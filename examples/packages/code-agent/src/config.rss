@@ -9,12 +9,12 @@ struct AgentConfig {
     workspace_root: String
 }
 
-fn env_int(name: read String, default: Int) -> Int {
+fn env_int(name: String, default: Int) -> Int {
     let raw = name.env_or("")
     return raw.parse_int().unwrap_or(default)
 }
 
-fn env_min_int(name: read String, default: Int, min: Int) -> Int {
+fn env_min_int(name: String, default: Int, min: Int) -> Int {
     let value = env_int(name, default)
     if value < min {
         return default
@@ -22,7 +22,7 @@ fn env_min_int(name: read String, default: Int, min: Int) -> Int {
     return value
 }
 
-fn ensure_trailing_slash(value: read String) -> String {
+fn ensure_trailing_slash(value: String) -> String {
     if value.ends_with("/") {
         return value
     }
@@ -50,7 +50,7 @@ fn repo_root_from_env() -> fresh Path {
 
 fn agent_config_from_env() -> fresh AgentConfig {
     return AgentConfig(
-        model: ModelConfig.from_env(env: read ModelEnv.agent(), defaults: read ModelDefaults.openai_compatible()),
+        model: ModelConfig.from_env(env: ModelEnv.agent(), defaults: ModelDefaults.openai_compatible()),
         max_steps: env_min_int("AGENT_MAX_STEPS", 8, 1),
         max_tool_calls: env_min_int("AGENT_MAX_TOOL_CALLS", 8, 1),
         max_total_tokens: env_min_int("AGENT_MAX_TOTAL_TOKENS", 1000000, 1),

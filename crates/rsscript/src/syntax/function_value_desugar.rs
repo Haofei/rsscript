@@ -54,7 +54,7 @@ fn collect_free_functions(program: &Program) -> HashMap<String, FunctionParams> 
                 function
                     .params
                     .iter()
-                    .map(|param| (param.name.clone(), param.effect))
+                    .map(|param| (param.name.clone(), param.effective_effect()))
                     .collect(),
             );
         }

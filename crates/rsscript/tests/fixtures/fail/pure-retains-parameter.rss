@@ -4,7 +4,7 @@ struct Image {
     pixels: Buffer
 }
 
-fn memoize(image: read Image) -> Image
+fn memoize(image: Image) -> Image
     effects(pure, retains(image))
 {
     return image

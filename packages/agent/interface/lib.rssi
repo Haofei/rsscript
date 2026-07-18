@@ -51,48 +51,48 @@ pub fn ModelEnv.agent() -> fresh ModelEnv
 
 pub fn ModelDefaults.openai_compatible() -> fresh ModelDefaults
 
-pub fn ModelConfig.from_env(env: read ModelEnv, defaults: read ModelDefaults) -> fresh ModelConfig
+pub fn ModelConfig.from_env(env: ModelEnv, defaults: ModelDefaults) -> fresh ModelConfig
 
-pub fn Prompt.code_agent(model: read ModelConfig) -> fresh Prompt
+pub fn Prompt.code_agent(model: ModelConfig) -> fresh Prompt
 
-pub fn Prompt.render(prompt: read Prompt) -> fresh String
+pub fn Prompt.render(prompt: Prompt) -> fresh String
 
 pub fn TokenUsage.zero() -> fresh TokenUsage
 
-pub fn TokenUsage.from_json(value: read JsonValue) -> Result<fresh TokenUsage, JsonError>
+pub fn TokenUsage.from_json(value: JsonValue) -> Result<fresh TokenUsage, JsonError>
 
-pub fn TokenUsage.from_response_text(text: read String) -> fresh TokenUsage
+pub fn TokenUsage.from_response_text(text: String) -> fresh TokenUsage
 
-pub fn TokenUsage.add(left: read TokenUsage, right: read TokenUsage) -> fresh TokenUsage
+pub fn TokenUsage.add(left: TokenUsage, right: TokenUsage) -> fresh TokenUsage
 
-pub fn TokenUsage.to_json(usage: read TokenUsage) -> fresh JsonValue
+pub fn TokenUsage.to_json(usage: TokenUsage) -> fresh JsonValue
 
-pub fn TokenUsage.summary(usage: read TokenUsage) -> fresh String
+pub fn TokenUsage.summary(usage: TokenUsage) -> fresh String
 
-pub fn StructuredLogger.named(name: read String) -> fresh StructuredLogger
+pub fn StructuredLogger.named(name: String) -> fresh StructuredLogger
 
 pub fn StructuredLogger.event(
-    logger: read StructuredLogger,
-    event: read String,
-    message: read String,
+    logger: StructuredLogger,
+    event: String,
+    message: String,
 ) -> Unit
 
 pub fn StructuredLogger.error(
-    logger: read StructuredLogger,
-    event: read String,
-    message: read String,
+    logger: StructuredLogger,
+    event: String,
+    message: String,
 ) -> Unit
 
 pub fn StructuredLogger.json(
-    logger: read StructuredLogger,
-    event: read String,
-    value: read JsonValue,
+    logger: StructuredLogger,
+    event: String,
+    value: JsonValue,
 ) -> Unit
 
-pub fn TraceSpan.start(name: read String) -> fresh TraceSpan
+pub fn TraceSpan.start(name: String) -> fresh TraceSpan
 
 pub fn TraceSpan.finish(
-    span: read TraceSpan,
-    logger: read StructuredLogger,
-    status: read String,
+    span: TraceSpan,
+    logger: StructuredLogger,
+    status: String,
 ) -> Unit

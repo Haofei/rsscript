@@ -12,164 +12,90 @@ features: local
 module selfhost.package_contract
 
 use selfhost.scan.*
-
-fn tk_text_at(toks: read List<Tok>, i: read Int) -> String {
-    if i < 0 { return "" }
-    if i >= List.len(list: read toks) { return "" }
-    let t = List.get(list: read toks, index: read i)
-    return t.text
-}
-
-fn dotted_name_text(toks: read List<Tok>, i: read Int) -> String {
-    if is_ident_tok(toks: read toks, i: read i) == false { return "" }
-    let mut out = tk_text_at(toks: read toks, i: read i)
-    let mut j = i + 1
-    let mut going = true
-    while going {
-        if at_symbol(toks: read toks, i: read j, code: read SYM_DOT)
-            && is_ident_tok(toks: read toks, i: read (j + 1)) {
-            out = String.concat(left: read out, right: read ".")
-            out = String.concat(left: read out, right: read tk_text_at(toks: read toks, i: read (j + 1)))
-            j = j + 2
-        } else {
-            going = false
-        }
-    }
-    return out
-}
-
-fn canonical_token_text(toks: read List<Tok>, i: read Int) -> String {
-    if at_symbol(toks: read toks, i: read i, code: read SYM_ARROW) { return "->" }
-    if at_symbol(toks: read toks, i: read i, code: read SYM_FATARROW) { return "=>" }
-    return tk_text_at(toks: read toks, i: read i)
-}
-
-fn canonical_signature(toks: read List<Tok>, start: read Int, end: read Int) -> String {
-    local out = StringBuilder.new()
-    let mut i = start
-    while i < end {
-        let text = canonical_token_text(toks: read toks, i: read i)
-        if text != "" {
-            StringBuilder.push(builder: mut out, value: read text)
-        }
-        i = i + 1
-    }
-    return StringBuilder.finish(builder: take out)
-}
-
-fn fn_token_index(toks: read List<Tok>, start: read Int) -> Int {
-    let mut i = start
-    let mut scanning = true
-    while scanning {
-        if at_ident(toks: read toks, i: read i, wid: read WORD_FN) {
-            return i
-        }
-        let isMod = at_ident(toks: read toks, i: read i, wid: read WORD_PUB)
-            || at_ident(toks: read toks, i: read i, wid: read WORD_ASYNC)
-            || at_ident(toks: read toks, i: read i, wid: read WORD_NATIVE)
-        if isMod {
-            i = i + 1
-        } else {
-            scanning = false
-        }
-    }
-    return -1
-}
+use selfhost.syntax.ast.*
+use selfhost.syntax.parser_items.*
 
 struct PackageFnIndex {
     names: List<String>
     sigs: handle Map<String, String>
+    nativeNames: handle Set<String>
 }
 
-fn collect_package_functions(source: read String, sourceVisibility: read Bool) -> PackageFnIndex {
-    let toks = tokenize(source: read source)
-    let n = List.len(list: read toks)
+// Function contract text is derived from the materialized Program, not a
+// second header scanner. It is intentionally internal: the package checker
+// only needs a deterministic equality key while Stage 2 grows richer types.
+fn package_function_contract(item: Item) -> String {
+    let mut out = String.copy(value: item.name)
+    let mut genericIndex = 0
+    while genericIndex < List.len(list: item.generics) {
+        let generic = List.get<GenericParam>(list: item.generics, index: genericIndex)
+        out = String.concat(left: out, right: String.concat(left: "|g:", right: generic.name))
+        out = String.concat(left: out, right: String.concat(left: ":", right: generic.boundText))
+        genericIndex = genericIndex + 1
+    }
+    let mut paramIndex = 0
+    while paramIndex < List.len(list: item.params) {
+        let param = List.get<Param>(list: item.params, index: paramIndex)
+        out = String.concat(left: out, right: String.concat(left: "|p:", right: param.effect))
+        out = String.concat(left: out, right: String.concat(left: ":", right: param.typeText))
+        if param.hasDefault { out = String.concat(left: out, right: "=default") }
+        paramIndex = paramIndex + 1
+    }
+    out = String.concat(left: out, right: String.concat(left: "|r:", right: item.returnType))
+    let mut effectIndex = 0
+    while effectIndex < List.len(list: item.effects) {
+        let effect = List.get<EffectName>(list: item.effects, index: effectIndex)
+        out = String.concat(left: out, right: String.concat(left: "|e:", right: effect.name))
+        if effect.isRetains { out = String.concat(left: out, right: String.concat(left: "(", right: String.concat(left: effect.target, right: ")"))) }
+        effectIndex = effectIndex + 1
+    }
+    return out
+}
+
+fn collect_package_functions(program: Program, sourceVisibility: Bool) -> PackageFnIndex {
     let mut names = List<String>.new()
     let mut sigs = Map<String, String>.new()
+    let mut nativeNames = Set<String>.new()
     let mut i = 0
-    while i < n {
-        let declKind = declaration_kind(toks: read toks, start: read i)
-        if declKind > 0 {
-            let declEnd = declaration_end(toks: read toks, start: read i, kind: read declKind)
-            if declEnd > i { i = declEnd } else { i = i + 1 }
-        } else {
-            let isPub = at_ident(toks: read toks, i: read i, wid: read WORD_PUB)
-            let fnIdx = fn_token_index(toks: read toks, start: read i)
-            if fnIdx >= 0 && at_ident(toks: read toks, i: read fnIdx, wid: read WORD_FN) {
-            if sourceVisibility == false || isPub {
-                let nameIdx = fnIdx + 1
-                if is_ident_tok(toks: read toks, i: read nameIdx) {
-                    let name = dotted_name_text(toks: read toks, i: read nameIdx)
-                    let end = function_signature_end(toks: read toks, start: read fnIdx)
-                    let mut contractStart = i
-                    if at_ident(toks: read toks, i: read contractStart, wid: read WORD_PUB) {
-                        contractStart = contractStart + 1
-                    }
-                    let sig = canonical_signature(toks: read toks, start: read contractStart, end: read end)
-                    if Map.contains_key<String, String>(map: read sigs, key: read name) == false {
-                        List.push<String>(list: mut names, value: read name)
-                    }
-                    Map.insert<String, String>(map: mut sigs, key: read name, value: read sig)
-                    i = end
-                } else {
-                    i = i + 1
-                }
-            } else {
-                i = i + 1
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
+        if item.kind == ITEM_FUNCTION && (!sourceVisibility || item.isPublic) {
+            let name = String.copy(value: item.name)
+            let signature = package_function_contract(item: item)
+            if Map.contains_key<String, String>(map: sigs, key: name) == false {
+                List.push<String>(list: mut names, value: name)
             }
-            } else {
-                i = i + 1
-            }
+            if item.isNative { Set.insert<String>(set: mut nativeNames, value: name) }
+            Map.insert<String, String>(map: mut sigs, key: name, value: signature)
         }
+        i = i + 1
     }
-    return PackageFnIndex(names: names, sigs: read sigs)
+    return PackageFnIndex(names: names, sigs: read sigs, nativeNames: read nativeNames)
 }
 
-fn comma_list_contains(values: read String, wanted: read String) -> Bool {
-    let parts = String.split(value: read values, delimiter: read ",")
+fn comma_list_contains(values: String, wanted: String) -> Bool {
+    let parts = String.split(value: values, delimiter: ",")
     let mut i = 0
-    while i < List.len(list: read parts) {
-        if List.get(list: read parts, index: read i) == wanted { return true }
+    while i < List.len(list: parts) {
+        if List.get(list: parts, index: i) == wanted { return true }
         i = i + 1
     }
     return false
 }
 
-fn signature_has_native(toks: read List<Tok>, start: read Int, end: read Int) -> Bool {
-    let mut i = start
-    while i < end {
-        if at_ident(toks: read toks, i: read i, wid: read WORD_NATIVE) { return true }
-        i = i + 1
-    }
-    return false
-}
-
-fn has_function_contract_mismatch(interfaceSource: read String, source: read String, nativeBindings: read String) -> Bool {
-    let interfaceFns = collect_package_functions(source: read interfaceSource, sourceVisibility: read false)
-    let sourceFns = collect_package_functions(source: read source, sourceVisibility: read true)
-    let interfaceToks = tokenize(source: read interfaceSource)
-    let n = List.len(list: read interfaceFns.names)
+fn has_function_contract_mismatch(interfaceProgram: Program, sourceProgram: Program, nativeBindings: String) -> Bool {
+    let interfaceFns = collect_package_functions(program: interfaceProgram, sourceVisibility: false)
+    let sourceFns = collect_package_functions(program: sourceProgram, sourceVisibility: true)
+    let n = List.len(list: interfaceFns.names)
     let mut i = 0
     let mut mismatch = false
     while i < n {
-        let name = List.get(list: read interfaceFns.names, index: read i)
-        let want = Map.get_or_default<String, String>(map: read interfaceFns.sigs, key: read name, default: read "")
-        let got = Map.get_or_default<String, String>(map: read sourceFns.sigs, key: read name, default: read "")
+        let name = List.get(list: interfaceFns.names, index: i)
+        let want = Map.get_or_default<String, String>(map: interfaceFns.sigs, key: name, default: "")
+        let got = Map.get_or_default<String, String>(map: sourceFns.sigs, key: name, default: "")
         if got == "" {
-            let mut nativeExempt = false
-            let mut j = 0
-            let tokenCount = List.len(list: read interfaceToks)
-            while j < tokenCount {
-                let fnIdx = fn_token_index(toks: read interfaceToks, start: read j)
-                if fnIdx >= 0 && dotted_name_text(toks: read interfaceToks, i: read (fnIdx + 1)) == name {
-                    let end = function_signature_end(toks: read interfaceToks, start: read fnIdx)
-                    nativeExempt = signature_has_native(toks: read interfaceToks, start: read j, end: read end)
-                    j = tokenCount
-                } else {
-                    j = j + 1
-                }
-            }
-            if nativeExempt == false || comma_list_contains(values: read nativeBindings, wanted: read name) == false {
+            let nativeExempt = Set.contains<String>(set: interfaceFns.nativeNames, value: name)
+            if !nativeExempt  || comma_list_contains(values: nativeBindings, wanted: name) == false {
                 mismatch = true
             }
         } else if got != want {
@@ -187,123 +113,151 @@ struct PackageDeclIndex {
     typeHeaders: handle Map<String, String>
 }
 
-fn prefixed_key(prefix: read String, name: read String) -> String {
-    return String.concat(left: read String.concat(left: read prefix, right: read ":"), right: read name)
+fn prefixed_key(prefix: String, name: String) -> String {
+    return String.concat(left: String.concat(left: prefix, right: ":"), right: name)
 }
 
-fn declaration_name_index(toks: read List<Tok>, start: read Int, kind: read Int) -> Int {
-    let mut i = start
-    if at_ident(toks: read toks, i: read i, wid: read WORD_PUB) { i = i + 1 }
-    if kind == 1 && at_ident(toks: read toks, i: read i, wid: read WORD_OPAQUE) { i = i + 1 }
-    if kind == 1 || kind == 2 || kind == 3 || kind == 4 || kind == 5 {
-        return i + 1
+fn package_field_contract(field: Field) -> String {
+    let mut out = String.concat(left: field.name, right: ":")
+    out = String.concat(left: out, right: field.typeText)
+    if field.isHandle { out = String.concat(left: out, right: "|handle") }
+    if field.isWeak { out = String.concat(left: out, right: "|weak") }
+    return out
+}
+
+fn package_data_header_contract(item: Item) -> String {
+    let mut out = String.copy(value: item.dataKind)
+    let mut genericIndex = 0
+    while genericIndex < List.len(list: item.generics) {
+        let generic = List.get<GenericParam>(list: item.generics, index: genericIndex)
+        out = String.concat(left: out, right: String.concat(left: "|g:", right: generic.name))
+        out = String.concat(left: out, right: String.concat(left: ":", right: generic.boundText))
+        genericIndex = genericIndex + 1
     }
-    return -1
+    return out
 }
 
-fn declaration_kind(toks: read List<Tok>, start: read Int) -> Int {
-    let mut i = start
-    if at_ident(toks: read toks, i: read i, wid: read WORD_PUB) { i = i + 1 }
-    if at_ident(toks: read toks, i: read i, wid: read WORD_OPAQUE) { return 1 }
-    if at_ident(toks: read toks, i: read i, wid: read WORD_STRUCT) || at_ident(toks: read toks, i: read i, wid: read WORD_CLASS) || at_ident(toks: read toks, i: read i, wid: read WORD_RESOURCE) { return 1 }
-    if at_ident(toks: read toks, i: read i, wid: read WORD_SUM) { return 2 }
-    if at_ident(toks: read toks, i: read i, wid: read WORD_TYPE) { return 3 }
-    if at_ident(toks: read toks, i: read i, wid: read WORD_CONST) { return 4 }
-    if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) { return 5 }
-    if at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) { return 6 }
-    return 0
-}
-
-fn declaration_end(toks: read List<Tok>, start: read Int, kind: read Int) -> Int {
-    if kind == 1 { return parse_type_decl(toks: read toks, i: read start) }
-    if kind == 2 { return parse_sum_decl(toks: read toks, i: read start) }
-    if kind == 3 { return parse_type_alias_decl(toks: read toks, i: read start) }
-    if kind == 4 { return parse_const_decl(toks: read toks, i: read start) }
-    if kind == 5 {
-        let mut i = start
-        if at_ident(toks: read toks, i: read i, wid: read WORD_PUB) { i = i + 1 }
-        return parse_protocol_decl(toks: read toks, i: read i)
+fn package_data_contract(item: Item) -> String {
+    let mut out = package_data_header_contract(item: item)
+    let mut deriveIndex = 0
+    while deriveIndex < List.len(list: item.derives) {
+        let derive = List.get<FeatureName>(list: item.derives, index: deriveIndex)
+        out = String.concat(left: out, right: String.concat(left: "|derive:", right: derive.name))
+        deriveIndex = deriveIndex + 1
     }
-    if kind == 6 { return parse_impl_decl(toks: read toks, i: read start) }
-    return -1
-}
-
-fn declaration_key(toks: read List<Tok>, start: read Int, kind: read Int) -> String {
-    if kind == 6 {
-        let protocol = tk_text_at(toks: read toks, i: read (start + 1))
-        let mut i = start + 2
-        while at_ident(toks: read toks, i: read i, wid: read WORD_FOR) == false && i < List.len(list: read toks) { i = i + 1 }
-        let typeName = dotted_name_text(toks: read toks, i: read (i + 1))
-        return prefixed_key(prefix: read "impl", name: read String.concat(left: read String.concat(left: read protocol, right: read " for "), right: read typeName))
+    let mut fieldIndex = 0
+    while fieldIndex < List.len(list: item.fields) {
+        let field = List.get<Field>(list: item.fields, index: fieldIndex)
+        out = String.concat(left: out, right: String.concat(left: "|field:", right: package_field_contract(field: field)))
+        fieldIndex = fieldIndex + 1
     }
-    let nameIdx = declaration_name_index(toks: read toks, start: read start, kind: read kind)
-    let name = dotted_name_text(toks: read toks, i: read nameIdx)
-    if kind == 1 { return prefixed_key(prefix: read "type", name: read name) }
-    if kind == 2 { return prefixed_key(prefix: read "sum", name: read name) }
-    if kind == 3 { return prefixed_key(prefix: read "alias", name: read name) }
-    if kind == 4 { return prefixed_key(prefix: read "const", name: read name) }
-    return prefixed_key(prefix: read "protocol", name: read name)
+    let mut variantIndex = 0
+    while variantIndex < List.len(list: item.variants) {
+        let variant = List.get<Variant>(list: item.variants, index: variantIndex)
+        out = String.concat(left: out, right: String.concat(left: "|variant:", right: variant.name))
+        fieldIndex = 0
+        while fieldIndex < List.len(list: variant.fields) {
+            let field = List.get<Field>(list: variant.fields, index: fieldIndex)
+            out = String.concat(left: out, right: String.concat(left: ":", right: package_field_contract(field: field)))
+            fieldIndex = fieldIndex + 1
+        }
+        variantIndex = variantIndex + 1
+    }
+    return out
 }
 
-fn collect_package_declarations(source: read String, sourceVisibility: read Bool) -> PackageDeclIndex {
-    let toks = tokenize(source: read source)
-    let n = List.len(list: read toks)
+fn package_protocol_contract(program: Program, protocol: Item) -> String {
+    let mut out = String.copy(value: protocol.name)
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_FUNCTION && item.protocol == protocol.name {
+            out = String.concat(left: out, right: String.concat(left: "|method:", right: package_function_contract(item: item)))
+            if item.hasDefaultImplMarker { out = String.concat(left: out, right: "=default") }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return out
+}
+
+fn package_impl_contract(implementation: Item) -> String {
+    let mut out = String.concat(left: implementation.protocol, right: String.concat(left: " for ", right: implementation.implType))
+    let mut mappingIndex = 0
+    while mappingIndex < List.len(list: implementation.mappings) {
+        let mapping = List.get<ProtocolMapping>(list: implementation.mappings, index: mappingIndex)
+        out = String.concat(left: out, right: String.concat(left: "|", right: mapping.method))
+        out = String.concat(left: out, right: String.concat(left: "=", right: mapping.target))
+        mappingIndex = mappingIndex + 1
+    }
+    return out
+}
+
+fn merge_program_declarations(program: Program, sourceVisibility: Bool, keys: mut List<String>, contracts: mut Map<String, String>, opaqueTypes: mut Set<String>, typeHeaders: mut Map<String, String>) -> Unit {
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        let include = !sourceVisibility || item.isPublic || item.kind == ITEM_PROTOCOL || item.kind == ITEM_IMPL
+        let mut key = ""
+        let mut contract = ""
+        let mut header = ""
+        if include && item.kind == ITEM_TYPE {
+            key = prefixed_key(prefix: "type", name: item.name)
+            contract = package_data_contract(item: item)
+            header = package_data_header_contract(item: item)
+        } else if include && item.kind == ITEM_SUM {
+            key = prefixed_key(prefix: "sum", name: item.name)
+            contract = package_data_contract(item: item)
+        } else if include && item.kind == ITEM_PROTOCOL {
+            key = prefixed_key(prefix: "protocol", name: item.name)
+            contract = package_protocol_contract(program: program, protocol: item)
+        } else if include && item.kind == ITEM_IMPL {
+            local implementationName = String.concat(left: item.protocol, right: String.concat(left: " for ", right: item.implType))
+            key = prefixed_key(prefix: "impl", name: implementationName)
+            contract = package_impl_contract(implementation: item)
+        } else if include && item.kind == ITEM_TYPE_ALIAS {
+            key = prefixed_key(prefix: "alias", name: item.name)
+            contract = String.copy(value: item.aliasTarget)
+        } else if include && item.kind == ITEM_CONST {
+            key = prefixed_key(prefix: "const", name: item.name)
+            contract = String.concat(left: item.constType, right: String.concat(left: "=", right: item.constValue))
+        }
+        if key != "" {
+            if Map.contains_key<String, String>(map: contracts, key: key) == false {
+                List.push<String>(list: mut keys, value: key)
+            }
+            if item.kind == ITEM_TYPE && item.isOpaque { Set.insert<String>(set: mut opaqueTypes, value: key) }
+            if header != "" { Map.insert<String, String>(map: mut typeHeaders, key: key, value: header) }
+            Map.insert<String, String>(map: mut contracts, key: key, value: contract)
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+fn collect_package_declarations(program: Program, sourceVisibility: Bool) -> PackageDeclIndex {
     let mut keys = List<String>.new()
     let mut contracts = Map<String, String>.new()
     let mut opaqueTypes = Set<String>.new()
     let mut typeHeaders = Map<String, String>.new()
-    let mut i = 0
-    while i < n {
-        let kind = declaration_kind(toks: read toks, start: read i)
-        let isPub = at_ident(toks: read toks, i: read i, wid: read WORD_PUB)
-        let include = kind > 0 && (sourceVisibility == false || isPub || kind == 5 || kind == 6)
-        if include {
-            let end = declaration_end(toks: read toks, start: read i, kind: read kind)
-            if end > i {
-                let key = declaration_key(toks: read toks, start: read i, kind: read kind)
-                if Map.contains_key<String, String>(map: read contracts, key: read key) == false {
-                    List.push<String>(list: mut keys, value: read key)
-                }
-                let mut contractStart = i
-                if at_ident(toks: read toks, i: read contractStart, wid: read WORD_PUB) { contractStart = contractStart + 1 }
-                Map.insert<String, String>(map: mut contracts, key: read key, value: read canonical_signature(toks: read toks, start: read contractStart, end: read end))
-                if kind == 1 {
-                    let mut p = i
-                    if at_ident(toks: read toks, i: read p, wid: read WORD_PUB) { p = p + 1 }
-                    if at_ident(toks: read toks, i: read p, wid: read WORD_OPAQUE) {
-                        Set.insert<String>(set: mut opaqueTypes, value: read key)
-                        p = p + 1
-                    }
-                    let mut headerEnd = p
-                    while headerEnd < end && at_symbol(toks: read toks, i: read headerEnd, code: read SYM_LBRACE) == false { headerEnd = headerEnd + 1 }
-                    Map.insert<String, String>(map: mut typeHeaders, key: read key, value: read canonical_signature(toks: read toks, start: read p, end: read headerEnd))
-                }
-                i = end
-            } else {
-                i = i + 1
-            }
-        } else {
-            i = i + 1
-        }
-    }
+    merge_program_declarations(program: program, sourceVisibility: sourceVisibility, keys: mut keys, contracts: mut contracts, opaqueTypes: mut opaqueTypes, typeHeaders: mut typeHeaders)
     return PackageDeclIndex(keys: keys, contracts: read contracts, opaqueTypes: read opaqueTypes, typeHeaders: read typeHeaders)
 }
 
-fn has_declaration_contract_mismatch(interfaceSource: read String, source: read String) -> Bool {
-    let wanted = collect_package_declarations(source: read interfaceSource, sourceVisibility: read false)
-    let actual = collect_package_declarations(source: read source, sourceVisibility: read true)
+fn has_declaration_contract_mismatch(interfaceProgram: Program, sourceProgram: Program) -> Bool {
+    let wanted = collect_package_declarations(program: interfaceProgram, sourceVisibility: false)
+    let actual = collect_package_declarations(program: sourceProgram, sourceVisibility: true)
     let mut i = 0
-    while i < List.len(list: read wanted.keys) {
-        let key = List.get(list: read wanted.keys, index: read i)
-        let got = Map.get_or_default<String, String>(map: read actual.contracts, key: read key, default: read "")
+    while i < List.len(list: wanted.keys) {
+        let key = List.get(list: wanted.keys, index: i)
+        let got = Map.get_or_default<String, String>(map: actual.contracts, key, default: "")
         if got == "" { return true }
-        let isOpaque = Set.contains<String>(set: read wanted.opaqueTypes, value: read key)
+        let isOpaque = Set.contains<String>(set: wanted.opaqueTypes, value: key)
         if isOpaque {
-            let wantHeader = Map.get_or_default<String, String>(map: read wanted.typeHeaders, key: read key, default: read "")
-            let gotHeader = Map.get_or_default<String, String>(map: read actual.typeHeaders, key: read key, default: read "")
+            let wantHeader = Map.get_or_default<String, String>(map: wanted.typeHeaders, key, default: "")
+            let gotHeader = Map.get_or_default<String, String>(map: actual.typeHeaders, key, default: "")
             if wantHeader != gotHeader { return true }
         } else {
-            let want = Map.get_or_default<String, String>(map: read wanted.contracts, key: read key, default: read "")
+            let want = Map.get_or_default<String, String>(map: wanted.contracts, key, default: "")
             if got != want { return true }
         }
         i = i + 1
@@ -312,15 +266,19 @@ fn has_declaration_contract_mismatch(interfaceSource: read String, source: read 
 }
 
 fn main() -> Unit {
-    let interfaceSource = Args.get_or_default(index: 0, default: read "")
-    let source = Args.get_or_default(index: 1, default: read "")
-    let nativeBindings = Args.get_or_default(index: 2, default: read "")
-    let fnMismatch = has_function_contract_mismatch(interfaceSource: read interfaceSource, source: read source, nativeBindings: read nativeBindings)
-    let declMismatch = has_declaration_contract_mismatch(interfaceSource: read interfaceSource, source: read source)
+    let interfaceSource = Args.get_or_default(index: 0, default: "")
+    let source = Args.get_or_default(index: 1, default: "")
+    let nativeBindings = Args.get_or_default(index: 2, default: "")
+    let interfaceTokens = tokenize(source: interfaceSource)
+    let sourceTokens = tokenize(source: source)
+    let interfaceProgram = parse_program(toks: interfaceTokens)
+    let sourceProgram = parse_program(toks: sourceTokens)
+    let fnMismatch = has_function_contract_mismatch(interfaceProgram, sourceProgram, nativeBindings)
+    let declMismatch = has_declaration_contract_mismatch(interfaceProgram, sourceProgram)
     if fnMismatch || declMismatch {
-        Log.write(message: read "RS1301")
+        Log.write(message: "RS1301")
     } else {
-        Log.write(message: read "CLEAN")
+        Log.write(message: "CLEAN")
     }
     return Unit
 }

@@ -1,8 +1,8 @@
 // expect: RS0009
 
-fn noisy(message: read String) -> Unit
+fn noisy(message: String) -> Unit
     effects(pure)
 {
-    Log.write(message: read message)
+    Log.write(message)
     return Unit
 }

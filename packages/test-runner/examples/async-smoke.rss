@@ -2,7 +2,7 @@ features: async
 
 async fn main() -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
-    Log.write(message: read "rss async smoke ok")
+    Log.write(message: "rss async smoke ok")
 
     return Ok(Unit)
 }

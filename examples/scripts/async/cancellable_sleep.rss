@@ -2,15 +2,15 @@ features: async
 
 async fn main() -> Result<Unit, TimerError> {
     let mut source = CancellationSource.new()
-    let token = CancellationSource.token(source: read source)
+    let token = CancellationSource.token(source)
 
     // Cancel before the long wait: the cancellable sleep must wake immediately
     // instead of sleeping the full 100s.
     CancellationSource.cancel(source: mut source)
-    await Timer.sleep_cancellable(ms: 100000, token: read token)?
+    await Timer.sleep_cancellable(ms: 100000, token)?
 
-    if CancellationToken.is_cancelled(token: read token) {
-        Log.write(message: read "woke on cancel")
+    if CancellationToken.is_cancelled(token) {
+        Log.write(message: "woke on cancel")
     }
     return Ok(Unit)
 }

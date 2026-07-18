@@ -2,7 +2,7 @@ struct ToolRequest {
     name: String
 }
 
-fn dispatch(name: read String) -> String {
+fn dispatch(name: String) -> String {
     match name {
         "read_file" => { return "read" }
         "write_file" => { return "write" }
@@ -33,13 +33,13 @@ fn maybe_tool(enabled: Bool) -> Option<ToolRequest> {
 }
 
 fn run(enabled: Bool) -> String {
-    if let Some(tool) = maybe_tool(enabled: enabled) {
-        return dispatch(name: read tool.name)
+    if let Some(tool) = maybe_tool(enabled) {
+        return dispatch(name: tool.name)
     }
     return "none"
 }
 
 fn main() -> Unit {
     let result = run(enabled: true)
-    Log.write(message: read result)
+    Log.write(message: result)
 }

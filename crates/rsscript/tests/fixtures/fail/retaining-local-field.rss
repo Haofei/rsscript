@@ -11,12 +11,12 @@ struct Holder {
 
 struct Cache
 
-fn Cache.store(cache: mut Cache, value: read Image) -> Unit
+fn Cache.store(cache: mut Cache, value: Image) -> Unit
     effects(retains(value))
 
-fn make_holder(path: read Path) -> fresh Holder
+fn make_holder(path: Path) -> fresh Holder
 
-fn bad_store(cache: mut Cache, path: read Path) -> Unit {
-    local holder = make_holder(path: read path)
-    Cache.store(cache: mut cache, value: read holder.image)
+fn bad_store(cache: mut Cache, path: Path) -> Unit {
+    local holder = make_holder(path)
+    Cache.store(cache: mut cache, value: holder.image)
 }

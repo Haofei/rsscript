@@ -5,8 +5,8 @@ features: local
 // SetContains/len) and hashing cost. Not reachable by the native tier.
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -22,19 +22,19 @@ fn main() -> Unit {
     let mut index = 0
 
     while index < limit {
-        Set.insert(set: mut seen, value: read index)
+        Set.insert(set: mut seen, value: index)
         index = index + 1
     }
 
     index = 0
     let mut total = 0
     while index < limit {
-        if Set.contains(set: read seen, value: read index) {
+        if Set.contains(set: seen, value: index) {
             total = total + 1
         }
         index = index + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Log.write(message: String.from_int(value: total))
     return Unit
 }

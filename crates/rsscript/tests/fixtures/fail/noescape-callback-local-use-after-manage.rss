@@ -5,7 +5,7 @@ struct ImageData {
     size: Int
 }
 
-fn inspect(image: read ImageData) -> Unit
+fn inspect(image: ImageData) -> Unit
 
 fn apply(callback: noescape Fn()) -> Unit {
     callback()
@@ -16,8 +16,8 @@ fn main() -> Unit {
     apply(callback: || {
         local image = ImageData(size: 1)
         let shared = manage image
-        inspect(image: read image)
-        inspect(image: read shared)
+        inspect(image)
+        inspect(image: shared)
     })
 
     return Unit

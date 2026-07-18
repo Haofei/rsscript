@@ -90,6 +90,16 @@ pub(super) fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usi
                 // why `<`/`>`/`-`/`=`/`!` are excluded), so a wrapped chain can
                 // never swallow the start of a genuinely new statement.
                 line = token.span.line;
+            } else if token.is_ident_text("else")
+                && tokens
+                    .get(index - 1)
+                    .is_some_and(|previous| previous.symbol("}"))
+            {
+                // `return if condition { value } else { value }` is one
+                // expression. `else` cannot start an ordinary statement, so
+                // carrying the line forward here cannot merge two valid
+                // statements.
+                line = token.span.line;
             } else {
                 return index;
             }

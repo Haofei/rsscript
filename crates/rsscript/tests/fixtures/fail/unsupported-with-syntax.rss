@@ -1,6 +1,6 @@
 // expect: RS0015
 
-fn bad(path: read Path) -> Unit {
+fn bad(path: Path) -> Unit {
     with File.open(path: read path) {
         return Unit
     }

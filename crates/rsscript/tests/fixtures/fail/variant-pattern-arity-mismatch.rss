@@ -3,7 +3,7 @@ sum Shape {
     Rectangle(width: Int, height: Int)
     Prism(width: Int, height: Int, depth: Int)
 }
-fn f(shape: read Shape) -> Int {
+fn f(shape: Shape) -> Int {
     match read shape {
         // Prism declares three fields but only two are bound positionally.
         Prism(w, h) => { return read w * read h }

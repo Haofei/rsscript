@@ -38,7 +38,7 @@ pub(crate) fn collect_interface_metadata(interfaces: &[(&str, &str)]) -> Interfa
                         .iter()
                         .map(|param| InterfaceParamMetadata {
                             name: param.name.clone(),
-                            effect: param.effect,
+                            effect: param.effective_effect(),
                             type_name: type_ref_name(&param.ty),
                         })
                         .collect(),
@@ -110,6 +110,26 @@ pub(crate) fn format_selfhost_interface_metadata_rss(metadata: &InterfaceMetadat
     out.push_str("    return \"\"\n}\n\n");
 
     out.push_str(
+        "fn generated_stdlib_param_name_at(ns: read String, method: read String, index: read Int) -> String {\n",
+    );
+    for function in metadata
+        .functions
+        .iter()
+        .filter(|function| function.namespace.is_some())
+    {
+        for (index, param) in function.params.iter().enumerate() {
+            out.push_str(&format!(
+                "    if ns == {} && method == {} && index == {} {{ return {} }}\n",
+                rss_string(function.namespace.as_deref().unwrap()),
+                rss_string(&function.method),
+                index,
+                rss_string(&param.name),
+            ));
+        }
+    }
+    out.push_str("    return \"\"\n}\n\n");
+
+    out.push_str(
         "fn generated_stdlib_param_effect(ns: read String, method: read String, pname: read String) -> String {\n",
     );
     for function in metadata
@@ -148,7 +168,7 @@ fn type_ref_name(ty: &TypeRef) -> String {
             .iter()
             .enumerate()
             .map(|(index, param)| {
-                let prefix = match ty.fn_param_effects.get(index).copied().flatten() {
+                let prefix = match ty.effective_fn_param_effect(index) {
                     Some(effect) => format!("{} ", effect.as_str()),
                     None => String::new(),
                 };
@@ -274,6 +294,9 @@ mod tests {
         assert!(rss.contains("if ns == \"Image\" && method == \"load\" { return \"ImageError\" }"));
         assert!(rss.contains(
             "if ns == \"String\" && method == \"concat\" && pname == \"left\" { return \"String\" }"
+        ));
+        assert!(rss.contains(
+            "if ns == \"String\" && method == \"concat\" && index == 0 { return \"left\" }"
         ));
         assert!(rss.contains(
             "if ns == \"Image\" && method == \"resize\" && pname == \"image\" { return \"mut\" }"

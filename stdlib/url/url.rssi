@@ -1,4 +1,4 @@
-pub fn Url.from_string(value: read String) -> fresh Url
+pub fn Url.from_string(value: String) -> fresh Url
 
-pub fn Url.to_string(url: read Url) -> fresh String
+pub fn Url.to_string(url: Url) -> fresh String
     effects(pure)

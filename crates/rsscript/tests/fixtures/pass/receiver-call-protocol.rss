@@ -1,7 +1,7 @@
 features: local
 
 protocol Writer {
-    fn write(self: mut Self, message: read String) -> Unit
+    fn write(self: mut Self, message: String) -> Unit
         effects(retains(message))
 
     fn flush(self: mut Self) -> Unit
@@ -11,14 +11,14 @@ class BufferWriter {
     buffer: List<String>
 }
 
-fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
+fn BufferWriter.write(self: mut BufferWriter, message: String) -> Unit
     effects(retains(message))
 {
-    List.push<String>(list: mut self.buffer, value: read message)
+    List.push<String>(list: mut self.buffer, value: message)
 }
 
 fn BufferWriter.flush(self: mut BufferWriter) -> Unit {
-    Log.write(message: read "flushed")
+    Log.write(message: "flushed")
 }
 
 impl Writer for BufferWriter {
@@ -26,8 +26,8 @@ impl Writer for BufferWriter {
     flush = BufferWriter.flush
 }
 
-fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit
+fn write_line<W: Writer>(writer: mut W, message: String) -> Unit
     effects(retains(message))
 {
-    mut writer.write(message: read message)
+    mut writer.write(message: message)
 }

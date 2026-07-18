@@ -2,16 +2,16 @@ struct ConfigValue
 
 struct ConfigStore
 
-pub fn Config.load(path: read Path) -> Result<fresh ConfigValue, ConfigError>
+pub fn Config.load(path: Path) -> Result<fresh ConfigValue, ConfigError>
 
-pub fn Config.name(value: read ConfigValue) -> String
+pub fn Config.name(value: ConfigValue) -> String
 
-pub fn ConfigStore.new(value: read ConfigValue) -> fresh ConfigStore
+pub fn ConfigStore.new(value: ConfigValue) -> fresh ConfigStore
 
 pub fn ConfigStore.replace(
     store: mut ConfigStore,
-    value: read ConfigValue,
+    value: ConfigValue,
 ) -> Unit
     effects(retains(value))
 
-pub fn ConfigStore.name(store: read ConfigStore) -> String
+pub fn ConfigStore.name(store: ConfigStore) -> String

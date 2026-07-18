@@ -1,6 +1,6 @@
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -20,7 +20,7 @@ fn maybe_even(value: Int) -> Option<Int> {
 
 fn checked(value: Int) -> Result<Int, String> {
     if value < 0 {
-        return Err(String.copy(value: read "negative"))
+        return Err(String.copy(value: "negative"))
     }
     return Ok(value)
 }
@@ -32,8 +32,8 @@ fn main() -> Unit {
 
     while index < limit {
         let option_value = Option.and_then<Int, Int>(
-            value: read Option.map<Int, Int>(
-                value: read maybe_even(value: index),
+            value: Option.map<Int, Int>(
+                value: maybe_even(value: index),
                 mapper: |value| {
                     return value + 1
                 },
@@ -42,10 +42,10 @@ fn main() -> Unit {
                 return Some(value * 2)
             },
         )
-        let option_total = Option.unwrap_or<Int>(value: read option_value, default: read 0)
+        let option_total = Option.unwrap_or<Int>(value: option_value, default: 0)
         let result_value = Result.and_then<Int, String, Int>(
-            result: read Result.map<Int, String, Int>(
-                result: read checked(value: option_total),
+            result: Result.map<Int, String, Int>(
+                result: checked(value: option_total),
                 mapper: |value| {
                     return value + 3
                 },
@@ -54,11 +54,11 @@ fn main() -> Unit {
                 return Ok(value * 2)
             },
         )
-        total = total + Result.unwrap_or<Int, String>(value: read result_value, default: read 0)
+        total = total + Result.unwrap_or<Int, String>(value: result_value, default: 0)
         index = index + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Log.write(message: String.from_int(value: total))
     return Unit
 }
 

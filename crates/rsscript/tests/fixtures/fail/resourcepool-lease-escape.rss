@@ -11,5 +11,5 @@ resource DbConnection {
 
 fn bad_lease(pool: mut ResourcePool<DbConnection>) -> Unit {
     local conn = ResourcePool.borrow(pool: mut pool)
-    DbConnection.query(conn: mut conn, sql: read "select 1")
+    DbConnection.query(conn: mut conn, sql: "select 1")
 }

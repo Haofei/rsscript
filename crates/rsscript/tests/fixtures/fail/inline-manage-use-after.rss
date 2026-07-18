@@ -5,10 +5,10 @@ struct Image {
     pixels: Buffer
 }
 
-fn compare(left: read Image, right: read Image) -> Unit {
+fn compare(left: Image, right: Image) -> Unit {
 }
 
-fn bad_inline(path: read Path) -> Unit {
-    local image = Image.load(path: read path)
-    compare(left: read (manage image), right: read image)
+fn bad_inline(path: Path) -> Unit {
+    local image = Image.load(path)
+    compare(left: (manage image), right: image)
 }

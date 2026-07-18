@@ -1,12 +1,12 @@
 // expect: RS0015
 
-fn missing_as(path: read Path) -> Unit {
+fn missing_as(path: Path) -> Unit {
     with File.open(path: read path) {
         return Unit
     }
 }
 
-fn missing_binding(path: read Path) -> Unit {
+fn missing_binding(path: Path) -> Unit {
     with File.open(path: read path)? as {
         return Unit
     }

@@ -49,7 +49,7 @@ pub struct TraceSpan {
     start_ms: Int
 }
 
-fn model_env_int(name: read String, default: Int, min: Int) -> Int {
+fn model_env_int(name: String, default: Int, min: Int) -> Int {
     let raw = name.env_or("")
     let parsed = match raw.parse_int() {
         Some(value) => {
@@ -87,7 +87,7 @@ pub fn ModelDefaults.openai_compatible() -> fresh ModelDefaults {
     )
 }
 
-pub fn ModelConfig.from_env(env: read ModelEnv, defaults: read ModelDefaults) -> fresh ModelConfig {
+pub fn ModelConfig.from_env(env: ModelEnv, defaults: ModelDefaults) -> fresh ModelConfig {
     return ModelConfig(
         model: env.model.env_or(defaults.model),
         endpoint: env.endpoint.env_or(defaults.endpoint).to_url(),
@@ -98,7 +98,7 @@ pub fn ModelConfig.from_env(env: read ModelEnv, defaults: read ModelDefaults) ->
     )
 }
 
-pub fn Prompt.code_agent(model: read ModelConfig) -> fresh Prompt {
+pub fn Prompt.code_agent(model: ModelConfig) -> fresh Prompt {
     let instructions: List<String> = [
         "Before writing RSScript, read the repository root AGENT.md and the nearest package AGENTS.md.",
         "Discover files before reading unfamiliar code.",
@@ -107,7 +107,7 @@ pub fn Prompt.code_agent(model: read ModelConfig) -> fresh Prompt {
         "Run a structured RSScript check after edits.",
         "Call finish with a concise answer when the task is done.",
     ]
-    let model_line = ["Current model: ", String.copy(value: read model.model)].join("")
+    let model_line = ["Current model: ", String.copy(value: model.model)].join("")
     let constraints: List<String> = [
         model_line,
         "Do not guess RSScript function names or parameter names.",
@@ -122,7 +122,7 @@ pub fn Prompt.code_agent(model: read ModelConfig) -> fresh Prompt {
     )
 }
 
-fn numbered_lines(items: read List<String>) -> fresh String {
+fn numbered_lines(items: List<String>) -> fresh String {
     let mut lines = List<String>.new()
     let mut index = 0
     while index < items.len() {
@@ -134,7 +134,7 @@ fn numbered_lines(items: read List<String>) -> fresh String {
     return lines.join("\n")
 }
 
-fn bullet_lines(items: read List<String>) -> fresh String {
+fn bullet_lines(items: List<String>) -> fresh String {
     let mut lines = List<String>.new()
     for item in items {
         mut lines.push(["- ", item].join(""))
@@ -142,9 +142,9 @@ fn bullet_lines(items: read List<String>) -> fresh String {
     return lines.join("\n")
 }
 
-pub fn Prompt.render(prompt: read Prompt) -> fresh String {
+pub fn Prompt.render(prompt: Prompt) -> fresh String {
     return [
-        String.copy(value: read prompt.system),
+        String.copy(value: prompt.system),
         "\n\nWork in a bounded tool loop:\n",
         numbered_lines(prompt.instructions),
         "\n\nConstraints:\n",
@@ -156,16 +156,16 @@ pub fn TokenUsage.zero() -> fresh TokenUsage {
     return TokenUsage(prompt_tokens: 0, completion_tokens: 0, total_tokens: 0)
 }
 
-pub fn TokenUsage.from_json(value: read JsonValue) -> Result<fresh TokenUsage, JsonError> {
-    return Json.decode<TokenUsage>(value: read value)
+pub fn TokenUsage.from_json(value: JsonValue) -> Result<fresh TokenUsage, JsonError> {
+    return Json.decode<TokenUsage>(value)
 }
 
-pub fn TokenUsage.from_response_text(text: read String) -> fresh TokenUsage {
-    match Json.parse(text: read text) {
+pub fn TokenUsage.from_response_text(text: String) -> fresh TokenUsage {
+    match Json.parse(text) {
         Ok(root) => {
             match root.at("usage") {
                 Ok(usage) => {
-                    match TokenUsage.from_json(value: read usage) {
+                    match TokenUsage.from_json(value: usage) {
                         Ok(decoded) => {
                             return decoded
                         }
@@ -185,7 +185,7 @@ pub fn TokenUsage.from_response_text(text: read String) -> fresh TokenUsage {
     }
 }
 
-pub fn TokenUsage.add(left: read TokenUsage, right: read TokenUsage) -> fresh TokenUsage {
+pub fn TokenUsage.add(left: TokenUsage, right: TokenUsage) -> fresh TokenUsage {
     return TokenUsage(
         prompt_tokens: left.prompt_tokens + right.prompt_tokens,
         completion_tokens: left.completion_tokens + right.completion_tokens,
@@ -193,7 +193,7 @@ pub fn TokenUsage.add(left: read TokenUsage, right: read TokenUsage) -> fresh To
     )
 }
 
-pub fn TokenUsage.to_json(usage: read TokenUsage) -> fresh JsonValue {
+pub fn TokenUsage.to_json(usage: TokenUsage) -> fresh JsonValue {
     return {
         "prompt_tokens": usage.prompt_tokens,
         "completion_tokens": usage.completion_tokens,
@@ -201,7 +201,7 @@ pub fn TokenUsage.to_json(usage: read TokenUsage) -> fresh JsonValue {
     }
 }
 
-pub fn TokenUsage.summary(usage: read TokenUsage) -> fresh String {
+pub fn TokenUsage.summary(usage: TokenUsage) -> fresh String {
     return [
         "prompt_tokens=",
         usage.prompt_tokens.to_string(),
@@ -212,11 +212,11 @@ pub fn TokenUsage.summary(usage: read TokenUsage) -> fresh String {
     ].join("")
 }
 
-pub fn StructuredLogger.named(name: read String) -> fresh StructuredLogger {
-    return StructuredLogger(name: String.copy(value: read name))
+pub fn StructuredLogger.named(name: String) -> fresh StructuredLogger {
+    return StructuredLogger(name: String.copy(value: name))
 }
 
-fn log_payload(logger: read StructuredLogger, level: read String, event: read String, message: read String) -> fresh JsonValue {
+fn log_payload(logger: StructuredLogger, level: String, event: String, message: String) -> fresh JsonValue {
     return {
         "logger": logger.name,
         "level": level,
@@ -226,27 +226,27 @@ fn log_payload(logger: read StructuredLogger, level: read String, event: read St
 }
 
 pub fn StructuredLogger.event(
-    logger: read StructuredLogger,
-    event: read String,
-    message: read String,
+    logger: StructuredLogger,
+    event: String,
+    message: String,
 ) -> Unit {
-    Log.write_json(value: read log_payload(logger: read logger, level: read "info", event: read event, message: read message))
+    Log.write_json(value: log_payload(logger, level: "info", event, message))
     return Unit
 }
 
 pub fn StructuredLogger.error(
-    logger: read StructuredLogger,
-    event: read String,
-    message: read String,
+    logger: StructuredLogger,
+    event: String,
+    message: String,
 ) -> Unit {
-    Log.error_json(value: read log_payload(logger: read logger, level: read "error", event: read event, message: read message))
+    Log.error_json(value: log_payload(logger, level: "error", event, message))
     return Unit
 }
 
 pub fn StructuredLogger.json(
-    logger: read StructuredLogger,
-    event: read String,
-    value: read JsonValue,
+    logger: StructuredLogger,
+    event: String,
+    value: JsonValue,
 ) -> Unit {
     let payload = {
         "logger": logger.name,
@@ -254,20 +254,20 @@ pub fn StructuredLogger.json(
         "event": event,
         "value": value,
     }
-    Log.write_json(value: read Json.value(value: read payload))
+    Log.write_json(value: Json.value(value: payload))
     return Unit
 }
 
-pub fn TraceSpan.start(name: read String) -> fresh TraceSpan {
+pub fn TraceSpan.start(name: String) -> fresh TraceSpan {
     let now = Clock.system_unix_ms()
     let trace_id = [name, "-", now.to_string()].join("")
-    return TraceSpan(name: String.copy(value: read name), trace_id: trace_id, start_ms: now)
+    return TraceSpan(name: String.copy(value: name), trace_id: trace_id, start_ms: now)
 }
 
 pub fn TraceSpan.finish(
-    span: read TraceSpan,
-    logger: read StructuredLogger,
-    status: read String,
+    span: TraceSpan,
+    logger: StructuredLogger,
+    status: String,
 ) -> Unit {
     let now = Clock.system_unix_ms()
     let payload = {
@@ -277,9 +277,9 @@ pub fn TraceSpan.finish(
         "duration_ms": now - span.start_ms,
     }
     StructuredLogger.json(
-        logger: read logger,
-        event: read "span.finished",
-        value: read Json.value(value: read payload),
+        logger,
+        event: "span.finished",
+        value: Json.value(value: payload),
     )
     return Unit
 }

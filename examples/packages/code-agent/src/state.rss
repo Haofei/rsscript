@@ -15,7 +15,7 @@ struct ToolLoopResult {
     failure_reason: String
 }
 
-fn AgentState.new(task: read String, prompt: read Prompt) -> fresh AgentState {
+fn AgentState.new(task: String, prompt: Prompt) -> fresh AgentState {
     return AgentState(
         messages: [ChatMessage.system(prompt.render()), ChatMessage.user(task)],
         step: 0,
@@ -25,6 +25,6 @@ fn AgentState.new(task: read String, prompt: read Prompt) -> fresh AgentState {
     )
 }
 
-fn AgentState.can_continue(state: read AgentState, max_steps: Int) -> Bool {
+fn AgentState.can_continue(state: AgentState, max_steps: Int) -> Bool {
     return state.finished == false && state.failed == false && state.step < max_steps
 }

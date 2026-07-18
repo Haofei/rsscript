@@ -2,30 +2,30 @@ struct PersistentMap<K, V>
 
 pub fn PersistentMap.new<K, V>() -> fresh PersistentMap<K, V>
 
-pub fn PersistentMap.len<K, V>(map: read PersistentMap<K, V>) -> Int
+pub fn PersistentMap.len<K, V>(map: PersistentMap<K, V>) -> Int
 
-pub fn PersistentMap.is_empty<K, V>(map: read PersistentMap<K, V>) -> Bool
+pub fn PersistentMap.is_empty<K, V>(map: PersistentMap<K, V>) -> Bool
 
 pub fn PersistentMap.contains_key<K, V>(
-    map: read PersistentMap<K, V>,
-    key: read K,
+    map: PersistentMap<K, V>,
+    key: K,
 ) -> Bool
 
 pub fn PersistentMap.get<K, V>(
-    map: read PersistentMap<K, V>,
-    key: read K,
+    map: PersistentMap<K, V>,
+    key: K,
 ) -> Option<V>
 
 pub fn PersistentMap.insert<K, V>(
-    map: read PersistentMap<K, V>,
-    key: read K,
-    value: read V,
+    map: PersistentMap<K, V>,
+    key: K,
+    value: V,
 ) -> fresh PersistentMap<K, V>
     effects(retains(key), retains(value))
 
 pub fn PersistentMap.remove<K, V>(
-    map: read PersistentMap<K, V>,
-    key: read K,
+    map: PersistentMap<K, V>,
+    key: K,
 ) -> fresh PersistentMap<K, V>
 
-pub fn PersistentMap.clear<K, V>(map: read PersistentMap<K, V>) -> fresh PersistentMap<K, V>
+pub fn PersistentMap.clear<K, V>(map: PersistentMap<K, V>) -> fresh PersistentMap<K, V>

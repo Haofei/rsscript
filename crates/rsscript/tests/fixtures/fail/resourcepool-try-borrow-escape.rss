@@ -9,14 +9,14 @@ resource Session {
     }
 }
 
-fn Session.open(host: read String) -> Session
+fn Session.open(host: String) -> Session
 
 // `try_borrow` produces a scoped lease just like `borrow`, so it must be consumed
 // by `with`. Binding it to a value lets the lease escape the scoped model.
-fn run(host: read String) -> Result<Unit, PoolError> {
-    local pool_host = String.concat(left: read host, right: read "")
+fn run(host: String) -> Result<Unit, PoolError> {
+    local pool_host = String.concat(left: host, right: "")
     local pool = ResourcePool<Session>.lazy(
-        create: || Session.open(host: read pool_host),
+        create: || Session.open(host: pool_host),
         max_size: 2,
     )
     let lease = ResourcePool.try_borrow(pool: mut pool)?

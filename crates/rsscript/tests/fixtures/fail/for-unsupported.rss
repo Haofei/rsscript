@@ -1,6 +1,6 @@
 // expect: RS0209
-fn run(items: read String) -> Unit {
+fn run(items: String) -> Unit {
     for item in items {
-        Log.write(message: read "x")
+        Log.write(message: "x")
     }
 }

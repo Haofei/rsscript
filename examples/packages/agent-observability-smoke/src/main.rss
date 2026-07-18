@@ -1,4 +1,4 @@
-fn agent_observability_smoke(response: read String) -> Result<fresh JsonValue, JsonError> {
+fn agent_observability_smoke(response: String) -> Result<fresh JsonValue, JsonError> {
     let env = ModelEnv(
         model: "TEST_AGENT_MODEL",
         endpoint: "TEST_AGENT_ENDPOINT",
@@ -15,22 +15,22 @@ fn agent_observability_smoke(response: read String) -> Result<fresh JsonValue, J
         max_attempts: 1,
         backoff_ms: 0,
     )
-    let model = ModelConfig.from_env(env: read env, defaults: read defaults)
-    let prompt = Prompt.code_agent(model: read model)
-    let rendered = Prompt.render(prompt: read prompt)
-    let usage = TokenUsage.from_response_text(text: read response)
-    let doubled = TokenUsage.add(left: read usage, right: read usage)
-    let logger = StructuredLogger.named(name: read "test-agent")
-    StructuredLogger.event(logger: read logger, event: read "prompt.rendered", message: read rendered)
-    StructuredLogger.json(logger: read logger, event: read "usage", value: read TokenUsage.to_json(usage: read doubled))
-    let span = TraceSpan.start(name: read "test.span")
-    TraceSpan.finish(span: read span, logger: read logger, status: read "ok")
-    return Ok(TokenUsage.to_json(usage: read doubled))
+    let model = ModelConfig.from_env(env: env, defaults: defaults)
+    let prompt = Prompt.code_agent(model: model)
+    let rendered = Prompt.render(prompt: prompt)
+    let usage = TokenUsage.from_response_text(text: response)
+    let doubled = TokenUsage.add(left: usage, right: usage)
+    let logger = StructuredLogger.named(name: "test-agent")
+    StructuredLogger.event(logger: logger, event: "prompt.rendered", message: rendered)
+    StructuredLogger.json(logger: logger, event: "usage", value: TokenUsage.to_json(usage: doubled))
+    let span = TraceSpan.start(name: "test.span")
+    TraceSpan.finish(span: span, logger: logger, status: "ok")
+    return Ok(TokenUsage.to_json(usage: doubled))
 }
 
 fn main() -> Result<Unit, JsonError> {
     let response = """{"usage":{"prompt_tokens":2,"completion_tokens":3,"total_tokens":5}}"""
-    let usage = agent_observability_smoke(response: read response)?
+    let usage = agent_observability_smoke(response)?
     let total = usage.field_int("total_tokens")?
     Assert.equal_int(left: total, right: 10)
     return Ok(Unit)

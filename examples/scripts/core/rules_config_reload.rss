@@ -1,46 +1,46 @@
 features: local
 
-fn load_rules_config(path: read Path) -> Result<fresh Config, ConfigError> {
-    let rules = RuleLoader.load_rules(path: read path)?
-    return Ok(Config.new(name: read "rules", rules: read rules))
+fn load_rules_config(path: Path) -> Result<fresh Config, ConfigError> {
+    let rules = RuleLoader.load_rules(path)?
+    return Ok(Config.new(name: "rules", rules))
 }
 
-fn reload_rules_config(path: read Path, global: mut GlobalConfig) -> Result<Unit, ConfigError> {
-    let next = load_rules_config(path: read path)?
-    GlobalConfig.replace(global: mut global, value: read next)
+fn reload_rules_config(path: Path, global: mut GlobalConfig) -> Result<Unit, ConfigError> {
+    let next = load_rules_config(path)?
+    GlobalConfig.replace(global: mut global, value: next)
     return Ok(Unit)
 }
 
 fn main() -> Result<Unit, FileError> {
-    let first = Path.from_string(value: read "rsscript-rules-first.txt")
-    let second = Path.from_string(value: read "rsscript-rules-second.txt")
-    let first_data = Bytes.from_string(value: read "alpha\nbeta\n")
-    let second_data = Bytes.from_string(value: read "gamma\n")
+    let first = Path.from_string(value: "rsscript-rules-first.txt")
+    let second = Path.from_string(value: "rsscript-rules-second.txt")
+    let first_data = Bytes.from_string(value: "alpha\nbeta\n")
+    let second_data = Bytes.from_string(value: "gamma\n")
 
-    with File.open_write(path: read first)? as file {
-        File.write(file: mut file, data: read first_data)?
+    with File.open_write(path: first)? as file {
+        File.write(file: mut file, data: first_data)?
     }
-    with File.open_write(path: read second)? as file {
-        File.write(file: mut file, data: read second_data)?
+    with File.open_write(path: second)? as file {
+        File.write(file: mut file, data: second_data)?
     }
 
-    match load_rules_config(path: read first) {
+    match load_rules_config(path: first) {
         Ok(initial) => {
-            let global = GlobalConfig.new(value: read (manage initial))
-            match reload_rules_config(path: read second, global: mut global) {
+            let global = GlobalConfig.new(value: (manage initial))
+            match reload_rules_config(path: second, global: mut global) {
                 Ok(unit) => {
-                    let count = GlobalConfig.rule_count(global: read global)
+                    let count = GlobalConfig.rule_count(global)
                     if count == 1 {
-                        Log.write(message: read "rules config reloaded")
+                        Log.write(message: "rules config reloaded")
                     }
                 }
                 Err(error) => {
-                    Log.write(message: read "rules config reload failed")
+                    Log.write(message: "rules config reload failed")
                 }
             }
         }
         Err(error) => {
-            Log.write(message: read "rules config load failed")
+            Log.write(message: "rules config load failed")
         }
     }
 

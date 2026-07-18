@@ -5,15 +5,15 @@ features: native, local
 
 fn main() -> Unit {
     local values = List<Int>.new()
-    List.push<Int>(list: mut values, value: read 1)
-    List.push<Int>(list: mut values, value: read 2)
-    List.push<Int>(list: mut values, value: read 3)
-    List.push<Int>(list: mut values, value: read 4)
+    List.push<Int>(list: mut values, value: 1)
+    List.push<Int>(list: mut values, value: 2)
+    List.push<Int>(list: mut values, value: 3)
+    List.push<Int>(list: mut values, value: 4)
 
-    let sum = Rayon.sum_int(values: read values)
+    let sum = Rayon.sum_int(values: values)
     Assert.equal_int(left: sum, right: 10)
 
-    let squares = Rayon.sum_squares(values: read values)
+    let squares = Rayon.sum_squares(values: values)
     Assert.equal_int(left: squares, right: 30)
 
     return Unit

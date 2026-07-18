@@ -6,13 +6,13 @@ struct Holder {
     image: handle Image
 }
 
-fn make_holder(path: read Path) -> fresh Holder
+fn make_holder(path: Path) -> fresh Holder
 
-fn use_image(image: read Image) -> Unit
+fn use_image(image: Image) -> Unit
 
-fn ok_capture(path: read Path) -> Unit {
-    local holder = make_holder(path: read path)
+fn ok_capture(path: Path) -> Unit {
+    local holder = make_holder(path)
     let callback = || {
-        use_image(image: read holder.image)
+        use_image(image: holder.image)
     }
 }

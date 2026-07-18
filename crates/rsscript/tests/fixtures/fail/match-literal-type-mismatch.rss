@@ -1,6 +1,6 @@
 // expect: RS0209
 
-fn bad(value: read String) -> String {
+fn bad(value: String) -> String {
     return match value {
         1 => { "one" }
         _ => { "fallback" }

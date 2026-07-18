@@ -1,4 +1,4 @@
-fn sum_all(xs: read List<Int>) -> Int {
+fn sum_all(xs: List<Int>) -> Int {
     let mut total = 0
     for x in xs {
         total = total + x

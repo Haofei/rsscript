@@ -2,8 +2,8 @@ features: async
 
 fn main() -> Result<Unit, String> {
     Reports.upload_batch(
-        bucket: read "reports-prod",
-        day: read "2026-05-31",
+        bucket: "reports-prod",
+        day: "2026-05-31",
     )?
     return Ok(Unit)
 }

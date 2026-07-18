@@ -23,12 +23,12 @@ fn mailbox_new<T>(capacity: Int) -> fresh Mailbox<T> {
     )
 }
 
-fn mailbox_count<T>(m: read Mailbox<T>) -> Int {
+fn mailbox_count<T>(m: Mailbox<T>) -> Int {
     return m.count
 }
 
 // Store a message at the tail. O(1). Returns false if full.
-fn mailbox_send<T>(m: mut Mailbox<T>, value: read T, source: Int) -> Bool {
+fn mailbox_send<T>(m: mut Mailbox<T>, value: T, source: Int) -> Bool {
     if m.count >= m.capacity {
         return false
     }
@@ -37,12 +37,12 @@ fn mailbox_send<T>(m: mut Mailbox<T>, value: read T, source: Int) -> Bool {
     // Slots fill 0..capacity-1 contiguously, so `tail` is either an existing slot
     // (reuse) or exactly the next one to allocate (grow). Avoids needing a generic
     // placeholder value to pre-size the lists.
-    if tail < List.len<T>(list: read m.values) {
-        List.set<T>(list: mut m.values, index: tail, value: read value)
-        List.set<Int>(list: mut m.sources, index: tail, value: read source)
+    if tail < List.len<T>(list: m.values) {
+        List.set<T>(list: mut m.values, index: tail, value)
+        List.set<Int>(list: mut m.sources, index: tail, value: source)
     } else {
-        List.push<T>(list: mut m.values, value: read value)
-        List.push<Int>(list: mut m.sources, value: read source)
+        List.push<T>(list: mut m.values, value)
+        List.push<Int>(list: mut m.sources, value: source)
     }
     m.count = m.count + 1
     return true
@@ -53,7 +53,7 @@ fn mailbox_take<T>(m: mut Mailbox<T>) -> Option<T> {
     if m.count <= 0 {
         return None
     }
-    let value = List.get<T>(list: read m.values, index: m.head)
+    let value = List.get<T>(list: m.values, index: m.head)
     let next = m.head + 1
     m.head = next % m.capacity
     m.count = m.count - 1
@@ -69,7 +69,7 @@ fn mailbox_take_from<T>(m: mut Mailbox<T>, source: Int) -> Option<T> {
     while k < m.count {
         let raw = m.head + k
         let idx = raw % m.capacity
-        if List.get<Int>(list: read m.sources, index: idx) == source {
+        if List.get<Int>(list: m.sources, index: idx) == source {
             offset = k
             k = m.count
         } else {
@@ -81,17 +81,17 @@ fn mailbox_take_from<T>(m: mut Mailbox<T>, source: Int) -> Option<T> {
     }
     let take_raw = m.head + offset
     let take_idx = take_raw % m.capacity
-    let value = List.get<T>(list: read m.values, index: take_idx)
+    let value = List.get<T>(list: m.values, index: take_idx)
     let mut j = offset
     while j > 0 {
         let dst_raw = m.head + j
         let dst = dst_raw % m.capacity
         let src_raw = m.head + j - 1
         let src = src_raw % m.capacity
-        let moved_value = List.get<T>(list: read m.values, index: src)
-        let moved_source = List.get<Int>(list: read m.sources, index: src)
-        List.set<T>(list: mut m.values, index: dst, value: read moved_value)
-        List.set<Int>(list: mut m.sources, index: dst, value: read moved_source)
+        let moved_value = List.get<T>(list: m.values, index: src)
+        let moved_source = List.get<Int>(list: m.sources, index: src)
+        List.set<T>(list: mut m.values, index: dst, value: moved_value)
+        List.set<Int>(list: mut m.sources, index: dst, value: moved_source)
         j = j - 1
     }
     let next = m.head + 1
@@ -100,36 +100,36 @@ fn mailbox_take_from<T>(m: mut Mailbox<T>, source: Int) -> Option<T> {
     return Some(value)
 }
 
-fn show(label: read String, value: Int) -> Unit {
-    Log.write(message: read String.concat(left: read label, right: read String.from_int(value: value)))
+fn show(label: String, value: Int) -> Unit {
+    Log.write(message: String.concat(left: label, right: String.from_int(value)))
 }
 
-fn show_none(label: read String) -> Unit {
-    Log.write(message: read String.concat(left: read label, right: read "none"))
+fn show_none(label: String) -> Unit {
+    Log.write(message: String.concat(left: label, right: "none"))
 }
 
 fn main() -> Unit {
     let mut box = mailbox_new<Int>(capacity: 4)
-    let _a = mailbox_send<Int>(m: mut box, value: read 10, source: 1)
-    let _b = mailbox_send<Int>(m: mut box, value: read 20, source: 2)
-    let _c = mailbox_send<Int>(m: mut box, value: read 30, source: 1)
+    let _a = mailbox_send<Int>(m: mut box, value: 10, source: 1)
+    let _b = mailbox_send<Int>(m: mut box, value: 20, source: 2)
+    let _c = mailbox_send<Int>(m: mut box, value: 30, source: 1)
 
     match mailbox_take<Int>(m: mut box) {
-        Some(v) => { show(label: read "oldest=", value: v) }
-        None => { show_none(label: read "oldest=") }
+        Some(v) => { show(label: "oldest=", value: v) }
+        None => { show_none(label: "oldest=") }
     }
     match mailbox_take_from<Int>(m: mut box, source: 1) {
-        Some(v) => { show(label: read "from1=", value: v) }
-        None => { show_none(label: read "from1=") }
+        Some(v) => { show(label: "from1=", value: v) }
+        None => { show_none(label: "from1=") }
     }
     match mailbox_take<Int>(m: mut box) {
-        Some(v) => { show(label: read "oldest=", value: v) }
-        None => { show_none(label: read "oldest=") }
+        Some(v) => { show(label: "oldest=", value: v) }
+        None => { show_none(label: "oldest=") }
     }
     match mailbox_take<Int>(m: mut box) {
-        Some(v) => { show(label: read "empty=", value: v) }
-        None => { show_none(label: read "empty=") }
+        Some(v) => { show(label: "empty=", value: v) }
+        None => { show_none(label: "empty=") }
     }
-    show(label: read "count=", value: mailbox_count<Int>(m: read box))
+    show(label: "count=", value: mailbox_count<Int>(m: box))
     return Unit
 }

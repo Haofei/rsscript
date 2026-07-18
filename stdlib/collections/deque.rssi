@@ -6,13 +6,13 @@ pub fn Deque.new<T>() -> fresh Deque<T>
 
 pub fn Deque.push_back<T>(
     deque: mut Deque<T>,
-    value: read T,
+    value: T,
 ) -> Unit
     effects(retains(value))
 
 pub fn Deque.push_front<T>(
     deque: mut Deque<T>,
-    value: read T,
+    value: T,
 ) -> Unit
     effects(retains(value))
 
@@ -22,8 +22,8 @@ pub fn Deque.pop_front<T>(deque: mut Deque<T>) -> Option<T>
 
 pub fn Deque.clear<T>(deque: mut Deque<T>) -> Unit
 
-pub fn Deque.len<T>(deque: read Deque<T>) -> Int
+pub fn Deque.len<T>(deque: Deque<T>) -> Int
 
-pub fn Deque.is_empty<T>(deque: read Deque<T>) -> Bool
+pub fn Deque.is_empty<T>(deque: Deque<T>) -> Bool
 
-pub fn Deque.to_list<T>(deque: read Deque<T>) -> fresh List<T>
+pub fn Deque.to_list<T>(deque: Deque<T>) -> fresh List<T>

@@ -9,10 +9,10 @@ struct Config {
     workspace: Workspace
 }
 
-fn use_config(config: read Config, workspace: read Workspace) -> Unit
+fn use_config(config: Config, workspace: Workspace) -> Unit
 fn make_config() -> fresh Config
 
 fn run() -> Unit {
     local config = make_config()
-    use_config(config: read (manage config), workspace: read config.workspace)
+    use_config(config: (manage config), workspace: config.workspace)
 }

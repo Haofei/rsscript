@@ -635,7 +635,7 @@ pub(super) fn function_sig(function: &FunctionDecl) -> FunctionSig {
 pub(super) fn param_sig(param: &Param) -> ParamSig {
     ParamSig {
         name: param.name.clone(),
-        effect: param.effect.map(effect_label),
+        effect: param.effective_effect().map(effect_label),
         type_name: type_name(&param.ty),
     }
 }

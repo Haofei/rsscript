@@ -2,21 +2,21 @@
 features: local
 
 protocol Formatter {
-    fn format(self: read Self) -> fresh String
+    fn format(self: Self) -> fresh String
 }
 
 struct Report {
     title: String
 }
 
-fn Report.format(self: read Report) -> fresh String {
-    return String.concat(left: read "report:", right: read self.title)
+fn Report.format(self: Report) -> fresh String {
+    return String.concat(left: "report:", right: self.title)
 }
 
 impl Formatter for Report {
     format = Report.format
 }
 
-fn display(report: read Report) -> fresh String {
-    return read report.format()
+fn display(report: Report) -> fresh String {
+    return report.format()
 }

@@ -1,8 +1,8 @@
 features: local
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -19,14 +19,14 @@ fn main() -> Unit {
 
     // Enqueue at the back...
     while i < limit {
-        Deque.push_back<Int>(deque: mut q, value: read i)
+        Deque.push_back<Int>(deque: mut q, value: i)
         i = i + 1
     }
 
     // ...then drain from the front (FIFO). `pop_front` was `Vec::remove(0)` (O(n)
     // → O(n^2) total); with `VecDeque` it is O(1) → O(n) total.
     let mut total = 0
-    while Deque.len<Int>(deque: read q) > 0 {
+    while Deque.len<Int>(deque: q) > 0 {
         match Deque.pop_front<Int>(deque: mut q) {
             Some(value) => {
                 total = total + value
@@ -37,6 +37,6 @@ fn main() -> Unit {
         }
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Log.write(message: String.from_int(value: total))
     return Unit
 }

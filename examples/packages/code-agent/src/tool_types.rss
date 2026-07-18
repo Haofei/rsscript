@@ -59,25 +59,25 @@ struct FinishArgs derives(Clone, JsonDecode) {
     answer: Option<String>
 }
 
-fn decode_args_error(tool: read String, error: read JsonError) -> fresh ToolAction {
+fn decode_args_error(tool: String, error: JsonError) -> fresh ToolAction {
     let body = ["error: ", tool, " arguments must be a JSON object: ", error.message()].join("")
-    return ToolAction.error(content: read body)
+    return ToolAction.error(content: body)
 }
 
-fn string_or(value: read Option<String>, fallback: read String) -> String {
-    return Option.unwrap_or(value: read value, default: read fallback)
+fn string_or(value: Option<String>, fallback: String) -> String {
+    return Option.unwrap_or(value, default: fallback)
 }
 
-fn int_or(value: read Option<Int>, fallback: Int) -> Int {
-    return Option.unwrap_or(value: read value, default: read fallback)
+fn int_or(value: Option<Int>, fallback: Int) -> Int {
+    return Option.unwrap_or(value, default: fallback)
 }
 
-fn bool_or(value: read Option<Bool>, fallback: Bool) -> Bool {
-    return Option.unwrap_or(value: read value, default: read fallback)
+fn bool_or(value: Option<Bool>, fallback: Bool) -> Bool {
+    return Option.unwrap_or(value, default: fallback)
 }
 
-fn read_args_error(arguments: read String) -> Option<String> {
-    match Json.decode_text<ReadArgs>(text: read arguments) {
+fn read_args_error(arguments: String) -> Option<String> {
+    match Json.decode_text<ReadArgs>(text: arguments) {
         Ok => {
             return None
         }
@@ -87,13 +87,13 @@ fn read_args_error(arguments: read String) -> Option<String> {
     }
 }
 
-fn read_args(arguments: read String) -> ReadArgs {
+fn read_args(arguments: String) -> ReadArgs {
     let fallback = ReadArgs(path: None, start_line: None, max_lines: None, max_output_chars: None)
-    return Result.unwrap_or(value: read Json.decode_text<ReadArgs>(text: read arguments), default: read fallback)
+    return Result.unwrap_or(value: Json.decode_text<ReadArgs>(text: arguments), default: fallback)
 }
 
-fn write_args_error(arguments: read String) -> Option<String> {
-    match Json.decode_text<WriteArgs>(text: read arguments) {
+fn write_args_error(arguments: String) -> Option<String> {
+    match Json.decode_text<WriteArgs>(text: arguments) {
         Ok => {
             return None
         }
@@ -103,13 +103,13 @@ fn write_args_error(arguments: read String) -> Option<String> {
     }
 }
 
-fn write_args(arguments: read String) -> WriteArgs {
+fn write_args(arguments: String) -> WriteArgs {
     let fallback = WriteArgs(path: None, content: None)
-    return Result.unwrap_or(value: read Json.decode_text<WriteArgs>(text: read arguments), default: read fallback)
+    return Result.unwrap_or(value: Json.decode_text<WriteArgs>(text: arguments), default: fallback)
 }
 
-fn edit_args_error(arguments: read String) -> Option<String> {
-    match Json.decode_text<EditArgs>(text: read arguments) {
+fn edit_args_error(arguments: String) -> Option<String> {
+    match Json.decode_text<EditArgs>(text: arguments) {
         Ok => {
             return None
         }
@@ -119,13 +119,13 @@ fn edit_args_error(arguments: read String) -> Option<String> {
     }
 }
 
-fn edit_args(arguments: read String) -> EditArgs {
+fn edit_args(arguments: String) -> EditArgs {
     let fallback = EditArgs(path: None, old_string: None, new_string: None, replace_all: None)
-    return Result.unwrap_or(value: read Json.decode_text<EditArgs>(text: read arguments), default: read fallback)
+    return Result.unwrap_or(value: Json.decode_text<EditArgs>(text: arguments), default: fallback)
 }
 
-fn apply_patch_args_error(arguments: read String) -> Option<String> {
-    match Json.decode_text<ApplyPatchArgs>(text: read arguments) {
+fn apply_patch_args_error(arguments: String) -> Option<String> {
+    match Json.decode_text<ApplyPatchArgs>(text: arguments) {
         Ok => {
             return None
         }
@@ -135,13 +135,13 @@ fn apply_patch_args_error(arguments: read String) -> Option<String> {
     }
 }
 
-fn apply_patch_args(arguments: read String) -> ApplyPatchArgs {
+fn apply_patch_args(arguments: String) -> ApplyPatchArgs {
     let fallback = ApplyPatchArgs(path: None, patch: None)
-    return Result.unwrap_or(value: read Json.decode_text<ApplyPatchArgs>(text: read arguments), default: read fallback)
+    return Result.unwrap_or(value: Json.decode_text<ApplyPatchArgs>(text: arguments), default: fallback)
 }
 
-fn shell_args_error(arguments: read String) -> Option<String> {
-    match Json.decode_text<ShellArgs>(text: read arguments) {
+fn shell_args_error(arguments: String) -> Option<String> {
+    match Json.decode_text<ShellArgs>(text: arguments) {
         Ok => {
             return None
         }
@@ -151,13 +151,13 @@ fn shell_args_error(arguments: read String) -> Option<String> {
     }
 }
 
-fn shell_args(arguments: read String) -> ShellArgs {
+fn shell_args(arguments: String) -> ShellArgs {
     let fallback = ShellArgs(cmd: None, timeout_ms: None, max_output_chars: None)
-    return Result.unwrap_or(value: read Json.decode_text<ShellArgs>(text: read arguments), default: read fallback)
+    return Result.unwrap_or(value: Json.decode_text<ShellArgs>(text: arguments), default: fallback)
 }
 
-fn rss_check_args_error(arguments: read String) -> Option<String> {
-    match Json.decode_text<RssCheckArgs>(text: read arguments) {
+fn rss_check_args_error(arguments: String) -> Option<String> {
+    match Json.decode_text<RssCheckArgs>(text: arguments) {
         Ok => {
             return None
         }
@@ -167,13 +167,13 @@ fn rss_check_args_error(arguments: read String) -> Option<String> {
     }
 }
 
-fn rss_check_args(arguments: read String) -> RssCheckArgs {
+fn rss_check_args(arguments: String) -> RssCheckArgs {
     let fallback = RssCheckArgs(path: None, timeout_ms: None)
-    return Result.unwrap_or(value: read Json.decode_text<RssCheckArgs>(text: read arguments), default: read fallback)
+    return Result.unwrap_or(value: Json.decode_text<RssCheckArgs>(text: arguments), default: fallback)
 }
 
-fn rss_cmd_args_error(arguments: read String) -> Option<String> {
-    match Json.decode_text<RssCmdArgs>(text: read arguments) {
+fn rss_cmd_args_error(arguments: String) -> Option<String> {
+    match Json.decode_text<RssCmdArgs>(text: arguments) {
         Ok => {
             return None
         }
@@ -183,13 +183,13 @@ fn rss_cmd_args_error(arguments: read String) -> Option<String> {
     }
 }
 
-fn rss_cmd_args(arguments: read String) -> RssCmdArgs {
+fn rss_cmd_args(arguments: String) -> RssCmdArgs {
     let fallback = RssCmdArgs(command: None, args: None, path: None, timeout_ms: None, max_output_chars: None)
-    return Result.unwrap_or(value: read Json.decode_text<RssCmdArgs>(text: read arguments), default: read fallback)
+    return Result.unwrap_or(value: Json.decode_text<RssCmdArgs>(text: arguments), default: fallback)
 }
 
-fn rss_ide_args_error(arguments: read String) -> Option<String> {
-    match Json.decode_text<RssIdeArgs>(text: read arguments) {
+fn rss_ide_args_error(arguments: String) -> Option<String> {
+    match Json.decode_text<RssIdeArgs>(text: arguments) {
         Ok => {
             return None
         }
@@ -199,7 +199,7 @@ fn rss_ide_args_error(arguments: read String) -> Option<String> {
     }
 }
 
-fn rss_ide_args(arguments: read String) -> RssIdeArgs {
+fn rss_ide_args(arguments: String) -> RssIdeArgs {
     let fallback = RssIdeArgs(
         action: None,
         path: None,
@@ -209,11 +209,11 @@ fn rss_ide_args(arguments: read String) -> RssIdeArgs {
         column: None,
         include_declaration: None,
     )
-    return Result.unwrap_or(value: read Json.decode_text<RssIdeArgs>(text: read arguments), default: read fallback)
+    return Result.unwrap_or(value: Json.decode_text<RssIdeArgs>(text: arguments), default: fallback)
 }
 
-fn finish_args_error(arguments: read String) -> Option<String> {
-    match Json.decode_text<FinishArgs>(text: read arguments) {
+fn finish_args_error(arguments: String) -> Option<String> {
+    match Json.decode_text<FinishArgs>(text: arguments) {
         Ok => {
             return None
         }
@@ -223,29 +223,29 @@ fn finish_args_error(arguments: read String) -> Option<String> {
     }
 }
 
-fn finish_args(arguments: read String) -> FinishArgs {
+fn finish_args(arguments: String) -> FinishArgs {
     let fallback = FinishArgs(answer: None)
-    return Result.unwrap_or(value: read Json.decode_text<FinishArgs>(text: read arguments), default: read fallback)
+    return Result.unwrap_or(value: Json.decode_text<FinishArgs>(text: arguments), default: fallback)
 }
 
-fn path_in_workspace(workspace_root: read String, path_text: read String) -> Bool {
+fn path_in_workspace(workspace_root: String, path_text: String) -> Bool {
     let safe = path_text.safe_relative().is_ok()
     let under_root = path_text.starts_with(workspace_root)
     return safe && under_root
 }
 
-fn resolve_repo_path(repo_root: read Path, path_text: read String) -> Result<fresh Path, String> {
-    return Workspace.resolve(root: read repo_root, relative: read path_text)
+fn resolve_repo_path(repo_root: Path, path_text: String) -> Result<fresh Path, String> {
+    return Workspace.resolve(root: repo_root, relative: path_text)
 }
 
-fn tool_path_error(path_text: read String, reason: read String) -> fresh ToolAction {
+fn tool_path_error(path_text: String, reason: String) -> fresh ToolAction {
     let body = {"ok": false, "path": path_text, "error": reason}
-    return ToolAction.error(content: read Json.encode(value: read body))
+    return ToolAction.error(content: Json.encode(value: body))
 }
 
-fn tool_arg_error(reason: read String) -> fresh ToolAction {
+fn tool_arg_error(reason: String) -> fresh ToolAction {
     let body = {"ok": false, "error": reason}
-    return ToolAction.error(content: read Json.encode(value: read body))
+    return ToolAction.error(content: Json.encode(value: body))
 }
 
 fn bounded_limit(value: Int, fallback: Int, max: Int) -> Int {
@@ -258,14 +258,14 @@ fn bounded_limit(value: Int, fallback: Int, max: Int) -> Int {
     return value
 }
 
-fn cap_text(content: read String, max_chars: Int) -> fresh String {
+fn cap_text(content: String, max_chars: Int) -> fresh String {
     if content.len() <= max_chars {
         return content.copy()
     }
     return content.slice(0, max_chars)
 }
 
-fn truncation_header(content: read String, max_chars: Int) -> String {
+fn truncation_header(content: String, max_chars: Int) -> String {
     if content.len() <= max_chars {
         return ""
     }
@@ -279,12 +279,12 @@ fn truncation_header(content: read String, max_chars: Int) -> String {
     return parts.join("")
 }
 
-fn output_with_cap(content: read String, max_chars: Int) -> fresh ToolOutput {
+fn output_with_cap(content: String, max_chars: Int) -> fresh ToolOutput {
     let capped = cap_text(content, max_chars)
     let prefix = truncation_header(content, max_chars)
     let text = [prefix, capped].join("")
     if content.len() > max_chars {
-        return ToolOutput.error(content: read text)
+        return ToolOutput.error(content: text)
     }
-    return ToolOutput.respond(content: read text)
+    return ToolOutput.respond(content: text)
 }

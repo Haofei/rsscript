@@ -13,17 +13,17 @@ fn main() -> Unit {
     let b = Coord(x: 3, y: 4, label: "b")
     let a_dup = Coord(x: 1, y: 2, label: "a")
 
-    Map.insert(map: mut m, key: read a, value: read 10)
-    Map.insert(map: mut m, key: read b, value: read 20)
+    Map.insert(map: mut m, key: a, value: 10)
+    Map.insert(map: mut m, key: b, value: 20)
     // Overwrite: structurally equal key replaces the existing entry.
-    Map.insert(map: mut m, key: read a_dup, value: read 99)
+    Map.insert(map: mut m, key: a_dup, value: 99)
 
-    let here = Map.contains_key(map: read m, key: read a)
-    let got = Map.get(map: read m, key: read a_dup)
-    let n = Map.len(map: read m)
+    let here = Map.contains_key(map: m, key: a)
+    let got = Map.get(map: m, key: a_dup)
+    let n = Map.len(map: m)
 
     if here {
-        Log.write(message: read "found")
+        Log.write(message: "found")
     }
     return Unit
 }

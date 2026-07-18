@@ -42,11 +42,11 @@ pub native fn Date.days_in_month(year: Int, month: Int) -> Int
 pub native fn Date.format_ymd(unix_ms: Int) -> fresh String
     effects(native)
 
-pub native fn Date.parse_ymd(value: read String) -> Option<Int>
+pub native fn Date.parse_ymd(value: String) -> Option<Int>
     effects(native)
 
 pub native fn Date.format_iso(unix_ms: Int) -> fresh String
     effects(native)
 
-pub native fn Date.parse_iso(value: read String) -> Option<Int>
+pub native fn Date.parse_iso(value: String) -> Option<Int>
     effects(native)

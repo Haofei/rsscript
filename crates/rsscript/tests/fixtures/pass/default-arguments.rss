@@ -6,8 +6,8 @@ fn box_volume(width: Int, height: Int = 2, depth: Int = 3) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: box_volume(width: 5)))
-    Log.write(message: read String.from_int(value: box_volume(width: 5, height: 4)))
-    Log.write(message: read String.from_int(value: box_volume(width: 5, height: 4, depth: 6)))
+    Log.write(message: String.from_int(value: box_volume(width: 5)))
+    Log.write(message: String.from_int(value: box_volume(width: 5, height: 4)))
+    Log.write(message: String.from_int(value: box_volume(width: 5, height: 4, depth: 6)))
     return Unit
 }

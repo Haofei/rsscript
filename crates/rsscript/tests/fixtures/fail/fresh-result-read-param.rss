@@ -8,6 +8,6 @@ class BuildError {
     code: Int
 }
 
-fn bad(value: read Boxed) -> Result<fresh Boxed, BuildError> {
+fn bad(value: Boxed) -> Result<fresh Boxed, BuildError> {
     return Ok(value)
 }

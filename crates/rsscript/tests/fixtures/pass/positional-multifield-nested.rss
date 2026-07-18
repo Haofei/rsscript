@@ -3,7 +3,7 @@ sum Entry {
 }
 
 // Nested per-position pattern: the second position destructures an Option.
-fn value_or_zero(entry: read Entry) -> Int {
+fn value_or_zero(entry: Entry) -> Int {
     match read entry {
         Pair(k, Some(v)) => { return read k + read v }
         Pair(k, None) => { return read k }
@@ -12,6 +12,6 @@ fn value_or_zero(entry: read Entry) -> Int {
 
 fn main() -> Unit {
     let e = Pair(key: 1, value: Some(2))
-    let n = value_or_zero(entry: read e)
+    let n = value_or_zero(entry: e)
     return Unit
 }

@@ -7,80 +7,80 @@ struct Map<K, V>
 
 pub fn Map.new<K: Hashable, V>() -> fresh Map<K, V>
 
-pub fn Map.len<K: Hashable, V>(map: read Map<K, V>) -> Int
+pub fn Map.len<K: Hashable, V>(map: Map<K, V>) -> Int
 
-pub fn Map.is_empty<K: Hashable, V>(map: read Map<K, V>) -> Bool
+pub fn Map.is_empty<K: Hashable, V>(map: Map<K, V>) -> Bool
 
 pub fn Map.contains_key<K: Hashable, V>(
-    map: read Map<K, V>,
-    key: read K,
+    map: Map<K, V>,
+    key: K,
 ) -> Bool
 
 pub fn Map.get<K: Hashable, V>(
-    map: read Map<K, V>,
-    key: read K,
+    map: Map<K, V>,
+    key: K,
 ) -> Option<V>
 
 pub fn Map.get_or_default<K: Hashable, V>(
-    map: read Map<K, V>,
-    key: read K,
-    default: read V,
+    map: Map<K, V>,
+    key: K,
+    default: V,
 ) -> V
 
 pub fn Map.insert<K: Hashable, V>(
     map: mut Map<K, V>,
-    key: read K,
-    value: read V,
+    key: K,
+    value: V,
 ) -> Unit
     effects(retains(key), retains(value))
 
 pub fn Map.insert_old<K: Hashable, V>(
     map: mut Map<K, V>,
-    key: read K,
-    value: read V,
+    key: K,
+    value: V,
 ) -> Option<V>
     effects(retains(key), retains(value))
 
 pub fn Map.remove<K: Hashable, V>(
     map: mut Map<K, V>,
-    key: read K,
+    key: K,
 ) -> Option<V>
 
 pub fn Map.clear<K: Hashable, V>(map: mut Map<K, V>) -> Unit
 
-pub fn Map.keys<K: Hashable, V>(map: read Map<K, V>) -> fresh List<K>
+pub fn Map.keys<K: Hashable, V>(map: Map<K, V>) -> fresh List<K>
 
-pub fn Map.values<K: Hashable, V>(map: read Map<K, V>) -> fresh List<V>
+pub fn Map.values<K: Hashable, V>(map: Map<K, V>) -> fresh List<V>
 
 pub fn Map.for_each<K: Hashable, V>(
-    map: read Map<K, V>,
+    map: Map<K, V>,
     callback: noescape Fn(K, V) -> Unit,
 ) -> Unit
 
 pub fn Map.map_values<K: Hashable, V, U>(
-    map: read Map<K, V>,
+    map: Map<K, V>,
     mapper: noescape Fn(V) -> U,
 ) -> fresh Map<K, U>
 
 pub fn Map.filter<K: Hashable, V>(
-    map: read Map<K, V>,
+    map: Map<K, V>,
     predicate: noescape Fn(K, V) -> Bool,
 ) -> fresh Map<K, V>
 
 pub fn Map.try_fold<K: Hashable, V, U: Struct, E>(
-    map: read Map<K, V>,
-    initial: read U,
+    map: Map<K, V>,
+    initial: U,
     folder: noescape Fn(U, K, V) -> Result<fresh U, E>,
 ) -> Result<fresh U, E>
 
 pub fn Map.fold<K: Hashable, V, U: Struct>(
-    map: read Map<K, V>,
-    initial: read U,
+    map: Map<K, V>,
+    initial: U,
     folder: noescape Fn(U, K, V) -> fresh U,
 ) -> fresh U
 
 pub fn Map.merge<K: Hashable, V>(
-    left: read Map<K, V>,
-    right: read Map<K, V>,
+    left: Map<K, V>,
+    right: Map<K, V>,
     resolver: noescape Fn(V, V) -> V,
 ) -> fresh Map<K, V>

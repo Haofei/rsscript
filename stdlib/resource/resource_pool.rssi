@@ -44,12 +44,12 @@ pub fn ResourcePool.discard<T: Resource>(lease: mut T) -> Unit
 
 pub fn ResourcePool.stats<T: Resource>(pool: mut ResourcePool<T>) -> fresh PoolStats
 
-pub fn PoolStats.capacity(stats: read PoolStats) -> Int
+pub fn PoolStats.capacity(stats: PoolStats) -> Int
 
-pub fn PoolStats.created(stats: read PoolStats) -> Int
+pub fn PoolStats.created(stats: PoolStats) -> Int
 
-pub fn PoolStats.available(stats: read PoolStats) -> Int
+pub fn PoolStats.available(stats: PoolStats) -> Int
 
-pub fn PoolStats.in_use(stats: read PoolStats) -> Int
+pub fn PoolStats.in_use(stats: PoolStats) -> Int
 
-pub fn PoolError.message(error: read PoolError) -> fresh String
+pub fn PoolError.message(error: PoolError) -> fresh String

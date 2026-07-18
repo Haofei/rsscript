@@ -350,6 +350,44 @@ impl DataEffect {
     }
 }
 
+impl Param {
+    /// The semantic data effect of a parameter. `effect` records whether the
+    /// source spelled an annotation; ordinary data parameters silently default
+    /// to `read`, while closure, owned, noescape, and trusted-Fd parameters
+    /// retain their established explicit/exempt semantics.
+    pub fn effective_effect(&self) -> Option<DataEffect> {
+        self.effect.or_else(|| self.ty.default_data_effect())
+    }
+}
+
+impl TypeRef {
+    /// The semantic default for an omitted data effect on this type. Syntax
+    /// deliberately keeps omission distinct from an explicit `read`; consumers
+    /// that need an ABI or a capability use this method instead.
+    pub fn default_data_effect(&self) -> Option<DataEffect> {
+        (!self.is_noescape
+            && !self.is_owned
+            && self.name != "share"
+            && self.name != "Closure"
+            && self.name != "Fd")
+            .then_some(DataEffect::Read)
+    }
+
+    /// The effective effect of one parameter in `Fn(...)`. Omitted effects on
+    /// function-type parameters follow exactly the same default as declarations.
+    pub fn effective_fn_param_effect(&self, index: usize) -> Option<DataEffect> {
+        self.fn_param_effects
+            .get(index)
+            .copied()
+            .flatten()
+            .or_else(|| {
+                self.fn_params
+                    .get(index)
+                    .and_then(Self::default_data_effect)
+            })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClosureCapture {
     pub effect: DataEffect,
@@ -697,6 +735,9 @@ pub enum Expr {
         value: Box<Expr>,
         scrutinee_effect: Option<DataEffect>,
         arms: Vec<MatchArm>,
+        /// Preserves surface `if ... else ...` syntax while sharing the match
+        /// expression's typed and lowered representation.
+        from_if_expression: bool,
         /// Spans of arms the parser could not parse (missing `=>`, malformed
         /// pattern, unbalanced body). Reported by the syntax checker exactly like
         /// `MatchStmt::malformed_arm_spans`, so an expression-form match cannot

@@ -5,8 +5,8 @@ features: async
 // resolves to the real group token); the async child cannot call
 // `Task.cancellation_token()` itself (RS0412), because at its definition site
 // there is no enclosing group to inherit from.
-async fn worker(token: read CancellationToken) -> Result<Unit, TimerError> {
-    await Timer.sleep_cancellable(ms: 1, token: read token)?
+async fn worker(token: CancellationToken) -> Result<Unit, TimerError> {
+    await Timer.sleep_cancellable(ms: 1, token)?
     return Ok(Unit)
 }
 
@@ -14,8 +14,8 @@ fn run_workers() -> Result<Unit, TimerError> {
     task_group {
         let token = Task.cancellation_token()
 
-        async let first = worker(token: read token)
-        async let second = worker(token: read token)
+        async let first = worker(token)
+        async let second = worker(token)
 
         await first?
         await second?
@@ -25,6 +25,6 @@ fn run_workers() -> Result<Unit, TimerError> {
 
 fn main() -> Result<Unit, TimerError> {
     run_workers()?
-    Log.write(message: read "task group children done")
+    Log.write(message: "task group children done")
     return Ok(Unit)
 }

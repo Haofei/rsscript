@@ -14,17 +14,17 @@ fn main() -> Unit {
     let b = Uop(op: 2, children: List.new<Int>(), arg: None)
     let a_dup = Uop(op: 1, children: List.new<Int>(), arg: Some(7))
 
-    Map.insert(map: mut intern, key: read a, value: read a)
-    Map.insert(map: mut intern, key: read b, value: read b)
-    Map.insert(map: mut intern, key: read a_dup, value: read a_dup)
-    let interned = Map.contains_key(map: read intern, key: read a_dup)
+    Map.insert(map: mut intern, key: a, value: a)
+    Map.insert(map: mut intern, key: b, value: b)
+    Map.insert(map: mut intern, key: a_dup, value: a_dup)
+    let interned = Map.contains_key(map: intern, key: a_dup)
 
     let seen = Set.new<Uop>()
-    let added = Set.insert(set: mut seen, value: read a)
-    let added_dup = Set.insert(set: mut seen, value: read a_dup)
+    let added = Set.insert(set: mut seen, value: a)
+    let added_dup = Set.insert(set: mut seen, value: a_dup)
 
     if interned {
-        Log.write(message: read "uop interned")
+        Log.write(message: "uop interned")
     }
     return Unit
 }

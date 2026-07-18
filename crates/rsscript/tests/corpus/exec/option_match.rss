@@ -5,10 +5,10 @@ fn first_name() -> Option<fresh String> {
 fn main() -> Unit {
     match first_name() {
         Some(name) => {
-            Log.write(message: read name)
+            Log.write(message: name)
         }
         None => {
-            Log.write(message: read "none")
+            Log.write(message: "none")
         }
     }
     return Unit

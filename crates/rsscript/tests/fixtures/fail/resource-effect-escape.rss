@@ -9,14 +9,14 @@ resource File {
     }
 }
 
-fn bad_return(path: read Path) -> File {
-    with File.open(path: read path)? as file {
+fn bad_return(path: Path) -> File {
+    with File.open(path)? as file {
         return read file
     }
 }
 
-fn bad_binding(path: read Path) -> Unit {
-    with File.open(path: read path)? as file {
+fn bad_binding(path: Path) -> Unit {
+    with File.open(path)? as file {
         let saved = read file
     }
 }

@@ -9,7 +9,7 @@ pub native fn Clock.now() -> fresh Instant
 pub native fn Clock.system_unix_ms() -> Int
     effects(native)
 
-pub native fn Instant.elapsed(start: read Instant) -> fresh Duration
+pub native fn Instant.elapsed(start: Instant) -> fresh Duration
     effects(native)
 
 pub native fn Duration.ms(value: Int) -> fresh Duration
@@ -18,11 +18,11 @@ pub native fn Duration.ms(value: Int) -> fresh Duration
 pub native fn Duration.seconds(value: Int) -> fresh Duration
     effects(native)
 
-pub native fn Duration.as_ms(value: read Duration) -> Int
+pub native fn Duration.as_ms(value: Duration) -> Int
     effects(native)
 
-pub native fn Duration.as_seconds(value: read Duration) -> Int
+pub native fn Duration.as_seconds(value: Duration) -> Int
     effects(native)
 
-pub native fn Duration.add(left: read Duration, right: read Duration) -> fresh Duration
+pub native fn Duration.add(left: Duration, right: Duration) -> fresh Duration
     effects(native)

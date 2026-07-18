@@ -1,39 +1,39 @@
 features: native
 
-pub native fn Directory.exists(path: read Path) -> Bool
+pub native fn Directory.exists(path: Path) -> Bool
     effects(native)
 
-pub native fn Directory.is_file(path: read Path) -> Bool
+pub native fn Directory.is_file(path: Path) -> Bool
     effects(native)
 
-pub native fn Directory.is_dir(path: read Path) -> Bool
+pub native fn Directory.is_dir(path: Path) -> Bool
     effects(native)
 
-pub native fn Directory.create_all(path: read Path) -> Result<Unit, FileError>
+pub native fn Directory.create_all(path: Path) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn Directory.create_dir_all(path: read Path) -> Result<Unit, FileError>
+pub native fn Directory.create_dir_all(path: Path) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn Directory.list_files(path: read Path) -> Result<fresh List<String>, FileError>
+pub native fn Directory.list_files(path: Path) -> Result<fresh List<String>, FileError>
     effects(native)
 
-pub native fn Directory.list_paths(path: read Path) -> Result<fresh List<Path>, FileError>
+pub native fn Directory.list_paths(path: Path) -> Result<fresh List<Path>, FileError>
     effects(native)
 
-pub native fn Directory.create(path: read Path) -> Result<Unit, FileError>
+pub native fn Directory.create(path: Path) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn Directory.remove_file(path: read Path) -> Result<Unit, FileError>
+pub native fn Directory.remove_file(path: Path) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn Directory.remove_dir_all(path: read Path) -> Result<Unit, FileError>
+pub native fn Directory.remove_dir_all(path: Path) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn Directory.copy_file(from: read Path, to: read Path) -> Result<Unit, FileError>
+pub native fn Directory.copy_file(from: Path, to: Path) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn Directory.rename(from: read Path, to: read Path) -> Result<Unit, FileError>
+pub native fn Directory.rename(from: Path, to: Path) -> Result<Unit, FileError>
     effects(native)
 
 struct FileMetadata {
@@ -42,11 +42,11 @@ struct FileMetadata {
     len: Int
 }
 
-pub native fn Directory.metadata(path: read Path) -> Result<fresh FileMetadata, FileError>
+pub native fn Directory.metadata(path: Path) -> Result<fresh FileMetadata, FileError>
     effects(native)
 
-pub native fn Directory.read_string(path: read Path) -> Result<fresh String, FileError>
+pub native fn Directory.read_string(path: Path) -> Result<fresh String, FileError>
     effects(native)
 
-pub native fn Directory.write_string(path: read Path, content: read String) -> Result<Unit, FileError>
+pub native fn Directory.write_string(path: Path, content: String) -> Result<Unit, FileError>
     effects(native)

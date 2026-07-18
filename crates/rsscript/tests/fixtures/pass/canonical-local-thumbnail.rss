@@ -4,15 +4,15 @@ struct Image {
     pixels: Buffer
 }
 
-fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, ImageError> {
-    local image = Image.load(path: read input)?
+fn make_thumbnail(input: Path, output: Path) -> Result<Unit, ImageError> {
+    local image = Image.load(path: input)?
 
     Image.resize(image: mut image, width: 256, height: 256)
     Image.normalize(image: mut image)
 
     let shared = manage image
 
-    Image.save(image: read shared, path: read output)?
+    Image.save(image: shared, path: output)?
 
     return Ok(Unit)
 }

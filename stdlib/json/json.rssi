@@ -1,314 +1,314 @@
 struct JsonValue
 struct JsonLiteral
 
-pub fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
+pub fn Json.parse(text: String) -> Result<fresh JsonValue, JsonError>
 
-pub fn Json.json_parse(text: read String) -> Result<fresh JsonValue, JsonError>
+pub fn Json.json_parse(text: String) -> Result<fresh JsonValue, JsonError>
 
-pub fn Json.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
+pub fn Json.parse_file(path: Path) -> Result<fresh JsonValue, JsonError>
 
-pub fn Json.value(value: read JsonLiteral) -> fresh JsonValue
+pub fn Json.value(value: JsonLiteral) -> fresh JsonValue
     effects(pure)
 
-pub fn Json.clone(value: read JsonValue) -> fresh JsonValue
+pub fn Json.clone(value: JsonValue) -> fresh JsonValue
     effects(pure)
 
-pub fn Json.decode<T: Struct>(value: read JsonValue) -> Result<fresh T, JsonError>
+pub fn Json.decode<T: Struct>(value: JsonValue) -> Result<fresh T, JsonError>
     effects(pure)
 
-pub fn Json.decode_text<T: Struct>(text: read String) -> Result<fresh T, JsonError>
+pub fn Json.decode_text<T: Struct>(text: String) -> Result<fresh T, JsonError>
     effects(pure)
 
-pub fn Json.encode(value: read JsonLiteral) -> fresh String
+pub fn Json.encode(value: JsonLiteral) -> fresh String
     effects(pure)
 
-pub fn Json.quote_string(value: read String) -> fresh String
+pub fn Json.quote_string(value: String) -> fresh String
     effects(pure)
 
-pub fn Json.to_string(value: read JsonValue) -> fresh String
+pub fn Json.to_string(value: JsonValue) -> fresh String
     effects(pure)
 
-pub fn Json.string_field(name: read String, value: read String) -> fresh String
+pub fn Json.string_field(name: String, value: String) -> fresh String
     effects(pure)
 
-pub fn Json.int_field(name: read String, value: Int) -> fresh String
+pub fn Json.int_field(name: String, value: Int) -> fresh String
     effects(pure)
 
-pub fn Json.bool_field(name: read String, value: Bool) -> fresh String
+pub fn Json.bool_field(name: String, value: Bool) -> fresh String
     effects(pure)
 
-pub fn Json.raw_field(name: read String, value: read String) -> fresh String
+pub fn Json.raw_field(name: String, value: String) -> fresh String
     effects(pure)
 
-pub fn Json.object(fields: read List<String>) -> fresh String
+pub fn Json.object(fields: List<String>) -> fresh String
     effects(pure)
 
-pub fn Json.array(items: read List<String>) -> fresh String
+pub fn Json.array(items: List<String>) -> fresh String
     effects(pure)
 
-pub fn Json.string_array(items: read List<String>) -> fresh String
+pub fn Json.string_array(items: List<String>) -> fresh String
     effects(pure)
 
-pub fn Json.strings(items: read List<String>) -> fresh JsonValue
+pub fn Json.strings(items: List<String>) -> fresh JsonValue
     effects(pure)
 
-pub fn Json.values(items: read List<JsonValue>) -> fresh JsonValue
+pub fn Json.values(items: List<JsonValue>) -> fresh JsonValue
     effects(pure)
 
 pub fn Json.field(
-    value: read JsonValue,
-    name: read String,
+    value: JsonValue,
+    name: String,
 ) -> Result<fresh JsonValue, JsonError>
 
 pub fn Json.field_string(
-    value: read JsonValue,
-    name: read String,
+    value: JsonValue,
+    name: String,
 ) -> Result<String, JsonError>
 
 pub fn Json.field_int(
-    value: read JsonValue,
-    name: read String,
+    value: JsonValue,
+    name: String,
 ) -> Result<Int, JsonError>
 
 pub fn Json.field_bool(
-    value: read JsonValue,
-    name: read String,
+    value: JsonValue,
+    name: String,
 ) -> Result<Bool, JsonError>
 
 pub fn Json.field_optional(
-    value: read JsonValue,
-    name: read String,
+    value: JsonValue,
+    name: String,
 ) -> Result<Option<JsonValue>, JsonError>
 
 pub fn Json.field_optional_string(
-    value: read JsonValue,
-    name: read String,
+    value: JsonValue,
+    name: String,
 ) -> Result<Option<String>, JsonError>
 
 pub fn Json.field_optional_int(
-    value: read JsonValue,
-    name: read String,
+    value: JsonValue,
+    name: String,
 ) -> Result<Option<Int>, JsonError>
 
 pub fn Json.field_optional_bool(
-    value: read JsonValue,
-    name: read String,
+    value: JsonValue,
+    name: String,
 ) -> Result<Option<Bool>, JsonError>
 
 pub fn Json.value_at(
-    value: read JsonValue,
-    path: read String,
+    value: JsonValue,
+    path: String,
 ) -> Result<fresh JsonValue, JsonError>
 
 pub fn Json.at(
-    value: read JsonValue,
-    path: read String,
+    value: JsonValue,
+    path: String,
 ) -> Result<fresh JsonValue, JsonError>
 
 pub fn Json.at_or(
-    value: read JsonValue,
-    path: read String,
-    fallback: read JsonValue,
+    value: JsonValue,
+    path: String,
+    fallback: JsonValue,
 ) -> fresh JsonValue
     effects(pure)
 
 pub fn Json.at_string(
-    value: read JsonValue,
-    path: read String,
+    value: JsonValue,
+    path: String,
 ) -> Result<String, JsonError>
 
 pub fn Json.at_int(
-    value: read JsonValue,
-    path: read String,
+    value: JsonValue,
+    path: String,
 ) -> Result<Int, JsonError>
 
 pub fn Json.at_bool(
-    value: read JsonValue,
-    path: read String,
+    value: JsonValue,
+    path: String,
 ) -> Result<Bool, JsonError>
 
 pub fn Json.at_optional(
-    value: read JsonValue,
-    path: read String,
+    value: JsonValue,
+    path: String,
 ) -> Result<Option<JsonValue>, JsonError>
 
 pub fn Json.at_optional_string(
-    value: read JsonValue,
-    path: read String,
+    value: JsonValue,
+    path: String,
 ) -> Result<Option<String>, JsonError>
 
 pub fn Json.at_optional_int(
-    value: read JsonValue,
-    path: read String,
+    value: JsonValue,
+    path: String,
 ) -> Result<Option<Int>, JsonError>
 
 pub fn Json.at_optional_bool(
-    value: read JsonValue,
-    path: read String,
+    value: JsonValue,
+    path: String,
 ) -> Result<Option<Bool>, JsonError>
 
 pub fn Json.at_string_or(
-    value: read JsonValue,
-    path: read String,
-    fallback: read String,
+    value: JsonValue,
+    path: String,
+    fallback: String,
 ) -> String
     effects(pure)
 
 pub fn Json.at_int_or(
-    value: read JsonValue,
-    path: read String,
+    value: JsonValue,
+    path: String,
     fallback: Int,
 ) -> Int
     effects(pure)
 
 pub fn Json.at_bool_or(
-    value: read JsonValue,
-    path: read String,
+    value: JsonValue,
+    path: String,
     fallback: Bool,
 ) -> Bool
     effects(pure)
 
 pub fn Json.at_to_string(
-    value: read JsonValue,
-    path: read String,
+    value: JsonValue,
+    path: String,
 ) -> Result<String, JsonError>
 
 pub fn Json.at_to_string_or(
-    value: read JsonValue,
-    path: read String,
-    fallback: read String,
+    value: JsonValue,
+    path: String,
+    fallback: String,
 ) -> String
     effects(pure)
 
 pub fn Json.string_at(
-    text: read String,
-    path: read String,
+    text: String,
+    path: String,
 ) -> Result<String, JsonError>
 
 pub fn Json.int_at(
-    text: read String,
-    path: read String,
+    text: String,
+    path: String,
 ) -> Result<Int, JsonError>
 
 pub fn Json.bool_at(
-    text: read String,
-    path: read String,
+    text: String,
+    path: String,
 ) -> Result<Bool, JsonError>
 
 pub fn Json.to_string_at(
-    text: read String,
-    path: read String,
+    text: String,
+    path: String,
 ) -> Result<String, JsonError>
 
 pub fn Json.string_at_or(
-    text: read String,
-    path: read String,
-    fallback: read String,
+    text: String,
+    path: String,
+    fallback: String,
 ) -> String
     effects(pure)
 
 pub fn Json.json_string_at_or(
-    text: read String,
-    path: read String,
-    fallback: read String,
+    text: String,
+    path: String,
+    fallback: String,
 ) -> String
     effects(pure)
 
 pub fn Json.int_at_or(
-    text: read String,
-    path: read String,
+    text: String,
+    path: String,
     fallback: Int,
 ) -> Int
     effects(pure)
 
 pub fn Json.json_int_at_or(
-    text: read String,
-    path: read String,
+    text: String,
+    path: String,
     fallback: Int,
 ) -> Int
     effects(pure)
 
 pub fn Json.bool_at_or(
-    text: read String,
-    path: read String,
+    text: String,
+    path: String,
     fallback: Bool,
 ) -> Bool
     effects(pure)
 
 pub fn Json.json_bool_at_or(
-    text: read String,
-    path: read String,
+    text: String,
+    path: String,
     fallback: Bool,
 ) -> Bool
     effects(pure)
 
 pub fn Json.to_string_at_or(
-    text: read String,
-    path: read String,
-    fallback: read String,
+    text: String,
+    path: String,
+    fallback: String,
 ) -> String
     effects(pure)
 
-pub fn Json.as_string(value: read JsonValue) -> Result<String, JsonError>
+pub fn Json.as_string(value: JsonValue) -> Result<String, JsonError>
 
-pub fn Json.as_int(value: read JsonValue) -> Result<Int, JsonError>
+pub fn Json.as_int(value: JsonValue) -> Result<Int, JsonError>
 
-pub fn Json.as_bool(value: read JsonValue) -> Result<Bool, JsonError>
+pub fn Json.as_bool(value: JsonValue) -> Result<Bool, JsonError>
 
-pub fn Json.is_null(value: read JsonValue) -> Bool
+pub fn Json.is_null(value: JsonValue) -> Bool
     effects(pure)
 
-pub fn Json.is_array(value: read JsonValue) -> Bool
+pub fn Json.is_array(value: JsonValue) -> Bool
     effects(pure)
 
-pub fn Json.is_object(value: read JsonValue) -> Bool
+pub fn Json.is_object(value: JsonValue) -> Bool
     effects(pure)
 
-pub fn Json.kind(value: read JsonValue) -> String
+pub fn Json.kind(value: JsonValue) -> String
     effects(pure)
 
-pub fn Json.object_len(value: read JsonValue) -> Result<Int, JsonError>
+pub fn Json.object_len(value: JsonValue) -> Result<Int, JsonError>
 
-pub fn Json.object_keys(value: read JsonValue) -> Result<fresh List<String>, JsonError>
+pub fn Json.object_keys(value: JsonValue) -> Result<fresh List<String>, JsonError>
 
-pub fn Json.array_len(value: read JsonValue) -> Result<Int, JsonError>
+pub fn Json.array_len(value: JsonValue) -> Result<Int, JsonError>
 
 pub fn Json.array_get(
-    value: read JsonValue,
+    value: JsonValue,
     index: Int,
 ) -> Result<fresh JsonValue, JsonError>
 
-pub fn Json.array_strings(value: read JsonValue) -> Result<fresh List<String>, JsonError>
+pub fn Json.array_strings(value: JsonValue) -> Result<fresh List<String>, JsonError>
 
-pub fn Json.array_ints(value: read JsonValue) -> Result<fresh List<Int>, JsonError>
+pub fn Json.array_ints(value: JsonValue) -> Result<fresh List<Int>, JsonError>
 
-pub fn Json.array_bools(value: read JsonValue) -> Result<fresh List<Bool>, JsonError>
+pub fn Json.array_bools(value: JsonValue) -> Result<fresh List<Bool>, JsonError>
 
 pub fn Json.array_contains_string(
-    value: read JsonValue,
-    item: read String,
+    value: JsonValue,
+    item: String,
 ) -> Result<Bool, JsonError>
 
 pub fn Json.array_contains_substring(
-    value: read JsonValue,
-    text: read String,
+    value: JsonValue,
+    text: String,
 ) -> Result<Bool, JsonError>
 
 pub fn Json.array_contains_prefix(
-    value: read JsonValue,
-    prefix: read String,
+    value: JsonValue,
+    prefix: String,
 ) -> Result<Bool, JsonError>
 
 pub fn Json.array_count_where(
-    value: read JsonValue,
+    value: JsonValue,
     predicate: noescape Fn(JsonValue) -> Result<Bool, JsonError>,
 ) -> Result<Int, JsonError>
 
 pub fn Json.array_fold<T: Struct>(
-    value: read JsonValue,
-    initial: read T,
+    value: JsonValue,
+    initial: T,
     folder: noescape Fn(T, JsonValue) -> Result<fresh T, JsonError>,
 ) -> Result<fresh T, JsonError>
 
-pub fn JsonError.message(error: read JsonError) -> String
+pub fn JsonError.message(error: JsonError) -> String
     effects(pure)

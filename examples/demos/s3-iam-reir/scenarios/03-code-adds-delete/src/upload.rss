@@ -1,33 +1,33 @@
 features: async
 
 async fn upload_report(
-    bucket: read String,
-    key: read String,
-    body: read String,
+    bucket: String,
+    key: String,
+    body: String,
 ) -> Result<Unit, String> {
-    await S3.put_object(bucket: read bucket, key: read key, body: read body)?
+    await S3.put_object(bucket: bucket, key: key, body: body)?
     return Ok(Unit)
 }
 
 pub async fn Reports.upload_batch(
-    bucket: read String,
-    day: read String,
+    bucket: String,
+    day: String,
 ) -> Result<Unit, String> {
     await upload_report(
-        bucket: read bucket,
-        key: read "reports/summary.json",
-        body: read day,
+        bucket,
+        key: "reports/summary.json",
+        body: day,
     )?
     return Ok(Unit)
 }
 
 pub async fn Reports.cleanup_old_reports(
-    bucket: read String,
-    day: read String,
+    bucket: String,
+    day: String,
 ) -> Result<Unit, String> {
     await S3.delete_object(
-        bucket: read bucket,
-        key: read "reports/old.json",
+        bucket: bucket,
+        key: "reports/old.json",
     )?
     return Ok(Unit)
 }

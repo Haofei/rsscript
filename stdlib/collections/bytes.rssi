@@ -2,30 +2,30 @@ features: local
 
 struct BytesView
 
-pub fn Bytes.from_string(value: read String) -> fresh Bytes
+pub fn Bytes.from_string(value: String) -> fresh Bytes
 
-pub fn Bytes.from_buffer(buffer: read Buffer) -> fresh Bytes
+pub fn Bytes.from_buffer(buffer: Buffer) -> fresh Bytes
 
-pub fn Bytes.from_uints(values: read List<Int>) -> fresh Bytes
+pub fn Bytes.from_uints(values: List<Int>) -> fresh Bytes
 
-pub fn Bytes.to_uints(value: read Bytes) -> fresh List<Int>
+pub fn Bytes.to_uints(value: Bytes) -> fresh List<Int>
 
-pub fn Bytes.to_string(value: read Bytes) -> fresh String
+pub fn Bytes.to_string(value: Bytes) -> fresh String
 
-pub fn Bytes.len(value: read Bytes) -> Int
+pub fn Bytes.len(value: Bytes) -> Int
 
-pub fn Bytes.is_empty(value: read Bytes) -> Bool
+pub fn Bytes.is_empty(value: Bytes) -> Bool
 
-pub fn Bytes.concat(left: read Bytes, right: read Bytes) -> fresh Bytes
+pub fn Bytes.concat(left: Bytes, right: Bytes) -> fresh Bytes
 
 pub fn Bytes.slice(
-    value: read Bytes,
+    value: Bytes,
     start: Int,
     len: Int,
 ) -> fresh Bytes
 
 pub fn Bytes.view(
-    value: read Bytes,
+    value: Bytes,
     start: Int,
     len: Int,
 ) -> BytesView
@@ -33,15 +33,15 @@ pub fn Bytes.view(
 pub fn Bytes.consume(bytes: take Bytes) -> Unit
 
 pub fn BytesView.slice(
-    value: read BytesView,
+    value: BytesView,
     start: Int,
     len: Int,
 ) -> BytesView
 
-pub fn BytesView.len(value: read BytesView) -> Int
+pub fn BytesView.len(value: BytesView) -> Int
 
-pub fn BytesView.is_empty(value: read BytesView) -> Bool
+pub fn BytesView.is_empty(value: BytesView) -> Bool
 
-pub fn BytesView.to_bytes(value: read BytesView) -> fresh Bytes
+pub fn BytesView.to_bytes(value: BytesView) -> fresh Bytes
 
-pub fn BytesView.starts_with(value: read BytesView, prefix: read BytesView) -> Bool
+pub fn BytesView.starts_with(value: BytesView, prefix: BytesView) -> Bool

@@ -2,12 +2,12 @@
 // filled with the default carrying the parameter's declared effect, so the
 // call-site effect check is satisfied (the effect is reviewed at the declaration).
 
-fn reduce(x: Int, axes: read List<Int> = List.new<Int>()) -> Int {
-    return x + List.len(list: read axes)
+fn reduce(x: Int, axes: List<Int> = List.new<Int>()) -> Int {
+    return x + List.len(list: axes)
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: reduce(x: 5)))
-    Log.write(message: read String.from_int(value: reduce(x: 5, axes: read List.new<Int>())))
+    Log.write(message: String.from_int(value: reduce(x: 5)))
+    Log.write(message: String.from_int(value: reduce(x: 5, axes: List.new<Int>())))
     return Unit
 }

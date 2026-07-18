@@ -1807,12 +1807,52 @@ impl RegVm {
                             builder,
                             value,
                         } => {
-                            let mut builder_value =
-                                expect_string_ref(self.reg(base + *builder))?.to_string();
-                            let value = expect_string_ref(self.reg(base + *value))?;
-                            builder_value.push_str(value);
-                            self.set_reg(base + *builder, VmValue::string(builder_value));
+                            let value = match self.reg(base + *value) {
+                                VmValue::String(value) => Rc::clone(value),
+                                other => {
+                                    return Err(EvalError::Runtime(format!(
+                                        "reg VM expected StringBuilder push value to be String, got `{}`.",
+                                        other.display()
+                                    )));
+                                }
+                            };
+                            let builder = match self.reg(base + *builder) {
+                                VmValue::Managed(builder) => Rc::clone(builder),
+                                other => {
+                                    return Err(EvalError::Runtime(format!(
+                                        "reg VM expected StringBuilder, got `{}`.",
+                                        other.display()
+                                    )));
+                                }
+                            };
+                            let mut builder = builder.borrow_mut();
+                            let VmValue::String(text) = &mut *builder else {
+                                return Err(EvalError::Runtime(
+                                    "reg VM expected StringBuilder storage to be String."
+                                        .to_string(),
+                                ));
+                            };
+                            Rc::make_mut(text).push_str(value.as_str());
                             self.set_reg(base + *dst, VmValue::Unit);
+                        }
+                        RegInstr::StringBuilderFinish { dst, builder } => {
+                            let builder = match self.reg(base + *builder) {
+                                VmValue::Managed(builder) => Rc::clone(builder),
+                                other => {
+                                    return Err(EvalError::Runtime(format!(
+                                        "reg VM expected StringBuilder, got `{}`.",
+                                        other.display()
+                                    )));
+                                }
+                            };
+                            let builder = builder.borrow();
+                            let VmValue::String(text) = &*builder else {
+                                return Err(EvalError::Runtime(
+                                    "reg VM expected StringBuilder storage to be String."
+                                        .to_string(),
+                                ));
+                            };
+                            self.set_reg(base + *dst, VmValue::string(text.as_str()));
                         }
                         RegInstr::StringConcat { dst, left, right } => {
                             let value = {

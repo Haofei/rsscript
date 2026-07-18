@@ -8,51 +8,129 @@ module selfhost.syntax.parser_stmts
 use selfhost.scan.*
 use selfhost.syntax.ast.*
 
-fn is_word(toks: read List<Tok>, i: read Int, word: read String) -> Bool {
-    if is_ident_tok(toks: read toks, i: read i) == false { return false }
-    let tok = List.get(list: read toks, index: read i)
+fn is_word(toks: List<Tok>, i: Int, word: String) -> Bool {
+    if is_ident_tok(toks: toks, i: i) == false { return false }
+    let tok = List.get(list: toks, index: i)
     return tok.text == word
 }
 
-fn first_equals(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+fn first_equals(toks: List<Tok>, start: Int, end: Int) -> Int {
     let mut i = start
     while i < end {
-        if at_symbol(toks: read toks, i: read i, code: read SYM_EQ) { return i }
+        if at_symbol(toks: toks, i: i, code: SYM_EQ) { return i }
         i = i + 1
     }
     return -1
 }
 
-fn first_word(toks: read List<Tok>, start: read Int, end: read Int, word: read String) -> Int {
+// Only a depth-zero, standalone `=` starts an assignment. Equality and
+// comparison operators remain expressions, including inside index places.
+fn assignment_equals(toks: List<Tok>, start: Int, end: Int) -> Int {
+    let mut depth = 0
     let mut i = start
     while i < end {
-        if is_word(toks: read toks, i: read i, word: read word) { return i }
+        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) { depth = depth + 1 }
+        else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) || at_symbol(toks: toks, i: i, code: SYM_RBRACE) { if depth > 0 { depth = depth - 1 } }
+        else if depth == 0 && at_symbol(toks: toks, i: i, code: SYM_EQ) {
+            let previousIsCompare = at_symbol(toks: toks, i: (i - 1), code: SYM_EQ) || at_symbol(toks: toks, i: (i - 1), code: SYM_BANG) || at_symbol(toks: toks, i: (i - 1), code: SYM_LANGLE) || at_symbol(toks: toks, i: (i - 1), code: SYM_RANGLE)
+            if at_symbol(toks: toks, i: (i + 1), code: SYM_EQ) == false && previousIsCompare == false { return i }
+        }
         i = i + 1
     }
     return -1
 }
 
-fn expression_end(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+fn first_word(toks: List<Tok>, start: Int, end: Int, word: String) -> Int {
+    let mut i = start
+    while i < end {
+        if is_word(toks, i, word) { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn expression_end(toks: List<Tok>, start: Int, end: Int) -> Int {
     let mut result = end
-    if end > start && at_symbol(toks: read toks, i: read (end - 1), code: read 59) { result = end - 1 }
+    if end > start && at_symbol(toks: toks, i: (end - 1), code: 59) { result = end - 1 }
     return result
+}
+
+fn qualified_expression_name(toks: List<Tok>, start: Int, end: Int) -> String {
+    let mut out = ""
+    let mut i = start
+    while i < end {
+        let token = List.get<Tok>(list: toks, index: i)
+        out = String.concat(left: out, right: token.text)
+        i = i + 1
+    }
+    return out
+}
+
+fn first_call_dot(toks: List<Tok>, start: Int, end: Int) -> Int {
+    let mut i = start + 1
+    while i < end {
+        if at_symbol(toks: toks, i: i, code: SYM_DOT) { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn first_call_name_is_upper(toks: List<Tok>, start: Int) -> Bool {
+    if is_ident_tok(toks: toks, i: start) == false { return false }
+    let token = List.get<Tok>(list: toks, index: start)
+    let chars = String.chars(value: token.text)
+    if List.len(list: chars) == 0 { return false }
+    return Char.is_upper(value: List.get<Char>(list: chars, index: 0))
+}
+
+// The call's `(` after a dotted callee and optional generic arguments, or -1.
+// This must be recognized before binary-operator parsing so `f<Int>(...)` is
+// not split at `<` and `>` as a comparison expression.
+fn call_open_after_name(toks: List<Tok>, start: Int, end: Int) -> Int {
+    let nameEnd = take_function_name(toks: toks, i: start)
+    if nameEnd <= start { return -1 }
+    let mut open = nameEnd
+    if at_symbol(toks: toks, i: open, code: SYM_LANGLE) {
+        let genericClose = find_matching(toks: toks, open: open, openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
+        if genericClose < 0 || genericClose >= end { return -1 }
+        open = genericClose + 1
+    }
+    if open < end && at_symbol(toks: toks, i: open, code: SYM_LPAREN) { return open }
+    return -1
+}
+
+fn collect_call_type_args(toks: List<Tok>, nameEnd: Int, callOpen: Int) -> fresh List<String> {
+    local args = List<String>.new()
+    if nameEnd >= callOpen || at_symbol(toks: toks, i: nameEnd, code: SYM_LANGLE) == false { return args }
+    let close = find_matching(toks: toks, open: nameEnd, openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
+    if close < nameEnd || (close + 1) != callOpen { return args }
+    let mut start = nameEnd + 1
+    while start < close {
+        let comma = split_top_level_comma(toks: toks, start: start, end: close)
+        let mut end = close
+        if comma >= 0 { end = comma }
+        local ty = canonical_type_text(toks: toks, start: start, end: end)
+        List.push<String>(list: mut args, value: (manage ty))
+        if comma < 0 { start = close } else { start = comma + 1 }
+    }
+    return args
 }
 
 // One top-level statement ends at `;` or the first later line after every
 // bracket/block nesting level closes. This keeps multiline calls, literals,
 // and control-flow blocks intact even before each form receives a dedicated
 // statement node.
-fn statement_end(toks: read List<Tok>, start: read Int, limit: read Int) -> Int {
-    let line = tk_line(toks: read toks, i: read start)
+fn statement_end(toks: List<Tok>, start: Int, limit: Int) -> Int {
+    let line = tk_line(toks: toks, i: start)
     let mut depth = 0
     let mut i = start + 1
     while i < limit {
-        if depth == 0 && at_symbol(toks: read toks, i: read i, code: read 59) { return i }
-        let elseContinuation = is_word(toks: read toks, i: read i, word: read "else") || (at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) && is_word(toks: read toks, i: read (i - 1), word: read "else"))
-        if depth == 0 && tk_line(toks: read toks, i: read i) > line && elseContinuation == false { return i }
-        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) {
+        if depth == 0 && at_symbol(toks: toks, i: i, code: 59) { return i }
+        let elseContinuation = is_word(toks, i, word: "else") || (at_symbol(toks: toks, i: i, code: SYM_LBRACE) && is_word(toks, i: (i - 1), word: "else"))
+        if depth == 0 && tk_line(toks: toks, i: i) > line && !elseContinuation  { return i }
+        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) {
             depth = depth + 1
-        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) {
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) || at_symbol(toks: toks, i: i, code: SYM_RBRACE) {
             if depth > 0 { depth = depth - 1 }
         }
         i = i + 1
@@ -60,15 +138,15 @@ fn statement_end(toks: read List<Tok>, start: read Int, limit: read Int) -> Int 
     return limit
 }
 
-fn block_open(toks: read List<Tok>, start: read Int, limit: read Int) -> Int {
+fn block_open(toks: List<Tok>, start: Int, limit: Int) -> Int {
     let mut depth = 0
     let mut i = start
     while i < limit {
-        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) {
+        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) {
             depth = depth + 1
-        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) {
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) {
             if depth > 0 { depth = depth - 1 }
-        } else if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) {
+        } else if depth == 0 && at_symbol(toks: toks, i: i, code: SYM_LBRACE) {
             return i
         }
         i = i + 1
@@ -76,66 +154,395 @@ fn block_open(toks: read List<Tok>, start: read Int, limit: read Int) -> Int {
     return -1
 }
 
-fn binary_operator_text(toks: read List<Tok>, i: read Int, end: read Int) -> String {
+fn binary_operator_text(toks: List<Tok>, i: Int, end: Int) -> String {
     if i >= end { return "" }
-    let tok = List.get(list: read toks, index: read i)
-    if at_symbol(toks: read toks, i: read i, code: read SYM_EQ) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_EQ) { return "==" }
-    if at_symbol(toks: read toks, i: read i, code: read SYM_BANG) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_EQ) { return "!=" }
-    if at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_EQ) { return "<=" }
-    if at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_EQ) { return ">=" }
-    if at_symbol(toks: read toks, i: read i, code: read 124) && at_symbol(toks: read toks, i: read (i + 1), code: read 124) { return "||" }
-    if at_symbol(toks: read toks, i: read i, code: read 38) && at_symbol(toks: read toks, i: read (i + 1), code: read 38) { return "&&" }
-    if at_symbol(toks: read toks, i: read i, code: read 43) || at_symbol(toks: read toks, i: read i, code: read 45) || at_symbol(toks: read toks, i: read i, code: read 42) || at_symbol(toks: read toks, i: read i, code: read 47) || at_symbol(toks: read toks, i: read i, code: read 37) || at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE) || at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE) { return tok.text }
+    let tok = List.get(list: toks, index: i)
+    if at_symbol(toks: toks, i: i, code: SYM_EQ) && at_symbol(toks: toks, i: (i + 1), code: SYM_EQ) { return "==" }
+    if at_symbol(toks: toks, i: i, code: SYM_BANG) && at_symbol(toks: toks, i: (i + 1), code: SYM_EQ) { return "!=" }
+    if at_symbol(toks: toks, i: i, code: SYM_LANGLE) && at_symbol(toks: toks, i: (i + 1), code: SYM_EQ) { return "<=" }
+    if at_symbol(toks: toks, i: i, code: SYM_RANGLE) && at_symbol(toks: toks, i: (i + 1), code: SYM_EQ) { return ">=" }
+    if at_symbol(toks: toks, i: i, code: 124) && at_symbol(toks: toks, i: (i + 1), code: 124) { return "||" }
+    if at_symbol(toks: toks, i: i, code: 38) && at_symbol(toks: toks, i: (i + 1), code: 38) { return "&&" }
+    if at_symbol(toks: toks, i: i, code: 43) || at_symbol(toks: toks, i: i, code: 45) || at_symbol(toks: toks, i: i, code: 42) || at_symbol(toks: toks, i: i, code: 47) || at_symbol(toks: toks, i: i, code: 37) || at_symbol(toks: toks, i: i, code: SYM_LANGLE) || at_symbol(toks: toks, i: i, code: SYM_RANGLE) { return tok.text }
     return ""
 }
 
-fn binary_operator_width(operator: read String) -> Int {
+fn binary_operator_width(operator: String) -> Int {
     if operator == "==" || operator == "!=" || operator == "<=" || operator == ">=" || operator == "&&" || operator == "||" { return 2 }
     return 1
 }
 
-fn last_top_binary_operator(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+// Lower numbers bind less tightly. Choosing the rightmost operator at the
+// lowest tier builds the same left-associative tree as the production parser:
+// `a + b * c` becomes `a + (b * c)`, while `a - b - c` becomes `(a - b) - c`.
+// This shared AST is consumed by semantic rules and astdump, so it must not use
+// a token-order-only split.
+fn binary_operator_tier(operator: String) -> Int {
+    if operator == "||" { return 1 }
+    if operator == "&&" { return 2 }
+    if operator == "==" || operator == "!=" || operator == "<=" || operator == ">=" || operator == "<" || operator == ">" { return 6 }
+    if operator == "+" || operator == "-" { return 8 }
+    if operator == "*" || operator == "/" || operator == "%" { return 9 }
+    return 100
+}
+
+fn last_top_binary_operator(toks: List<Tok>, start: Int, end: Int) -> Int {
     let mut depth = 0
     let mut found = -1
+    let mut foundTier = 100
     let mut i = start + 1
     while i < end {
-        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) {
+        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) {
             depth = depth + 1
-        } else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) {
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) || at_symbol(toks: toks, i: i, code: SYM_RBRACE) {
             if depth > 0 { depth = depth - 1 }
-        } else if depth == 0 && String.len(value: read binary_operator_text(toks: read toks, i: read i, end: read end)) > 0 {
-            found = i
+        } else if depth == 0 {
+            let operator = binary_operator_text(toks, i, end)
+            let tier = binary_operator_tier(operator: operator)
+            if String.len(value: operator) > 0 && tier <= foundTier {
+                found = i
+                foundTier = tier
+            }
         }
         i = i + 1
     }
     return found
 }
 
-fn top_fat_arrow(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
-    let mut depth = 0
+// The rightmost depth-zero `.` gives left-associative field chains a stable
+// tree: `a.b.c` becomes field(field(a, b), c). Calls are recognized first, so
+// qualified call names such as `Log.write(...)` keep their call representation.
+fn last_top_field_dot(toks: List<Tok>, start: Int, end: Int) -> Int {
     let mut i = start
+    let mut depth = 0
+    let mut result = -1
     while i < end {
-        if at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) { depth = depth + 1 }
-        else if at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) { if depth > 0 { depth = depth - 1 } }
-        else if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_FATARROW) { return i }
+        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) || at_symbol(toks: toks, i: i, code: SYM_RBRACE) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: toks, i: i, code: SYM_DOT) {
+            result = i
+        }
+        i = i + 1
+    }
+    return result
+}
+
+fn top_level_index_open(toks: List<Tok>, start: Int, end: Int) -> Int {
+    let mut i = start + 1
+    let mut depth = 0
+    while i < end {
+        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACE) {
+            if depth > 0 { depth = depth - 1 }
+        } else if depth == 0 && at_symbol(toks: toks, i: i, code: SYM_LBRACKET) {
+            return i
+        }
         i = i + 1
     }
     return -1
 }
 
-fn parse_match_arms(program: mut Program, toks: read List<Tok>, open: read Int, close: read Int, arms: mut List<MatchArm>) -> Unit {
+fn top_fat_arrow(toks: List<Tok>, start: Int, end: Int) -> Int {
+    let mut depth = 0
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) { depth = depth + 1 }
+        else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) || at_symbol(toks: toks, i: i, code: SYM_RBRACE) { if depth > 0 { depth = depth - 1 } }
+        else if depth == 0 && at_symbol(toks: toks, i: i, code: SYM_FATARROW) { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn top_match_guard(toks: List<Tok>, start: Int, end: Int) -> Int {
+    let mut depth = 0
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) { depth = depth + 1 }
+        else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) || at_symbol(toks: toks, i: i, code: SYM_RBRACE) { if depth > 0 { depth = depth - 1 } }
+        else if depth == 0 && is_word(toks, i, word: "if") { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn pattern_name_text(toks: List<Tok>, start: Int, end: Int) -> String {
+    local out = StringBuilder.new()
+    let mut i = start
+    while i < end {
+        let token = List.get<Tok>(list: toks, index: i)
+        StringBuilder.push(builder: mut out, value: token.text)
+        i = i + 1
+    }
+    return StringBuilder.finish(builder: take out)
+}
+
+fn push_shared_pattern(program: mut Program, kind: Int, token: Tok, name: String, children: take List<Int>, rest: String) -> Int {
+    local ownedName = String.copy(value: name)
+    local ownedRest = String.copy(value: rest)
+    let pattern = Pattern.from(kind: kind, tokenKind: token.kind, name: take ownedName, line: token.line, column: token.col, length: token.len, children: take children, rest: take ownedRest)
+    return Program.push_pattern(self: mut program, pattern: pattern)
+}
+
+fn push_shared_struct_pattern(program: mut Program, token: Tok, name: String, fields: take List<PatternField>, rest: String) -> Int {
+    local ownedName = String.copy(value: name)
+    local ownedRest = String.copy(value: rest)
+    local children = List<Int>.new()
+    let pattern = Pattern(kind: PAT_STRUCT, tokenKind: token.kind, name: take ownedName, line: token.line, column: token.col, length: token.len, children: take children, rest: take ownedRest, restIndex: -1, fields: take fields)
+    return Program.push_pattern(self: mut program, pattern: pattern)
+}
+
+fn push_shared_list_pattern(program: mut Program, token: Tok, children: take List<Int>, rest: String, restIndex: Int) -> Int {
+    local ownedRest = String.copy(value: rest)
+    let pattern = Pattern.list(tokenKind: token.kind, line: token.line, column: token.col, length: token.len, children: take children, rest: take ownedRest, restIndex: restIndex)
+    return Program.push_pattern(self: mut program, pattern: pattern)
+}
+
+fn pattern_field_colon(toks: List<Tok>, start: Int, end: Int) -> Int {
+    let mut depth = 0
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) { depth = depth + 1 }
+        else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) || at_symbol(toks: toks, i: i, code: SYM_RBRACE) { if depth > 0 { depth = depth - 1 } }
+        else if depth == 0 && at_symbol(toks: toks, i: i, code: SYM_COLON) { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn pattern_effect(toks: List<Tok>, i: Int) -> String {
+    if is_word(toks, i, word: "read") || is_word(toks, i, word: "mut") || is_word(toks, i, word: "take") {
+        let token = List.get<Tok>(list: toks, index: i)
+        return token.text
+    }
+    return ""
+}
+
+fn parse_shared_struct_field(program: mut Program, toks: List<Tok>, start: Int, end: Int, fields: mut List<PatternField>) -> Unit {
+    if start >= end || at_symbol(toks: toks, i: start, code: SYM_DOT) { return Unit }
+    if is_ident_tok(toks: toks, i: start) == false { return Unit }
+    let fieldToken = List.get<Tok>(list: toks, index: start)
+    local name = String.copy(value: fieldToken.text)
+    let colon = pattern_field_colon(toks: toks, start: start, end: end)
+    if colon < 0 {
+        local effect = ""
+        local binding = String.copy(value: fieldToken.text)
+        let field = PatternField.from(name: take name, ignored: false, effect: take effect, binding: take binding, pattern: -1)
+        List.push<PatternField>(list: mut fields, value: field)
+        return Unit
+    }
+    let mut rhs = colon + 1
+    if rhs >= end {
+        local effect = ""
+        local binding = ""
+        let field = PatternField.from(name: take name, ignored: false, effect: take effect, binding: take binding, pattern: -1)
+        List.push<PatternField>(list: mut fields, value: field)
+        return Unit
+    }
+    if rhs + 1 == end && is_word(toks, rhs, word: "_") {
+        local effect = ""
+        local binding = ""
+        let field = PatternField.from(name: take name, ignored: true, effect: take effect, binding: take binding, pattern: -1)
+        List.push<PatternField>(list: mut fields, value: field)
+        return Unit
+    }
+    let effectText = pattern_effect(toks: toks, i: rhs)
+    if String.len(value: effectText) > 0 { rhs = rhs + 1 }
+    local effect = String.copy(value: effectText)
+    let mut nested = -1
+    if rhs < end && rhs + 1 == end {
+        let rhsToken = List.get<Tok>(list: toks, index: rhs)
+        let rhsIsLiteral = rhsToken.kind == TOK_NUMBER || rhsToken.kind == TOK_STRING || rhsToken.kind == TOK_CHAR || rhsToken.text == "true" || rhsToken.text == "false"
+        if rhsIsLiteral || first_call_name_is_upper(toks: toks, start: rhs) { nested = parse_shared_pattern(program: mut program, toks, start: rhs, end: end, nested: true) }
+        else {
+            local binding = String.copy(value: rhsToken.text)
+            let field = PatternField.from(name: take name, ignored: false, effect: take effect, binding: take binding, pattern: -1)
+            List.push<PatternField>(list: mut fields, value: field)
+            return Unit
+        }
+    } else if rhs < end {
+        nested = parse_shared_pattern(program: mut program, toks, start: rhs, end: end, nested: true)
+    }
+    local binding = ""
+    let field = PatternField.from(name: take name, ignored: false, effect: take effect, binding: take binding, pattern: nested)
+    List.push<PatternField>(list: mut fields, value: field)
+    return Unit
+}
+
+// Materialize recursive patterns independently of expressions. This is the
+// sole representation consumed by renderers, semantic rules, and IR lowering.
+fn parse_shared_pattern(program: mut Program, toks: List<Tok>, start: Int, end: Int, nested: Bool) -> Int {
+    let stop = expression_end(toks, start, end)
+    if start >= stop {
+        let token = List.get<Tok>(list: toks, index: start)
+        local children = List<Int>.new()
+        return push_shared_pattern(program: mut program, kind: PAT_UNKNOWN, token: token, name: "", children: take children, rest: "")
+    }
+    let token = List.get<Tok>(list: toks, index: start)
+    if at_symbol(toks: toks, i: start, code: SYM_LPAREN) {
+        let close = find_matching(toks: toks, open: start, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+        if close == (stop - 1) {
+            let firstComma = split_top_level_comma(toks: toks, start: (start + 1), end: close)
+            if firstComma < 0 { return parse_shared_pattern(program: mut program, toks, start: (start + 1), end: close, nested: nested) }
+            local children = List<Int>.new()
+            let mut partStart = start + 1
+            while partStart < close {
+                let comma = split_top_level_comma(toks: toks, start: partStart, end: close)
+                let mut partEnd = close
+                if comma >= 0 { partEnd = comma }
+                let child = parse_shared_pattern(program: mut program, toks, start: partStart, end: partEnd, nested: true)
+                List.push<Int>(list: mut children, value: child)
+                if comma < 0 { partStart = close } else { partStart = comma + 1 }
+            }
+            return push_shared_pattern(program: mut program, kind: PAT_TUPLE, token: token, name: "", children: take children, rest: "")
+        }
+    }
+    if at_symbol(toks: toks, i: start, code: SYM_LBRACKET) {
+        let close = find_matching(toks: toks, open: start, openSym: SYM_LBRACKET, closeSym: SYM_RBRACKET)
+        if close == (stop - 1) {
+            local children = List<Int>.new()
+            let mut rest = "none"
+            let mut restIndex = -1
+            let mut partStart = start + 1
+            while partStart < close {
+                let comma = split_top_level_comma(toks: toks, start: partStart, end: close)
+                let mut partEnd = close
+                if comma >= 0 { partEnd = comma }
+                if at_symbol(toks: toks, i: partStart, code: SYM_DOT) && at_symbol(toks: toks, i: (partStart + 1), code: SYM_DOT) {
+                    restIndex = List.len(list: children)
+                    if partStart + 2 >= partEnd || is_word(toks, i: (partStart + 2), word: "_") { rest = "ignore" }
+                    else if is_ident_tok(toks: toks, i: (partStart + 2)) {
+                        let restToken = List.get<Tok>(list: toks, index: (partStart + 2))
+                        rest = restToken.text
+                    } else { rest = "ignore" }
+                } else {
+                    let child = parse_shared_pattern(program: mut program, toks, start: partStart, end: partEnd, nested: true)
+                    List.push<Int>(list: mut children, value: child)
+                }
+                if comma < 0 { partStart = close } else { partStart = comma + 1 }
+            }
+            return push_shared_list_pattern(program: mut program, token: token, children: take children, rest: rest, restIndex: restIndex)
+        }
+    }
+    let nameEnd = take_function_name(toks: toks, i: start)
+    if nameEnd > start && at_symbol(toks: toks, i: nameEnd, code: SYM_LBRACE) {
+        let close = find_matching(toks: toks, open: nameEnd, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+        if close == (stop - 1) {
+            local fields = List<PatternField>.new()
+            let mut rest = "none"
+            let mut partStart = nameEnd + 1
+            while partStart < close {
+                let comma = split_top_level_comma(toks: toks, start: partStart, end: close)
+                let mut partEnd = close
+                if comma >= 0 { partEnd = comma }
+                if at_symbol(toks: toks, i: partStart, code: SYM_DOT) && at_symbol(toks: toks, i: (partStart + 1), code: SYM_DOT) { rest = "present" }
+                else { parse_shared_struct_field(program: mut program, toks, start: partStart, end: partEnd, fields: mut fields) }
+                if comma < 0 { partStart = close } else { partStart = comma + 1 }
+            }
+            local name = pattern_name_text(toks: toks, start: start, end: nameEnd)
+            return push_shared_struct_pattern(program: mut program, token: token, name: name, fields: take fields, rest: rest)
+        }
+    }
+    if nameEnd > start && at_symbol(toks: toks, i: nameEnd, code: SYM_LPAREN) {
+        let close = find_matching(toks: toks, open: nameEnd, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+        if close == (stop - 1) {
+            local children = List<Int>.new()
+            let mut partStart = nameEnd + 1
+            while partStart < close {
+                let comma = split_top_level_comma(toks: toks, start: partStart, end: close)
+                let mut partEnd = close
+                if comma >= 0 { partEnd = comma }
+                let child = parse_shared_pattern(program: mut program, toks, start: partStart, end: partEnd, nested: true)
+                List.push<Int>(list: mut children, value: child)
+                if comma < 0 { partStart = close } else { partStart = comma + 1 }
+            }
+            local name = pattern_name_text(toks: toks, start: start, end: nameEnd)
+            return push_shared_pattern(program: mut program, kind: PAT_VARIANT, token: token, name: name, children: take children, rest: "")
+        }
+    }
+    local children = List<Int>.new()
+    let text = token.text
+    if start + 1 == stop {
+        if text == "_" { return push_shared_pattern(program: mut program, kind: PAT_WILDCARD, token: token, name: text, children: take children, rest: "") }
+        if token.kind == TOK_NUMBER || token.kind == TOK_STRING || token.kind == TOK_CHAR || text == "true" || text == "false" {
+            return push_shared_pattern(program: mut program, kind: PAT_LITERAL, token: token, name: text, children: take children, rest: "")
+        }
+        if nested && first_call_name_is_upper(toks: toks, start: start) == false { return push_shared_pattern(program: mut program, kind: PAT_BINDING, token: token, name: text, children: take children, rest: "") }
+        return push_shared_pattern(program: mut program, kind: PAT_VARIANT, token: token, name: text, children: take children, rest: "")
+    }
+    local name = pattern_name_text(toks: toks, start: start, end: stop)
+    return push_shared_pattern(program: mut program, kind: PAT_UNKNOWN, token: token, name: name, children: take children, rest: "")
+}
+
+fn parse_match_arms(program: mut Program, toks: List<Tok>, open: Int, close: Int, arms: mut List<MatchArm>) -> Int {
+    let mut i = open + 1
+    let mut malformed = 0
+    while i < close {
+        if at_symbol(toks: toks, i: i, code: 59) || at_symbol(toks: toks, i: i, code: SYM_COMMA) { i = i + 1 }
+        else {
+            let mut end = next_line_or_block_end(toks: toks, start: i, end: close)
+            let arrow = top_fat_arrow(toks, start: i, end)
+            if arrow >= 0 {
+                let guardStart = top_match_guard(toks, start: i, end: arrow)
+                let mut patternEnd = arrow
+                if guardStart >= 0 { patternEnd = guardStart }
+                let patternNode = parse_shared_pattern(program: mut program, toks, start: i, end: patternEnd, nested: false)
+                let mut guard = -1
+                if guardStart >= 0 { guard = parse_expression(program: mut program, toks, start: (guardStart + 1), end: arrow) }
+                let token = List.get<Tok>(list: toks, index: i)
+                local shape = String.copy(value: token.text)
+                local body = List<Int>.new()
+                let bodyStart = arrow + 1
+                if at_symbol(toks: toks, i: bodyStart, code: SYM_LBRACE) {
+                    let bodyClose = find_matching(toks: toks, open: bodyStart, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+                    if bodyClose >= 0 {
+                        parse_body_statements(program: mut program, toks, open: bodyStart, close: bodyClose, statements: mut body)
+                        end = bodyClose + 1
+                    }
+                } else if bodyStart < end {
+                    push_statement(program: mut program, toks, start: bodyStart, end, statements: mut body)
+                }
+                let arm = MatchArm.from(patternNode: patternNode, guard: guard, shape: take shape, line: token.line, column: token.col, length: token.len, body: take body)
+                List.push<MatchArm>(list: mut arms, value: arm)
+            } else {
+                malformed = malformed + 1
+            }
+            if end > i { i = end } else { i = i + 1 }
+        }
+    }
+    return malformed
+}
+
+fn parse_select_arms(program: mut Program, toks: List<Tok>, open: Int, close: Int, arms: mut List<SelectArm>) -> Unit {
     let mut i = open + 1
     while i < close {
-        if at_symbol(toks: read toks, i: read i, code: read 59) || at_symbol(toks: read toks, i: read i, code: read SYM_COMMA) { i = i + 1 }
+        if at_symbol(toks: toks, i: i, code: 59) || at_symbol(toks: toks, i: i, code: SYM_COMMA) { i = i + 1 }
         else {
-            let end = next_line_or_block_end(toks: read toks, start: read i, end: read close)
-            let arrow = top_fat_arrow(toks: read toks, start: read i, end: read end)
+            let mut end = next_line_or_block_end(toks: toks, start: i, end: close)
+            let arrow = top_fat_arrow(toks, start: i, end)
             if arrow >= 0 {
-                let pattern = parse_expression(program: mut program, toks: read toks, start: read i, end: read arrow)
-                let token = List.get<Tok>(list: read toks, index: read i)
-                local shape = String.copy(value: read token.text)
-                let arm = MatchArm.from(pattern: pattern, shape: take shape, line: token.line, column: token.col, length: token.len)
-                List.push<MatchArm>(list: mut arms, value: read arm)
+                let eq = first_equals(toks, start: i, end: arrow)
+                if eq >= 0 && is_ident_tok(toks: toks, i: i) {
+                    let bindingTok = List.get<Tok>(list: toks, index: i)
+                    local binding = String.copy(value: bindingTok.text)
+                    let operation = parse_expression(program: mut program, toks, start: (eq + 1), end: arrow)
+                    local body = List<Int>.new()
+                    let bodyStart = arrow + 1
+                    if at_symbol(toks: toks, i: bodyStart, code: SYM_LBRACE) {
+                        let bodyClose = find_matching(toks: toks, open: bodyStart, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+                        if bodyClose >= 0 {
+                            parse_body_statements(program: mut program, toks, open: bodyStart, close: bodyClose, statements: mut body)
+                            end = bodyClose + 1
+                        }
+                    } else if bodyStart < end {
+                        push_statement(program: mut program, toks, start: bodyStart, end, statements: mut body)
+                    }
+                    let arm = SelectArm.from(binding: take binding, operation: operation, line: bindingTok.line, column: bindingTok.col, length: bindingTok.len, body: take body)
+                    List.push<SelectArm>(list: mut arms, value: arm)
+                }
             }
             if end > i { i = end } else { i = i + 1 }
         }
@@ -143,143 +550,466 @@ fn parse_match_arms(program: mut Program, toks: read List<Tok>, open: read Int, 
     return Unit
 }
 
-fn parse_expression(program: mut Program, toks: read List<Tok>, start: read Int, end: read Int) -> Int {
-    let stop = expression_end(toks: read toks, start: read start, end: read end)
-    if start >= stop { return -1 }
-    if at_symbol(toks: read toks, i: read start, code: read SYM_LPAREN) {
-        let close = find_matching(toks: read toks, open: read start, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
-        if close == (stop - 1) { return parse_expression(program: mut program, toks: read toks, start: read (start + 1), end: read close) }
+fn call_arg_value_start(toks: List<Tok>, start: Int, end: Int) -> Int {
+    if (start + 2) <= end && is_ident_tok(toks: toks, i: start) && at_symbol(toks: toks, i: (start + 1), code: SYM_COLON) {
+        return start + 2
     }
-    if at_symbol(toks: read toks, i: read start, code: read SYM_BANG) {
-        let token = List.get(list: read toks, index: read start)
-        let child = parse_expression(program: mut program, toks: read toks, start: read (start + 1), end: read stop)
+    return start
+}
+
+fn call_arg_label(toks: List<Tok>, start: Int, end: Int) -> String {
+    if call_arg_value_start(toks, start, end) != start {
+        let token = List.get<Tok>(list: toks, index: start)
+        return String.copy(value: token.text)
+    }
+    return ""
+}
+
+fn parse_expression(program: mut Program, toks: List<Tok>, start: Int, end: Int) -> Int {
+    let stop = expression_end(toks, start, end)
+    if start >= stop { return -1 }
+    // Data effects are first-class expression nodes. Consumers that only need
+    // the value can unwrap them, while canonical lowering preserves ownership.
+    if is_word(toks, i: start, word: "read") || is_word(toks, i: start, word: "mut") || is_word(toks, i: start, word: "take") {
+        let token = List.get<Tok>(list: toks, index: start)
+        let child = parse_expression(program: mut program, toks, start: (start + 1), end: stop)
         local children = List<Int>.new()
-        if child >= 0 { List.push<Int>(list: mut children, value: read child) }
+        if child >= 0 { List.push<Int>(list: mut children, value: child) }
+        local effect = String.copy(value: token.text)
+        let expression = Expr.from(kind: EXPR_EFFECT, tokenKind: token.kind, text: take effect, line: token.line, column: token.col, length: token.len, children: take children)
+        return Program.push_expression(self: mut program, expression: expression)
+    }
+    if is_word(toks, i: start, word: "manage") {
+        let token = List.get<Tok>(list: toks, index: start)
+        let child = parse_expression(program: mut program, toks, start: (start + 1), end: stop)
+        local children = List<Int>.new()
+        if child >= 0 { List.push<Int>(list: mut children, value: child) }
+        local operator = "manage"
+        let expression = Expr.from(kind: EXPR_MANAGE, tokenKind: token.kind, text: take operator, line: token.line, column: token.col, length: token.len, children: take children)
+        return Program.push_expression(self: mut program, expression: expression)
+    }
+    if is_word(toks, i: start, word: "spawn") {
+        let token = List.get<Tok>(list: toks, index: start)
+        let child = parse_expression(program: mut program, toks, start: (start + 1), end: stop)
+        local children = List<Int>.new()
+        if child >= 0 { List.push<Int>(list: mut children, value: child) }
+        local operator = "spawn"
+        let expression = Expr.from(kind: EXPR_SPAWN, tokenKind: token.kind, text: take operator, line: token.line, column: token.col, length: token.len, children: take children)
+        return Program.push_expression(self: mut program, expression: expression)
+    }
+    if is_word(toks, i: start, word: "match") {
+        let open = block_open(toks, start: (start + 1), limit: stop)
+        if open >= 0 {
+            let close = find_matching(toks: toks, open: open, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+            if close == (stop - 1) {
+                let scrutinee = parse_expression(program: mut program, toks, start: (start + 1), end: open)
+                local arms = List<MatchArm>.new()
+                let ignored = parse_match_arms(program: mut program, toks, open, close, arms: mut arms)
+                let token = List.get<Tok>(list: toks, index: start)
+                let expression = Expr.match(tokenKind: token.kind, line: token.line, column: token.col, length: token.len, scrutinee: scrutinee, arms: take arms)
+                return Program.push_expression(self: mut program, expression: expression)
+            }
+        }
+    }
+    if at_symbol(toks: toks, i: start, code: SYM_LPAREN) {
+        let close = find_matching(toks: toks, open: start, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+        if close == (stop - 1) { return parse_expression(program: mut program, toks, start: (start + 1), end: close) }
+    }
+    if at_symbol(toks: toks, i: start, code: SYM_LBRACKET) {
+        let close = find_matching(toks: toks, open: start, openSym: SYM_LBRACKET, closeSym: SYM_RBRACKET)
+        if close == (stop - 1) {
+            local children = List<Int>.new()
+            let mut itemStart = start + 1
+            while itemStart < close {
+                let comma = split_top_level_comma(toks: toks, start: itemStart, end: close)
+                let mut itemEnd = close
+                if comma >= 0 { itemEnd = comma }
+                let item = parse_expression(program: mut program, toks, start: itemStart, end: itemEnd)
+                if item >= 0 { List.push<Int>(list: mut children, value: item) }
+                if comma < 0 { itemStart = close } else { itemStart = comma + 1 }
+            }
+            let token = List.get<Tok>(list: toks, index: start)
+            local text = "array"
+            let expression = Expr.from(kind: EXPR_ARRAY, tokenKind: token.kind, text: take text, line: token.line, column: token.col, length: token.len, children: take children)
+            return Program.push_expression(self: mut program, expression: expression)
+        }
+    }
+    if at_symbol(toks: toks, i: start, code: SYM_BANG) {
+        let token = List.get(list: toks, index: start)
+        let child = parse_expression(program: mut program, toks, start: (start + 1), end: stop)
+        local children = List<Int>.new()
+        if child >= 0 { List.push<Int>(list: mut children, value: child) }
         local operator = "!"
         let expression = Expr.from(kind: EXPR_UNARY, tokenKind: token.kind, text: take operator, line: token.line, column: token.col, length: token.len, children: take children)
-        return Program.push_expression(self: mut program, expression: read expression)
+        return Program.push_expression(self: mut program, expression: expression)
     }
-    let binary = last_top_binary_operator(toks: read toks, start: read start, end: read stop)
-    if binary >= 0 {
-        local operator = binary_operator_text(toks: read toks, i: read binary, end: read stop)
-        let width = binary_operator_width(operator: read operator)
-        let left = parse_expression(program: mut program, toks: read toks, start: read start, end: read binary)
-        let right = parse_expression(program: mut program, toks: read toks, start: read (binary + width), end: read stop)
-        let token = List.get(list: read toks, index: read binary)
+    // `?` is postfix. At the outer expression level it wraps a preceding
+    // `await`, matching the Rust parser's `try(await call())` association.
+    if at_symbol(toks: toks, i: (stop - 1), code: SYM_QUESTION) {
+        let token = List.get<Tok>(list: toks, index: (stop - 1))
+        let child = parse_expression(program: mut program, toks, start, end: (stop - 1))
         local children = List<Int>.new()
-        if left >= 0 { List.push<Int>(list: mut children, value: read left) }
-        if right >= 0 { List.push<Int>(list: mut children, value: read right) }
-        let expression = Expr.from(kind: EXPR_BINARY, tokenKind: token.kind, text: take operator, line: token.line, column: token.col, length: token.len, children: take children)
-        return Program.push_expression(self: mut program, expression: read expression)
+        if child >= 0 { List.push<Int>(list: mut children, value: child) }
+        local operator = "try"
+        let expression = Expr.from(kind: EXPR_TRY, tokenKind: token.kind, text: take operator, line: token.line, column: token.col, length: token.len, children: take children)
+        return Program.push_expression(self: mut program, expression: expression)
     }
-    let tok = List.get(list: read toks, index: read start)
-    local text = String.copy(value: read tok.text)
+    if is_word(toks, i: start, word: "await") {
+        let token = List.get(list: toks, index: start)
+        let child = parse_expression(program: mut program, toks, start: (start + 1), end: stop)
+        local children = List<Int>.new()
+        if child >= 0 { List.push<Int>(list: mut children, value: child) }
+        local operator = "await"
+        let expression = Expr.from(kind: EXPR_AWAIT, tokenKind: token.kind, text: take operator, line: token.line, column: token.col, length: token.len, children: take children)
+        return Program.push_expression(self: mut program, expression: expression)
+    }
+    // A pipe closure with one expression body is the first closure slice shared
+    // by the RSS AST and canonical IR. The expression may be written directly
+    // or enclosed in braces. Captures, declared effects, and statement blocks
+    // remain unsupported until they have equivalent shared records.
+    if at_symbol(toks: toks, i: start, code: SYM_PIPE) {
+        let mut closePipe = start + 1
+        while closePipe < stop && at_symbol(toks: toks, i: closePipe, code: SYM_PIPE) == false {
+            closePipe = closePipe + 1
+        }
+        if closePipe < stop && closePipe + 1 < stop {
+            local params = List<String>.new()
+            let mut paramStart = start + 1
+            let mut valid = true
+            while paramStart < closePipe {
+                let comma = split_top_level_comma(toks: toks, start: paramStart, end: closePipe)
+                let mut paramEnd = closePipe
+                if comma >= 0 { paramEnd = comma }
+                if paramStart + 1 != paramEnd || is_ident_tok(toks: toks, i: paramStart) == false {
+                    valid = false
+                } else {
+                    let param = List.get<Tok>(list: toks, index: paramStart)
+                    local name = String.copy(value: param.text)
+                    List.push<String>(list: mut params, value: (manage name))
+                }
+                if comma < 0 { paramStart = closePipe } else { paramStart = comma + 1 }
+            }
+            if valid {
+                let bodyStart = closePipe + 1
+                let mut body = -1
+                local statements = List<Int>.new()
+                if at_symbol(toks: toks, i: bodyStart, code: SYM_LBRACE) {
+                    let close = find_matching(toks: toks, open: bodyStart, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+                    if close == (stop - 1) {
+                        parse_body_statements(program: mut program, toks, open: bodyStart, close: close, statements: mut statements)
+                    }
+                } else {
+                    body = parse_expression(program: mut program, toks, start: bodyStart, end: stop)
+                }
+                if body >= 0 || List.len(list: statements) > 0 {
+                    let token = List.get<Tok>(list: toks, index: start)
+                    let expression = Expr.closure(tokenKind: token.kind, line: token.line, column: token.col, length: token.len, params: take params, body: body, statements: take statements)
+                    return Program.push_expression(self: mut program, expression: expression)
+                }
+            }
+        }
+    }
+    // Explicit closures remain unsupported rather than being misrepresented as
+    // an ordinary name expression.
+    if is_word(toks, i: start, word: "fn") {
+        let token = List.get<Tok>(list: toks, index: start)
+        local text = String.copy(value: token.text)
+        local children = List<Int>.new()
+        let expression = Expr.from(kind: EXPR_UNKNOWN, tokenKind: token.kind, text: take text, line: token.line, column: token.col, length: token.len, children: take children)
+        return Program.push_expression(self: mut program, expression: expression)
+    }
+    let callOpen = call_open_after_name(toks, start, end: stop)
+    let mut callClose = -1
+    if callOpen >= 0 { callClose = find_matching(toks: toks, open: callOpen, openSym: SYM_LPAREN, closeSym: SYM_RPAREN) }
+    // Postfix call chains such as `value.check().is_err()` are not yet a
+    // materialized expression form. Do not fall back to the receiver name:
+    // that would incorrectly reuse its scalar type for the whole chain.
+    if callClose >= 0 && callClose < (stop - 1) && at_symbol(toks: toks, i: (callClose + 1), code: SYM_DOT) {
+        let token = List.get(list: toks, index: start)
+        local text = String.copy(value: token.text)
+        local children = List<Int>.new()
+        let expression = Expr.from(kind: EXPR_UNKNOWN, tokenKind: token.kind, text: take text, line: token.line, column: token.col, length: token.len, children: take children)
+        return Program.push_expression(self: mut program, expression: expression)
+    }
+    let mut binary = last_top_binary_operator(toks, start, end: stop)
+    if callClose == (stop - 1) { binary = -1 }
+    if binary >= 0 {
+        local operator = binary_operator_text(toks, i: binary, end: stop)
+        let width = binary_operator_width(operator)
+        let left = parse_expression(program: mut program, toks, start, end: binary)
+        let right = parse_expression(program: mut program, toks, start: (binary + width), end: stop)
+        let token = List.get(list: toks, index: binary)
+        local children = List<Int>.new()
+        if left >= 0 { List.push<Int>(list: mut children, value: left) }
+        if right >= 0 { List.push<Int>(list: mut children, value: right) }
+        let expression = Expr.from(kind: EXPR_BINARY, tokenKind: token.kind, text: take operator, line: token.line, column: token.col, length: token.len, children: take children)
+        return Program.push_expression(self: mut program, expression: expression)
+    }
+    let indexOpen = top_level_index_open(toks: toks, start: start, end: stop)
+    if indexOpen > start {
+        let indexClose = find_matching(toks: toks, open: indexOpen, openSym: SYM_LBRACKET, closeSym: SYM_RBRACKET)
+        if indexClose == (stop - 1) {
+            let base = parse_expression(program: mut program, toks, start: start, end: indexOpen)
+            let index = parse_expression(program: mut program, toks, start: (indexOpen + 1), end: indexClose)
+            let token = List.get<Tok>(list: toks, index: indexOpen)
+            local children = List<Int>.new()
+            if base >= 0 { List.push<Int>(list: mut children, value: base) }
+            if index >= 0 { List.push<Int>(list: mut children, value: index) }
+            local text = "index"
+            let expression = Expr.from(kind: EXPR_INDEX, tokenKind: token.kind, text: take text, line: token.line, column: token.col, length: token.len, children: take children)
+            return Program.push_expression(self: mut program, expression: expression)
+        }
+    }
+    let fieldDot = last_top_field_dot(toks: toks, start: start, end: stop)
+    if fieldDot > start && (fieldDot + 1) < stop && is_ident_tok(toks: toks, i: (fieldDot + 1)) && (fieldDot + 2) == stop {
+        let base = parse_expression(program: mut program, toks, start: start, end: fieldDot)
+        let field = List.get<Tok>(list: toks, index: (fieldDot + 1))
+        local children = List<Int>.new()
+        if base >= 0 { List.push<Int>(list: mut children, value: base) }
+        local name = String.copy(value: field.text)
+        let expression = Expr.from(kind: EXPR_FIELD, tokenKind: field.kind, text: take name, line: field.line, column: field.col, length: field.len, children: take children)
+        return Program.push_expression(self: mut program, expression: expression)
+    }
+    let tok = List.get(list: toks, index: start)
+    let mut text = String.copy(value: tok.text)
     let mut kind = EXPR_UNKNOWN
-    if is_ident_tok(toks: read toks, i: read start) {
+    if is_ident_tok(toks: toks, i: start) {
         if text == "true" || text == "false" || text == "Unit" { kind = EXPR_LITERAL }
         else { kind = EXPR_NAME }
     }
-    else if tk_kind(toks: read toks, i: read start) == TOK_NUMBER || tk_kind(toks: read toks, i: read start) == TOK_STRING || tk_kind(toks: read toks, i: read start) == TOK_CHAR { kind = EXPR_LITERAL }
+    else if tk_kind(toks: toks, i: start) == TOK_NUMBER || tk_kind(toks: toks, i: start) == TOK_STRING || tk_kind(toks: toks, i: start) == TOK_CHAR { kind = EXPR_LITERAL }
     local children = List<Int>.new()
-    let afterName = take_function_name(toks: read toks, i: read start)
-    if afterName > start && at_symbol(toks: read toks, i: read afterName, code: read SYM_LPAREN) {
-        let close = find_matching(toks: read toks, open: read afterName, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    local args = List<CallArg>.new()
+    let afterName = take_function_name(toks: toks, i: start)
+    local typeArgs = collect_call_type_args(toks, nameEnd: afterName, callOpen: callOpen)
+    if afterName > start && callOpen >= 0 {
+        let close = callClose
         if close == (stop - 1) {
             kind = EXPR_CALL
-            let mut argStart = afterName + 1
+            text = qualified_expression_name(toks, start, end: afterName)
+            let mut argStart = callOpen + 1
             while argStart < close {
-                let comma = split_top_level_comma(toks: read toks, start: read argStart, end: read close)
+                let comma = split_top_level_comma(toks: toks, start: argStart, end: close)
                 let mut argEnd = close
                 if comma >= 0 { argEnd = comma }
-                let child = parse_expression(program: mut program, toks: read toks, start: read argStart, end: read argEnd)
-                if child >= 0 { List.push<Int>(list: mut children, value: read child) }
+                let valueStart = call_arg_value_start(toks, start: argStart, end: argEnd)
+                local label = call_arg_label(toks, start: argStart, end: argEnd)
+                let child = parse_expression(program: mut program, toks, start: valueStart, end: argEnd)
+                if child >= 0 { List.push<Int>(list: mut children, value: child) }
+                let argToken = List.get<Tok>(list: toks, index: argStart)
+                let argument = CallArg.from(label: take label, value: child, line: argToken.line, column: argToken.col, length: argToken.len)
+                List.push<CallArg>(list: mut args, value: argument)
                 if comma < 0 { argStart = close } else { argStart = comma + 1 }
             }
         }
     }
-    let expression = Expr.from(kind: kind, tokenKind: tok.kind, text: take text, line: tok.line, column: tok.col, length: tok.len, children: take children)
-    return Program.push_expression(self: mut program, expression: read expression)
+    if kind == EXPR_CALL {
+        let mut calleeKind = CALLEE_NAME
+        let mut calleeReceiver = -1
+        let dot = first_call_dot(toks: toks, start: start, end: afterName)
+        if dot > start {
+            if first_call_name_is_upper(toks: toks, start: start) {
+                calleeKind = CALLEE_QUALIFIED
+            } else {
+                calleeKind = CALLEE_RECEIVER
+                calleeReceiver = parse_expression(program: mut program, toks, start: start, end: dot)
+                let receiverMethod = qualified_expression_name(toks: toks, start: (dot + 1), end: afterName)
+                text = String.copy(value: receiverMethod)
+            }
+        }
+        local ownedText = String.copy(value: text)
+        let expression = Expr.call(tokenKind: tok.kind, text: take ownedText, line: tok.line, column: tok.col, length: tok.len, typeArgs: take typeArgs, calleeKind: calleeKind, calleeReceiver: calleeReceiver, children: take children, args: take args)
+        return Program.push_expression(self: mut program, expression: expression)
+    }
+    local ownedText = String.copy(value: text)
+    let expression = Expr.from(kind: kind, tokenKind: tok.kind, text: take ownedText, line: tok.line, column: tok.col, length: tok.len, children: take children)
+    return Program.push_expression(self: mut program, expression: expression)
 }
 
-fn push_statement(program: mut Program, toks: read List<Tok>, start: read Int, end: read Int, statements: mut List<Int>) -> Unit {
-    let stop = expression_end(toks: read toks, start: read start, end: read end)
+fn assignment_root_name(program: Program, index: Int) -> String {
+    if index < 0 || index >= List.len(list: program.expressions) { return "" }
+    let expression = List.get<Expr>(list: program.expressions, index)
+    if expression.kind == EXPR_NAME { return String.copy(value: expression.text) }
+    if (expression.kind == EXPR_FIELD || expression.kind == EXPR_INDEX) && List.len(list: expression.children) > 0 {
+        return assignment_root_name(program, index: List.get<Int>(list: expression.children, index: 0))
+    }
+    return ""
+}
+
+fn push_statement(program: mut Program, toks: List<Tok>, start: Int, end: Int, statements: mut List<Int>) -> Unit {
+    let stop = expression_end(toks, start, end)
     if start >= stop { return Unit }
-    let tok = List.get(list: read toks, index: read start)
+    let tok = List.get(list: toks, index: start)
     let mut kind = STMT_EXPR
     let mut expressionStart = start
+    let mut target = -1
     let mut name = ""
+    let mut isAsync = false
+    let mut isLocal = false
+    let mut isMutable = false
+    let mut hasValidHeader = true
+    let mut hasBlock = false
+    let mut hasElse = false
+    let mut hasElseBlock = false
+    let mut malformedArms = 0
+    let mut hasInitializer = false
     let mut typeText = ""
+    local destructure = List<String>.new()
     local children = List<Int>.new()
     local elseChildren = List<Int>.new()
     local arms = List<MatchArm>.new()
-    if is_word(toks: read toks, i: read start, word: read "return") {
+    local selectArms = List<SelectArm>.new()
+    if is_word(toks, i: start, word: "return") {
         kind = STMT_RETURN
         expressionStart = start + 1
-    } else if is_word(toks: read toks, i: read start, word: read "let") || is_word(toks: read toks, i: read start, word: read "local") {
+    } else if is_word(toks, i: start, word: "let") || is_word(toks, i: start, word: "local") || (is_word(toks, i: start, word: "async") && is_word(toks, i: (start + 1), word: "let")) {
         kind = STMT_LET
+        if is_word(toks, i: start, word: "local") { isLocal = true }
         let mut nameIndex = start + 1
-        if is_word(toks: read toks, i: read nameIndex, word: read "mut") { nameIndex = nameIndex + 1 }
-        if is_ident_tok(toks: read toks, i: read nameIndex) {
-            let nameTok = List.get(list: read toks, index: read nameIndex)
+        if is_word(toks, i: start, word: "async") {
+            isAsync = true
+            nameIndex = start + 2
+        }
+        if is_word(toks, i: nameIndex, word: "mut") { isMutable = true; nameIndex = nameIndex + 1 }
+        if at_symbol(toks: toks, i: nameIndex, code: SYM_LPAREN) {
+            let close = find_matching(toks: toks, open: nameIndex, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+            if close >= 0 && close < stop {
+                let mut part = nameIndex + 1
+                while part < close {
+                    let comma = split_top_level_comma(toks: toks, start: part, end: close)
+                    if is_ident_tok(toks: toks, i: part) {
+                        let binding = List.get<Tok>(list: toks, index: part)
+                        local bindingName = String.copy(value: binding.text)
+                        List.push<String>(list: mut destructure, value: (manage bindingName))
+                    }
+                    if comma < 0 { part = close } else { part = comma + 1 }
+                }
+                nameIndex = close
+            }
+        } else if is_ident_tok(toks: toks, i: nameIndex) {
+            let nameTok = List.get(list: toks, index: nameIndex)
             name = nameTok.text
         }
-        let eq = first_equals(toks: read toks, start: read (nameIndex + 1), end: read stop)
+        let eq = first_equals(toks, start: (nameIndex + 1), end: stop)
         let mut typeEnd = stop
-        if eq >= 0 { typeEnd = eq; expressionStart = eq + 1 } else { expressionStart = stop }
-        if at_symbol(toks: read toks, i: read (nameIndex + 1), code: read SYM_COLON) {
-            typeText = canonical_type_text(toks: read toks, start: read (nameIndex + 2), end: read typeEnd)
+        if eq >= 0 { typeEnd = eq; expressionStart = eq + 1; hasInitializer = true } else { expressionStart = stop }
+        if at_symbol(toks: toks, i: (nameIndex + 1), code: SYM_COLON) {
+            typeText = canonical_type_text(toks: toks, start: (nameIndex + 2), end: typeEnd)
         }
-    } else if is_word(toks: read toks, i: read start, word: read "if") || is_word(toks: read toks, i: read start, word: read "while") || is_word(toks: read toks, i: read start, word: read "loop") || is_word(toks: read toks, i: read start, word: read "for") || is_word(toks: read toks, i: read start, word: read "match") {
-        if is_word(toks: read toks, i: read start, word: read "if") { kind = STMT_IF }
-        else if is_word(toks: read toks, i: read start, word: read "while") { kind = STMT_WHILE }
-        else if is_word(toks: read toks, i: read start, word: read "for") { kind = STMT_FOR }
-        else if is_word(toks: read toks, i: read start, word: read "match") { kind = STMT_MATCH }
+    } else if assignment_equals(toks: toks, start: start, end: stop) >= 0 {
+        let eq = assignment_equals(toks: toks, start: start, end: stop)
+        target = parse_expression(program: mut program, toks, start, end: eq)
+        name = assignment_root_name(program, index: target)
+        expressionStart = eq + 1
+        if target >= 0 && target < List.len(list: program.expressions) {
+            let place = List.get<Expr>(list: program.expressions, index: target)
+            if place.kind == EXPR_INDEX { kind = STMT_INDEX_ASSIGN }
+            else { kind = STMT_ASSIGN }
+        }
+    } else if is_word(toks, i: start, word: "if") || is_word(toks, i: start, word: "while") || is_word(toks, i: start, word: "loop") || is_word(toks, i: start, word: "for") || is_word(toks, i: start, word: "match") || is_word(toks, i: start, word: "with") || is_word(toks, i: start, word: "select") || is_word(toks, i: start, word: "task_group") {
+        if is_word(toks, i: start, word: "if") { kind = STMT_IF }
+        else if is_word(toks, i: start, word: "while") { kind = STMT_WHILE }
+        else if is_word(toks, i: start, word: "for") { kind = STMT_FOR }
+        else if is_word(toks, i: start, word: "match") { kind = STMT_MATCH }
+        else if is_word(toks, i: start, word: "with") { kind = STMT_WITH }
+        else if is_word(toks, i: start, word: "select") { kind = STMT_SELECT }
+        else if is_word(toks, i: start, word: "task_group") { kind = STMT_TASK_GROUP }
         else { kind = STMT_LOOP }
-        let open = block_open(toks: read toks, start: read (start + 1), limit: read stop)
+        let open = block_open(toks, start: (start + 1), limit: stop)
         if open >= 0 {
             if kind == STMT_IF || kind == STMT_WHILE {
                 expressionStart = start + 1
+                hasValidHeader = expressionStart < open
             } else if kind == STMT_FOR {
-                let inIndex = first_word(toks: read toks, start: read (start + 1), end: read open, word: read "in")
-                if inIndex >= 0 { expressionStart = inIndex + 1 } else { expressionStart = open }
+                let inIndex = first_word(toks, start: (start + 1), end: open, word: "in")
+                if is_ident_tok(toks: toks, i: (start + 1)) {
+                    let binding = List.get<Tok>(list: toks, index: (start + 1))
+                    name = binding.text
+                }
+                if inIndex >= 0 {
+                    expressionStart = inIndex + 1
+                    hasValidHeader = String.len(value: name) > 0 && expressionStart < open
+                } else {
+                    expressionStart = open
+                    hasValidHeader = false
+                }
             } else if kind == STMT_MATCH {
                 expressionStart = start + 1
+                hasValidHeader = expressionStart < open
+            } else if kind == STMT_WITH {
+                let asIndex = first_word(toks, start: (start + 1), end: open, word: "as")
+                if asIndex >= 0 {
+                    expressionStart = start + 1
+                    if is_ident_tok(toks: toks, i: (asIndex + 1)) {
+                        let binding = List.get<Tok>(list: toks, index: (asIndex + 1))
+                        name = binding.text
+                    }
+                    hasValidHeader = expressionStart < asIndex && String.len(value: name) > 0
+                } else {
+                    expressionStart = open
+                    hasValidHeader = false
+                }
+            } else if kind == STMT_SELECT {
+                expressionStart = open
+                hasValidHeader = (start + 1) == open
             } else {
                 expressionStart = open
+                hasValidHeader = (start + 1) == open
             }
-            let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
+            let close = find_matching(toks: toks, open: open, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
             if close >= 0 {
-                if kind == STMT_MATCH { parse_match_arms(program: mut program, toks: read toks, open: read open, close: read close, arms: mut arms) }
-                else { parse_body_statements(program: mut program, toks: read toks, open: read open, close: read close, statements: mut children) }
-                if is_word(toks: read toks, i: read (close + 1), word: read "else") && at_symbol(toks: read toks, i: read (close + 2), code: read SYM_LBRACE) {
+                hasBlock = true
+                if kind == STMT_MATCH { malformedArms = parse_match_arms(program: mut program, toks, open, close, arms: mut arms) }
+                else if kind == STMT_SELECT { parse_select_arms(program: mut program, toks, open, close, arms: mut selectArms) }
+                else { parse_body_statements(program: mut program, toks, open, close, statements: mut children) }
+                if is_word(toks, i: (close + 1), word: "else") {
+                    hasElse = true
+                }
+                if hasElse && at_symbol(toks: toks, i: (close + 2), code: SYM_LBRACE) {
                     let elseOpen = close + 2
-                    let elseClose = find_matching(toks: read toks, open: read elseOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
-                    if elseClose >= 0 { parse_body_statements(program: mut program, toks: read toks, open: read elseOpen, close: read elseClose, statements: mut elseChildren) }
+                    let elseClose = find_matching(toks: toks, open: elseOpen, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+                    if elseClose >= 0 {
+                        hasElseBlock = true
+                        parse_body_statements(program: mut program, toks, open: elseOpen, close: elseClose, statements: mut elseChildren)
+                    }
                 }
             }
         }
     }
     let mut expressionEnd = stop
-    if kind == STMT_IF || kind == STMT_WHILE || kind == STMT_LOOP || kind == STMT_FOR || kind == STMT_MATCH {
-        let open = block_open(toks: read toks, start: read (start + 1), limit: read stop)
+    if kind == STMT_IF || kind == STMT_WHILE || kind == STMT_LOOP || kind == STMT_FOR || kind == STMT_MATCH || kind == STMT_WITH || kind == STMT_SELECT || kind == STMT_TASK_GROUP {
+        let open = block_open(toks, start: (start + 1), limit: stop)
         if open >= 0 { expressionEnd = open }
     }
-    let expression = parse_expression(program: mut program, toks: read toks, start: read expressionStart, end: read expressionEnd)
-    local ownedName = String.copy(value: read name)
-    local ownedType = String.copy(value: read typeText)
-    let statement = Stmt.from(kind: kind, name: take ownedName, typeText: take ownedType, line: tok.line, column: tok.col, length: tok.len, expression: expression, children: take children, elseChildren: take elseChildren, arms: take arms)
-    let index = Program.push_statement(self: mut program, statement: read statement)
-    List.push<Int>(list: mut statements, value: read index)
+    if kind == STMT_WITH {
+        let open = block_open(toks, start: (start + 1), limit: stop)
+        if open >= 0 {
+            let asIndex = first_word(toks, start: (start + 1), end: open, word: "as")
+            if asIndex >= 0 { expressionEnd = asIndex }
+        }
+    }
+    let expression = parse_expression(program: mut program, toks, start: expressionStart, end: expressionEnd)
+    local ownedName = String.copy(value: name)
+    local ownedType = String.copy(value: typeText)
+    let mut root = ""
+    if is_ident_tok(toks: toks, i: expressionStart) {
+        let rootToken = List.get<Tok>(list: toks, index: expressionStart)
+        root = rootToken.text
+    }
+    local ownedRoot = String.copy(value: root)
+    let statement = Stmt.from(kind: kind, name: take ownedName, isAsync: isAsync, isLocal: isLocal, isMutable: isMutable, hasValidHeader: hasValidHeader, hasBlock: hasBlock, hasElse: hasElse, hasElseBlock: hasElseBlock, malformedArms: malformedArms, hasInitializer: hasInitializer, destructure: take destructure, typeText: take ownedType, expressionRoot: take ownedRoot, line: tok.line, column: tok.col, length: tok.len, target: target, expression: expression, children: take children, elseChildren: take elseChildren, arms: take arms, selectArms: take selectArms)
+    let index = Program.push_statement(self: mut program, statement: statement)
+    List.push<Int>(list: mut statements, value: index)
 }
 
-fn parse_body_statements(program: mut Program, toks: read List<Tok>, open: read Int, close: read Int, statements: mut List<Int>) -> Unit {
+fn parse_body_statements(program: mut Program, toks: List<Tok>, open: Int, close: Int, statements: mut List<Int>) -> Unit {
     let mut start = open + 1
     while start < close {
-        if at_symbol(toks: read toks, i: read start, code: read 59) {
+        if at_symbol(toks: toks, i: start, code: 59) {
             start = start + 1
         } else {
-            let end = statement_end(toks: read toks, start: read start, limit: read close)
-            push_statement(program: mut program, toks: read toks, start: read start, end: read end, statements: mut statements)
+            let end = statement_end(toks, start, limit: close)
+            push_statement(program: mut program, toks, start, end, statements: mut statements)
             if end > start { start = end } else { start = start + 1 }
         }
     }

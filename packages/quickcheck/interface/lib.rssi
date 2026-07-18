@@ -77,21 +77,21 @@ struct StringListGen {
 
 pub fn Rng.seed(seed: Int) -> fresh Rng
 
-pub fn Rng.next(rng: read Rng) -> fresh Rng
+pub fn Rng.next(rng: Rng) -> fresh Rng
 
-pub fn Rng.int(rng: read Rng, range: read IntRange) -> Int
+pub fn Rng.int(rng: Rng, range: IntRange) -> Int
 
-pub fn Rng.bool(rng: read Rng) -> Bool
+pub fn Rng.bool(rng: Rng) -> Bool
 
 pub fn IntRange.new(min: Int, max: Int) -> fresh IntRange
 
-pub fn IntListGen.new(max_len: Int, range: read IntRange) -> fresh IntListGen
+pub fn IntListGen.new(max_len: Int, range: IntRange) -> fresh IntListGen
 
 pub fn BoolListGen.new(max_len: Int) -> fresh BoolListGen
 
-pub fn IntPairGen.new(left: read IntRange, right: read IntRange) -> fresh IntPairGen
+pub fn IntPairGen.new(left: IntRange, right: IntRange) -> fresh IntPairGen
 
-pub fn IntListPairGen.new(max_len: Int, range: read IntRange) -> fresh IntListPairGen
+pub fn IntListPairGen.new(max_len: Int, range: IntRange) -> fresh IntListPairGen
 
 pub fn StringGen.new(max_len: Int) -> fresh StringGen
 
@@ -101,83 +101,83 @@ pub fn StringListGen.new(max_len: Int, max_item_len: Int) -> fresh StringListGen
 
 pub fn Property.pass() -> fresh PropertyResult
 
-pub fn Property.fail(message: read String, counterexample: read String) -> fresh PropertyResult
+pub fn Property.fail(message: String, counterexample: String) -> fresh PropertyResult
 
 pub fn Property.discard() -> fresh PropertyResult
 
 pub fn Property.expect_bool(value: Bool) -> fresh PropertyResult
 
-pub fn PropertyResult.label(result: read PropertyResult, label: read String) -> fresh PropertyResult
+pub fn PropertyResult.label(result: PropertyResult, label: String) -> fresh PropertyResult
 
 pub fn Property.check_int(
-    name: read String,
+    name: String,
     cases: Int,
     seed: Int,
-    range: read IntRange,
+    range: IntRange,
     property: noescape Fn(Int) -> fresh PropertyResult,
 ) -> fresh PropertySummary
 
 pub fn Property.check_bool(
-    name: read String,
+    name: String,
     cases: Int,
     seed: Int,
     property: noescape Fn(Bool) -> fresh PropertyResult,
 ) -> fresh PropertySummary
 
 pub fn Property.check_bool_list(
-    name: read String,
+    name: String,
     cases: Int,
     seed: Int,
-    input: read BoolListGen,
+    input: BoolListGen,
     property: noescape Fn(List<Bool>) -> fresh PropertyResult,
 ) -> fresh PropertySummary
 
 pub fn Property.check_string(
-    name: read String,
+    name: String,
     cases: Int,
     seed: Int,
-    input: read StringGen,
+    input: StringGen,
     property: noescape Fn(String) -> fresh PropertyResult,
 ) -> fresh PropertySummary
 
 pub fn Property.check_string_pair(
-    name: read String,
+    name: String,
     cases: Int,
     seed: Int,
-    input: read StringPairGen,
+    input: StringPairGen,
     property: noescape Fn(StringPair) -> fresh PropertyResult,
 ) -> fresh PropertySummary
 
 pub fn Property.check_string_list(
-    name: read String,
+    name: String,
     cases: Int,
     seed: Int,
-    input: read StringListGen,
+    input: StringListGen,
     property: noescape Fn(List<String>) -> fresh PropertyResult,
 ) -> fresh PropertySummary
 
 pub fn Property.check_int_list(
-    name: read String,
+    name: String,
     cases: Int,
     seed: Int,
-    input: read IntListGen,
+    input: IntListGen,
     property: noescape Fn(List<Int>) -> fresh PropertyResult,
 ) -> fresh PropertySummary
 
 pub fn Property.check_int_pair(
-    name: read String,
+    name: String,
     cases: Int,
     seed: Int,
-    input: read IntPairGen,
+    input: IntPairGen,
     property: noescape Fn(IntPair) -> fresh PropertyResult,
 ) -> fresh PropertySummary
 
 pub fn Property.check_int_list_pair(
-    name: read String,
+    name: String,
     cases: Int,
     seed: Int,
-    input: read IntListPairGen,
+    input: IntListPairGen,
     property: noescape Fn(IntListPair) -> fresh PropertyResult,
 ) -> fresh PropertySummary
 
-pub fn Property.assert_passed(summary: read PropertySummary) -> Unit
+pub fn Property.assert_passed(summary: PropertySummary) -> Unit

@@ -6,15 +6,15 @@ features: native, local
 
 fn main() -> Unit {
     local values = List<Int>.new()
-    List.push<Int>(list: mut values, value: read 3)
-    List.push<Int>(list: mut values, value: read 1)
-    List.push<Int>(list: mut values, value: read 2)
+    List.push<Int>(list: mut values, value: 3)
+    List.push<Int>(list: mut values, value: 1)
+    List.push<Int>(list: mut values, value: 2)
 
     Rayon.sort_int(values: mut values)
 
-    Assert.equal_int(left: List.get<Int>(list: read values, index: 0), right: 1)
-    Assert.equal_int(left: List.get<Int>(list: read values, index: 1), right: 2)
-    Assert.equal_int(left: List.get<Int>(list: read values, index: 2), right: 3)
+    Assert.equal_int(left: List.get<Int>(list: values, index: 0), right: 1)
+    Assert.equal_int(left: List.get<Int>(list: values, index: 1), right: 2)
+    Assert.equal_int(left: List.get<Int>(list: values, index: 2), right: 3)
 
     return Unit
 }

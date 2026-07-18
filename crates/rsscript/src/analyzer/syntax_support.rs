@@ -601,7 +601,7 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn unsupported_syntax(
+    pub(crate) fn unsupported_syntax(
         &mut self,
         span: crate::diagnostic::Span,
         label: &str,

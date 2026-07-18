@@ -25,91 +25,91 @@ struct TestRunSummary {
     skipped: Int
 }
 
-fn json_error(prefix: read String, error: read JsonError) -> fresh String {
-    let message = JsonError.message(error: read error)
-    let label = String.concat(left: read prefix, right: read ": ")
+fn json_error(prefix: String, error: JsonError) -> fresh String {
+    let message = JsonError.message(error)
+    let label = String.concat(left: prefix, right: ": ")
 
-    return String.concat(left: read label, right: read message)
+    return String.concat(left: label, right: message)
 }
 
-fn file_error(prefix: read String, error: read FileError) -> fresh String {
-    let message = FileError.message(error: read error)
-    let label = String.concat(left: read prefix, right: read ": ")
+fn file_error(prefix: String, error: FileError) -> fresh String {
+    let message = FileError.message(error)
+    let label = String.concat(left: prefix, right: ": ")
 
-    return String.concat(left: read label, right: read message)
+    return String.concat(left: label, right: message)
 }
 
-fn read_text_file(path: read Path) -> Result<String, FileError> {
-    with File.open_read(path: read path)? as file {
+fn read_text_file(path: Path) -> Result<String, FileError> {
+    with File.open_read(path)? as file {
         let text = File.read_all_string(file: mut file)?
 
         return Ok(text)
     }
 }
 
-fn read_text(path: read Path) -> Result<String, String> {
-    match read_text_file(path: read path) {
+fn read_text(path: Path) -> Result<String, String> {
+    match read_text_file(path) {
         Ok(text) => {
             return Ok(text)
         }
         Err(error) => {
-            return Err(file_error(prefix: read "read file", error: read error))
+            return Err(file_error(prefix: "read file", error))
         }
     }
 }
 
-fn parse_manifest(path: read Path) -> Result<fresh JsonValue, String> {
-    match Toml.parse_file(path: read path) {
+fn parse_manifest(path: Path) -> Result<fresh JsonValue, String> {
+    match Toml.parse_file(path) {
         Ok(value) => {
             return Ok(value)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "test manifest parse", error: read error))
+            return Err(json_error(prefix: "test manifest parse", error))
         }
     }
 }
 
-fn json_field(value: read JsonValue, name: read String) -> Result<JsonValue, String> {
-    match Json.field(value: read value, name: read name) {
+fn json_field(value: JsonValue, name: String) -> Result<JsonValue, String> {
+    match Json.field(value, name) {
         Ok(field) => {
             return Ok(field)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "test manifest field", error: read error))
+            return Err(json_error(prefix: "test manifest field", error))
         }
     }
 }
 
-fn json_string(value: read JsonValue, name: read String) -> Result<String, String> {
-    match Json.field_string(value: read value, name: read name) {
+fn json_string(value: JsonValue, name: String) -> Result<String, String> {
+    match Json.field_string(value, name) {
         Ok(text) => {
             return Ok(text)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "test manifest string", error: read error))
+            return Err(json_error(prefix: "test manifest string", error))
         }
     }
 }
 
 fn json_string_or_default(
-    value: read JsonValue,
-    name: read String,
-    default: read String,
+    value: JsonValue,
+    name: String,
+    default: String,
 ) -> fresh String {
-    match Json.field_string(value: read value, name: read name) {
+    match Json.field_string(value, name) {
         Ok(text) => {
-            return String.concat(left: read "", right: read text)
+            return String.concat(left: "", right: text)
         }
         Err(_) => {
-            return String.concat(left: read "", right: read default)
+            return String.concat(left: "", right: default)
         }
     }
 }
 
-fn json_string_list_or_empty(value: read JsonValue, name: read String) -> fresh List<String> {
-    match Json.field(value: read value, name: read name) {
+fn json_string_list_or_empty(value: JsonValue, name: String) -> fresh List<String> {
+    match Json.field(value, name) {
         Ok(field) => {
-            match Json.array_strings(value: read field) {
+            match Json.array_strings(value: field) {
                 Ok(items) => {
                     return items
                 }
@@ -125,11 +125,11 @@ fn json_string_list_or_empty(value: read JsonValue, name: read String) -> fresh 
 }
 
 fn json_bool_or_default(
-    value: read JsonValue,
-    name: read String,
+    value: JsonValue,
+    name: String,
     default: Bool,
 ) -> Bool {
-    match Json.field_bool(value: read value, name: read name) {
+    match Json.field_bool(value, name) {
         Ok(flag) => {
             return flag
         }
@@ -140,11 +140,11 @@ fn json_bool_or_default(
 }
 
 fn json_int_or_default(
-    value: read JsonValue,
-    name: read String,
+    value: JsonValue,
+    name: String,
     default: Int,
 ) -> Int {
-    match Json.field_int(value: read value, name: read name) {
+    match Json.field_int(value, name) {
         Ok(number) => {
             return number
         }
@@ -154,27 +154,27 @@ fn json_int_or_default(
     }
 }
 
-fn test_case_from_json(value: read JsonValue) -> Result<fresh TestCase, String> {
+fn test_case_from_json(value: JsonValue) -> Result<fresh TestCase, String> {
     return Ok(TestCase(
-        name: json_string(value: read value, name: read "name")?,
-        kind: json_string(value: read value, name: read "kind")?,
-        path: json_string_or_default(value: read value, name: read "path", default: read ""),
-        paths: json_string_list_or_empty(value: read value, name: read "paths"),
-        directory: json_string_or_default(value: read value, name: read "directory", default: read ""),
-        extension: json_string_or_default(value: read value, name: read "extension", default: read ""),
-        recursive: json_bool_or_default(value: read value, name: read "recursive", default: true),
-        command: json_string_or_default(value: read value, name: read "command", default: read ""),
-        args: json_string_list_or_empty(value: read value, name: read "args"),
-        jobs: json_int_or_default(value: read value, name: read "jobs", default: 0),
-        timeout_ms: json_int_or_default(value: read value, name: read "timeout_ms", default: 60000),
-        contains: json_string_or_default(value: read value, name: read "contains", default: read ""),
-        contains_all: json_string_list_or_empty(value: read value, name: read "contains_all"),
-        ignored: json_bool_or_default(value: read value, name: read "ignored", default: false),
+        name: json_string(value, name: "name")?,
+        kind: json_string(value, name: "kind")?,
+        path: json_string_or_default(value, name: "path", default: ""),
+        paths: json_string_list_or_empty(value, name: "paths"),
+        directory: json_string_or_default(value, name: "directory", default: ""),
+        extension: json_string_or_default(value, name: "extension", default: ""),
+        recursive: json_bool_or_default(value, name: "recursive", default: true),
+        command: json_string_or_default(value, name: "command", default: ""),
+        args: json_string_list_or_empty(value, name: "args"),
+        jobs: json_int_or_default(value, name: "jobs", default: 0),
+        timeout_ms: json_int_or_default(value, name: "timeout_ms", default: 60000),
+        contains: json_string_or_default(value, name: "contains", default: ""),
+        contains_all: json_string_list_or_empty(value, name: "contains_all"),
+        ignored: json_bool_or_default(value, name: "ignored", default: false),
     ))
 }
 
 fn parse_tests_from(
-    tests: read JsonValue,
+    tests: JsonValue,
     index: Int,
     limit: Int,
     items: mut List<TestCase>,
@@ -183,158 +183,158 @@ fn parse_tests_from(
         return Ok(Unit)
     }
 
-    match Json.array_get(value: read tests, index: index) {
+    match Json.array_get(value: tests, index) {
         Ok(item) => {
-            let test = test_case_from_json(value: read item)?
-            List.push(list: mut items, value: read test)
+            let test = test_case_from_json(value: item)?
+            List.push(list: mut items, value: test)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "test manifest item", error: read error))
+            return Err(json_error(prefix: "test manifest item", error))
         }
     }
 
     return parse_tests_from(
-        tests: read tests,
+        tests,
         index: index + 1,
-        limit: limit,
+        limit,
         items: mut items,
     )
 }
 
-fn load_tests(manifest: read JsonValue) -> Result<fresh List<TestCase>, String> {
-    let tests = json_field(value: read manifest, name: read "tests")?
-    match Json.array_len(value: read tests) {
+fn load_tests(manifest: JsonValue) -> Result<fresh List<TestCase>, String> {
+    let tests = json_field(value: manifest, name: "tests")?
+    match Json.array_len(value: tests) {
         Ok(limit) => {
             local items = List<TestCase>.new()
-            parse_tests_from(tests: read tests, index: 0, limit: limit, items: mut items)?
+            parse_tests_from(tests, index: 0, limit, items: mut items)?
 
             return Ok(items)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "test manifest tests", error: read error))
+            return Err(json_error(prefix: "test manifest tests", error))
         }
     }
 }
 
-fn test_matches_filter(test: read TestCase, filter: read String) -> Bool {
-    if String.is_empty(value: read filter) {
+fn test_matches_filter(test: TestCase, filter: String) -> Bool {
+    if String.is_empty(value: filter) {
         return true
     }
 
-    return String.contains(value: read test.name, needle: read filter)
+    return String.contains(value: test.name, needle: filter)
 }
 
-fn text_contains_required(value: read String, required: read String) -> Bool {
-    if String.is_empty(value: read required) {
+fn text_contains_required(value: String, required: String) -> Bool {
+    if String.is_empty(value: required) {
         return true
     }
 
-    return String.contains(value: read value, needle: read required)
+    return String.contains(value, needle: required)
 }
 
 fn text_contains_all_from(
-    value: read String,
-    needles: read List<String>,
+    value: String,
+    needles: List<String>,
     index: Int,
 ) -> Bool {
-    if index >= List.len(list: read needles) {
+    if index >= List.len(list: needles) {
         return true
     }
 
-    let needle = List.get(list: read needles, index: index)
-    if String.contains(value: read value, needle: read needle) == false {
+    let needle = List.get(list: needles, index)
+    if String.contains(value, needle) == false {
         return false
     }
 
     return text_contains_all_from(
-        value: read value,
-        needles: read needles,
+        value,
+        needles,
         index: index + 1,
     )
 }
 
 fn text_matches_expectations(
-    value: read String,
-    contains: read String,
-    contains_all: read List<String>,
+    value: String,
+    contains: String,
+    contains_all: List<String>,
 ) -> Result<Bool, String> {
-    if text_contains_required(value: read value, required: read contains) == false {
+    if text_contains_required(value, required: contains) == false {
         return Ok(false)
     }
 
     return Ok(text_contains_all_from(
-        value: read value,
-        needles: read contains_all,
+        value,
+        needles: contains_all,
         index: 0,
     ))
 }
 
 fn copy_args_from(
-    source: read List<String>,
+    source: List<String>,
     index: Int,
     target: mut List<String>,
 ) -> Unit {
-    if index >= List.len(list: read source) {
+    if index >= List.len(list: source) {
         return Unit
     }
 
-    let arg = List.get(list: read source, index: index)
-    List.push(list: mut target, value: read arg)
+    let arg = List.get(list: source, index)
+    List.push(list: mut target, value: arg)
 
-    return copy_args_from(source: read source, index: index + 1, target: mut target)
+    return copy_args_from(source, index: index + 1, target: mut target)
 }
 
-fn append_arg(args: read List<String>, arg: read String) -> fresh List<String> {
+fn append_arg(args: List<String>, arg: String) -> fresh List<String> {
     local next = List<String>.new()
-    copy_args_from(source: read args, index: 0, target: mut next)
-    List.push(list: mut next, value: read arg)
+    copy_args_from(source: args, index: 0, target: mut next)
+    List.push(list: mut next, value: arg)
 
     return next
 }
 
-fn rss_binary_command(command: read String) -> String {
-    if String.is_empty(value: read command) {
+fn rss_binary_command(command: String) -> String {
+    if String.is_empty(value: command) {
         return "target/debug/rss"
     }
 
-    return String.concat(left: read "", right: read command)
+    return String.concat(left: "", right: command)
 }
 
-fn rss_run_args(path: read String, program_args: read List<String>) -> fresh List<String> {
+fn rss_run_args(path: String, program_args: List<String>) -> fresh List<String> {
     local args = List<String>.new()
-    List.push(list: mut args, value: read "run")
-    List.push(list: mut args, value: read path)
-    copy_args_from(source: read program_args, index: 0, target: mut args)
+    List.push(list: mut args, value: "run")
+    List.push(list: mut args, value: path)
+    copy_args_from(source: program_args, index: 0, target: mut args)
 
     return args
 }
 
-fn command_with_windows_exe_suffix(command: read String) -> fresh String {
-    return String.concat(left: read command, right: read ".exe")
+fn command_with_windows_exe_suffix(command: String) -> fresh String {
+    return String.concat(left: command, right: ".exe")
 }
 
 fn run_command_stdout(
-    command: read String,
-    args: read List<String>,
+    command: String,
+    args: List<String>,
     timeout_ms: Int,
 ) -> Result<String, String> {
     match Process.run_stdout_timeout(
-        command: read command,
-        args: read args,
-        timeout_ms: timeout_ms,
+        command,
+        args,
+        timeout_ms,
     ) {
         Ok(stdout) => {
             return Ok(stdout)
         }
         Err(first_error) => {
-            if String.ends_with(value: read command, suffix: read ".exe") {
+            if String.ends_with(value: command, suffix: ".exe") {
                 return Err(first_error)
             }
 
             match Process.run_stdout_timeout(
-                command: read command_with_windows_exe_suffix(command: read command),
-                args: read args,
-                timeout_ms: timeout_ms,
+                command: command_with_windows_exe_suffix(command),
+                args,
+                timeout_ms,
             ) {
                 Ok(stdout) => {
                     return Ok(stdout)
@@ -348,11 +348,11 @@ fn run_command_stdout(
 }
 
 fn run_command_success(
-    command: read String,
-    args: read List<String>,
+    command: String,
+    args: List<String>,
     timeout_ms: Int,
 ) -> Result<Bool, String> {
-    match run_command_stdout(command: read command, args: read args, timeout_ms: timeout_ms) {
+    match run_command_stdout(command, args, timeout_ms) {
         Ok(_) => {
             return Ok(true)
         }
@@ -362,15 +362,15 @@ fn run_command_success(
     }
 }
 
-fn run_rss_source_stdout(test: read TestCase) -> Result<String, String> {
-    let command = rss_binary_command(command: read test.command)
-    let args = rss_run_args(path: read test.path, program_args: read test.args)
+fn run_rss_source_stdout(test: TestCase) -> Result<String, String> {
+    let command = rss_binary_command(command: test.command)
+    let args = rss_run_args(path: test.path, program_args: test.args)
 
-    return run_command_stdout(command: read command, args: read args, timeout_ms: test.timeout_ms)
+    return run_command_stdout(command, args, timeout_ms: test.timeout_ms)
 }
 
-fn run_rss_source_success(test: read TestCase) -> Result<Bool, String> {
-    match run_rss_source_stdout(test: read test) {
+fn run_rss_source_success(test: TestCase) -> Result<Bool, String> {
+    match run_rss_source_stdout(test) {
         Ok(_) => {
             return Ok(true)
         }
@@ -380,119 +380,119 @@ fn run_rss_source_success(test: read TestCase) -> Result<Bool, String> {
     }
 }
 
-fn run_rss_source_failure_contains(test: read TestCase) -> Result<Bool, String> {
-    match run_rss_source_stdout(test: read test) {
+fn run_rss_source_failure_contains(test: TestCase) -> Result<Bool, String> {
+    match run_rss_source_stdout(test) {
         Ok(_) => {
             return Ok(false)
         }
         Err(error) => {
             return text_matches_expectations(
-                value: read error,
-                contains: read test.contains,
-                contains_all: read test.contains_all,
+                value: error,
+                contains: test.contains,
+                contains_all: test.contains_all,
             )
         }
     }
 }
 
-fn path_allows_recursive(path: read String, recursive: Bool) -> Bool {
+fn path_allows_recursive(path: String, recursive: Bool) -> Bool {
     if recursive {
         return true
     }
 
-    if String.contains(value: read path, needle: read "/") {
+    if String.contains(value: path, needle: "/") {
         return false
     }
 
-    return String.contains(value: read path, needle: read "\\") == false
+    return String.contains(value: path, needle: "\\") == false
 }
 
-fn joined_path(directory: read String, file: read String) -> fresh String {
-    if String.ends_with(value: read directory, suffix: read "/") {
-        return String.concat(left: read directory, right: read file)
+fn joined_path(directory: String, file: String) -> fresh String {
+    if String.ends_with(value: directory, suffix: "/") {
+        return String.concat(left: directory, right: file)
     }
 
     return String.concat(
-        left: read String.concat(left: read directory, right: read "/"),
-        right: read file,
+        left: String.concat(left: directory, right: "/"),
+        right: file,
     )
 }
 
 fn run_command_for_path(
-    command: read String,
-    args: read List<String>,
-    path: read String,
+    command: String,
+    args: List<String>,
+    path: String,
     timeout_ms: Int,
 ) -> Result<Bool, String> {
-    let next_args = append_arg(args: read args, arg: read path)
+    let next_args = append_arg(args, arg: path)
 
-    return run_command_success(command: read command, args: read next_args, timeout_ms: timeout_ms)
+    return run_command_success(command, args: next_args, timeout_ms)
 }
 
 fn collect_paths_from(
-    paths: read List<String>,
+    paths: List<String>,
     index: Int,
     selected: mut List<String>,
 ) -> Unit {
-    if index >= List.len(list: read paths) {
+    if index >= List.len(list: paths) {
         return Unit
     }
 
-    let path = List.get(list: read paths, index: index)
-    Log.write(message: read String.concat(left: read "run ", right: read path))
-    List.push(list: mut selected, value: read path)
+    let path = List.get(list: paths, index)
+    Log.write(message: String.concat(left: "run ", right: path))
+    List.push(list: mut selected, value: path)
 
     return collect_paths_from(
-        paths: read paths,
+        paths,
         index: index + 1,
         selected: mut selected,
     )
 }
 
 fn collect_files_from(
-    directory: read String,
-    extension: read String,
+    directory: String,
+    extension: String,
     recursive: Bool,
-    files: read List<String>,
+    files: List<String>,
     index: Int,
     selected: mut List<String>,
 ) -> Unit {
-    if index >= List.len(list: read files) {
+    if index >= List.len(list: files) {
         return Unit
     }
 
-    let file = List.get(list: read files, index: index)
-    if path_allows_recursive(path: read file, recursive: recursive) {
-        if String.ends_with(value: read file, suffix: read extension) {
-            let path = joined_path(directory: read directory, file: read file)
-            Log.write(message: read String.concat(left: read "run ", right: read path))
-            List.push(list: mut selected, value: read path)
+    let file = List.get(list: files, index)
+    if path_allows_recursive(path: file, recursive) {
+        if String.ends_with(value: file, suffix: extension) {
+            let path = joined_path(directory, file)
+            Log.write(message: String.concat(left: "run ", right: path))
+            List.push(list: mut selected, value: path)
         }
     }
 
     return collect_files_from(
-        directory: read directory,
-        extension: read extension,
-        recursive: recursive,
-        files: read files,
+        directory,
+        extension,
+        recursive,
+        files,
         index: index + 1,
         selected: mut selected,
     )
 }
 
 fn run_command_with_appended_args(
-    command: read String,
-    args: read List<String>,
-    appended_args: read List<String>,
+    command: String,
+    args: List<String>,
+    appended_args: List<String>,
     jobs: Int,
     timeout_ms: Int,
 ) -> Result<Bool, String> {
     match Process.run_many_stdout_timeout(
-        command: read command,
-        args: read args,
-        appended_args: read appended_args,
-        jobs: jobs,
-        timeout_ms: timeout_ms,
+        command,
+        args,
+        appended_args,
+        jobs,
+        timeout_ms,
     ) {
         Ok(_) => {
             return Ok(true)
@@ -503,27 +503,27 @@ fn run_command_with_appended_args(
     }
 }
 
-fn run_test(test: read TestCase) -> Result<Bool, String> {
+fn run_test(test: TestCase) -> Result<Bool, String> {
     if test.kind == "file_contains" {
-        let text = read_text(path: read Path.from_string(value: read test.path))?
+        let text = read_text(path: Path.from_string(value: test.path))?
         return text_matches_expectations(
-            value: read text,
-            contains: read test.contains,
-            contains_all: read test.contains_all,
+            value: text,
+            contains: test.contains,
+            contains_all: test.contains_all,
         )
     }
 
     if test.kind == "command_stdout_contains" {
         match run_command_stdout(
-            command: read test.command,
-            args: read test.args,
+            command: test.command,
+            args: test.args,
             timeout_ms: test.timeout_ms,
         ) {
             Ok(stdout) => {
                 return text_matches_expectations(
-                    value: read stdout,
-                    contains: read test.contains,
-                    contains_all: read test.contains_all,
+                    value: stdout,
+                    contains: test.contains,
+                    contains_all: test.contains_all,
                 )
             }
             Err(error) => {
@@ -534,23 +534,23 @@ fn run_test(test: read TestCase) -> Result<Bool, String> {
 
     if test.kind == "command_success" {
         return run_command_success(
-            command: read test.command,
-            args: read test.args,
+            command: test.command,
+            args: test.args,
             timeout_ms: test.timeout_ms,
         )
     }
 
     if test.kind == "rss_run_success" {
-        return run_rss_source_success(test: read test)
+        return run_rss_source_success(test)
     }
 
     if test.kind == "rss_run_stdout_contains" {
-        match run_rss_source_stdout(test: read test) {
+        match run_rss_source_stdout(test) {
             Ok(stdout) => {
                 return text_matches_expectations(
-                    value: read stdout,
-                    contains: read test.contains,
-                    contains_all: read test.contains_all,
+                    value: stdout,
+                    contains: test.contains,
+                    contains_all: test.contains_all,
                 )
             }
             Err(error) => {
@@ -560,64 +560,64 @@ fn run_test(test: read TestCase) -> Result<Bool, String> {
     }
 
     if test.kind == "rss_run_failure_contains" {
-        return run_rss_source_failure_contains(test: read test)
+        return run_rss_source_failure_contains(test)
     }
 
     if test.kind == "command_for_each_path" {
         local selected = List<String>.new()
         collect_paths_from(
-            paths: read test.paths,
+            paths: test.paths,
             index: 0,
             selected: mut selected,
         )
         return run_command_with_appended_args(
-            command: read test.command,
-            args: read test.args,
-            appended_args: read selected,
+            command: test.command,
+            args: test.args,
+            appended_args: selected,
             jobs: test.jobs,
             timeout_ms: test.timeout_ms,
         )
     }
 
     if test.kind == "command_for_each_file" {
-        match Directory.list_files(path: read Path.from_string(value: read test.directory)) {
+        match Directory.list_files(path: Path.from_string(value: test.directory)) {
             Ok(files) => {
                 local selected = List<String>.new()
                 collect_files_from(
-                    directory: read test.directory,
-                    extension: read test.extension,
+                    directory: test.directory,
+                    extension: test.extension,
                     recursive: test.recursive,
-                    files: read files,
+                    files,
                     index: 0,
                     selected: mut selected,
                 )
                 return run_command_with_appended_args(
-                    command: read test.command,
-                    args: read test.args,
-                    appended_args: read selected,
+                    command: test.command,
+                    args: test.args,
+                    appended_args: selected,
                     jobs: test.jobs,
                     timeout_ms: test.timeout_ms,
                 )
             }
             Err(error) => {
-                return Err(file_error(prefix: read "list files", error: read error))
+                return Err(file_error(prefix: "list files", error))
             }
         }
     }
 
-    return Err(String.concat(left: read "unsupported test kind ", right: read test.kind))
+    return Err(String.concat(left: "unsupported test kind ", right: test.kind))
 }
 
-fn print_test_line(status: read String, name: read String) -> Unit {
+fn print_test_line(status: String, name: String) -> Unit {
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read status)
-    StringBuilder.push(builder: mut builder, value: read " ")
-    StringBuilder.push(builder: mut builder, value: read name)
+    StringBuilder.push(builder: mut builder, value: status)
+    StringBuilder.push(builder: mut builder, value: " ")
+    StringBuilder.push(builder: mut builder, value: name)
     let line = StringBuilder.finish(builder: take builder)
-    Log.write(message: read line)
+    Log.write(message: line)
 }
 
-fn record_selected(summary: read TestRunSummary) -> fresh TestRunSummary {
+fn record_selected(summary: TestRunSummary) -> fresh TestRunSummary {
     return TestRunSummary(
         total: summary.total,
         selected: summary.selected + 1,
@@ -627,7 +627,7 @@ fn record_selected(summary: read TestRunSummary) -> fresh TestRunSummary {
     )
 }
 
-fn record_passed(summary: read TestRunSummary) -> fresh TestRunSummary {
+fn record_passed(summary: TestRunSummary) -> fresh TestRunSummary {
     return TestRunSummary(
         total: summary.total,
         selected: summary.selected,
@@ -637,7 +637,7 @@ fn record_passed(summary: read TestRunSummary) -> fresh TestRunSummary {
     )
 }
 
-fn record_failed(summary: read TestRunSummary) -> fresh TestRunSummary {
+fn record_failed(summary: TestRunSummary) -> fresh TestRunSummary {
     return TestRunSummary(
         total: summary.total,
         selected: summary.selected,
@@ -647,7 +647,7 @@ fn record_failed(summary: read TestRunSummary) -> fresh TestRunSummary {
     )
 }
 
-fn record_skipped(summary: read TestRunSummary) -> fresh TestRunSummary {
+fn record_skipped(summary: TestRunSummary) -> fresh TestRunSummary {
     return TestRunSummary(
         total: summary.total,
         selected: summary.selected,
@@ -657,7 +657,7 @@ fn record_skipped(summary: read TestRunSummary) -> fresh TestRunSummary {
     )
 }
 
-fn copy_summary(summary: read TestRunSummary) -> fresh TestRunSummary {
+fn copy_summary(summary: TestRunSummary) -> fresh TestRunSummary {
     return TestRunSummary(
         total: summary.total,
         selected: summary.selected,
@@ -668,39 +668,39 @@ fn copy_summary(summary: read TestRunSummary) -> fresh TestRunSummary {
 }
 
 fn execute_selected_test(
-    summary: read TestRunSummary,
-    test: read TestCase,
+    summary: TestRunSummary,
+    test: TestCase,
 ) -> Result<fresh TestRunSummary, String> {
-    let selected = record_selected(summary: read summary)
+    let selected = record_selected(summary)
     if test.ignored {
-        print_test_line(status: read "skip", name: read test.name)
-        return Ok(record_skipped(summary: read selected))
+        print_test_line(status: "skip", name: test.name)
+        return Ok(record_skipped(summary: selected))
     }
 
-    match run_test(test: read test) {
+    match run_test(test) {
         Ok(ok) => {
             if ok {
-                print_test_line(status: read "pass", name: read test.name)
-                return Ok(record_passed(summary: read selected))
+                print_test_line(status: "pass", name: test.name)
+                return Ok(record_passed(summary: selected))
             }
 
-            print_test_line(status: read "fail", name: read test.name)
-            return Ok(record_failed(summary: read selected))
+            print_test_line(status: "fail", name: test.name)
+            return Ok(record_failed(summary: selected))
         }
         Err(error) => {
-            print_test_line(status: read "fail", name: read test.name)
-            Log.write(message: read error)
-            return Ok(record_failed(summary: read selected))
+            print_test_line(status: "fail", name: test.name)
+            Log.write(message: error)
+            return Ok(record_failed(summary: selected))
         }
     }
 }
 
 fn run_tests(
-    tests: read List<TestCase>,
-    filter: read String,
+    tests: List<TestCase>,
+    filter: String,
 ) -> Result<fresh TestRunSummary, String> {
     let initial = TestRunSummary(
-        total: List.len(list: read tests),
+        total: List.len(list: tests),
         selected: 0,
         passed: 0,
         failed: 0,
@@ -708,40 +708,40 @@ fn run_tests(
     )
 
     return List.try_fold<TestCase, TestRunSummary, String>(
-        list: read tests,
-        initial: read initial,
+        list: tests,
+        initial,
         folder: |summary, test| {
-            if test_matches_filter(test: read test, filter: read filter) == false {
-                return Ok(copy_summary(summary: read summary))
+            if test_matches_filter(test, filter) == false {
+                return Ok(copy_summary(summary))
             }
 
-            return execute_selected_test(summary: read summary, test: read test)
+            return execute_selected_test(summary, test)
         },
     )
 }
 
-fn summary_line(summary: read TestRunSummary) -> fresh String {
+fn summary_line(summary: TestRunSummary) -> fresh String {
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "rss test summary total=")
-    StringBuilder.push(builder: mut builder, value: read String.from_int(value: summary.total))
-    StringBuilder.push(builder: mut builder, value: read " selected=")
-    StringBuilder.push(builder: mut builder, value: read String.from_int(value: summary.selected))
-    StringBuilder.push(builder: mut builder, value: read " passed=")
-    StringBuilder.push(builder: mut builder, value: read String.from_int(value: summary.passed))
-    StringBuilder.push(builder: mut builder, value: read " failed=")
-    StringBuilder.push(builder: mut builder, value: read String.from_int(value: summary.failed))
-    StringBuilder.push(builder: mut builder, value: read " skipped=")
-    StringBuilder.push(builder: mut builder, value: read String.from_int(value: summary.skipped))
+    StringBuilder.push(builder: mut builder, value: "rss test summary total=")
+    StringBuilder.push(builder: mut builder, value: String.from_int(value: summary.total))
+    StringBuilder.push(builder: mut builder, value: " selected=")
+    StringBuilder.push(builder: mut builder, value: String.from_int(value: summary.selected))
+    StringBuilder.push(builder: mut builder, value: " passed=")
+    StringBuilder.push(builder: mut builder, value: String.from_int(value: summary.passed))
+    StringBuilder.push(builder: mut builder, value: " failed=")
+    StringBuilder.push(builder: mut builder, value: String.from_int(value: summary.failed))
+    StringBuilder.push(builder: mut builder, value: " skipped=")
+    StringBuilder.push(builder: mut builder, value: String.from_int(value: summary.skipped))
 
     return StringBuilder.finish(builder: take builder)
 }
 
-pub fn RssTest.run(manifest_path: read Path, filter: read String) -> Result<Unit, String> {
-    let manifest = parse_manifest(path: read manifest_path)?
-    let tests = load_tests(manifest: read manifest)?
-    let summary = run_tests(tests: read tests, filter: read filter)?
-    let line = summary_line(summary: read summary)
-    Log.write(message: read line)
+pub fn RssTest.run(manifest_path: Path, filter: String) -> Result<Unit, String> {
+    let manifest = parse_manifest(path: manifest_path)?
+    let tests = load_tests(manifest)?
+    let summary = run_tests(tests, filter)?
+    let line = summary_line(summary)
+    Log.write(message: line)
 
     if summary.failed > 0 {
         return Err("rss test failures")
@@ -753,12 +753,12 @@ pub fn RssTest.run(manifest_path: read Path, filter: read String) -> Result<Unit
 fn main() -> Result<Unit, String> {
     let manifest = Args.get_or_default(
         index: 0,
-        default: read "packages/test-runner/examples/rss-smoke.rsstest.toml",
+        default: "packages/test-runner/examples/rss-smoke.rsstest.toml",
     )
-    let filter = Args.get_or_default(index: 1, default: read "")
+    let filter = Args.get_or_default(index: 1, default: "")
 
     return RssTest.run(
-        manifest_path: read Path.from_string(value: read manifest),
-        filter: read filter,
+        manifest_path: Path.from_string(value: manifest),
+        filter,
     )
 }

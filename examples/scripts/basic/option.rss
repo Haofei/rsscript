@@ -7,6 +7,6 @@ pub fn maybe_value(flag: Bool) -> Option<Int> {
 
 fn main() -> Unit {
     let _ = maybe_value(flag: true)
-    Log.write(message: read "option ran")
+    Log.write(message: "option ran")
     return Unit
 }

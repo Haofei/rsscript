@@ -1,137 +1,137 @@
 features: local
 
-fn list_sum(values: read List<Int>) -> Int {
+fn list_sum(values: List<Int>) -> Int {
     let mut total = 0
     let mut index = 0
-    while index < List.len(list: read values) {
-        total = total + List.get(list: read values, index: index)
+    while index < List.len(list: values) {
+        total = total + List.get(list: values, index)
         index = index + 1
     }
     return total
 }
 
 fn key_from_int(value: Int) -> fresh String {
-    return String.concat(left: read "key-", right: read String.from_int(value: value))
+    return String.concat(left: "key-", right: String.from_int(value))
 }
 
 fn value_from_int(value: Int) -> fresh String {
-    return String.concat(left: read "value-", right: read String.from_int(value: value))
+    return String.concat(left: "value-", right: String.from_int(value))
 }
 
-fn prop_counter_add_matches_sum(values: read List<Int>) -> fresh PropertyResult {
-    let start = List.len(list: read values)
-    let expected = start + list_sum(values: read values)
+fn prop_counter_add_matches_sum(values: List<Int>) -> fresh PropertyResult {
+    let start = List.len(list: values)
+    let expected = start + list_sum(values)
     local counter = Counter.new(value: start)
     let mut index = 0
-    while index < List.len(list: read values) {
-        Counter.add(counter: mut counter, amount: List.get(list: read values, index: index))
+    while index < List.len(list: values) {
+        Counter.add(counter: mut counter, amount: List.get(list: values, index))
         index = index + 1
     }
-    return Property.expect_bool(value: Counter.value(counter: read counter) == expected)
+    return Property.expect_bool(value: Counter.value(counter) == expected)
 }
 
 fn prop_counter_add_zero_identity(value: Int) -> fresh PropertyResult {
-    local counter = Counter.new(value: value)
+    local counter = Counter.new(value)
     Counter.add(counter: mut counter, amount: 0)
-    return Property.expect_bool(value: Counter.value(counter: read counter) == value)
+    return Property.expect_bool(value: Counter.value(counter) == value)
 }
 
 fn prop_cache_insert_lookup(value: Int) -> fresh PropertyResult {
     local cache = Cache.new()
-    let key = key_from_int(value: value)
-    let stored = value_from_int(value: value)
-    Cache.insert(cache: mut cache, key: read key, value: read stored)
-    let found = Cache.lookup(cache: read cache, key: read key)
+    let key = key_from_int(value)
+    let stored = value_from_int(value)
+    Cache.insert(cache: mut cache, key, value: stored)
+    let found = Cache.lookup(cache, key)
     return Property.expect_bool(value: found == stored)
 }
 
 fn prop_cache_last_write_wins(value: Int) -> fresh PropertyResult {
     local cache = Cache.new()
-    let key = key_from_int(value: value)
-    let first = value_from_int(value: value)
+    let key = key_from_int(value)
+    let first = value_from_int(value)
     let second = value_from_int(value: value + 1)
-    Cache.insert(cache: mut cache, key: read key, value: read first)
-    Cache.insert(cache: mut cache, key: read key, value: read second)
-    let found = Cache.lookup(cache: read cache, key: read key)
+    Cache.insert(cache: mut cache, key, value: first)
+    Cache.insert(cache: mut cache, key, value: second)
+    let found = Cache.lookup(cache, key)
     return Property.expect_bool(value: found == second)
 }
 
 fn prop_cache_independent_keys(value: Int) -> fresh PropertyResult {
     local cache = Cache.new()
-    let left_key = key_from_int(value: value)
+    let left_key = key_from_int(value)
     let right_key = key_from_int(value: value + 1)
     if left_key == right_key {
         return Property.discard()
     }
 
-    let left_value = value_from_int(value: value)
+    let left_value = value_from_int(value)
     let right_value = value_from_int(value: value + 1)
-    Cache.insert(cache: mut cache, key: read left_key, value: read left_value)
-    Cache.insert(cache: mut cache, key: read right_key, value: read right_value)
+    Cache.insert(cache: mut cache, key: left_key, value: left_value)
+    Cache.insert(cache: mut cache, key: right_key, value: right_value)
 
-    let left_found = Cache.lookup(cache: read cache, key: read left_key)
-    let right_found = Cache.lookup(cache: read cache, key: read right_key)
+    let left_found = Cache.lookup(cache, key: left_key)
+    let right_found = Cache.lookup(cache, key: right_key)
     return Property.expect_bool(value: left_found == left_value && right_found == right_value)
 }
 
 pub fn QuickCheckState.run() -> Unit {
     let counter_sum = Property.check_int_list(
-        name: read "counter add matches sum model",
+        name: "counter add matches sum model",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_counter_add_matches_sum(values: read values)
+            return prop_counter_add_matches_sum(values)
         },
     )
-    Property.assert_passed(summary: read counter_sum)
+    Property.assert_passed(summary: counter_sum)
 
     let counter_zero = Property.check_int(
-        name: read "counter add zero is identity",
+        name: "counter add zero is identity",
         cases: 200,
         seed: 20260602,
-        range: read IntRange.new(min: -10000, max: 10000),
+        range: IntRange.new(min: -10000, max: 10000),
         property: |value| {
-            return prop_counter_add_zero_identity(value: value)
+            return prop_counter_add_zero_identity(value)
         },
     )
-    Property.assert_passed(summary: read counter_zero)
+    Property.assert_passed(summary: counter_zero)
 
     let cache_lookup = Property.check_int(
-        name: read "cache insert lookup roundtrip",
+        name: "cache insert lookup roundtrip",
         cases: 200,
         seed: 20260602,
-        range: read IntRange.new(min: -10000, max: 10000),
+        range: IntRange.new(min: -10000, max: 10000),
         property: |value| {
-            return prop_cache_insert_lookup(value: value)
+            return prop_cache_insert_lookup(value)
         },
     )
-    Property.assert_passed(summary: read cache_lookup)
+    Property.assert_passed(summary: cache_lookup)
 
     let cache_last_write = Property.check_int(
-        name: read "cache last write wins",
+        name: "cache last write wins",
         cases: 200,
         seed: 20260602,
-        range: read IntRange.new(min: -10000, max: 10000),
+        range: IntRange.new(min: -10000, max: 10000),
         property: |value| {
-            return prop_cache_last_write_wins(value: value)
+            return prop_cache_last_write_wins(value)
         },
     )
-    Property.assert_passed(summary: read cache_last_write)
+    Property.assert_passed(summary: cache_last_write)
 
     let cache_keys = Property.check_int(
-        name: read "cache keeps independent keys",
+        name: "cache keeps independent keys",
         cases: 200,
         seed: 20260602,
-        range: read IntRange.new(min: -10000, max: 10000),
+        range: IntRange.new(min: -10000, max: 10000),
         property: |value| {
-            return prop_cache_independent_keys(value: value)
+            return prop_cache_independent_keys(value)
         },
     )
-    Property.assert_passed(summary: read cache_keys)
+    Property.assert_passed(summary: cache_keys)
 
     return Unit
 }

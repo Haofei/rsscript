@@ -264,10 +264,13 @@ pub(super) fn review_map_region_draft(
         reasons.push("entry point".to_string());
     }
     for param in &function.params {
-        if matches!(param.effect, Some(DataEffect::Mut | DataEffect::Take)) {
+        if matches!(
+            param.effective_effect(),
+            Some(DataEffect::Mut | DataEffect::Take)
+        ) {
             reasons.push(format!(
                 "{} parameter `{}`",
-                effect_label(param.effect.expect("effect matched")),
+                effect_label(param.effective_effect().expect("effect matched")),
                 param.name
             ));
         }

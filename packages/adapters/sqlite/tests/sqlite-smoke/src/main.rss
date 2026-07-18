@@ -8,20 +8,20 @@ features: native, local
 fn db_path() -> fresh Path {
     let temp = Env.temp_dir()
 
-    return Path.join(base: read temp, child: read "rss-sqlite-smoke.db")
+    return Path.join(base: temp, child: "rss-sqlite-smoke.db")
 }
 
 fn main() -> Result<Unit, String> {
     let path = db_path()
-    Sqlite.execute(path: read path, sql: read "drop table if exists item")?
-    Sqlite.execute(path: read path, sql: read "create table item(name text)")?
-    Sqlite.execute(path: read path, sql: read "insert into item values ('a'), ('b')")?
+    Sqlite.execute(path: path, sql: "drop table if exists item")?
+    Sqlite.execute(path: path, sql: "create table item(name text)")?
+    Sqlite.execute(path: path, sql: "insert into item values ('a'), ('b')")?
 
     let names = Sqlite.query_strings(
-        path: read path,
-        sql: read "select name from item order by name",
+        path: path,
+        sql: "select name from item order by name",
     )?
-    Assert.equal_int(left: List.len(list: read names), right: 2)
+    Assert.equal_int(left: List.len(list: names), right: 2)
 
     return Ok(Unit)
 }

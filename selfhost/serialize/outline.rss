@@ -23,16 +23,38 @@ fn kind_name(kind: Int) -> String {
     return "unknown"
 }
 
-fn item_line(item: read Item) -> String {
-    let head = String.concat(left: read String.concat(left: read kind_name(kind: item.kind), right: read "\t"), right: read item.name)
-    let pos = String.concat(left: read String.concat(left: read String.from_int(value: item.line), right: read ":"), right: read String.from_int(value: item.column))
-    return String.concat(left: read String.concat(left: read head, right: read "\t"), right: read String.concat(left: read pos, right: read String.concat(left: read ":", right: read String.from_int(value: item.length))))
+fn item_line(item: Item) -> String {
+    let head = String.concat(left: String.concat(left: kind_name(kind: item.kind), right: "\t"), right: item.name)
+    let pos = String.concat(left: String.concat(left: String.from_int(value: item.line), right: ":"), right: String.from_int(value: item.column))
+    return String.concat(left: String.concat(left: head, right: "\t"), right: String.concat(left: pos, right: String.concat(left: ":", right: String.from_int(value: item.length))))
 }
 
-fn param_line(param: read Param) -> String {
-    let mut out = String.concat(left: read "  param\t", right: read param.name)
-    if String.len(value: read param.effect) > 0 { out = String.concat(left: read String.concat(left: read out, right: read "\t"), right: read param.effect) }
-    return String.concat(left: read String.concat(left: read out, right: read "\t"), right: read param.typeText)
+fn param_line(param: Param) -> String {
+    let mut out = String.concat(left: "  param\t", right: param.name)
+    if String.len(value: param.effect) > 0 { out = String.concat(left: String.concat(left: out, right: "\t"), right: param.effect) }
+    return String.concat(left: String.concat(left: out, right: "\t"), right: param.typeText)
+}
+
+fn data_header_line(item: Item) -> String {
+    let kind = String.concat(left: "  data-kind\t", right: item.dataKind)
+    return String.concat(left: kind, right: String.concat(left: "\tpublic=", right: String.concat(left: String.from_bool(value: item.isPublic), right: String.concat(left: "\topaque=", right: String.from_bool(value: item.isOpaque)))))
+}
+
+fn field_line(prefix: String, field: Field) -> String {
+    let mut out = String.concat(left: prefix, right: field.name)
+    out = String.concat(left: out, right: String.concat(left: "\t", right: field.typeText))
+    out = String.concat(left: out, right: String.concat(left: "\thandle=", right: String.from_bool(value: field.isHandle)))
+    return String.concat(left: out, right: String.concat(left: "\tweak=", right: String.from_bool(value: field.isWeak)))
+}
+
+fn protocol_mapping_line(mapping: ProtocolMapping) -> String {
+    let head = String.concat(left: "  mapping\t", right: mapping.method)
+    let target = String.concat(left: head, right: String.concat(left: "\t", right: mapping.target))
+    let line = String.from_int(value: mapping.line)
+    let column = String.from_int(value: mapping.column)
+    let length = String.from_int(value: mapping.length)
+    let position = String.concat(left: line, right: String.concat(left: ":", right: String.concat(left: column, right: String.concat(left: ":", right: length))))
+    return String.concat(left: target, right: String.concat(left: "\t", right: position))
 }
 
 fn expression_kind_name(kind: Int) -> String {
@@ -41,6 +63,15 @@ fn expression_kind_name(kind: Int) -> String {
     if kind == EXPR_CALL { return "call" }
     if kind == EXPR_BINARY { return "binary" }
     if kind == EXPR_UNARY { return "unary" }
+    if kind == EXPR_MATCH { return "match" }
+    if kind == EXPR_AWAIT { return "await" }
+    if kind == EXPR_FIELD { return "field" }
+    if kind == EXPR_INDEX { return "index" }
+    if kind == EXPR_EFFECT { return "effect" }
+    if kind == EXPR_TRY { return "try" }
+    if kind == EXPR_CLOSURE { return "closure" }
+    if kind == EXPR_MANAGE { return "manage" }
+    if kind == EXPR_ARRAY { return "array" }
     return "unknown"
 }
 
@@ -53,68 +84,276 @@ fn statement_kind_name(kind: Int) -> String {
     if kind == STMT_LOOP { return "loop" }
     if kind == STMT_FOR { return "for" }
     if kind == STMT_MATCH { return "match" }
+    if kind == STMT_WITH { return "with" }
+    if kind == STMT_SELECT { return "select" }
+    if kind == STMT_ASSIGN { return "assign" }
+    if kind == STMT_INDEX_ASSIGN { return "index-assign" }
+    if kind == STMT_TASK_GROUP { return "task-group" }
     return "unknown"
 }
 
-fn statement_line(program: read Program, statement: read Stmt) -> String {
-    let mut expressionKind = "none"
-    let mut expressionText = ""
-    if statement.expression >= 0 {
-        let expression = List.get<Expr>(list: read program.expressions, index: read statement.expression)
-        expressionKind = expression_kind_name(kind: expression.kind)
-        expressionText = expression.text
+fn match_guard_count(expression: Expr) -> Int {
+    let mut count = 0
+    let mut i = 0
+    while i < List.len(list: expression.arms) {
+        let arm = List.get<MatchArm>(list: expression.arms, index: i)
+        if arm.guard >= 0 { count = count + 1 }
+        i = i + 1
     }
-    let a = String.concat(left: read String.concat(left: read "  stmt\t", right: read statement_kind_name(kind: statement.kind)), right: read String.concat(left: read "\t", right: read statement.name))
-    let b = String.concat(left: read a, right: read String.concat(left: read "\t", right: read statement.typeText))
-    let mut out = String.concat(left: read String.concat(left: read b, right: read String.concat(left: read "\t", right: read expressionKind)), right: read String.concat(left: read "\t", right: read expressionText))
-    if List.len(list: read statement.children) > 0 || List.len(list: read statement.elseChildren) > 0 {
-        out = String.concat(left: read out, right: read String.concat(left: read "\tthen=", right: read String.concat(left: read String.from_int(value: List.len(list: read statement.children)), right: read String.concat(left: read "\telse=", right: read String.from_int(value: List.len(list: read statement.elseChildren))))))
-    }
-    if statement.kind == STMT_MATCH {
-        out = String.concat(left: read out, right: read String.concat(left: read "\tarms=", right: read String.from_int(value: List.len(list: read statement.arms))))
+    return count
+}
+
+fn binding_list_text(bindings: List<String>) -> String {
+    let mut out = ""
+    let mut i = 0
+    while i < List.len(list: bindings) {
+        let binding = List.get<String>(list: bindings, index: i)
+        if i > 0 { out = String.concat(left: out, right: ",") }
+        out = String.concat(left: out, right: binding)
+        i = i + 1
     }
     return out
 }
 
-fn main() -> Unit {
-    let source = Args.get_or_default(index: 0, default: read "")
-    let toks = tokenize(source: read source)
-    let program = parse_program(toks: read toks)
+fn call_arg_labels(args: List<CallArg>) -> String {
+    let mut out = ""
     let mut i = 0
-    while i < Program.len(self: read program) {
-        let item = List.get<Item>(list: read program.items, index: read i)
-        Log.write(message: read item_line(item: read item))
-        if item.kind == ITEM_FUNCTION {
-            Log.write(message: read String.concat(left: read "  header\tpublic=", right: read String.concat(left: read String.from_bool(value: item.isPublic), right: read String.concat(left: read "\tasync=", right: read String.concat(left: read String.from_bool(value: item.isAsync), right: read String.concat(left: read "\tnative=", right: read String.concat(left: read String.from_bool(value: item.isNative), right: read String.concat(left: read "\tbody=", right: read String.concat(left: read String.from_bool(value: item.hasBody), right: read String.concat(left: read "\treturn=", right: read item.returnType))))))))))
+    while i < List.len(list: args) {
+        let arg = List.get<CallArg>(list: args, index: i)
+        if i > 0 { out = String.concat(left: out, right: ",") }
+        if String.len(value: arg.label) > 0 { out = String.concat(left: out, right: arg.label) }
+        else { out = String.concat(left: out, right: "_") }
+        i = i + 1
+    }
+    return out
+}
+
+fn pattern_kind_name(kind: Int) -> String {
+    if kind == PAT_WILDCARD { return "wildcard" }
+    if kind == PAT_BINDING { return "binding" }
+    if kind == PAT_VARIANT { return "variant" }
+    if kind == PAT_LITERAL { return "literal" }
+    if kind == PAT_TUPLE { return "tuple" }
+    if kind == PAT_LIST { return "list" }
+    return "unknown"
+}
+
+fn statement_line(program: Program, statement: Stmt) -> String {
+    let mut expressionKind = "none"
+    let mut expressionText = ""
+    if statement.expression >= 0 {
+        let expression = List.get<Expr>(list: program.expressions, index: statement.expression)
+        expressionKind = expression_kind_name(kind: expression.kind)
+        expressionText = expression.text
+    }
+    let a = String.concat(left: String.concat(left: "  stmt\t", right: statement_kind_name(kind: statement.kind)), right: String.concat(left: "\t", right: statement.name))
+    let b = String.concat(left: a, right: String.concat(left: "\t", right: statement.typeText))
+    let mut out = String.concat(left: String.concat(left: b, right: String.concat(left: "\t", right: expressionKind)), right: String.concat(left: "\t", right: expressionText))
+    if List.len(list: statement.destructure) > 0 {
+        let bindings = binding_list_text(bindings: statement.destructure)
+        out = String.concat(left: out, right: String.concat(left: "\tdestructure=", right: bindings))
+    }
+    if statement.expression >= 0 {
+        let expression = List.get<Expr>(list: program.expressions, index: statement.expression)
+        if expression.kind == EXPR_CALL {
+            let labels = call_arg_labels(args: expression.args)
+            out = String.concat(left: out, right: String.concat(left: "\targs=", right: String.concat(left: String.from_int(value: List.len(list: expression.args)), right: String.concat(left: "\tlabels=", right: labels))))
+        }
+        if expression.kind == EXPR_MATCH {
+            out = String.concat(left: out, right: String.concat(left: "\tarms=", right: String.from_int(value: List.len(list: expression.arms))))
+            out = String.concat(left: out, right: String.concat(left: "\tguards=", right: String.from_int(value: match_guard_count(expression))))
+        }
+        if expression.kind == EXPR_CLOSURE && List.len(list: expression.closureStatements) > 0 {
+            out = String.concat(left: out, right: String.concat(left: "\tclosure-body=", right: String.from_int(value: List.len(list: expression.closureStatements))))
+        }
+    }
+    if statement.kind == STMT_WITH {
+        out = String.concat(left: out, right: String.concat(left: "\tbody=", right: String.from_int(value: List.len(list: statement.children))))
+    } else if List.len(list: statement.children) > 0 || List.len(list: statement.elseChildren) > 0 {
+        out = String.concat(left: out, right: String.concat(left: "\tthen=", right: String.concat(left: String.from_int(value: List.len(list: statement.children)), right: String.concat(left: "\telse=", right: String.from_int(value: List.len(list: statement.elseChildren))))))
+    }
+    if statement.kind == STMT_MATCH {
+        out = String.concat(left: out, right: String.concat(left: "\tarms=", right: String.from_int(value: List.len(list: statement.arms))))
+    }
+    if statement.kind == STMT_SELECT {
+        out = String.concat(left: out, right: String.concat(left: "\tarms=", right: String.from_int(value: List.len(list: statement.selectArms))))
+    }
+    return out
+}
+
+fn match_arm_line(program: Program, arm: MatchArm) -> String {
+    let mut kind = "none"
+    let mut text = ""
+    if List.len(list: arm.body) > 0 {
+        let statementIndex = List.get<Int>(list: arm.body, index: 0)
+        if statementIndex >= 0 && statementIndex < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index: statementIndex)
+            kind = statement_kind_name(kind: statement.kind)
+            if statement.expression >= 0 {
+                let expression = List.get<Expr>(list: program.expressions, index: statement.expression)
+                text = expression.text
+            }
+        }
+    }
+    let head = String.concat(left: String.concat(left: "    arm\t", right: kind), right: String.concat(left: "\t", right: text))
+    let mut out = String.concat(left: head, right: String.concat(left: "\tbody=", right: String.from_int(value: List.len(list: arm.body))))
+    if arm.patternNode >= 0 && arm.patternNode < List.len(list: program.patterns) {
+        let pattern = List.get<Pattern>(list: program.patterns, index: arm.patternNode)
+        out = String.concat(left: out, right: String.concat(left: "\tpattern=", right: pattern_kind_name(kind: pattern.kind)))
+        if (pattern.kind == PAT_TUPLE || pattern.kind == PAT_LIST) && List.len(list: pattern.children) > 1 {
+            out = String.concat(left: out, right: String.concat(left: "\tpattern-parts=", right: String.from_int(value: List.len(list: pattern.children))))
+        }
+    }
+    if arm.guard >= 0 && arm.guard < List.len(list: program.expressions) {
+        let guard = List.get<Expr>(list: program.expressions, index: arm.guard)
+        out = String.concat(left: out, right: String.concat(left: "\tguard=", right: expression_kind_name(kind: guard.kind)))
+    }
+    return out
+}
+
+fn select_arm_line(program: Program, arm: SelectArm) -> String {
+    let mut operationKind = "none"
+    let mut operationText = ""
+    if arm.operation >= 0 && arm.operation < List.len(list: program.expressions) {
+        let operation = List.get<Expr>(list: program.expressions, index: arm.operation)
+        operationKind = expression_kind_name(kind: operation.kind)
+        operationText = operation.text
+    }
+    let head = String.concat(left: String.concat(left: "    select-arm\t", right: arm.binding), right: String.concat(left: "\t", right: operationKind))
+    return String.concat(left: head, right: String.concat(left: "\t", right: String.concat(left: operationText, right: String.concat(left: "\tbody=", right: String.from_int(value: List.len(list: arm.body))))))
+}
+
+fn main() -> Unit {
+    let source = Args.get_or_default(index: 0, default: "")
+    let toks = tokenize(source: source)
+    let program = parse_program(toks: toks)
+    let mut i = 0
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
+        Log.write(message: item_line(item))
+        if item.kind == ITEM_FEATURES {
+            let mut f = 0
+            while f < List.len(list: item.features) {
+                let feature = List.get<FeatureName>(list: item.features, index: f)
+                let pos = String.concat(left: String.concat(left: String.from_int(value: feature.line), right: ":"), right: String.concat(left: String.from_int(value: feature.column), right: String.concat(left: ":", right: String.from_int(value: feature.length))))
+                Log.write(message: String.concat(left: String.concat(left: "  feature\t", right: feature.name), right: String.concat(left: "\t", right: pos)))
+                f = f + 1
+            }
+        }
+        if item.kind == ITEM_TYPE || item.kind == ITEM_SUM {
+            Log.write(message: data_header_line(item))
             let mut g = 0
-            while g < List.len(list: read item.generics) {
-                let generic = List.get<GenericParam>(list: read item.generics, index: read g)
-                Log.write(message: read String.concat(left: read String.concat(left: read "  generic\t", right: read generic.name), right: read String.concat(left: read "\t", right: read generic.boundText)))
+            while g < List.len(list: item.generics) {
+                let generic = List.get<GenericParam>(list: item.generics, index: g)
+                Log.write(message: String.concat(left: String.concat(left: "  generic\t", right: generic.name), right: String.concat(left: "\t", right: generic.boundText)))
+                g = g + 1
+            }
+            let mut d = 0
+            while d < List.len(list: item.derives) {
+                let derive = List.get<FeatureName>(list: item.derives, index: d)
+                Log.write(message: String.concat(left: "  derive\t", right: derive.name))
+                d = d + 1
+            }
+            let mut f = 0
+            while f < List.len(list: item.fields) {
+                let field = List.get<Field>(list: item.fields, index: f)
+                Log.write(message: field_line(prefix: "  field\t", field))
+                f = f + 1
+            }
+            let mut v = 0
+            while v < List.len(list: item.variants) {
+                let variant = List.get<Variant>(list: item.variants, index: v)
+                Log.write(message: String.concat(left: "  variant\t", right: variant.name))
+                let mut vf = 0
+                while vf < List.len(list: variant.fields) {
+                    let field = List.get<Field>(list: variant.fields, index: vf)
+                    Log.write(message: field_line(prefix: "    field\t", field))
+                    vf = vf + 1
+                }
+                v = v + 1
+            }
+        }
+        if item.kind == ITEM_TYPE_ALIAS {
+            Log.write(message: String.concat(left: "  target\t", right: item.aliasTarget))
+        }
+        if item.kind == ITEM_CONST {
+            let typed = String.concat(left: "  type\t", right: item.constType)
+            Log.write(message: typed)
+            Log.write(message: String.concat(left: "  value\t", right: item.constValue))
+        }
+        if item.kind == ITEM_FUNCTION {
+            let mut header = "  header\tpublic="
+            header = String.concat(left: header, right: String.from_bool(value: item.isPublic))
+            header = String.concat(left: header, right: "\tasync=")
+            header = String.concat(left: header, right: String.from_bool(value: item.isAsync))
+            header = String.concat(left: header, right: "\tnative=")
+            header = String.concat(left: header, right: String.from_bool(value: item.isNative))
+            header = String.concat(left: header, right: "\tbody=")
+            header = String.concat(left: header, right: String.from_bool(value: item.hasBody))
+            header = String.concat(left: header, right: "\treturn=")
+            header = String.concat(left: header, right: item.returnType)
+            if String.len(value: item.protocol) > 0 {
+                header = String.concat(left: header, right: String.concat(left: "\tprotocol=", right: item.protocol))
+            }
+            if item.hasDefaultImplMarker {
+                header = String.concat(left: header, right: "\tdefault-impl=true")
+            }
+            Log.write(message: header)
+            let mut g = 0
+            while g < List.len(list: item.generics) {
+                let generic = List.get<GenericParam>(list: item.generics, index: g)
+                Log.write(message: String.concat(left: String.concat(left: "  generic\t", right: generic.name), right: String.concat(left: "\t", right: generic.boundText)))
                 g = g + 1
             }
             let mut p = 0
-            while p < List.len(list: read item.params) {
-                let param = List.get<Param>(list: read item.params, index: read p)
-                Log.write(message: read param_line(param: read param))
+            while p < List.len(list: item.params) {
+                let param = List.get<Param>(list: item.params, index: p)
+                Log.write(message: param_line(param))
                 if param.hasDefault {
-                    let pos = String.concat(left: read String.concat(left: read String.from_int(value: param.defaultLine), right: read ":"), right: read String.concat(left: read String.from_int(value: param.defaultColumn), right: read String.concat(left: read ":", right: read String.from_int(value: param.defaultLength))))
-                    Log.write(message: read String.concat(left: read "  default\t", right: read pos))
+                    let pos = String.concat(left: String.concat(left: String.from_int(value: param.defaultLine), right: ":"), right: String.concat(left: String.from_int(value: param.defaultColumn), right: String.concat(left: ":", right: String.from_int(value: param.defaultLength))))
+                    Log.write(message: String.concat(left: "  default\t", right: pos))
                 }
                 p = p + 1
             }
             let mut e = 0
-            while e < List.len(list: read item.effects) {
-                let effect = List.get<EffectName>(list: read item.effects, index: read e)
-                let pos = String.concat(left: read String.concat(left: read String.from_int(value: effect.line), right: read ":"), right: read String.concat(left: read String.from_int(value: effect.column), right: read String.concat(left: read ":", right: read String.from_int(value: effect.length))))
-                Log.write(message: read String.concat(left: read String.concat(left: read "  effect\t", right: read effect.name), right: read String.concat(left: read "\t", right: read pos)))
+            while e < List.len(list: item.effects) {
+                let effect = List.get<EffectName>(list: item.effects, index: e)
+                let pos = String.concat(left: String.concat(left: String.from_int(value: effect.line), right: ":"), right: String.concat(left: String.from_int(value: effect.column), right: String.concat(left: ":", right: String.from_int(value: effect.length))))
+                Log.write(message: String.concat(left: String.concat(left: "  effect\t", right: effect.name), right: String.concat(left: "\t", right: pos)))
                 e = e + 1
             }
             let mut s = 0
-            while s < List.len(list: read item.statements) {
-                let statementIndex = List.get<Int>(list: read item.statements, index: read s)
-                let statement = List.get<Stmt>(list: read program.statements, index: read statementIndex)
-                Log.write(message: read statement_line(program: read program, statement: read statement))
+            while s < List.len(list: item.statements) {
+                let statementIndex = List.get<Int>(list: item.statements, index: s)
+                let statement = List.get<Stmt>(list: program.statements, index: statementIndex)
+                Log.write(message: statement_line(program, statement))
+                if statement.kind == STMT_MATCH {
+                    let mut a = 0
+                    while a < List.len(list: statement.arms) {
+                        let arm = List.get<MatchArm>(list: statement.arms, index: a)
+                        Log.write(message: match_arm_line(program, arm))
+                        a = a + 1
+                    }
+                }
+                if statement.kind == STMT_SELECT {
+                    let mut a = 0
+                    while a < List.len(list: statement.selectArms) {
+                        let arm = List.get<SelectArm>(list: statement.selectArms, index: a)
+                        Log.write(message: select_arm_line(program, arm))
+                        a = a + 1
+                    }
+                }
                 s = s + 1
+            }
+        }
+        if item.kind == ITEM_IMPL {
+            let protocol = String.concat(left: "  protocol\t", right: item.protocol)
+            Log.write(message: String.concat(left: protocol, right: String.concat(left: "\tfor\t", right: item.implType)))
+            let mut m = 0
+            while m < List.len(list: item.mappings) {
+                let mapping = List.get<ProtocolMapping>(list: item.mappings, index: m)
+                Log.write(message: protocol_mapping_line(mapping))
+                m = m + 1
             }
         }
         i = i + 1

@@ -9,13 +9,13 @@ fn first_ok() -> fresh Pair<Int> {
     return Ok(1)
 }
 
-fn count(xs: read IntList) -> Int {
-    return List.len(list: read xs)
+fn count(xs: IntList) -> Int {
+    return List.len(list: xs)
 }
 
 fn main() -> Unit {
     let p: Pair<Int> = first_ok()
     let n: IntList = List.new<Int>()
-    Log.write(message: read String.from_int(value: count(xs: read n)))
+    Log.write(message: String.from_int(value: count(xs: n)))
     return Unit
 }

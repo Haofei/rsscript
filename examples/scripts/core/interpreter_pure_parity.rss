@@ -4,7 +4,7 @@ struct Expr {
 }
 
 fn render(value: Int) -> fresh String {
-    return String.concat(left: read "value=", right: read value.to_string())
+    return String.concat(left: "value=", right: value.to_string())
 }
 
 fn main() -> Unit {
@@ -12,8 +12,8 @@ fn main() -> Unit {
     match read expr {
         Expr { left, right } => {
             let total = left + right
-            Log.write(message: read render(value: total))
-            Log.trace(event: read "eval.parity", message: read "done")
+            Log.write(message: render(value: total))
+            Log.trace(event: "eval.parity", message: "done")
         }
     }
 }

@@ -1,7 +1,7 @@
 features: async, native
 
 pub async native fn DB.insert_event(
-    table: read String,
-    payload: read String,
+    table: String,
+    payload: String,
 ) -> Result<Unit, String>
     effects(native)

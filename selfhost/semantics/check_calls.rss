@@ -1,0 +1,89 @@
+// Call-level diagnostics over the shared Program.
+//
+// This mirrors the Rust checker boundary in crates/rsscript/src/checks/calls.rs.
+
+module selfhost.semantics.check_calls
+
+use selfhost.semantics.diagnostics.*
+use selfhost.syntax.ast.*
+
+fn collect_duplicate_named_args_expression(program: Program, expressionIndex: Int, diagnostics: mut DiagnosticBag) -> Unit {
+    if expressionIndex < 0 || expressionIndex >= List.len(list: program.expressions) { return Unit }
+    let expression = List.get<Expr>(list: program.expressions, index: expressionIndex)
+    if expression.kind == EXPR_CALL {
+        let mut seen = Set<String>.new()
+        let mut argIndex = 0
+        while argIndex < List.len(list: expression.args) {
+            let arg = List.get<CallArg>(list: expression.args, index: argIndex)
+            if String.len(value: arg.label) > 0 {
+                if Set.contains<String>(set: seen, value: arg.label) {
+                    DiagnosticBag.add(self: mut diagnostics, code: "RS0205", line: arg.line, column: arg.column, length: arg.length)
+                } else {
+                    Set.insert<String>(set: mut seen, value: arg.label)
+                }
+            }
+            argIndex = argIndex + 1
+        }
+    }
+    let mut childIndex = 0
+    while childIndex < List.len(list: expression.children) {
+        collect_duplicate_named_args_expression(program, expressionIndex: List.get<Int>(list: expression.children, index: childIndex), diagnostics: mut diagnostics)
+        childIndex = childIndex + 1
+    }
+    if expression.kind == EXPR_MATCH {
+        let mut armIndex = 0
+        while armIndex < List.len(list: expression.arms) {
+            let arm = List.get<MatchArm>(list: expression.arms, index: armIndex)
+            let mut bodyIndex = 0
+            while bodyIndex < List.len(list: arm.body) {
+                collect_duplicate_named_args_statement(program, statementIndex: List.get<Int>(list: arm.body, index: bodyIndex), diagnostics: mut diagnostics)
+                bodyIndex = bodyIndex + 1
+            }
+            armIndex = armIndex + 1
+        }
+    }
+    return Unit
+}
+
+fn collect_duplicate_named_args_statement(program: Program, statementIndex: Int, diagnostics: mut DiagnosticBag) -> Unit {
+    if statementIndex < 0 || statementIndex >= List.len(list: program.statements) { return Unit }
+    let statement = List.get<Stmt>(list: program.statements, index: statementIndex)
+    collect_duplicate_named_args_expression(program, expressionIndex: statement.expression, diagnostics: mut diagnostics)
+    let mut armIndex = 0
+    while armIndex < List.len(list: statement.arms) {
+        let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+        let mut bodyIndex = 0
+        while bodyIndex < List.len(list: arm.body) {
+            collect_duplicate_named_args_statement(program, statementIndex: List.get<Int>(list: arm.body, index: bodyIndex), diagnostics: mut diagnostics)
+            bodyIndex = bodyIndex + 1
+        }
+        armIndex = armIndex + 1
+    }
+    let mut childIndex = 0
+    while childIndex < List.len(list: statement.children) {
+        collect_duplicate_named_args_statement(program, statementIndex: List.get<Int>(list: statement.children, index: childIndex), diagnostics: mut diagnostics)
+        childIndex = childIndex + 1
+    }
+    let mut elseIndex = 0
+    while elseIndex < List.len(list: statement.elseChildren) {
+        collect_duplicate_named_args_statement(program, statementIndex: List.get<Int>(list: statement.elseChildren, index: elseIndex), diagnostics: mut diagnostics)
+        elseIndex = elseIndex + 1
+    }
+    return Unit
+}
+
+fn collect_program_duplicate_named_args_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            let mut statementIndex = 0
+            while statementIndex < List.len(list: item.statements) {
+                collect_duplicate_named_args_statement(program, statementIndex: List.get<Int>(list: item.statements, index: statementIndex), diagnostics: mut diagnostics)
+                statementIndex = statementIndex + 1
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}

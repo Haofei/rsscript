@@ -5,11 +5,11 @@ struct Deadline
 pub native fn Deadline.after_ms(ms: Int) -> fresh Deadline
     effects(native)
 
-pub native fn Deadline.after(duration: read Duration) -> fresh Deadline
+pub native fn Deadline.after(duration: Duration) -> fresh Deadline
     effects(native)
 
-pub native fn Deadline.is_expired(deadline: read Deadline) -> Bool
+pub native fn Deadline.is_expired(deadline: Deadline) -> Bool
     effects(native)
 
-pub native fn Deadline.remaining_ms(deadline: read Deadline) -> Int
+pub native fn Deadline.remaining_ms(deadline: Deadline) -> Int
     effects(native)

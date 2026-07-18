@@ -14,12 +14,12 @@ resource Session {
     }
 }
 
-fn Session.open(host: read String) -> Session
+fn Session.open(host: String) -> Session
 fn Session.ping(session: mut Session) -> Result<Unit, PoolError>
 
-fn run(host: read String) -> Result<Unit, PoolError> {
+fn run(host: String) -> Result<Unit, PoolError> {
     local pool = ResourcePool<Session>.new(
-        create: || Session.open(host: read host),
+        create: || Session.open(host),
         max_size: POOL_SIZE,
     )
 
@@ -28,8 +28,8 @@ fn run(host: read String) -> Result<Unit, PoolError> {
     }
 
     let snapshot = ResourcePool.stats(pool: mut pool)
-    if PoolStats.available(stats: read snapshot) > 0 {
-        Log.write(message: read "pool has idle connections")
+    if PoolStats.available(stats: snapshot) > 0 {
+        Log.write(message: "pool has idle connections")
     }
     return Ok(Unit)
 }

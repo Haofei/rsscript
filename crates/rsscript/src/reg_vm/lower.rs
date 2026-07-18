@@ -1940,6 +1940,19 @@ impl RegLowerer<'_> {
                             });
                             return Ok(dst);
                         }
+                        ("StringBuilder", "finish") => {
+                            if arg_regs.len() != 1 {
+                                return Err(EvalError::Runtime(format!(
+                                    "reg VM StringBuilder.finish expected 1 arg, got {}.",
+                                    arg_regs.len()
+                                )));
+                            }
+                            self.emit(RegInstr::StringBuilderFinish {
+                                dst,
+                                builder: arg_regs[0],
+                            });
+                            return Ok(dst);
+                        }
                         _ => {
                             let qualified_key = format!("{namespace_root}.{name_root}");
                             // Native declarations also appear in `function_ids` (with
@@ -3529,7 +3542,6 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("String", "trim_start") => Some(RegIntrinsic::StringTrimStart),
         ("TcpError", "message") => Some(RegIntrinsic::TcpErrorMessage),
         ("Toml", "parse_file") => Some(RegIntrinsic::TomlParseFile),
-        ("StringBuilder", "finish") => Some(RegIntrinsic::StringCopy),
         ("StringBuilder", "new") => Some(RegIntrinsic::StringBuilderNew),
         ("Stream", "collect_list") => Some(RegIntrinsic::StreamCollectList),
         ("Stream", "from_list") => Some(RegIntrinsic::StreamFromList),

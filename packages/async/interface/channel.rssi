@@ -19,38 +19,38 @@ pub native fn Channel.bounded<T>(capacity: Int) -> Result<fresh Channel<T>, Chan
 pub native fn Channel.message<T>(capacity: Int) -> Result<fresh Channel<T>, ChannelError>
     effects(native)
 
-pub native fn Channel.sender<T>(channel: read Channel<T>) -> fresh Sender<T>
+pub native fn Channel.sender<T>(channel: Channel<T>) -> fresh Sender<T>
     effects(native)
 
 pub native fn Channel.receiver<T>(channel: mut Channel<T>) -> Result<fresh Receiver<T>, ChannelError>
     effects(native)
 
 pub async native fn Sender.send<T>(
-    sender: read Sender<T>,
+    sender: Sender<T>,
     value: take T,
 ) -> Result<Unit, ChannelError>
     effects(native)
 
 pub async native fn Sender.send_cancellable<T>(
-    sender: read Sender<T>,
+    sender: Sender<T>,
     value: take T,
-    token: read CancellationToken,
+    token: CancellationToken,
 ) -> Result<Unit, ChannelError>
     effects(native)
 
 pub native fn Sender.close<T>(sender: mut Sender<T>) -> Unit
     effects(native)
 
-pub async native fn Receiver.recv<T>(receiver: read Receiver<T>) -> Result<Option<T>, ChannelError>
+pub async native fn Receiver.recv<T>(receiver: Receiver<T>) -> Result<Option<T>, ChannelError>
     effects(native)
 
 pub async native fn Receiver.recv_cancellable<T>(
-    receiver: read Receiver<T>,
-    token: read CancellationToken,
+    receiver: Receiver<T>,
+    token: CancellationToken,
 ) -> Result<Option<T>, ChannelError>
     effects(native)
 
 pub native fn Receiver.close<T>(receiver: mut Receiver<T>) -> Unit
     effects(native)
 
-pub fn ChannelError.message(error: read ChannelError) -> fresh String
+pub fn ChannelError.message(error: ChannelError) -> fresh String

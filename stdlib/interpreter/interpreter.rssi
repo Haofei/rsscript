@@ -4,19 +4,19 @@ struct FunctionObject
 
 pub fn Environment.root() -> fresh Environment
 
-pub fn Environment.child(parent: read Environment) -> fresh Environment
+pub fn Environment.child(parent: Environment) -> fresh Environment
     effects(retains(parent))
 
 pub fn Environment.bind_function(
     env: mut Environment,
-    function: read FunctionObject,
+    function: FunctionObject,
 ) -> Unit
     effects(retains(function))
 
-pub fn Environment.has_parent(env: read Environment) -> Bool
+pub fn Environment.has_parent(env: Environment) -> Bool
 
-pub fn Environment.has_function(env: read Environment) -> Bool
+pub fn Environment.has_function(env: Environment) -> Bool
 
-pub fn FunctionObject.new(closure: read Environment) -> fresh FunctionObject
+pub fn FunctionObject.new(closure: Environment) -> fresh FunctionObject
 
-pub fn FunctionObject.has_closure(function: read FunctionObject) -> Bool
+pub fn FunctionObject.has_closure(function: FunctionObject) -> Bool

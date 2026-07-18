@@ -5,7 +5,7 @@ struct Image {
     pixels: Buffer
 }
 
-fn bad_resize_missing_width(path: read Path) -> Unit {
-    local image = Image.load(path: read path)
+fn bad_resize_missing_width(path: Path) -> Unit {
+    local image = Image.load(path)
     Image.resize(image: mut image, height: 600)
 }

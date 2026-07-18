@@ -8,5 +8,5 @@ struct Session {
 
 fn make_session() -> Session {
     let user = User(name: "Ada")
-    return Session(owner: Weak.from(value: read user))
+    return Session(owner: Weak.from(value: user))
 }

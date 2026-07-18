@@ -9,7 +9,7 @@ sum Shape {
     Rectangle(width: Int, height: Int)
 }
 
-fn describe_color(color: read Color) -> String {
+fn describe_color(color: Color) -> String {
     match color {
         Red => { return "red" }
         Green => { return "green" }
@@ -19,5 +19,5 @@ fn describe_color(color: read Color) -> String {
 
 fn main() -> Unit {
     let c = Red
-    let desc = describe_color(color: read c)
+    let desc = describe_color(color: c)
 }

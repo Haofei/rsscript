@@ -12,7 +12,7 @@ sum Shape {
     Rectangle(width: Int, height: Int)
 }
 
-fn direction_name(d: read Direction) -> String {
+fn direction_name(d: Direction) -> String {
     let name = match d {
         North => { "north" }
         South => { "south" }
@@ -22,7 +22,7 @@ fn direction_name(d: read Direction) -> String {
     return name
 }
 
-fn area(s: read Shape) -> Int {
+fn area(s: Shape) -> Int {
     let result = match s {
         Circle(r) => { read r }
         Rectangle(w, _) => { read w }
@@ -32,6 +32,6 @@ fn area(s: read Shape) -> Int {
 
 fn main() -> Unit {
     let d = North
-    let name = direction_name(d: read d)
-    Log.write(message: read name)
+    let name = direction_name(d)
+    Log.write(message: name)
 }

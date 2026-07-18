@@ -36,7 +36,7 @@ impl RustLowerer<'_> {
             .iter()
             .map(|param| {
                 if param.name == "self" {
-                    return match param.effect {
+                    return match param.effective_effect() {
                         Some(DataEffect::Read) => "&self".to_string(),
                         Some(DataEffect::Mut) => "&mut self".to_string(),
                         Some(DataEffect::Take) | None => "self".to_string(),
@@ -443,7 +443,11 @@ impl RustLowerer<'_> {
         self.param_effects = function
             .params
             .iter()
-            .filter_map(|param| param.effect.map(|effect| (param.name.clone(), effect)))
+            .filter_map(|param| {
+                param
+                    .effective_effect()
+                    .map(|effect| (param.name.clone(), effect))
+            })
             .collect();
         self.value_types = function
             .params
@@ -568,7 +572,7 @@ impl RustLowerer<'_> {
         // only ever survived in check-only fixtures). A normal `read` `&T` param
         // plus clone-at-store matches the VM.
         let ty = self.lower_type_ref(&param.ty, ManagedPosition::Param);
-        let rust_ty = match param.effect {
+        let rust_ty = match param.effective_effect() {
             // Copy primitives are passed `read` by value (call sites already lower
             // `read <int>` by value via `read_effect_lowers_by_value`); the param
             // type must match so the value is owned inside the body.

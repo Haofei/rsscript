@@ -388,6 +388,26 @@ fn main() -> Unit {
     common::differential::assert_backends_agree("jit-branches.rss", source, &[]);
 }
 
+#[test]
+fn backends_agree_on_if_expression() {
+    let source = "\
+fn choose(flag: Bool) -> Int {
+    return if flag {
+        7
+    } else {
+        11
+    }
+}
+
+fn main() -> Unit {
+    Log.write(message: String.from_int(value: choose(flag: true)))
+    Log.write(message: String.from_int(value: choose(flag: false)))
+    return Unit
+}
+";
+    common::differential::assert_backends_agree("if-expression.rss", source, &[]);
+}
+
 /// Eligible function with a loop (jumps + reassignment in the JIT).
 #[test]
 fn backends_agree_on_loop() {

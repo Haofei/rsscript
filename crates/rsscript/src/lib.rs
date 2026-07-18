@@ -14,6 +14,7 @@ pub mod bbom_reir;
 mod capability;
 mod checks;
 mod core_index;
+mod default_read_migration;
 mod diagnostic;
 mod editor_grammar;
 mod eval_types;
@@ -51,6 +52,7 @@ pub use capability::{
     capability_risk, is_known_capability_category,
 };
 pub use core_index::core_package_index_json;
+pub use default_read_migration::default_read_migration_edits;
 pub use diagnostic::{
     Diagnostic, DiagnosticExplanation, Fix, FixEdit, Severity, Span, explain_diagnostic_code,
     format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,

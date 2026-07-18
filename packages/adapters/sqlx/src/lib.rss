@@ -9,16 +9,16 @@
 // returns. Queries read the first column of each row as text.
 
 // Run one or more SQL statements that produce no rows (DDL, INSERT, ...).
-pub fn Sqlx.execute(url: read String, sql: read String) -> Result<Unit, String> {
-    return SqlxFfi.execute(url: read url, sql: read sql)
+pub fn Sqlx.execute(url: String, sql: String) -> Result<Unit, String> {
+    return SqlxFfi.execute(url: url, sql: sql)
 }
 
 // Run a query and collect the first column of every row as a list of strings.
-pub fn Sqlx.query_strings(url: read String, sql: read String) -> Result<fresh List<String>, String> {
-    return SqlxFfi.query_strings(url: read url, sql: read sql)
+pub fn Sqlx.query_strings(url: String, sql: String) -> Result<fresh List<String>, String> {
+    return SqlxFfi.query_strings(url: url, sql: sql)
 }
 
 // Run a query and return the first column of the first row, if any.
-pub fn Sqlx.query_one_string(url: read String, sql: read String) -> Result<Option<String>, String> {
-    return SqlxFfi.query_one_string(url: read url, sql: read sql)
+pub fn Sqlx.query_one_string(url: String, sql: String) -> Result<Option<String>, String> {
+    return SqlxFfi.query_one_string(url: url, sql: sql)
 }

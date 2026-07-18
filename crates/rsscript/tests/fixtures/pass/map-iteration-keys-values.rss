@@ -1,16 +1,16 @@
 features: local
 
-fn count_keys(table: read Map<String, Int>) -> Int {
-    let keys = Map.keys<String, Int>(map: read table)
-    let count = List.len<String>(list: read keys)
+fn count_keys(table: Map<String, Int>) -> Int {
+    let keys = Map.keys<String, Int>(map: table)
+    let count = List.len<String>(list: keys)
     return count
 }
 
-fn sum_values(table: read Map<String, Int>) -> Int {
-    let values = Map.values<String, Int>(map: read table)
+fn sum_values(table: Map<String, Int>) -> Int {
+    let values = Map.values<String, Int>(map: table)
     let total = List.fold<Int, Int>(
-        list: read values,
-        initial: read 0,
+        list: values,
+        initial: 0,
         folder: |acc, val| acc + val,
     )
     return total

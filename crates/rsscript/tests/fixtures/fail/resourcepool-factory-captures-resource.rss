@@ -14,13 +14,13 @@ class MyError {
     code: Int
 }
 
-fn MyFile.open(path: read Path) -> Result<MyFile, MyError>
-fn Conn.from_file(file: read MyFile) -> Conn
+fn MyFile.open(path: Path) -> Result<MyFile, MyError>
+fn Conn.from_file(file: MyFile) -> Conn
 
-fn bad(path: read Path) -> Result<Unit, MyError> {
-    with MyFile.open(path: read path)? as file {
+fn bad(path: Path) -> Result<Unit, MyError> {
+    with MyFile.open(path)? as file {
         local pool = ResourcePool<Conn>.new(
-            create: || Conn.from_file(file: read file),
+            create: || Conn.from_file(file),
             max_size: 1,
         )
     }

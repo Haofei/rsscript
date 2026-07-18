@@ -182,7 +182,7 @@ fn json_lists() -> fresh JsonValue {
     ));
     assert!(rust.contains("let text_from_method = rsscript_runtime::file_read_string(&path)?;"));
     assert!(rust.contains("let mut file = rsscript_runtime::file_open_write(&(path))?;"));
-    assert!(rust.contains("return rsscript_runtime::path_resolve_relative(&root, &relative);"));
+    assert!(rust.contains("return rsscript_runtime::path_resolve_relative(&root, relative);"));
     assert!(!rust.contains("return Ok(rsscript_runtime::path_resolve_relative"));
     assert!(rust.contains("let string_json = rsscript_runtime::json_strings(&strings);"));
     assert!(rust.contains("let value_json = rsscript_runtime::json_values(&values);"));

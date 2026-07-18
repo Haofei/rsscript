@@ -8,6 +8,6 @@ resource DbConnection {
     }
 }
 
-fn bad_pool(pool: read ResourcePool<DbConnection>) -> Unit {
+fn bad_pool(pool: ResourcePool<DbConnection>) -> Unit {
     ResourcePool.borrow(pool: mut pool)
 }

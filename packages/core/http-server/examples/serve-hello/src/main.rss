@@ -5,15 +5,15 @@ features: native, local
 
 fn build_paths() -> fresh List<String> {
     local paths = List.new<String>()
-    List.push<String>(list: mut paths, value: read "/hello")
-    List.push<String>(list: mut paths, value: read "/health")
+    List.push<String>(list: mut paths, value: "/hello")
+    List.push<String>(list: mut paths, value: "/health")
     return paths
 }
 
 fn build_bodies() -> fresh List<String> {
     local bodies = List.new<String>()
-    List.push<String>(list: mut bodies, value: read "Hello, world!")
-    List.push<String>(list: mut bodies, value: read "ok")
+    List.push<String>(list: mut bodies, value: "Hello, world!")
+    List.push<String>(list: mut bodies, value: "ok")
     return bodies
 }
 
@@ -21,8 +21,8 @@ fn main() -> Result<Unit, String> {
     local paths = build_paths()
     local bodies = build_bodies()
     return HttpServer.serve_static(
-        address: read "127.0.0.1:8080",
-        paths: read paths,
-        bodies: read bodies,
+        address: "127.0.0.1:8080",
+        paths: paths,
+        bodies: bodies,
     )
 }

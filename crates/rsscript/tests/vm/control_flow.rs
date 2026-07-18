@@ -31,6 +31,27 @@ fn main() -> Result<Unit, TimerError> {
 }
 
 #[test]
+fn reg_vm_runs_if_expression_like_compiled_backend() {
+    let source = r#"
+fn choose(flag: Bool) -> Int {
+    return if flag {
+        7
+    } else {
+        11
+    }
+}
+
+fn main() -> Unit {
+    Log.write(message: String.from_int(value: choose(flag: true)))
+    Log.write(message: String.from_int(value: choose(flag: false)))
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-if-expression.rss", source, []);
+}
+
+#[test]
 fn vm_runs_pure_loop_sum_like_interpreter() {
     let source = r#"
 fn main() -> Unit {

@@ -1,5 +1,5 @@
 // expect: RS0101
-fn checksum(data: read Bytes) -> UInt64
+fn checksum(data: Bytes) -> UInt64
     effects(unsafe)
 {
     return 0

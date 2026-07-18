@@ -506,6 +506,23 @@ impl Formatter {
             Expr::Binary {
                 op, left, right, ..
             } => {
+                if is_boolean_identity(*op, right) {
+                    self.expr_at(left, parent_precedence, indent);
+                    return;
+                }
+                if is_boolean_negation(*op, right) {
+                    let precedence = 10;
+                    let needs_parens = precedence < parent_precedence;
+                    if needs_parens {
+                        self.out.push('(');
+                    }
+                    self.out.push('!');
+                    self.expr_at(left, precedence, indent);
+                    if needs_parens {
+                        self.out.push(')');
+                    }
+                    return;
+                }
                 let precedence = binary_precedence(*op);
                 let needs_parens = precedence < parent_precedence;
                 if needs_parens {
@@ -625,8 +642,25 @@ impl Formatter {
                 value,
                 scrutinee_effect,
                 arms,
+                from_if_expression,
                 ..
             } => {
+                if *from_if_expression {
+                    let [then_arm, else_arm] = arms.as_slice() else {
+                        self.out.push_str("/* malformed if expression */");
+                        return;
+                    };
+                    self.out.push_str("if ");
+                    self.expr_at(value, 0, indent);
+                    self.out.push_str(" {\n");
+                    self.block(&then_arm.body, indent + 1);
+                    self.indent(indent);
+                    self.out.push_str("} else {\n");
+                    self.block(&else_arm.body, indent + 1);
+                    self.indent(indent);
+                    self.out.push('}');
+                    return;
+                }
                 self.out.push_str("match ");
                 if let Some(effect) = scrutinee_effect {
                     self.out.push_str(data_effect_name(*effect));
@@ -1136,12 +1170,23 @@ fn inline_expr(expr: &Expr) -> Option<String> {
         Expr::ArrayLiteral { items, .. } => inline_array_literal(items),
         Expr::Binary {
             op, left, right, ..
-        } => Some(format!(
-            "{} {} {}",
-            inline_expr(left)?,
-            binary_op_text(*op),
-            inline_expr(right)?
-        )),
+        } => {
+            let needs_parens = matches!(left.as_ref(), Expr::Binary { .. });
+            let left = inline_expr(left)?;
+            if is_boolean_identity(*op, right) {
+                Some(needs_parens.then(|| format!("({left})")).unwrap_or(left))
+            } else if is_boolean_negation(*op, right) {
+                let left = needs_parens.then(|| format!("({left})")).unwrap_or(left);
+                Some(format!("!{left}"))
+            } else {
+                Some(format!(
+                    "{} {} {}",
+                    left,
+                    binary_op_text(*op),
+                    inline_expr(right)?
+                ))
+            }
+        }
         Expr::Field { base, name, .. } => Some(format!("{}.{}", inline_expr(base)?, name)),
         Expr::Index { base, index, .. } => {
             Some(format!("{}[{}]", inline_expr(base)?, inline_expr(index)?))
@@ -1446,6 +1491,20 @@ fn binary_op_text(op: BinaryOp) -> &'static str {
         BinaryOp::LogicalAnd => "&&",
         BinaryOp::LogicalOr => "||",
     }
+}
+
+fn is_boolean_negation(op: BinaryOp, right: &Expr) -> bool {
+    let Expr::Ident(name, _) = right else {
+        return false;
+    };
+    (op == BinaryOp::Equal && name == "false") || (op == BinaryOp::NotEqual && name == "true")
+}
+
+fn is_boolean_identity(op: BinaryOp, right: &Expr) -> bool {
+    let Expr::Ident(name, _) = right else {
+        return false;
+    };
+    (op == BinaryOp::Equal && name == "true") || (op == BinaryOp::NotEqual && name == "false")
 }
 
 fn binary_precedence(op: BinaryOp) -> u8 {
@@ -2034,5 +2093,53 @@ fn main() -> Unit {
 }
 "#
         );
+    }
+
+    #[test]
+    fn preserves_if_expression_surface_syntax() {
+        let source = r#"fn choose(flag: Bool) -> Int {
+return if flag {
+7
+} else {
+11
+}
+}
+"#;
+
+        let formatted = format_source("if-expression.rss", source);
+        assert_eq!(
+            formatted,
+            r#"fn choose(flag: Bool) -> Int {
+    return if flag {
+        7
+    } else {
+        11
+    }
+}
+"#
+        );
+        assert_eq!(format_source("if-expression.rss", &formatted), formatted);
+    }
+
+    #[test]
+    fn canonicalizes_boolean_negation() {
+        let source = r#"fn test(state: Bool, left: Bool, right: Bool) -> Bool {
+    let a = state == false
+    let b = (left && right) != true
+    let c = state == true
+    let d = (left || right) != false
+    return a || b || c || d
+}
+"#;
+
+        let formatted = format_source("boolean.rss", source);
+        assert!(formatted.contains("let a = !state"), "{formatted}");
+        assert!(
+            formatted.contains("let b = !(left && right)"),
+            "{formatted}"
+        );
+        assert!(formatted.contains("let c = state"), "{formatted}");
+        assert!(formatted.contains("let d = left || right"), "{formatted}");
+        assert_eq!(format_source("boolean.rss", &formatted), formatted);
     }
 }

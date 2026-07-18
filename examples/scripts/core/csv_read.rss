@@ -1,32 +1,32 @@
 features: local
 
-fn read_csv(path: read Path) -> Result<Unit, CsvError> {
+fn read_csv(path: Path) -> Result<Unit, CsvError> {
     local buffer = RowBuffer.new(size: 4096)
-    with Csv.open_read(path: read path)? as file {
+    with Csv.open_read(path)? as file {
         Csv.read_into(file: mut file, buffer: mut buffer)?
-        let row = Csv.parse_row(buffer: read buffer)?
-        let name = Row.field_string(row: read row, index: 0)?
-        Assert.equal(left: read name, right: read "RSScript")
-        Log.write(message: read name)
+        let row = Csv.parse_row(buffer)?
+        let name = Row.field_string(row, index: 0)?
+        Assert.equal(left: name, right: "RSScript")
+        Log.write(message: name)
     }
 
     return Ok(Unit)
 }
 
 fn main() -> Result<Unit, FileError> {
-    let path = Path.from_string(value: read "rsscript-csv-example.csv")
-    let data = Bytes.from_string(value: read "name,amount\nRSScript,42\n")
+    let path = Path.from_string(value: "rsscript-csv-example.csv")
+    let data = Bytes.from_string(value: "name,amount\nRSScript,42\n")
 
-    with File.open_write(path: read path)? as file {
-        File.write(file: mut file, data: read data)?
+    with File.open_write(path)? as file {
+        File.write(file: mut file, data)?
     }
 
-    match read_csv(path: read path) {
+    match read_csv(path) {
         Ok(unit) => {
             return Ok(Unit)
         }
         Err(error) => {
-            Log.write(message: read "csv read failed")
+            Log.write(message: "csv read failed")
             return Ok(Unit)
         }
     }

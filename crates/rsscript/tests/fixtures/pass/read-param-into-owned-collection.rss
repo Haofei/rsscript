@@ -9,15 +9,15 @@ struct Node derives(Clone, Eq, Hash) {
 
 fn leaf(tag: Int) -> fresh Node { return Node(tag: tag, src: List.new<Node>()) }
 
-fn bin(a: read Node, b: read Node) -> fresh Node {
+fn bin(a: Node, b: Node) -> fresh Node {
     local s = List.new<Node>()
-    List.push(list: mut s, value: read a)
-    List.push(list: mut s, value: read b)
+    List.push(list: mut s, value: a)
+    List.push(list: mut s, value: b)
     return Node(tag: 0, src: take s)
 }
 
 fn main() -> Unit {
-    let p = bin(a: read leaf(tag: 1), b: read leaf(tag: 2))
-    Log.write(message: read Int.to_string(value: read List.len(list: read p.src)))
+    let p = bin(a: leaf(tag: 1), b: leaf(tag: 2))
+    Log.write(message: Int.to_string(value: List.len(list: p.src)))
     return Unit
 }

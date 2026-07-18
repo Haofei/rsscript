@@ -12,37 +12,37 @@ struct Tensor
 // Build a tensor from a flat row-major `Float` buffer and a shape. Errors if the
 // shape has a negative dimension or its element count != `data.len()`.
 pub native fn Tensor.from_f32_slice(
-    data: read List<Float>,
-    shape: read List<Int>,
+    data: List<Float>,
+    shape: List<Int>,
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Read the packed buffer back out (row-major), widened to `Float`.
-pub native fn Tensor.to_f32_slice(tensor: read Tensor) -> Result<fresh List<Float>, TensorError>
+pub native fn Tensor.to_f32_slice(tensor: Tensor) -> Result<fresh List<Float>, TensorError>
     effects(native)
 
 // The tensor's shape.
-pub native fn Tensor.shape(tensor: read Tensor) -> Result<fresh List<Int>, TensorError>
+pub native fn Tensor.shape(tensor: Tensor) -> Result<fresh List<Int>, TensorError>
     effects(native)
 
 // The number of dimensions.
-pub native fn Tensor.rank(tensor: read Tensor) -> Int
+pub native fn Tensor.rank(tensor: Tensor) -> Int
     effects(native)
 
 // Serialize f32 values to little-endian device-buffer bytes (4 per value, each in
 // 0..=255). Used by the fused-backend realize path to fill exec-context buffers.
-pub native fn Tensor.f32_to_le_bytes(data: read List<Float>) -> fresh List<Int>
+pub native fn Tensor.f32_to_le_bytes(data: List<Float>) -> fresh List<Int>
     effects(native)
 
 // Inverse: decode little-endian f32 bytes (length a multiple of 4) to floats.
-pub native fn Tensor.f32_from_le_bytes(bytes: read List<Int>) -> Result<fresh List<Float>, TensorError>
+pub native fn Tensor.f32_from_le_bytes(bytes: List<Int>) -> Result<fresh List<Float>, TensorError>
     effects(native)
 
 // 2-D × 2-D matrix multiply, contracting the inner dims: (m, k) × (k, n) -> (m,
 // n). Errors on non-rank-2 operands or an inner-dimension mismatch.
 pub native fn Tensor.matmul(
-    a: read Tensor,
-    b: read Tensor,
+    a: Tensor,
+    b: Tensor,
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
@@ -60,8 +60,8 @@ pub native fn Tensor.metal_device_name() -> fresh String
 // identical to the CPU kernel (GPU reductions reorder), so it matches to f32
 // tolerance. Errors on non-rank-2 operands, an inner-dim mismatch, or no GPU.
 pub native fn Tensor.matmul_metal(
-    a: read Tensor,
-    b: read Tensor,
+    a: Tensor,
+    b: Tensor,
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
@@ -73,9 +73,9 @@ pub native fn Tensor.matmul_metal(
 // escape hatch the Metal renderer lowers kernel ASTs into. Errors on no GPU or an
 // MSL compile/dispatch failure.
 pub native fn Tensor.gpu_run_msl(
-    source: read String,
-    fn_name: read String,
-    inputs: read List<List<Float>>,
+    source: String,
+    fn_name: String,
+    inputs: List<List<Float>>,
     out_len: Int,
     threads: Int,
 ) -> Result<fresh List<Float>, TensorError>
@@ -88,33 +88,33 @@ pub native fn Tensor.gpu_run_msl(
 // Elementwise binary ops over two same-shape tensors. No broadcasting — the
 // shapes must match exactly (broadcasting is deferred to a later slice). Errors
 // on a shape mismatch.
-pub native fn Tensor.add(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.add(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.sub(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.sub(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.mul(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.mul(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.div(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.div(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Elementwise unary ops, same shape out. Infallible (no Result).
-pub native fn Tensor.neg(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.neg(t: Tensor) -> fresh Tensor
     effects(native)
 
-pub native fn Tensor.exp(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.exp(t: Tensor) -> fresh Tensor
     effects(native)
 
-pub native fn Tensor.log(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.log(t: Tensor) -> fresh Tensor
     effects(native)
 
-pub native fn Tensor.sqrt(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.sqrt(t: Tensor) -> fresh Tensor
     effects(native)
 
 // ReLU: max(0, x).
-pub native fn Tensor.relu(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.relu(t: Tensor) -> fresh Tensor
     effects(native)
 
 // Reductions (slice 3). `sum_all` is a global reduction to a scalar `Float`
@@ -123,25 +123,25 @@ pub native fn Tensor.relu(t: read Tensor) -> fresh Tensor
 // axis is out of range.
 
 // Sum of every element.
-pub native fn Tensor.sum_all(t: read Tensor) -> Float
+pub native fn Tensor.sum_all(t: Tensor) -> Float
     effects(native)
 
 // Sum over one axis, removing it.
-pub native fn Tensor.sum_axis(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.sum_axis(t: Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Max over one axis, removing it.
-pub native fn Tensor.max_axis(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.max_axis(t: Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Mean (sum / axis length) over one axis, removing it.
-pub native fn Tensor.mean_axis(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.mean_axis(t: Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Index of the max over one axis, removing it. The result tensor holds the
 // integer indices stored as `f32` (read them back via `to_f32_slice` and round).
 // Ties resolve to the lowest index.
-pub native fn Tensor.argmax_axis(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.argmax_axis(t: Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Movement ops (slice 4). The tensor stays row-major contiguous: reshape is
@@ -151,21 +151,21 @@ pub native fn Tensor.argmax_axis(t: read Tensor, axis: Int) -> Result<fresh Tens
 // Reshape to a new shape WITHOUT copying — shares the buffer. Errors if the new
 // shape's element count differs from the current one.
 pub native fn Tensor.reshape(
-    t: read Tensor,
-    shape: read List<Int>,
+    t: Tensor,
+    shape: List<Int>,
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // 2-D transpose: (r, c) -> (c, r), materializing the transposed buffer. Errors
 // if the tensor is not rank-2.
-pub native fn Tensor.transpose(t: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.transpose(t: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // General axis permutation: `axes` must be a permutation of 0..rank. Errors
 // otherwise. Materializes the permuted buffer.
 pub native fn Tensor.permute(
-    t: read Tensor,
-    axes: read List<Int>,
+    t: Tensor,
+    axes: List<Int>,
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
@@ -173,55 +173,55 @@ pub native fn Tensor.permute(
 // source dim (right-aligned) must be 1 or equal to the target dim. Errors if not
 // broadcastable.
 pub native fn Tensor.broadcast_to(
-    t: read Tensor,
-    shape: read List<Int>,
+    t: Tensor,
+    shape: List<Int>,
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Comparisons (slice: dtype + broadcasting foundation). All broadcast their two
 // operands (NumPy right-aligned) and return a Bool tensor (1.0 / 0.0). Error if the
 // shapes are not broadcast-compatible.
-pub native fn Tensor.cmplt(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.cmplt(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.cmpne(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.cmpne(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.cmpeq(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.cmpeq(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Select (tinygrad's `where`): pick `a` where `cond` is nonzero, else `b`. All
 // three broadcast together. Output dtype = F32 if either a/b is F32 else I32. Error
 // if the three shapes are not mutually broadcast-compatible.
 pub native fn Tensor.select(
-    cond: read Tensor,
-    a: read Tensor,
-    b: read Tensor,
+    cond: Tensor,
+    a: Tensor,
+    b: Tensor,
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Elementwise maximum / minimum with broadcasting. Output dtype = F32 if either
 // operand is F32 else I32. Error if not broadcast-compatible.
-pub native fn Tensor.maximum(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.maximum(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.minimum(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.minimum(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Casts: reinterpret the dtype tag (with numeric coercion). Infallible.
 // cast_f32: values unchanged. cast_i32: each value truncated toward zero.
 // cast_bool: 1.0 where x != 0.0, else 0.0.
-pub native fn Tensor.cast_f32(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.cast_f32(t: Tensor) -> fresh Tensor
     effects(native)
 
-pub native fn Tensor.cast_i32(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.cast_i32(t: Tensor) -> fresh Tensor
     effects(native)
 
-pub native fn Tensor.cast_bool(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.cast_bool(t: Tensor) -> fresh Tensor
     effects(native)
 
 // The tensor's dtype as a numeric code: F32=0, I32=1, Bool=2. Infallible.
-pub native fn Tensor.dtype_code(t: read Tensor) -> Int
+pub native fn Tensor.dtype_code(t: Tensor) -> Int
     effects(native)
 
 // movement+gather (ops B). pad/shrink/flip materialize a fresh contiguous buffer
@@ -232,8 +232,8 @@ pub native fn Tensor.dtype_code(t: read Tensor) -> Int
 // after1, ...] (length == 2*rank). Output dim = before + old + after. Errors if
 // `pads` length != 2*rank or any pad is negative.
 pub native fn Tensor.pad(
-    t: read Tensor,
-    pads: read List<Int>,
+    t: Tensor,
+    pads: List<Int>,
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
@@ -241,16 +241,16 @@ pub native fn Tensor.pad(
 // [start0, end0, start1, end1, ...] (length == 2*rank). Output dim = end - start.
 // Errors if `bounds` length != 2*rank or any axis violates 0 <= start <= end <= dim.
 pub native fn Tensor.shrink(
-    t: read Tensor,
-    bounds: read List<Int>,
+    t: Tensor,
+    bounds: List<Int>,
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Reverse the tensor along each listed axis (shape unchanged). Errors if any axis
 // is out of range or duplicated.
 pub native fn Tensor.flip(
-    t: read Tensor,
-    axes: read List<Int>,
+    t: Tensor,
+    axes: List<Int>,
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
@@ -260,69 +260,69 @@ pub native fn Tensor.flip(
 // tensor along one axis is supported in this slice. Errors if `axis` is out of
 // range, `indices` is not rank-1, or any index is out of bounds.
 pub native fn Tensor.gather(
-    data: read Tensor,
+    data: Tensor,
     axis: Int,
-    indices: read Tensor,
+    indices: Tensor,
 ) -> Result<fresh Tensor, TensorError>
 // reductions+math (ops C)
 // Product / min over one axis, removing it. prod -> F32; min -> input dtype.
 // Error on an out-of-range axis.
-pub native fn Tensor.prod_axis(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.prod_axis(t: Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.min_axis(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.min_axis(t: Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Multi-axis reductions: remove ALL listed axes (must be distinct & in range).
 // sum/prod/mean -> F32; max/min -> input dtype. An empty axes list is identity
 // (returns a copy). Error on a duplicate or out-of-range axis.
-pub native fn Tensor.sum_axes(t: read Tensor, axes: read List<Int>) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.sum_axes(t: Tensor, axes: List<Int>) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.prod_axes(t: read Tensor, axes: read List<Int>) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.prod_axes(t: Tensor, axes: List<Int>) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.max_axes(t: read Tensor, axes: read List<Int>) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.max_axes(t: Tensor, axes: List<Int>) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.min_axes(t: read Tensor, axes: read List<Int>) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.min_axes(t: Tensor, axes: List<Int>) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.mean_axes(t: read Tensor, axes: read List<Int>) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.mean_axes(t: Tensor, axes: List<Int>) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Math unary ops, same shape out, all -> F32. Infallible (no Result).
 // reciprocal: 1/x. exp2: 2^x. log2: log2(x). rsqrt: 1/sqrt(x).
-pub native fn Tensor.reciprocal(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.reciprocal(t: Tensor) -> fresh Tensor
     effects(native)
 
-pub native fn Tensor.exp2(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.exp2(t: Tensor) -> fresh Tensor
     effects(native)
 
-pub native fn Tensor.log2(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.log2(t: Tensor) -> fresh Tensor
     effects(native)
 
-pub native fn Tensor.rsqrt(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.rsqrt(t: Tensor) -> fresh Tensor
     effects(native)
 
 // Elementwise sine (radians). Output dtype F32.
-pub native fn Tensor.sin(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.sin(t: Tensor) -> fresh Tensor
     effects(native)
 
 // Elementwise truncation toward zero (drops the fractional part, keeps the sign);
 // a float-result op that preserves dtype, unlike cast_i32 which retags to I32.
-pub native fn Tensor.trunc(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.trunc(t: Tensor) -> fresh Tensor
     effects(native)
 
 // Elementwise power a^b with broadcasting. Output dtype F32. Error if not
 // broadcast-compatible.
-pub native fn Tensor.pow(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.pow(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
 // bmm+int/bit (ops D)
 // Batched matmul: both operands rank >= 2. The last two dims are the matrix
 // (m,k) x (k,n) -> (m,n); the leading (batch) dims BROADCAST against each other
 // (NumPy semantics). Output dtype F32. Errors on rank < 2, an inner-dim
 // mismatch, or non-broadcastable batch dims.
-pub native fn Tensor.bmm(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.bmm(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Integer / bitwise ops over the INTEGER VALUES of (I32-dtype) tensors. The f32
@@ -333,47 +333,47 @@ pub native fn Tensor.bmm(a: read Tensor, b: read Tensor) -> Result<fresh Tensor,
 // shift counts are masked to 0..63.
 
 // Truncated integer division toward zero (div-by-zero -> 0).
-pub native fn Tensor.idiv(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.idiv(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Integer remainder (sign follows the dividend; mod-by-zero -> 0).
-pub native fn Tensor.modulo(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.modulo(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Floor division (Python //): rounds toward negative infinity, so the quotient
 // sign follows the divisor (distinct from idiv's truncate-toward-zero). Div-by-zero
 // -> 0. Broadcasts; output dtype I32.
-pub native fn Tensor.floordiv(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.floordiv(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Floor modulo (Python %): the remainder sign follows the DIVISOR (distinct from
 // modulo, whose sign follows the dividend). Mod-by-zero -> 0. Broadcasts; dtype I32.
-pub native fn Tensor.floormod(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.floormod(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Left / right shift on i64 values, shift count masked to 0..63.
-pub native fn Tensor.shl(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.shl(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.shr(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.shr(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Bitwise AND / OR / XOR on i64 values.
-pub native fn Tensor.bit_and(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.bit_and(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.bit_or(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.bit_or(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.bit_xor(a: read Tensor, b: read Tensor) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.bit_xor(a: Tensor, b: Tensor) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 // Bit-reinterpretation casts (for completeness/index arithmetic). Same 2^24
 // exactness caveat. Infallible.
-pub native fn Tensor.bitcast_f32_to_i32(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.bitcast_f32_to_i32(t: Tensor) -> fresh Tensor
     effects(native)
 
-pub native fn Tensor.bitcast_i32_to_f32(t: read Tensor) -> fresh Tensor
+pub native fn Tensor.bitcast_i32_to_f32(t: Tensor) -> fresh Tensor
     effects(native)
 
 // rng (slice E)
@@ -383,14 +383,14 @@ pub native fn Tensor.bitcast_i32_to_f32(t: read Tensor) -> fresh Tensor
 // `counter` by the element count between draws. `randn` advances at 2x (two
 // uniforms per element).
 pub native fn Tensor.rand(
-    shape: read List<Int>,
+    shape: List<Int>,
     seed: Int,
     counter: Int,
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 pub native fn Tensor.randint(
-    shape: read List<Int>,
+    shape: List<Int>,
     low: Int,
     high: Int,
     seed: Int,
@@ -399,7 +399,7 @@ pub native fn Tensor.randint(
     effects(native)
 
 pub native fn Tensor.randn(
-    shape: read List<Int>,
+    shape: List<Int>,
     seed: Int,
     counter: Int,
 ) -> Result<fresh Tensor, TensorError>
@@ -414,20 +414,20 @@ pub native fn Tensor.iota(n: Int) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 pub native fn Tensor.one_hot(
-    indices: read Tensor,
+    indices: Tensor,
     num_classes: Int,
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.softmax(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.softmax(t: Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
     effects(native)
 
-pub native fn Tensor.log_softmax(t: read Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
+pub native fn Tensor.log_softmax(t: Tensor, axis: Int) -> Result<fresh Tensor, TensorError>
     effects(native)
 
 pub native fn Tensor.cross_entropy(
-    logits: read Tensor,
-    targets: read Tensor,
+    logits: Tensor,
+    targets: Tensor,
     axis: Int,
 ) -> Result<fresh Tensor, TensorError>
     effects(native)
@@ -441,8 +441,8 @@ pub native fn Tensor.cross_entropy(
 // rectangular strides/kernels are future work. Errors on rank mismatch, Cin
 // mismatch, or non-positive output dims.
 pub native fn Tensor.conv2d(
-    input: read Tensor,
-    weight: read Tensor,
+    input: Tensor,
+    weight: Tensor,
     stride: Int,
     padding: Int,
 ) -> Result<fresh Tensor, TensorError>
@@ -452,7 +452,7 @@ pub native fn Tensor.conv2d(
 // Output [N, C, (H-kernel)/stride+1, (W-kernel)/stride+1], dtype F32. Errors on
 // non-positive output dims. Rectangular kernels/strides are future work.
 pub native fn Tensor.max_pool2d(
-    input: read Tensor,
+    input: Tensor,
     kernel: Int,
     stride: Int,
 ) -> Result<fresh Tensor, TensorError>
@@ -461,7 +461,7 @@ pub native fn Tensor.max_pool2d(
 // Square average pooling: same as max_pool2d but averages over each window
 // (divides by kernel*kernel). Output dtype F32.
 pub native fn Tensor.avg_pool2d(
-    input: read Tensor,
+    input: Tensor,
     kernel: Int,
     stride: Int,
 ) -> Result<fresh Tensor, TensorError>
@@ -475,11 +475,11 @@ pub native fn Tensor.avg_pool2d(
 // rank-1, its length != updates.shape[axis], axis out of range, dim_size <= 0, or
 // any index is outside [0, dim_size).
 pub native fn Tensor.scatter_add(
-    updates: read Tensor,
+    updates: Tensor,
     axis: Int,
-    indices: read Tensor,
+    indices: Tensor,
     dim_size: Int,
 ) -> Result<fresh Tensor, TensorError>
 
-pub fn TensorError.message(error: read TensorError) -> fresh String
+pub fn TensorError.message(error: TensorError) -> fresh String
     effects(pure)

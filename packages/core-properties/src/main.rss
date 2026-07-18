@@ -8,6 +8,6 @@ fn main() -> Unit {
     QuickCheckViews.run()
     QuickCheckState.run()
 
-    Log.write(message: read "quickcheck properties ok")
+    Log.write(message: "quickcheck properties ok")
     return Unit
 }

@@ -11,9 +11,9 @@ struct DecodeResult {
     metadata: Metadata
 }
 
-fn decode(path: read Path) -> fresh DecodeResult
+fn decode(path: Path) -> fresh DecodeResult
 
-fn load_image(path: read Path) -> fresh Image {
-    local decoded = decode(path: read path)
+fn load_image(path: Path) -> fresh Image {
+    local decoded = decode(path)
     return decoded.image
 }

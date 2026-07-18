@@ -2,7 +2,7 @@ fn build_range(count: Int) -> fresh List<Int> {
     let mut xs = List<Int>.new()
     let mut i = 0
     while i < count {
-        List.push(list: mut xs, value: read i)
+        List.push(list: mut xs, value: i)
         i = i + 1
     }
     return xs

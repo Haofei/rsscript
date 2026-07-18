@@ -11,7 +11,7 @@ impl Analyzer<'_> {
         type_name == "ResourcePool"
     }
 
-    pub(super) fn check_resource_fields(&mut self) {
+    pub(crate) fn check_resource_fields(&mut self) {
         for item in &self.syntax_program.items {
             let Item::Type(decl) = item else {
                 continue;
@@ -36,7 +36,7 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_fd_surface(&mut self) {
+    pub(crate) fn check_fd_surface(&mut self) {
         let items = self.syntax_program.items.clone();
         for item in &items {
             match item {
@@ -86,7 +86,7 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_weak_fields(&mut self) {
+    pub(crate) fn check_weak_fields(&mut self) {
         for item in &self.syntax_program.items {
             let Item::Type(decl) = item else {
                 continue;
@@ -120,7 +120,7 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_resource_pool_type_arguments(&mut self) {
+    pub(crate) fn check_resource_pool_type_arguments(&mut self) {
         let items = self.syntax_program.items.clone();
         for item in &items {
             match item {
@@ -147,7 +147,7 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_resource_generic_arguments(&mut self) {
+    pub(crate) fn check_resource_generic_arguments(&mut self) {
         let items = self.syntax_program.items.clone();
         for item in &items {
             match item {

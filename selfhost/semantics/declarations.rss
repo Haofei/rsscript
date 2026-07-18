@@ -1,0 +1,526 @@
+features: local
+// Declaration-level diagnostics over the shared Program. These rules do not
+// inspect token ranges or function bodies, so keeping them here prevents the
+// checker driver from becoming a second declaration parser.
+
+module selfhost.semantics.declarations
+
+use selfhost.semantics.diagnostics.*
+use selfhost.syntax.ast.*
+
+// Shared entry point for the declaration phase. The driver owns ordering across
+// semantic domains; this module owns the declaration rules within that phase.
+fn collect_program_declaration_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    collect_program_signature_diagnostics(program, diagnostics: mut diagnostics)
+    collect_program_self_parameter_diagnostics(program, diagnostics: mut diagnostics)
+    collect_program_protocol_bound_diagnostics(program, diagnostics: mut diagnostics)
+    collect_program_protocol_contract_diagnostics(program, diagnostics: mut diagnostics)
+    collect_program_fresh_return_diagnostics(program, diagnostics: mut diagnostics)
+    collect_program_resource_generic_diagnostics(program, diagnostics: mut diagnostics)
+    collect_program_effect_diagnostics(program, diagnostics: mut diagnostics)
+    collect_program_retains_diagnostics(program, diagnostics: mut diagnostics)
+    collect_program_removed_effect_diagnostics(program, diagnostics: mut diagnostics)
+    collect_program_removed_share_diagnostics(program, diagnostics: mut diagnostics)
+    collect_program_lower_name_diagnostics(program, diagnostics: mut diagnostics)
+    collect_program_duplicate_declaration_diagnostics(program, diagnostics: mut diagnostics)
+    return Unit
+}
+
+// Protocol methods and implementation mappings now share the parser's function
+// and mapping records. This mirrors the Rust declaration pass without reopening
+// protocol or impl bodies in the checker driver.
+fn collect_program_protocol_contract_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            if String.len(value: item.protocol) > 0 {
+                collect_protocol_method_contract(item: item, diagnostics: mut diagnostics)
+            } else if item.hasDefaultImplMarker {
+                DiagnosticBag.add(self: mut diagnostics, code: "RS0015", line: item.line, column: item.column, length: item.length)
+            }
+        } else if item.kind == ITEM_IMPL {
+            collect_protocol_impl_contract(program: program, implementation: item, diagnostics: mut diagnostics)
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+fn collect_protocol_method_contract(item: Item, diagnostics: mut DiagnosticBag) -> Unit {
+    if item.hasBody {
+        DiagnosticBag.add(self: mut diagnostics, code: "RS0015", line: item.line, column: item.column, length: item.length)
+    }
+    if List.len(list: item.params) == 0 {
+        DiagnosticBag.add(self: mut diagnostics, code: "RS0028", line: item.line, column: item.column, length: item.length)
+        return Unit
+    }
+    let receiver = List.get<Param>(list: item.params, index: 0)
+    if receiver.name != "self" || receiver.typeText != "Self" || String.len(value: receiver.effect) == 0 {
+        DiagnosticBag.add(self: mut diagnostics, code: "RS0028", line: receiver.line, column: receiver.column, length: receiver.length)
+    }
+    return Unit
+}
+
+fn collect_protocol_impl_contract(program: Program, implementation: Item, diagnostics: mut DiagnosticBag) -> Unit {
+    if declaration_program_has_protocol(program: program, name: implementation.protocol) == false {
+        DiagnosticBag.add(self: mut diagnostics, code: "RS0027", line: implementation.line, column: implementation.column, length: implementation.length)
+        return Unit
+    }
+    let mut methodIndex = 0
+    while methodIndex < Program.len(self: program) {
+        let method = List.get<Item>(list: program.items, index: methodIndex)
+        if method.kind == ITEM_FUNCTION && method.protocol == implementation.protocol {
+            let methodName = declaration_method_leaf(name: method.name)
+            if declaration_impl_has_mapping(implementation: implementation, method: methodName) == false {
+                DiagnosticBag.add(self: mut diagnostics, code: "RS1301", line: implementation.line, column: implementation.column, length: implementation.length)
+            }
+        }
+        methodIndex = methodIndex + 1
+    }
+    let mut mappingIndex = 0
+    while mappingIndex < List.len(list: implementation.mappings) {
+        let mapping = List.get<ProtocolMapping>(list: implementation.mappings, index: mappingIndex)
+        let expectedIndex = declaration_protocol_method_index(program: program, protocol: implementation.protocol, method: mapping.method)
+        let targetIndex = declaration_function_index(program: program, name: mapping.target)
+        if expectedIndex < 0 || targetIndex < 0 {
+            DiagnosticBag.add(self: mut diagnostics, code: "RS1301", line: mapping.line, column: mapping.column, length: mapping.length)
+        } else {
+            let expected = List.get<Item>(list: program.items, index: expectedIndex)
+            let target = List.get<Item>(list: program.items, index: targetIndex)
+            if declaration_protocol_signature_matches(expected: expected, target: target, implementationType: implementation.implType) == false {
+                DiagnosticBag.add(self: mut diagnostics, code: "RS1301", line: mapping.line, column: mapping.column, length: mapping.length)
+            }
+        }
+        mappingIndex = mappingIndex + 1
+    }
+    return Unit
+}
+
+fn declaration_program_has_protocol(program: Program, name: String) -> Bool {
+    let mut i = 0
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
+        if item.kind == ITEM_PROTOCOL && item.name == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn declaration_impl_has_mapping(implementation: Item, method: String) -> Bool {
+    let mut i = 0
+    while i < List.len(list: implementation.mappings) {
+        let mapping = List.get<ProtocolMapping>(list: implementation.mappings, index: i)
+        if mapping.method == method { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn declaration_protocol_method_index(program: Program, protocol: String, method: String) -> Int {
+    let mut i = 0
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
+        if item.kind == ITEM_FUNCTION && item.protocol == protocol && declaration_method_leaf(name: item.name) == method { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn declaration_function_index(program: Program, name: String) -> Int {
+    let mut i = 0
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
+        if item.kind == ITEM_FUNCTION && item.name == name { return i }
+        i = i + 1
+    }
+    return 0 - 1
+}
+
+fn declaration_method_leaf(name: String) -> String {
+    let parts = String.split(value: name, delimiter: ".")
+    return List.get<String>(list: parts, index: (List.len(list: parts) - 1))
+}
+
+fn declaration_protocol_signature_matches(expected: Item, target: Item, implementationType: String) -> Bool {
+    if expected.returnType != target.returnType || List.len(list: expected.params) != List.len(list: target.params) { return false }
+    let mut i = 0
+    while i < List.len(list: expected.params) {
+        let expectedParam = List.get<Param>(list: expected.params, index: i)
+        let targetParam = List.get<Param>(list: target.params, index: i)
+        let mut expectedType = String.copy(value: expectedParam.typeText)
+        if expectedParam.typeText == "Self" {
+            expectedType = String.copy(value: implementationType)
+        }
+        if expectedParam.effect != targetParam.effect || expectedType != targetParam.typeText { return false }
+        i = i + 1
+    }
+    return true
+}
+
+// RS0704 has two declaration-local cases. Nested resource values remain in
+// the type-reference pass; a resource's own generic contract and direct
+// Resource-bound fields are fully represented by Item.generics and Item.fields.
+fn collect_program_resource_generic_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_TYPE && item.dataKind == "resource" {
+            let mut resourceParams = Set<String>.new()
+            let mut genericIndex = 0
+            while genericIndex < List.len(list: item.generics) {
+                let generic = List.get<GenericParam>(list: item.generics, index: genericIndex)
+                if String.len(value: generic.boundText) == 0 {
+                    DiagnosticBag.add(self: mut diagnostics, code: "RS0704", line: generic.line, column: generic.column, length: generic.length)
+                } else if generic.boundText == "Resource" {
+                    Set.insert<String>(set: mut resourceParams, value: generic.name)
+                }
+                genericIndex = genericIndex + 1
+            }
+            let mut fieldIndex = 0
+            while fieldIndex < List.len(list: item.fields) {
+                let field = List.get<Field>(list: item.fields, index: fieldIndex)
+                if Set.contains<String>(set: resourceParams, value: field.typeSyntax.base) && field.typeSyntax.base != "ResourcePool" {
+                    DiagnosticBag.add(self: mut diagnostics, code: "RS0704", line: field.typeLine, column: field.typeColumn, length: field.typeLength)
+                }
+                fieldIndex = fieldIndex + 1
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+// RS0603: a fresh return must name a struct. The parser records every fresh
+// target so nested Result/Option returns use the target span, not the whole
+// function header.
+fn collect_program_fresh_return_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut classes = Set<String>.new()
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_TYPE && item.dataKind == "class" {
+            Set.insert<String>(set: mut classes, value: item.name)
+        }
+        itemIndex = itemIndex + 1
+    }
+    itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            let mut targetIndex = 0
+            while targetIndex < List.len(list: item.freshReturnTargets) {
+                let target = List.get<FreshReturnTarget>(list: item.freshReturnTargets, index: targetIndex)
+                if declaration_fresh_target_is_invalid(item: item, target: target, classes: classes) {
+                    DiagnosticBag.add(self: mut diagnostics, code: "RS0603", line: target.line, column: target.column, length: target.length)
+                }
+                targetIndex = targetIndex + 1
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+fn declaration_fresh_target_is_invalid(item: Item, target: FreshReturnTarget, classes: Set<String>) -> Bool {
+    if target.name == "Int" || target.name == "Float" || target.name == "Bool" || target.name == "Char" || target.name == "Unit" {
+        return true
+    }
+    if Set.contains<String>(set: classes, value: target.name) { return true }
+    let mut genericIndex = 0
+    while genericIndex < List.len(list: item.generics) {
+        let generic = List.get<GenericParam>(list: item.generics, index: genericIndex)
+        if generic.name == target.name { return true }
+        genericIndex = genericIndex + 1
+    }
+    return false
+}
+
+// RS0028 is a declaration rule: the parser has already separated each
+// parameter and preserved the qualified function name, so no header rescan is
+// required.
+fn collect_program_self_parameter_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            let qualified = declaration_is_qualified_name(name: item.name)
+            let mut paramIndex = 0
+            while paramIndex < List.len(list: item.params) {
+                let param = List.get<Param>(list: item.params, index: paramIndex)
+                if param.name == "self" && (!qualified || paramIndex != 0) {
+                    DiagnosticBag.add(self: mut diagnostics, code: "RS0028", line: param.line, column: param.column, length: param.length)
+                }
+                paramIndex = paramIndex + 1
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+fn declaration_is_qualified_name(name: String) -> Bool {
+    match String.index_of(value: name, needle: ".") {
+        Some(_) => { return true }
+        None => { return false }
+    }
+}
+
+// RS0027 checks only explicit protocol bounds. Managed, Struct, and Resource
+// are language bounds; Clone/Eq/Hashable/Ord come from the standard interface.
+fn collect_program_protocol_bound_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut visible = Set<String>.new()
+    Set.insert<String>(set: mut visible, value: "Clone")
+    Set.insert<String>(set: mut visible, value: "Eq")
+    Set.insert<String>(set: mut visible, value: "Hashable")
+    Set.insert<String>(set: mut visible, value: "Ord")
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_PROTOCOL { Set.insert<String>(set: mut visible, value: item.name) }
+        itemIndex = itemIndex + 1
+    }
+    itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        let mut genericIndex = 0
+        while genericIndex < List.len(list: item.generics) {
+            let generic = List.get<GenericParam>(list: item.generics, index: genericIndex)
+            if String.len(value: generic.boundText) > 0 && generic.boundText != "Managed" && generic.boundText != "Struct" && generic.boundText != "Resource" && Set.contains<String>(set: visible, value: generic.boundText) == false {
+                DiagnosticBag.add(self: mut diagnostics, code: "RS0027", line: generic.line, column: generic.column, length: generic.length)
+            }
+            genericIndex = genericIndex + 1
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+// RS0035: lowered backend names form one declaration namespace. The parser
+// preserves the optional pin so this rule no longer reopens function headers.
+fn collect_program_lower_name_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut seen = Set<String>.new()
+    let mut pinned = Set<String>.new()
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            let lowered = if item.hasLowerName { item.lowerName } else { declaration_default_lower_name(name: item.name) }
+            let invalid = item.hasLowerName && declaration_valid_rust_identifier(name: lowered) == false
+            let collides = Set.contains<String>(set: seen, value: lowered) && (item.hasLowerName || Set.contains<String>(set: pinned, value: lowered))
+            if invalid || collides {
+                DiagnosticBag.add(self: mut diagnostics, code: "RS0035", line: item.line, column: item.column, length: item.length)
+            }
+            if !invalid {
+                Set.insert<String>(set: mut seen, value: lowered)
+                if item.hasLowerName { Set.insert<String>(set: mut pinned, value: lowered) }
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+fn declaration_valid_rust_identifier(name: String) -> Bool {
+    let chars = String.chars(value: name)
+    if List.len(list: chars) == 0 { return false }
+    let first = Char.to_code(value: List.get(list: chars, index: 0))
+    if !((first >= 65 && first <= 90) || (first >= 97 && first <= 122) || first == 95) { return false }
+    let mut i = 1
+    while i < List.len(list: chars) {
+        let code = Char.to_code(value: List.get(list: chars, index: i))
+        if !((code >= 65 && code <= 90) || (code >= 97 && code <= 122) || (code >= 48 && code <= 57) || code == 95) { return false }
+        i = i + 1
+    }
+    return declaration_rust_keyword(name) == false
+}
+
+fn declaration_rust_keyword(name: String) -> Bool {
+    return name == "abstract" || name == "as" || name == "async" || name == "await" || name == "become" || name == "box" || name == "break" || name == "const" || name == "continue" || name == "crate" || name == "do" || name == "dyn" || name == "else" || name == "enum" || name == "extern" || name == "false" || name == "final" || name == "fn" || name == "for" || name == "gen" || name == "if" || name == "impl" || name == "in" || name == "let" || name == "loop" || name == "macro" || name == "match" || name == "mod" || name == "move" || name == "mut" || name == "override" || name == "priv" || name == "pub" || name == "ref" || name == "return" || name == "self" || name == "Self" || name == "static" || name == "struct" || name == "super" || name == "trait" || name == "true" || name == "try" || name == "type" || name == "typeof" || name == "unsafe" || name == "unsized" || name == "use" || name == "virtual" || name == "where" || name == "while" || name == "yield"
+}
+
+fn declaration_default_lower_name(name: String) -> String {
+    let chars = String.chars(value: name)
+    let mut result = ""
+    let mut i = 0
+    while i < List.len(list: chars) {
+        let ch = List.get(list: chars, index: i)
+        if Char.to_code(value: ch) == 46 { result = String.concat(left: result, right: "_") }
+        else { result = String.concat(left: result, right: Char.to_string(value: ch)) }
+        i = i + 1
+    }
+    if declaration_rust_keyword(name: result) { return String.concat(left: "r#", right: result) }
+    return result
+}
+
+// RS0002 and RS0003 attach directly to the materialized function and parameter.
+fn collect_program_signature_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            if String.len(value: item.returnType) == 0 {
+                DiagnosticBag.add(self: mut diagnostics, code: "RS0002", line: item.line, column: item.column, length: item.length)
+            }
+            let mut paramIndex = 0
+            while paramIndex < List.len(list: item.params) {
+                let param = List.get<Param>(list: item.params, index: paramIndex)
+                if String.len(value: param.typeText) == 0 {
+                    DiagnosticBag.add(self: mut diagnostics, code: "RS0003", line: param.line, column: param.column, length: param.length)
+                }
+                paramIndex = paramIndex + 1
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+// RS0004: the parser materializes only valid bare effect names here. `retains`
+// is represented separately and checked by the declaration contract below.
+fn collect_program_effect_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            let mut effectIndex = 0
+            while effectIndex < List.len(list: item.effects) {
+                let effect = List.get<EffectName>(list: item.effects, index: effectIndex)
+                let invalid = effect.isRetains == false && (effect.name == "fresh" || (is_removed_declaration_effect(name: effect.name) == false && is_valid_declaration_effect(name: effect.name) == false))
+                if invalid {
+                    DiagnosticBag.add(self: mut diagnostics, code: "RS0004", line: item.line, column: item.column, length: item.length)
+                }
+                effectIndex = effectIndex + 1
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+// RS0007: `retains(p)` must name a declared, non-Copy parameter.
+fn collect_program_retains_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            let mut effectIndex = 0
+            while effectIndex < List.len(list: item.effects) {
+                let effect = List.get<EffectName>(list: item.effects, index: effectIndex)
+                if effect.isRetains {
+                    let mut paramIndex = 0
+                    let mut matched = false
+                    while paramIndex < List.len(list: item.params) && !matched {
+                        let param = List.get<Param>(list: item.params, index: paramIndex)
+                        if param.name == effect.target {
+                            matched = true
+                            if param.isCopy {
+                                DiagnosticBag.add(self: mut diagnostics, code: "RS0007", line: param.line, column: param.column, length: param.length)
+                            }
+                        }
+                        paramIndex = paramIndex + 1
+                    }
+                    if !matched {
+                        DiagnosticBag.add(self: mut diagnostics, code: "RS0007", line: item.line, column: item.column, length: item.length)
+                    }
+                }
+                effectIndex = effectIndex + 1
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+// RS0012: removed runtime effects are declaration contracts, not body checks.
+fn collect_program_removed_effect_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            let mut effectIndex = 0
+            while effectIndex < List.len(list: item.effects) {
+                let effect = List.get<EffectName>(list: item.effects, index: effectIndex)
+                if effect.isRetains == false && is_removed_declaration_effect(name: effect.name) {
+                    DiagnosticBag.add(self: mut diagnostics, code: "RS0012", line: item.line, column: item.column, length: item.length)
+                }
+                effectIndex = effectIndex + 1
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+// RS0011: `share` is no longer a data effect.
+fn collect_program_removed_share_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            let mut paramIndex = 0
+            while paramIndex < List.len(list: item.params) {
+                let param = List.get<Param>(list: item.params, index: paramIndex)
+                if String.starts_with(value: param.typeText, prefix: "share") && param.typeLine > 0 {
+                    DiagnosticBag.add(self: mut diagnostics, code: "RS0011", line: param.typeLine, column: param.typeColumn, length: param.typeLength)
+                }
+                paramIndex = paramIndex + 1
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+fn is_valid_declaration_effect(name: String) -> Bool {
+    return name == "no_panic" || name == "noalloc" || name == "no_block" || name == "pure" || name == "unsafe" || name == "native" || name == "parallel"
+}
+
+fn is_removed_declaration_effect(name: String) -> Bool {
+    return name == "io" || name == "allocates" || name == "may_panic" || name == "may_fail" || name == "async" || name == "suspends"
+}
+
+// RS0005 uses the callable, type, and per-type-field namespaces preserved by
+// Program. Sum variants intentionally do not participate in field duplicates.
+fn collect_program_duplicate_declaration_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut callable = Set<String>.new()
+    let mut types = Set<String>.new()
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_TYPE {
+            if Set.contains<String>(set: types, value: item.name) {
+                DiagnosticBag.add(self: mut diagnostics, code: "RS0005", line: item.line, column: item.column, length: item.length)
+            }
+            if Set.contains<String>(set: callable, value: item.name) {
+                DiagnosticBag.add(self: mut diagnostics, code: "RS0005", line: item.line, column: item.column, length: item.length)
+            }
+            Set.insert<String>(set: mut types, value: item.name)
+            Set.insert<String>(set: mut callable, value: item.name)
+            let mut fields = Set<String>.new()
+            let mut fieldIndex = 0
+            while fieldIndex < List.len(list: item.fields) {
+                let field = List.get<Field>(list: item.fields, index: fieldIndex)
+                if String.len(value: field.name) > 0 {
+                    if Set.contains<String>(set: fields, value: field.name) {
+                        DiagnosticBag.add(self: mut diagnostics, code: "RS0005", line: field.line, column: field.column, length: field.length)
+                    }
+                    Set.insert<String>(set: mut fields, value: field.name)
+                }
+                fieldIndex = fieldIndex + 1
+            }
+        } else if item.kind == ITEM_SUM {
+            if Set.contains<String>(set: types, value: item.name) {
+                DiagnosticBag.add(self: mut diagnostics, code: "RS0005", line: item.line, column: item.column, length: item.length)
+            }
+            Set.insert<String>(set: mut types, value: item.name)
+        } else if item.kind == ITEM_FUNCTION {
+            if Set.contains<String>(set: callable, value: item.name) {
+                DiagnosticBag.add(self: mut diagnostics, code: "RS0005", line: item.line, column: item.column, length: item.length)
+            }
+            Set.insert<String>(set: mut callable, value: item.name)
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}

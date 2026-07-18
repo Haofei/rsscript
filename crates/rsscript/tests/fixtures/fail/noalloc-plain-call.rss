@@ -7,5 +7,5 @@ fn may_allocate(value: Int) -> Int {
 fn promised_noalloc(value: Int) -> Int
     effects(noalloc)
 {
-    return may_allocate(value: value)
+    return may_allocate(value)
 }

@@ -4,18 +4,18 @@ class MyCache {
     entries: Map<String, String>
 }
 
-fn MyCache.put(self: mut MyCache, key: read String, value: read String) -> Unit
+fn MyCache.put(self: mut MyCache, key: String, value: String) -> Unit
     effects(retains(key), retains(value))
 {
-    Map.insert(map: mut self.entries, key: read key, value: read value)
+    Map.insert(map: mut self.entries, key, value)
 }
 
-fn MyCache.get(self: read MyCache, key: read String) -> Option<String> {
-    return Map.get(map: read self.entries, key: read key)
+fn MyCache.get(self: MyCache, key: String) -> Option<String> {
+    return Map.get(map: self.entries, key)
 }
 
-fn use_cache(cache: mut MyCache, key: read String, value: read String) -> Unit
+fn use_cache(cache: mut MyCache, key: String, value: String) -> Unit
     effects(retains(key), retains(value))
 {
-    mut cache.put(key: read key, value: read value)
+    mut cache.put(key: key, value: value)
 }

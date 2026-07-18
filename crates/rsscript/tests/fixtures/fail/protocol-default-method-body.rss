@@ -1,8 +1,8 @@
 // expect: RS0015
 protocol Writer {
-    fn write(self: mut Self, message: read String) -> Unit
+    fn write(self: mut Self, message: String) -> Unit
         effects(retains(message))
     {
-        Log.write(message: read message)
+        Log.write(message)
     }
 }

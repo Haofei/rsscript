@@ -1,5 +1,5 @@
-async fn run(body: read String) -> Int {
-    async let a = Upload.put(path: read "/x", body: read body)
-    async let b = Upload.put(path: read "/y", body: read body)
+async fn run(body: String) -> Int {
+    async let a = Upload.put(path: "/x", body: body)
+    async let b = Upload.put(path: "/y", body: body)
     return 0
 }

@@ -1,6 +1,6 @@
 // expect: RS0015
 
-fn bad_if(value: read Bool) -> Unit {
+fn bad_if(value: Bool) -> Unit {
     if value {
         return Unit
     } else return Unit

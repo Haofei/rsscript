@@ -6,8 +6,8 @@ features: local
 // helper coverage: native/OSR should keep the slice/len chain out of dispatch.
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -24,12 +24,12 @@ fn main() -> Unit {
 
     while index < limit {
         let suffix = String.from_int(value: index)
-        let key = String.concat(left: read "item-", right: read suffix)
-        let head = String.slice(value: read key, start: 0, len: 4)
-        total = total + String.len(value: read key) + String.len(value: read head)
+        let key = String.concat(left: "item-", right: suffix)
+        let head = String.slice(value: key, start: 0, len: 4)
+        total = total + String.len(value: key) + String.len(value: head)
         index = index + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Log.write(message: String.from_int(value: total))
     return Unit
 }

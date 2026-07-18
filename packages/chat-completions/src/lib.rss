@@ -4,23 +4,23 @@ pub struct ChatMessage {
     value: JsonValue
 }
 
-pub fn ChatMessage.system(content: read String) -> fresh ChatMessage {
-    local value = Json.value(value: read {"role": "system", "content": content})
+pub fn ChatMessage.system(content: String) -> fresh ChatMessage {
+    local value = Json.value(value: {"role": "system", "content": content})
     return ChatMessage(value: take value)
 }
 
-pub fn ChatMessage.user(content: read String) -> fresh ChatMessage {
-    local value = Json.value(value: read {"role": "user", "content": content})
+pub fn ChatMessage.user(content: String) -> fresh ChatMessage {
+    local value = Json.value(value: {"role": "user", "content": content})
     return ChatMessage(value: take value)
 }
 
-pub fn ChatMessage.assistant(content: read String) -> fresh ChatMessage {
-    local value = Json.value(value: read {"role": "assistant", "content": content})
+pub fn ChatMessage.assistant(content: String) -> fresh ChatMessage {
+    local value = Json.value(value: {"role": "assistant", "content": content})
     return ChatMessage(value: take value)
 }
 
-pub fn ChatMessage.tool(request: read ToolRequest, output: read ToolOutput) -> fresh ChatMessage {
-    local value = Json.value(value: read {
+pub fn ChatMessage.tool(request: ToolRequest, output: ToolOutput) -> fresh ChatMessage {
+    local value = Json.value(value: {
         "role": "tool",
         "tool_call_id": request.id,
         "content": output.content,
@@ -30,11 +30,11 @@ pub fn ChatMessage.tool(request: read ToolRequest, output: read ToolOutput) -> f
     )
 }
 
-pub fn ChatMessage.value(message: read ChatMessage) -> fresh JsonValue {
+pub fn ChatMessage.value(message: ChatMessage) -> fresh JsonValue {
     return message.value.clone()
 }
 
-fn chat_message_values(messages: read List<ChatMessage>) -> fresh JsonValue {
+fn chat_message_values(messages: List<ChatMessage>) -> fresh JsonValue {
     let mut values = List<JsonValue>.new()
     for message in messages {
         mut values.push(message.value)
@@ -43,14 +43,14 @@ fn chat_message_values(messages: read List<ChatMessage>) -> fresh JsonValue {
 }
 
 pub fn ChatRequest.openai_compatible(
-    model: read String,
-    messages: read List<ChatMessage>,
-    tools: read JsonValue,
+    model: String,
+    messages: List<ChatMessage>,
+    tools: JsonValue,
 ) -> fresh JsonValue {
     return {"model": model, "messages": chat_message_values(messages), "tools": tools, "stream": false}
 }
 
-pub fn ChatResponse.content(response: read String) -> fresh String {
+pub fn ChatResponse.content(response: String) -> fresh String {
     match response.json_parse() {
         Ok(root) => {
             match root.at_optional_string("choices[0].message.content") {
@@ -75,31 +75,31 @@ pub fn ChatResponse.content(response: read String) -> fresh String {
     }
 }
 
-pub fn ChatResponse.usage(response: read String) -> fresh TokenUsage {
-    return TokenUsage.from_response_text(text: read response)
+pub fn ChatResponse.usage(response: String) -> fresh TokenUsage {
+    return TokenUsage.from_response_text(text: response)
 }
 
-fn assistant_fallback_message(content: read String) -> fresh JsonValue {
+fn assistant_fallback_message(content: String) -> fresh JsonValue {
     return {"role": "assistant", "content": content}
 }
 
-pub fn ChatResponse.assistant_message(response: read String) -> fresh ChatMessage {
+pub fn ChatResponse.assistant_message(response: String) -> fresh ChatMessage {
     match response.json_parse() {
         Ok(root) => {
             return ChatMessage(value: root.at_or("choices[0].message", assistant_fallback_message(response)))
         }
         Err => {
-            return ChatMessage.assistant(content: read response)
+            return ChatMessage.assistant(content: response)
         }
     }
 }
 
-fn tool_call_at(message: read JsonValue, index: Int) -> Result<fresh JsonValue, JsonError> {
+fn tool_call_at(message: JsonValue, index: Int) -> Result<fresh JsonValue, JsonError> {
     let calls = message.field("tool_calls")?
     return calls.array_get(index)
 }
 
-fn tool_call_count(message: read JsonValue) -> Int {
+fn tool_call_count(message: JsonValue) -> Int {
     match message.field("tool_calls") {
         Ok(calls) => {
             return calls.array_len().unwrap_or(0)
@@ -110,14 +110,14 @@ fn tool_call_count(message: read JsonValue) -> Int {
     }
 }
 
-fn tool_request_from_call(call: read JsonValue) -> Result<fresh ToolRequest, JsonError> {
+fn tool_request_from_call(call: JsonValue) -> Result<fresh ToolRequest, JsonError> {
     let id = call.field_string("id")?
     let name = call.at_string("function.name")?
     let arguments = call.at_string("function.arguments")?
-    return Ok(ToolRequest.new(id: read id, name: read name, arguments: read arguments))
+    return Ok(ToolRequest.new(id: id, name: name, arguments: arguments))
 }
 
-fn tool_request_at(message: read JsonValue, index: Int) -> Option<ToolRequest> {
+fn tool_request_at(message: JsonValue, index: Int) -> Option<ToolRequest> {
     match tool_call_at(message, index) {
         Ok(call) => {
             return tool_request_from_call(call).ok()
@@ -128,7 +128,7 @@ fn tool_request_at(message: read JsonValue, index: Int) -> Option<ToolRequest> {
     }
 }
 
-pub fn ChatResponse.tool_requests(message: read ChatMessage) -> List<ToolRequest> {
+pub fn ChatResponse.tool_requests(message: ChatMessage) -> List<ToolRequest> {
     let mut requests = List<ToolRequest>.new()
     let limit = tool_call_count(message.value)
     let mut index = 0

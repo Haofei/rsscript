@@ -21,10 +21,10 @@ fn mailbox_send(m: mut MailboxInt, value: Int) -> Bool {
         return false
     }
     let tail = (m.head + m.count) % m.capacity
-    if tail < List.len<Int>(list: read m.values) {
-        List.set<Int>(list: mut m.values, index: tail, value: read value)
+    if tail < List.len<Int>(list: m.values) {
+        List.set<Int>(list: mut m.values, index: tail, value)
     } else {
-        List.push<Int>(list: mut m.values, value: read value)
+        List.push<Int>(list: mut m.values, value)
     }
     m.count = m.count + 1
     return true
@@ -34,15 +34,15 @@ fn mailbox_take(m: mut MailboxInt) -> Option<Int> {
     if m.count <= 0 {
         return None
     }
-    let value = List.get<Int>(list: read m.values, index: m.head)
+    let value = List.get<Int>(list: m.values, index: m.head)
     m.head = (m.head + 1) % m.capacity
     m.count = m.count - 1
     return Some(value)
 }
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -54,8 +54,8 @@ fn bench_size(default: Int) -> Int {
 
 fn main() -> Unit {
     let limit = bench_size(default: 60000)
-    let total = hot(limit: limit)
-    Log.write(message: read String.from_int(value: total))
+    let total = hot(limit)
+    Log.write(message: String.from_int(value: total))
     return Unit
 }
 

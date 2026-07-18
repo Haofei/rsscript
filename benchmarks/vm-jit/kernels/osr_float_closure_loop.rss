@@ -16,8 +16,8 @@
 // precondition for the OSR × J2 inline.
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -27,8 +27,8 @@ fn bench_size(default: Int) -> Int {
     }
 }
 
-fn apply_loop(g: read Fn(Float) -> Float, limit: Int, seed: Float) -> Float {
-    Log.write(message: read "osr-begin")
+fn apply_loop(g: Fn(Float) -> Float, limit: Int, seed: Float) -> Float {
+    Log.write(message: "osr-begin")
     let mut i = 0
     let mut total = seed
     let mut x = 0.0
@@ -37,7 +37,7 @@ fn apply_loop(g: read Fn(Float) -> Float, limit: Int, seed: Float) -> Float {
         x = x + 1.0
         i = i + 1
     }
-    Log.write(message: read String.from_float(value: total))
+    Log.write(message: String.from_float(value: total))
     return total
 }
 
@@ -47,8 +47,8 @@ fn main() -> Unit {
     let g = fn(value) captures(read scale) effects(pure) {
         return value * scale + scale
     }
-    let result = apply_loop(g: read g, limit: limit, seed: 0.0)
-    Log.write(message: read String.from_float(value: result))
+    let result = apply_loop(g, limit, seed: 0.0)
+    Log.write(message: String.from_float(value: result))
     return Unit
 }
 features: local

@@ -1,5 +1,5 @@
 // expect: RS0002 RS0003
 
 fn missing_signature(path) {
-    Request.path(request: read path)
+    Request.path(request: path)
 }

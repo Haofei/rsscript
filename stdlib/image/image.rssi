@@ -1,6 +1,6 @@
 struct Image
 
-pub fn Image.load(path: read Path) -> Result<fresh Image, ImageError>
+pub fn Image.load(path: Path) -> Result<fresh Image, ImageError>
 
 pub fn Image.resize(image: mut Image, width: Int, height: Int) -> Unit
 
@@ -8,6 +8,6 @@ pub fn Image.normalize(image: mut Image) -> Unit
 
 pub fn Image.sharpen(image: mut Image) -> Unit
 
-pub fn Image.save(image: read Image, path: read Path) -> Result<Unit, ImageError>
+pub fn Image.save(image: Image, path: Path) -> Result<Unit, ImageError>
 
-pub fn Image.inspect(image: read Image) -> Unit
+pub fn Image.inspect(image: Image) -> Unit

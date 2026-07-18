@@ -9,7 +9,7 @@ resource Session {
     }
 }
 
-fn Session.open(host: read String) -> Session
+fn Session.open(host: String) -> Session
 
 // A lazy factory must capture an *owned local*. A managed `let` binding is
 // shared/refcounted, not a clean owned value, so capturing it is rejected just
@@ -17,7 +17,7 @@ fn Session.open(host: read String) -> Session
 fn run() -> Result<Unit, PoolError> {
     let host = "db://local"
     local pool = ResourcePool<Session>.lazy(
-        create: || Session.open(host: read host),
+        create: || Session.open(host),
         max_size: 2,
     )
     return Ok(Unit)

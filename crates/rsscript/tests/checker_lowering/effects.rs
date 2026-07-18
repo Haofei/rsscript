@@ -65,7 +65,7 @@ fn main() -> Unit {
     let rust = lower_source_to_rust("read-receiver-call-result.rss", source)
         .expect("read receiver-call result should lower");
 
-    assert!(rust.contains("accept(&rsscript_runtime::json_to_string(&value));"));
+    assert!(rust.contains("accept(&(rsscript_runtime::json_to_string(&value)));"));
 }
 
 #[test]
@@ -238,7 +238,7 @@ fn parse(value: read Option<Int>) -> Int {
         .expect("multiline receiver chain after closure should lower");
 
     assert!(rust.contains("rsscript_runtime::option_unwrap_or(&rsscript_runtime::option_map("));
-    assert!(rust.contains("|item: i64| {"));
+    assert!(rust.contains("|item: &i64| {"));
 }
 
 #[test]

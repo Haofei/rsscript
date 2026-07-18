@@ -2,111 +2,111 @@ features: local
 
 fn prop_json_int_object_roundtrip(value: Int) -> fresh PropertyResult {
     local fields = List<String>.new()
-    List.push(list: mut fields, value: read Json.int_field(name: read "value", value: value))
-    let text = Json.object(fields: read fields)
-    match Json.parse(text: read text) {
+    List.push(list: mut fields, value: Json.int_field(name: "value", value))
+    let text = Json.object(fields)
+    match Json.parse(text) {
         Ok(root) => {
-            match Json.field_int(value: read root, name: read "value") {
+            match Json.field_int(value: root, name: "value") {
                 Ok(parsed) => {
                     return Property.expect_bool(value: parsed == value)
                 }
                 Err(error) => {
-                    return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+                    return Property.fail(message: JsonError.message(error), counterexample: text)
                 }
             }
         }
         Err(error) => {
-            return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+            return Property.fail(message: JsonError.message(error), counterexample: text)
         }
     }
 }
 
-fn prop_json_string_object_roundtrip(value: read String) -> fresh PropertyResult {
+fn prop_json_string_object_roundtrip(value: String) -> fresh PropertyResult {
     local fields = List<String>.new()
-    List.push(list: mut fields, value: read Json.string_field(name: read "value", value: read value))
-    let text = Json.object(fields: read fields)
-    match Json.parse(text: read text) {
+    List.push(list: mut fields, value: Json.string_field(name: "value", value))
+    let text = Json.object(fields)
+    match Json.parse(text) {
         Ok(root) => {
-            match Json.field_string(value: read root, name: read "value") {
+            match Json.field_string(value: root, name: "value") {
                 Ok(parsed) => {
                     return Property.expect_bool(value: parsed == value)
                 }
                 Err(error) => {
-                    return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+                    return Property.fail(message: JsonError.message(error), counterexample: text)
                 }
             }
         }
         Err(error) => {
-            return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+            return Property.fail(message: JsonError.message(error), counterexample: text)
         }
     }
 }
 
-fn prop_json_int_pair_object_roundtrip(value: read IntPair) -> fresh PropertyResult {
+fn prop_json_int_pair_object_roundtrip(value: IntPair) -> fresh PropertyResult {
     local fields = List<String>.new()
-    List.push(list: mut fields, value: read Json.int_field(name: read "left", value: value.left))
-    List.push(list: mut fields, value: read Json.int_field(name: read "right", value: value.right))
-    let text = Json.object(fields: read fields)
-    match Json.parse(text: read text) {
+    List.push(list: mut fields, value: Json.int_field(name: "left", value: value.left))
+    List.push(list: mut fields, value: Json.int_field(name: "right", value: value.right))
+    let text = Json.object(fields)
+    match Json.parse(text) {
         Ok(root) => {
-            match Json.field_int(value: read root, name: read "left") {
+            match Json.field_int(value: root, name: "left") {
                 Ok(left) => {
-                    match Json.field_int(value: read root, name: read "right") {
+                    match Json.field_int(value: root, name: "right") {
                         Ok(right) => {
                             return Property.expect_bool(value: left == value.left && right == value.right)
                         }
                         Err(error) => {
-                            return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+                            return Property.fail(message: JsonError.message(error), counterexample: text)
                         }
                     }
                 }
                 Err(error) => {
-                    return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+                    return Property.fail(message: JsonError.message(error), counterexample: text)
                 }
             }
         }
         Err(error) => {
-            return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+            return Property.fail(message: JsonError.message(error), counterexample: text)
         }
     }
 }
 
-fn prop_json_string_pair_object_roundtrip(value: read StringPair) -> fresh PropertyResult {
+fn prop_json_string_pair_object_roundtrip(value: StringPair) -> fresh PropertyResult {
     local fields = List<String>.new()
-    List.push(list: mut fields, value: read Json.string_field(name: read "left", value: read value.left))
-    List.push(list: mut fields, value: read Json.string_field(name: read "right", value: read value.right))
-    let text = Json.object(fields: read fields)
-    match Json.parse(text: read text) {
+    List.push(list: mut fields, value: Json.string_field(name: "left", value: value.left))
+    List.push(list: mut fields, value: Json.string_field(name: "right", value: value.right))
+    let text = Json.object(fields)
+    match Json.parse(text) {
         Ok(root) => {
-            match Json.field_string(value: read root, name: read "left") {
+            match Json.field_string(value: root, name: "left") {
                 Ok(left) => {
-                    match Json.field_string(value: read root, name: read "right") {
+                    match Json.field_string(value: root, name: "right") {
                         Ok(right) => {
                             return Property.expect_bool(value: left == value.left && right == value.right)
                         }
                         Err(error) => {
-                            return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+                            return Property.fail(message: JsonError.message(error), counterexample: text)
                         }
                     }
                 }
                 Err(error) => {
-                    return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+                    return Property.fail(message: JsonError.message(error), counterexample: text)
                 }
             }
         }
         Err(error) => {
-            return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+            return Property.fail(message: JsonError.message(error), counterexample: text)
         }
     }
 }
 
-fn int_lists_equal(left: read List<Int>, right: read List<Int>) -> Bool {
-    if List.len(list: read left) != List.len(list: read right) {
+fn int_lists_equal(left: List<Int>, right: List<Int>) -> Bool {
+    if List.len(list: left) != List.len(list: right) {
         return false
     }
     let mut index = 0
-    while index < List.len(list: read left) {
-        if List.get(list: read left, index: index) != List.get(list: read right, index: index) {
+    while index < List.len(list: left) {
+        if List.get(list: left, index) != List.get(list: right, index) {
             return false
         }
         index = index + 1
@@ -114,13 +114,13 @@ fn int_lists_equal(left: read List<Int>, right: read List<Int>) -> Bool {
     return true
 }
 
-fn bool_lists_equal(left: read List<Bool>, right: read List<Bool>) -> Bool {
-    if List.len(list: read left) != List.len(list: read right) {
+fn bool_lists_equal(left: List<Bool>, right: List<Bool>) -> Bool {
+    if List.len(list: left) != List.len(list: right) {
         return false
     }
     let mut index = 0
-    while index < List.len(list: read left) {
-        if List.get(list: read left, index: index) != List.get(list: read right, index: index) {
+    while index < List.len(list: left) {
+        if List.get(list: left, index) != List.get(list: right, index) {
             return false
         }
         index = index + 1
@@ -128,13 +128,13 @@ fn bool_lists_equal(left: read List<Bool>, right: read List<Bool>) -> Bool {
     return true
 }
 
-fn string_lists_equal(left: read List<String>, right: read List<String>) -> Bool {
-    if List.len(list: read left) != List.len(list: read right) {
+fn string_lists_equal(left: List<String>, right: List<String>) -> Bool {
+    if List.len(list: left) != List.len(list: right) {
         return false
     }
     let mut index = 0
-    while index < List.len(list: read left) {
-        if List.get(list: read left, index: index) != List.get(list: read right, index: index) {
+    while index < List.len(list: left) {
+        if List.get(list: left, index) != List.get(list: right, index) {
             return false
         }
         index = index + 1
@@ -142,168 +142,168 @@ fn string_lists_equal(left: read List<String>, right: read List<String>) -> Bool
     return true
 }
 
-fn json_int_array_text(values: read List<Int>) -> fresh String {
+fn json_int_array_text(values: List<Int>) -> fresh String {
     local items = List<String>.new()
     let mut index = 0
-    while index < List.len(list: read values) {
-        let value = List.get(list: read values, index: index)
-        List.push(list: mut items, value: read String.from_int(value: value))
+    while index < List.len(list: values) {
+        let value = List.get(list: values, index)
+        List.push(list: mut items, value: String.from_int(value))
         index = index + 1
     }
-    return Json.array(items: read items)
+    return Json.array(items)
 }
 
-fn json_bool_array_text(values: read List<Bool>) -> fresh String {
+fn json_bool_array_text(values: List<Bool>) -> fresh String {
     local items = List<String>.new()
     let mut index = 0
-    while index < List.len(list: read values) {
-        let value = List.get(list: read values, index: index)
-        List.push(list: mut items, value: read String.from_bool(value: value))
+    while index < List.len(list: values) {
+        let value = List.get(list: values, index)
+        List.push(list: mut items, value: String.from_bool(value))
         index = index + 1
     }
-    return Json.array(items: read items)
+    return Json.array(items)
 }
 
-fn prop_json_int_array_roundtrip(values: read List<Int>) -> fresh PropertyResult {
-    let text = json_int_array_text(values: read values)
-    match Json.parse(text: read text) {
+fn prop_json_int_array_roundtrip(values: List<Int>) -> fresh PropertyResult {
+    let text = json_int_array_text(values)
+    match Json.parse(text) {
         Ok(root) => {
-            match Json.array_ints(value: read root) {
+            match Json.array_ints(value: root) {
                 Ok(parsed) => {
-                    return Property.expect_bool(value: int_lists_equal(left: read values, right: read parsed))
+                    return Property.expect_bool(value: int_lists_equal(left: values, right: parsed))
                 }
                 Err(error) => {
-                    return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+                    return Property.fail(message: JsonError.message(error), counterexample: text)
                 }
             }
         }
         Err(error) => {
-            return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+            return Property.fail(message: JsonError.message(error), counterexample: text)
         }
     }
 }
 
-fn prop_json_bool_array_roundtrip(values: read List<Bool>) -> fresh PropertyResult {
-    let text = json_bool_array_text(values: read values)
-    match Json.parse(text: read text) {
+fn prop_json_bool_array_roundtrip(values: List<Bool>) -> fresh PropertyResult {
+    let text = json_bool_array_text(values)
+    match Json.parse(text) {
         Ok(root) => {
-            match Json.array_bools(value: read root) {
+            match Json.array_bools(value: root) {
                 Ok(parsed) => {
-                    return Property.expect_bool(value: bool_lists_equal(left: read values, right: read parsed))
+                    return Property.expect_bool(value: bool_lists_equal(left: values, right: parsed))
                 }
                 Err(error) => {
-                    return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+                    return Property.fail(message: JsonError.message(error), counterexample: text)
                 }
             }
         }
         Err(error) => {
-            return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+            return Property.fail(message: JsonError.message(error), counterexample: text)
         }
     }
 }
 
-fn prop_json_string_array_roundtrip(values: read List<String>) -> fresh PropertyResult {
-    let text = Json.string_array(items: read values)
-    match Json.parse(text: read text) {
+fn prop_json_string_array_roundtrip(values: List<String>) -> fresh PropertyResult {
+    let text = Json.string_array(items: values)
+    match Json.parse(text) {
         Ok(root) => {
-            match Json.array_strings(value: read root) {
+            match Json.array_strings(value: root) {
                 Ok(parsed) => {
-                    return Property.expect_bool(value: string_lists_equal(left: read values, right: read parsed))
+                    return Property.expect_bool(value: string_lists_equal(left: values, right: parsed))
                 }
                 Err(error) => {
-                    return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+                    return Property.fail(message: JsonError.message(error), counterexample: text)
                 }
             }
         }
         Err(error) => {
-            return Property.fail(message: read JsonError.message(error: read error), counterexample: read text)
+            return Property.fail(message: JsonError.message(error), counterexample: text)
         }
     }
 }
 
 pub fn QuickCheckJson.run() -> Unit {
     let json_int_summary = Property.check_int(
-        name: read "json int object roundtrip",
+        name: "json int object roundtrip",
         cases: 200,
         seed: 20260602,
-        range: read IntRange.new(min: -10000, max: 10000),
+        range: IntRange.new(min: -10000, max: 10000),
         property: |value| {
-            return prop_json_int_object_roundtrip(value: value)
+            return prop_json_int_object_roundtrip(value)
         },
     )
-    Property.assert_passed(summary: read json_int_summary)
+    Property.assert_passed(summary: json_int_summary)
 
     let json_string_summary = Property.check_string(
-        name: read "json string object roundtrip",
+        name: "json string object roundtrip",
         cases: 200,
         seed: 20260602,
-        input: read StringGen.new(max_len: 40),
+        input: StringGen.new(max_len: 40),
         property: |value| {
-            return prop_json_string_object_roundtrip(value: read value)
+            return prop_json_string_object_roundtrip(value)
         },
     )
-    Property.assert_passed(summary: read json_string_summary)
+    Property.assert_passed(summary: json_string_summary)
 
     let json_pair_summary = Property.check_int_pair(
-        name: read "json int pair object roundtrip",
+        name: "json int pair object roundtrip",
         cases: 200,
         seed: 20260602,
-        input: read IntPairGen.new(
-            left: read IntRange.new(min: -10000, max: 10000),
-            right: read IntRange.new(min: -10000, max: 10000),
+        input: IntPairGen.new(
+            left: IntRange.new(min: -10000, max: 10000),
+            right: IntRange.new(min: -10000, max: 10000),
         ),
         property: |value| {
-            return prop_json_int_pair_object_roundtrip(value: read value)
+            return prop_json_int_pair_object_roundtrip(value)
         },
     )
-    Property.assert_passed(summary: read json_pair_summary)
+    Property.assert_passed(summary: json_pair_summary)
 
     let json_string_pair_summary = Property.check_string_pair(
-        name: read "json string pair object roundtrip",
+        name: "json string pair object roundtrip",
         cases: 200,
         seed: 20260602,
-        input: read StringPairGen.new(max_len: 40),
+        input: StringPairGen.new(max_len: 40),
         property: |value| {
-            return prop_json_string_pair_object_roundtrip(value: read value)
+            return prop_json_string_pair_object_roundtrip(value)
         },
     )
-    Property.assert_passed(summary: read json_string_pair_summary)
+    Property.assert_passed(summary: json_string_pair_summary)
 
     let json_int_array_summary = Property.check_int_list(
-        name: read "json int array roundtrip",
+        name: "json int array roundtrip",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -10000, max: 10000),
+            range: IntRange.new(min: -10000, max: 10000),
         ),
         property: |values| {
-            return prop_json_int_array_roundtrip(values: read values)
+            return prop_json_int_array_roundtrip(values)
         },
     )
-    Property.assert_passed(summary: read json_int_array_summary)
+    Property.assert_passed(summary: json_int_array_summary)
 
     let json_bool_array_summary = Property.check_bool_list(
-        name: read "json bool array roundtrip",
+        name: "json bool array roundtrip",
         cases: 200,
         seed: 20260602,
-        input: read BoolListGen.new(max_len: 50),
+        input: BoolListGen.new(max_len: 50),
         property: |values| {
-            return prop_json_bool_array_roundtrip(values: read values)
+            return prop_json_bool_array_roundtrip(values)
         },
     )
-    Property.assert_passed(summary: read json_bool_array_summary)
+    Property.assert_passed(summary: json_bool_array_summary)
 
     let json_string_array_summary = Property.check_string_list(
-        name: read "json string array roundtrip",
+        name: "json string array roundtrip",
         cases: 200,
         seed: 20260602,
-        input: read StringListGen.new(max_len: 50, max_item_len: 40),
+        input: StringListGen.new(max_len: 50, max_item_len: 40),
         property: |values| {
-            return prop_json_string_array_roundtrip(values: read values)
+            return prop_json_string_array_roundtrip(values)
         },
     )
-    Property.assert_passed(summary: read json_string_array_summary)
+    Property.assert_passed(summary: json_string_array_summary)
 
     return Unit
 }

@@ -1,0 +1,4 @@
+fn main() -> Int {
+    let value = 40 + 2
+    return value
+}

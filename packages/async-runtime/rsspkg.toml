@@ -9,4 +9,4 @@ paths = ["src"]
 [implements."rss-async"]
 version = "0.1"
 interface_features = []
-interface_effective_hash = "sha256:f2723baf4534b3d3185cc2380b247ef04a03c51b05641af2ce9da79f35231019"
+interface_effective_hash = "sha256:604a985dce961534bb724342ab11b981a3d304f8e55a175b0d9c3110d46f94a0"

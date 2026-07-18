@@ -1125,6 +1125,10 @@ pub(crate) enum RegInstr {
         builder: Reg,
         value: Reg,
     },
+    StringBuilderFinish {
+        dst: Reg,
+        builder: Reg,
+    },
     StringConcat {
         dst: Reg,
         left: Reg,
@@ -2150,6 +2154,10 @@ fn deepcopy_collect_regs(instr: &RegInstr, out: &mut Vec<Reg>) {
             out.push(*dst);
             out.push(*base);
             out.push(*extra);
+        }
+        RegInstr::StringBuilderFinish { dst, builder: base } => {
+            out.push(*dst);
+            out.push(*base);
         }
         RegInstr::ListLen { dst, list: base }
         | RegInstr::ListClear { dst, list: base }

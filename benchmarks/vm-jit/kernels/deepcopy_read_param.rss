@@ -11,8 +11,8 @@ features: local
 // a mut arg, an aggregate store, or a return.
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -28,21 +28,21 @@ struct Bag {
     c: List<Int>,
 }
 
-fn sum_reads(g: read Bag, i: Int) -> Int {
-    let na = List.len<Int>(list: read g.a)
-    let nb = List.len<Int>(list: read g.b)
-    let nc = List.len<Int>(list: read g.c)
-    let va = List.get<Int>(list: read g.a, index: i % na)
-    let vb = List.get<Int>(list: read g.b, index: i % nb)
-    let vc = List.get<Int>(list: read g.c, index: i % nc)
+fn sum_reads(g: Bag, i: Int) -> Int {
+    let na = List.len<Int>(list: g.a)
+    let nb = List.len<Int>(list: g.b)
+    let nc = List.len<Int>(list: g.c)
+    let va = List.get<Int>(list: g.a, index: i % na)
+    let vb = List.get<Int>(list: g.b, index: i % nb)
+    let vc = List.get<Int>(list: g.c, index: i % nc)
     return va + vb + vc
 }
 
-fn hot(g: read Bag, limit: Int) -> Int {
+fn hot(g: Bag, limit: Int) -> Int {
     let mut i = 0
     let mut total = 0
     while i < limit {
-        total = total + sum_reads(g: read g, i: i)
+        total = total + sum_reads(g, i)
         i = i + 1
     }
     return total
@@ -53,7 +53,7 @@ fn build_list(n: Int) -> List<Int> {
     let mut k = 0
     while k < n {
         let v = k * k - k
-        List.push<Int>(list: mut xs, value: read v)
+        List.push<Int>(list: mut xs, value: v)
         k = k + 1
     }
     return xs
@@ -62,7 +62,7 @@ fn build_list(n: Int) -> List<Int> {
 fn main() -> Unit {
     let limit = bench_size(default: 500000)
     let bag = Bag(a: build_list(n: 256), b: build_list(n: 256), c: build_list(n: 256))
-    let result = hot(g: read bag, limit: limit)
-    Log.write(message: read String.from_int(value: result))
+    let result = hot(g: bag, limit)
+    Log.write(message: String.from_int(value: result))
     return Unit
 }

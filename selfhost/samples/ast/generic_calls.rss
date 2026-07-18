@@ -1,6 +1,6 @@
 fn build() -> Int {
     let a = Deque<Int>.new()
-    let b = Map.insert<Int, Int>(key: read 1, value: read 2)
-    let c = List.fold<Int, Acc>(init: read 0)
+    let b = Map.insert<Int, Int>(key: 1, value: 2)
+    let c = List.fold<Int, Acc>(init: 0)
     return a
 }

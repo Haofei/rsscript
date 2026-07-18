@@ -5,7 +5,7 @@ struct Image {
     pixels: Buffer
 }
 
-fn bad_local(path: read Path) -> Unit {
-    let image = Image.load(path: read path)
+fn bad_local(path: Path) -> Unit {
+    let image = Image.load(path)
     local working = image
 }

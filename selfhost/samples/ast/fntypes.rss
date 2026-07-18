@@ -6,6 +6,6 @@ fn make() -> fresh String {
     return "x"
 }
 
-fn take_fn(f: read Fn(read Int, Int) -> Int) -> Int {
+fn take_fn(f: Fn(read Int, Int) -> Int) -> Int {
     return 0
 }

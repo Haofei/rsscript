@@ -6,8 +6,8 @@
 // through `profile_closure_pic_sites` and `profile_closure_pic_arms` telemetry.
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -17,7 +17,7 @@ fn bench_size(default: Int) -> Int {
     }
 }
 
-fn dispatch(f: read Fn(Int) -> Int, x: Int) -> Int {
+fn dispatch(f: Fn(Int) -> Int, x: Int) -> Int {
     return f(x)
 }
 
@@ -28,16 +28,16 @@ fn main() -> Unit {
     while i < limit {
         if i % 6 == 0 {
             let c: Fn(Int) -> Int = |x| { return 0 - x }
-            total = total + dispatch(f: read c, x: read i)
+            total = total + dispatch(f: c, x: i)
         } else if i % 6 < 3 {
             let b: Fn(Int) -> Int = |x| { return x + 7 }
-            total = total + dispatch(f: read b, x: read i)
+            total = total + dispatch(f: b, x: i)
         } else {
             let a: Fn(Int) -> Int = |x| { return x * 2 - 1 }
-            total = total + dispatch(f: read a, x: read i)
+            total = total + dispatch(f: a, x: i)
         }
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Log.write(message: String.from_int(value: total))
     return Unit
 }

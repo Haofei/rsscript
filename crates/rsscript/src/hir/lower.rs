@@ -6,25 +6,38 @@ impl Hir {
     }
 
     pub fn from_syntax_with_standard_package_interfaces(program: &SyntaxProgram) -> Self {
-        Self::from_syntax_with_interfaces_options(program, &[], true, true)
-    }
-
-    pub fn from_syntax_without_builtin_interfaces(program: &SyntaxProgram) -> Self {
-        Self::from_syntax_with_interfaces_options(program, &[], false, false)
+        Self::from_syntax_with_interfaces_options(program, &[], true)
     }
 
     pub fn from_syntax_with_interfaces(
         program: &SyntaxProgram,
         interfaces: &[SyntaxProgram],
     ) -> Self {
-        Self::from_syntax_with_interfaces_options(program, interfaces, true, false)
+        Self::from_syntax_with_interfaces_options(program, interfaces, false)
     }
 
-    pub fn from_syntax_with_interfaces_without_builtin_interfaces(
+    pub(crate) fn from_syntax_with_prepared_interfaces(
         program: &SyntaxProgram,
+        builtin_interfaces: &[SyntaxProgram],
         interfaces: &[SyntaxProgram],
     ) -> Self {
-        Self::from_syntax_with_interfaces_options(program, interfaces, false, false)
+        let mut hir = Self::default();
+        for interface in builtin_interfaces {
+            hir.insert_builtin_interface(interface);
+        }
+        let mut type_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
+        let mut callable_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
+        for interface in interfaces {
+            hir.extend_protocol_impls(&interface.protocol_impls, false);
+            hir.collect_item_signatures(interface, &mut type_symbols, &mut callable_symbols);
+        }
+        hir.extend_protocol_impls(&program.protocol_impls, true);
+        hir.collect_item_signatures(program, &mut type_symbols, &mut callable_symbols);
+        hir.normalize_class_typed_handle_fields();
+        hir.collect_const_values(program);
+        hir.collect_resource_drop_bodies(program);
+        hir.collect_body_facts(program);
+        hir
     }
 
     /// Record top-level `const` initializers so references can be inlined during
@@ -42,29 +55,18 @@ impl Hir {
     fn from_syntax_with_interfaces_options(
         program: &SyntaxProgram,
         interfaces: &[SyntaxProgram],
-        include_builtin_interfaces: bool,
         include_standard_package_interfaces: bool,
     ) -> Self {
-        let mut hir = Self::default();
-        if include_builtin_interfaces {
-            hir.insert_builtin_interfaces();
-        }
+        let mut builtin_interface_programs = builtin_interfaces()
+            .map(|(file, source)| parse_source(file, source))
+            .collect::<Vec<_>>();
         if include_standard_package_interfaces {
-            hir.insert_standard_package_interfaces();
+            builtin_interface_programs.extend(
+                standard_package_interfaces().map(|(file, source)| parse_source(file, source)),
+            );
         }
-        let mut type_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
-        let mut callable_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
-        for interface in interfaces {
-            hir.extend_protocol_impls(&interface.protocol_impls, false);
-            hir.collect_item_signatures(interface, &mut type_symbols, &mut callable_symbols);
-        }
-        hir.extend_protocol_impls(&program.protocol_impls, true);
-        hir.collect_item_signatures(program, &mut type_symbols, &mut callable_symbols);
-        hir.normalize_class_typed_handle_fields();
-        hir.collect_const_values(program);
-        hir.collect_resource_drop_bodies(program);
-        hir.collect_body_facts(program);
-        hir
+
+        Self::from_syntax_with_prepared_interfaces(program, &builtin_interface_programs, interfaces)
     }
 
     fn extend_protocol_impls(&mut self, impls: &[ProtocolImpl], is_current_program: bool) {
@@ -519,20 +521,6 @@ impl Hir {
         self.insert_function(constructor);
     }
 
-    fn insert_builtin_interfaces(&mut self) {
-        for (file, source) in builtin_interfaces() {
-            let program = parse_source(file, source);
-            self.insert_builtin_interface(&program);
-        }
-    }
-
-    fn insert_standard_package_interfaces(&mut self) {
-        for (file, source) in standard_package_interfaces() {
-            let program = parse_source(file, source);
-            self.insert_builtin_interface(&program);
-        }
-    }
-
     fn insert_builtin_interface(&mut self, program: &SyntaxProgram) {
         for item in &program.items {
             match item {
@@ -689,7 +677,7 @@ fn collect_function_body_facts(hir: &Hir, function: &FunctionDecl, facts: &mut B
             function_name: function.name.clone(),
             name: param.name.clone(),
             kind: HirBindingKind::Param,
-            effect: param.effect.map(param_effect_from_data_effect),
+            effect: effective_param_effect(param),
             span: param.span.clone(),
             type_name: Some(param_type),
         });
@@ -1474,14 +1462,55 @@ fn lower_hir_call_expr(
             span: arg.span.clone(),
         })
         .collect();
+    // Syntax preserves whether a caller wrote `read`, but the semantic form has
+    // exactly one representation: a bare argument for a read parameter is the
+    // same read effect as an explicitly wrapped argument. This happens after
+    // resolution so a bare argument can never be upgraded to mut/take.
+    if let CallResolution::Resolved { signature, .. } = &resolution {
+        let positional_offset = usize::from(matches!(callee, Callee::ReceiverCall { .. }));
+        for (index, arg) in hir_args.iter_mut().enumerate() {
+            let actual_type = args
+                .get(index)
+                .and_then(|source_arg| infer_hir_expr_type(hir, &source_arg.value, value_types));
+            let positional_param = signature.params.get(index + positional_offset);
+            // Same-name punning is deliberately narrower than positional calls:
+            // only an identifier identical to a resolved default-read parameter
+            // may omit its label. Other unnamed arguments remain diagnostics.
+            if arg.name.is_none()
+                && let (Some(param), HirExpr::Ident { name, .. }) = (positional_param, &arg.value)
+                && param.name == *name
+                && param.effect == Some(ParamEffect::Read)
+            {
+                arg.name = Some(name.clone());
+            }
+            let expected = arg
+                .name
+                .as_deref()
+                .and_then(|name| signature.params.iter().find(|param| param.name == name))
+                .or(positional_param);
+            let Some(param) = expected else {
+                continue;
+            };
+            if param.effect == Some(ParamEffect::Read) && !hir_expr_already_read(&arg.value) {
+                let value = std::mem::replace(&mut arg.value, HirExpr::Unknown(arg.span.clone()));
+                arg.value = HirExpr::Effect {
+                    effect: ParamEffect::Read,
+                    value: Box::new(value),
+                    events: Vec::new(),
+                    type_name: actual_type.or_else(|| Some(param.type_name.clone())),
+                    span: arg.span.clone(),
+                };
+            }
+        }
+    }
     // Fill omitted parameters that declare a default value, so every
     // backend sees a complete call (defaults are desugared once, here).
     if let CallResolution::Resolved { signature, .. } = &resolution {
-        let provided: std::collections::HashSet<&str> =
-            args.iter().filter_map(|arg| arg.name.as_deref()).collect();
+        let provided: std::collections::HashSet<String> =
+            hir_args.iter().filter_map(|arg| arg.name.clone()).collect();
         for param in &signature.params {
             if let Some(default) = &param.default
-                && !provided.contains(param.name.as_str())
+                && !provided.contains(&param.name)
             {
                 let mut value = lower_hir_expr(hir, function_name, default, value_types);
                 // A non-Copy default is materialized at the call site and
@@ -1580,14 +1609,26 @@ fn retain_events_for_call(
         return Vec::new();
     }
 
+    let positional_offset = usize::from(matches!(callee, Callee::ReceiverCall { .. }));
     args.iter()
-        .filter_map(|arg| {
-            let name = arg.name.as_ref()?;
+        .enumerate()
+        .filter_map(|(index, arg)| {
+            let param = arg
+                .name
+                .as_deref()
+                .and_then(|name| signature.params.iter().find(|param| param.name == name))
+                .or_else(|| signature.params.get(index + positional_offset))?;
+            let name = &param.name;
             if !signature.retained_params.contains(name) {
                 return None;
             }
-            let (binding_name, value_span) =
-                direct_effect_retained_binding(&arg.value, hir, value_types)?;
+            let retained =
+                direct_effect_retained_binding(&arg.value, hir, value_types).or_else(|| {
+                    (param.effect == Some(ParamEffect::Read))
+                        .then(|| retained_inline_binding(&arg.value, hir, value_types))
+                        .flatten()
+                });
+            let (binding_name, value_span) = retained?;
             Some(HirEffectEvent {
                 function_name: function_name.to_string(),
                 kind: HirEffectEventKind::Retain {
@@ -2212,7 +2253,7 @@ fn type_ref_name(ty: &TypeRef) -> String {
             .iter()
             .enumerate()
             .map(|(index, param)| {
-                let prefix = match ty.fn_param_effects.get(index).copied().flatten() {
+                let prefix = match ty.effective_fn_param_effect(index) {
                     Some(effect) => format!("{} ", effect.as_str()),
                     None => String::new(),
                 };
@@ -2301,9 +2342,27 @@ fn duplicate_symbol_kind(
 fn param_sig_from_decl(param: &Param) -> ParamSig {
     ParamSig {
         name: param.name.clone(),
-        effect: param.effect.map(param_effect_from_data_effect),
+        effect: effective_param_effect(param),
         type_name: type_ref_name(&param.ty),
         default: param.default.clone(),
+    }
+}
+
+/// Syntax records whether the author wrote an effect. Semantics add the silent
+/// `read` default for ordinary data values; the established closure/Fd
+/// exceptions continue to pass without a data-effect capability.
+fn effective_param_effect(param: &Param) -> Option<ParamEffect> {
+    param.effective_effect().map(param_effect_from_data_effect)
+}
+
+fn hir_expr_already_read(expr: &HirExpr) -> bool {
+    match expr {
+        HirExpr::Effect { .. } => true,
+        HirExpr::Call {
+            callee: Callee::ReceiverCall { effect, .. },
+            ..
+        } => matches!(effect, Some(DataEffect::Read) | None),
+        _ => false,
     }
 }
 

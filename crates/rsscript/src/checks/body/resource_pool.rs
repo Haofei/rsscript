@@ -407,6 +407,7 @@ pub(super) fn resource_pool_static_positive_int(
     expr: &HirExpr,
 ) -> Option<i64> {
     match expr {
+        HirExpr::Effect { value, .. } => resource_pool_static_positive_int(analyzer, value),
         HirExpr::Number { value, .. } => value.parse::<i64>().ok().filter(|value| *value > 0),
         HirExpr::Ident { name, .. } => analyzer.syntax_program.items.iter().find_map(|item| {
             let Item::Const(decl) = item else {

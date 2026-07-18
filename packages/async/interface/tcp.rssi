@@ -7,31 +7,31 @@ struct TcpError
 struct TcpStream
 
 pub async native fn Tcp.connect(
-    host: read String,
+    host: String,
     port: Int,
 ) -> Result<fresh TcpStream, TcpError>
     effects(native)
 
 pub async native fn TcpStream.read(
-    stream: read TcpStream,
+    stream: TcpStream,
     max_bytes: Int,
 ) -> Result<fresh Bytes, TcpError>
     effects(native)
 
 pub async native fn TcpStream.write(
-    stream: read TcpStream,
-    data: read Bytes,
+    stream: TcpStream,
+    data: Bytes,
 ) -> Result<Int, TcpError>
     effects(native)
 
 pub async native fn TcpStream.write_all(
-    stream: read TcpStream,
-    data: read Bytes,
+    stream: TcpStream,
+    data: Bytes,
 ) -> Result<Unit, TcpError>
     effects(native)
 
-pub async native fn TcpStream.shutdown(stream: read TcpStream) -> Result<Unit, TcpError>
+pub async native fn TcpStream.shutdown(stream: TcpStream) -> Result<Unit, TcpError>
     effects(native)
 
-pub fn TcpError.message(error: read TcpError) -> fresh String
+pub fn TcpError.message(error: TcpError) -> fresh String
     effects(pure)

@@ -1,21 +1,21 @@
 features: local
 
-fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
+fn run_query(url: Url, sql: String) -> Result<Unit, DbError> {
     local pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.open(url: read url),
+        create: || DbConnection.open(url),
         max_size: 2,
     )
 
     with ResourcePool.borrow(pool: mut pool) as conn {
-        DbConnection.query(conn: mut conn, sql: read sql)?
+        DbConnection.query(conn: mut conn, sql)?
     }
 
     return Ok(Unit)
 }
 
 fn main() -> Result<Unit, DbError> {
-    let url = Url.from_string(value: read "db://local")
-    run_query(url: read url, sql: read "select 1")?
-    Log.write(message: read "db pool ran")
+    let url = Url.from_string(value: "db://local")
+    run_query(url, sql: "select 1")?
+    Log.write(message: "db pool ran")
     return Ok(Unit)
 }

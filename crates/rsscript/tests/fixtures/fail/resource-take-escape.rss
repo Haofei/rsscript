@@ -12,8 +12,8 @@ resource File {
 fn consume_file(file: take File) -> Unit {
 }
 
-fn bad_take(path: read Path) -> Unit {
-    with File.open(path: read path)? as file {
+fn bad_take(path: Path) -> Unit {
+    with File.open(path)? as file {
         consume_file(file: take file)
     }
 }

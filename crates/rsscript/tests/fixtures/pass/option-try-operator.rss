@@ -8,18 +8,18 @@ fn make(n: Int) -> Option<Int> {
 }
 
 fn checked_double(n: Int) -> Option<Int> {
-    let v = make(n: n)?
+    let v = make(n)?
     return Some(v + v)
 }
 
 fn main() -> Unit {
     match checked_double(n: 21) {
-        Some(x) => { Log.write(message: read String.from_int(value: x)) }
-        None => { Log.write(message: read "none") }
+        Some(x) => { Log.write(message: String.from_int(value: x)) }
+        None => { Log.write(message: "none") }
     }
     match checked_double(n: 0) {
-        Some(x) => { Log.write(message: read String.from_int(value: x)) }
-        None => { Log.write(message: read "none") }
+        Some(x) => { Log.write(message: String.from_int(value: x)) }
+        None => { Log.write(message: "none") }
     }
     return Unit
 }

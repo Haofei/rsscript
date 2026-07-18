@@ -1,12 +1,12 @@
 features: local
 
-fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
+fn copy_file(input: Path, output: Path) -> Result<Unit, FileError> {
     local buffer = Buffer.new(size: 8192)
 
-    with File.open_read(path: read input)? as reader {
-        with File.open_write(path: read output)? as writer {
+    with File.open_read(path: input)? as reader {
+        with File.open_write(path: output)? as writer {
             while File.read_into(file: mut reader, buffer: mut buffer)? {
-                File.write_buffer(file: mut writer, buffer: read buffer)?
+                File.write_buffer(file: mut writer, buffer)?
                 Buffer.clear(buffer: mut buffer)
             }
         }
@@ -16,15 +16,15 @@ fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
 }
 
 fn main() -> Result<Unit, FileError> {
-    let input = Path.from_string(value: read "rsscript-file-copy-buffer-input.txt")
-    let output = Path.from_string(value: read "rsscript-file-copy-buffer-output.txt")
-    let data = Bytes.from_string(value: read "file copy buffer ran")
+    let input = Path.from_string(value: "rsscript-file-copy-buffer-input.txt")
+    let output = Path.from_string(value: "rsscript-file-copy-buffer-output.txt")
+    let data = Bytes.from_string(value: "file copy buffer ran")
 
-    with File.open_write(path: read input)? as file {
-        File.write(file: mut file, data: read data)?
+    with File.open_write(path: input)? as file {
+        File.write(file: mut file, data)?
     }
 
-    copy_file(input: read input, output: read output)?
-    Log.write(message: read "file copy buffer ran")
+    copy_file(input, output)?
+    Log.write(message: "file copy buffer ran")
     return Ok(Unit)
 }

@@ -1,4 +1,4 @@
-fn run(pool: read Pool) -> Int {
+fn run(pool: Pool) -> Int {
     with pool.acquire() as r {
         return 0
     }
@@ -7,7 +7,7 @@ fn run(pool: read Pool) -> Int {
     }
 }
 
-fn pick(a: read Chan, b: read Chan) -> Int {
+fn pick(a: Chan, b: Chan) -> Int {
     select {
         x = await a => { return x }
         y = await b => { return y }

@@ -1,4 +1,4 @@
-fn helper(x: read Int) -> Int {
+fn helper(x: Int) -> Int {
     return x
 }
 

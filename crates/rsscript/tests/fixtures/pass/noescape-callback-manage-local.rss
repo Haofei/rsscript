@@ -8,7 +8,7 @@ struct Cache {
     count: Int
 }
 
-fn Cache.store(cache: mut Cache, image: read ImageData) -> Unit
+fn Cache.store(cache: mut Cache, image: ImageData) -> Unit
     effects(retains(image)) {
     return Unit
 }
@@ -24,7 +24,7 @@ fn main() -> Unit {
     apply(callback: || {
         local image = ImageData(size: 1)
         let shared = manage image
-        Cache.store(cache: mut cache, image: read shared)
+        Cache.store(cache: mut cache, image: shared)
     })
 
     return Unit

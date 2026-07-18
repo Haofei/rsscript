@@ -3,7 +3,7 @@ features: async, native, local
 // Streaming CSV rows uses the shared async Stream<T> model.
 
 pub fn Csv.rows(
-    path: read Path,
+    path: Path,
     buffer_size: Int,
 ) -> Result<fresh Stream<Row>, ChannelError>
     effects(native)

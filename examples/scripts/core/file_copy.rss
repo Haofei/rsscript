@@ -1,24 +1,24 @@
-pub fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
-    with File.open_read(path: read input)? as reader {
-        with File.open_write(path: read output)? as writer {
+pub fn copy_file(input: Path, output: Path) -> Result<Unit, FileError> {
+    with File.open_read(path: input)? as reader {
+        with File.open_write(path: output)? as writer {
             let bytes = File.read_all(file: mut reader)?
-            File.write(file: mut writer, data: read bytes)?
+            File.write(file: mut writer, data: bytes)?
         }
     }
     return Ok(Unit)
 }
 
 fn main() -> Result<Unit, FileError> {
-    let input = Path.from_string(value: read "rsscript-file-copy-input.txt")
-    let output_dir = Path.from_string(value: read "rsscript-file-copy-output")
-    Directory.create_all(path: read output_dir)?
-    let output = Path.join(base: read output_dir, child: read "copy.txt")
-    with File.open_write(path: read input)? as file {
-        File.write_string(file: mut file, text: read "file copy ran")?
+    let input = Path.from_string(value: "rsscript-file-copy-input.txt")
+    let output_dir = Path.from_string(value: "rsscript-file-copy-output")
+    Directory.create_all(path: output_dir)?
+    let output = Path.join(base: output_dir, child: "copy.txt")
+    with File.open_write(path: input)? as file {
+        File.write_string(file: mut file, text: "file copy ran")?
     }
 
-    copy_file(input: read input, output: read output)?
+    copy_file(input, output)?
 
-    Log.write(message: read "file copy ran")
+    Log.write(message: "file copy ran")
     return Ok(Unit)
 }

@@ -7,5 +7,5 @@
 // total contract: it introduces no mutation, retention, native, or unsafe
 // boundary.
 protocol Eq {
-    fn equals(self: read Self, other: read Self) -> Bool
+    fn equals(self: Self, other: Self) -> Bool
 }

@@ -5,8 +5,8 @@ struct Image {
     pixels: Buffer
 }
 
-fn bad_loop_publish(path: read Path) -> fresh Image {
-    local image = Image.load(path: read path)
+fn bad_loop_publish(path: Path) -> fresh Image {
+    local image = Image.load(path)
     loop {
         let shared = manage image
         break

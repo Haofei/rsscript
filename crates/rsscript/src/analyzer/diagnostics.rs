@@ -46,7 +46,7 @@ impl Analyzer<'_> {
         self.unknown_type_name_diagnostic(&type_ref_name(ty), &ty.span);
     }
 
-    pub(super) fn unknown_type_name_diagnostic(
+    pub(crate) fn unknown_type_name_diagnostic(
         &mut self,
         name: &str,
         span: &crate::diagnostic::Span,
@@ -70,7 +70,7 @@ impl Analyzer<'_> {
         );
     }
 
-    pub(super) fn unknown_protocol_diagnostic(
+    pub(crate) fn unknown_protocol_diagnostic(
         &mut self,
         name: &str,
         span: &crate::diagnostic::Span,
@@ -93,7 +93,7 @@ impl Analyzer<'_> {
         );
     }
 
-    pub(super) fn protocol_impl_mismatch_diagnostic(
+    pub(crate) fn protocol_impl_mismatch_diagnostic(
         &mut self,
         protocol: &str,
         type_name: &str,
@@ -185,7 +185,7 @@ impl Analyzer<'_> {
         );
     }
 
-    pub(super) fn generic_resource_argument_diagnostic(
+    pub(crate) fn generic_resource_argument_diagnostic(
         &mut self,
         generic_name: &str,
         resource_name: &str,
@@ -328,7 +328,7 @@ impl Analyzer<'_> {
         ));
     }
 
-    pub(super) fn pure_resource_return_diagnostic(
+    pub(crate) fn pure_resource_return_diagnostic(
         &mut self,
         function_name: &str,
         span: crate::diagnostic::Span,
@@ -347,7 +347,7 @@ impl Analyzer<'_> {
         ));
     }
 
-    pub(super) fn resource_return_type_name<'a>(&self, ty: &'a TypeRef) -> Option<&'a str> {
+    pub(crate) fn resource_return_type_name<'a>(&self, ty: &'a TypeRef) -> Option<&'a str> {
         let target = if matches!(ty.name.as_str(), "Result" | "Option") {
             ty.args.first().unwrap_or(ty)
         } else {

@@ -9,17 +9,17 @@ resource DbConnection {
     }
 }
 
-fn DbConnection.open(url: read String) -> DbConnection
+fn DbConnection.open(url: String) -> DbConnection
 
-fn bad_nested_borrow(url: read String) -> Unit {
+fn bad_nested_borrow(url: String) -> Unit {
     local pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.open(url: read url),
+        create: || DbConnection.open(url),
         max_size: 2,
     )
 
     with ResourcePool.borrow(pool: mut pool) as first {
         with ResourcePool.borrow(pool: mut pool) as second {
-            Log.write(message: read "unreachable")
+            Log.write(message: "unreachable")
         }
     }
 }

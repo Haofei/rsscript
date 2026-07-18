@@ -12,8 +12,8 @@ class Object {
     prototype: Object
 }
 
-fn make_function(env: read Environment) -> FunctionObject {
-    let function = FunctionObject.new(closure: read env)
+fn make_function(env: Environment) -> FunctionObject {
+    let function = FunctionObject.new(closure: env)
 
     return function
 }

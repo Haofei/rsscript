@@ -4,6 +4,6 @@ struct Boxed {
     value: Int
 }
 
-fn bad(value: read Boxed) -> fresh Boxed {
+fn bad(value: Boxed) -> fresh Boxed {
     return value
 }

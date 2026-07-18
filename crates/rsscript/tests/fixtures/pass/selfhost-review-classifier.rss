@@ -51,7 +51,7 @@ fn ReviewClass.low_semantic_risk() -> Int {
     return 1
 }
 
-fn review_class_from_string(value: read String) -> Int {
+fn review_class_from_string(value: String) -> Int {
     if value == "unknown" {
         return ReviewClass.unknown()
     }
@@ -75,7 +75,7 @@ fn review_class_to_string(value: Int) -> String {
     return "low_semantic_risk"
 }
 
-fn risk_line_budget(facts: read ReviewFacts) -> Int {
+fn risk_line_budget(facts: ReviewFacts) -> Int {
     if facts.line_count > 0 {
         return facts.line_count
     }
@@ -113,7 +113,7 @@ fn reason_low() -> String {
 
 fn decision(
     classification: Int,
-    reason: read String,
+    reason: String,
     lines: Int,
 ) -> fresh ReviewDecision {
     return ReviewDecision(
@@ -123,58 +123,58 @@ fn decision(
     )
 }
 
-fn classify_boundary(facts: read ReviewFacts) -> fresh ReviewDecision {
-    let lines = risk_line_budget(facts: read facts)
+fn classify_boundary(facts: ReviewFacts) -> fresh ReviewDecision {
+    let lines = risk_line_budget(facts)
 
     if facts.has_unknown_call {
         return decision(
             classification: ReviewClass.unknown(),
-            reason: read reason_unknown(),
-            lines: lines,
+            reason: reason_unknown(),
+            lines,
         )
     }
 
     if facts.callee_risk == ReviewClass.unknown() {
         return decision(
             classification: ReviewClass.unknown(),
-            reason: read reason_unknown(),
-            lines: lines,
+            reason: reason_unknown(),
+            lines,
         )
     }
 
     if facts.callee_risk == ReviewClass.must_review() {
         return decision(
             classification: ReviewClass.must_review(),
-            reason: read reason_public(),
-            lines: lines,
+            reason: reason_public(),
+            lines,
         )
     }
 
     if facts.has_unsafe_boundary || facts.has_native_boundary {
         return decision(
             classification: ReviewClass.must_review(),
-            reason: read reason_native(),
-            lines: lines,
+            reason: reason_native(),
+            lines,
         )
     }
 
     if facts.has_resource_boundary {
         return decision(
             classification: ReviewClass.must_review(),
-            reason: read reason_resource(),
-            lines: lines,
+            reason: reason_resource(),
+            lines,
         )
     }
 
     return decision(
         classification: ReviewClass.low_semantic_risk(),
-        reason: read reason_low(),
+        reason: reason_low(),
         lines: 0,
     )
 }
 
-fn classify_semantics(facts: read ReviewFacts) -> fresh ReviewDecision {
-    let lines = risk_line_budget(facts: read facts)
+fn classify_semantics(facts: ReviewFacts) -> fresh ReviewDecision {
+    let lines = risk_line_budget(facts)
 
     if facts.has_retains
         || facts.has_mut
@@ -185,8 +185,8 @@ fn classify_semantics(facts: read ReviewFacts) -> fresh ReviewDecision {
         || facts.has_noescape {
         return decision(
             classification: ReviewClass.must_review(),
-            reason: read reason_retention(),
-            lines: lines,
+            reason: reason_retention(),
+            lines,
         )
     }
 
@@ -197,29 +197,29 @@ fn classify_semantics(facts: read ReviewFacts) -> fresh ReviewDecision {
         || facts.has_guarantee_boundary {
         return decision(
             classification: ReviewClass.must_review(),
-            reason: read reason_fresh(),
-            lines: lines,
+            reason: reason_fresh(),
+            lines,
         )
     }
 
     if facts.public_api {
         return decision(
             classification: ReviewClass.must_review(),
-            reason: read reason_public(),
-            lines: lines,
+            reason: reason_public(),
+            lines,
         )
     }
 
     return decision(
         classification: ReviewClass.low_semantic_risk(),
-        reason: read reason_low(),
+        reason: reason_low(),
         lines: 0,
     )
 }
 
 fn stronger_decision(
-    left: read ReviewDecision,
-    right: read ReviewDecision,
+    left: ReviewDecision,
+    right: ReviewDecision,
 ) -> fresh ReviewDecision {
     if left.classification > right.classification {
         return ReviewDecision(
@@ -252,11 +252,11 @@ fn stronger_decision(
     )
 }
 
-fn classify_function(facts: read ReviewFacts) -> fresh ReviewDecision {
-    let boundary = classify_boundary(facts: read facts)
-    let semantic = classify_semantics(facts: read facts)
+fn classify_function(facts: ReviewFacts) -> fresh ReviewDecision {
+    let boundary = classify_boundary(facts)
+    let semantic = classify_semantics(facts)
 
-    return stronger_decision(left: read boundary, right: read semantic)
+    return stronger_decision(left: boundary, right: semantic)
 }
 
 fn make_low_helper(lines: Int) -> fresh ReviewFacts {
@@ -394,52 +394,52 @@ fn make_unknown_region(lines: Int) -> fresh ReviewFacts {
     )
 }
 
-fn parse_review_region(value: read JsonValue) -> Result<fresh ReviewFacts, JsonError> {
-    let function_name = Json.field_string(value: read value, name: read "function")?
-    let classification = Json.field_string(value: read value, name: read "classification")?
-    let reasons = Json.field(value: read value, name: read "reasons")?
-    let reason_count = Json.array_len(value: read reasons)?
+fn parse_review_region(value: JsonValue) -> Result<fresh ReviewFacts, JsonError> {
+    let function_name = Json.field_string(value, name: "function")?
+    let classification = Json.field_string(value, name: "classification")?
+    let reasons = Json.field(value, name: "reasons")?
+    let reason_count = Json.array_len(value: reasons)?
     let unmodeled = count_unmodeled_reasons(
-        reasons: read reasons,
+        reasons,
         index: 0,
         limit: reason_count,
     )?
 
     return ReviewFacts(
         function_name: read function_name,
-        expected_classification: review_class_from_string(value: read classification),
-        public_api: Json.array_contains_string(value: read reasons, item: read "public entry point")?
-            || Json.array_contains_string(value: read reasons, item: read "entry point")?,
+        expected_classification: review_class_from_string(value: classification),
+        public_api: Json.array_contains_string(value: reasons, item: "public entry point")?
+            || Json.array_contains_string(value: reasons, item: "entry point")?,
         has_unknown_call: classification == "unknown",
-        has_native_boundary: Json.array_contains_prefix(value: read reasons, prefix: read "native")?,
-        has_unsafe_boundary: Json.array_contains_prefix(value: read reasons, prefix: read "unsafe")?,
-        has_resource_boundary: Json.array_contains_prefix(value: read reasons, prefix: read "resource ")?
-            || Json.array_contains_prefix(value: read reasons, prefix: read "ResourcePool")?,
-        has_retains: Json.array_contains_prefix(value: read reasons, prefix: read "retains ")?
-            || Json.array_contains_prefix(value: read reasons, prefix: read "retention ")?
-            || Json.array_contains_prefix(value: read reasons, prefix: read "managed closure retains")?,
-        has_mut: Json.array_contains_prefix(value: read reasons, prefix: read "mut ")?
-            || Json.array_contains_string(value: read reasons, item: read "writes to managed state")?,
-        has_manage_boundary: Json.array_contains_string(value: read reasons, item: read "manage boundary")?,
-        has_take_effect: Json.array_contains_string(value: read reasons, item: read "take effect")?
-            || Json.array_contains_prefix(value: read reasons, prefix: read "take parameter")?,
-        has_async_boundary: Json.array_contains_string(value: read reasons, item: read "async function boundary")?
-            || Json.array_contains_string(value: read reasons, item: read "await suspension boundary")?,
-        has_task_boundary: Json.array_contains_string(value: read reasons, item: read "spawn task boundary")?
-            || Json.array_contains_prefix(value: read reasons, prefix: read "spawn retains-until-task-complete")?,
-        has_handle_write: Json.array_contains_string(value: read reasons, item: read "writes through handle field")?,
-        has_guarantee_boundary: Json.array_contains_prefix(value: read reasons, prefix: read "guarantee ")?,
-        has_local: Json.array_contains_string(value: read reasons, item: read "local binding")?,
-        has_fresh_return: Json.array_contains_string(value: read reasons, item: read "fresh guarantee boundary")?,
-        has_noescape: Json.array_contains_prefix(value: read reasons, prefix: read "noescape")?,
-        has_error_boundary: Json.array_contains_string(value: read reasons, item: read "error handling boundary")?,
-        callee_risk: review_callee_risk(reasons: read reasons)?,
-        line_count: Json.field_int(value: read value, name: read "line_count")?,
+        has_native_boundary: Json.array_contains_prefix(value: reasons, prefix: "native")?,
+        has_unsafe_boundary: Json.array_contains_prefix(value: reasons, prefix: "unsafe")?,
+        has_resource_boundary: Json.array_contains_prefix(value: reasons, prefix: "resource ")?
+            || Json.array_contains_prefix(value: reasons, prefix: "ResourcePool")?,
+        has_retains: Json.array_contains_prefix(value: reasons, prefix: "retains ")?
+            || Json.array_contains_prefix(value: reasons, prefix: "retention ")?
+            || Json.array_contains_prefix(value: reasons, prefix: "managed closure retains")?,
+        has_mut: Json.array_contains_prefix(value: reasons, prefix: "mut ")?
+            || Json.array_contains_string(value: reasons, item: "writes to managed state")?,
+        has_manage_boundary: Json.array_contains_string(value: reasons, item: "manage boundary")?,
+        has_take_effect: Json.array_contains_string(value: reasons, item: "take effect")?
+            || Json.array_contains_prefix(value: reasons, prefix: "take parameter")?,
+        has_async_boundary: Json.array_contains_string(value: reasons, item: "async function boundary")?
+            || Json.array_contains_string(value: reasons, item: "await suspension boundary")?,
+        has_task_boundary: Json.array_contains_string(value: reasons, item: "spawn task boundary")?
+            || Json.array_contains_prefix(value: reasons, prefix: "spawn retains-until-task-complete")?,
+        has_handle_write: Json.array_contains_string(value: reasons, item: "writes through handle field")?,
+        has_guarantee_boundary: Json.array_contains_prefix(value: reasons, prefix: "guarantee ")?,
+        has_local: Json.array_contains_string(value: reasons, item: "local binding")?,
+        has_fresh_return: Json.array_contains_string(value: reasons, item: "fresh guarantee boundary")?,
+        has_noescape: Json.array_contains_prefix(value: reasons, prefix: "noescape")?,
+        has_error_boundary: Json.array_contains_string(value: reasons, item: "error handling boundary")?,
+        callee_risk: review_callee_risk(reasons)?,
+        line_count: Json.field_int(value, name: "line_count")?,
         unmodeled_reasons: unmodeled,
     )
 }
 
-fn reason_is_modeled(reason: read String) -> Bool {
+fn reason_is_modeled(reason: String) -> Bool {
     if reason == "public entry point" || reason == "entry point" {
         return true
     }
@@ -468,59 +468,59 @@ fn reason_is_modeled(reason: read String) -> Bool {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "native") {
+    if String.starts_with(value: reason, prefix: "native") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "unsafe") {
+    if String.starts_with(value: reason, prefix: "unsafe") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "resource ") {
+    if String.starts_with(value: reason, prefix: "resource ") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "ResourcePool") {
+    if String.starts_with(value: reason, prefix: "ResourcePool") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "retains ") {
+    if String.starts_with(value: reason, prefix: "retains ") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "retention ") {
+    if String.starts_with(value: reason, prefix: "retention ") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "managed closure retains") {
+    if String.starts_with(value: reason, prefix: "managed closure retains") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "mut ") {
+    if String.starts_with(value: reason, prefix: "mut ") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "take parameter") {
+    if String.starts_with(value: reason, prefix: "take parameter") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "spawn retains-until-task-complete") {
+    if String.starts_with(value: reason, prefix: "spawn retains-until-task-complete") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "guarantee ") {
+    if String.starts_with(value: reason, prefix: "guarantee ") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "noescape") {
+    if String.starts_with(value: reason, prefix: "noescape") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "calls unknown") {
+    if String.starts_with(value: reason, prefix: "calls unknown") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "calls must-review") {
+    if String.starts_with(value: reason, prefix: "calls must-review") {
         return true
     }
 
@@ -528,7 +528,7 @@ fn reason_is_modeled(reason: read String) -> Bool {
 }
 
 fn count_unmodeled_reasons(
-    reasons: read JsonValue,
+    reasons: JsonValue,
     index: Int,
     limit: Int,
 ) -> Result<Int, JsonError> {
@@ -536,27 +536,27 @@ fn count_unmodeled_reasons(
         return Ok(0)
     }
 
-    let item = Json.array_get(value: read reasons, index: index)?
-    let reason = Json.as_string(value: read item)?
+    let item = Json.array_get(value: reasons, index)?
+    let reason = Json.as_string(value: item)?
     let rest = count_unmodeled_reasons(
-        reasons: read reasons,
+        reasons,
         index: index + 1,
-        limit: limit,
+        limit,
     )?
 
-    if reason_is_modeled(reason: read reason) {
+    if reason_is_modeled(reason) {
         return Ok(rest)
     }
 
     return Ok(rest + 1)
 }
 
-fn review_callee_risk(reasons: read JsonValue) -> Result<Int, JsonError> {
-    if Json.array_contains_prefix(value: read reasons, prefix: read "calls unknown")? {
+fn review_callee_risk(reasons: JsonValue) -> Result<Int, JsonError> {
+    if Json.array_contains_prefix(value: reasons, prefix: "calls unknown")? {
         return Ok(ReviewClass.unknown())
     }
 
-    if Json.array_contains_prefix(value: read reasons, prefix: read "calls must-review")? {
+    if Json.array_contains_prefix(value: reasons, prefix: "calls must-review")? {
         return Ok(ReviewClass.must_review())
     }
 
@@ -564,7 +564,7 @@ fn review_callee_risk(reasons: read JsonValue) -> Result<Int, JsonError> {
 }
 
 fn parse_region_list_from(
-    json: read JsonValue,
+    json: JsonValue,
     index: Int,
     limit: Int,
     items: mut List<ReviewFacts>,
@@ -573,14 +573,14 @@ fn parse_region_list_from(
         return Ok(Unit)
     }
 
-    let item = Json.array_get(value: read json, index: index)?
-    let facts = parse_review_region(value: read item)?
-    List.push(list: mut items, value: read facts)
+    let item = Json.array_get(value: json, index)?
+    let facts = parse_review_region(value: item)?
+    List.push(list: mut items, value: facts)
 
     parse_region_list_from(
-        json: read json,
+        json,
         index: index + 1,
-        limit: limit,
+        limit,
         items: mut items,
     )?
 
@@ -588,7 +588,7 @@ fn parse_region_list_from(
 }
 
 fn parse_file_regions_from(
-    files: read JsonValue,
+    files: JsonValue,
     index: Int,
     limit: Int,
     items: mut List<ReviewFacts>,
@@ -597,39 +597,39 @@ fn parse_file_regions_from(
         return Ok(Unit)
     }
 
-    let file = Json.array_get(value: read files, index: index)?
-    let regions = Json.field(value: read file, name: read "regions")?
-    let region_count = Json.array_len(value: read regions)?
+    let file = Json.array_get(value: files, index)?
+    let regions = Json.field(value: file, name: "regions")?
+    let region_count = Json.array_len(value: regions)?
 
     parse_region_list_from(
-        json: read regions,
+        json: regions,
         index: 0,
         limit: region_count,
         items: mut items,
     )?
 
     parse_file_regions_from(
-        files: read files,
+        files,
         index: index + 1,
-        limit: limit,
+        limit,
         items: mut items,
     )?
 
     return Ok(Unit)
 }
 
-fn expected_summary_from_json(json: read JsonValue) -> Result<fresh ReviewSummary, JsonError> {
-    let summary = Json.field(value: read json, name: read "summary")?
-    let must_review = Json.field(value: read summary, name: read "must_review")?
-    let low_risk = Json.field(value: read summary, name: read "low_semantic_risk")?
-    let unknown = Json.field(value: read summary, name: read "unknown")?
+fn expected_summary_from_json(json: JsonValue) -> Result<fresh ReviewSummary, JsonError> {
+    let summary = Json.field(value: json, name: "summary")?
+    let must_review = Json.field(value: summary, name: "must_review")?
+    let low_risk = Json.field(value: summary, name: "low_semantic_risk")?
+    let unknown = Json.field(value: summary, name: "unknown")?
 
     return ReviewSummary(
-        total_functions: Json.field_int(value: read summary, name: read "total_functions")?,
-        must_review_functions: Json.field_int(value: read must_review, name: read "functions")?,
-        low_risk_functions: Json.field_int(value: read low_risk, name: read "functions")?,
-        unknown_functions: Json.field_int(value: read unknown, name: read "functions")?,
-        suggested_lines: Json.field_int(value: read summary, name: read "suggested_review_lines")?,
+        total_functions: Json.field_int(value: summary, name: "total_functions")?,
+        must_review_functions: Json.field_int(value: must_review, name: "functions")?,
+        low_risk_functions: Json.field_int(value: low_risk, name: "functions")?,
+        unknown_functions: Json.field_int(value: unknown, name: "functions")?,
+        suggested_lines: Json.field_int(value: summary, name: "suggested_review_lines")?,
     )
 }
 
@@ -644,8 +644,8 @@ fn empty_summary() -> fresh ReviewSummary {
 }
 
 fn add_decision(
-    summary: read ReviewSummary,
-    decision_value: read ReviewDecision,
+    summary: ReviewSummary,
+    decision_value: ReviewDecision,
 ) -> fresh ReviewSummary {
     if decision_value.classification == ReviewClass.unknown() {
         return ReviewSummary(
@@ -676,23 +676,23 @@ fn add_decision(
     )
 }
 
-fn add_fact_to_summary(summary: read ReviewSummary, facts: read ReviewFacts) -> fresh ReviewSummary {
-    let decision_value = classify_function(facts: read facts)
-    return add_decision(summary: read summary, decision_value: read decision_value)
+fn add_fact_to_summary(summary: ReviewSummary, facts: ReviewFacts) -> fresh ReviewSummary {
+    let decision_value = classify_function(facts)
+    return add_decision(summary, decision_value)
 }
 
-fn summarize_list(items: read List<ReviewFacts>) -> fresh ReviewSummary {
+fn summarize_list(items: List<ReviewFacts>) -> fresh ReviewSummary {
     return List.fold<ReviewFacts, ReviewSummary>(
-        list: read items,
-        initial: read empty_summary(),
+        list: items,
+        initial: empty_summary(),
         folder: |summary, facts| {
-            return add_fact_to_summary(summary: read summary, facts: read facts)
+            return add_fact_to_summary(summary, facts)
         },
     )
 }
 
-fn classification_matches_region(facts: read ReviewFacts) -> Bool {
-    let decision_value = classify_function(facts: read facts)
+fn classification_matches_region(facts: ReviewFacts) -> Bool {
+    let decision_value = classify_function(facts)
 
     if decision_value.classification != facts.expected_classification {
         return false
@@ -706,106 +706,106 @@ fn classification_matches_region(facts: read ReviewFacts) -> Bool {
 }
 
 fn every_region_classification_matches(
-    items: read List<ReviewFacts>,
+    items: List<ReviewFacts>,
     index: Int,
 ) -> Bool {
-    if index >= List.len(list: read items) {
+    if index >= List.len(list: items) {
         return true
     }
 
-    let facts = List.get(list: read items, index: index)
+    let facts = List.get(list: items, index)
 
-    if classification_matches_region(facts: read facts) == false {
+    if classification_matches_region(facts) == false {
         return false
     }
 
     return every_region_classification_matches(
-        items: read items,
+        items,
         index: index + 1,
     )
 }
 
 fn classification_mismatch_count_from(
-    items: read List<ReviewFacts>,
+    items: List<ReviewFacts>,
     index: Int,
 ) -> Int {
-    if index >= List.len(list: read items) {
+    if index >= List.len(list: items) {
         return 0
     }
 
-    let facts = List.get(list: read items, index: index)
+    let facts = List.get(list: items, index)
     let rest = classification_mismatch_count_from(
-        items: read items,
+        items,
         index: index + 1,
     )
 
-    if classification_matches_region(facts: read facts) {
+    if classification_matches_region(facts) {
         return rest
     }
 
     return rest + 1
 }
 
-fn classification_mismatch_count(items: read List<ReviewFacts>) -> Int {
-    return classification_mismatch_count_from(items: read items, index: 0)
+fn classification_mismatch_count(items: List<ReviewFacts>) -> Int {
+    return classification_mismatch_count_from(items, index: 0)
 }
 
 fn unmodeled_reason_count_from(
-    items: read List<ReviewFacts>,
+    items: List<ReviewFacts>,
     index: Int,
 ) -> Int {
-    if index >= List.len(list: read items) {
+    if index >= List.len(list: items) {
         return 0
     }
 
-    let facts = List.get(list: read items, index: index)
+    let facts = List.get(list: items, index)
     let rest = unmodeled_reason_count_from(
-        items: read items,
+        items,
         index: index + 1,
     )
 
     return rest + facts.unmodeled_reasons
 }
 
-fn unmodeled_reason_count(items: read List<ReviewFacts>) -> Int {
-    return unmodeled_reason_count_from(items: read items, index: 0)
+fn unmodeled_reason_count(items: List<ReviewFacts>) -> Int {
+    return unmodeled_reason_count_from(items, index: 0)
 }
 
-fn mismatch_detail(facts: read ReviewFacts) -> fresh String {
-    let decision_value = classify_function(facts: read facts)
+fn mismatch_detail(facts: ReviewFacts) -> fresh String {
+    let decision_value = classify_function(facts)
     let expected = review_class_to_string(value: facts.expected_classification)
     let actual = review_class_to_string(value: decision_value.classification)
-    let first = String.concat(left: read facts.function_name, right: read " expected=")
-    let second = String.concat(left: read first, right: read expected)
-    let third = String.concat(left: read second, right: read " actual=")
+    let first = String.concat(left: facts.function_name, right: " expected=")
+    let second = String.concat(left: first, right: expected)
+    let third = String.concat(left: second, right: " actual=")
 
-    return String.concat(left: read third, right: read actual)
+    return String.concat(left: third, right: actual)
 }
 
 fn first_classification_mismatch_from(
-    items: read List<ReviewFacts>,
+    items: List<ReviewFacts>,
     index: Int,
 ) -> String {
-    if index >= List.len(list: read items) {
+    if index >= List.len(list: items) {
         return "none"
     }
 
-    let facts = List.get(list: read items, index: index)
+    let facts = List.get(list: items, index)
 
-    if classification_matches_region(facts: read facts) == false {
-        return mismatch_detail(facts: read facts)
+    if classification_matches_region(facts) == false {
+        return mismatch_detail(facts)
     }
 
     return first_classification_mismatch_from(
-        items: read items,
+        items,
         index: index + 1,
     )
 }
 
-fn first_classification_mismatch(items: read List<ReviewFacts>) -> String {
+fn first_classification_mismatch(items: List<ReviewFacts>) -> String {
     for facts in items {
-        if classification_matches_region(facts: read facts) == false {
-            return mismatch_detail(facts: read facts)
+        if classification_matches_region(facts) == false {
+            return mismatch_detail(facts)
         }
     }
 
@@ -813,16 +813,16 @@ fn first_classification_mismatch(items: read List<ReviewFacts>) -> String {
 }
 
 fn selfhost_fact_list() -> Result<fresh List<ReviewFacts>, JsonError> {
-    let path = Path.from_string(value: read "tests/fixtures/pass/selfhost-review-facts.json")
-    let json = Json.parse_file(path: read path)?
-    let files = Json.field(value: read json, name: read "files")?
-    let limit = Json.array_len(value: read files)?
+    let path = Path.from_string(value: "tests/fixtures/pass/selfhost-review-facts.json")
+    let json = Json.parse_file(path)?
+    let files = Json.field(value: json, name: "files")?
+    let limit = Json.array_len(value: files)?
     local items = List<ReviewFacts>.new()
 
     parse_file_regions_from(
-        files: read files,
+        files,
         index: 0,
-        limit: limit,
+        limit,
         items: mut items,
     )?
 
@@ -830,13 +830,13 @@ fn selfhost_fact_list() -> Result<fresh List<ReviewFacts>, JsonError> {
 }
 
 fn selfhost_expected_summary() -> Result<fresh ReviewSummary, JsonError> {
-    let path = Path.from_string(value: read "tests/fixtures/pass/selfhost-review-facts.json")
-    let json = Json.parse_file(path: read path)?
+    let path = Path.from_string(value: "tests/fixtures/pass/selfhost-review-facts.json")
+    let json = Json.parse_file(path)?
 
-    return expected_summary_from_json(json: read json)
+    return expected_summary_from_json(json)
 }
 
-fn unknown_ratio_percent(summary: read ReviewSummary) -> Int {
+fn unknown_ratio_percent(summary: ReviewSummary) -> Int {
     if summary.total_functions == 0 {
         return 0
     }
@@ -847,16 +847,16 @@ fn unknown_ratio_percent(summary: read ReviewSummary) -> Int {
 fn selfhost_sample_summary() -> Result<fresh ReviewSummary, JsonError> {
     let items = selfhost_fact_list()?
 
-    return summarize_list(items: read items)
+    return summarize_list(items)
 }
 
 fn selfhost_shape_is_expected() -> Result<Bool, JsonError> {
     let items = selfhost_fact_list()?
     let summary = selfhost_sample_summary()?
     let expected = selfhost_expected_summary()?
-    let unknown_percent = unknown_ratio_percent(summary: read summary)
-    let mismatches = classification_mismatch_count(items: read items)
-    let unmodeled = unmodeled_reason_count(items: read items)
+    let unknown_percent = unknown_ratio_percent(summary)
+    let mismatches = classification_mismatch_count(items)
+    let unmodeled = unmodeled_reason_count(items)
 
     if summary.total_functions != expected.total_functions {
         return Ok(false)
@@ -890,10 +890,10 @@ fn selfhost_shape_is_expected() -> Result<Bool, JsonError> {
 }
 
 fn selfhost_summary_line(
-    summary: read ReviewSummary,
+    summary: ReviewSummary,
     mismatches: Int,
     unmodeled_reasons: Int,
-    first_mismatch: read String,
+    first_mismatch: String,
 ) -> fresh String {
     let total = String.from_int(value: summary.total_functions)
     let must = String.from_int(value: summary.must_review_functions)
@@ -902,22 +902,22 @@ fn selfhost_summary_line(
     let lines = String.from_int(value: summary.suggested_lines)
     let mismatch_count = String.from_int(value: mismatches)
     let unmodeled_count = String.from_int(value: unmodeled_reasons)
-    let first = String.concat(left: read "selfhost review summary total=", right: read total)
-    let second = String.concat(left: read first, right: read " must=")
-    let third = String.concat(left: read second, right: read must)
-    let fourth = String.concat(left: read third, right: read " low=")
-    let fifth = String.concat(left: read fourth, right: read low)
-    let sixth = String.concat(left: read fifth, right: read " unknown=")
-    let seventh = String.concat(left: read sixth, right: read unknown)
-    let eighth = String.concat(left: read seventh, right: read " lines=")
-    let ninth = String.concat(left: read eighth, right: read lines)
-    let tenth = String.concat(left: read ninth, right: read " mismatches=")
-    let eleventh = String.concat(left: read tenth, right: read mismatch_count)
-    let twelfth = String.concat(left: read eleventh, right: read " unmodeled_reasons=")
-    let thirteenth = String.concat(left: read twelfth, right: read unmodeled_count)
-    let fourteenth = String.concat(left: read thirteenth, right: read " first_mismatch=")
+    let first = String.concat(left: "selfhost review summary total=", right: total)
+    let second = String.concat(left: first, right: " must=")
+    let third = String.concat(left: second, right: must)
+    let fourth = String.concat(left: third, right: " low=")
+    let fifth = String.concat(left: fourth, right: low)
+    let sixth = String.concat(left: fifth, right: " unknown=")
+    let seventh = String.concat(left: sixth, right: unknown)
+    let eighth = String.concat(left: seventh, right: " lines=")
+    let ninth = String.concat(left: eighth, right: lines)
+    let tenth = String.concat(left: ninth, right: " mismatches=")
+    let eleventh = String.concat(left: tenth, right: mismatch_count)
+    let twelfth = String.concat(left: eleventh, right: " unmodeled_reasons=")
+    let thirteenth = String.concat(left: twelfth, right: unmodeled_count)
+    let fourteenth = String.concat(left: thirteenth, right: " first_mismatch=")
 
-    return String.concat(left: read fourteenth, right: read first_mismatch)
+    return String.concat(left: fourteenth, right: first_mismatch)
 }
 
 pub fn main() -> Result<Unit, JsonError> {
@@ -925,19 +925,19 @@ pub fn main() -> Result<Unit, JsonError> {
     let items = selfhost_fact_list()?
     let expected = selfhost_expected_summary()?
     let unknown_region = make_unknown_region(lines: 7)
-    let unknown_decision = classify_function(facts: read unknown_region)
-    let mismatches = classification_mismatch_count(items: read items)
-    let unmodeled = unmodeled_reason_count(items: read items)
-    let first_mismatch = first_classification_mismatch(items: read items)
+    let unknown_decision = classify_function(facts: unknown_region)
+    let mismatches = classification_mismatch_count(items)
+    let unmodeled = unmodeled_reason_count(items)
+    let first_mismatch = first_classification_mismatch(items)
     let summary_line = selfhost_summary_line(
-        summary: read summary,
-        mismatches: mismatches,
+        summary,
+        mismatches,
         unmodeled_reasons: unmodeled,
-        first_mismatch: read first_mismatch,
+        first_mismatch,
     )
     let shape_ok = selfhost_shape_is_expected()?
 
-    Log.write(message: read summary_line)
+    Log.write(message: summary_line)
 
     Assert.equal_int(left: summary.total_functions, right: expected.total_functions)
     Assert.equal_int(left: summary.must_review_functions, right: expected.must_review_functions)
@@ -946,10 +946,10 @@ pub fn main() -> Result<Unit, JsonError> {
     Assert.equal_int(left: summary.suggested_lines, right: expected.suggested_lines)
     Assert.equal_int(left: mismatches, right: 0)
     Assert.equal_int(left: unmodeled, right: 0)
-    Assert.equal(left: read first_mismatch, right: read "none")
+    Assert.equal(left: first_mismatch, right: "none")
     Assert.equal_int(left: unknown_decision.classification, right: ReviewClass.unknown())
     Assert.equal_bool(left: shape_ok, right: true)
-    Assert.equal_bool(left: every_region_classification_matches(items: read items, index: 0), right: true)
+    Assert.equal_bool(left: every_region_classification_matches(items, index: 0), right: true)
 
     return Ok(Unit)
 }

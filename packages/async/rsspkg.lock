@@ -4,8 +4,8 @@ version = 1
 name = "rss-async"
 version = "0.1.0"
 source = "path+packages/async"
-checksum = "sha256:9119ffe44aa82304fc32fb445ed8e0b95dac71dc7328dc6c1dba47ca8dcde5c2"
-interface_hash = "sha256:f2723baf4534b3d3185cc2380b247ef04a03c51b05641af2ce9da79f35231019"
+checksum = "sha256:e83535963f901a89abdad51f2a73da6634cad36fe2fd09047e8fdb8b978f48ee"
+interface_hash = "sha256:604a985dce961534bb724342ab11b981a3d304f8e55a175b0d9c3110d46f94a0"
 review_hash = "sha256:9a488d2f6f5d95493e92a99016df4a83610138e5de22e6fb14821c97bf8119ee"
 features = []
 

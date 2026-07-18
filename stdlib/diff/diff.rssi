@@ -1,4 +1,4 @@
 features: native
 
-pub fn Diff.unified(old: read String, new: read String) -> fresh String
+pub fn Diff.unified(old: String, new: String) -> fresh String
     effects(native)

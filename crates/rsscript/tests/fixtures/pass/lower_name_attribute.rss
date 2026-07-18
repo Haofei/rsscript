@@ -2,11 +2,11 @@
 // boundaries and compiler transitions). The pin is checked for validity and
 // uniqueness and is reflected in the symbol inventory and generated Rust.
 #lower_name("helpers__count")
-fn count(value: read Int) -> Int {
+fn count(value: Int) -> Int {
     return value
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: count(value: read 3)))
+    Log.write(message: String.from_int(value: count(value: 3)))
     return Unit
 }

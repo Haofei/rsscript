@@ -26,7 +26,7 @@ fn empty_export_summary() -> fresh PackageExportSummary {
     )
 }
 
-fn export_reason_is_modeled(reason: read String) -> Bool {
+fn export_reason_is_modeled(reason: String) -> Bool {
     if reason == "public struct type" || reason == "public resource type" {
         return true
     }
@@ -39,47 +39,47 @@ fn export_reason_is_modeled(reason: read String) -> Bool {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "mut parameter") {
+    if String.starts_with(value: reason, prefix: "mut parameter") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "take parameter") {
+    if String.starts_with(value: reason, prefix: "take parameter") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "resource parameter") {
+    if String.starts_with(value: reason, prefix: "resource parameter") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "resource return type") {
+    if String.starts_with(value: reason, prefix: "resource return type") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "retains(") {
+    if String.starts_with(value: reason, prefix: "retains(") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "native boundary") {
+    if String.starts_with(value: reason, prefix: "native boundary") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "unsafe boundary") {
+    if String.starts_with(value: reason, prefix: "unsafe boundary") {
         return true
     }
 
-    if String.starts_with(value: read reason, prefix: read "guarantee `") {
+    if String.starts_with(value: reason, prefix: "guarantee `") {
         return true
     }
 
     return false
 }
 
-fn count_unmodeled_export_reasons(reasons: read JsonValue) -> Result<Int, JsonError> {
+fn count_unmodeled_export_reasons(reasons: JsonValue) -> Result<Int, JsonError> {
     return Json.array_count_where(
-        value: read reasons,
+        value: reasons,
         predicate: |item| {
-            let reason = Json.as_string(value: read item)?
-            if export_reason_is_modeled(reason: read reason) {
+            let reason = Json.as_string(value: item)?
+            if export_reason_is_modeled(reason) {
                 return Ok(false)
             }
 
@@ -89,35 +89,35 @@ fn count_unmodeled_export_reasons(reasons: read JsonValue) -> Result<Int, JsonEr
 }
 
 fn export_has_resource_boundary(
-    kind: read String,
-    reasons: read JsonValue,
+    kind: String,
+    reasons: JsonValue,
 ) -> Result<Bool, JsonError> {
     if kind != "function" {
         return Ok(false)
     }
 
-    if Json.array_contains_prefix(value: read reasons, prefix: read "resource parameter")? {
+    if Json.array_contains_prefix(value: reasons, prefix: "resource parameter")? {
         return Ok(true)
     }
 
-    return Json.array_contains_string(value: read reasons, item: read "resource return type")
+    return Json.array_contains_string(value: reasons, item: "resource return type")
 }
 
 fn add_export_summary(
-    summary: read PackageExportSummary,
-    export: read JsonValue,
+    summary: PackageExportSummary,
+    export: JsonValue,
 ) -> Result<fresh PackageExportSummary, JsonError> {
-    let kind = Json.field_string(value: read export, name: read "kind")?
-    let classification = Json.field_string(value: read export, name: read "classification")?
-    let reasons = Json.field(value: read export, name: read "reasons")?
+    let kind = Json.field_string(value: export, name: "kind")?
+    let classification = Json.field_string(value: export, name: "classification")?
+    let reasons = Json.field(value: export, name: "reasons")?
     let is_function = kind == "function"
     let is_type = kind == "type"
-    let mutating = is_function && Json.array_contains_prefix(value: read reasons, prefix: read "mut parameter")?
-    let retaining = is_function && Json.array_contains_prefix(value: read reasons, prefix: read "retains(")?
-    let resource = export_has_resource_boundary(kind: read kind, reasons: read reasons)?
-    let fresh = is_function && Json.array_contains_string(value: read reasons, item: read "returns fresh value")?
+    let mutating = is_function && Json.array_contains_prefix(value: reasons, prefix: "mut parameter")?
+    let retaining = is_function && Json.array_contains_prefix(value: reasons, prefix: "retains(")?
+    let resource = export_has_resource_boundary(kind, reasons)?
+    let fresh = is_function && Json.array_contains_string(value: reasons, item: "returns fresh value")?
     let unknown = is_function && classification == "unknown"
-    let unmodeled = count_unmodeled_export_reasons(reasons: read reasons)?
+    let unmodeled = count_unmodeled_export_reasons(reasons)?
 
     return PackageExportSummary(
         public_types: add_bool(value: summary.public_types, condition: is_type),
@@ -141,47 +141,47 @@ fn add_bool(value: Int, condition: Bool) -> Int {
 }
 
 fn fold_export_summary(
-    summary: read PackageExportSummary,
-    export: read JsonValue,
+    summary: PackageExportSummary,
+    export: JsonValue,
 ) -> Result<fresh PackageExportSummary, JsonError> {
-    return add_export_summary(summary: read summary, export: read export)
+    return add_export_summary(summary, export)
 }
 
 fn selfhost_export_summary() -> Result<fresh PackageExportSummary, JsonError> {
-    let path = Path.from_string(value: read "tests/fixtures/pass/selfhost-package-exports.json")
-    let json = Json.parse_file(path: read path)?
-    let exports = Json.field(value: read json, name: read "exports")?
+    let path = Path.from_string(value: "tests/fixtures/pass/selfhost-package-exports.json")
+    let json = Json.parse_file(path)?
+    let exports = Json.field(value: json, name: "exports")?
 
     return Json.array_fold<PackageExportSummary>(
-        value: read exports,
-        initial: read empty_export_summary(),
+        value: exports,
+        initial: empty_export_summary(),
         folder: |summary, export| {
-            return fold_export_summary(summary: read summary, export: read export)
+            return fold_export_summary(summary, export)
         },
     )
 }
 
 fn expected_export_summary() -> Result<fresh PackageExportSummary, JsonError> {
-    let path = Path.from_string(value: read "tests/fixtures/pass/selfhost-package-exports.json")
-    let json = Json.parse_file(path: read path)?
-    let summary = Json.field(value: read json, name: read "summary")?
+    let path = Path.from_string(value: "tests/fixtures/pass/selfhost-package-exports.json")
+    let json = Json.parse_file(path)?
+    let summary = Json.field(value: json, name: "summary")?
 
     return PackageExportSummary(
-        public_types: Json.field_int(value: read summary, name: read "public_types")?,
-        public_functions: Json.field_int(value: read summary, name: read "public_functions")?,
-        public_apis: Json.field_int(value: read summary, name: read "public_apis")?,
-        mutating_apis: Json.field_int(value: read summary, name: read "mutating_apis")?,
-        retaining_apis: Json.field_int(value: read summary, name: read "retaining_apis")?,
-        resource_apis: Json.field_int(value: read summary, name: read "resource_apis")?,
-        fresh_returning_apis: Json.field_int(value: read summary, name: read "fresh_returning_apis")?,
-        unknown_apis: Json.field_int(value: read summary, name: read "unknown_apis")?,
+        public_types: Json.field_int(value: summary, name: "public_types")?,
+        public_functions: Json.field_int(value: summary, name: "public_functions")?,
+        public_apis: Json.field_int(value: summary, name: "public_apis")?,
+        mutating_apis: Json.field_int(value: summary, name: "mutating_apis")?,
+        retaining_apis: Json.field_int(value: summary, name: "retaining_apis")?,
+        resource_apis: Json.field_int(value: summary, name: "resource_apis")?,
+        fresh_returning_apis: Json.field_int(value: summary, name: "fresh_returning_apis")?,
+        unknown_apis: Json.field_int(value: summary, name: "unknown_apis")?,
         unmodeled_reasons: 0,
     )
 }
 
 fn export_mismatch_count(
-    actual: read PackageExportSummary,
-    expected: read PackageExportSummary,
+    actual: PackageExportSummary,
+    expected: PackageExportSummary,
 ) -> Int {
     if actual.public_types != expected.public_types {
         return 1
@@ -219,7 +219,7 @@ fn export_mismatch_count(
 }
 
 fn export_summary_line(
-    actual: read PackageExportSummary,
+    actual: PackageExportSummary,
     mismatches: Int,
 ) -> fresh String {
     let types = String.from_int(value: actual.public_types)
@@ -233,26 +233,26 @@ fn export_summary_line(
     let mismatch_count = String.from_int(value: mismatches)
     let unmodeled = String.from_int(value: actual.unmodeled_reasons)
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "selfhost package exports types=")
-    StringBuilder.push(builder: mut builder, value: read types)
-    StringBuilder.push(builder: mut builder, value: read " functions=")
-    StringBuilder.push(builder: mut builder, value: read functions)
-    StringBuilder.push(builder: mut builder, value: read " apis=")
-    StringBuilder.push(builder: mut builder, value: read apis)
-    StringBuilder.push(builder: mut builder, value: read " mutating=")
-    StringBuilder.push(builder: mut builder, value: read mutating)
-    StringBuilder.push(builder: mut builder, value: read " retaining=")
-    StringBuilder.push(builder: mut builder, value: read retaining)
-    StringBuilder.push(builder: mut builder, value: read " resource=")
-    StringBuilder.push(builder: mut builder, value: read resource)
-    StringBuilder.push(builder: mut builder, value: read " fresh=")
-    StringBuilder.push(builder: mut builder, value: read fresh)
-    StringBuilder.push(builder: mut builder, value: read " unknown=")
-    StringBuilder.push(builder: mut builder, value: read unknown)
-    StringBuilder.push(builder: mut builder, value: read " mismatches=")
-    StringBuilder.push(builder: mut builder, value: read mismatch_count)
-    StringBuilder.push(builder: mut builder, value: read " unmodeled_reasons=")
-    StringBuilder.push(builder: mut builder, value: read unmodeled)
+    StringBuilder.push(builder: mut builder, value: "selfhost package exports types=")
+    StringBuilder.push(builder: mut builder, value: types)
+    StringBuilder.push(builder: mut builder, value: " functions=")
+    StringBuilder.push(builder: mut builder, value: functions)
+    StringBuilder.push(builder: mut builder, value: " apis=")
+    StringBuilder.push(builder: mut builder, value: apis)
+    StringBuilder.push(builder: mut builder, value: " mutating=")
+    StringBuilder.push(builder: mut builder, value: mutating)
+    StringBuilder.push(builder: mut builder, value: " retaining=")
+    StringBuilder.push(builder: mut builder, value: retaining)
+    StringBuilder.push(builder: mut builder, value: " resource=")
+    StringBuilder.push(builder: mut builder, value: resource)
+    StringBuilder.push(builder: mut builder, value: " fresh=")
+    StringBuilder.push(builder: mut builder, value: fresh)
+    StringBuilder.push(builder: mut builder, value: " unknown=")
+    StringBuilder.push(builder: mut builder, value: unknown)
+    StringBuilder.push(builder: mut builder, value: " mismatches=")
+    StringBuilder.push(builder: mut builder, value: mismatch_count)
+    StringBuilder.push(builder: mut builder, value: " unmodeled_reasons=")
+    StringBuilder.push(builder: mut builder, value: unmodeled)
 
     return StringBuilder.finish(builder: take builder)
 }
@@ -260,10 +260,10 @@ fn export_summary_line(
 pub fn main() -> Result<Unit, JsonError> {
     let actual = selfhost_export_summary()?
     let expected = expected_export_summary()?
-    let mismatches = export_mismatch_count(actual: read actual, expected: read expected)
-    let summary = export_summary_line(actual: read actual, mismatches: mismatches)
+    let mismatches = export_mismatch_count(actual, expected)
+    let summary = export_summary_line(actual, mismatches)
 
-    Log.write(message: read summary)
+    Log.write(message: summary)
 
     Assert.equal_int(left: mismatches, right: 0)
     Assert.equal_int(left: actual.unmodeled_reasons, right: 0)

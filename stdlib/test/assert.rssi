@@ -1,4 +1,4 @@
-pub fn Assert.equal(left: read String, right: read String) -> Unit
+pub fn Assert.equal(left: String, right: String) -> Unit
 
 pub fn Assert.equal_int(left: Int, right: Int) -> Unit
 

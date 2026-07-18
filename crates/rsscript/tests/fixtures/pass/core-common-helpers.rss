@@ -1,32 +1,32 @@
-fn count_common_helpers(path: read Path) -> Result<Int, FileError> {
+fn count_common_helpers(path: Path) -> Result<Int, FileError> {
     let mut items = List<Int>.new()
-    List.push(list: mut items, value: read 1)
-    List.set(list: mut items, index: 0, value: read 2)
+    List.push(list: mut items, value: 1)
+    List.set(list: mut items, index: 0, value: 2)
 
-    let copy = List.slice(list: read items, start: 0, len: 1)
-    List.append(list: mut items, values: read copy)
+    let copy = List.slice(list: items, start: 0, len: 1)
+    List.append(list: mut items, values: copy)
     List.pop(list: mut items)
 
-    if File.exists(path: read path) {
-        let text = File.read_string(path: read path)?
-        File.write_string_to_path(path: read path, text: read text)?
-        File.append_string(path: read path, text: read "!")?
+    if File.exists(path) {
+        let text = File.read_string(path)?
+        File.write_string_to_path(path, text)?
+        File.append_string(path, text: "!")?
     }
 
-    if Path.is_absolute(path: read path) {
-        List.push(list: mut items, value: read 3)
+    if Path.is_absolute(path) {
+        List.push(list: mut items, value: 3)
     }
 
-    let part = List.slice(list: read items, start: 0, len: 2)
-    return Ok(List.len(list: read part))
+    let part = List.slice(list: items, start: 0, len: 2)
+    return Ok(List.len(list: part))
 }
 
 fn main() -> Result<Unit, FileError> {
-    let path = Path.from_string(value: read "target/rss-core-common-helpers.txt")
-    File.write_string_to_path(path: read path, text: read "hello")?
-    let count = count_common_helpers(path: read path)?
+    let path = Path.from_string(value: "target/rss-core-common-helpers.txt")
+    File.write_string_to_path(path, text: "hello")?
+    let count = count_common_helpers(path)?
     if count == 0 {
-        File.append_string(path: read path, text: read "empty")?
+        File.append_string(path, text: "empty")?
     }
     return Ok(Unit)
 }

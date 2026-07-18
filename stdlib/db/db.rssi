@@ -2,13 +2,13 @@ features: native
 
 resource DbConnection
 
-pub fn DbConnection.open(url: read Url) -> DbConnection
+pub fn DbConnection.open(url: Url) -> DbConnection
 
-pub fn DbConnection.try_open(url: read Url) -> Result<DbConnection, DbError>
+pub fn DbConnection.try_open(url: Url) -> Result<DbConnection, DbError>
 
 pub fn DbConnection.query(
     conn: mut DbConnection,
-    sql: read String,
+    sql: String,
 ) -> Result<Unit, DbError>
 
 pub native fn Db.close(fd: Fd) -> Unit

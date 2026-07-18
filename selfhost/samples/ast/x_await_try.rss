@@ -16,7 +16,7 @@ async fn nested_loop() -> Result<Unit, TimerError> {
     return Ok(Unit)
 }
 
-async fn nested_match(value: read Option<Int>) -> Result<Unit, TimerError> {
+async fn nested_match(value: Option<Int>) -> Result<Unit, TimerError> {
     match value {
         Some(_) => {
             await Timer.sleep(ms: 1)?
@@ -31,7 +31,7 @@ async fn nested_match(value: read Option<Int>) -> Result<Unit, TimerError> {
 async fn main() -> Result<Unit, TimerError> {
     await nested_if()?
     await nested_loop()?
-    await nested_match(value: read Some(1))?
-    await nested_match(value: read None)?
+    await nested_match(value: Some(1))?
+    await nested_match(value: None)?
     return Ok(Unit)
 }

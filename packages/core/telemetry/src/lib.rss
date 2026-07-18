@@ -1,6 +1,6 @@
-pub fn Telemetry.emit(event: read String, message: read String) -> Unit {
-    let prefix = String.concat(left: read event, right: read ": ")
-    let line = String.concat(left: read prefix, right: read message)
-    Log.write(message: read line)
+pub fn Telemetry.emit(event: String, message: String) -> Unit {
+    let prefix = String.concat(left: event, right: ": ")
+    let line = String.concat(left: prefix, right: message)
+    Log.write(message: line)
     return Unit
 }

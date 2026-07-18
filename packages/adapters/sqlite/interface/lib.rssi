@@ -1,10 +1,10 @@
 features: native
 
-native fn Sqlite.execute(path: read Path, sql: read String) -> Result<Unit, String>
+native fn Sqlite.execute(path: Path, sql: String) -> Result<Unit, String>
     effects(native)
 
-native fn Sqlite.query_strings(path: read Path, sql: read String) -> Result<fresh List<String>, String>
+native fn Sqlite.query_strings(path: Path, sql: String) -> Result<fresh List<String>, String>
     effects(native)
 
-native fn Sqlite.query_one_string(path: read Path, sql: read String) -> Result<Option<String>, String>
+native fn Sqlite.query_one_string(path: Path, sql: String) -> Result<Option<String>, String>
     effects(native)

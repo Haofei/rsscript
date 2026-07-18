@@ -5,11 +5,11 @@ struct Image {
     pixels: Buffer
 }
 
-fn store_once(path: read Path) -> Unit {
-    local image = Image.load(path: read path)
+fn store_once(path: Path) -> Unit {
+    local image = Image.load(path)
     loop {
         let shared = manage image
         break
     }
-    Image.inspect(image: read image)
+    Image.inspect(image)
 }

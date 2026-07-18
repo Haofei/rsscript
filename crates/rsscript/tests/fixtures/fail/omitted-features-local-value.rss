@@ -1,5 +1,5 @@
 // expect: RS0101
-fn render(path: read Path) -> Image {
-    local image = Image.load(path: read path)
+fn render(path: Path) -> Image {
+    local image = Image.load(path)
     return manage image
 }

@@ -1,10 +1,10 @@
 features: native
 
-native fn Cli.flag(args: read List<String>, name: read String) -> Bool
+native fn Cli.flag(args: List<String>, name: String) -> Bool
     effects(native)
 
-native fn Cli.option(args: read List<String>, name: read String) -> Option<String>
+native fn Cli.option(args: List<String>, name: String) -> Option<String>
     effects(native)
 
-native fn Cli.positionals(args: read List<String>) -> fresh List<String>
+native fn Cli.positionals(args: List<String>) -> fresh List<String>
     effects(native)

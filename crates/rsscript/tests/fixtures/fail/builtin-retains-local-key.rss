@@ -3,6 +3,6 @@ features: local
 
 fn run() -> Unit {
     let cache = Cache.new()
-    local key = String.concat(left: read "/users", right: read "")
-    Cache.insert(cache: mut cache, key: read key, value: read "handled /users")
+    local key = String.concat(left: "/users", right: "")
+    Cache.insert(cache: mut cache, key, value: "handled /users")
 }

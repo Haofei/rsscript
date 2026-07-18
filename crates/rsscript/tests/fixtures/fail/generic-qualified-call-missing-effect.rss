@@ -1,14 +1,5 @@
 // expect: RS0202
-features: local
-
-resource DbConnection {
-    fd: Int
-
-    drop {
-        Db.close(fd: fd)
-    }
-}
-
-fn bad_borrow(pool: mut ResourcePool<DbConnection>) -> Unit {
-    ResourcePool<DbConnection>.borrow(pool: pool)
+fn bad_push() -> Unit {
+    let mut items = List<Int>.new()
+    List.push<Int>(list: items, value: 1)
 }

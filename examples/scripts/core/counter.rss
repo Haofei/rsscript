@@ -1,10 +1,10 @@
 fn main() -> Unit {
     let counter = Counter.new(value: 1)
     Counter.add(counter: mut counter, amount: 2)
-    let value = Counter.value(counter: read counter)
+    let value = Counter.value(counter)
 
     if value == 3 {
-        Log.write(message: read "counter ran")
+        Log.write(message: "counter ran")
     }
 
     return Unit

@@ -7,17 +7,17 @@ struct Holder {
 }
 struct Cache
 
-fn Cache.store_option(cache: mut Cache, value: read Option<Image>) -> Unit
+fn Cache.store_option(cache: mut Cache, value: Option<Image>) -> Unit
     effects(retains(value))
 
-fn Cache.store_result(cache: mut Cache, value: read Result<Image, StoreError>) -> Unit
+fn Cache.store_result(cache: mut Cache, value: Result<Image, StoreError>) -> Unit
     effects(retains(value))
 
 fn make_holder() -> fresh Holder
 
 fn bad_store(cache: mut Cache) -> Unit {
     local holder = make_holder()
-    Cache.store_option(cache: mut cache, value: read Some(holder.image))
-    Cache.store_result(cache: mut cache, value: read Ok(holder.image))
-    Cache.store_option(cache: mut cache, value: read Some(read holder.image))
+    Cache.store_option(cache: mut cache, value: Some(holder.image))
+    Cache.store_result(cache: mut cache, value: Ok(holder.image))
+    Cache.store_option(cache: mut cache, value: Some(read holder.image))
 }

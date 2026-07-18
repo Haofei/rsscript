@@ -186,7 +186,14 @@ pub(super) fn type_ref_name(ty: &TypeRef) -> String {
         let params = ty
             .fn_params
             .iter()
-            .map(type_ref_name)
+            .enumerate()
+            .map(|(index, param)| {
+                let prefix = ty
+                    .effective_fn_param_effect(index)
+                    .map(|effect| format!("{} ", effect.as_str()))
+                    .unwrap_or_default();
+                format!("{prefix}{}", type_ref_name(param))
+            })
             .collect::<Vec<_>>()
             .join(", ");
         let return_ty = ty

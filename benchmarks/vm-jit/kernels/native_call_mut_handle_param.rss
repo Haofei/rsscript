@@ -7,8 +7,8 @@ struct Cell {
 }
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -27,7 +27,7 @@ fn hot(cell: mut Cell, limit: Int) -> Int {
     let mut i = 0
     let mut total = 0
     while i < limit {
-        total = total + set_cell(cell: mut cell, value: read i)
+        total = total + set_cell(cell: mut cell, value: i)
         i = i + 1
     }
     return total + cell.value
@@ -36,7 +36,7 @@ fn hot(cell: mut Cell, limit: Int) -> Int {
 fn main() -> Unit {
     let limit = bench_size(default: 250000)
     let mut cell = Cell(value: 0)
-    let result = hot(cell: mut cell, limit: limit)
-    Log.write(message: read String.from_int(value: result))
+    let result = hot(cell: mut cell, limit)
+    Log.write(message: String.from_int(value: result))
     return Unit
 }

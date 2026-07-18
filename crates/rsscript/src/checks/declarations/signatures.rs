@@ -1,7 +1,19 @@
-use super::*;
+use std::collections::HashSet;
+
+use crate::analyzer::{
+    Analyzer, data_effect_name, effect_display, effect_name, function_belongs_to_protocol,
+    function_body_belongs_to_protocol, function_has_effect, generic_bounds, is_builtin_type_name,
+    protocol_method_names, protocol_signature_mismatch, removed_runtime_effect_replacement,
+    split_qualified_name, type_ref_is_copy, type_ref_is_noescape,
+};
+use crate::checks;
+use crate::diagnostic::{Diagnostic, code};
+use crate::syntax::ast::{
+    DataEffect, EffectDecl, FunctionDecl, GenericBound, GenericParam, Item, Param, TypeKind,
+};
 
 impl Analyzer<'_> {
-    pub(super) fn check_signature_explicitness(&mut self) {
+    pub(crate) fn check_signature_explicitness(&mut self) {
         let items = self.syntax_program.items.clone();
         let protocol_names = self
             .syntax_program
@@ -97,35 +109,6 @@ impl Analyzer<'_> {
                     ),
                 );
             }
-            if param.effect.is_none()
-                && !param.ty.name.is_empty()
-                && param.ty.name != "share"
-                && !type_ref_is_noescape(&param.ty)
-                && !type_ref_is_owned(&param.ty)
-                && !type_ref_is_closure_effect_exempt(&param.ty)
-                && !type_ref_has_surface_reference(&param.ty, self.tokens)
-                && !type_ref_contains_name(&param.ty, "Fd")
-                && !is_copy_type(&param.ty)
-                && !self.is_payloadless_sum_type(&param.ty)
-            {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        code::MISSING_PARAMETER_EFFECT,
-                        format!(
-                            "parameter `{}` in `{}` must declare `read`, `mut`, or `take`.",
-                            param.name, function.name
-                        ),
-                        param.span.clone(),
-                        "missing parameter effect",
-                    )
-                    .with_cause("Non-Copy parameters must expose their data effect in the function signature.")
-                    .with_fix(
-                        "add_parameter_effect",
-                        format!("Write `{}: read {}` or another explicit effect.", param.name, type_ref_name(&param.ty)),
-                        "manual",
-                    ),
-                );
-            }
         }
     }
 
@@ -142,7 +125,7 @@ impl Analyzer<'_> {
             Some(param)
                 if param.name == "self"
                     && param.ty.name == "Self"
-                    && param.effect.is_some() => {}
+                    && param.effective_effect().is_some() => {}
             Some(param) => self.invalid_self_parameter_diagnostic(
                 function,
                 param,
@@ -452,7 +435,7 @@ impl Analyzer<'_> {
         );
     }
 
-    pub(super) fn check_generic_constraints(&mut self) {
+    pub(crate) fn check_generic_constraints(&mut self) {
         let items = self.syntax_program.items.clone();
         for item in &items {
             match item {
@@ -502,7 +485,7 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_protocol_contracts(&mut self) {
+    pub(crate) fn check_protocol_contracts(&mut self) {
         let protocol_names = self.visible_protocol_names();
         let items = self.visible_protocol_items();
         for item in &items {

@@ -8,12 +8,12 @@ struct Config {
     workspace: Workspace
 }
 
-fn inspect_workspace(workspace: read Workspace) -> Unit
-fn publish(config: read Config) -> Unit
+fn inspect_workspace(workspace: Workspace) -> Unit
+fn publish(config: Config) -> Unit
 fn make_config() -> fresh Config
 
 fn run() -> Unit {
     local config = make_config()
-    inspect_workspace(workspace: read config.workspace)
-    publish(config: read (manage config))
+    inspect_workspace(workspace: config.workspace)
+    publish(config: (manage config))
 }

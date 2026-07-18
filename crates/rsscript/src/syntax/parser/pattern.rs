@@ -27,6 +27,7 @@ pub(super) fn parse_match_expr(tokens: &[Token], start: usize, end: usize) -> Op
         value: Box::new(value),
         scrutinee_effect,
         arms: parsed_arms.arms,
+        from_if_expression: false,
         malformed_arm_spans: parsed_arms.malformed_spans,
         span: tokens[start].span.clone(),
     })

@@ -1453,7 +1453,7 @@ async fn connect_websocket(url: read Url) -> Result<WebSocket, WebSocketError> {
     .expect("package source should lower with async provider");
     let _ = fs::remove_dir_all(&root_dir);
 
-    assert!(check.ok);
+    assert!(check.ok, "{check:#?}");
     assert!(input.interfaces.iter().any(|(path, _)| {
         path.ends_with("packages/async/interface/timer.rssi")
             || path.ends_with("rss\\async\\interface\\timer.rssi")

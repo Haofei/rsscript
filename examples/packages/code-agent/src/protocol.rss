@@ -1,3 +1,3 @@
-fn build_model_request(config: read AgentConfig, state: read AgentState) -> fresh JsonValue {
-    return ChatRequest.openai_compatible(model: read config.model.model, messages: read state.messages, tools: read tool_specs())
+fn build_model_request(config: AgentConfig, state: AgentState) -> fresh JsonValue {
+    return ChatRequest.openai_compatible(model: config.model.model, messages: state.messages, tools: tool_specs())
 }

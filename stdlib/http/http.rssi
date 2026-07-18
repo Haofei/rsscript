@@ -2,12 +2,12 @@ struct Request
 
 struct Response
 
-pub fn Request.new(path: read String) -> fresh Request
+pub fn Request.new(path: String) -> fresh Request
 
-pub fn Request.path(request: read Request) -> String
+pub fn Request.path(request: Request) -> String
 
-pub fn Response.ok(body: read String) -> Result<fresh Response, HttpError>
+pub fn Response.ok(body: String) -> Result<fresh Response, HttpError>
 
-pub fn Response.status(response: read Response) -> Int
+pub fn Response.status(response: Response) -> Int
 
-pub fn Response.body(response: read Response) -> String
+pub fn Response.body(response: Response) -> String

@@ -21,31 +21,31 @@ fn main() -> Unit {
     // `a_again` is a structurally identical, separately-constructed value.
     let a_again = Uop(op: 1, children: List.new<Int>(), arg: Some(7))
 
-    Map.insert(map: mut intern, key: read a, value: read a)
-    Map.insert(map: mut intern, key: read b, value: read b)
+    Map.insert(map: mut intern, key: a, value: a)
+    Map.insert(map: mut intern, key: b, value: b)
     // Overwrite-with-same-key path: inserting a structural duplicate replaces.
-    Map.insert(map: mut intern, key: read a_again, value: read a_again)
+    Map.insert(map: mut intern, key: a_again, value: a_again)
 
-    let size = Map.len(map: read intern)
-    Log.write(message: read String.concat(
-        left: read "intern size: ",
-        right: read Int.to_string(value: read size),
+    let size = Map.len(map: intern)
+    Log.write(message: String.concat(
+        left: "intern size: ",
+        right: Int.to_string(value: size),
     ))
 
     // Lookup the canonical node for a structural duplicate.
-    let found = Map.contains_key(map: read intern, key: read a_again)
+    let found = Map.contains_key(map: intern, key: a_again)
     if found {
-        Log.write(message: read "a_again interns to an existing node")
+        Log.write(message: "a_again interns to an existing node")
     }
 
     // Dedup with a Set<Uop>.
     let seen = Set.new<Uop>()
-    let inserted_a = Set.insert(set: mut seen, value: read a)
-    let inserted_dup = Set.insert(set: mut seen, value: read a_again)
-    let unique = Set.len(set: read seen)
-    Log.write(message: read String.concat(
-        left: read "unique nodes: ",
-        right: read Int.to_string(value: read unique),
+    let inserted_a = Set.insert(set: mut seen, value: a)
+    let inserted_dup = Set.insert(set: mut seen, value: a_again)
+    let unique = Set.len(set: seen)
+    Log.write(message: String.concat(
+        left: "unique nodes: ",
+        right: Int.to_string(value: unique),
     ))
 
     return Unit

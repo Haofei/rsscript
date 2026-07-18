@@ -1,0 +1,133 @@
+// Shared token-range navigation for self-hosted syntax and checker rules.
+//
+// These helpers are deliberately stateless: a rule supplies its range and
+// receives an index. Keeping bracket-depth policy here prevents individual
+// checker rules from drifting on nested calls, generics, and blocks.
+
+module selfhost.syntax.token_ranges
+
+use selfhost.scan.*
+
+// End of the first generic/call argument from `start`: top-level comma,
+// enclosing `>`, or `limit`.
+fn arg_end(toks: List<Tok>, start: Int, limit: Int) -> Int {
+    let mut i = start
+    let mut depth = 0
+    while i < limit {
+        if at_symbol(toks: toks, i: i, code: SYM_LANGLE) || at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) {
+            depth = depth - 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RANGLE) {
+            if depth == 0 { return i }
+            depth = depth - 1
+        } else if depth == 0 && at_symbol(toks: toks, i: i, code: SYM_COMMA) {
+            return i
+        }
+        i = i + 1
+    }
+    return limit
+}
+
+fn matching_lbracket(toks: List<Tok>, closePos: Int) -> Int {
+    let mut i = closePos
+    let mut depth = 0
+    while i >= 0 {
+        if at_symbol(toks: toks, i: i, code: SYM_RBRACKET) { depth = depth + 1 }
+        else if at_symbol(toks: toks, i: i, code: SYM_LBRACKET) {
+            depth = depth - 1
+            if depth == 0 { return i }
+        }
+        i = i - 1
+    }
+    return -1
+}
+
+fn matching_lparen(toks: List<Tok>, closePos: Int) -> Int {
+    let mut i = closePos
+    let mut depth = 0
+    while i >= 0 {
+        if at_symbol(toks: toks, i: i, code: SYM_RPAREN) { depth = depth + 1 }
+        else if at_symbol(toks: toks, i: i, code: SYM_LPAREN) {
+            depth = depth - 1
+            if depth == 0 { return i }
+        }
+        i = i - 1
+    }
+    return -1
+}
+
+// Index immediately after a dotted identifier sequence.
+fn dotted_end(toks: List<Tok>, i: Int) -> Int {
+    if is_ident_tok(toks: toks, i: i) == false { return i }
+    let mut j = i + 1
+    while at_symbol(toks: toks, i: j, code: SYM_DOT) && is_ident_tok(toks: toks, i: (j + 1)) {
+        j = j + 2
+    }
+    return j
+}
+
+// First top-level symbol in [start,end), tracking ()[]{} nesting.
+fn find_top_sym(toks: List<Tok>, start: Int, end: Int, code: Int) -> Int {
+    let mut depth = 0
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACE) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && at_symbol(toks: toks, i: i, code: code) {
+            return i
+        }
+        i = i + 1
+    }
+    return -1
+}
+
+// First top-level match-arm brace after a scrutinee.
+fn find_match_arms_open(toks: List<Tok>, start: Int, end: Int) -> Int {
+    let mut paren = 0
+    let mut bracket = 0
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) { paren = paren + 1 }
+        else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) && paren > 0 { paren = paren - 1 }
+        else if at_symbol(toks: toks, i: i, code: SYM_LBRACKET) { bracket = bracket + 1 }
+        else if at_symbol(toks: toks, i: i, code: SYM_RBRACKET) && bracket > 0 { bracket = bracket - 1 }
+        else if paren == 0 && bracket == 0 && at_symbol(toks: toks, i: i, code: SYM_LBRACE) { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+// End of a same-line expression, stopping before the enclosing closer.
+fn stmt_expr_end(toks: List<Tok>, start: Int, end: Int) -> Int {
+    if start >= end { return end }
+    let line = tk_line(toks: toks, i: start)
+    let mut depth = 0
+    let mut i = start
+    while i < end {
+        if tk_line(toks: toks, i: i) > line { return i }
+        if at_symbol(toks: toks, i: i, code: SYM_RBRACE) || at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) {
+            if depth == 0 { return i }
+            depth = depth - 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_LBRACE) || at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) {
+            depth = depth + 1
+        }
+        i = i + 1
+    }
+    return end
+}
+
+// End of an if/while condition: the top-level opening body brace.
+fn cond_expr_end(toks: List<Tok>, start: Int, limit: Int) -> Int {
+    let mut i = start
+    let mut depth = 0
+    while i < limit {
+        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) { depth = depth + 1 }
+        else if (at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET)) && depth > 0 { depth = depth - 1 }
+        else if depth == 0 && at_symbol(toks: toks, i: i, code: SYM_LBRACE) { return i }
+        i = i + 1
+    }
+    return -1
+}

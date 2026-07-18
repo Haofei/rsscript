@@ -1,5 +1,5 @@
 use crate::text_util::{split_top_level_type_args, type_arg_names, type_root_name};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::checks;
 use crate::diagnostic::{Diagnostic, code};
@@ -12,18 +12,16 @@ use crate::lexer::{Token, lex};
 use crate::syntax::ast::merge_programs;
 use crate::syntax::ast::{
     AssignStmt, Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, GenericBound,
-    GenericParam, Item, MatchPattern, Param, Stmt, TypeKind, TypeRef,
+    GenericParam, Item, MatchPattern, Stmt, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
 mod assign;
 mod derives;
 mod diagnostics;
-mod duplicate_decls;
 mod exhaustiveness;
 mod resource_types;
 mod runtime_guarantee;
-mod signatures;
 mod syntax_support;
 mod unknowns;
 use assign::AssignChecker;
@@ -52,28 +50,160 @@ fn resource_result_return_arg_allowed(
     context == ResourceGenericContext::Return && ty.name == "Result" && index == 0
 }
 
-pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
-    let tokens = lex(file, source);
-    let mut syntax_program = parse_source(file, source);
+/// The source shape is explicit because a single source preserves its historic
+/// parser entrypoint, while package analysis merges separately parsed files.
+enum AnalysisSources<'a> {
+    Single { file: &'a str, source: &'a str },
+    Many(&'a [(&'a str, &'a str)]),
+}
+
+#[derive(Clone, Copy)]
+enum AnalysisFlavor {
+    FullWithStandardPackages,
+    FullWithBuiltinInterfaces,
+    FullWithoutBuiltinInterfaces,
+    SyntaxOnly,
+}
+
+struct AnalysisInput<'a> {
+    sources: AnalysisSources<'a>,
+    interfaces: &'a [(&'a str, &'a str)],
+    flavor: AnalysisFlavor,
+}
+
+struct PreparedAnalysis {
+    tokens: Vec<Token>,
+    syntax_program: crate::syntax::ast::Program,
+    interface_programs: Vec<crate::syntax::ast::Program>,
+    hir: Hir,
+    type_aliases: BTreeMap<String, String>,
+    type_alias_params: BTreeMap<String, Vec<String>>,
+}
+
+/// Own the analyzer front-end protocol in one place. Public entrypoints select
+/// only their historical input shape and HIR interface policy.
+fn prepare_analysis(input: AnalysisInput<'_>) -> PreparedAnalysis {
+    let tokens = match input.sources {
+        AnalysisSources::Single { file, source } => lex(file, source),
+        AnalysisSources::Many(sources) => sources
+            .iter()
+            .flat_map(|(file, source)| lex(file, source))
+            .collect(),
+    };
+    let mut syntax_program = match input.sources {
+        AnalysisSources::Single { file, source } => parse_source(file, source),
+        AnalysisSources::Many(sources) => merge_programs(
+            sources
+                .iter()
+                .map(|(file, source)| parse_source(file, source)),
+        ),
+    };
     crate::syntax::isolate_module_namespaces(&mut syntax_program);
-    let hir = Hir::from_syntax_with_standard_package_interfaces(&syntax_program);
-    analyze_program(tokens, syntax_program, hir, builtin_interface_programs())
+
+    if matches!(input.flavor, AnalysisFlavor::SyntaxOnly) {
+        let hir = Hir::from_syntax(&syntax_program);
+        return PreparedAnalysis {
+            tokens,
+            syntax_program,
+            interface_programs: Vec::new(),
+            hir,
+            type_aliases: BTreeMap::new(),
+            type_alias_params: BTreeMap::new(),
+        };
+    }
+
+    // Alias lookup historically includes core and standard-package aliases for
+    // every full analysis flavor, even when HIR builtin interfaces are disabled.
+    let default_interface_programs = crate::interfaces::default_interfaces()
+        .map(|(file, source)| parse_source(file, source))
+        .collect::<Vec<_>>();
+    let supplied_interface_programs = input
+        .interfaces
+        .iter()
+        .map(|(file, source)| parse_source(file, source))
+        .collect::<Vec<_>>();
+    let hir = match input.flavor {
+        AnalysisFlavor::FullWithStandardPackages => Hir::from_syntax_with_prepared_interfaces(
+            &syntax_program,
+            &default_interface_programs,
+            &[],
+        ),
+        AnalysisFlavor::FullWithBuiltinInterfaces => Hir::from_syntax_with_prepared_interfaces(
+            &syntax_program,
+            &default_interface_programs[..CORE_INTERFACES.len()],
+            &supplied_interface_programs,
+        ),
+        AnalysisFlavor::FullWithoutBuiltinInterfaces => Hir::from_syntax_with_prepared_interfaces(
+            &syntax_program,
+            &[],
+            &supplied_interface_programs,
+        ),
+        AnalysisFlavor::SyntaxOnly => unreachable!("syntax-only analysis returned above"),
+    };
+    let (type_aliases, type_alias_params) = match input.flavor {
+        AnalysisFlavor::FullWithStandardPackages => collect_type_alias_metadata(
+            default_interface_programs
+                .iter()
+                .chain(std::iter::once(&syntax_program)),
+        ),
+        AnalysisFlavor::FullWithBuiltinInterfaces
+        | AnalysisFlavor::FullWithoutBuiltinInterfaces => collect_type_alias_metadata(
+            default_interface_programs
+                .iter()
+                .chain(supplied_interface_programs.iter())
+                .chain(std::iter::once(&syntax_program)),
+        ),
+        AnalysisFlavor::SyntaxOnly => unreachable!("syntax-only analysis returned above"),
+    };
+    let interface_programs = match input.flavor {
+        AnalysisFlavor::FullWithStandardPackages => default_interface_programs,
+        AnalysisFlavor::FullWithBuiltinInterfaces
+        | AnalysisFlavor::FullWithoutBuiltinInterfaces => supplied_interface_programs,
+        AnalysisFlavor::SyntaxOnly => unreachable!("syntax-only analysis returned above"),
+    };
+    PreparedAnalysis {
+        tokens,
+        syntax_program,
+        interface_programs,
+        hir,
+        type_aliases,
+        type_alias_params,
+    }
+}
+
+fn analyze_input(input: AnalysisInput<'_>) -> Vec<Diagnostic> {
+    let flavor = input.flavor;
+    let prepared = prepare_analysis(input);
+    match flavor {
+        AnalysisFlavor::SyntaxOnly => analyze_syntax_program(prepared),
+        AnalysisFlavor::FullWithStandardPackages
+        | AnalysisFlavor::FullWithBuiltinInterfaces
+        | AnalysisFlavor::FullWithoutBuiltinInterfaces => analyze_program(prepared),
+    }
+}
+
+pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
+    analyze_input(AnalysisInput {
+        sources: AnalysisSources::Single { file, source },
+        interfaces: &[],
+        flavor: AnalysisFlavor::FullWithStandardPackages,
+    })
 }
 
 pub fn analyze_syntax_source(file: &str, source: &str) -> Vec<Diagnostic> {
-    let tokens = lex(file, source);
-    let mut syntax_program = parse_source(file, source);
-    crate::syntax::isolate_module_namespaces(&mut syntax_program);
-    let hir = Hir::from_syntax(&syntax_program);
-    analyze_syntax_program(tokens, syntax_program, hir)
+    analyze_input(AnalysisInput {
+        sources: AnalysisSources::Single { file, source },
+        interfaces: &[],
+        flavor: AnalysisFlavor::SyntaxOnly,
+    })
 }
 
 pub fn analyze_source_without_core(file: &str, source: &str) -> Vec<Diagnostic> {
-    let tokens = lex(file, source);
-    let mut syntax_program = parse_source(file, source);
-    crate::syntax::isolate_module_namespaces(&mut syntax_program);
-    let hir = Hir::from_syntax_without_builtin_interfaces(&syntax_program);
-    analyze_program(tokens, syntax_program, hir, Vec::new())
+    analyze_input(AnalysisInput {
+        sources: AnalysisSources::Single { file, source },
+        interfaces: &[],
+        flavor: AnalysisFlavor::FullWithoutBuiltinInterfaces,
+    })
 }
 
 pub fn core_interfaces() -> &'static [(&'static str, &'static str)] {
@@ -93,15 +223,11 @@ pub fn analyze_source_with_interfaces(
     source: &str,
     interfaces: &[(&str, &str)],
 ) -> Vec<Diagnostic> {
-    let tokens = lex(file, source);
-    let mut syntax_program = parse_source(file, source);
-    crate::syntax::isolate_module_namespaces(&mut syntax_program);
-    let interface_programs = interfaces
-        .iter()
-        .map(|(file, source)| parse_source(file, source))
-        .collect::<Vec<_>>();
-    let hir = Hir::from_syntax_with_interfaces(&syntax_program, &interface_programs);
-    analyze_program(tokens, syntax_program, hir, interface_programs)
+    analyze_input(AnalysisInput {
+        sources: AnalysisSources::Single { file, source },
+        interfaces,
+        flavor: AnalysisFlavor::FullWithBuiltinInterfaces,
+    })
 }
 
 pub fn analyze_source_with_interfaces_without_core(
@@ -109,95 +235,166 @@ pub fn analyze_source_with_interfaces_without_core(
     source: &str,
     interfaces: &[(&str, &str)],
 ) -> Vec<Diagnostic> {
-    let tokens = lex(file, source);
-    let mut syntax_program = parse_source(file, source);
-    crate::syntax::isolate_module_namespaces(&mut syntax_program);
-    let interface_programs = interfaces
-        .iter()
-        .map(|(file, source)| parse_source(file, source))
-        .collect::<Vec<_>>();
-    let hir = Hir::from_syntax_with_interfaces_without_builtin_interfaces(
-        &syntax_program,
-        &interface_programs,
-    );
-    analyze_program(tokens, syntax_program, hir, interface_programs)
+    analyze_input(AnalysisInput {
+        sources: AnalysisSources::Single { file, source },
+        interfaces,
+        flavor: AnalysisFlavor::FullWithoutBuiltinInterfaces,
+    })
 }
 
 pub fn analyze_sources_with_interfaces(
     sources: &[(&str, &str)],
     interfaces: &[(&str, &str)],
 ) -> Vec<Diagnostic> {
-    let tokens = sources
-        .iter()
-        .flat_map(|(file, source)| lex(file, source))
-        .collect::<Vec<_>>();
-    let mut syntax_program = merge_programs(
-        sources
-            .iter()
-            .map(|(file, source)| parse_source(file, source)),
-    );
-    crate::syntax::isolate_module_namespaces(&mut syntax_program);
-    let interface_programs = interfaces
-        .iter()
-        .map(|(file, source)| parse_source(file, source))
-        .collect::<Vec<_>>();
-    let hir = Hir::from_syntax_with_interfaces(&syntax_program, &interface_programs);
-    analyze_program(tokens, syntax_program, hir, interface_programs)
+    analyze_input(AnalysisInput {
+        sources: AnalysisSources::Many(sources),
+        interfaces,
+        flavor: AnalysisFlavor::FullWithBuiltinInterfaces,
+    })
 }
 
 pub fn analyze_sources_with_interfaces_without_core(
     sources: &[(&str, &str)],
     interfaces: &[(&str, &str)],
 ) -> Vec<Diagnostic> {
-    let tokens = sources
-        .iter()
-        .flat_map(|(file, source)| lex(file, source))
-        .collect::<Vec<_>>();
-    let mut syntax_program = merge_programs(
-        sources
-            .iter()
-            .map(|(file, source)| parse_source(file, source)),
-    );
-    crate::syntax::isolate_module_namespaces(&mut syntax_program);
-    let interface_programs = interfaces
-        .iter()
-        .map(|(file, source)| parse_source(file, source))
-        .collect::<Vec<_>>();
-    let hir = Hir::from_syntax_with_interfaces_without_builtin_interfaces(
-        &syntax_program,
-        &interface_programs,
-    );
-    analyze_program(tokens, syntax_program, hir, interface_programs)
+    analyze_input(AnalysisInput {
+        sources: AnalysisSources::Many(sources),
+        interfaces,
+        flavor: AnalysisFlavor::FullWithoutBuiltinInterfaces,
+    })
 }
 
-fn builtin_interface_programs() -> Vec<crate::syntax::ast::Program> {
-    crate::interfaces::default_interfaces()
-        .map(|(file, source)| parse_source(file, source))
-        .collect()
+#[cfg(test)]
+mod entrypoint_tests {
+    use super::{
+        AnalysisFlavor, AnalysisInput, AnalysisSources, PreparedAnalysis,
+        analyze_source_with_interfaces, analyze_source_with_interfaces_without_core,
+        analyze_sources_with_interfaces, analyze_sources_with_interfaces_without_core,
+        prepare_analysis,
+    };
+
+    const SOURCE: &str = "fn helper(value: read Int) -> Int { return value }\n\
+        fn main() -> Int { return helper(value: 1) }\n";
+    const ALIAS_SOURCE: &str = "type SourceAlias = CallerAlias<Int>\n\
+        fn main() -> Unit { return Unit }\n";
+    const CALLER_INTERFACE: &str = "type CallerAlias<T> = Result<T, String>\n\
+        pub fn Caller.make<T>(value: T) -> CallerAlias<T>\n";
+
+    fn prepare(
+        flavor: AnalysisFlavor,
+        source: &'static str,
+        interfaces: &'static [(&'static str, &'static str)],
+    ) -> PreparedAnalysis {
+        prepare_analysis(AnalysisInput {
+            sources: AnalysisSources::Single {
+                file: "main.rss",
+                source,
+            },
+            interfaces,
+            flavor,
+        })
+    }
+
+    #[test]
+    fn single_and_merged_entrypoints_agree_for_each_interface_policy() {
+        let sources = [("main.rss", SOURCE)];
+        let interfaces = [];
+
+        assert_eq!(
+            analyze_source_with_interfaces("main.rss", SOURCE, &interfaces),
+            analyze_sources_with_interfaces(&sources, &interfaces),
+        );
+        assert_eq!(
+            analyze_source_with_interfaces_without_core("main.rss", SOURCE, &interfaces),
+            analyze_sources_with_interfaces_without_core(&sources, &interfaces),
+        );
+    }
+
+    #[test]
+    fn preparation_preserves_analyzer_interface_program_policy() {
+        static CALLER_INTERFACES: &[(&str, &str)] = &[("caller.rssi", CALLER_INTERFACE)];
+
+        let standard = prepare(AnalysisFlavor::FullWithStandardPackages, SOURCE, &[]);
+        assert_eq!(
+            standard.interface_programs.len(),
+            crate::interfaces::default_interfaces().count(),
+        );
+        assert!(
+            standard
+                .hir
+                .resolve_function(Some("List"), "new")
+                .is_some_and(|signature| signature.is_builtin),
+        );
+
+        let with_builtins = prepare(
+            AnalysisFlavor::FullWithBuiltinInterfaces,
+            SOURCE,
+            CALLER_INTERFACES,
+        );
+        assert_eq!(with_builtins.interface_programs.len(), 1);
+        assert!(
+            with_builtins
+                .hir
+                .resolve_function(Some("List"), "new")
+                .is_some_and(|signature| signature.is_builtin),
+        );
+        assert!(
+            with_builtins
+                .hir
+                .resolve_function(Some("Caller"), "make")
+                .is_some_and(|signature| !signature.is_builtin),
+        );
+
+        let without_builtins = prepare(
+            AnalysisFlavor::FullWithoutBuiltinInterfaces,
+            SOURCE,
+            CALLER_INTERFACES,
+        );
+        assert_eq!(without_builtins.interface_programs.len(), 1);
+        assert!(
+            without_builtins
+                .hir
+                .resolve_function(Some("List"), "new")
+                .is_none(),
+        );
+        assert!(
+            without_builtins
+                .hir
+                .resolve_function(Some("Caller"), "make")
+                .is_some_and(|signature| !signature.is_builtin),
+        );
+
+        let syntax_only = prepare(AnalysisFlavor::SyntaxOnly, SOURCE, &[]);
+        assert!(syntax_only.interface_programs.is_empty());
+        assert!(syntax_only.type_aliases.is_empty());
+        assert!(syntax_only.type_alias_params.is_empty());
+    }
+
+    #[test]
+    fn preparation_builds_alias_metadata_from_prepared_programs() {
+        static CALLER_INTERFACES: &[(&str, &str)] = &[("caller.rssi", CALLER_INTERFACE)];
+        let prepared = prepare(
+            AnalysisFlavor::FullWithoutBuiltinInterfaces,
+            ALIAS_SOURCE,
+            CALLER_INTERFACES,
+        );
+
+        assert_eq!(prepared.type_aliases["WorkspacePath"], "Path");
+        assert_eq!(prepared.type_aliases["CallerAlias"], "Result<T, String>");
+        assert_eq!(prepared.type_alias_params["CallerAlias"], vec!["T"]);
+        assert_eq!(prepared.type_aliases["SourceAlias"], "CallerAlias<Int>");
+    }
 }
 
-fn analyze_program(
-    tokens: Vec<Token>,
-    syntax_program: crate::syntax::ast::Program,
-    hir: Hir,
-    interface_programs: Vec<crate::syntax::ast::Program>,
-) -> Vec<Diagnostic> {
-    let mut type_aliases = std::collections::BTreeMap::new();
-    for interface in builtin_interface_programs()
-        .iter()
-        .chain(interface_programs.iter())
-    {
-        type_aliases.extend(type_aliases_from_program(interface));
-    }
-    type_aliases.extend(type_aliases_from_program(&syntax_program));
-    let mut type_alias_params = std::collections::BTreeMap::new();
-    for interface in builtin_interface_programs()
-        .iter()
-        .chain(interface_programs.iter())
-    {
-        type_alias_params.extend(type_alias_params_from_program(interface));
-    }
-    type_alias_params.extend(type_alias_params_from_program(&syntax_program));
+fn analyze_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
+    let PreparedAnalysis {
+        tokens,
+        syntax_program,
+        interface_programs,
+        hir,
+        type_aliases,
+        type_alias_params,
+    } = prepared;
     let mut analyzer = Analyzer {
         tokens: &tokens,
         syntax_program,
@@ -224,54 +421,47 @@ fn is_reserved_generated_name(leaf: &str) -> bool {
     leaf.starts_with("__rss_") || leaf.starts_with("__rsscript_")
 }
 
-fn type_aliases_from_program(
-    program: &crate::syntax::ast::Program,
-) -> impl Iterator<Item = (String, String)> + '_ {
-    use crate::syntax::ast::Item;
-    program.items.iter().filter_map(|item| {
-        if let Item::TypeAlias(alias) = item {
-            Some((alias.name.clone(), type_ref_display_name(&alias.target)))
-        } else {
-            None
-        }
-    })
-}
-
-/// The generic parameter names of each type alias (`type Pair<T> = ...` → `T`),
-/// so generic aliases can be expanded by substituting arguments for parameters.
-fn type_alias_params_from_program(
-    program: &crate::syntax::ast::Program,
-) -> impl Iterator<Item = (String, Vec<String>)> + '_ {
-    use crate::syntax::ast::Item;
-    program.items.iter().filter_map(|item| {
-        if let Item::TypeAlias(alias) = item {
-            Some((
+fn collect_type_alias_metadata<'a>(
+    programs: impl IntoIterator<Item = &'a crate::syntax::ast::Program>,
+) -> (BTreeMap<String, String>, BTreeMap<String, Vec<String>>) {
+    let mut type_aliases = BTreeMap::new();
+    let mut type_alias_params = BTreeMap::new();
+    for program in programs {
+        for item in &program.items {
+            let Item::TypeAlias(alias) = item else {
+                continue;
+            };
+            type_aliases.insert(alias.name.clone(), type_ref_display_name(&alias.target));
+            type_alias_params.insert(
                 alias.name.clone(),
                 alias
                     .type_params
                     .iter()
                     .map(|param| param.name.clone())
                     .collect(),
-            ))
-        } else {
-            None
+            );
         }
-    })
+    }
+    (type_aliases, type_alias_params)
 }
 
-fn analyze_syntax_program(
-    tokens: Vec<Token>,
-    syntax_program: crate::syntax::ast::Program,
-    hir: Hir,
-) -> Vec<Diagnostic> {
+fn analyze_syntax_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
+    let PreparedAnalysis {
+        tokens,
+        syntax_program,
+        interface_programs,
+        hir,
+        type_aliases,
+        type_alias_params,
+    } = prepared;
     let mut analyzer = Analyzer {
         tokens: &tokens,
         syntax_program,
-        interface_programs: Vec::new(),
+        interface_programs,
         hir,
         diagnostics: Vec::new(),
-        type_aliases: Default::default(),
-        type_alias_params: Default::default(),
+        type_aliases,
+        type_alias_params,
         in_task_group: false,
         async_let_names: Vec::new(),
     };
@@ -300,7 +490,7 @@ fn type_ref_display_name(ty: &crate::syntax::ast::TypeRef) -> String {
 pub(crate) struct Analyzer<'a> {
     pub(crate) tokens: &'a [Token],
     pub(crate) syntax_program: crate::syntax::ast::Program,
-    interface_programs: Vec<crate::syntax::ast::Program>,
+    pub(crate) interface_programs: Vec<crate::syntax::ast::Program>,
     pub(crate) hir: Hir,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) type_aliases: std::collections::BTreeMap<String, String>,
@@ -1078,21 +1268,12 @@ impl Analyzer<'_> {
         self.check_assignments();
         self.check_async_fn_lowerable();
         self.check_match_exhaustiveness();
-        self.check_duplicate_declarations();
-        self.check_lowered_name_conflicts();
-        self.check_protocol_contracts();
-        self.check_signature_explicitness();
-        self.check_unknown_types();
-        self.check_unknown_fields();
-        self.check_unknown_bindings();
-        self.check_fd_surface();
-        self.check_generic_constraints();
+        checks::declarations::check(self);
+        checks::types::check_names(self);
+        checks::declarations::check_generic_constraints(self);
         self.check_runtime_guarantee_bodies();
         self.check_try_operator_result_returns();
-        self.check_resource_fields();
-        self.check_weak_fields();
-        self.check_resource_pool_type_arguments();
-        self.check_resource_generic_arguments();
+        checks::types::check_resource_shapes(self);
         checks::features::check(self);
         checks::calls::check(self);
         checks::body::check(self);
@@ -1315,13 +1496,13 @@ fn fn_type_param_type_name(type_name: &str, index: usize) -> Option<String> {
     Some(bare.trim().to_string())
 }
 
-fn effect_name(effect: &EffectDecl) -> &str {
+pub(crate) fn effect_name(effect: &EffectDecl) -> &str {
     match effect {
         EffectDecl::Name(name) | EffectDecl::Retains(name) => name,
     }
 }
 
-fn data_effect_name(effect: DataEffect) -> &'static str {
+pub(crate) fn data_effect_name(effect: DataEffect) -> &'static str {
     match effect {
         DataEffect::Read => "read",
         DataEffect::Mut => "mut",
@@ -1329,14 +1510,14 @@ fn data_effect_name(effect: DataEffect) -> &'static str {
     }
 }
 
-fn effect_display(effect: &EffectDecl) -> String {
+pub(crate) fn effect_display(effect: &EffectDecl) -> String {
     match effect {
         EffectDecl::Name(name) => name.clone(),
         EffectDecl::Retains(param) => format!("retains({param})"),
     }
 }
 
-fn generic_bounds(params: &[GenericParam]) -> HashMap<String, Option<GenericBound>> {
+pub(crate) fn generic_bounds(params: &[GenericParam]) -> HashMap<String, Option<GenericBound>> {
     params
         .iter()
         .map(|param| (param.name.clone(), param.bound.clone()))
@@ -1630,7 +1811,7 @@ fn async_block_nonlinear_await(block: &Block) -> Option<crate::diagnostic::Span>
     None
 }
 
-fn protocol_method_names(items: &[Item], protocol: &str) -> HashSet<String> {
+pub(crate) fn protocol_method_names(items: &[Item], protocol: &str) -> HashSet<String> {
     items
         .iter()
         .filter_map(|item| {
@@ -1643,20 +1824,23 @@ fn protocol_method_names(items: &[Item], protocol: &str) -> HashSet<String> {
         .collect()
 }
 
-fn function_body_belongs_to_protocol(
+pub(crate) fn function_body_belongs_to_protocol(
     function: &FunctionDecl,
     protocol_names: &HashSet<String>,
 ) -> bool {
     !function.body.statements.is_empty() && function_belongs_to_protocol(function, protocol_names)
 }
 
-fn function_belongs_to_protocol(function: &FunctionDecl, protocol_names: &HashSet<String>) -> bool {
+pub(crate) fn function_belongs_to_protocol(
+    function: &FunctionDecl,
+    protocol_names: &HashSet<String>,
+) -> bool {
     split_qualified_name(&function.name)
         .0
         .is_some_and(|namespace| protocol_names.contains(&namespace))
 }
 
-fn protocol_signature_mismatch(
+pub(crate) fn protocol_signature_mismatch(
     protocol: &FunctionSig,
     target: &FunctionSig,
     concrete_type: &str,
@@ -1766,7 +1950,7 @@ fn substitute_protocol_self(type_name: &str, concrete_type: &str) -> String {
     result
 }
 
-fn split_qualified_name(name: &str) -> (Option<String>, &str) {
+pub(crate) fn split_qualified_name(name: &str) -> (Option<String>, &str) {
     if let Some((namespace, name)) = name.rsplit_once('.') {
         (Some(namespace.to_string()), name)
     } else {
@@ -1783,7 +1967,10 @@ fn fresh_return_target_type(return_ty: &TypeRef) -> &TypeRef {
     return_ty
 }
 
-fn function_has_effect(function: &crate::syntax::ast::FunctionDecl, effect_name: &str) -> bool {
+pub(crate) fn function_has_effect(
+    function: &crate::syntax::ast::FunctionDecl,
+    effect_name: &str,
+) -> bool {
     function
         .effects
         .iter()
@@ -1914,7 +2101,7 @@ fn analyzer_expr_label(expr: &Expr) -> String {
     }
 }
 
-fn removed_runtime_effect_replacement(effect_name: &str) -> Option<&'static str> {
+pub(crate) fn removed_runtime_effect_replacement(effect_name: &str) -> Option<&'static str> {
     match effect_name {
         "io" => Some(
             "Remove `io`; I/O is allowed by default unless a guarantee such as `pure` or `no_block` forbids it.",
@@ -1950,37 +2137,13 @@ fn item_span(item: &Item) -> &crate::diagnostic::Span {
     }
 }
 
-fn duplicate_symbol_label(kind: DuplicateSymbolKind) -> &'static str {
+pub(crate) fn duplicate_symbol_label(kind: DuplicateSymbolKind) -> &'static str {
     match kind {
         DuplicateSymbolKind::Function => "function",
         DuplicateSymbolKind::Type => "type",
         DuplicateSymbolKind::Constructor => "callable",
         DuplicateSymbolKind::Field => "field",
     }
-}
-
-fn is_copy_type(ty: &TypeRef) -> bool {
-    ty.args.is_empty()
-        && matches!(
-            ty.name.as_str(),
-            "Bool"
-                | "Byte"
-                | "Char"
-                | "Float"
-                | "Float32"
-                | "Float64"
-                | "Int"
-                | "Int8"
-                | "Int16"
-                | "Int32"
-                | "Int64"
-                | "UInt"
-                | "UInt8"
-                | "UInt16"
-                | "UInt32"
-                | "UInt64"
-                | "Unit"
-        )
 }
 
 fn known_type_ref(ty: &TypeRef, generic_params: &HashSet<&str>, hir: &Hir) -> bool {
@@ -1995,7 +2158,7 @@ fn known_type_ref(ty: &TypeRef, generic_params: &HashSet<&str>, hir: &Hir) -> bo
         || hir.type_info(&ty.name).is_some()
 }
 
-fn is_builtin_type_name(name: &str) -> bool {
+pub(crate) fn is_builtin_type_name(name: &str) -> bool {
     matches!(
         name,
         "Unit"
@@ -2069,7 +2232,7 @@ fn type_ref_name(ty: &TypeRef) -> String {
             .iter()
             .enumerate()
             .map(|(index, param)| {
-                let prefix = match ty.fn_param_effects.get(index).copied().flatten() {
+                let prefix = match ty.effective_fn_param_effect(index) {
                     Some(effect) => format!("{} ", effect.as_str()),
                     None => String::new(),
                 };
@@ -2124,7 +2287,7 @@ fn item_span_file(item: &Item) -> String {
 /// Whether `name` is a plain Rust identifier (used verbatim as a pinned backend
 /// symbol): non-empty, starts with a letter or `_`, and otherwise alphanumeric or
 /// `_`. Raw identifiers and keywords are intentionally rejected.
-fn is_valid_rust_identifier(name: &str) -> bool {
+pub(crate) fn is_valid_rust_identifier(name: &str) -> bool {
     let mut chars = name.chars();
     let Some(first) = chars.next() else {
         return false;
@@ -2134,15 +2297,11 @@ fn is_valid_rust_identifier(name: &str) -> bool {
         && !crate::rust_lower::is_rust_keyword(name)
 }
 
-fn type_ref_is_noescape(ty: &TypeRef) -> bool {
+pub(crate) fn type_ref_is_noescape(ty: &TypeRef) -> bool {
     ty.is_noescape || ty.args.iter().any(type_ref_is_noescape)
 }
 
-fn type_ref_is_owned(ty: &TypeRef) -> bool {
-    ty.is_owned || ty.args.iter().any(type_ref_is_owned)
-}
-
-fn type_ref_is_copy(ty: &TypeRef) -> bool {
+pub(crate) fn type_ref_is_copy(ty: &TypeRef) -> bool {
     !ty.is_fresh
         && !ty.is_noescape
         && ty.args.is_empty()
@@ -2168,17 +2327,4 @@ fn type_ref_is_copy(ty: &TypeRef) -> bool {
                 | "UInt64"
                 | "Unit"
         )
-}
-
-fn type_ref_is_closure_effect_exempt(ty: &TypeRef) -> bool {
-    ty.args.is_empty() && !ty.is_noescape && ty.name == "Closure"
-}
-
-fn type_ref_has_surface_reference(ty: &TypeRef, tokens: &[Token]) -> bool {
-    tokens.iter().any(|token| {
-        token.symbol("&")
-            && token.span.file == ty.span.file
-            && token.span.line == ty.span.line
-            && token.span.column + token.span.length <= ty.span.column
-    })
 }

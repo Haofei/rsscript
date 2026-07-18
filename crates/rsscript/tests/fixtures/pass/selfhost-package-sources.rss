@@ -27,124 +27,124 @@ struct PackageSourceContentFacts {
 fn selfhost_source_root() -> fresh Path {
     let input = Args.get_or_default(
         index: 0,
-        default: read "tests/fixtures/pass/selfhost-package-source-set",
+        default: "tests/fixtures/pass/selfhost-package-source-set",
     )
 
-    return Path.from_string(value: read input)
+    return Path.from_string(value: input)
 }
 
-fn json_error(prefix: read String, error: read JsonError) -> fresh String {
-    let message = JsonError.message(error: read error)
-    let first = String.concat(left: read prefix, right: read ": ")
+fn json_error(prefix: String, error: JsonError) -> fresh String {
+    let message = JsonError.message(error)
+    let first = String.concat(left: prefix, right: ": ")
 
-    return String.concat(left: read first, right: read message)
+    return String.concat(left: first, right: message)
 }
 
-fn file_error(prefix: read String, error: read FileError) -> fresh String {
-    let message = FileError.message(error: read error)
-    let first = String.concat(left: read prefix, right: read ": ")
+fn file_error(prefix: String, error: FileError) -> fresh String {
+    let message = FileError.message(error)
+    let first = String.concat(left: prefix, right: ": ")
 
-    return String.concat(left: read first, right: read message)
+    return String.concat(left: first, right: message)
 }
 
-fn parse_toml_result(path: read Path) -> Result<JsonValue, String> {
-    match Toml.parse_file(path: read path) {
+fn parse_toml_result(path: Path) -> Result<JsonValue, String> {
+    match Toml.parse_file(path) {
         Ok(value) => {
             return Ok(value)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "manifest parse", error: read error))
+            return Err(json_error(prefix: "manifest parse", error))
         }
     }
 }
 
 fn json_field_result(
-    value: read JsonValue,
-    name: read String,
+    value: JsonValue,
+    name: String,
 ) -> Result<JsonValue, String> {
-    match Json.field(value: read value, name: read name) {
+    match Json.field(value, name) {
         Ok(field) => {
             return Ok(field)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "manifest field", error: read error))
+            return Err(json_error(prefix: "manifest field", error))
         }
     }
 }
 
-fn json_string_result(value: read JsonValue) -> Result<String, String> {
-    match Json.as_string(value: read value) {
+fn json_string_result(value: JsonValue) -> Result<String, String> {
+    match Json.as_string(value) {
         Ok(text) => {
             return Ok(text)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "manifest string", error: read error))
+            return Err(json_error(prefix: "manifest string", error))
         }
     }
 }
 
 fn json_array_item_result(
-    value: read JsonValue,
+    value: JsonValue,
     index: Int,
 ) -> Result<JsonValue, String> {
-    match Json.array_get(value: read value, index: index) {
+    match Json.array_get(value, index) {
         Ok(item) => {
             return Ok(item)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "manifest array item", error: read error))
+            return Err(json_error(prefix: "manifest array item", error))
         }
     }
 }
 
-fn json_array_string_result(value: read JsonValue, index: Int) -> Result<String, String> {
-    let item = json_array_item_result(value: read value, index: index)?
+fn json_array_string_result(value: JsonValue, index: Int) -> Result<String, String> {
+    let item = json_array_item_result(value, index)?
 
-    return json_string_result(value: read item)
+    return json_string_result(value: item)
 }
 
-fn json_array_len_result(value: read JsonValue) -> Result<Int, String> {
-    match Json.array_len(value: read value) {
+fn json_array_len_result(value: JsonValue) -> Result<Int, String> {
+    match Json.array_len(value) {
         Ok(length) => {
             return Ok(length)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "manifest array length", error: read error))
+            return Err(json_error(prefix: "manifest array length", error))
         }
     }
 }
 
-fn json_array_strings_result(value: read JsonValue) -> Result<List<String>, String> {
-    match Json.array_strings(value: read value) {
+fn json_array_strings_result(value: JsonValue) -> Result<List<String>, String> {
+    match Json.array_strings(value) {
         Ok(items) => {
             return Ok(items)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "manifest string array", error: read error))
+            return Err(json_error(prefix: "manifest string array", error))
         }
     }
 }
 
-fn list_files_result(path: read Path) -> Result<List<String>, String> {
-    match Directory.list_files(path: read path) {
+fn list_files_result(path: Path) -> Result<List<String>, String> {
+    match Directory.list_files(path) {
         Ok(paths) => {
             return Ok(paths)
         }
         Err(error) => {
-            return Err(file_error(prefix: read "source listing", error: read error))
+            return Err(file_error(prefix: "source listing", error))
         }
     }
 }
 
-fn require_directory(path: read Path, label: read String) -> Result<Unit, String> {
-    if Directory.exists(path: read path) == false {
-        let message = String.concat(left: read label, right: read " does not exist")
+fn require_directory(path: Path, label: String) -> Result<Unit, String> {
+    if Directory.exists(path) == false {
+        let message = String.concat(left: label, right: " does not exist")
 
         return Err(message)
     }
 
-    if Directory.is_dir(path: read path) == false {
-        let message = String.concat(left: read label, right: read " is not a directory")
+    if Directory.is_dir(path) == false {
+        let message = String.concat(left: label, right: " is not a directory")
 
         return Err(message)
     }
@@ -152,18 +152,18 @@ fn require_directory(path: read Path, label: read String) -> Result<Unit, String
     return Ok(Unit)
 }
 
-fn read_file_text_result(path: read Path) -> Result<String, FileError> {
-    with File.open_read(path: read path)? as file {
+fn read_file_text_result(path: Path) -> Result<String, FileError> {
+    with File.open_read(path)? as file {
         let text = File.read_all_string(file: mut file)?
 
         return Ok(text)
     }
 }
 
-fn public_function_symbol(line: read String) -> Option<String> {
-    match String.strip_prefix(value: read line, prefix: read "pub fn ") {
+fn public_function_symbol(line: String) -> Option<String> {
+    match String.strip_prefix(value: line, prefix: "pub fn ") {
         Some(rest) => {
-            return String.before(value: read rest, delimiter: read "(")
+            return String.before(value: rest, delimiter: "(")
         }
         None => {
             return None
@@ -171,12 +171,12 @@ fn public_function_symbol(line: read String) -> Option<String> {
     }
 }
 
-fn source_content_facts(contents: read String) -> fresh PackageSourceContentFacts {
-    let lines = String.lines(value: read contents)
+fn source_content_facts(contents: String) -> fresh PackageSourceContentFacts {
+    let lines = String.lines(value: contents)
     let public_functions = List.count_where(
-        list: read lines,
+        list: lines,
         predicate: |line| {
-            match public_function_symbol(line: read line) {
+            match public_function_symbol(line) {
                 Some(_) => {
                     return true
                 }
@@ -187,9 +187,9 @@ fn source_content_facts(contents: read String) -> fresh PackageSourceContentFact
         },
     )
     let api_symbols = List.count_where(
-        list: read lines,
+        list: lines,
         predicate: |line| {
-            match public_function_symbol(line: read line) {
+            match public_function_symbol(line) {
                 Some(symbol) => {
                     return symbol == "Api.run"
                 }
@@ -200,9 +200,9 @@ fn source_content_facts(contents: read String) -> fresh PackageSourceContentFact
         },
     )
     let tool_symbols = List.count_where(
-        list: read lines,
+        list: lines,
         predicate: |line| {
-            match public_function_symbol(line: read line) {
+            match public_function_symbol(line) {
                 Some(symbol) => {
                     return symbol == "Tool.run"
                 }
@@ -220,16 +220,16 @@ fn source_content_facts(contents: read String) -> fresh PackageSourceContentFact
     )
 }
 
-fn package_source_path_sets(root: read Path) -> Result<fresh PackageSourcePathSets, String> {
+fn package_source_path_sets(root: Path) -> Result<fresh PackageSourcePathSets, String> {
     let manifest_path = Path.join(
-        base: read root,
-        child: read "rsspkg.toml",
+        base: root,
+        child: "rsspkg.toml",
     )
-    let manifest = parse_toml_result(path: read manifest_path)?
-    let interfaces = json_field_result(value: read manifest, name: read "interfaces")?
-    let interface_paths = json_field_result(value: read interfaces, name: read "paths")?
-    let sources = json_field_result(value: read manifest, name: read "sources")?
-    let source_paths = json_field_result(value: read sources, name: read "paths")?
+    let manifest = parse_toml_result(path: manifest_path)?
+    let interfaces = json_field_result(value: manifest, name: "interfaces")?
+    let interface_paths = json_field_result(value: interfaces, name: "paths")?
+    let sources = json_field_result(value: manifest, name: "sources")?
+    let source_paths = json_field_result(value: sources, name: "paths")?
 
     return PackageSourcePathSets(
         interface_paths: read interface_paths,
@@ -238,14 +238,14 @@ fn package_source_path_sets(root: read Path) -> Result<fresh PackageSourcePathSe
 }
 
 fn add_source_path(
-    facts: read PackageSourceSetFacts,
-    path: read String,
-    contents: read String,
+    facts: PackageSourceSetFacts,
+    path: String,
+    contents: String,
 ) -> fresh PackageSourceSetFacts {
     let is_manifest = path == "rsspkg.toml"
-    let is_interface = String.ends_with(value: read path, suffix: read ".rssi")
-    let is_source = String.ends_with(value: read path, suffix: read ".rss")
-    let content_facts = source_content_facts(contents: read contents)
+    let is_interface = String.ends_with(value: path, suffix: ".rssi")
+    let is_source = String.ends_with(value: path, suffix: ".rss")
+    let content_facts = source_content_facts(contents)
     let has_public_function = content_facts.public_functions > 0
     let has_api_run = content_facts.api_symbols > 0
     let has_tool_run = content_facts.tool_symbols > 0
@@ -291,81 +291,81 @@ fn add_bool(value: Int, condition: Bool) -> Int {
 }
 
 fn count_source_path(
-    root: read Path,
-    facts: read PackageSourceSetFacts,
-    relative_path: read String,
+    root: Path,
+    facts: PackageSourceSetFacts,
+    relative_path: String,
 ) -> Result<fresh PackageSourceSetFacts, String> {
     let file_path = Path.join(
-        base: read root,
-        child: read relative_path,
+        base: root,
+        child: relative_path,
     )
 
-    match read_file_text_result(path: read file_path) {
+    match read_file_text_result(path: file_path) {
         Ok(contents) => {
             return Ok(add_source_path(
-                facts: read facts,
-                path: read relative_path,
-                contents: read contents,
+                facts,
+                path: relative_path,
+                contents,
             ))
         }
         Err(error) => {
-            return Err(file_error(prefix: read "source read", error: read error))
+            return Err(file_error(prefix: "source read", error))
         }
     }
 }
 
 fn count_source_paths(
-    root: read Path,
-    facts: read PackageSourceSetFacts,
-    paths: read List<String>,
+    root: Path,
+    facts: PackageSourceSetFacts,
+    paths: List<String>,
 ) -> Result<fresh PackageSourceSetFacts, String> {
     return List.try_fold<String, PackageSourceSetFacts, String>(
-        list: read paths,
-        initial: read facts,
+        list: paths,
+        initial: facts,
         folder: |state, relative_path| {
             return count_source_path(
-                root: read root,
-                facts: read state,
-                relative_path: read relative_path,
+                root,
+                facts: state,
+                relative_path,
             )
         },
     )
 }
 
 fn count_root_path(
-    root: read Path,
-    facts: read PackageSourceSetFacts,
-    child: read String,
+    root: Path,
+    facts: PackageSourceSetFacts,
+    child: String,
 ) -> Result<fresh PackageSourceSetFacts, String> {
     let source_root = Path.join(
-        base: read root,
-        child: read child,
+        base: root,
+        child,
     )
-    require_directory(path: read source_root, label: read child)?
-    let paths = list_files_result(path: read source_root)?
+    require_directory(path: source_root, label: child)?
+    let paths = list_files_result(path: source_root)?
 
     return count_source_paths(
-        root: read source_root,
-        facts: read facts,
-        paths: read paths,
+        root: source_root,
+        facts,
+        paths,
     )
 }
 
 fn count_root_paths(
-    root: read Path,
-    roots: read JsonValue,
-    facts: read PackageSourceSetFacts,
+    root: Path,
+    roots: JsonValue,
+    facts: PackageSourceSetFacts,
 ) -> Result<fresh PackageSourceSetFacts, String> {
-    let children = json_array_strings_result(value: read roots)?
+    let children = json_array_strings_result(value: roots)?
 
     return List.try_fold<String, PackageSourceSetFacts, String>(
-        list: read children,
-        initial: read facts,
+        list: children,
+        initial: facts,
         folder: |state, child| {
             return count_root_path(
-                root: read root,
-                facts: read state,
-                child: read child,
+                root,
+                facts: state,
+                child,
             )
         },
     )
@@ -373,8 +373,8 @@ fn count_root_paths(
 
 fn selfhost_source_set_facts() -> Result<fresh PackageSourceSetFacts, String> {
     let root = selfhost_source_root()
-    require_directory(path: read root, label: read "package root")?
-    let paths = package_source_path_sets(root: read root)?
+    require_directory(path: root, label: "package root")?
+    let paths = package_source_path_sets(root)?
     let manifest = PackageSourceSetFacts(
         total_files: 1,
         manifest_files: 1,
@@ -388,19 +388,19 @@ fn selfhost_source_set_facts() -> Result<fresh PackageSourceSetFacts, String> {
         tool_source_symbols: 0,
     )
     let all_interfaces = count_root_paths(
-        root: read root,
-        roots: read paths.interface_paths,
-        facts: read manifest,
+        root,
+        roots: paths.interface_paths,
+        facts: manifest,
     )?
 
     return count_root_paths(
-        root: read root,
-        roots: read paths.source_paths,
-        facts: read all_interfaces,
+        root,
+        roots: paths.source_paths,
+        facts: all_interfaces,
     )
 }
 
-fn source_set_summary_line(facts: read PackageSourceSetFacts) -> fresh String {
+fn source_set_summary_line(facts: PackageSourceSetFacts) -> fresh String {
     let total = String.from_int(value: facts.total_files)
     let manifests = String.from_int(value: facts.manifest_files)
     let interfaces = String.from_int(value: facts.interface_files)
@@ -412,35 +412,35 @@ fn source_set_summary_line(facts: read PackageSourceSetFacts) -> fresh String {
     let tool_interfaces = String.from_int(value: facts.tool_interface_symbols)
     let tool_sources = String.from_int(value: facts.tool_source_symbols)
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "selfhost package sources total=")
-    StringBuilder.push(builder: mut builder, value: read total)
-    StringBuilder.push(builder: mut builder, value: read " manifests=")
-    StringBuilder.push(builder: mut builder, value: read manifests)
-    StringBuilder.push(builder: mut builder, value: read " interfaces=")
-    StringBuilder.push(builder: mut builder, value: read interfaces)
-    StringBuilder.push(builder: mut builder, value: read " sources=")
-    StringBuilder.push(builder: mut builder, value: read sources)
-    StringBuilder.push(builder: mut builder, value: read " public_interfaces=")
-    StringBuilder.push(builder: mut builder, value: read public_interfaces)
-    StringBuilder.push(builder: mut builder, value: read " public_sources=")
-    StringBuilder.push(builder: mut builder, value: read public_sources)
-    StringBuilder.push(builder: mut builder, value: read " api=")
-    StringBuilder.push(builder: mut builder, value: read api_interfaces)
-    StringBuilder.push(builder: mut builder, value: read "/")
-    StringBuilder.push(builder: mut builder, value: read api_sources)
-    StringBuilder.push(builder: mut builder, value: read " tool=")
-    StringBuilder.push(builder: mut builder, value: read tool_interfaces)
-    StringBuilder.push(builder: mut builder, value: read "/")
-    StringBuilder.push(builder: mut builder, value: read tool_sources)
+    StringBuilder.push(builder: mut builder, value: "selfhost package sources total=")
+    StringBuilder.push(builder: mut builder, value: total)
+    StringBuilder.push(builder: mut builder, value: " manifests=")
+    StringBuilder.push(builder: mut builder, value: manifests)
+    StringBuilder.push(builder: mut builder, value: " interfaces=")
+    StringBuilder.push(builder: mut builder, value: interfaces)
+    StringBuilder.push(builder: mut builder, value: " sources=")
+    StringBuilder.push(builder: mut builder, value: sources)
+    StringBuilder.push(builder: mut builder, value: " public_interfaces=")
+    StringBuilder.push(builder: mut builder, value: public_interfaces)
+    StringBuilder.push(builder: mut builder, value: " public_sources=")
+    StringBuilder.push(builder: mut builder, value: public_sources)
+    StringBuilder.push(builder: mut builder, value: " api=")
+    StringBuilder.push(builder: mut builder, value: api_interfaces)
+    StringBuilder.push(builder: mut builder, value: "/")
+    StringBuilder.push(builder: mut builder, value: api_sources)
+    StringBuilder.push(builder: mut builder, value: " tool=")
+    StringBuilder.push(builder: mut builder, value: tool_interfaces)
+    StringBuilder.push(builder: mut builder, value: "/")
+    StringBuilder.push(builder: mut builder, value: tool_sources)
 
     return StringBuilder.finish(builder: take builder)
 }
 
 pub fn main() -> Result<Unit, String> {
     let facts = selfhost_source_set_facts()?
-    let summary = source_set_summary_line(facts: read facts)
+    let summary = source_set_summary_line(facts)
 
-    Log.write(message: read summary)
+    Log.write(message: summary)
 
     Assert.equal_int(left: facts.total_files, right: 5)
     Assert.equal_int(left: facts.manifest_files, right: 1)

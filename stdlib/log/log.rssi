@@ -1,16 +1,16 @@
 features: native
 
-pub fn Log.write(message: read String) -> Unit
+pub fn Log.write(message: String) -> Unit
     effects(native)
 
-pub fn Log.write_json(value: read JsonValue) -> Unit
+pub fn Log.write_json(value: JsonValue) -> Unit
     effects(native)
 
-pub fn Log.error(message: read String) -> Unit
+pub fn Log.error(message: String) -> Unit
     effects(native)
 
-pub fn Log.error_json(value: read JsonValue) -> Unit
+pub fn Log.error_json(value: JsonValue) -> Unit
     effects(native)
 
-pub fn Log.trace(event: read String, message: read String) -> Unit
+pub fn Log.trace(event: String, message: String) -> Unit
     effects(native)

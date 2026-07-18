@@ -1,11 +1,11 @@
 // expect: RS0303
 fn apply(image: mut Image, callback: noescape Fn()) -> Unit
-fn save_image(image: read Image) -> Unit
+fn save_image(image: Image) -> Unit
 
 fn run(image: mut Image) -> Unit {
     apply(
         image: mut image,
-        callback: || save_image(image: read image),
+        callback: || save_image(image),
     )
     return Unit
 }

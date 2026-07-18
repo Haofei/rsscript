@@ -7,14 +7,14 @@ struct Pair {
     right: Image
 }
 
-fn make_pair(path: read Path) -> fresh Pair
+fn make_pair(path: Path) -> fresh Pair
 
 fn consume(image: take Image) -> Unit
 
-fn inspect(image: read Image) -> Unit
+fn inspect(image: Image) -> Unit
 
-fn ok_take_disjoint(path: read Path) -> Unit {
-    local pair = make_pair(path: read path)
+fn ok_take_disjoint(path: Path) -> Unit {
+    local pair = make_pair(path)
     consume(image: take pair.left)
-    inspect(image: read pair.right)
+    inspect(image: pair.right)
 }

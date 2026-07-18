@@ -5,7 +5,7 @@ sum Shape {
 }
 
 // Two-field positional binding.
-fn area(shape: read Shape) -> Int {
+fn area(shape: Shape) -> Int {
     match read shape {
         Circle(r) => { return read r * read r * 3 }
         Rectangle(w, h) => { return read w * read h }
@@ -14,7 +14,7 @@ fn area(shape: read Shape) -> Int {
 }
 
 // Three-field positional binding with an ignored middle position.
-fn width_times_depth(shape: read Shape) -> Int {
+fn width_times_depth(shape: Shape) -> Int {
     match read shape {
         Circle(r) => { return read r }
         Rectangle(w, _) => { return read w }
@@ -23,7 +23,7 @@ fn width_times_depth(shape: read Shape) -> Int {
 }
 
 // Named field patterns produce the identical result as positional binding.
-fn area_named(shape: read Shape) -> Int {
+fn area_named(shape: Shape) -> Int {
     match read shape {
         Circle { radius } => { return read radius * read radius * 3 }
         Rectangle { width, height } => { return read width * read height }
@@ -33,10 +33,10 @@ fn area_named(shape: read Shape) -> Int {
 
 fn main() -> Unit {
     let r = Rectangle(width: 3, height: 4)
-    let a = area(shape: read r)
-    let b = area_named(shape: read r)
+    let a = area(shape: r)
+    let b = area_named(shape: r)
     let p = Prism(width: 2, height: 3, depth: 5)
-    let c = area(shape: read p)
-    let d = width_times_depth(shape: read p)
+    let c = area(shape: p)
+    let d = width_times_depth(shape: p)
     return Unit
 }

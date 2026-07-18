@@ -9,7 +9,7 @@ fn advance(pos: mut Int) -> Unit {
 }
 
 fn toggle(flag: mut Bool) -> Unit {
-    flag = flag == false
+    flag = !flag
     return Unit
 }
 
@@ -18,12 +18,12 @@ fn main() -> Unit {
     advance(pos: mut cursor)
     advance(pos: mut cursor)
     // cursor is observably 2 after two write-backs.
-    Log.write(message: read String.from_int(value: cursor))
+    Log.write(message: String.from_int(value: cursor))
 
     let mut flag = false
     toggle(flag: mut flag)
     if flag {
-        Log.write(message: read "on")
+        Log.write(message: "on")
     }
     return Unit
 }

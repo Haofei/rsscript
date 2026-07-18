@@ -13,10 +13,10 @@ struct State {
     inner: Inner
 }
 
-fn use_state(state: read State, cache: mut Cache) -> Unit
+fn use_state(state: State, cache: mut Cache) -> Unit
 fn make_state() -> fresh State
 
 fn run() -> Unit {
     local state = make_state()
-    use_state(state: read state, cache: mut state.inner.cache)
+    use_state(state, cache: mut state.inner.cache)
 }

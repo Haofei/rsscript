@@ -1,10 +1,10 @@
 // expect: RS0802
 struct Callback
 
-fn store(callback: read Callback) -> Unit
+fn store(callback: Callback) -> Unit
     effects(retains(callback))
 
 fn bad(callback: noescape Fn()) -> Unit {
-    store(callback: read callback)
+    store(callback)
     return Unit
 }

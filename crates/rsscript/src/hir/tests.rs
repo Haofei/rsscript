@@ -1,4 +1,6 @@
 use super::*;
+use crate::analyze_source;
+use crate::diagnostic::code;
 use crate::syntax::parse_source;
 
 #[test]
@@ -50,6 +52,20 @@ struct Session {
     assert!(hir.is_handle_field_name("user"));
     assert!(hir.is_handle_field_name("parent"));
     assert!(!hir.is_handle_field_name("file_name"));
+}
+
+#[test]
+fn normalizes_omitted_function_type_effects() {
+    let program = parse_source(
+        "test.rss",
+        "fn apply(f: Fn(Int) -> Int) -> Int { return f(1) }",
+    );
+    let hir = Hir::from_syntax(&program);
+    let signature = hir
+        .resolve_function(None, "apply")
+        .expect("apply signature");
+
+    assert_eq!(signature.params[0].type_name, "Fn(read Int) -> Int");
 }
 
 #[test]
@@ -119,6 +135,7 @@ fn cache_put(cache: mut Cache, value: read Image) -> Unit
     effects(retains(value))
 {
 }
+
 "#;
 
     let program = parse_source("test.rss", source);
@@ -141,6 +158,170 @@ fn cache_put(cache: mut Cache, value: read Image) -> Unit
         load.return_type.as_deref(),
         Some("Result<fresh Image, ImageError>")
     );
+}
+
+#[test]
+fn normalizes_omitted_read_effects_for_all_ordinary_parameters() {
+    let source = r#"
+fn inspect(value: String) -> Unit {
+}
+
+fn caller(value: String, count: Int) -> Unit {
+    inspect(value: value)
+}
+"#;
+
+    let program = parse_source("default-read.rss", source);
+    let hir = Hir::from_syntax(&program);
+    let inspect = hir
+        .resolve_function(None, "inspect")
+        .expect("inspect signature exists");
+    assert_eq!(inspect.params[0].effect, Some(ParamEffect::Read));
+    let caller = hir
+        .resolve_function(None, "caller")
+        .expect("caller signature exists");
+    assert_eq!(caller.params[0].effect, Some(ParamEffect::Read));
+    assert_eq!(caller.params[1].effect, Some(ParamEffect::Read));
+
+    let body = hir.function_body("caller").expect("caller body exists");
+    let Some(HirStmt::Expr(HirExpr::Call { args, .. })) = body
+        .block
+        .as_ref()
+        .and_then(|block| block.statements.first())
+    else {
+        panic!("caller should contain a call expression");
+    };
+    assert!(matches!(
+        args.first().map(|arg| &arg.value),
+        Some(HirExpr::Effect {
+            effect: ParamEffect::Read,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn omitted_read_is_accepted_but_never_upgrades_to_mut_or_take() {
+    let source = r#"
+features: local
+
+fn inspect(value: String) -> Unit {
+}
+
+fn rewrite(value: mut String) -> Unit {
+}
+
+fn consume(value: take String) -> Unit {
+}
+
+fn caller() -> Unit {
+    let value = "value"
+    inspect(value: value)
+    rewrite(value: value)
+    consume(value: value)
+}
+"#;
+
+    let diagnostics = analyze_source("default-read-calls.rss", source);
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == code::MISSING_PARAMETER_EFFECT),
+        "omitted ordinary parameter effects default to read"
+    );
+    assert_eq!(
+        diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == code::MISSING_DATA_EFFECT)
+            .count(),
+        2,
+        "bare arguments satisfy read only; mut and take remain explicit"
+    );
+}
+
+#[test]
+fn same_name_read_argument_may_omit_its_label() {
+    let source = r#"
+fn inspect(value: String) -> Unit {}
+fn caller(value: String) -> Unit { inspect(value) }
+"#;
+    let diagnostics = analyze_source("same-name-argument.rss", source);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+    let hir = Hir::from_syntax(&parse_source("same-name-argument.rss", source));
+    let body = hir.function_body("caller").expect("caller body exists");
+    let Some(HirStmt::Expr(HirExpr::Call { args, .. })) = body
+        .block
+        .as_ref()
+        .and_then(|block| block.statements.first())
+    else {
+        panic!("caller should contain a call expression");
+    };
+    assert_eq!(args[0].name.as_deref(), Some("value"));
+}
+
+#[test]
+fn receiver_call_default_read_arguments_skip_the_receiver_parameter() {
+    let source = r#"
+fn String.inspect(self: String, count: Int) -> Unit {}
+fn caller(text: String, count: Int) -> Unit { text.inspect(count) }
+"#;
+    let diagnostics = analyze_source("receiver-default-read.rss", source);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+    let hir = Hir::from_syntax(&parse_source("receiver-default-read.rss", source));
+    let body = hir.function_body("caller").expect("caller body exists");
+    let Some(HirStmt::Expr(HirExpr::Call { args, .. })) = body
+        .block
+        .as_ref()
+        .and_then(|block| block.statements.first())
+    else {
+        panic!("caller should contain a receiver call");
+    };
+    assert_eq!(args[0].name.as_deref(), Some("count"));
+    assert!(matches!(
+        &args[0].value,
+        HirExpr::Effect {
+            effect: ParamEffect::Read,
+            type_name: Some(type_name),
+            ..
+        } if type_name == "Int"
+    ));
+}
+
+#[test]
+fn qualified_protocol_call_preserves_the_concrete_receiver_type() {
+    let source = r#"
+protocol Formatter {
+    fn format(self: Self) -> fresh String
+}
+fn render<F: Formatter>(item: F) -> fresh String {
+    return Formatter.format(self: item)
+}
+"#;
+    let diagnostics = analyze_source("protocol-default-read.rss", source);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+
+    let hir = Hir::from_syntax(&parse_source("protocol-default-read.rss", source));
+    let body = hir.function_body("render").expect("render body exists");
+    let Some(HirStmt::Return {
+        value: Some(HirExpr::Call { args, .. }),
+        ..
+    }) = body
+        .block
+        .as_ref()
+        .and_then(|block| block.statements.first())
+    else {
+        panic!("render should return a protocol call");
+    };
+    assert!(matches!(
+        &args[0].value,
+        HirExpr::Effect {
+            effect: ParamEffect::Read,
+            type_name: Some(type_name),
+            ..
+        } if type_name == "F"
+    ));
 }
 
 #[test]

@@ -8,16 +8,16 @@ struct Image {
     pixels: Buffer
 }
 
-fn RetainedImageStore.store(cache: mut RetainedImageStore, image: read Image) -> Unit
+fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Image) -> Unit
     effects(retains(image))
 
-fn good_store(cache: mut RetainedImageStore, input: read Path, output: read Path) -> Result<Unit, ImageError> {
-    local image = Image.load(path: read input)?
+fn good_store(cache: mut RetainedImageStore, input: Path, output: Path) -> Result<Unit, ImageError> {
+    local image = Image.load(path: input)?
     Image.resize(image: mut image, width: 800, height: 600)
 
     let shared = manage image
-    RetainedImageStore.store(cache: mut cache, image: read shared)
-    Image.save(image: read shared, path: read output)?
+    RetainedImageStore.store(cache: mut cache, image: shared)
+    Image.save(image: shared, path: output)?
 
     return Ok(Unit)
 }

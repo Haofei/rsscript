@@ -1,8 +1,8 @@
 features: local
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -16,25 +16,25 @@ fn main() -> Unit {
     let limit = bench_size(default: 500000)
     local values = List<Int>.new()
 
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
-    List.push<Int>(list: mut values, value: read 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
+    List.push<Int>(list: mut values, value: 0)
 
-    let total = hot(limit: limit, values: mut values)
-    Log.write(message: read String.from_int(value: total))
+    let total = hot(limit, values: mut values)
+    Log.write(message: String.from_int(value: total))
     return Unit
 }
 
@@ -44,8 +44,8 @@ fn hot(limit: Int, values: mut List<Int>) -> Int {
 
     while i < limit {
         let slot = i % 16
-        List.set<Int>(list: mut values, index: slot, value: read i)
-        total = total + List.get<Int>(list: read values, index: slot)
+        List.set<Int>(list: mut values, index: slot, value: i)
+        total = total + List.get<Int>(list: values, index: slot)
         i = i + 1
     }
 

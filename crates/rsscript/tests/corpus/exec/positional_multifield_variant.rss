@@ -4,7 +4,7 @@ sum Shape {
     Prism(width: Int, height: Int, depth: Int)
 }
 
-fn area(shape: read Shape) -> Int {
+fn area(shape: Shape) -> Int {
     match read shape {
         Circle(r) => { return read r * read r }
         Rectangle(w, h) => { return read w * read h }
@@ -13,7 +13,7 @@ fn area(shape: read Shape) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: area(shape: read Rectangle(width: 3, height: 5))))
-    Log.write(message: read String.from_int(value: area(shape: read Prism(width: 2, height: 9, depth: 7))))
+    Log.write(message: String.from_int(value: area(shape: Rectangle(width: 3, height: 5))))
+    Log.write(message: String.from_int(value: area(shape: Prism(width: 2, height: 9, depth: 7))))
     return Unit
 }

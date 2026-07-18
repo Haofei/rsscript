@@ -7,5 +7,5 @@ fn cheap_id(value: Int) -> Int
 fn cheap_wrapper(value: Int) -> Int
     effects(noalloc)
 {
-    return cheap_id(value: value)
+    return cheap_id(value)
 }

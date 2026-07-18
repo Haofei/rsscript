@@ -4,18 +4,18 @@ features: native, local
 // report. Used both as a real tool and as a cross-backend (VM/JIT/AOT) benchmark
 // and hardening pressure-test (see docs/self-hosting.md).
 
-fn edition_of(package: read JsonValue) -> Result<fresh String, JsonError> {
+fn edition_of(package: JsonValue) -> Result<fresh String, JsonError> {
     // SH-002: the optional-field-or-default shape collapses to one line via the
     // existing `Option.unwrap_or` rather than a `match`.
-    let edition = Json.field_optional_string(value: read package, name: read "edition")?
-    return Ok(Option.unwrap_or<String>(value: read edition, default: read ""))
+    let edition = Json.field_optional_string(value: package, name: "edition")?
+    return Ok(Option.unwrap_or<String>(value: edition, default: ""))
 }
 
-fn dependency_count(manifest: read JsonValue) -> Result<Int, JsonError> {
-    match Json.field_optional(value: read manifest, name: read "dependencies")? {
+fn dependency_count(manifest: JsonValue) -> Result<Int, JsonError> {
+    match Json.field_optional(value: manifest, name: "dependencies")? {
         Some(deps) => {
-            let keys = Json.object_keys(value: read deps)?
-            return Ok(List.len<String>(list: read keys))
+            let keys = Json.object_keys(value: deps)?
+            return Ok(List.len<String>(list: keys))
         }
         None => {
             return Ok(0)
@@ -24,12 +24,12 @@ fn dependency_count(manifest: read JsonValue) -> Result<Int, JsonError> {
 }
 
 // `[<table>] paths = [...]` as a list of strings, or empty when absent.
-fn path_array(manifest: read JsonValue, table: read String) -> Result<fresh List<String>, JsonError> {
-    match Json.field_optional(value: read manifest, name: read table)? {
+fn path_array(manifest: JsonValue, table: String) -> Result<fresh List<String>, JsonError> {
+    match Json.field_optional(value: manifest, name: table)? {
         Some(section) => {
-            match Json.field_optional(value: read section, name: read "paths")? {
+            match Json.field_optional(value: section, name: "paths")? {
                 Some(array) => {
-                    return Json.array_strings(value: read array)
+                    return Json.array_strings(value: array)
                 }
                 None => {
                     return Ok(List<String>.new())
@@ -42,35 +42,35 @@ fn path_array(manifest: read JsonValue, table: read String) -> Result<fresh List
     }
 }
 
-fn inspect(path: read Path) -> Result<fresh String, JsonError> {
-    let manifest = Toml.parse_file(path: read path)?
-    let package = Json.field(value: read manifest, name: read "package")?
-    let name = Json.field_string(value: read package, name: read "name")?
-    let version = Json.field_string(value: read package, name: read "version")?
-    let edition = edition_of(package: read package)?
-    let dep_count = dependency_count(manifest: read manifest)?
-    let interfaces = path_array(manifest: read manifest, table: read "interfaces")?
-    let sources = path_array(manifest: read manifest, table: read "sources")?
+fn inspect(path: Path) -> Result<fresh String, JsonError> {
+    let manifest = Toml.parse_file(path)?
+    let package = Json.field(value: manifest, name: "package")?
+    let name = Json.field_string(value: package, name: "name")?
+    let version = Json.field_string(value: package, name: "version")?
+    let edition = edition_of(package)?
+    let dep_count = dependency_count(manifest)?
+    let interfaces = path_array(manifest, table: "interfaces")?
+    let sources = path_array(manifest, table: "sources")?
 
     let mut fields = List<String>.new()
-    List.push<String>(list: mut fields, value: read Json.string_field(name: read "package", value: read name))
-    List.push<String>(list: mut fields, value: read Json.string_field(name: read "version", value: read version))
-    List.push<String>(list: mut fields, value: read Json.string_field(name: read "edition", value: read edition))
-    List.push<String>(list: mut fields, value: read Json.int_field(name: read "dependency_count", value: dep_count))
-    List.push<String>(list: mut fields, value: read Json.raw_field(name: read "interfaces", value: read Json.string_array(items: read interfaces)))
-    List.push<String>(list: mut fields, value: read Json.raw_field(name: read "sources", value: read Json.string_array(items: read sources)))
-    return Ok(Json.object(fields: read fields))
+    List.push<String>(list: mut fields, value: Json.string_field(name: "package", value: name))
+    List.push<String>(list: mut fields, value: Json.string_field(name: "version", value: version))
+    List.push<String>(list: mut fields, value: Json.string_field(name: "edition", value: edition))
+    List.push<String>(list: mut fields, value: Json.int_field(name: "dependency_count", value: dep_count))
+    List.push<String>(list: mut fields, value: Json.raw_field(name: "interfaces", value: Json.string_array(items: interfaces)))
+    List.push<String>(list: mut fields, value: Json.raw_field(name: "sources", value: Json.string_array(items: sources)))
+    return Ok(Json.object(fields))
 }
 
 fn main() -> Result<Unit, String> {
-    let path = Args.get_or_default(index: 0, default: read "packages/agent/rsspkg.toml")
-    match inspect(path: read Path.from_string(value: read path)) {
+    let path = Args.get_or_default(index: 0, default: "packages/agent/rsspkg.toml")
+    match inspect(path: Path.from_string(value: path)) {
         Ok(report) => {
-            Log.write(message: read report)
+            Log.write(message: report)
             return Ok(Unit)
         }
         Err(error) => {
-            return Err(JsonError.message(error: read error))
+            return Err(JsonError.message(error))
         }
     }
 }

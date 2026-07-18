@@ -5,9 +5,9 @@ struct Image {
     pixels: Buffer
 }
 
-fn bad_pool(path: read Path) -> Unit {
+fn bad_pool(path: Path) -> Unit {
     local pool = ResourcePool<Image>.new(
-        create: || Image.load(path: read path),
+        create: || Image.load(path),
         max_size: 4,
     )
 }

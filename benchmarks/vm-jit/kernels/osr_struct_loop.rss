@@ -12,8 +12,8 @@ struct Point {
 }
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -24,7 +24,7 @@ fn bench_size(default: Int) -> Int {
 }
 
 fn run(limit: Int) -> Int {
-    Log.write(message: read "begin")
+    Log.write(message: "begin")
     let mut i = 0
     let mut total = 0
     while i < limit {
@@ -32,12 +32,12 @@ fn run(limit: Int) -> Int {
         total = total + p.x + p.y
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Log.write(message: String.from_int(value: total))
     return total
 }
 
 fn main() -> Unit {
     let limit = bench_size(default: 2000000)
-    Log.write(message: read String.from_int(value: run(limit: read limit)))
+    Log.write(message: String.from_int(value: run(limit)))
     return Unit
 }

@@ -10,9 +10,9 @@ class IOError {
     code: Int
 }
 
-fn LogFile.open(path: read Path) -> Result<LogFile, IOError>
+fn LogFile.open(path: Path) -> Result<LogFile, IOError>
 
-fn bad(path: read Path) -> Result<Unit, IOError> {
-    let file = LogFile.open(path: read path)?
+fn bad(path: Path) -> Result<Unit, IOError> {
+    let file = LogFile.open(path)?
     return Ok(Unit)
 }

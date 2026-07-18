@@ -342,7 +342,7 @@ pub(crate) fn print_usage() {
     eprintln!("  rss check [--json] <package-directory>");
     eprintln!("  rss check --explain <code>");
     eprintln!(
-        "  rss fix [--write] [--json] [--interface <file.rssi> ...] <file.rss>  # apply machine-applicable fixes"
+        "  rss fix [--default-read] [--write] [--json] [--interface <file.rssi> ...] <file.rss>  # apply machine-applicable fixes"
     );
     eprintln!("  rss fmt <file.rss>  # writes formatted source to stdout");
     eprintln!("  rss new <package-name>");

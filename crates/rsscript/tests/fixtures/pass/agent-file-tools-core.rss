@@ -1,9 +1,9 @@
-fn write_workspace_file(root: read Path, relative: read String, text: read String) -> Result<Unit, String> {
-    match Workspace.resolve(root: read root, relative: read relative) {
+fn write_workspace_file(root: Path, relative: String, text: String) -> Result<Unit, String> {
+    match Workspace.resolve(root, relative) {
         Ok(path) => {
             match path.parent() {
                 Some(parent) => {
-                    match Directory.create_dir_all(path: read parent) {
+                    match Directory.create_dir_all(path: parent) {
                         Ok(unit) => {
                         }
                         Err(error) => {
@@ -14,7 +14,7 @@ fn write_workspace_file(root: read Path, relative: read String, text: read Strin
                 None => {
                 }
             }
-            match File.write_atomic(path: read path, text: read text) {
+            match File.write_atomic(path, text) {
                 Ok(unit) => {
                     return Ok(Unit)
                 }
@@ -29,7 +29,7 @@ fn write_workspace_file(root: read Path, relative: read String, text: read Strin
     }
 }
 
-fn preview_and_apply(original: read String, changed: read String) -> Result<fresh String, String> {
-    let patch = Diff.unified(old: read original, new: read changed)
-    return Patch.apply_text(original: read original, patch: read patch)
+fn preview_and_apply(original: String, changed: String) -> Result<fresh String, String> {
+    let patch = Diff.unified(old: original, new: changed)
+    return Patch.apply_text(original, patch)
 }

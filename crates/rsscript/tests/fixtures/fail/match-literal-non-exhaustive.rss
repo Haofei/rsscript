@@ -1,6 +1,6 @@
 // expect: RS0021
 
-fn bad(name: read String) -> String {
+fn bad(name: String) -> String {
     return match name {
         "read_file" => { "read" }
     }

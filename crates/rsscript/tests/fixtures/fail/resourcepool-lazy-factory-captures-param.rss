@@ -9,14 +9,14 @@ resource Session {
     }
 }
 
-fn Session.open(host: read String) -> Session
+fn Session.open(host: String) -> Session
 
 // A lazy factory is stored in the pool, so it must own its captures. Capturing
 // the borrowed `host` parameter would not outlive the pool. Bind an owned `local`
 // first and capture that instead.
-fn run(host: read String) -> Result<Unit, PoolError> {
+fn run(host: String) -> Result<Unit, PoolError> {
     local pool = ResourcePool<Session>.lazy(
-        create: || Session.open(host: read host),
+        create: || Session.open(host),
         max_size: 2,
     )
     return Ok(Unit)

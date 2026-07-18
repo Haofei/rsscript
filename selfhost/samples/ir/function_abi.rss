@@ -1,0 +1,11 @@
+fn increment(value: Int) -> Int {
+    return value + 1
+}
+
+fn relay() -> Int {
+    return increment(value: 41)
+}
+
+fn main() -> Int {
+    return relay()
+}

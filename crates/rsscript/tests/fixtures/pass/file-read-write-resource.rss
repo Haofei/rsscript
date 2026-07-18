@@ -7,11 +7,11 @@ resource File {
     }
 }
 
-fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
-    with File.open_read(path: read input)? as reader {
-        with File.open_write(path: read output)? as writer {
+fn copy_file(input: Path, output: Path) -> Result<Unit, FileError> {
+    with File.open_read(path: input)? as reader {
+        with File.open_write(path: output)? as writer {
             let bytes = File.read_all(file: mut reader)?
-            File.write(file: mut writer, data: read bytes)?
+            File.write(file: mut writer, data: bytes)?
         }
     }
 

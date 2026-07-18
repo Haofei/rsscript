@@ -9,6 +9,6 @@ struct Coord derives(Clone) {
 fn main() -> Unit {
     let s = Set.new<Coord>()
     let c = Coord(x: 1, y: 2)
-    let added = Set.insert(set: mut s, value: read c)
+    let added = Set.insert(set: mut s, value: c)
     return Unit
 }

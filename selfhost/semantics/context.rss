@@ -7,41 +7,80 @@ module selfhost.semantics.context
 
 use selfhost.scan.*
 use selfhost.syntax.ast.*
+use selfhost.types.*
 
 struct FunctionContext {
     bindings: Map<String, String>
 }
 
-fn FunctionContext.from_item(item: read Item) -> fresh FunctionContext {
+fn FunctionContext.from_item(item: Item) -> fresh FunctionContext {
     local bindings = Map<String, String>.new()
     let mut i = 0
-    while i < List.len(list: read item.params) {
-        let param = List.get<Param>(list: read item.params, index: read i)
-        Map.insert<String, String>(map: mut bindings, key: read param.name, value: read param.typeText)
+    while i < List.len(list: item.params) {
+        let param = List.get<Param>(list: item.params, index: i)
+        Map.insert<String, String>(map: mut bindings, key: param.name, value: param.typeText)
         i = i + 1
     }
     return FunctionContext(bindings: take bindings)
 }
 
-fn program_function_return_type(program: read Program, name: read String) -> String {
+fn program_function_return_type(program: Program, name: String) -> String {
     let mut i = 0
-    while i < Program.len(self: read program) {
-        let item = List.get<Item>(list: read program.items, index: read i)
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
         if item.kind == ITEM_FUNCTION && item.name == name { return item.returnType }
         i = i + 1
     }
     return ""
 }
 
-fn is_comparison_operator(operator: read String) -> Bool {
+// Resolve a direct field from a file-local data declaration. This intentionally
+// does not substitute generic arguments yet; it is the smallest reusable
+// nominal-field slice needed by AST-backed receiver checks.
+fn program_field_type(program: Program, ownerType: String, fieldName: String) -> String {
+    let root = str_type_root(s: ownerType)
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_TYPE && item.name == root {
+            let mut fieldIndex = 0
+            while fieldIndex < List.len(list: item.fields) {
+                let field = List.get<Field>(list: item.fields, index: fieldIndex)
+                if field.name == fieldName { return field.typeText }
+                fieldIndex = fieldIndex + 1
+            }
+            return ""
+        }
+        itemIndex = itemIndex + 1
+    }
+    return ""
+}
+
+fn is_comparison_operator(operator: String) -> Bool {
     return operator == "==" || operator == "!=" || operator == "<" || operator == "<=" || operator == ">" || operator == ">="
 }
 
-fn infer_expression_type(program: read Program, context: read FunctionContext, index: Int) -> String {
-    if index < 0 || index >= List.len(list: read program.expressions) { return "" }
-    let expression = List.get<Expr>(list: read program.expressions, index: read index)
+fn call_constructed_type(expression: Expr) -> String {
+    if expression.text != "Map.new" && expression.text != "Set.new" && expression.text != "List.new" && expression.text != "Deque.new" { return "" }
+    let count = List.len(list: expression.typeArgs)
+    if count == 0 { return "" }
+    let mut out = String.concat(left: expression.text, right: "")
+    out = String.slice(value: out, start: 0, len: (String.len(value: out) - 4))
+    out = String.concat(left: out, right: "<")
+    let mut i = 0
+    while i < count {
+        if i > 0 { out = String.concat(left: out, right: ", ") }
+        out = String.concat(left: out, right: List.get<String>(list: expression.typeArgs, index: i))
+        i = i + 1
+    }
+    return String.concat(left: out, right: ">")
+}
+
+fn infer_expression_type(program: Program, context: FunctionContext, index: Int) -> String {
+    if index < 0 || index >= List.len(list: program.expressions) { return "" }
+    let expression = List.get<Expr>(list: program.expressions, index)
     if expression.kind == EXPR_NAME {
-        return Map.get_or_default<String, String>(map: read context.bindings, key: read expression.text, default: read "")
+        return Map.get_or_default<String, String>(map: context.bindings, key: expression.text, default: "")
     }
     if expression.kind == EXPR_LITERAL {
         if expression.tokenKind == TOK_NUMBER { return "Int" }
@@ -52,28 +91,35 @@ fn infer_expression_type(program: read Program, context: read FunctionContext, i
         return ""
     }
     if expression.kind == EXPR_CALL {
-        return program_function_return_type(program: read program, name: read expression.text)
+        let constructed = call_constructed_type(expression: expression)
+        if String.len(value: constructed) > 0 { return constructed }
+        return program_function_return_type(program, name: expression.text)
+    }
+    if expression.kind == EXPR_FIELD && List.len(list: expression.children) == 1 {
+        let base = List.get<Int>(list: expression.children, index: 0)
+        let baseType = infer_expression_type(program: program, context: context, index: base)
+        return program_field_type(program: program, ownerType: baseType, fieldName: expression.text)
     }
     if expression.kind == EXPR_UNARY && expression.text == "!" { return "Bool" }
     if expression.kind == EXPR_BINARY {
-        if is_comparison_operator(operator: read expression.text) || expression.text == "&&" || expression.text == "||" { return "Bool" }
-        if List.len(list: read expression.children) == 2 {
-            let left = List.get<Int>(list: read expression.children, index: read 0)
-            let right = List.get<Int>(list: read expression.children, index: read 1)
-            if infer_expression_type(program: read program, context: read context, index: read left) == "Int" && infer_expression_type(program: read program, context: read context, index: read right) == "Int" { return "Int" }
+        if is_comparison_operator(operator: expression.text) || expression.text == "&&" || expression.text == "||" { return "Bool" }
+        if List.len(list: expression.children) == 2 {
+            let left = List.get<Int>(list: expression.children, index: 0)
+            let right = List.get<Int>(list: expression.children, index: 1)
+            if infer_expression_type(program, context, index: left) == "Int" && infer_expression_type(program, context, index: right) == "Int" { return "Int" }
         }
     }
     return ""
 }
 
-fn infer_statement_type(program: read Program, context: mut FunctionContext, index: Int) -> String {
-    if index < 0 || index >= List.len(list: read program.statements) { return "" }
-    let statement = List.get<Stmt>(list: read program.statements, index: read index)
-    let inferred = infer_expression_type(program: read program, context: read context, index: statement.expression)
-    if statement.kind == STMT_LET && String.len(value: read statement.name) > 0 {
+fn infer_statement_type(program: Program, context: mut FunctionContext, index: Int) -> String {
+    if index < 0 || index >= List.len(list: program.statements) { return "" }
+    let statement = List.get<Stmt>(list: program.statements, index)
+    let inferred = infer_expression_type(program, context, index: statement.expression)
+    if statement.kind == STMT_LET && String.len(value: statement.name) > 0 {
         let mut bindingType = statement.typeText
-        if String.len(value: read bindingType) == 0 { bindingType = inferred }
-        if String.len(value: read bindingType) > 0 { Map.insert<String, String>(map: mut context.bindings, key: read statement.name, value: read bindingType) }
+        if String.len(value: bindingType) == 0 { bindingType = inferred }
+        if String.len(value: bindingType) > 0 { Map.insert<String, String>(map: mut context.bindings, key: statement.name, value: bindingType) }
     }
     return inferred
 }

@@ -10,19 +10,19 @@ struct VendorCopyFacts {
 fn source_root() -> fresh Path {
     let input = Args.get_or_default(
         index: 0,
-        default: read "tests/fixtures/pass/selfhost-package-source-set",
+        default: "tests/fixtures/pass/selfhost-package-source-set",
     )
 
-    return Path.from_string(value: read input)
+    return Path.from_string(value: input)
 }
 
 fn vendor_root() -> fresh Path {
     let input = Args.get_or_default(
         index: 1,
-        default: read "target/rsscript-selfhost-vendor/rss-selfhost-source-set-0.5.0",
+        default: "target/rsscript-selfhost-vendor/rss-selfhost-source-set-0.5.0",
     )
 
-    return Path.from_string(value: read input)
+    return Path.from_string(value: input)
 }
 
 fn empty_facts() -> fresh VendorCopyFacts {
@@ -42,9 +42,9 @@ fn bool_count(value: Bool) -> Int {
     return 0
 }
 
-fn add_file_facts(facts: read VendorCopyFacts, relative_path: read String) -> fresh VendorCopyFacts {
-    let is_interface = String.ends_with(value: read relative_path, suffix: read ".rssi")
-    let is_source = String.ends_with(value: read relative_path, suffix: read ".rss")
+fn add_file_facts(facts: VendorCopyFacts, relative_path: String) -> fresh VendorCopyFacts {
+    let is_interface = String.ends_with(value: relative_path, suffix: ".rssi")
+    let is_source = String.ends_with(value: relative_path, suffix: ".rss")
     let is_manifest = relative_path == "rsspkg.toml"
 
     return VendorCopyFacts(
@@ -55,10 +55,10 @@ fn add_file_facts(facts: read VendorCopyFacts, relative_path: read String) -> fr
     )
 }
 
-fn ensure_parent_directory(path: read Path) -> Result<Unit, FileError> {
-    match Path.parent(path: read path) {
+fn ensure_parent_directory(path: Path) -> Result<Unit, FileError> {
+    match Path.parent(path) {
         Some(parent) => {
-            Directory.create_all(path: read parent)?
+            Directory.create_all(path: parent)?
         }
         None => {
         }
@@ -67,71 +67,71 @@ fn ensure_parent_directory(path: read Path) -> Result<Unit, FileError> {
     return Ok(Unit)
 }
 
-fn read_text(path: read Path) -> Result<String, FileError> {
-    with File.open_read(path: read path)? as file {
+fn read_text(path: Path) -> Result<String, FileError> {
+    with File.open_read(path)? as file {
         let text = File.read_all_string(file: mut file)?
 
         return Ok(text)
     }
 }
 
-fn write_text(path: read Path, text: read String) -> Result<Unit, FileError> {
-    ensure_parent_directory(path: read path)?
+fn write_text(path: Path, text: String) -> Result<Unit, FileError> {
+    ensure_parent_directory(path)?
 
-    with File.open_write(path: read path)? as file {
-        File.write_string(file: mut file, text: read text)?
+    with File.open_write(path)? as file {
+        File.write_string(file: mut file, text)?
     }
 
     return Ok(Unit)
 }
 
 fn copy_relative_file(
-    source: read Path,
-    vendor: read Path,
-    facts: read VendorCopyFacts,
-    relative_path: read String,
+    source: Path,
+    vendor: Path,
+    facts: VendorCopyFacts,
+    relative_path: String,
 ) -> Result<fresh VendorCopyFacts, FileError> {
-    let input = Path.join(base: read source, child: read relative_path)
-    let output = Path.join(base: read vendor, child: read relative_path)
-    let contents = read_text(path: read input)?
-    write_text(path: read output, text: read contents)?
+    let input = Path.join(base: source, child: relative_path)
+    let output = Path.join(base: vendor, child: relative_path)
+    let contents = read_text(path: input)?
+    write_text(path: output, text: contents)?
 
-    return add_file_facts(facts: read facts, relative_path: read relative_path)
+    return add_file_facts(facts, relative_path)
 }
 
 fn copy_package_tree(
-    source: read Path,
-    vendor: read Path,
-    files: read List<String>,
+    source: Path,
+    vendor: Path,
+    files: List<String>,
 ) -> Result<fresh VendorCopyFacts, FileError> {
     return List.try_fold<String, VendorCopyFacts, FileError>(
-        list: read files,
-        initial: read empty_facts(),
+        list: files,
+        initial: empty_facts(),
         folder: |facts, relative_path| {
             return copy_relative_file(
-                source: read source,
-                vendor: read vendor,
-                facts: read facts,
-                relative_path: read relative_path,
+                source,
+                vendor,
+                facts,
+                relative_path,
             )
         },
     )
 }
 
-fn summary_line(facts: read VendorCopyFacts) -> fresh String {
+fn summary_line(facts: VendorCopyFacts) -> fresh String {
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "selfhost package vendor copied=")
+    StringBuilder.push(builder: mut builder, value: "selfhost package vendor copied=")
     let copied = String.from_int(value: facts.copied_files)
-    StringBuilder.push(builder: mut builder, value: read copied)
-    StringBuilder.push(builder: mut builder, value: read " interfaces=")
+    StringBuilder.push(builder: mut builder, value: copied)
+    StringBuilder.push(builder: mut builder, value: " interfaces=")
     let interfaces = String.from_int(value: facts.interface_files)
-    StringBuilder.push(builder: mut builder, value: read interfaces)
-    StringBuilder.push(builder: mut builder, value: read " sources=")
+    StringBuilder.push(builder: mut builder, value: interfaces)
+    StringBuilder.push(builder: mut builder, value: " sources=")
     let sources = String.from_int(value: facts.source_files)
-    StringBuilder.push(builder: mut builder, value: read sources)
-    StringBuilder.push(builder: mut builder, value: read " manifests=")
+    StringBuilder.push(builder: mut builder, value: sources)
+    StringBuilder.push(builder: mut builder, value: " manifests=")
     let manifests = String.from_int(value: facts.manifest_files)
-    StringBuilder.push(builder: mut builder, value: read manifests)
+    StringBuilder.push(builder: mut builder, value: manifests)
 
     return StringBuilder.finish(builder: take builder)
 }
@@ -139,16 +139,16 @@ fn summary_line(facts: read VendorCopyFacts) -> fresh String {
 pub fn main() -> Result<Unit, FileError> {
     let source = source_root()
     let vendor = vendor_root()
-    Directory.create_all(path: read vendor)?
-    let files = Directory.list_files(path: read source)?
+    Directory.create_all(path: vendor)?
+    let files = Directory.list_files(path: source)?
     let facts = copy_package_tree(
-        source: read source,
-        vendor: read vendor,
-        files: read files,
+        source,
+        vendor,
+        files,
     )?
-    let summary = summary_line(facts: read facts)
+    let summary = summary_line(facts)
 
-    Log.write(message: read summary)
+    Log.write(message: summary)
 
     return Ok(Unit)
 }

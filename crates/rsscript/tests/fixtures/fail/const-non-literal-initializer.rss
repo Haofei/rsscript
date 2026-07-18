@@ -5,5 +5,5 @@
 const SUM: Int = 1 + 2
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: SUM))
+    Log.write(message: String.from_int(value: SUM))
 }

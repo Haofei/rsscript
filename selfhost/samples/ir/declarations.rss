@@ -1,0 +1,16 @@
+struct Point {
+    x: Int
+}
+
+sum Answer {
+    Value(value: Int)
+    Empty
+}
+
+type Count = Int
+
+const LIMIT: Int = 42
+
+fn main() -> Int {
+    return LIMIT
+}

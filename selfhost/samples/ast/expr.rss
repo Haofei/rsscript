@@ -1,9 +1,9 @@
-fn compute(a: read Int, b: read Int) -> Int {
+fn compute(a: Int, b: Int) -> Int {
     return a + b * 2 - 1
 }
 
-fn call_forms(xs: read List<Int>) -> Int {
-    let n = List.len(list: read xs)
-    let first = List.get(list: read xs, index: read 0)
+fn call_forms(xs: List<Int>) -> Int {
+    let n = List.len(list: xs)
+    let first = List.get(list: xs, index: 0)
     return n + first
 }

@@ -5,10 +5,10 @@ struct Image {
     pixels: Buffer
 }
 
-fn bad_capture(path: read Path) -> Unit {
-    local image = Image.load(path: read path)
+fn bad_capture(path: Path) -> Unit {
+    local image = Image.load(path)
 
     let callback = || {
-        Image.inspect(image: read image)
+        Image.inspect(image)
     }
 }

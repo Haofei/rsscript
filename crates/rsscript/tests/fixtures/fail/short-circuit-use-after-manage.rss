@@ -5,7 +5,7 @@ struct Image {
     pixels: Buffer
 }
 
-fn bad_short_circuit(path: read Path) -> Unit {
-    local image = Image.load(path: read path)
+fn bad_short_circuit(path: Path) -> Unit {
+    local image = Image.load(path)
     let ok = manage image && image
 }

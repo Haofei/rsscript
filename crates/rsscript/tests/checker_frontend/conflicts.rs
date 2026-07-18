@@ -415,8 +415,8 @@ fn main() -> Unit {
     let rust = lower_source_to_rust("callback-param.rss", source)
         .expect("callback with parameter should lower");
 
-    assert!(rust.contains("callback(41i64)"));
-    assert!(rust.contains("|item: i64|"));
+    assert!(rust.contains("callback(&41i64)"), "{rust}");
+    assert!(rust.contains("|item: &i64|"));
 }
 
 #[test]
@@ -632,11 +632,11 @@ fn run() -> Int {
         .expect("owned explicit fn should lower");
 
     assert!(
-        lowered.contains("mut callback: impl FnMut(i64) -> i64"),
+        lowered.contains("mut callback: impl FnMut(&i64) -> i64"),
         "{lowered}"
     );
-    assert!(lowered.contains("callback(value)"), "{lowered}");
-    assert!(lowered.contains("move |value: i64|"), "{lowered}");
+    assert!(lowered.contains("callback(&value)"), "{lowered}");
+    assert!(lowered.contains("move |value: &i64|"), "{lowered}");
 }
 
 #[test]

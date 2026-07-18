@@ -453,7 +453,7 @@ fn collect_program_function_param_effects(
                 function
                     .params
                     .iter()
-                    .map(|param| (param.name.clone(), param.effect))
+                    .map(|param| (param.name.clone(), param.effective_effect()))
                     .collect(),
             );
         }
@@ -1311,7 +1311,7 @@ pub(super) fn lower_protocol_callee(callee: &Callee) -> String {
 
 pub(super) fn protocol_impl_forward_arg(param: &Param) -> String {
     if param.name == "self" {
-        return match param.effect {
+        return match param.effective_effect() {
             Some(DataEffect::Read) => "self".to_string(),
             Some(DataEffect::Mut) => "self".to_string(),
             Some(DataEffect::Take) | None => "self".to_string(),

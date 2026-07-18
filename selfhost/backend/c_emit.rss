@@ -1,0 +1,570 @@
+features: local
+// Stage 4 bootstrap C emitter, scalar ABI slice.
+//
+// Input is canonical rss-ir-v1 text, never source RSS. This first executable
+// ABI accepts a scalar `main` plus a narrow, acyclic pure-helper convention.
+// Main supports scalar literals/binaries, locals, if/else, and while loops;
+// helpers currently support straight-line scalar locals and a final return.
+// Unsupported IR produces no C artifact.
+
+module selfhost.backend.c_emit
+
+fn line_at(lines: List<String>, index: Int) -> String {
+    if index < 0 || index >= List.len(list: lines) { return "" }
+    return List.get<String>(list: lines, index: index)
+}
+
+fn scalar_literal(value: String) -> String {
+    // The scalar bootstrap ABI deliberately accepts decimal Int literals only.
+    if decimal_int(value: value) == false { return "" }
+    return value
+}
+
+fn decimal_int(value: String) -> Bool {
+    let chars = String.chars(value: value)
+    let n = List.len(list: chars)
+    if n == 0 { return false }
+    let mut i = 0
+    if Char.to_code(value: List.get(list: chars, index: 0)) == 45 {
+        if n == 1 { return false }
+        i = 1
+    }
+    while i < n {
+        if Char.is_digit(value: List.get(list: chars, index: i)) == false { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn c_identifier(value: String) -> Bool {
+    let chars = String.chars(value: value)
+    if List.len(list: chars) == 0 { return false }
+    let first = Char.to_code(value: List.get<Char>(list: chars, index: 0))
+    if Char.is_alpha(value: List.get<Char>(list: chars, index: 0)) == false && first != 95 { return false }
+    let mut i = 1
+    while i < List.len(list: chars) {
+        let ch = List.get<Char>(list: chars, index: i)
+        if Char.is_alpha(value: ch) == false && Char.is_digit(value: ch) == false && Char.to_code(value: ch) != 95 { return false }
+        i = i + 1
+    }
+    return true
+}
+
+fn local_name(line: String) -> String {
+    let spaces = leading_spaces(line: line)
+    let mut start = spaces + 4
+    if String.len(value: line) >= (spaces + 8) && String.slice(value: line, start: spaces, len: 8) == "let mut " { start = spaces + 8 }
+    else if String.len(value: line) < (spaces + 4) || String.slice(value: line, start: spaces, len: 4) != "let " { return "" }
+    let pieces = String.split(value: line, delimiter: " = ")
+    if List.len(list: pieces) != 2 { return "" }
+    let left = List.get<String>(list: pieces, index: 0)
+    if String.len(value: left) <= start { return "" }
+    let name = String.slice(value: left, start: start, len: (String.len(value: left) - start))
+    if c_identifier(value: name) == false { return "" }
+    return name
+}
+
+fn assignment_name(line: String) -> String {
+    let spaces = leading_spaces(line: line)
+    if String.len(value: line) < (spaces + 7) || String.slice(value: line, start: spaces, len: 7) != "assign " { return "" }
+    let pieces = String.split(value: line, delimiter: " = ")
+    if List.len(list: pieces) != 2 { return "" }
+    let left = List.get<String>(list: pieces, index: 0)
+    if String.len(value: left) <= (spaces + 7) { return "" }
+    let name = String.slice(value: left, start: (spaces + 7), len: (String.len(value: left) - spaces - 7))
+    if c_identifier(value: name) == false { return "" }
+    return name
+}
+
+fn local_expression(line: String) -> String {
+    let pieces = String.split(value: line, delimiter: " = ")
+    if List.len(list: pieces) != 2 { return "" }
+    return scalar_expression(value: List.get<String>(list: pieces, index: 1))
+}
+
+fn scalar_name(value: String) -> String {
+    if c_identifier(value: value) == false { return "" }
+    return value
+}
+
+fn binary_atom(value: String) -> String {
+    if String.len(value: value) < 2 { return "" }
+    let chars = String.chars(value: value)
+    if Char.to_code(value: List.get<Char>(list: chars, index: (List.len(list: chars) - 1))) != 41 { return "" }
+    let inner = String.slice(value: value, start: 0, len: (String.len(value: value) - 1))
+    if String.starts_with(value: inner, prefix: "literal ") {
+        let literal = String.slice(value: inner, start: 8, len: (String.len(value: inner) - 8))
+        if decimal_int(value: literal) { return literal }
+        return ""
+    }
+    if String.starts_with(value: inner, prefix: "name ") {
+        let name = String.slice(value: inner, start: 5, len: (String.len(value: inner) - 5))
+        if c_identifier(value: name) { return name }
+    }
+    return ""
+}
+
+fn binary_expression(value: String) -> String {
+    if String.starts_with(value: value, prefix: "bin ") == false { return "" }
+    let pieces = String.split(value: value, delimiter: " (")
+    if List.len(list: pieces) != 3 { return "" }
+    let head = String.split(value: List.get<String>(list: pieces, index: 0), delimiter: " ")
+    if List.len(list: head) != 2 { return "" }
+    let op = List.get<String>(list: head, index: 1)
+    if op != "+" && op != "-" && op != "*" && op != "/" && op != "%"
+        && op != "&" && op != "|" && op != "^" && op != "<<" && op != ">>"
+        && op != "==" && op != "!=" && op != "<" && op != "<=" && op != ">" && op != ">="
+        && op != "&&" && op != "||" { return "" }
+    let left = binary_atom(value: List.get<String>(list: pieces, index: 1))
+    let right = binary_atom(value: List.get<String>(list: pieces, index: 2))
+    if String.len(value: left) == 0 || String.len(value: right) == 0 { return "" }
+    if (op == "/" || op == "%") && right == "0" { return "" }
+    return parenthesized_binary(left: left, op: op, right: right)
+}
+
+fn scalar_expression(value: String) -> String {
+    if String.starts_with(value: value, prefix: "literal ") {
+        return scalar_literal(value: String.slice(value: value, start: 8, len: (String.len(value: value) - 8)))
+    }
+    if String.starts_with(value: value, prefix: "name ") {
+        return scalar_name(value: String.slice(value: value, start: 5, len: (String.len(value: value) - 5)))
+    }
+    return binary_expression(value: value)
+}
+
+fn boolean_condition(value: String) -> String {
+    if value == "literal true" { return "1" }
+    if value == "literal false" { return "0" }
+    return ""
+}
+
+fn condition_expression(value: String) -> String {
+    let boolean = boolean_condition(value: value)
+    if String.len(value: boolean) > 0 { return boolean }
+    return scalar_expression(value: value)
+}
+
+fn expression_uses_declared_names(value: String, declared: Set<String>) -> Bool {
+    if String.starts_with(value: value, prefix: "literal ") {
+        return String.len(value: scalar_literal(value: String.slice(value: value, start: 8, len: (String.len(value: value) - 8)))) > 0
+    }
+    if String.starts_with(value: value, prefix: "name ") {
+        let name = scalar_name(value: String.slice(value: value, start: 5, len: (String.len(value: value) - 5)))
+        return String.len(value: name) > 0 && Set.contains<String>(set: declared, value: name)
+    }
+    if String.starts_with(value: value, prefix: "bin ") == false { return false }
+    let pieces = String.split(value: value, delimiter: " (")
+    if List.len(list: pieces) != 3 { return false }
+    let left = List.get<String>(list: pieces, index: 1)
+    let right = List.get<String>(list: pieces, index: 2)
+    if String.len(value: left) < 2 || String.len(value: right) < 2 { return false }
+    return expression_uses_declared_names(value: String.slice(value: left, start: 0, len: (String.len(value: left) - 1)), declared: declared) && expression_uses_declared_names(value: String.slice(value: right, start: 0, len: (String.len(value: right) - 1)), declared: declared)
+}
+
+fn condition_uses_declared_names(value: String, declared: Set<String>) -> Bool {
+    if String.len(value: boolean_condition(value: value)) > 0 { return true }
+    return expression_uses_declared_names(value: value, declared: declared)
+}
+
+fn indentation(depth: Int) -> String {
+    local out = StringBuilder.new()
+    let mut i = 0
+    while i < depth {
+        StringBuilder.push(builder: mut out, value: "  ")
+        i = i + 1
+    }
+    return StringBuilder.finish(builder: take out)
+}
+
+fn leading_spaces(line: String) -> Int {
+    let chars = String.chars(value: line)
+    let mut i = 0
+    while i < List.len(list: chars) && Char.to_code(value: List.get<Char>(list: chars, index: i)) == 32 {
+        i = i + 1
+    }
+    return i
+}
+
+fn while_expression(line: String) -> String {
+    let spaces = leading_spaces(line: line)
+    if String.len(value: line) < (spaces + 6) { return "" }
+    let head = String.slice(value: line, start: spaces, len: 6)
+    if head != "while " { return "" }
+    return String.slice(value: line, start: (spaces + 6), len: (String.len(value: line) - spaces - 6))
+}
+
+fn if_expression(line: String) -> String {
+    let spaces = leading_spaces(line: line)
+    if String.len(value: line) < (spaces + 3) { return "" }
+    let head = String.slice(value: line, start: spaces, len: 3)
+    if head != "if " { return "" }
+    return String.slice(value: line, start: (spaces + 3), len: (String.len(value: line) - spaces - 3))
+}
+
+fn is_else_line(line: String) -> Bool {
+    let spaces = leading_spaces(line: line)
+    return String.slice(value: line, start: spaces, len: (String.len(value: line) - spaces)) == "else"
+}
+
+fn is_end_line(line: String) -> Bool {
+    let spaces = leading_spaces(line: line)
+    return String.slice(value: line, start: spaces, len: (String.len(value: line) - spaces)) == "end"
+}
+
+fn parenthesized_binary(left: String, op: String, right: String) -> String {
+    let openLeft = String.concat(left: "(", right: left)
+    let operation = String.concat(left: openLeft, right: op)
+    return String.concat(left: operation, right: String.concat(left: right, right: ")"))
+}
+
+// The first native calling-convention slice accepts pure Int helpers with zero
+// or one read Int parameter. It is kept separate from the block renderer so
+// the existing control-flow subset does not acquire a second, partial ABI.
+fn pure_int_function_name(line: String) -> String {
+    if leading_spaces(line: line) != 0 || String.starts_with(value: line, prefix: "fn ") == false { return "" }
+    let suffix = "()->Int"
+    if String.len(value: line) <= (3 + String.len(value: suffix)) { return "" }
+    let parts = String.split(value: line, delimiter: "(")
+    if List.len(list: parts) != 2 { return "" }
+    let nameHead = List.get<String>(list: parts, index: 0)
+    if String.len(value: nameHead) <= 3 { return "" }
+    let name = String.slice(value: nameHead, start: 3, len: (String.len(value: nameHead) - 3))
+    if c_identifier(value: name) == false { return "" }
+    return name
+}
+
+fn pure_int_function_parameter(line: String) -> String {
+    let parts = String.split(value: line, delimiter: "(")
+    if List.len(list: parts) != 2 { return "" }
+    let tail = List.get<String>(list: parts, index: 1)
+    if String.len(value: tail) < 6 || String.slice(value: tail, start: (String.len(value: tail) - 6), len: 6) != ")->Int" { return "" }
+    let params = String.slice(value: tail, start: 0, len: (String.len(value: tail) - 6))
+    if String.len(value: params) == 0 { return "" }
+    let parameter = String.split(value: params, delimiter: ":")
+    if List.len(list: parameter) != 2 || List.get<String>(list: parameter, index: 1) != "read Int" { return "" }
+    let name = List.get<String>(list: parameter, index: 0)
+    if c_identifier(value: name) == false { return "" }
+    return name
+}
+
+fn pure_int_function_signature_valid(line: String) -> Bool {
+    if String.len(value: pure_int_function_name(line: line)) == 0 { return false }
+    let parts = String.split(value: line, delimiter: "(")
+    if List.len(list: parts) != 2 { return false }
+    let tail = List.get<String>(list: parts, index: 1)
+    if String.len(value: tail) < 6 { return false }
+    let params = String.slice(value: tail, start: 0, len: (String.len(value: tail) - 6))
+    if String.len(value: params) == 0 { return true }
+    return String.len(value: pure_int_function_parameter(line: line)) > 0
+}
+
+fn pure_function_index(name: String, names: List<String>) -> Int {
+    let mut i = 0
+    while i < List.len(list: names) {
+        if List.get<String>(list: names, index: i) == name { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn first_open_parenthesis(value: String) -> Int {
+    let chars = String.chars(value: value)
+    let mut i = 0
+    while i < List.len(list: chars) {
+        if Char.to_code(value: List.get<Char>(list: chars, index: i)) == 40 { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn pure_function_expression(value: String, names: List<String>, parameters: List<String>, declared: read Set<String>, currentFunction: String) -> String {
+    if String.starts_with(value: value, prefix: "literal ") {
+        return scalar_literal(value: String.slice(value: value, start: 8, len: (String.len(value: value) - 8)))
+    }
+    if String.starts_with(value: value, prefix: "call ") {
+        let open = first_open_parenthesis(value: value)
+        if open <= 5 || String.len(value: value) <= (open + 1) || String.slice(value: value, start: (String.len(value: value) - 1), len: 1) != ")" { return "" }
+        let name = String.slice(value: value, start: 5, len: (open - 5))
+        let index = pure_function_index(name: name, names: names)
+        let currentIndex = pure_function_index(name: currentFunction, names: names)
+        // Calls may only point to an earlier declaration. This is a small but
+        // mechanically checked call-graph rule: it excludes direct and indirect
+        // recursion without needing a second graph analysis in the bootstrap ABI.
+        if c_identifier(value: name) == false || name == "main" || index < 0 || currentIndex < 0 || index >= currentIndex { return "" }
+        let argument = String.slice(value: value, start: (open + 1), len: (String.len(value: value) - open - 2))
+        let parameter = List.get<String>(list: parameters, index: index)
+        if String.len(value: parameter) == 0 {
+            if String.len(value: argument) > 0 { return "" }
+            return String.concat(left: "rss_fn_", right: String.concat(left: name, right: "()"))
+        }
+        let prefix = String.concat(left: parameter, right: "=")
+        if String.starts_with(value: argument, prefix: prefix) == false { return "" }
+        let argumentValue = String.slice(value: argument, start: String.len(value: prefix), len: (String.len(value: argument) - String.len(value: prefix)))
+        let lowered = pure_function_expression(value: argumentValue, names: names, parameters: parameters, declared: declared, currentFunction: currentFunction)
+        if String.len(value: lowered) == 0 { return "" }
+        return String.concat(left: String.concat(left: "rss_fn_", right: name), right: String.concat(left: "(", right: String.concat(left: lowered, right: ")")))
+    }
+    if String.starts_with(value: value, prefix: "name ") {
+        let name = String.slice(value: value, start: 5, len: (String.len(value: value) - 5))
+        if Set.contains<String>(set: declared, value: name) { return name }
+        return ""
+    }
+    if String.starts_with(value: value, prefix: "bin ") == false { return "" }
+    let pieces = String.split(value: value, delimiter: " (")
+    if List.len(list: pieces) != 3 { return "" }
+    let head = String.split(value: List.get<String>(list: pieces, index: 0), delimiter: " ")
+    if List.len(list: head) != 2 { return "" }
+    let op = List.get<String>(list: head, index: 1)
+    if op != "+" && op != "-" && op != "*" && op != "/" && op != "%"
+        && op != "&" && op != "|" && op != "^" && op != "<<" && op != ">>" { return "" }
+    let leftText = List.get<String>(list: pieces, index: 1)
+    let rightText = List.get<String>(list: pieces, index: 2)
+    if String.len(value: leftText) < 2 || String.len(value: rightText) < 2 { return "" }
+    let left = pure_function_expression(value: String.slice(value: leftText, start: 0, len: (String.len(value: leftText) - 1)), names: names, parameters: parameters, declared: declared, currentFunction: currentFunction)
+    let right = pure_function_expression(value: String.slice(value: rightText, start: 0, len: (String.len(value: rightText) - 1)), names: names, parameters: parameters, declared: declared, currentFunction: currentFunction)
+    if String.len(value: left) == 0 || String.len(value: right) == 0 || ((op == "/" || op == "%") && right == "0") { return "" }
+    return parenthesized_binary(left: left, op: op, right: right)
+}
+
+fn pure_function_body_end(lines: List<String>, start: Int, end: Int) -> Int {
+    let mut i = start + 1
+    while i < end && String.starts_with(value: line_at(lines, index: i), prefix: "fn ") == false {
+        i = i + 1
+    }
+    return i
+}
+
+fn pure_function_local_value(line: String) -> String {
+    let pieces = String.split(value: line, delimiter: " = ")
+    if List.len(list: pieces) != 2 { return "" }
+    return List.get<String>(list: pieces, index: 1)
+}
+
+// Validate the straight-line scalar body before any C output is emitted. This
+// makes malformed late functions fail atomically rather than leaving a partial
+// translation on stdout.
+fn pure_function_body_valid(lines: List<String>, start: Int, bodyEnd: Int, names: List<String>, parameters: List<String>, parameter: String, functionName: String) -> Bool {
+    if start + 1 >= bodyEnd { return false }
+    local declared = Set<String>.new()
+    if String.len(value: parameter) > 0 { Set.insert<String>(set: mut declared, value: parameter) }
+    let mut i = start + 1
+    while i < bodyEnd {
+        let line = line_at(lines, index: i)
+        if leading_spaces(line: line) != 2 { return false }
+        if String.starts_with(value: line, prefix: "  return ") {
+            if i != (bodyEnd - 1) { return false }
+            let value = String.slice(value: line, start: 9, len: (String.len(value: line) - 9))
+            return String.len(value: pure_function_expression(value: value, names: names, parameters: parameters, declared: declared, currentFunction: functionName)) > 0
+        }
+        let local = local_name(line: line)
+        let value = pure_function_local_value(line: line)
+        if String.len(value: local) == 0 || String.len(value: value) == 0 || Set.contains<String>(set: declared, value: local) { return false }
+        if String.len(value: pure_function_expression(value: value, names: names, parameters: parameters, declared: declared, currentFunction: functionName)) == 0 { return false }
+        Set.insert<String>(set: mut declared, value: local)
+        i = i + 1
+    }
+    return false
+}
+
+fn emit_pure_function_body(lines: List<String>, start: Int, bodyEnd: Int, names: List<String>, parameters: List<String>, parameter: String, functionName: String, cDepth: Int) -> Unit {
+    local declared = Set<String>.new()
+    if String.len(value: parameter) > 0 { Set.insert<String>(set: mut declared, value: parameter) }
+    let mut i = start + 1
+    while i < bodyEnd {
+        let line = line_at(lines, index: i)
+        if String.starts_with(value: line, prefix: "  return ") {
+            let source = String.slice(value: line, start: 9, len: (String.len(value: line) - 9))
+            let value = pure_function_expression(value: source, names: names, parameters: parameters, declared: declared, currentFunction: functionName)
+            Log.write(message: String.concat(left: indentation(depth: cDepth), right: String.concat(left: "return ", right: String.concat(left: value, right: ";"))))
+        } else {
+            let local = local_name(line: line)
+            let source = pure_function_local_value(line: line)
+            let value = pure_function_expression(value: source, names: names, parameters: parameters, declared: declared, currentFunction: functionName)
+            Log.write(message: String.concat(left: indentation(depth: cDepth), right: String.concat(left: "long long ", right: String.concat(left: local, right: String.concat(left: " = ", right: String.concat(left: value, right: ";"))))))
+            Set.insert<String>(set: mut declared, value: local)
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn emit_pure_function_program(lines: List<String>, end: Int) -> Bool {
+    local names = List<String>.new()
+    local parameters = List<String>.new()
+    local functions = Set<String>.new()
+    let mut i = 1
+    while i < end {
+        let header = line_at(lines, index: i)
+        let name = pure_int_function_name(line: header)
+        if pure_int_function_signature_valid(line: header) == false || Set.contains<String>(set: functions, value: name) { return false }
+        let parameter = pure_int_function_parameter(line: header)
+        if name == "main" && String.len(value: parameter) > 0 { return false }
+        local ownedName = String.copy(value: name)
+        local ownedParameter = String.copy(value: parameter)
+        List.push<String>(list: mut names, value: (manage ownedName))
+        List.push<String>(list: mut parameters, value: (manage ownedParameter))
+        Set.insert<String>(set: mut functions, value: name)
+        i = pure_function_body_end(lines: lines, start: i, end: end)
+    }
+    if List.len(list: names) < 2 || Set.contains<String>(set: functions, value: "main") == false { return false }
+
+    i = 0
+    let mut functionStart = 1
+    while i < List.len(list: names) {
+        let bodyEnd = pure_function_body_end(lines: lines, start: functionStart, end: end)
+        if pure_function_body_valid(lines: lines, start: functionStart, bodyEnd: bodyEnd, names: names, parameters: parameters, parameter: List.get<String>(list: parameters, index: i), functionName: List.get<String>(list: names, index: i)) == false { return false }
+        functionStart = bodyEnd
+        i = i + 1
+    }
+
+    Log.write(message: "#include \"rssrt.h\"")
+    i = 0
+    while i < List.len(list: names) {
+        let name = List.get<String>(list: names, index: i)
+        let parameter = List.get<String>(list: parameters, index: i)
+        if name != "main" {
+            let mut cParameter = "void"
+            if String.len(value: parameter) > 0 { cParameter = String.concat(left: "long long ", right: parameter) }
+            Log.write(message: String.concat(left: "static long long rss_fn_", right: String.concat(left: name, right: String.concat(left: "(", right: String.concat(left: cParameter, right: ");")))))
+        }
+        i = i + 1
+    }
+    i = 0
+    functionStart = 1
+    while i < List.len(list: names) {
+        let name = List.get<String>(list: names, index: i)
+        let parameter = List.get<String>(list: parameters, index: i)
+        let bodyEnd = pure_function_body_end(lines: lines, start: functionStart, end: end)
+        if name == "main" {
+            Log.write(message: "int main(void) {")
+            // Main has no C return value. Its final RSS return is routed through
+            // the runtime output ABI instead of a C return statement.
+            local declared = Set<String>.new()
+            let mut body = functionStart + 1
+            while body < bodyEnd {
+                let line = line_at(lines, index: body)
+                if String.starts_with(value: line, prefix: "  return ") {
+                    let source = String.slice(value: line, start: 9, len: (String.len(value: line) - 9))
+                    let value = pure_function_expression(value: source, names: names, parameters: parameters, declared: declared, currentFunction: name)
+                    Log.write(message: String.concat(left: "  rssrt_print_int((long long)", right: String.concat(left: value, right: ");")))
+                } else {
+                    let local = local_name(line: line)
+                    let source = pure_function_local_value(line: line)
+                    let value = pure_function_expression(value: source, names: names, parameters: parameters, declared: declared, currentFunction: name)
+                    Log.write(message: String.concat(left: "  long long ", right: String.concat(left: local, right: String.concat(left: " = ", right: String.concat(left: value, right: ";")))))
+                    Set.insert<String>(set: mut declared, value: local)
+                }
+                body = body + 1
+            }
+            Log.write(message: "  return 0;")
+            Log.write(message: "}")
+        } else {
+            let mut cParameter = "void"
+            if String.len(value: parameter) > 0 { cParameter = String.concat(left: "long long ", right: parameter) }
+            Log.write(message: String.concat(left: "static long long rss_fn_", right: String.concat(left: name, right: String.concat(left: "(", right: String.concat(left: cParameter, right: ") {")))))
+            emit_pure_function_body(lines: lines, start: functionStart, bodyEnd: bodyEnd, names: names, parameters: parameters, parameter: parameter, functionName: name, cDepth: 1)
+            Log.write(message: "}")
+        }
+        functionStart = bodyEnd
+        i = i + 1
+    }
+    return true
+}
+
+fn main() -> Unit {
+    let ir = Args.get_or_default(index: 0, default: "")
+    let lines = String.split(value: ir, delimiter: "\n")
+    if List.len(list: lines) < 3 { return Unit }
+    if line_at(lines, index: 0) != "rss-ir-v1" { return Unit }
+    let mut end = List.len(list: lines)
+    if line_at(lines, index: (end - 1)) == "" { end = end - 1 }
+    if end < 3 { return Unit }
+    if emit_pure_function_program(lines: lines, end: end) { return Unit }
+    if line_at(lines, index: 1) != "fn main()->Int" { return Unit }
+    local cStatements = List<String>.new()
+    local declared = Set<String>.new()
+    local mutable = Set<String>.new()
+    let mut i = 2
+    let mut irDepth = 1
+    let mut cDepth = 1
+    // 1 is while, 2 is an if awaiting an optional else, and 3 is an if
+    // whose else was already emitted. The slot index is its parent depth.
+    local blockKinds = List<Int>.new()
+    while i < (end - 1) {
+        let line = line_at(lines, index: i)
+        let name = local_name(line: line)
+        local value = local_expression(line: line)
+        if String.len(value: name) > 0 && String.len(value: value) > 0 {
+            let source = List.get<String>(list: String.split(value: line, delimiter: " = "), index: 1)
+            if leading_spaces(line: line) != (irDepth * 2) || Set.contains<String>(set: declared, value: name) || expression_uses_declared_names(value: source, declared: declared) == false { return Unit }
+            Set.insert<String>(set: mut declared, value: name)
+            let spaces = leading_spaces(line: line)
+            if String.len(value: line) >= (spaces + 8) && String.slice(value: line, start: spaces, len: 8) == "let mut " { Set.insert<String>(set: mut mutable, value: name) }
+            local cLine = String.concat(left: indentation(depth: cDepth), right: String.concat(left: "long long ", right: String.concat(left: name, right: String.concat(left: " = ", right: String.concat(left: value, right: ";")))))
+            List.push<String>(list: mut cStatements, value: (manage cLine))
+        } else {
+            local target = assignment_name(line: line)
+            if String.len(value: target) > 0 && String.len(value: value) > 0 {
+                let source = List.get<String>(list: String.split(value: line, delimiter: " = "), index: 1)
+                if leading_spaces(line: line) != (irDepth * 2) || Set.contains<String>(set: mutable, value: target) == false || expression_uses_declared_names(value: source, declared: declared) == false { return Unit }
+                local cLine = String.concat(left: indentation(depth: cDepth), right: String.concat(left: target, right: String.concat(left: " = ", right: String.concat(left: value, right: ";"))))
+                List.push<String>(list: mut cStatements, value: (manage cLine))
+            } else {
+                local condition = while_expression(line: line)
+                if String.len(value: condition) > 0 {
+                    if leading_spaces(line: line) != (irDepth * 2) || condition_uses_declared_names(value: condition, declared: declared) == false { return Unit }
+                    local cLine = String.concat(left: indentation(depth: cDepth), right: String.concat(left: "while (", right: String.concat(left: condition_expression(value: condition), right: ") {")))
+                    if String.len(value: condition_expression(value: condition)) == 0 { return Unit }
+                    List.push<String>(list: mut cStatements, value: (manage cLine))
+                    if List.len(list: blockKinds) < irDepth { List.push<Int>(list: mut blockKinds, value: 1) }
+                    else { List.set<Int>(list: mut blockKinds, index: (irDepth - 1), value: 1) }
+                    irDepth = irDepth + 1
+                    cDepth = cDepth + 1
+                } else {
+                    local ifCondition = if_expression(line: line)
+                    if String.len(value: ifCondition) > 0 {
+                        if leading_spaces(line: line) != (irDepth * 2) || condition_uses_declared_names(value: ifCondition, declared: declared) == false { return Unit }
+                        local cLine = String.concat(left: indentation(depth: cDepth), right: String.concat(left: "if (", right: String.concat(left: condition_expression(value: ifCondition), right: ") {")))
+                        if String.len(value: condition_expression(value: ifCondition)) == 0 { return Unit }
+                        List.push<String>(list: mut cStatements, value: (manage cLine))
+                        if List.len(list: blockKinds) < irDepth { List.push<Int>(list: mut blockKinds, value: 2) }
+                        else { List.set<Int>(list: mut blockKinds, index: (irDepth - 1), value: 2) }
+                        irDepth = irDepth + 1
+                        cDepth = cDepth + 1
+                    } else if is_else_line(line: line) {
+                        if irDepth <= 1 || leading_spaces(line: line) != ((irDepth - 1) * 2) || List.get<Int>(list: blockKinds, index: (irDepth - 2)) != 2 { return Unit }
+                        List.set<Int>(list: mut blockKinds, index: (irDepth - 2), value: 3)
+                        local cLine = String.concat(left: indentation(depth: (cDepth - 1)), right: "} else {")
+                        List.push<String>(list: mut cStatements, value: (manage cLine))
+                    } else if is_end_line(line: line) {
+                        if irDepth <= 1 || leading_spaces(line: line) != ((irDepth - 1) * 2) { return Unit }
+                        irDepth = irDepth - 1
+                        cDepth = cDepth - 1
+                        local cLine = String.concat(left: indentation(depth: cDepth), right: "}")
+                        List.push<String>(list: mut cStatements, value: (manage cLine))
+                    } else {
+                        return Unit
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    let line = line_at(lines, index: (end - 1))
+    let returnParts = String.split(value: line, delimiter: "  return ")
+    if List.len(list: returnParts) != 2 { return Unit }
+    let source = List.get<String>(list: returnParts, index: 1)
+    let value = scalar_expression(value: source)
+    if irDepth != 1 || cDepth != 1 || leading_spaces(line: line) != 2 || String.len(value: value) == 0 || expression_uses_declared_names(value: source, declared: declared) == false { return Unit }
+    Log.write(message: "#include \"rssrt.h\"")
+    Log.write(message: "int main(void) {")
+    i = 0
+    while i < List.len(list: cStatements) {
+        Log.write(message: List.get<String>(list: cStatements, index: i))
+        i = i + 1
+    }
+    Log.write(message: String.concat(left: "  rssrt_print_int((long long)", right: String.concat(left: value, right: ");")))
+    Log.write(message: "  return 0;")
+    Log.write(message: "}")
+    return Unit
+}

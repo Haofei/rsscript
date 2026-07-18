@@ -1,5 +1,5 @@
 // expect: RS1004
 
 fn hash(data: &Bytes) -> UInt64 {
-    return Bytes.hash(data: read data)
+    return Bytes.hash(data: data)
 }

@@ -4,8 +4,8 @@ features: local
 // Exercises typed `Ints` storage on both the build (push) and read (get) paths.
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -20,22 +20,22 @@ fn main() -> Unit {
     let mut index = 0
     local values = List<Int>.new()
     while index < n {
-        List.push<Int>(list: mut values, value: read index)
+        List.push<Int>(list: mut values, value: index)
         index = index + 1
     }
 
-    let len = List.len<Int>(list: read values)
+    let len = List.len<Int>(list: values)
     let mut total = 0
     let mut pass = 0
     while pass < 8 {
         index = 0
         while index < len {
-            total = total + List.get<Int>(list: read values, index: index)
+            total = total + List.get<Int>(list: values, index)
             index = index + 1
         }
         pass = pass + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Log.write(message: String.from_int(value: total))
     return Unit
 }

@@ -1251,20 +1251,6 @@ impl<'a> RustLowerer<'a> {
                 DataEffect::Read => format!("&{}", self.lower_expr(receiver)),
                 DataEffect::Take => self.lower_expr(receiver),
             };
-            // Runtime intrinsics / native fns take their args by reference
-            // (even `Copy` ones), so for those callees honor the parameter
-            // effect for named args too. Protocol/user receiver calls are
-            // not native targets and keep their by-value `Copy` handling.
-            let native_target_callee = Callee::Qualified {
-                namespace: namespace.clone(),
-                name: method.to_string(),
-            };
-            let is_native_target = runtime_intrinsic_target(&native_target_callee).is_some()
-                || self
-                    .native_bindings
-                    .contains_key(&native_boundary_function_key(&format!(
-                        "{namespace}.{method}"
-                    )));
             let lowered_args = args
                 .iter()
                 .enumerate()
@@ -1276,20 +1262,48 @@ impl<'a> RustLowerer<'a> {
                         arg.name.as_deref(),
                         index,
                     ) {
-                        // Only `Copy` named args to native targets need the
-                        // effect-based `&` (they'd otherwise pass by value to a
-                        // by-reference intrinsic); non-Copy named args keep their
-                        // existing lowering (which handles String/Json cleanly).
-                        if (arg.name.is_none() || (is_native_target && is_copy_type_ref(&expected)))
-                            && let Some(effect) =
-                                self.receiver_call_expected_arg_effect(&namespace, method, index)
+                        if let Some(effect) =
+                            self.receiver_call_expected_arg_effect(&namespace, method, index)
                         {
-                            let lowered = self.lower_receiver_positional_arg(&arg.value, &expected);
-                            return match effect {
-                                DataEffect::Read => format!("&{lowered}"),
-                                DataEffect::Mut => format!("&mut {lowered}"),
-                                DataEffect::Take => lowered,
+                            if effect == DataEffect::Read {
+                                let value = match &arg.value {
+                                    Expr::Effect {
+                                        effect: DataEffect::Read,
+                                        value,
+                                        ..
+                                    } => value.as_ref(),
+                                    value => value,
+                                };
+                                let lowered = self.lower_receiver_positional_arg(value, &expected);
+                                let abi_type = self
+                                    .receiver_call_declared_arg_type(
+                                        &namespace,
+                                        method,
+                                        arg.name.as_deref(),
+                                        index,
+                                    )
+                                    .unwrap_or_else(|| expected.clone());
+                                if Self::read_effect_lowers_by_value(&abi_type) {
+                                    return lowered;
+                                }
+                                if let Expr::Ident(name, _) = value
+                                    && self.param_effects.get(name) == Some(&DataEffect::Read)
+                                    && !Self::read_effect_lowers_by_value(&expected)
+                                {
+                                    return lowered;
+                                }
+                                return format!("&({lowered})");
+                            }
+                            let effective_value = match &arg.value {
+                                Expr::Effect { .. } => arg.value.clone(),
+                                value => Expr::Effect {
+                                    effect,
+                                    value: Box::new(value.clone()),
+                                    span: arg.span.clone(),
+                                },
                             };
+                            return self
+                                .lower_call_arg_for_expected_type(&effective_value, &expected);
                         }
                         if arg.name.is_none() {
                             if expected.name == "Fn" {
@@ -1649,7 +1663,7 @@ impl<'a> RustLowerer<'a> {
         // assignments propagate to the caller, and a `take`/defaulted parameter is
         // owned by value. This is what lets a stored `mut Ctx` rule mutate `ctx`.
         for (index, param) in params.iter().enumerate() {
-            if let Some(effect) = expected.fn_param_effects.get(index).copied().flatten() {
+            if let Some(effect) = expected.effective_fn_param_effect(index) {
                 self.param_effects.insert(param.clone(), effect);
             }
         }
@@ -1671,7 +1685,7 @@ impl<'a> RustLowerer<'a> {
                     return name;
                 };
                 let bare = self.lower_type_ref(ty, ManagedPosition::Param);
-                let effect = expected.fn_param_effects.get(index).copied().flatten();
+                let effect = expected.effective_fn_param_effect(index);
                 // Match the stored `Rc<dyn Fn(..)>` parameter ABI exactly (see
                 // `lower_type_ref` for `Fn`): `read T` -> `&T`, `mut T` -> `&mut T`,
                 // owned otherwise. Kept uniform (no by-value-`Copy` shortcut) so
@@ -1877,15 +1891,18 @@ impl<'a> RustLowerer<'a> {
         {
             return self.lower_expr_for_expected_type(value, &expected);
         }
-        if arg.name.is_none()
-            && let Some(DataEffect::Read) = self.expected_call_arg_effect(callee, arg, index)
+        if let Some(effect) = self.expected_call_arg_effect(callee, arg, index)
             && let Some(expected) = self.expected_call_arg_type(callee, arg, index)
         {
-            let lowered = self.lower_receiver_positional_arg(&arg.value, &expected);
-            if is_copy_type_ref(&expected) {
-                return lowered;
-            }
-            return format!("&{lowered}");
+            let effective_value = match &arg.value {
+                Expr::Effect { .. } => arg.value.clone(),
+                value => Expr::Effect {
+                    effect,
+                    value: Box::new(value.clone()),
+                    span: arg.span.clone(),
+                },
+            };
+            return self.lower_call_arg_for_expected_type(&effective_value, &expected);
         }
         if let Some(expected) = self.expected_call_arg_type(callee, arg, index) {
             return self.lower_call_arg_for_expected_type(&arg.value, &expected);
@@ -2432,6 +2449,30 @@ impl<'a> RustLowerer<'a> {
         };
         let key = native_boundary_callee_key(&qualified);
         self.function_param_effects.get(&key)?.get(arg_index + 1)?.1
+    }
+
+    pub(super) fn receiver_call_declared_arg_type(
+        &self,
+        namespace: &str,
+        method: &str,
+        arg_name: Option<&str>,
+        arg_index: usize,
+    ) -> Option<TypeRef> {
+        let qualified = Callee::Qualified {
+            namespace: namespace.to_string(),
+            name: method.to_string(),
+        };
+        let params = self
+            .function_param_types
+            .get(&native_boundary_callee_key(&qualified))?;
+        if let Some(arg_name) = arg_name {
+            params
+                .iter()
+                .find(|(param_name, _)| param_name == arg_name)
+                .map(|(_, ty)| ty.clone())
+        } else {
+            params.get(arg_index + 1).map(|(_, ty)| ty.clone())
+        }
     }
 
     /// Builtin value types whose `.clone()` the checker resolves (via the `Clone`

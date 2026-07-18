@@ -1,12 +1,12 @@
 struct Image
 struct Callback
 
-fn store(callback: read Callback) -> Unit
+fn store(callback: Callback) -> Unit
     effects(retains(callback))
 
-fn schedule_image(image: read Image) -> Unit {
-    store(callback: read || {
-        Image.inspect(image: read image)
+fn schedule_image(image: Image) -> Unit {
+    store(callback: || {
+        Image.inspect(image)
     })
 
     return Unit

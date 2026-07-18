@@ -9,8 +9,8 @@ resource File {
     }
 }
 
-fn bad_resource(path: read Path) -> Unit {
-    with File.open(path: read path)? as file {
+fn bad_resource(path: Path) -> Unit {
+    with File.open(path)? as file {
         let shared = manage file
     }
 }

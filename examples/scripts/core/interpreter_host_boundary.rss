@@ -2,7 +2,7 @@ features: native
 
 fn main() -> Result<Unit, FileError> {
     let root = Env.run_workspace_root()
-    Env.set_current_dir(path: read root)?
-    Log.write(message: read "host-ok")
+    Env.set_current_dir(path: root)?
+    Log.write(message: "host-ok")
     return Ok(Unit)
 }

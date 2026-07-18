@@ -1,12 +1,11 @@
-// expect: RS0202
 features: local
 
 class Cache {
     data: Map<String, String>
 }
 
-fn Cache.put(self: mut Cache, key: read String, value: read String) -> Unit {
-    Map.insert<String, String>(map: mut self.data, key: read key, value: read value)
+fn Cache.put(self: mut Cache, key: String, value: String) -> Unit {
+    Map.insert<String, String>(map: mut self.data, key, value)
 }
 
 fn main() -> Unit {

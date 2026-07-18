@@ -68,7 +68,7 @@ impl RustLowerer<'_> {
         }
         self.value_types
             .get(name)
-            .is_some_and(|ty| ty.name == "Fn" && ty.is_owned)
+            .is_some_and(|ty| ty.name == "Fn" && (ty.is_owned || ty.is_noescape))
     }
 
     /// The declared data effect of the `index`-th parameter of a first-class
@@ -86,7 +86,7 @@ impl RustLowerer<'_> {
         if ty.name != "Fn" {
             return None;
         }
-        ty.fn_param_effects.get(index).copied().flatten()
+        ty.effective_fn_param_effect(index)
     }
 
     // Lower a `read`-effect managed-handle argument to a `&T`. A managed `let` local lowers to

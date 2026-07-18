@@ -1,4 +1,4 @@
-fn is_vowel(c: read Char) -> Bool {
+fn is_vowel(c: Char) -> Bool {
     match c {
         'a' => { return true }
         'e' => { return true }
@@ -9,7 +9,7 @@ fn is_vowel(c: read Char) -> Bool {
     }
 }
 
-fn classify(c: read Char) -> String {
+fn classify(c: Char) -> String {
     if c == '\n' {
         return "newline"
     }

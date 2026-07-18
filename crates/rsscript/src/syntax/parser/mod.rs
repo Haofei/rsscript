@@ -779,9 +779,6 @@ impl Parser<'_> {
             for param in &mut function.params {
                 if param.name == "self" && param.ty.name.is_empty() {
                     param.ty.name = type_name.clone();
-                    if param.effect.is_none() {
-                        param.effect = Some(DataEffect::Read);
-                    }
                 }
             }
             functions.push(function);
@@ -1052,5 +1049,60 @@ fn run() -> Unit {
             }
         );
         assert_eq!(args.len(), 3);
+    }
+
+    #[test]
+    fn canonicalizes_omitted_function_type_effects_as_read() {
+        let program = parse_source("test.rss", "fn apply(f: Fn(Int) -> Int) -> Unit {}");
+        let Item::Function(function) = &program.items[0] else {
+            panic!("expected function");
+        };
+
+        assert_eq!(
+            types::type_ref_name(&function.params[0].ty),
+            "Fn(read Int) -> Int"
+        );
+    }
+
+    #[test]
+    fn parses_multiline_if_expression() {
+        let source = "fn choose(flag: Bool) -> Int {\n    return if flag {\n        1\n    } else {\n        2\n    }\n}\n";
+        let program = parse_source("test.rss", source);
+        let Item::Function(function) = &program.items[0] else {
+            panic!("expected function");
+        };
+        let Stmt::Return(return_stmt) = &function.body.statements[0] else {
+            panic!("expected return");
+        };
+        let Some(Expr::Match {
+            value,
+            arms,
+            from_if_expression,
+            ..
+        }) = &return_stmt.value
+        else {
+            panic!("expected if expression, got {:?}", return_stmt.value);
+        };
+        assert!(matches!(value.as_ref(), Expr::Ident(name, _) if name == "flag"));
+        assert!(*from_if_expression);
+        assert!(matches!(
+            arms.as_slice(),
+            [
+                MatchArm {
+                    pattern: MatchPattern::Literal {
+                        value: MatchLiteral::Bool(true),
+                        ..
+                    },
+                    ..
+                },
+                MatchArm {
+                    pattern: MatchPattern::Literal {
+                        value: MatchLiteral::Bool(false),
+                        ..
+                    },
+                    ..
+                },
+            ]
+        ));
     }
 }

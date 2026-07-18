@@ -2,34 +2,34 @@ struct SortedMap<K, V>
 
 pub fn SortedMap.new<K: Ord, V>() -> fresh SortedMap<K, V>
 
-pub fn SortedMap.len<K: Ord, V>(map: read SortedMap<K, V>) -> Int
+pub fn SortedMap.len<K: Ord, V>(map: SortedMap<K, V>) -> Int
 
-pub fn SortedMap.is_empty<K: Ord, V>(map: read SortedMap<K, V>) -> Bool
+pub fn SortedMap.is_empty<K: Ord, V>(map: SortedMap<K, V>) -> Bool
 
 pub fn SortedMap.contains_key<K: Ord, V>(
-    map: read SortedMap<K, V>,
-    key: read K,
+    map: SortedMap<K, V>,
+    key: K,
 ) -> Bool
 
 pub fn SortedMap.get<K: Ord, V>(
-    map: read SortedMap<K, V>,
-    key: read K,
+    map: SortedMap<K, V>,
+    key: K,
 ) -> Option<V>
 
 pub fn SortedMap.insert<K: Ord, V>(
     map: mut SortedMap<K, V>,
-    key: read K,
-    value: read V,
+    key: K,
+    value: V,
 ) -> Unit
     effects(retains(key), retains(value))
 
 pub fn SortedMap.remove<K: Ord, V>(
     map: mut SortedMap<K, V>,
-    key: read K,
+    key: K,
 ) -> Option<V>
 
 pub fn SortedMap.clear<K: Ord, V>(map: mut SortedMap<K, V>) -> Unit
 
-pub fn SortedMap.keys<K: Ord, V>(map: read SortedMap<K, V>) -> fresh List<K>
+pub fn SortedMap.keys<K: Ord, V>(map: SortedMap<K, V>) -> fresh List<K>
 
-pub fn SortedMap.values<K: Ord, V>(map: read SortedMap<K, V>) -> fresh List<V>
+pub fn SortedMap.values<K: Ord, V>(map: SortedMap<K, V>) -> fresh List<V>

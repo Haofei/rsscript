@@ -2,40 +2,40 @@ features: native
 
 resource File
 
-pub native fn File.open(path: read Path) -> Result<File, FileError>
+pub native fn File.open(path: Path) -> Result<File, FileError>
     effects(native)
 
-pub native fn File.open_read(path: read Path) -> Result<File, FileError>
+pub native fn File.open_read(path: Path) -> Result<File, FileError>
     effects(native)
 
-pub native fn File.open_write(path: read Path) -> Result<File, FileError>
+pub native fn File.open_write(path: Path) -> Result<File, FileError>
     effects(native)
 
-pub native fn File.exists(path: read Path) -> Bool
+pub native fn File.exists(path: Path) -> Bool
     effects(native)
 
-pub native fn File.read_bytes(path: read Path) -> Result<fresh Bytes, FileError>
+pub native fn File.read_bytes(path: Path) -> Result<fresh Bytes, FileError>
     effects(native)
 
-pub native fn File.read_string(path: read Path) -> Result<String, FileError>
+pub native fn File.read_string(path: Path) -> Result<String, FileError>
     effects(native)
 
-pub native fn File.write_bytes(path: read Path, data: read Bytes) -> Result<Unit, FileError>
+pub native fn File.write_bytes(path: Path, data: Bytes) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn File.append_bytes(path: read Path, data: read Bytes) -> Result<Unit, FileError>
+pub native fn File.append_bytes(path: Path, data: Bytes) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn File.write_string_to_path(path: read Path, text: read String) -> Result<Unit, FileError>
+pub native fn File.write_string_to_path(path: Path, text: String) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn File.write_atomic(path: read Path, text: read String) -> Result<Unit, FileError>
+pub native fn File.write_atomic(path: Path, text: String) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn File.append_string(path: read Path, text: read String) -> Result<Unit, FileError>
+pub native fn File.append_string(path: Path, text: String) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn File.remove(path: read Path) -> Result<Unit, FileError>
+pub native fn File.remove(path: Path) -> Result<Unit, FileError>
     effects(native)
 
 pub native fn File.read_all(file: mut File) -> Result<fresh Bytes, FileError>
@@ -47,20 +47,20 @@ pub native fn File.read_all_string(file: mut File) -> Result<String, FileError>
 pub native fn File.read_into(file: mut File, buffer: mut Buffer) -> Result<Bool, FileError>
     effects(native)
 
-pub native fn File.write(file: mut File, data: read Bytes) -> Result<Unit, FileError>
+pub native fn File.write(file: mut File, data: Bytes) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn File.write_bytes_view(file: mut File, data: read BytesView) -> Result<Unit, FileError>
+pub native fn File.write_bytes_view(file: mut File, data: BytesView) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn File.write_string(file: mut File, text: read String) -> Result<Unit, FileError>
+pub native fn File.write_string(file: mut File, text: String) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn File.write_buffer(file: mut File, buffer: read Buffer) -> Result<Unit, FileError>
+pub native fn File.write_buffer(file: mut File, buffer: Buffer) -> Result<Unit, FileError>
     effects(native)
 
-pub native fn File.write_buffer_view(file: mut File, buffer: read BufferView) -> Result<Unit, FileError>
+pub native fn File.write_buffer_view(file: mut File, buffer: BufferView) -> Result<Unit, FileError>
     effects(native)
 
-pub fn FileError.message(error: read FileError) -> String
+pub fn FileError.message(error: FileError) -> String
     effects(pure)

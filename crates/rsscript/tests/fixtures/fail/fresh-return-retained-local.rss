@@ -9,14 +9,14 @@ struct Image {
     pixels: Buffer
 }
 
-fn Image.load(path: read Path) -> fresh Image
+fn Image.load(path: Path) -> fresh Image
 
-fn RetainedImageStore.store(cache: mut RetainedImageStore, image: read Image) -> Unit
+fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Image) -> Unit
     effects(retains(image))
 
-fn bad_fresh(cache: mut RetainedImageStore, path: read Path) -> fresh Image {
-    local image = Image.load(path: read path)
-    RetainedImageStore.store(cache: mut cache, image: read image)
+fn bad_fresh(cache: mut RetainedImageStore, path: Path) -> fresh Image {
+    local image = Image.load(path)
+    RetainedImageStore.store(cache: mut cache, image)
 
     return image
 }

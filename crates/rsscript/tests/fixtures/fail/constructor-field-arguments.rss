@@ -5,6 +5,6 @@ struct Response {
     body: String
 }
 
-fn bad_response(body: read String) -> Result<fresh Response, HttpError> {
+fn bad_response(body: String) -> Result<fresh Response, HttpError> {
     return Response(status: 200, boody: read body)
 }

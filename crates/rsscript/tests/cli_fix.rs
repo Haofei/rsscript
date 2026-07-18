@@ -11,17 +11,21 @@ fn fix_write_resolves_missing_data_effects_to_a_clean_check() {
     let dir = common::unique_temp_dir("rss-fix");
     fs::create_dir_all(&dir).expect("temp dir should be creatable");
     let file = dir.join("fixme.rss");
-    // Three missing `read` effects across two lines (one line has two), so the
-    // test also exercises multi-edit-per-line application order.
+    // Four missing exclusive effects across three lines (one line has two), so
+    // the test also exercises multi-edit-per-line application order. Default
+    // `read` arguments intentionally do not produce fixes.
     fs::write(
         &file,
         concat!(
-            "fn greet(name: read String) -> String {\n",
-            "    return String.concat(left: name, right: \"!\")\n",
+            "fn touch(left: mut List<Int>, right: mut List<Int>) -> Unit {\n",
+            "    return Unit\n",
             "}\n",
             "fn main() -> Unit {\n",
-            "    let who = \"world\"\n",
-            "    Log.write(message: greet(name: who))\n",
+            "    let mut left = List<Int>.new()\n",
+            "    let mut right = List<Int>.new()\n",
+            "    touch(left: left, right: right)\n",
+            "    List.push(list: left, value: 1)\n",
+            "    List.push(list: right, value: 2)\n",
             "    return Unit\n",
             "}\n",
         ),
@@ -67,13 +71,14 @@ fn fix_write_resolves_missing_data_effects_to_a_clean_check() {
         String::from_utf8_lossy(&write.stderr)
     );
     let fixed = fs::read_to_string(&file).unwrap();
-    assert!(fixed.contains("left: read name"), "fixed source:\n{fixed}");
+    assert!(fixed.contains("left: mut left"), "fixed source:\n{fixed}");
+    assert!(fixed.contains("right: mut right"), "fixed source:\n{fixed}");
     assert!(
-        fixed.contains("right: read \"!\""),
+        fixed.contains("List.push(list: mut left, value: 1)"),
         "fixed source:\n{fixed}"
     );
     assert!(
-        fixed.contains("message: read greet(name: read who)"),
+        fixed.contains("List.push(list: mut right, value: 2)"),
         "fixed source:\n{fixed}"
     );
 

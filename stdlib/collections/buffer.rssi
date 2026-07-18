@@ -4,14 +4,14 @@ struct BufferView
 
 pub fn Buffer.new(size: Int) -> fresh Buffer
 
-pub fn Buffer.len(buffer: read Buffer) -> Int
+pub fn Buffer.len(buffer: Buffer) -> Int
 
-pub fn Buffer.is_empty(buffer: read Buffer) -> Bool
+pub fn Buffer.is_empty(buffer: Buffer) -> Bool
 
 pub fn Buffer.clear(buffer: mut Buffer) -> Unit
 
 pub fn Buffer.view(
-    buffer: read Buffer,
+    buffer: Buffer,
     start: Int,
     len: Int,
 ) -> BufferView
@@ -19,13 +19,13 @@ pub fn Buffer.view(
 pub fn Buffer.consume(buffer: take Buffer) -> Unit
 
 pub fn BufferView.slice(
-    value: read BufferView,
+    value: BufferView,
     start: Int,
     len: Int,
 ) -> BufferView
 
-pub fn BufferView.len(value: read BufferView) -> Int
+pub fn BufferView.len(value: BufferView) -> Int
 
-pub fn BufferView.is_empty(value: read BufferView) -> Bool
+pub fn BufferView.is_empty(value: BufferView) -> Bool
 
-pub fn BufferView.to_bytes(value: read BufferView) -> fresh Bytes
+pub fn BufferView.to_bytes(value: BufferView) -> fresh Bytes

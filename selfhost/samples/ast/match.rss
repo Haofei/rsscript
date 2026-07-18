@@ -1,4 +1,4 @@
-fn describe(n: read Int) -> String {
+fn describe(n: Int) -> String {
     match n {
         0 => {
             return "zero"
@@ -13,7 +13,7 @@ fn describe(n: read Int) -> String {
     return "x"
 }
 
-fn unwrap(r: read Result<Int, String>) -> Int {
+fn unwrap(r: Result<Int, String>) -> Int {
     match read r {
         Ok(value) => {
             return value
@@ -25,7 +25,7 @@ fn unwrap(r: read Result<Int, String>) -> Int {
     return 0
 }
 
-fn label(n: read Int) -> String {
+fn label(n: Int) -> String {
     let r = match n {
         0 => {
             "zero"

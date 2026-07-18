@@ -10,15 +10,15 @@ fn main() -> Unit {
     let a = Coord(x: 1, y: 2)
     let a_dup = Coord(x: 1, y: 2)
 
-    let first = Set.insert(set: mut seen, value: read a)
+    let first = Set.insert(set: mut seen, value: a)
     // Structural duplicate: insert returns false, set stays size 1.
-    let again = Set.insert(set: mut seen, value: read a_dup)
+    let again = Set.insert(set: mut seen, value: a_dup)
 
-    let present = Set.contains(set: read seen, value: read a_dup)
-    let count = Set.len(set: read seen)
+    let present = Set.contains(set: seen, value: a_dup)
+    let count = Set.len(set: seen)
 
     if present {
-        Log.write(message: read "member")
+        Log.write(message: "member")
     }
     return Unit
 }

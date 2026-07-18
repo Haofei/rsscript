@@ -6,29 +6,29 @@ features: async, native, local
 struct WebSocket
 struct WebSocketError
 
-pub async native fn WebSocket.connect(url: read Url) -> Result<fresh WebSocket, WebSocketError>
+pub async native fn WebSocket.connect(url: Url) -> Result<fresh WebSocket, WebSocketError>
     effects(native)
 
 pub async native fn WebSocket.send_text(
-    socket: read WebSocket,
-    text: read String,
+    socket: WebSocket,
+    text: String,
 ) -> Result<Unit, WebSocketError>
     effects(native)
 
 pub async native fn WebSocket.send_bytes(
-    socket: read WebSocket,
-    bytes: read Bytes,
+    socket: WebSocket,
+    bytes: Bytes,
 ) -> Result<Unit, WebSocketError>
     effects(native)
 
-pub async native fn WebSocket.recv_text(socket: read WebSocket) -> Result<Option<String>, WebSocketError>
+pub async native fn WebSocket.recv_text(socket: WebSocket) -> Result<Option<String>, WebSocketError>
     effects(native)
 
-pub async native fn WebSocket.recv_bytes(socket: read WebSocket) -> Result<Option<Bytes>, WebSocketError>
+pub async native fn WebSocket.recv_bytes(socket: WebSocket) -> Result<Option<Bytes>, WebSocketError>
     effects(native)
 
-pub async native fn WebSocket.close(socket: read WebSocket) -> Result<Unit, WebSocketError>
+pub async native fn WebSocket.close(socket: WebSocket) -> Result<Unit, WebSocketError>
     effects(native)
 
-pub fn WebSocketError.message(error: read WebSocketError) -> fresh String
+pub fn WebSocketError.message(error: WebSocketError) -> fresh String
     effects(pure)

@@ -9,11 +9,11 @@ resource DbConnection {
     }
 }
 
-fn DbConnection.try_open(url: read Url) -> Result<DbConnection, DbError>
+fn DbConnection.try_open(url: Url) -> Result<DbConnection, DbError>
 
-fn bad_pool(url: read Url) -> Unit {
+fn bad_pool(url: Url) -> Unit {
     local pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.try_open(url: read url),
+        create: || DbConnection.try_open(url),
         max_size: 4,
     )
 }

@@ -8,6 +8,6 @@ resource File {
     }
 }
 
-fn bad_list(files: read List<File>) -> Unit {
+fn bad_list(files: List<File>) -> Unit {
     return Unit
 }

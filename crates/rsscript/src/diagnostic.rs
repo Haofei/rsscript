@@ -143,7 +143,6 @@ pub(crate) const SELFHOST_CHECKER_TARGET_CODES: &[&str] = &[
     code::DUPLICATE_DECLARATION,
     code::DUPLICATE_FEATURE_DECLARATION,
     code::UNKNOWN_RETAINED_PARAMETER,
-    code::MISSING_PARAMETER_EFFECT,
     code::INVALID_PURE_EFFECT,
     code::REMOVED_PROFILE_DECLARATION,
     code::REMOVED_SHARE_EFFECT,
@@ -220,6 +219,7 @@ pub(crate) const SELFHOST_CHECKER_TARGET_CODES: &[&str] = &[
     code::RESOURCE_POOL_ACTIVE_LEASE_CONFLICT,
     code::RESOURCE_POOL_DISCARD_NOT_LEASE,
     code::OPERATOR_OVERLOAD_ATTEMPT,
+    code::PACKAGE_INTERFACE_MISMATCH,
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -526,8 +526,8 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     },
     DiagnosticExplanation {
         code: code::MISSING_PARAMETER_EFFECT,
-        title: "missing parameter data effect",
-        explanation: "Non-Copy parameters must declare `read`, `mut`, or `take` in the function signature so call effects are review-visible.",
+        title: "retired parameter data-effect diagnostic",
+        explanation: "RSScript v0.7 defaults an omitted ordinary parameter effect to `read`; `mut` and `take` remain explicit. RS0008 is retained as a reserved diagnostic code for compatibility and is no longer emitted.",
     },
     DiagnosticExplanation {
         code: code::INVALID_PURE_EFFECT,
@@ -676,8 +676,8 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     },
     DiagnosticExplanation {
         code: code::MISSING_DATA_EFFECT,
-        title: "missing call-site data effect",
-        explanation: "Arguments for non-Copy parameters must use an explicit `read`, `mut`, or `take` effect matching the callee signature.",
+        title: "call-site data-effect mismatch",
+        explanation: "A bare argument has the default `read` effect. Arguments for `mut` or `take` parameters must spell that non-default effect explicitly and match the callee signature.",
     },
     DiagnosticExplanation {
         code: code::UNKNOWN_ARGUMENT,

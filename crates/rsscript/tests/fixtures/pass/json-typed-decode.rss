@@ -4,21 +4,21 @@ struct AgentToolArgs derives(Clone, JsonDecode) {
     include_hidden: Option<Bool>
 }
 
-fn decode_args(text: read String) -> Result<fresh AgentToolArgs, JsonError> {
-    return Json.decode_text<AgentToolArgs>(text: read text)
+fn decode_args(text: String) -> Result<fresh AgentToolArgs, JsonError> {
+    return Json.decode_text<AgentToolArgs>(text)
 }
 
-fn decode_value(value: read JsonValue) -> Result<fresh AgentToolArgs, JsonError> {
-    return Json.decode<AgentToolArgs>(value: read value)
+fn decode_value(value: JsonValue) -> Result<fresh AgentToolArgs, JsonError> {
+    return Json.decode<AgentToolArgs>(value)
 }
 
-fn optional_fields(value: read JsonValue) -> Result<String, JsonError> {
+fn optional_fields(value: JsonValue) -> Result<String, JsonError> {
     let name = value.field_optional_string("name")?.unwrap_or("missing")
     let nested = value.at_optional_string("nested.value")?.unwrap_or("missing")
     return [name, ":", nested].join("")
 }
 
-fn describe_json(value: read JsonValue) -> String {
+fn describe_json(value: JsonValue) -> String {
     match value.kind() {
         "null" => { return "null" }
         "bool" => { return "bool" }

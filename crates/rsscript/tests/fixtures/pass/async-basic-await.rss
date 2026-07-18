@@ -1,7 +1,7 @@
 features: async
 
-async fn fetch_data(url: read Url) -> Result<fresh Bytes, NetworkError>
+async fn fetch_data(url: Url) -> Result<fresh Bytes, NetworkError>
 
-async fn download(url: read Url) -> Result<fresh Bytes, NetworkError> {
-    return await fetch_data(url: read url)
+async fn download(url: Url) -> Result<fresh Bytes, NetworkError> {
+    return await fetch_data(url)
 }

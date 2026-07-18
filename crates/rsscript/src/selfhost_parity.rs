@@ -11,6 +11,7 @@
 
 use std::collections::{BTreeSet, VecDeque};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use crate::diagnostic::{SELFHOST_CHECKER_TARGET_CODES, code};
 use crate::interface_metadata::{
@@ -19,7 +20,7 @@ use crate::interface_metadata::{
 use crate::interfaces::default_interfaces;
 use crate::lexer::{TokenKind, lex};
 use crate::reg_vm::reg_vm_compile_sources;
-use crate::syntax::ast::Item;
+use crate::syntax::ast::{Expr, Item, Stmt};
 use crate::syntax::parse_source_raw;
 use crate::{RegVmExecutable, Severity, analyze_source, review_package_dir};
 
@@ -256,6 +257,1479 @@ fn compile_selfhost_tool(tool: &str, label: &str) -> Result<RegVmExecutable, Str
         .collect::<Vec<_>>();
     reg_vm_compile_sources(&source_refs)
         .map_err(|e| format!("rss {label} failed to compile: {e:?}"))
+}
+
+fn bootstrap_runtime_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join("selfhost/runtime")
+}
+
+fn compile_bootstrap_c(c_file: &Path, binary: &Path) -> std::process::Output {
+    let runtime = bootstrap_runtime_dir();
+    Command::new("cc")
+        .arg("-std=c11")
+        .arg("-Wall")
+        .arg("-Werror")
+        .arg("-I")
+        .arg(&runtime)
+        .arg(c_file)
+        .arg(runtime.join("rssrt.c"))
+        .arg("-o")
+        .arg(binary)
+        .output()
+        .expect("C compiler should be available in the Docker test image")
+}
+
+fn bootstrap_ir_expr(expr: &Expr) -> String {
+    match expr {
+        Expr::Ident(name, _) if matches!(name.as_str(), "Unit" | "true" | "false") => {
+            format!("literal {name}")
+        }
+        Expr::Ident(name, _) => format!("name {name}"),
+        Expr::Number(value, _) | Expr::String(value, _) | Expr::CharLiteral(value, _) => {
+            format!("literal {value}")
+        }
+        Expr::ArrayLiteral { items, .. } => format!(
+            "array[{}]",
+            items
+                .iter()
+                .map(bootstrap_ir_expr)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        Expr::Binary {
+            op, left, right, ..
+        } => format!(
+            "bin {} ({}) ({})",
+            match op {
+                crate::syntax::ast::BinaryOp::Add => "+",
+                crate::syntax::ast::BinaryOp::Subtract => "-",
+                crate::syntax::ast::BinaryOp::Multiply => "*",
+                crate::syntax::ast::BinaryOp::Divide => "/",
+                crate::syntax::ast::BinaryOp::Modulo => "%",
+                crate::syntax::ast::BinaryOp::BitAnd => "&",
+                crate::syntax::ast::BinaryOp::BitOr => "|",
+                crate::syntax::ast::BinaryOp::BitXor => "^",
+                crate::syntax::ast::BinaryOp::ShiftLeft => "<<",
+                crate::syntax::ast::BinaryOp::ShiftRight => ">>",
+                crate::syntax::ast::BinaryOp::Equal => "==",
+                crate::syntax::ast::BinaryOp::NotEqual => "!=",
+                crate::syntax::ast::BinaryOp::Less => "<",
+                crate::syntax::ast::BinaryOp::LessEqual => "<=",
+                crate::syntax::ast::BinaryOp::Greater => ">",
+                crate::syntax::ast::BinaryOp::GreaterEqual => ">=",
+                crate::syntax::ast::BinaryOp::LogicalAnd => "&&",
+                crate::syntax::ast::BinaryOp::LogicalOr => "||",
+            },
+            bootstrap_ir_expr(left),
+            bootstrap_ir_expr(right)
+        ),
+        Expr::Field { base, name, .. } => format!("field {}.{name}", bootstrap_ir_expr(base)),
+        Expr::Index { base, index, .. } => {
+            format!(
+                "index {}[{}]",
+                bootstrap_ir_expr(base),
+                bootstrap_ir_expr(index)
+            )
+        }
+        Expr::Effect { effect, value, .. } => {
+            format!("effect {} {}", effect.as_str(), bootstrap_ir_expr(value))
+        }
+        Expr::Manage { value, .. } => format!("manage {}", bootstrap_ir_expr(value)),
+        Expr::Await { value, .. } => format!("await {}", bootstrap_ir_expr(value)),
+        Expr::Try { value, .. } => format!("try {}", bootstrap_ir_expr(value)),
+        Expr::Closure {
+            params,
+            captures,
+            declared_effects,
+            explicit,
+            body,
+            ..
+        } if !*explicit && captures.is_empty() && declared_effects.is_empty() => {
+            let body = if let [Stmt::Expr(value)] = body.statements.as_slice() {
+                bootstrap_ir_expr(value)
+            } else {
+                match body
+                    .statements
+                    .iter()
+                    .map(bootstrap_ir_inline_statement)
+                    .collect::<Option<Vec<_>>>()
+                {
+                    Some(statements) if !statements.is_empty() => {
+                        format!("block{{{}}}", statements.join(";"))
+                    }
+                    _ => "unsupported".to_string(),
+                }
+            };
+            format!("closure({})=>{body}", params.join(","))
+        }
+        Expr::Call { callee, args, .. } => {
+            let callee = match callee {
+                crate::syntax::ast::Callee::Name(name) => name.clone(),
+                crate::syntax::ast::Callee::Qualified { namespace, name } => {
+                    format!("{namespace}.{name}")
+                }
+                crate::syntax::ast::Callee::ReceiverCall {
+                    receiver, method, ..
+                } => match receiver.as_ref() {
+                    Expr::Ident(name, _) => format!("{name}.{method}"),
+                    _ => return "unsupported".to_string(),
+                },
+            };
+            let arguments = args
+                .iter()
+                .map(|argument| match &argument.name {
+                    Some(name) => format!("{name}={}", bootstrap_ir_expr(&argument.value)),
+                    None => bootstrap_ir_expr(&argument.value),
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("call {callee}({arguments})")
+        }
+        _ => "unsupported".to_string(),
+    }
+}
+
+fn bootstrap_ir_type(ty: &crate::syntax::ast::TypeRef) -> String {
+    let mut prefix = String::new();
+    if ty.is_fresh {
+        prefix.push_str("fresh ");
+    }
+    if ty.is_noescape {
+        prefix.push_str("noescape ");
+    }
+    if ty.is_owned {
+        prefix.push_str("owned ");
+    }
+    let arguments = ty.args.iter().map(bootstrap_ir_type).collect::<Vec<_>>();
+    if arguments.is_empty() {
+        format!("{prefix}{}", ty.name)
+    } else {
+        format!("{prefix}{}<{}>", ty.name, arguments.join(", "))
+    }
+}
+
+fn bootstrap_ir_generics(generics: &[crate::syntax::ast::GenericParam]) -> String {
+    if generics.is_empty() {
+        return String::new();
+    }
+    let values = generics
+        .iter()
+        .map(|generic| {
+            let bound = match &generic.bound {
+                None => return generic.name.clone(),
+                Some(crate::syntax::ast::GenericBound::Managed) => "Managed".to_string(),
+                Some(crate::syntax::ast::GenericBound::Struct) => "Struct".to_string(),
+                Some(crate::syntax::ast::GenericBound::Resource) => "Resource".to_string(),
+                Some(crate::syntax::ast::GenericBound::Protocol(name)) => name.clone(),
+            };
+            format!("{}:{bound}", generic.name)
+        })
+        .collect::<Vec<_>>();
+    format!("<{}>", values.join(","))
+}
+
+fn bootstrap_ir_effects(lines: &mut Vec<String>, effects: &[crate::syntax::ast::EffectDecl]) {
+    for effect in effects {
+        match effect {
+            crate::syntax::ast::EffectDecl::Name(name) => {
+                lines.push(format!("  effect {name}"));
+            }
+            crate::syntax::ast::EffectDecl::Retains(name) => {
+                lines.push(format!("  effect retains {name}"));
+            }
+        }
+    }
+}
+
+fn bootstrap_ir_data(lines: &mut Vec<String>, decl: &crate::syntax::ast::TypeDecl) {
+    let kind = match decl.kind {
+        crate::syntax::ast::TypeKind::Class => "class",
+        crate::syntax::ast::TypeKind::Struct => "struct",
+        crate::syntax::ast::TypeKind::Resource => "resource",
+    };
+    lines.push(format!(
+        "type {kind} {} public={} opaque={}",
+        format!("{}{}", decl.name, bootstrap_ir_generics(&decl.type_params)),
+        decl.is_public,
+        decl.is_opaque
+    ));
+    if !decl.derives.is_empty() {
+        lines.push(format!("  derives {}", decl.derives.join(",")));
+    }
+    for field in &decl.fields {
+        let mut line = format!("  field {}:{}", field.name, bootstrap_ir_type(&field.ty));
+        if field.is_handle {
+            line.push_str(" handle");
+        }
+        if field.is_weak {
+            line.push_str(" weak");
+        }
+        lines.push(line);
+    }
+}
+
+fn bootstrap_ir_sum(lines: &mut Vec<String>, decl: &crate::syntax::ast::SumTypeDecl) {
+    lines.push(format!(
+        "sum {} public={}",
+        format!("{}{}", decl.name, bootstrap_ir_generics(&decl.type_params)),
+        decl.is_public
+    ));
+    if !decl.derives.is_empty() {
+        lines.push(format!("  derives {}", decl.derives.join(",")));
+    }
+    for variant in &decl.variants {
+        lines.push(format!("  variant {}", variant.name));
+        for field in &variant.fields {
+            let mut line = format!("    field {}:{}", field.name, bootstrap_ir_type(&field.ty));
+            if field.is_handle {
+                line.push_str(" handle");
+            }
+            if field.is_weak {
+                line.push_str(" weak");
+            }
+            lines.push(line);
+        }
+    }
+}
+
+fn bootstrap_ir_alias(lines: &mut Vec<String>, decl: &crate::syntax::ast::TypeAliasDecl) {
+    lines.push(format!(
+        "alias {}{}={} public={}",
+        decl.name,
+        bootstrap_ir_generics(&decl.type_params),
+        bootstrap_ir_type(&decl.target),
+        decl.is_public
+    ));
+}
+
+fn bootstrap_ir_const(lines: &mut Vec<String>, decl: &crate::syntax::ast::ConstDecl) {
+    lines.push(format!(
+        "const {}:{}={} public={}",
+        decl.name,
+        decl.type_annotation
+            .as_ref()
+            .map_or_else(String::new, bootstrap_ir_type),
+        bootstrap_ir_expr(&decl.value),
+        decl.is_public
+    ));
+}
+
+fn bootstrap_ir_protocol(lines: &mut Vec<String>, decl: &crate::syntax::ast::ProtocolDecl) {
+    lines.push(format!("protocol {}", decl.name));
+}
+
+fn bootstrap_ir_impl(lines: &mut Vec<String>, decl: &crate::syntax::ast::ProtocolImpl) {
+    lines.push(format!("impl {} for {}", decl.protocol, decl.type_name));
+    for mapping in &decl.mappings {
+        lines.push(format!("  map {}={}", mapping.method, mapping.target));
+    }
+}
+
+fn bootstrap_ir_module(lines: &mut Vec<String>, decl: &crate::syntax::ast::ModuleDecl) {
+    lines.push(format!("module {}", decl.path.join(".")));
+}
+
+fn bootstrap_ir_use(lines: &mut Vec<String>, decl: &crate::syntax::ast::UseDecl) {
+    let mut line = format!("use {}", decl.path.join("."));
+    if decl.glob {
+        line.push_str(".*");
+    } else if let Some(alias) = &decl.alias {
+        line.push_str(&format!(" as {alias}"));
+    }
+    lines.push(line);
+}
+
+fn bootstrap_ir_pattern(pattern: &crate::syntax::ast::MatchPattern) -> String {
+    match pattern {
+        crate::syntax::ast::MatchPattern::Binding { name, .. } => format!("name {name}"),
+        crate::syntax::ast::MatchPattern::Literal { value, .. } => match value {
+            crate::syntax::ast::MatchLiteral::Int(value)
+            | crate::syntax::ast::MatchLiteral::String(value)
+            | crate::syntax::ast::MatchLiteral::Char(value) => format!("literal {value}"),
+            crate::syntax::ast::MatchLiteral::Bool(value) => format!("literal {value}"),
+        },
+        crate::syntax::ast::MatchPattern::Variant { name, bindings, .. } => {
+            if bindings.is_empty() {
+                format!("name {name}")
+            } else {
+                format!(
+                    "call {name}({})",
+                    bindings
+                        .iter()
+                        .map(bootstrap_ir_pattern)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                )
+            }
+        }
+        _ => "unsupported".to_string(),
+    }
+}
+
+fn bootstrap_ir_place(expression: &Expr) -> String {
+    match expression {
+        Expr::Ident(name, _) => name.clone(),
+        _ => bootstrap_ir_expr(expression),
+    }
+}
+
+fn bootstrap_ir_inline_statement(statement: &Stmt) -> Option<String> {
+    match statement {
+        Stmt::Let(binding) => {
+            let mutability = if binding.is_mut { " mut" } else { "" };
+            Some(format!(
+                "let{mutability} {} = {}",
+                binding.name,
+                binding
+                    .value
+                    .as_ref()
+                    .map_or_else(|| "unit".to_string(), bootstrap_ir_expr)
+            ))
+        }
+        Stmt::Assign(assignment) => Some(format!(
+            "assign {} = {}",
+            bootstrap_ir_place(&assignment.target),
+            bootstrap_ir_expr(&assignment.value)
+        )),
+        Stmt::Expr(expr) => Some(format!("expr {}", bootstrap_ir_expr(expr))),
+        Stmt::Return(ret) => Some(format!(
+            "return {}",
+            ret.value
+                .as_ref()
+                .map_or_else(|| "unit".to_string(), bootstrap_ir_expr)
+        )),
+        _ => None,
+    }
+}
+
+fn bootstrap_ir_statements(lines: &mut Vec<String>, statements: &[Stmt], depth: usize) {
+    let prefix = "  ".repeat(depth);
+    for statement in statements {
+        match statement {
+            Stmt::Let(binding) => {
+                let mutability = if binding.is_mut { " mut" } else { "" };
+                lines.push(format!(
+                    "{prefix}let{mutability} {} = {}",
+                    binding.name,
+                    binding
+                        .value
+                        .as_ref()
+                        .map_or_else(|| "unit".to_string(), bootstrap_ir_expr)
+                ));
+            }
+            Stmt::Assign(assignment) => {
+                lines.push(format!(
+                    "{prefix}assign {} = {}",
+                    bootstrap_ir_place(&assignment.target),
+                    bootstrap_ir_expr(&assignment.value)
+                ));
+            }
+            Stmt::Expr(expr) => lines.push(format!("{prefix}expr {}", bootstrap_ir_expr(expr))),
+            Stmt::Return(ret) => lines.push(format!(
+                "{prefix}return {}",
+                ret.value
+                    .as_ref()
+                    .map_or_else(|| "unit".to_string(), bootstrap_ir_expr)
+            )),
+            Stmt::If(branch) => {
+                lines.push(format!(
+                    "{prefix}if {}",
+                    bootstrap_ir_expr(&branch.condition)
+                ));
+                bootstrap_ir_statements(lines, &branch.then_body.statements, depth + 1);
+                if let Some(else_body) = &branch.else_body {
+                    lines.push(format!("{prefix}else"));
+                    bootstrap_ir_statements(lines, &else_body.statements, depth + 1);
+                }
+                lines.push(format!("{prefix}end"));
+            }
+            Stmt::Loop(loop_stmt) => {
+                match &loop_stmt.condition {
+                    Some(condition) => {
+                        lines.push(format!("{prefix}while {}", bootstrap_ir_expr(condition)));
+                    }
+                    None => lines.push(format!("{prefix}loop")),
+                }
+                bootstrap_ir_statements(lines, &loop_stmt.body.statements, depth + 1);
+                lines.push(format!("{prefix}end"));
+            }
+            Stmt::For(for_stmt) => {
+                lines.push(format!(
+                    "{prefix}for {} in {}",
+                    for_stmt.binding,
+                    bootstrap_ir_expr(&for_stmt.iterable)
+                ));
+                bootstrap_ir_statements(lines, &for_stmt.body.statements, depth + 1);
+                lines.push(format!("{prefix}end"));
+            }
+            Stmt::With(with_stmt) => {
+                lines.push(format!(
+                    "{prefix}with {} as {}",
+                    bootstrap_ir_expr(&with_stmt.resource),
+                    with_stmt.binding
+                ));
+                bootstrap_ir_statements(lines, &with_stmt.body.statements, depth + 1);
+                lines.push(format!("{prefix}end"));
+            }
+            Stmt::Match(match_stmt) => {
+                lines.push(format!(
+                    "{prefix}match {}",
+                    bootstrap_ir_expr(&match_stmt.value)
+                ));
+                for arm in &match_stmt.arms {
+                    let mut arm_head =
+                        format!("{prefix}  arm {}", bootstrap_ir_pattern(&arm.pattern));
+                    if let Some(guard) = &arm.guard {
+                        arm_head.push_str(&format!(" if {}", bootstrap_ir_expr(guard)));
+                    }
+                    lines.push(arm_head);
+                    bootstrap_ir_statements(lines, &arm.body.statements, depth + 2);
+                }
+                lines.push(format!("{prefix}end"));
+            }
+            Stmt::Select(select_stmt) => {
+                lines.push(format!("{prefix}select"));
+                for arm in &select_stmt.arms {
+                    lines.push(format!(
+                        "{prefix}  arm {} = {}",
+                        arm.binding,
+                        bootstrap_ir_expr(&arm.operation)
+                    ));
+                    bootstrap_ir_statements(lines, &arm.body.statements, depth + 2);
+                }
+                lines.push(format!("{prefix}end"));
+            }
+            Stmt::TaskGroup(task_group) => {
+                lines.push(format!("{prefix}task_group"));
+                bootstrap_ir_statements(lines, &task_group.body.statements, depth + 1);
+                lines.push(format!("{prefix}end"));
+            }
+            _ => lines.push(format!("{prefix}unsupported")),
+        }
+    }
+}
+
+fn rust_bootstrap_ir(source: &str) -> String {
+    let program = parse_source_raw("bootstrap-ir.rss", source);
+    let mut lines = vec!["rss-ir-v1".to_string()];
+    for protocol in &program.protocols {
+        bootstrap_ir_protocol(&mut lines, protocol);
+    }
+    for protocol_impl in &program.protocol_impls {
+        bootstrap_ir_impl(&mut lines, protocol_impl);
+    }
+    for item in program.items {
+        match item {
+            Item::Module(decl) => bootstrap_ir_module(&mut lines, &decl),
+            Item::Use(decl) => bootstrap_ir_use(&mut lines, &decl),
+            Item::Type(decl) => bootstrap_ir_data(&mut lines, &decl),
+            Item::SumType(decl) => bootstrap_ir_sum(&mut lines, &decl),
+            Item::TypeAlias(decl) => bootstrap_ir_alias(&mut lines, &decl),
+            Item::Const(decl) => bootstrap_ir_const(&mut lines, &decl),
+            Item::Function(function) => {
+                let parameters = function
+                    .params
+                    .iter()
+                    .map(|parameter| {
+                        let mut text = format!(
+                            "{}:{} {}",
+                            parameter.name,
+                            parameter
+                                .effective_effect()
+                                .map_or("read", |effect| effect.as_str()),
+                            bootstrap_ir_type(&parameter.ty)
+                        );
+                        if let Some(default) = &parameter.default {
+                            text.push('=');
+                            text.push_str(&bootstrap_ir_expr(default));
+                        }
+                        text
+                    })
+                    .collect::<Vec<_>>()
+                    .join(",");
+                lines.push(format!(
+                    "fn {}{}({parameters})->{}",
+                    function.name,
+                    bootstrap_ir_generics(&function.type_params),
+                    function
+                        .return_ty
+                        .as_ref()
+                        .map_or_else(String::new, bootstrap_ir_type)
+                ));
+                bootstrap_ir_effects(&mut lines, &function.effects);
+                bootstrap_ir_statements(&mut lines, &function.body.statements, 1);
+            }
+        }
+    }
+    format!("{}\n", lines.join("\n"))
+}
+
+#[test]
+fn selfhost_bootstrap_ir_matches_rust_oracle_for_straight_line_functions() {
+    let source =
+        "fn add(left: Int, right: Int) -> Int {\n    let sum = left + right\n    return sum\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+/// Stage-3 inner-loop gate: lowering must agree byte-for-byte over the explicit
+/// lowering corpus. Unsupported syntax belongs in frontend/recovery tests, not
+/// in this supported-subset contract.
+fn canonical_ir_sample_files() -> Vec<PathBuf> {
+    let dir = selfhost_dir().join("samples/ir");
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "rss"))
+        .collect();
+    files.sort();
+    files
+}
+
+const CANONICAL_IR_SAMPLE_COUNT: usize = 5;
+
+#[test]
+fn canonical_ir_parity_samples() {
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss canonical IR lowerer should compile");
+    let files = canonical_ir_sample_files();
+    assert_eq!(
+        files.len(), CANONICAL_IR_SAMPLE_COUNT,
+        "canonical IR corpus must be explicit and complete; update the expected count with each reviewed sample change"
+    );
+    let mut mismatches = Vec::new();
+    for file in files {
+        let source = std::fs::read_to_string(&file)
+            .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+        let actual = executable
+            .eval_main_with_args([source.clone()])
+            .unwrap_or_else(|e| panic!("rss canonical IR failed for {}: {e:?}", file.display()))
+            .stdout;
+        let expected = rust_bootstrap_ir(&source);
+        if actual != expected {
+            mismatches.push(format!(
+                "{}\n--- Rust IR ---\n{expected}\n--- RSS IR ---\n{actual}",
+                file.display()
+            ));
+        }
+    }
+    assert!(
+        mismatches.is_empty(),
+        "canonical IR parity failed on {} curated samples:\n{}",
+        mismatches.len(),
+        mismatches.join("\n\n")
+    );
+}
+
+#[test]
+fn selfhost_c_emitter_compiles_and_runs_scalar_ir() {
+    let executable = compile_selfhost_tool("backend/c_emit.rss", "bootstrap C emitter")
+        .expect("rss C emitter should compile");
+    let ir = "rss-ir-v1\nfn main()->Int\n  return literal 42\n";
+    let c_source = executable
+        .eval_main_with_args([ir.to_string()])
+        .expect("rss C emitter should run")
+        .stdout;
+    assert!(c_source.contains("#include \"rssrt.h\""));
+    assert!(c_source.contains("rssrt_print_int"));
+    let rejected = executable
+        .eval_main_with_args([
+            "rss-ir-v1\nfn main()->Int\n  return literal 42;system(\"false\")\n".to_string(),
+        ])
+        .expect("rss C emitter should reject malformed scalar IR without failing")
+        .stdout;
+    assert!(
+        rejected.is_empty(),
+        "C emitter must reject non-decimal IR literals"
+    );
+    let binary_ir = "rss-ir-v1\nfn main()->Int\n  return bin + (literal 2) (literal 40)\n";
+    let binary_c_source = executable
+        .eval_main_with_args([binary_ir.to_string()])
+        .expect("rss C emitter should lower scalar binary IR")
+        .stdout;
+    assert!(
+        binary_c_source.contains("(2+40)"),
+        "C emitter must preserve the binary scalar expression"
+    );
+    let rejected_divide_by_zero = executable
+        .eval_main_with_args([
+            "rss-ir-v1\nfn main()->Int\n  return bin / (literal 1) (literal 0)\n".to_string(),
+        ])
+        .expect("rss C emitter should reject invalid scalar binary IR without failing")
+        .stdout;
+    assert!(
+        rejected_divide_by_zero.is_empty(),
+        "C emitter must reject a statically invalid divide-by-zero expression"
+    );
+    let rejected_unknown_name = executable
+        .eval_main_with_args(["rss-ir-v1\nfn main()->Int\n  return name missing\n".to_string()])
+        .expect("rss C emitter should reject an undeclared scalar name without failing")
+        .stdout;
+    assert!(
+        rejected_unknown_name.is_empty(),
+        "C emitter must reject scalar IR that refers to an undeclared local"
+    );
+    let rejected_immutable_assignment = executable
+        .eval_main_with_args(["rss-ir-v1\nfn main()->Int\n  let answer = literal 1\n  assign answer = literal 42\n  return name answer\n".to_string()])
+        .expect("rss C emitter should reject immutable assignment without failing")
+        .stdout;
+    assert!(
+        rejected_immutable_assignment.is_empty(),
+        "C emitter must reject assignment to a non-mutable local"
+    );
+    let rejected_else_without_if = executable
+        .eval_main_with_args([
+            "rss-ir-v1\nfn main()->Int\n  else\n  return literal 42\n".to_string()
+        ])
+        .expect("rss C emitter should reject a misplaced else without failing")
+        .stdout;
+    assert!(
+        rejected_else_without_if.is_empty(),
+        "C emitter must reject an else without a matching if"
+    );
+    let rejected_repeated_else = executable
+        .eval_main_with_args([
+            "rss-ir-v1\nfn main()->Int\n  if literal 1\n  else\n  else\n  end\n  return literal 42\n"
+                .to_string(),
+        ])
+        .expect("rss C emitter should reject a repeated else without failing")
+        .stdout;
+    assert!(
+        rejected_repeated_else.is_empty(),
+        "C emitter must reject a repeated else for one if"
+    );
+    let rejected_unknown_function = executable
+        .eval_main_with_args([
+            "rss-ir-v1\nfn helper()->Int\n  return call missing()\nfn main()->Int\n  return call helper()\n"
+                .to_string(),
+        ])
+        .expect("rss C emitter should reject an unknown helper without failing")
+        .stdout;
+    assert!(
+        rejected_unknown_function.is_empty(),
+        "C emitter must not emit a partial artifact for an unknown helper"
+    );
+    let rejected_unknown_pure_name = executable
+        .eval_main_with_args([
+            "rss-ir-v1\nfn helper()->Int\n  return name missing\nfn main()->Int\n  return call helper()\n"
+                .to_string(),
+        ])
+        .expect("rss C emitter should reject an undeclared pure name without failing")
+        .stdout;
+    assert!(
+        rejected_unknown_pure_name.is_empty(),
+        "C emitter must reject a bare name in a pure zero-argument helper"
+    );
+    let rejected_recursive_helper = executable
+        .eval_main_with_args([
+            "rss-ir-v1\nfn loop()->Int\n  return call loop()\nfn main()->Int\n  return call loop()\n"
+                .to_string(),
+        ])
+        .expect("rss C emitter should reject unsupported recursion without failing")
+        .stdout;
+    assert!(
+        rejected_recursive_helper.is_empty(),
+        "C emitter must reject recursive helpers outside the current ABI slice"
+    );
+    let rejected_indirect_recursion = executable
+        .eval_main_with_args([
+            "rss-ir-v1\nfn first()->Int\n  return call second()\nfn second()->Int\n  return call first()\nfn main()->Int\n  return call first()\n"
+                .to_string(),
+        ])
+        .expect("rss C emitter should reject indirect recursion without failing")
+        .stdout;
+    assert!(
+        rejected_indirect_recursion.is_empty(),
+        "C emitter must reject an indirect recursive helper cycle"
+    );
+    let rejected_forward_call = executable
+        .eval_main_with_args([
+            "rss-ir-v1\nfn first()->Int\n  return call second()\nfn second()->Int\n  return literal 42\nfn main()->Int\n  return call first()\n"
+                .to_string(),
+        ])
+        .expect("rss C emitter should reject a forward helper call without failing")
+        .stdout;
+    assert!(
+        rejected_forward_call.is_empty(),
+        "C emitter must reject forward helper calls under its acyclic ABI rule"
+    );
+
+    let dir = selfhost_unique_temp_dir("rss-selfhost-c-emitter");
+    std::fs::create_dir_all(&dir).expect("C emitter temp directory should be writable");
+    let c_file = dir.join("main.c");
+    let binary = dir.join("main");
+    std::fs::write(&c_file, &c_source).expect("generated C should be writable");
+    let compile = compile_bootstrap_c(&c_file, &binary);
+    assert!(
+        compile.status.success(),
+        "generated C failed to compile: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = Command::new(&binary)
+        .output()
+        .expect("generated scalar C program should run");
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
+
+    std::fs::write(&c_file, binary_c_source).expect("generated binary C should be writable");
+    let compile = compile_bootstrap_c(&c_file, &binary);
+    assert!(
+        compile.status.success(),
+        "generated binary C failed to compile: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = Command::new(&binary)
+        .output()
+        .expect("generated scalar binary C program should run");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
+}
+
+#[test]
+fn selfhost_c_emitter_runs_canonical_ir_artifact() {
+    let source = "fn main() -> Int {\n    let mut answer = 0\n    while answer < 42 {\n        if answer == 41 {\n            answer = 42\n        } else {\n            answer = answer + 1\n        }\n    }\n    return answer\n}\n";
+    let lowerer = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss canonical IR lowerer should compile");
+    let ir = lowerer
+        .eval_main_with_args([source.to_string()])
+        .expect("rss canonical IR lowerer should run")
+        .stdout;
+    let emitter = compile_selfhost_tool("backend/c_emit.rss", "bootstrap C emitter")
+        .expect("rss C emitter should compile");
+    let c_source = emitter
+        .eval_main_with_args([ir.clone()])
+        .expect("rss C emitter should consume canonical IR")
+        .stdout;
+    let dir = selfhost_unique_temp_dir("rss-selfhost-canonical-c");
+    std::fs::create_dir_all(&dir).expect("C artifact directory should be writable");
+    let c_file = dir.join("main.c");
+    let binary = dir.join("main");
+    std::fs::write(&c_file, &c_source).expect("generated C should be writable");
+    let compile = compile_bootstrap_c(&c_file, &binary);
+    assert!(
+        compile.status.success(),
+        "canonical C artifact failed to compile: {}\n--- generated C ---\n{}",
+        String::from_utf8_lossy(&compile.stderr),
+        c_source
+    );
+    let run = Command::new(&binary)
+        .output()
+        .expect("canonical C artifact should run");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
+}
+
+#[test]
+fn selfhost_c_emitter_runs_canonical_if_else_artifact() {
+    let source = "fn main() -> Int {\n    let mut answer = 0\n    if true {\n        answer = 42\n    } else {\n        answer = 7\n    }\n    return answer\n}\n";
+    let lowerer = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss canonical IR lowerer should compile");
+    let ir = lowerer
+        .eval_main_with_args([source.to_string()])
+        .expect("rss canonical IR lowerer should run")
+        .stdout;
+    let emitter = compile_selfhost_tool("backend/c_emit.rss", "bootstrap C emitter")
+        .expect("rss C emitter should compile");
+    let c_source = emitter
+        .eval_main_with_args([ir.clone()])
+        .expect("rss C emitter should consume canonical if/else IR")
+        .stdout;
+    assert!(c_source.contains("if (1) {"));
+    assert!(c_source.contains("} else {"));
+
+    let dir = selfhost_unique_temp_dir("rss-selfhost-canonical-if-else-c");
+    std::fs::create_dir_all(&dir).expect("C artifact directory should be writable");
+    let c_file = dir.join("main.c");
+    let binary = dir.join("main");
+    std::fs::write(&c_file, &c_source).expect("generated C should be writable");
+    let compile = compile_bootstrap_c(&c_file, &binary);
+    assert!(
+        compile.status.success(),
+        "canonical if/else C artifact failed to compile: {}\n--- generated C ---\n{}",
+        String::from_utf8_lossy(&compile.stderr),
+        c_source
+    );
+    let run = Command::new(&binary)
+        .output()
+        .expect("canonical if/else C artifact should run");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
+}
+
+#[test]
+fn selfhost_c_emitter_runs_scalar_function_abi() {
+    let source = "fn seed(value: Int) -> Int {\n    let next = value + 1\n    return next\n}\n\nfn relay() -> Int {\n    let base = 40\n    return seed(value: base + 1)\n}\n\nfn main() -> Int {\n    let result = relay()\n    return result\n}\n";
+    let lowerer = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss canonical IR lowerer should compile");
+    let ir = lowerer
+        .eval_main_with_args([source.to_string()])
+        .expect("rss canonical IR lowerer should run")
+        .stdout;
+    assert!(
+        ir.contains("fn seed(value:read Int)->Int"),
+        "canonical IR:\n{ir}"
+    );
+    let emitter = compile_selfhost_tool("backend/c_emit.rss", "bootstrap C emitter")
+        .expect("rss C emitter should compile");
+    let c_source = emitter
+        .eval_main_with_args([ir.clone()])
+        .expect("rss C emitter should consume pure function IR")
+        .stdout;
+    assert!(
+        c_source.contains("static long long rss_fn_seed(long long value);"),
+        "canonical IR:\n{ir}\n--- generated C ---\n{c_source}"
+    );
+    assert!(c_source.contains("long long next = (value+1);"));
+    assert!(c_source.contains("return rss_fn_seed((base+1));"));
+    assert!(c_source.contains("long long result = rss_fn_relay();"));
+
+    let dir = selfhost_unique_temp_dir("rss-selfhost-canonical-function-abi-c");
+    std::fs::create_dir_all(&dir).expect("C artifact directory should be writable");
+    let c_file = dir.join("main.c");
+    let binary = dir.join("main");
+    std::fs::write(&c_file, &c_source).expect("generated C should be writable");
+    let compile = compile_bootstrap_c(&c_file, &binary);
+    assert!(
+        compile.status.success(),
+        "canonical function-ABI C artifact failed to compile: {}\n--- generated C ---\n{}",
+        String::from_utf8_lossy(&compile.stderr),
+        c_source
+    );
+    let run = Command::new(&binary)
+        .output()
+        .expect("canonical function-ABI C artifact should run");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "42\n");
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_named_calls() {
+    let source = "fn run(value: Int) -> Int {\n    return helper(value: value)\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        "rss-ir-v1\nfn run(value:read Int)->Int\n  return call helper(value=name value)\n",
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_mutable_local_assignment() {
+    let source = "fn increment(value: Int) -> Int {\n    let mut next = value\n    next = next + 1\n    return next\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn increment(value:read Int)->Int\n",
+            "  let mut next = name value\n",
+            "  assign next = bin + (name next) (literal 1)\n",
+            "  return name next\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_if_else_blocks() {
+    let source = "fn choose(value: Int) -> Int {\n    if value > 0 {\n        return value\n    } else {\n        return 0\n    }\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn choose(value:read Int)->Int\n",
+            "  if bin > (name value) (literal 0)\n",
+            "    return name value\n",
+            "  else\n",
+            "    return literal 0\n",
+            "  end\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_while_blocks() {
+    let source = "fn countdown(value: Int) -> Int {\n    let mut next = value\n    while next > 0 {\n        next = next - 1\n    }\n    return next\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn countdown(value:read Int)->Int\n",
+            "  let mut next = name value\n",
+            "  while bin > (name next) (literal 0)\n",
+            "    assign next = bin - (name next) (literal 1)\n",
+            "  end\n",
+            "  return name next\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_for_blocks() {
+    let source = "fn sum(values: List<Int>) -> Int {\n    let mut total = 0\n    for item in values {\n        total = total + item\n    }\n    return total\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn sum(values:read List<Int>)->Int\n",
+            "  let mut total = literal 0\n",
+            "  for item in name values\n",
+            "    assign total = bin + (name total) (name item)\n",
+            "  end\n",
+            "  return name total\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_with_blocks() {
+    let source = "fn read_file(file: File) -> Unit {\n    with file as handle {\n        Log.write(message: read \"open\")\n    }\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn read_file(file:read File)->Unit\n",
+            "  with name file as handle\n",
+            "    expr call Log.write(message=effect read literal open)\n",
+            "  end\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_match_blocks() {
+    let source = "fn classify(value: Int) -> Int {\n    match value {\n        0 => return 1\n        other => return other\n    }\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn classify(value:read Int)->Int\n",
+            "  match name value\n",
+            "    arm literal 0\n",
+            "      return literal 1\n",
+            "    arm name other\n",
+            "      return name other\n",
+            "  end\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+/// Match lowering reads Pattern directly. This keeps the canonical IR oracle
+/// independent of the removed Expr-backed MatchArm representation.
+#[test]
+fn selfhost_bootstrap_ir_lowers_positional_variant_patterns() {
+    let source = "fn unwrap(value: Option<Int>) -> Int {\n    match value {\n        Some(item) => return item\n        None => return 0\n    }\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn unwrap(value:read Option<Int>)->Int\n",
+            "  match name value\n",
+            "    arm call Some(name item)\n",
+            "      return name item\n",
+            "    arm name None\n",
+            "      return literal 0\n",
+            "  end\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_select_blocks() {
+    let source = "fn pick(first: Chan, second: Chan) -> Unit {\n    select {\n        left = await first.receive() => { return Unit }\n        right = await second.receive() => return Unit\n    }\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn pick(first:read Chan,second:read Chan)->Unit\n",
+            "  select\n",
+            "    arm left = await call first.receive()\n",
+            "      return literal Unit\n",
+            "    arm right = await call second.receive()\n",
+            "      return literal Unit\n",
+            "  end\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_task_group_blocks() {
+    let source = "fn run() -> Unit {\n    task_group {\n        return Unit\n    }\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn run()->Unit\n",
+            "  task_group\n",
+            "    return literal Unit\n",
+            "  end\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_expression_statements() {
+    let source =
+        "fn trace(value: Int) -> Unit {\n    Log.write(message: \"value\")\n    return Unit\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn trace(value:read Int)->Unit\n",
+            "  expr call Log.write(message=literal value)\n",
+            "  return literal Unit\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_field_reads() {
+    let source = "struct Config { value: Int }\nfn read_value(config: Config) -> Int {\n    return config.value\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "type struct Config public=false opaque=false\n",
+            "  field value:Int\n",
+            "fn read_value(config:read Config)->Int\n",
+            "  return field name config.value\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_index_reads() {
+    let source = "fn first(values: List<Int>) -> Int {\n    return values[0]\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn first(values:read List<Int>)->Int\n",
+            "  return index name values[literal 0]\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_field_and_index_places() {
+    let source = "struct Config { value: Int }\nfn update(config: Config, values: List<Int>, next: Int) -> Unit {\n    config.value = next\n    values[0] = next\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "type struct Config public=false opaque=false\n",
+            "  field value:Int\n",
+            "fn update(config:read Config,values:read List<Int>,next:read Int)->Unit\n",
+            "  assign field name config.value = name next\n",
+            "  assign index name values[literal 0] = name next\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_value_effects_and_await() {
+    let source = "fn consume(value: read Int) -> Unit { return Unit }\nfn forward(value: read Int) -> Unit {\n    consume(value: read value)\n    return Unit\n}\nasync fn wait_for(task: read Task<Int>) -> Int {\n    return await task\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn consume(value:read Int)->Unit\n",
+            "  return literal Unit\n",
+            "fn forward(value:read Int)->Unit\n",
+            "  expr call consume(value=effect read name value)\n",
+            "  return literal Unit\n",
+            "fn wait_for(task:read Task<Int>)->Int\n",
+            "  return await name task\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_manage() {
+    let source = "fn share(image: Image) -> Image {\n    return manage image\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn share(image:read Image)->Image\n",
+            "  return manage name image\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_array_literals() {
+    let source = "fn values() -> List<Int> {\n    return [1, 2 + 3]\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn values()->List<Int>\n",
+            "  return array[literal 1,bin + (literal 2) (literal 3)]\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_postfix_try() {
+    let source = "async fn wait_for() -> Result<Unit, Error> {\n    await Timer.sleep(ms: 1)?\n    return Ok(Unit)\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn wait_for()->Result<Unit, Error>\n",
+            "  expr try await call Timer.sleep(ms=literal 1)\n",
+            "  return call Ok(literal Unit)\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_generic_function_signatures() {
+    let source =
+        "fn identity<T: Managed, U>(value: read T, fallback: read U) -> T {\n    return value\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn identity<T:Managed,U>(value:read T,fallback:read U)->T\n",
+            "  return name value\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_data_declarations() {
+    let source = "pub struct Boxed<T: Managed> {\n    value: handle T\n}\n\nstruct Tagged derives(Eq, Hash) {\n    id: Int\n    label: String\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "type struct Boxed<T:Managed> public=true opaque=false\n",
+            "  field value:T handle\n",
+            "type struct Tagged public=false opaque=false\n",
+            "  derives Eq,Hash\n",
+            "  field id:Int\n",
+            "  field label:String\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_sum_alias_and_const_declarations() {
+    let source = "pub sum Result<T, E> derives(Eq) {\n    Ok(value: T)\n    Err(error: E)\n}\n\npub type Name<T> = List<T>\npub const LIMIT: Int = 3\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "sum Result<T,E> public=true\n",
+            "  derives Eq\n",
+            "  variant Ok\n",
+            "    field value:T\n",
+            "  variant Err\n",
+            "    field error:E\n",
+            "alias Name<T>=List<T> public=true\n",
+            "const LIMIT:Int=literal 3 public=true\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_protocols_and_implementations() {
+    let source = "protocol Render {\n    fn draw(self: read Self) -> Unit\n}\n\nimpl Render for Canvas {\n    draw = Canvas.draw\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "protocol Render\n",
+            "impl Render for Canvas\n",
+            "  map draw=Canvas.draw\n",
+            "fn Render.draw<Self:Managed>(self:read Self)->Unit\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_module_and_use_declarations() {
+    let source = "module package.review\nuse package.contract.Contract as PackageContract\nuse package.util.*\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "module package.review\n",
+            "use package.contract.Contract as PackageContract\n",
+            "use package.util.*\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_pipe_closures() {
+    let source = "fn map_one(values: List<Int>) -> List<Int> {\n    return List.map(items: values, fn: |value| value + 1)\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn map_one(values:read List<Int>)->List<Int>\n",
+            "  return call List.map(items=name values,fn=closure(value)=>bin + (name value) (literal 1))\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_braced_pipe_closures() {
+    let source = "fn map_one(values: List<Int>) -> List<Int> {\n    return List.map(items: values, fn: |value| { value + 1 })\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn map_one(values:read List<Int>)->List<Int>\n",
+            "  return call List.map(items=name values,fn=closure(value)=>bin + (name value) (literal 1))\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_braced_pipe_closure_statement_blocks() {
+    let source = "fn map_two(values: List<Int>) -> List<Int> {\n    return List.map(items: values, fn: |value| {\n        let next = value + 1\n        next\n    })\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn map_two(values:read List<Int>)->List<Int>\n",
+            "  return call List.map(items=name values,fn=closure(value)=>block{let next = bin + (name value) (literal 1);expr name next})\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_lowers_function_effects() {
+    let source = "fn publish(value: read String) -> Unit\n    effects(noalloc, retains(value), no_panic)\n{\n    return Unit\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        concat!(
+            "rss-ir-v1\n",
+            "fn publish(value:read String)->Unit\n",
+            "  effect noalloc\n",
+            "  effect retains value\n",
+            "  effect no_panic\n",
+            "  return literal Unit\n",
+        ),
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
+}
+
+#[test]
+fn selfhost_bootstrap_ir_marks_unmodelled_nodes_explicitly() {
+    let source = "fn run(value: Int) -> Int {\n    return fn() { value }\n}\n";
+    let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
+        .expect("rss bootstrap IR should compile");
+    let actual = executable
+        .eval_main_with_args([source.to_string()])
+        .expect("rss bootstrap IR should run")
+        .stdout;
+    assert_eq!(
+        "rss-ir-v1\nfn run(value:read Int)->Int\n  return unsupported\n",
+        actual
+    );
+    assert_eq!(rust_bootstrap_ir(source), actual);
 }
 
 /// Compile `selfhost/lexer.rss` with the shared scanner once for reuse.
@@ -635,6 +2109,119 @@ fn parser_parity_tiny_sample() {
 }
 
 #[test]
+fn selfhost_feature_header_ast_outline_is_deterministic() {
+    let source = "features: local, async\n";
+    let exe = compile_selfhost_tool("serialize/outline.rss", "feature header AST outline")
+        .expect("feature header AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("feature header AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "features\tfeatures\t1:1:8\n",
+            "  feature\tlocal\t1:11:5\n",
+            "  feature\tasync\t1:18:5\n",
+        )
+    );
+}
+
+#[test]
+fn selfhost_data_declaration_ast_outline_is_deterministic() {
+    let source = r#"pub opaque resource Cache<T: Resource> derives(Clone, Eq) {
+    id: Int
+    owner: handle Owner
+    peer: weak Peer
+}
+pub sum Resultish<T> derives(Eq) {
+    Good(value: T, code: Int)
+    Empty
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/outline.rss", "data declaration AST outline")
+        .expect("data declaration AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("data declaration AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "type\tCache\t1:1:3\n",
+            "  data-kind\tresource\tpublic=true\topaque=true\n",
+            "  generic\tT\tResource\n",
+            "  derive\tClone\n",
+            "  derive\tEq\n",
+            "  field\tid\tInt\thandle=false\tweak=false\n",
+            "  field\towner\tOwner\thandle=true\tweak=false\n",
+            "  field\tpeer\tPeer\thandle=false\tweak=true\n",
+            "sum\tResultish\t6:1:3\n",
+            "  data-kind\tsum\tpublic=true\topaque=false\n",
+            "  generic\tT\t\n",
+            "  derive\tEq\n",
+            "  variant\tGood\n",
+            "    field\tvalue\tT\thandle=false\tweak=false\n",
+            "    field\tcode\tInt\thandle=false\tweak=false\n",
+            "  variant\tEmpty\n",
+        )
+    );
+}
+
+#[test]
+fn selfhost_protocol_contract_ast_outline_is_deterministic() {
+    let source = r#"protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+    fn default_write(self: read Self) -> Unit = _
+}
+struct Buffer {}
+fn Buffer.write(self: mut Buffer, message: read String) -> Unit {
+    return Unit
+}
+fn Buffer.default_write(self: read Buffer) -> Unit {
+    return Unit
+}
+impl Writer for Buffer {
+    write = Buffer.write
+    default_write = Buffer.default_write
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/outline.rss", "protocol contract AST outline")
+        .expect("protocol contract AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("protocol contract AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "protocol\tWriter\t1:1:8\n",
+            "function\tWriter.write\t2:5:2\n",
+            "  header\tpublic=true\tasync=false\tnative=false\tbody=false\treturn=Unit\tprotocol=Writer\n",
+            "  generic\tSelf\tManaged\n",
+            "  param\tself\tmut\tSelf\n",
+            "  param\tmessage\tread\tString\n",
+            "function\tWriter.default_write\t3:5:2\n",
+            "  header\tpublic=true\tasync=false\tnative=false\tbody=false\treturn=Unit\tprotocol=Writer\tdefault-impl=true\n",
+            "  generic\tSelf\tManaged\n",
+            "  param\tself\tread\tSelf\n",
+            "type\tBuffer\t5:1:6\n",
+            "  data-kind\tstruct\tpublic=false\topaque=false\n",
+            "function\tBuffer.write\t6:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  param\tself\tmut\tBuffer\n",
+            "  param\tmessage\tread\tString\n",
+            "  stmt\treturn\t\t\tliteral\tUnit\n",
+            "function\tBuffer.default_write\t9:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  param\tself\tread\tBuffer\n",
+            "  stmt\treturn\t\t\tliteral\tUnit\n",
+            "impl\tWriter\t12:1:4\n",
+            "  protocol\tWriter\tfor\tBuffer\n",
+            "  mapping\twrite\tBuffer.write\t13:5:5\n",
+            "  mapping\tdefault_write\tBuffer.default_write\t14:5:13\n",
+        )
+    );
+}
+
+#[test]
 fn selfhost_top_level_ast_outline_is_deterministic() {
     let source = r#"features: local
 module demo.core
@@ -674,16 +2261,26 @@ pub fn pinned_name() -> Unit {
         output.stdout,
         concat!(
             "features\tfeatures\t1:1:8\n",
-            "module\tdemo\t2:1:6\n",
-            "use\t\t3:1:3\n",
+            "  feature\tlocal\t1:11:5\n",
+            "module\tdemo.core\t2:1:6\n",
+            "use\tdemo.util\t3:1:3\n",
             "type\tBoxed\t4:1:6\n",
+            "  data-kind\tstruct\tpublic=false\topaque=false\n",
+            "  field\tvalue\tInt\thandle=false\tweak=false\n",
             "sum\tResultish\t7:1:3\n",
+            "  data-kind\tsum\tpublic=false\topaque=false\n",
+            "  variant\tGood\n",
             "type-alias\tName\t10:1:4\n",
+            "  target\tString\n",
             "const\tLIMIT\t11:1:5\n",
+            "  type\tInt\n",
+            "  value\t3\n",
             "function\trun\t12:1:2\n",
             "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
             "  stmt\treturn\t\t\tliteral\tUnit\n",
             "type\tPublicBox\t15:1:3\n",
+            "  data-kind\tstruct\tpublic=true\topaque=false\n",
+            "  field\tvalue\tInt\thandle=false\tweak=false\n",
             "function\tasync_run\t18:1:5\n",
             "  header\tpublic=false\tasync=true\tnative=false\tbody=true\treturn=Unit\n",
             "  stmt\treturn\t\t\tliteral\tUnit\n",
@@ -740,9 +2337,84 @@ fn work() -> Unit {
             "function\twork\t5:1:2\n",
             "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
             "  stmt\tlet\titem\tInt\tliteral\t1\n",
-            "  stmt\texpr\t\t\tcall\tconsume\n",
+            "  stmt\texpr\t\t\tcall\tconsume\targs=1\tlabels=value\n",
             "  stmt\tif\t\t\tbinary\t==\tthen=1\telse=1\n",
             "  stmt\treturn\t\t\tname\titem\n",
+        )
+    );
+}
+
+#[test]
+fn selfhost_pipe_closure_ast_outline_is_deterministic() {
+    let source = r#"fn incrementer() -> Unit {
+    let increment = |value| value + 1
+    return Unit
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/outline.rss", "pipe closure AST outline")
+        .expect("pipe closure AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("pipe closure AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "function\tincrementer\t1:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  stmt\tlet\tincrement\t\tclosure\tclosure\n",
+            "  stmt\treturn\t\t\tliteral\tUnit\n",
+        )
+    );
+}
+
+#[test]
+fn selfhost_braced_pipe_closure_body_is_materialized() {
+    let source = r#"fn incrementer() -> Unit {
+    let increment = |value| {
+        let next = value + 1
+        next
+    }
+    return Unit
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/outline.rss", "braced pipe closure AST outline")
+        .expect("braced pipe closure AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("braced pipe closure AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "function\tincrementer\t1:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  stmt\tlet\tincrement\t\tclosure\tclosure\tclosure-body=2\n",
+            "  stmt\treturn\t\t\tliteral\tUnit\n",
+        )
+    );
+}
+
+#[test]
+fn selfhost_ast_outline_names_shared_expression_kinds() {
+    let source = r#"fn values(image: Image) -> List<Int> {
+    let shared = manage image
+    let items = [1, 2]
+    return items
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/outline.rss", "shared expression AST outline")
+        .expect("shared expression AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("shared expression AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "function\tvalues\t1:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=List<Int>\n",
+            "  param\timage\tImage\n",
+            "  stmt\tlet\tshared\t\tmanage\tmanage\n",
+            "  stmt\tlet\titems\t\tarray\tarray\n",
+            "  stmt\treturn\t\t\tname\titems\n",
         )
     );
 }
@@ -769,6 +2441,247 @@ fn selfhost_match_ast_outline_is_deterministic() {
             "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
             "  param\tvalue\tread\tOption<Int>\n",
             "  stmt\tmatch\t\t\tname\tvalue\tarms=2\n",
+            "    arm\treturn\tUnit\tbody=1\tpattern=variant\n",
+            "    arm\treturn\tUnit\tbody=1\tpattern=variant\n",
+            "  stmt\treturn\t\t\tliteral\tUnit\n",
+        )
+    );
+}
+
+#[test]
+fn selfhost_match_arm_block_ast_outline_is_deterministic() {
+    let source = r#"fn choose(value: read Option<Int>) -> Unit {
+    match value {
+        Some(item) => {
+            let next: Int = item
+            return Unit
+        }
+        None => "none"
+    }
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/outline.rss", "match arm body AST outline")
+        .expect("match arm body AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("match arm body AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "function\tchoose\t1:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  param\tvalue\tread\tOption<Int>\n",
+            "  stmt\tmatch\t\t\tname\tvalue\tarms=2\n",
+            "    arm\tlet\titem\tbody=2\tpattern=variant\n",
+            "    arm\texpr\tnone\tbody=1\tpattern=variant\n",
+        )
+    );
+}
+
+#[test]
+fn selfhost_match_expression_ast_outline_is_deterministic() {
+    let source = r#"fn choose(value: read Option<Int>) -> Unit {
+    let answer: Int = match value {
+        Some(item) => item
+        None => 0
+    }
+    return Unit
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/outline.rss", "match expression AST outline")
+        .expect("match expression AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("match expression AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "function\tchoose\t1:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  param\tvalue\tread\tOption<Int>\n",
+            "  stmt\tlet\tanswer\tInt\tmatch\tmatch\tarms=2\tguards=0\n",
+            "  stmt\treturn\t\t\tliteral\tUnit\n",
+        )
+    );
+}
+
+#[test]
+fn selfhost_match_expression_arm_type_oracle_anchor() {
+    let source = r#"fn choose(value: read Option<Int>) -> Int {
+    return match value {
+        Some(item) => item
+        None => "none"
+    }
+}
+"#;
+    let oracle = checker_oracle_records("match-expression-arm-type.rss", source, "RS0209");
+    assert_eq!(
+        oracle,
+        vec![SelfhostDiagnosticRecord {
+            code: "RS0209".to_string(),
+            line: 4,
+            column: 9,
+            length: 4,
+        }],
+        "fixture must pin the incompatible arm pattern anchor"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0209",
+    );
+    assert_eq!(oracle, actual, "match expression arm types diverged");
+}
+
+#[test]
+fn selfhost_result_match_expression_arm_type_parity() {
+    let source = r#"fn choose(value: read Result<Int, String>) -> Int {
+    return match value {
+        Ok(item) => item
+        Err(reason) => reason
+    }
+}
+"#;
+    let oracle = checker_oracle_records("result-match-expression-arm-type.rss", source, "RS0209");
+    assert_eq!(
+        oracle,
+        vec![SelfhostDiagnosticRecord {
+            code: "RS0209".to_string(),
+            line: 4,
+            column: 9,
+            length: 3,
+        }],
+        "fixture must pin the Err arm pattern anchor"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0209",
+    );
+    assert_eq!(oracle, actual, "Result match expression arm types diverged");
+}
+
+#[test]
+fn selfhost_match_guard_ast_outline_is_deterministic() {
+    let source = r#"fn choose(value: read Option<Int>) -> Int {
+    return match value {
+        Some(item) if item == 1 => item
+        None => 0
+    }
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/outline.rss", "match guard AST outline")
+        .expect("match guard AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("match guard AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "function\tchoose\t1:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Int\n",
+            "  param\tvalue\tread\tOption<Int>\n",
+            "  stmt\treturn\t\t\tmatch\tmatch\tarms=2\tguards=1\n",
+        )
+    );
+}
+
+#[test]
+fn selfhost_destructuring_pattern_ast_outline_is_deterministic() {
+    let source = r#"fn choose(value: read Int) -> Unit {
+    match value {
+        (left, right) => return Unit
+        [head, tail] => return Unit
+    }
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/outline.rss", "destructuring pattern AST outline")
+        .expect("destructuring pattern AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("destructuring pattern AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "function\tchoose\t1:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  param\tvalue\tread\tInt\n",
+            "  stmt\tmatch\t\t\tname\tvalue\tarms=2\n",
+            "    arm\treturn\tUnit\tbody=1\tpattern=tuple\tpattern-parts=2\n",
+            "    arm\treturn\tUnit\tbody=1\tpattern=list\tpattern-parts=2\n",
+        )
+    );
+}
+
+#[test]
+fn selfhost_with_statement_ast_outline_is_deterministic() {
+    let source = r#"fn run(pool: read Pool) -> Unit {
+    with pool.acquire() as resource {
+        return Unit
+    }
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/outline.rss", "with statement AST outline")
+        .expect("with statement AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("with statement AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "function\trun\t1:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  param\tpool\tread\tPool\n",
+            "  stmt\twith\tresource\t\tcall\tacquire\targs=0\tlabels=\tbody=1\n",
+        )
+    );
+}
+
+#[test]
+fn selfhost_select_statement_ast_outline_is_deterministic() {
+    let source = r#"fn pick(first: read Chan, second: read Chan) -> Unit {
+    select {
+        left = await first.receive() => { return Unit }
+        right = await second.receive() => return Unit
+    }
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/outline.rss", "select statement AST outline")
+        .expect("select statement AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("select statement AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "function\tpick\t1:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  param\tfirst\tread\tChan\n",
+            "  param\tsecond\tread\tChan\n",
+            "  stmt\tselect\t\t\tnone\t\tarms=2\n",
+            "    select-arm\tleft\tawait\tawait\tbody=1\n",
+            "    select-arm\tright\tawait\tawait\tbody=1\n",
+        )
+    );
+}
+
+#[test]
+fn selfhost_let_destructure_ast_outline_is_deterministic() {
+    let source = r#"fn split(pair: read Pair) -> Unit {
+    let (left, right) = pair
+    return Unit
+}
+"#;
+    let exe = compile_selfhost_tool("serialize/outline.rss", "let destructure AST outline")
+        .expect("let destructure AST outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("let destructure AST outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "function\tsplit\t1:1:2\n",
+            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  param\tpair\tread\tPair\n",
+            "  stmt\tlet\t\t\tname\tpair\tdestructure=left,right\n",
             "  stmt\treturn\t\t\tliteral\tUnit\n",
         )
     );
@@ -831,9 +2744,16 @@ fn selfhost_ast_control_type_rule_matches_rs0209_conditions() {
 }
 "#;
     let oracle = checker_oracle_records("ast-control-rs0209.rss", source, "RS0209");
-    assert_eq!(oracle.len(), 4, "fixture must exercise nested if/while and for subjects");
-    let exe = compile_selfhost_tool("serialize/control_outline.rss", "AST control type-rule probe")
-        .expect("AST control type-rule probe should compile");
+    assert_eq!(
+        oracle.len(),
+        4,
+        "fixture must exercise nested if/while and for subjects"
+    );
+    let exe = compile_selfhost_tool(
+        "serialize/control_outline.rss",
+        "AST control type-rule probe",
+    )
+    .expect("AST control type-rule probe should compile");
     let output = exe
         .eval_main_with_args([source.to_string()])
         .expect("AST control type-rule probe should run");
@@ -854,7 +2774,11 @@ fn selfhost_ast_match_pattern_rule_matches_rs0209_patterns() {
 }
 "#;
     let oracle = checker_oracle_records("ast-match-rs0209.rss", source, "RS0209");
-    assert_eq!(oracle.len(), 3, "fixture must exercise variant, literal, and bare-name patterns");
+    assert_eq!(
+        oracle.len(),
+        3,
+        "fixture must exercise variant, literal, and bare-name patterns"
+    );
     let exe = compile_selfhost_tool("serialize/control_outline.rss", "AST match type-rule probe")
         .expect("AST match type-rule probe should compile");
     let output = exe
@@ -882,9 +2806,16 @@ fn list_pattern(value: read String) -> Unit {
 }
 "#;
     let oracle = checker_oracle_records("ast-match-shape-rs0209.rss", source, "RS0209");
-    assert_eq!(oracle.len(), 2, "fixture must exercise tuple and list pattern shapes");
-    let exe = compile_selfhost_tool("serialize/control_outline.rss", "AST match shape-rule probe")
-        .expect("AST match shape-rule probe should compile");
+    assert_eq!(
+        oracle.len(),
+        2,
+        "fixture must exercise tuple and list pattern shapes"
+    );
+    let exe = compile_selfhost_tool(
+        "serialize/control_outline.rss",
+        "AST match shape-rule probe",
+    )
+    .expect("AST match shape-rule probe should compile");
     let output = exe
         .eval_main_with_args([source.to_string()])
         .expect("AST match shape-rule probe should run");
@@ -895,7 +2826,73 @@ fn list_pattern(value: read String) -> Unit {
         run_cached_checker_records(source).expect("rss checker should emit records"),
         "RS0209",
     );
-    assert_eq!(oracle, checker_actual, "main checker match shape diagnostics diverged");
+    assert_eq!(
+        oracle, checker_actual,
+        "main checker match shape diagnostics diverged"
+    );
+}
+
+#[test]
+fn selfhost_ast_type_rules_accept_deque_queue_kernel() {
+    let source = include_str!("../../../benchmarks/micro/deque_queue.rss");
+    let exe = compile_selfhost_tool(
+        "serialize/control_outline.rss",
+        "AST deque queue type-rule probe",
+    )
+    .expect("AST deque queue type-rule probe should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("AST deque queue type-rule probe should run");
+    assert!(
+        output.stdout.trim().is_empty(),
+        "valid deque queue kernel must not produce AST type diagnostics: {:?}",
+        output.stdout
+    );
+}
+
+#[test]
+fn selfhost_ast_type_rules_accept_code_agent_config() {
+    let source = include_str!("../../../examples/packages/code-agent/src/config.rss");
+    let exe = compile_selfhost_tool(
+        "serialize/control_outline.rss",
+        "AST code-agent config type-rule probe",
+    )
+    .expect("AST code-agent config type-rule probe should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("AST code-agent config type-rule probe should run");
+    assert!(
+        output.stdout.trim().is_empty(),
+        "valid code-agent config must not produce AST type diagnostics: {:?}",
+        output.stdout
+    );
+}
+
+#[test]
+fn selfhost_checker_accepts_diagnostic_ast_module() {
+    let source = include_str!("../../../selfhost/semantics/diagnostics.rss");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0208",
+    );
+    assert!(
+        actual.is_empty(),
+        "valid diagnostic AST constructors must not report return-type mismatches: {actual:?}"
+    );
+}
+
+#[test]
+fn selfhost_checker_accepts_mutable_handle_parameter_kernel() {
+    let source =
+        include_str!("../../../benchmarks/vm-jit/kernels/native_call_mut_handle_param.rss");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0311",
+    );
+    assert!(
+        actual.is_empty(),
+        "mutating a mut Handle parameter field must not report immutable assignment: {actual:?}"
+    );
 }
 
 /// Phase-2 NEGATIVE smoke (non-ignored): the rss parser must REJECT malformed
@@ -1155,36 +3152,62 @@ fn parse_checker_records(stdout: &str) -> Result<Vec<SelfhostDiagnosticRecord>, 
 type CheckerWorkerResponse = Result<String, String>;
 type CheckerWorkerRequest = (String, std::sync::mpsc::Sender<CheckerWorkerResponse>);
 
-/// Compile the large self-hosted checker once and keep both compilation and
-/// execution on one worker thread. `RegVmExecutable` owns an `Rc<RegUnit>`, so
-/// it cannot live in a process-global `Sync` cache or cross thread boundaries.
+struct CheckerWorkerPool {
+    workers: Vec<std::sync::mpsc::Sender<CheckerWorkerRequest>>,
+    next: std::sync::atomic::AtomicUsize,
+}
+
+impl CheckerWorkerPool {
+    fn start() -> Self {
+        let worker_count = std::thread::available_parallelism()
+            .map_or(1, usize::from)
+            .clamp(1, 4);
+        let mut workers = Vec::with_capacity(worker_count);
+        for index in 0..worker_count {
+            let (request_tx, request_rx) = std::sync::mpsc::channel::<CheckerWorkerRequest>();
+            std::thread::Builder::new()
+                .name(format!("selfhost-checker-{index}"))
+                .spawn(move || {
+                    let checker = compile_checker();
+                    for (source, response_tx) in request_rx {
+                        let response = match &checker {
+                            Ok(exe) => exe
+                                .eval_main_with_args([source, "records".to_string()])
+                                .map(|output| output.stdout)
+                                .map_err(|e| {
+                                    format!("rss structured checker failed to run: {e:?}")
+                                }),
+                            Err(error) => Err(error.clone()),
+                        };
+                        let _ = response_tx.send(response);
+                    }
+                })
+                .expect("self-host checker worker should start");
+            workers.push(request_tx);
+        }
+        Self {
+            workers,
+            next: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+
+    fn send(&self, request: CheckerWorkerRequest) -> Result<(), String> {
+        let index =
+            self.next.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % self.workers.len();
+        self.workers[index]
+            .send(request)
+            .map_err(|_| "self-host checker worker stopped".to_string())
+    }
+}
+
+/// Compile a small pool of self-hosted checkers and keep every executable on
+/// its owning worker thread. `RegVmExecutable` owns an `Rc<RegUnit>`, so it
+/// cannot live in a process-global `Sync` cache or cross thread boundaries.
 fn run_cached_checker_records(source: &str) -> Result<Vec<SelfhostDiagnosticRecord>, String> {
-    static WORKER: std::sync::OnceLock<std::sync::mpsc::Sender<CheckerWorkerRequest>> =
-        std::sync::OnceLock::new();
-    let worker = WORKER.get_or_init(|| {
-        let (request_tx, request_rx) = std::sync::mpsc::channel::<CheckerWorkerRequest>();
-        std::thread::Builder::new()
-            .name("selfhost-checker".to_string())
-            .spawn(move || {
-                let checker = compile_checker();
-                for (source, response_tx) in request_rx {
-                    let response = match &checker {
-                        Ok(exe) => exe
-                            .eval_main_with_args([source, "records".to_string()])
-                            .map(|output| output.stdout)
-                            .map_err(|e| format!("rss structured checker failed to run: {e:?}")),
-                        Err(error) => Err(error.clone()),
-                    };
-                    let _ = response_tx.send(response);
-                }
-            })
-            .expect("self-host checker worker should start");
-        request_tx
-    });
+    static WORKERS: std::sync::OnceLock<CheckerWorkerPool> = std::sync::OnceLock::new();
+    let workers = WORKERS.get_or_init(CheckerWorkerPool::start);
     let (response_tx, response_rx) = std::sync::mpsc::channel();
-    worker
-        .send((source.to_string(), response_tx))
-        .map_err(|_| "self-host checker worker stopped".to_string())?;
+    workers.send((source.to_string(), response_tx))?;
     let stdout = response_rx
         .recv()
         .map_err(|_| "self-host checker worker returned no result".to_string())??;
@@ -1315,6 +3338,26 @@ fn checker_rs0004_structured_multiset_parity() {
 }
 
 #[test]
+fn checker_rs0004_retains_effect_is_not_unknown() {
+    let source = r#"fn retain(image: read Image) -> Unit
+    effects(retains(image))
+{
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-rs0004-retains.rss", source, "RS0004");
+    assert!(
+        oracle.is_empty(),
+        "retains must not be an RS0004 effect item"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0004",
+    );
+    assert_eq!(oracle, actual, "retains effect classification diverged");
+}
+
+#[test]
 fn checker_rs0006_structured_multiset_parity() {
     let source = "features: local\nfeatures: async\nfeatures: native\n";
     let oracle = checker_oracle_records("structured-rs0006.rss", source, "RS0006");
@@ -1324,21 +3367,6 @@ fn checker_rs0006_structured_multiset_parity() {
         "RS0006",
     );
     assert_eq!(oracle, actual, "RS0006 structured diagnostics diverged");
-}
-
-#[test]
-fn checker_rs0008_structured_multiset_parity() {
-    let source = r#"fn combine(first: String, second: List<Int>) -> Unit {
-    return Unit
-}
-"#;
-    let oracle = checker_oracle_records("structured-rs0008.rss", source, "RS0008");
-    assert_eq!(oracle.len(), 2, "fixture must exercise both parameters");
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0008",
-    );
-    assert_eq!(oracle, actual, "RS0008 structured diagnostics diverged");
 }
 
 #[test]
@@ -1672,12 +3700,24 @@ fn exhaustive(value: read Option<Int>) -> Int {
         None => { 0 }
     }
 }
+
+fn bool_bad(value: read Bool) -> Int {
+    return match value {
+        true => { 1 }
+    }
+}
+
+fn result_bad(value: read Result<Int, String>) -> Int {
+    return match value {
+        Ok(item) => { item }
+    }
+}
 "#;
     let oracle = checker_oracle_records("structured-rs0021.rss", source, "RS0021");
     assert_eq!(
         oracle.len(),
-        2,
-        "fixture must preserve statement/expression mismatches and exempt exhaustive match"
+        4,
+        "fixture must preserve Option, String, Bool, and Result mismatches while exempting exhaustive match"
     );
     let actual = diagnostic_records_for_code(
         run_cached_checker_records(source).expect("rss checker should emit records"),
@@ -1754,6 +3794,63 @@ fn checker_rs0028_structured_multiset_parity() {
 }
 
 #[test]
+fn checker_protocol_contract_structured_multiset_parity() {
+    let source = r#"protocol Writer {
+    fn write(self: mut Self, message: read String) -> Unit
+}
+
+struct Buffer {}
+
+fn Buffer.write(self: mut Buffer, message: read String) -> Unit {
+    return Unit
+}
+
+fn Buffer.bad_write(self: mut Buffer, message: read String) -> Int {
+    return 0
+}
+
+impl Writer for Buffer {
+    write = Buffer.bad_write
+}
+"#;
+    let oracle = checker_oracle_records("structured-protocol-contract.rss", source, "RS1301");
+    assert_eq!(oracle.len(), 1, "fixture must exercise a mapping mismatch");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS1301",
+    );
+    assert_eq!(oracle, actual, "protocol contract diagnostics diverged");
+}
+
+#[test]
+fn checker_protocol_method_contract_structured_multiset_parity() {
+    let source = r#"protocol Broken {
+    fn missing_receiver() -> Unit
+
+    fn has_body(self: read Self) -> Unit {
+        return Unit
+    }
+
+    fn default_impl(self: read Self) -> Unit = _
+}
+"#;
+    // A protocol declaration may use `= _`; only its method body is invalid.
+    for (code, expected) in [("RS0015", 1), ("RS0028", 1)] {
+        let oracle =
+            checker_oracle_records("structured-protocol-method-contract.rss", source, code);
+        assert_eq!(oracle.len(), expected, "fixture must exercise {code}");
+        let actual = diagnostic_records_for_code(
+            run_cached_checker_records(source).expect("rss checker should emit records"),
+            code,
+        );
+        assert_eq!(
+            oracle, actual,
+            "protocol method {code} diagnostics diverged"
+        );
+    }
+}
+
+#[test]
 fn checker_rs0029_structured_multiset_parity() {
     let source = r#"features: async
 
@@ -1808,6 +3905,23 @@ async fn exercise(value: read Int) -> Unit {
         "RS0022",
     );
     assert_eq!(oracle, actual, "RS0022 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_task_group_async_context_structured_multiset_parity() {
+    let source = include_str!("../tests/fixtures/pass/task-group-basic.rss");
+    for code in ["RS0022", "RS0029"] {
+        let oracle = checker_oracle_records("task-group-basic.rss", source, code);
+        assert!(
+            oracle.is_empty(),
+            "task-group fixture must be valid for {code}"
+        );
+        let actual = diagnostic_records_for_code(
+            run_cached_checker_records(source).expect("rss checker should emit records"),
+            code,
+        );
+        assert_eq!(oracle, actual, "task-group {code} diagnostics diverged");
+    }
 }
 
 #[test]
@@ -1933,6 +4047,77 @@ fn exercise(values: mut List<Plain>, ordered: mut List<Ordered>) -> Unit {
         "RS0032",
     );
     assert_eq!(oracle, actual, "RS0032 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0032_map_receiver_protocol_parity() {
+    let source = include_str!("../tests/fixtures/pass/hashable-struct-map-key.rss");
+    let oracle = checker_oracle_records("hashable-struct-map-key.rss", source, "RS0032");
+    assert!(
+        oracle.is_empty(),
+        "valid Map receivers must remain protocol-clean"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0032",
+    );
+    assert_eq!(oracle, actual, "Map receiver RS0032 diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0032_map_field_receiver_protocol_parity() {
+    let source = include_str!("../tests/fixtures/pass/receiver-call-basic.rss");
+    let oracle = checker_oracle_records("receiver-call-basic.rss", source, "RS0032");
+    assert!(
+        oracle.is_empty(),
+        "valid Map field receivers must remain protocol-clean"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0032",
+    );
+    assert_eq!(
+        oracle, actual,
+        "Map field receiver RS0032 diagnostics diverged"
+    );
+}
+
+#[test]
+fn checker_rs0032_set_receiver_protocol_parity() {
+    let source = include_str!("../tests/fixtures/pass/hashable-struct-set.rss");
+    let oracle = checker_oracle_records("hashable-struct-set.rss", source, "RS0032");
+    assert!(
+        oracle.is_empty(),
+        "valid Set receivers must remain protocol-clean"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0032",
+    );
+    assert_eq!(oracle, actual, "Set receiver RS0032 diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0032_explicit_collection_method_type_args_are_exempt() {
+    let source = r#"fn main() -> Unit {
+    let mut seen = Set<String>.new()
+    Set.insert<String>(set: mut seen, value: "entry")
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("rs0032-explicit-method-type-args.rss", source, "RS0032");
+    assert!(
+        oracle.is_empty(),
+        "fixture must remain protocol-clean in Rust"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0032",
+    );
+    assert_eq!(
+        oracle, actual,
+        "explicit collection method type args must not emit RS0032"
+    );
 }
 
 #[test]
@@ -2143,8 +4328,8 @@ fn bad(expr: read Expr) -> Unit {
     let oracle = checker_oracle_records("structured-rs0202.rss", source, "RS0202");
     assert_eq!(
         oracle.len(),
-        4,
-        "fixture must exercise argument, constructor, receiver, and match-effect spans"
+        3,
+        "fixture must exercise constructor, receiver, and match-effect spans; bare read is valid"
     );
     let actual = diagnostic_records_for_code(
         run_cached_checker_records(source).expect("rss checker should emit records"),
@@ -2434,6 +4619,29 @@ fn exercise() -> Unit {
         "RS0201",
     );
     assert_eq!(oracle, actual, "RS0201 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0201_accepts_default_read_name_puns() {
+    let source = r#"pub fn forward(value: String, suffix: String) -> String {
+    return String.concat(left: value, right: suffix)
+}
+
+fn exercise(value: String, suffix: String, fill: String) -> String {
+    let joined = forward(value, suffix)
+    return String.pad_left(value: joined, width: 12, fill)
+}
+"#;
+    let oracle = checker_oracle_records("rs0201-default-read-pun.rss", source, "RS0201");
+    assert!(
+        oracle.is_empty(),
+        "same-name default-read puns must be accepted"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0201",
+    );
+    assert_eq!(oracle, actual, "RS0201 default-read pun handling diverged");
 }
 
 #[test]
@@ -5088,6 +7296,7 @@ fn dump_expr(out: &mut String, depth: usize, e: &ast::Expr) {
             value,
             scrutinee_effect,
             arms,
+            from_if_expression,
             malformed_arm_spans,
             span,
         } => dump_match(
@@ -5097,7 +7306,11 @@ fn dump_expr(out: &mut String, depth: usize, e: &ast::Expr) {
             *scrutinee_effect,
             arms,
             malformed_arm_spans.len(),
-            "match-expr",
+            if *from_if_expression {
+                "if-expr"
+            } else {
+                "match-expr"
+            },
             span,
         ),
         ast::Expr::Unknown(_) => push_node(out, depth, "unknown-expr", es),
@@ -5146,6 +7359,234 @@ program
     assert_eq!(
         dump, expected,
         "AST dump golden mismatch\n--- actual ---\n{dump}"
+    );
+}
+
+#[test]
+fn astdump_parity_if_expression() {
+    let source = "fn choose(flag: Bool) -> Int {\n    return if flag {\n        7\n    } else {\n        11\n    }\n}\n";
+    let oracle = ast_oracle_dump("if-expression.rss", source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, source).expect("rss astdump should run");
+    assert_eq!(actual, oracle);
+}
+
+#[test]
+fn astdump_parity_long_left_associative_binary_chain() {
+    let source = "fn any_flag(a: Bool, b: Bool, c: Bool, d: Bool, e: Bool, f: Bool, g: Bool, h: Bool, i: Bool, j: Bool, k: Bool, l: Bool, m: Bool, n: Bool, o: Bool, p: Bool) -> Bool {\n    return a || b || c || d || e || f || g || h || i || j || k || l || m || n || o || p\n}\n";
+    let oracle = ast_oracle_dump("long-binary-chain.rss", source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, source).expect("rss astdump should run");
+    assert_eq!(actual, oracle);
+}
+
+/// The first direct shared-body renderer consumes return expressions from the
+/// materialized Program. Keep precedence in this focused gate: a flat,
+/// token-order-only binary split would render `(a + b) * c` here.
+#[test]
+fn astdump_shared_body_precedence_parity() {
+    let source = "fn compute(a: Int, b: Int) -> Int { return a + b * 2 - 1 }\n";
+    let oracle = ast_oracle_dump("shared-body-precedence.rss", source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, source).expect("rss astdump should run");
+    assert_eq!(actual, oracle);
+}
+
+/// Guard the direct body slice's binding and qualified-call representation.
+/// `local` and an absent/malformed initializer are distinct AST facts, while
+/// named arguments must keep their value nesting and dump order.
+#[test]
+fn astdump_shared_body_let_and_call_parity() {
+    let source = "fn size(xs: List<Int>) -> Int {\n    local count = List.len(list: xs)\n    return count\n}\n";
+    let oracle = ast_oracle_dump("shared-body-let-call.rss", source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, source).expect("rss astdump should run");
+    assert_eq!(actual, oracle);
+}
+
+#[test]
+fn astdump_shared_body_receiver_call_parity() {
+    let source = "fn display(report: Report) -> String { return report.format() }\n";
+    let oracle = ast_oracle_dump("shared-body-receiver-call.rss", source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, source).expect("rss astdump should run");
+    assert_eq!(actual, oracle);
+}
+
+/// Keep the shared renderer's non-control expression and mutation slice exact.
+/// These nodes are already materialized by `Program`; this gate prevents them
+/// from silently returning to the legacy token renderer.
+#[test]
+fn astdump_shared_body_places_effects_and_expression_statements_parity() {
+    let source = r#"features: local, async
+struct Box {
+    value: Int
+}
+
+async fn update(values: mut List<Int>, box: mut Box, pending: Task<Int>) -> Int {
+    let mut scratch = [1, 2]
+    scratch[0] = await pending?
+    box.value = manage take scratch[0]
+    Log.write(message: read box.value)
+    return !false
+}
+"#;
+    let oracle = ast_oracle_dump("shared-body-places-effects.rss", source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, source).expect("rss astdump should run");
+    assert_eq!(actual, oracle);
+}
+
+/// Control-flow blocks are now rendered from the shared statement arena. Keep
+/// their nesting, empty-free blocks, and representative spans byte-exact.
+#[test]
+fn astdump_shared_body_control_flow_parity() {
+    let source = r#"fn choose(flag: Bool, values: List<Int>) -> Int {
+    if flag {
+        return 1
+    } else {
+        return 2
+    }
+    while flag {
+        return 3
+    }
+    for value in values {
+        return value
+    }
+    task_group {
+        return 4
+    }
+    loop {
+        return 5
+    }
+}
+"#;
+    let oracle = ast_oracle_dump("shared-body-control-flow.rss", source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, source).expect("rss astdump should run");
+    assert_eq!(actual, oracle);
+}
+
+#[test]
+fn astdump_shared_body_with_parity() {
+    let source = r#"fn borrow(pool: Pool) -> Int {
+    with pool.acquire() as lease {
+        return 1
+    }
+}
+"#;
+    let oracle = ast_oracle_dump("shared-body-with.rss", source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, source).expect("rss astdump should run");
+    assert_eq!(actual, oracle);
+}
+
+#[test]
+fn astdump_shared_body_select_parity() {
+    let source = r#"fn wait(first: Task<Int>, second: Task<Int>) -> Int {
+    select {
+        left = await first => { return left }
+        right = await second => { return right }
+    }
+}
+"#;
+    let oracle = ast_oracle_dump("shared-body-select.rss", source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, source).expect("rss astdump should run");
+    assert_eq!(actual, oracle);
+}
+
+/// Common variant and binding patterns are represented directly by the shared
+/// expression arena. Keep this direct match slice byte-exact; richer pattern
+/// forms deliberately retain the legacy renderer until Pattern is shared too.
+#[test]
+fn astdump_shared_body_match_simple_pattern_parity() {
+    let source = r#"fn unwrap(value: Option<Int>) -> Int {
+    match value {
+        Some(item) if item > 0 => { return item }
+        None => { return 0 }
+    }
+}
+"#;
+    let oracle = ast_oracle_dump("shared-body-match-simple-pattern.rss", source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, source).expect("rss astdump should run");
+    assert_eq!(actual, oracle);
+}
+
+/// Struct patterns now use the shared Pattern arena, including shorthand and
+/// effect-qualified bindings, ignored fields, nested constructors, and `..`.
+#[test]
+fn astdump_shared_body_match_struct_pattern_parity() {
+    let source = r#"fn radius(shape: Shape) -> Int {
+    match shape {
+        Circle { radius: read value, center: Point { x, y: _ }, .. } => { return value }
+        _ => { return 0 }
+    }
+}
+"#;
+    let oracle = ast_oracle_dump("shared-body-match-struct-pattern.rss", source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, source).expect("rss astdump should run");
+    assert_eq!(actual, oracle);
+}
+
+/// Tuple and list patterns retain the canonical synthetic tuple fields and the
+/// list rest split, including a suffix after the captured rest.
+#[test]
+fn astdump_shared_body_match_tuple_list_pattern_parity() {
+    let source = r#"fn choose(pair: Pair, values: List<Int>) -> Int {
+    match pair {
+        (left, _) => { return left }
+    }
+    match values {
+        [first, ..middle, last] => { return first }
+        [] => { return 0 }
+    }
+}
+"#;
+    let oracle = ast_oracle_dump("shared-body-match-tuple-list-pattern.rss", source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, source).expect("rss astdump should run");
+    assert_eq!(actual, oracle);
+}
+
+#[test]
+fn astdump_shared_body_pipe_closure_parity() {
+    let source = r#"fn apply(value: Int) -> Int {
+    let increment = |item| item + 1
+    let doubled = |item| {
+        let next = item * 2
+        return next
+    }
+    return increment(value: doubled(value: value))
+}
+"#;
+    let oracle = ast_oracle_dump("shared-body-pipe-closure.rss", source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, source).expect("rss astdump should run");
+    assert_eq!(actual, oracle);
+}
+
+/// The large self-hosted checker's driver is the largest single top-level
+/// function in the AST corpus. Keep a focused parity probe so renderer work can
+/// distinguish this one body from corpus-wide setup or scheduling cost.
+#[test]
+#[ignore]
+fn astdump_selfhost_checker_main_parity() {
+    let path = selfhost_dir().join("check.rss");
+    let full = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
+    let main_start = full
+        .find("fn main() -> Unit {")
+        .expect("selfhost checker must retain its main declaration");
+    let source = format!("features: local\n{}", &full[main_start..]);
+    let oracle = ast_oracle_dump("selfhost/check-main.rss", &source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, &source).expect("rss astdump should run");
+    assert_eq!(
+        actual, oracle,
+        "AST dump mismatch for selfhost/check.rss main"
     );
 }
 
@@ -5287,6 +7728,19 @@ fn ast_parity_tiny_sample() {
     );
 }
 
+#[test]
+fn astdump_shared_module_and_use_items_match_oracle() {
+    let source =
+        "module demo.core\nuse demo.util.*\nuse demo.io as io\nfn run() -> Unit { return Unit }\n";
+    let oracle = ast_oracle_dump("shared-items.rss", source);
+    let exe = compile_astdump().expect("rss astdump should compile");
+    let actual = run_astdump(&exe, source).expect("rss astdump should run");
+    assert_eq!(
+        actual, oracle,
+        "AST parity mismatch while rendering shared module/use items\n--- oracle ---\n{oracle}\n--- rss ---\n{actual}"
+    );
+}
+
 /// Step-2 gate (non-ignored): the rss producer matches the oracle byte-for-byte
 /// on every curated sample. This is the fast inner-loop gate; keep the samples
 /// within the producer's supported core so it stays green as coverage grows.
@@ -5336,6 +7790,11 @@ fn ast_parity_samples() {
 /// against a vacuous pass if the samples dir goes missing).
 const AST_SAMPLE_MIN: usize = 6;
 
+// RegVmExecutable contains Rc state. Concurrently compiling several large
+// producers has proved less reliable than one reusable producer, while a single
+// worker makes the full gate's timing and failure location deterministic.
+const AST_CORPUS_WORKERS: usize = 1;
+
 /// Step-2 corpus gate (ignored by default): the rss AST producer reproduces the
 /// Rust AST oracle byte-for-byte for every discovered `.rss` file.
 ///
@@ -5370,20 +7829,32 @@ fn ast_parity_corpus() {
         .map(|(_, path)| path)
         .collect::<Vec<_>>();
     let total = files.len();
-    let workers = std::thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .clamp(1, total.max(1));
+    let workers = AST_CORPUS_WORKERS.min(total.max(1));
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let partials: Vec<(usize, Vec<String>, Vec<String>)> = std::thread::scope(|scope| {
-        let handles: Vec<_> = (0..workers)
-            .map(|_| {
-                let (root, files, next) = (&root, &files, &next);
-                scope.spawn(move || {
+    let completed = std::sync::atomic::AtomicUsize::new(0);
+    let partials: Vec<(
+        usize,
+        Vec<String>,
+        Vec<String>,
+        std::time::Duration,
+        Vec<(std::time::Duration, String)>,
+    )> = std::thread::scope(|scope| {
+        let handles: Vec<_> =
+            (0..workers)
+                .map(|worker| {
+                    let (root, files, next, completed) = (&root, &files, &next, &completed);
+                    scope.spawn(move || {
+                    let worker_started = std::time::Instant::now();
+                    let compile_started = std::time::Instant::now();
                     let exe = compile_astdump().expect("rss astdump should compile");
+                    eprintln!(
+                        "[ast] worker {worker}: producer compiled in {:?}",
+                        compile_started.elapsed()
+                    );
                     let mut ok = 0usize;
                     let mut run_failures = Vec::new();
                     let mut mismatches = Vec::new();
+                    let mut slowest: Vec<(std::time::Duration, String)> = Vec::new();
                     loop {
                         let i = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         if i >= files.len() {
@@ -5395,14 +7866,32 @@ fn ast_parity_corpus() {
                             .unwrap_or(file)
                             .display()
                             .to_string();
+                        let file_started = std::time::Instant::now();
                         let source = match std::fs::read_to_string(file) {
                             Ok(source) => source,
                             Err(e) => {
                                 run_failures.push(format!("{rel}: unreadable: {e}"));
+                                completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 continue;
                             }
                         };
+                        if source.len() >= 40 * 1024 {
+                            eprintln!(
+                                "[ast] worker {worker}: starting large input {rel} ({} bytes)",
+                                source.len()
+                            );
+                        }
+                        let oracle_started = std::time::Instant::now();
                         let oracle = ast_oracle_dump(&rel, &source);
+                        if source.len() >= 40 * 1024 {
+                            eprintln!(
+                                "[ast] worker {worker}: Rust oracle for {rel} in {:?} ({} lines, {} bytes)",
+                                oracle_started.elapsed(),
+                                oracle.lines().count(),
+                                oracle.len(),
+                            );
+                        }
+                        let producer_started = std::time::Instant::now();
                         match run_astdump(&exe, &source) {
                             Err(e) => run_failures.push(format!("{rel}: {e}")),
                             Ok(actual) if actual == oracle => ok += 1,
@@ -5423,11 +7912,27 @@ fn ast_parity_corpus() {
                             }
                             Ok(_) => {}
                         }
+                        let elapsed = file_started.elapsed();
+                        if source.len() >= 40 * 1024 {
+                            eprintln!(
+                                "[ast] worker {worker}: RSS producer for {rel} ({} bytes) in {:?}; total {:?}",
+                                source.len(),
+                                producer_started.elapsed(),
+                                elapsed,
+                            );
+                        }
+                        slowest.push((elapsed, rel));
+                        slowest.sort_by(|(left, _), (right, _)| right.cmp(left));
+                        slowest.truncate(5);
+                        let done = completed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                        if done % 64 == 0 || done == files.len() {
+                            eprintln!("[ast] progress: {done}/{} files", files.len());
+                        }
                     }
-                    (ok, run_failures, mismatches)
+                    (ok, run_failures, mismatches, worker_started.elapsed(), slowest)
                 })
-            })
-            .collect();
+                })
+                .collect();
         handles
             .into_iter()
             .map(|handle| handle.join().unwrap())
@@ -5436,14 +7941,19 @@ fn ast_parity_corpus() {
     let mut ok = 0usize;
     let mut run_failures = Vec::new();
     let mut sample_mismatches = Vec::new();
-    for (partial_ok, partial_failures, partial_mismatches) in partials {
+    let mut slowest = Vec::new();
+    for (partial_ok, partial_failures, partial_mismatches, elapsed, worker_slowest) in partials {
         ok += partial_ok;
         run_failures.extend(partial_failures);
         sample_mismatches.extend(partial_mismatches);
+        eprintln!("[ast] worker finished in {elapsed:?}");
+        slowest.extend(worker_slowest);
     }
     run_failures.sort();
     sample_mismatches.sort();
     sample_mismatches.truncate(10);
+    slowest.sort_by(|(left, _), (right, _)| right.cmp(left));
+    slowest.truncate(10);
     eprintln!(
         "\n=== ast_parity_corpus ===\n  files: {total}\n  checked: {}\n  byte-exact: {ok}\n  \
          run-failures: {}\n",
@@ -5455,6 +7965,9 @@ fn ast_parity_corpus() {
     }
     for rel in &sample_mismatches {
         eprintln!("[mismatch] {rel}");
+    }
+    for (elapsed, rel) in &slowest {
+        eprintln!("[slow] {elapsed:?} {rel}");
     }
     // The producer must never crash on corpus input — unsupported constructs are
     // expected to mismatch (partial/`unknown-*` output), not error. A run-failure

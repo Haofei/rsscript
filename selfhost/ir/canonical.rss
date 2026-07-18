@@ -1,0 +1,467 @@
+// Versioned canonical bootstrap IR, Stage 3 initial slice.
+//
+// This consumes the shared Program AST. It deliberately emits `unsupported`
+// for nodes outside the current lowering contract; a later backend must never
+// mistake an unmodelled source form for valid executable IR.
+
+module selfhost.ir.canonical
+
+use selfhost.scan.*
+use selfhost.syntax.ast.*
+use selfhost.syntax.parser_items.*
+
+// Closure bodies share the statement arena with function bodies. Keep the
+// inline form deliberately narrow until control-flow blocks have a nested IR
+// representation: unsupported is safer than silently flattening scope.
+fn closure_statement_text(program: Program, index: Int) -> String {
+    if index < 0 || index >= List.len(list: program.statements) { return "unsupported" }
+    let statement = List.get<Stmt>(list: program.statements, index: index)
+    if statement.kind == STMT_LET {
+        let mut head = "let "
+        if statement.isMutable { head = "let mut " }
+        let mut value = "unit"
+        if statement.expression >= 0 { value = expression_text(program, index: statement.expression) }
+        return String.concat(left: String.concat(left: head, right: statement.name), right: String.concat(left: " = ", right: value))
+    }
+    if statement.kind == STMT_ASSIGN || statement.kind == STMT_INDEX_ASSIGN {
+        return String.concat(left: String.concat(left: "assign ", right: place_text(program, index: statement.target)), right: String.concat(left: " = ", right: expression_text(program, index: statement.expression)))
+    }
+    if statement.kind == STMT_EXPR { return String.concat(left: "expr ", right: expression_text(program, index: statement.expression)) }
+    if statement.kind == STMT_RETURN { return String.concat(left: "return ", right: expression_text(program, index: statement.expression)) }
+    return "unsupported"
+}
+
+fn closure_body_text(program: Program, statements: List<Int>) -> String {
+    if List.len(list: statements) == 0 { return "unsupported" }
+    if List.len(list: statements) == 1 {
+        let statement = List.get<Stmt>(list: program.statements, index: List.get<Int>(list: statements, index: 0))
+        if statement.kind == STMT_EXPR { return expression_text(program, index: statement.expression) }
+    }
+    let mut out = "block{"
+    let mut i = 0
+    while i < List.len(list: statements) {
+        let text = closure_statement_text(program, index: List.get<Int>(list: statements, index: i))
+        if text == "unsupported" { return "unsupported" }
+        if i > 0 { out = String.concat(left: out, right: ";") }
+        out = String.concat(left: out, right: text)
+        i = i + 1
+    }
+    return String.concat(left: out, right: "}")
+}
+
+fn expression_text(program: Program, index: Int) -> String {
+    if index < 0 || index >= List.len(list: program.expressions) { return "unit" }
+    let expression = List.get<Expr>(list: program.expressions, index)
+    // Builtin constants lex as identifiers in some nested parser paths.
+    // Canonical IR keeps their value semantics independent of that surface form.
+    if expression.kind == EXPR_NAME {
+        if expression.text == "Unit" || expression.text == "true" || expression.text == "false" {
+            return String.concat(left: "literal ", right: expression.text)
+        }
+        return String.concat(left: "name ", right: expression.text)
+    }
+    if expression.kind == EXPR_LITERAL { return String.concat(left: "literal ", right: expression.text) }
+    if expression.kind == EXPR_ARRAY {
+        let mut out = "array["
+        let mut i = 0
+        while i < List.len(list: expression.children) {
+            if i > 0 { out = String.concat(left: out, right: ",") }
+            out = String.concat(left: out, right: expression_text(program, index: List.get<Int>(list: expression.children, index: i)))
+            i = i + 1
+        }
+        return String.concat(left: out, right: "]")
+    }
+    if expression.kind == EXPR_BINARY && List.len(list: expression.children) == 2 {
+        let left = expression_text(program, index: List.get<Int>(list: expression.children, index: 0))
+        let right = expression_text(program, index: List.get<Int>(list: expression.children, index: 1))
+        let head = String.concat(left: String.concat(left: "bin ", right: expression.text), right: " (")
+        return String.concat(left: String.concat(left: String.concat(left: head, right: left), right: ") ("), right: String.concat(left: right, right: ")"))
+    }
+    if expression.kind == EXPR_FIELD && List.len(list: expression.children) == 1 {
+        let base = expression_text(program, index: List.get<Int>(list: expression.children, index: 0))
+        return String.concat(left: String.concat(left: "field ", right: base), right: String.concat(left: ".", right: expression.text))
+    }
+    if expression.kind == EXPR_INDEX && List.len(list: expression.children) == 2 {
+        let base = expression_text(program, index: List.get<Int>(list: expression.children, index: 0))
+        let index = expression_text(program, index: List.get<Int>(list: expression.children, index: 1))
+        return String.concat(left: String.concat(left: "index ", right: base), right: String.concat(left: "[", right: String.concat(left: index, right: "]")))
+    }
+    if expression.kind == EXPR_EFFECT && List.len(list: expression.children) == 1 {
+        let value = expression_text(program, index: List.get<Int>(list: expression.children, index: 0))
+        return String.concat(left: String.concat(left: "effect ", right: expression.text), right: String.concat(left: " ", right: value))
+    }
+    if expression.kind == EXPR_MANAGE && List.len(list: expression.children) == 1 {
+        let value = expression_text(program, index: List.get<Int>(list: expression.children, index: 0))
+        return String.concat(left: "manage ", right: value)
+    }
+    if expression.kind == EXPR_AWAIT && List.len(list: expression.children) == 1 {
+        let value = expression_text(program, index: List.get<Int>(list: expression.children, index: 0))
+        return String.concat(left: "await ", right: value)
+    }
+    if expression.kind == EXPR_TRY && List.len(list: expression.children) == 1 {
+        let value = expression_text(program, index: List.get<Int>(list: expression.children, index: 0))
+        return String.concat(left: "try ", right: value)
+    }
+    if expression.kind == EXPR_CLOSURE {
+        let mut params = ""
+        let mut i = 0
+        while i < List.len(list: expression.closureParams) {
+            if i > 0 { params = String.concat(left: params, right: ",") }
+            let param = List.get<String>(list: expression.closureParams, index: i)
+            params = String.concat(left: params, right: param)
+            i = i + 1
+        }
+        let mut body = "unsupported"
+        if expression.closureBody >= 0 {
+            body = expression_text(program, index: expression.closureBody)
+        } else if List.len(list: expression.closureStatements) > 0 {
+            body = closure_body_text(program, statements: expression.closureStatements)
+        }
+        let head = String.concat(left: String.concat(left: "closure(", right: params), right: ")=>")
+        return String.concat(left: head, right: body)
+    }
+    if expression.kind == EXPR_CALL {
+        let mut callee = String.copy(value: expression.text)
+        if expression.calleeKind == CALLEE_RECEIVER {
+            if expression.calleeReceiver < 0 || expression.calleeReceiver >= List.len(list: program.expressions) { return "unsupported" }
+            let receiver = List.get<Expr>(list: program.expressions, index: expression.calleeReceiver)
+            if receiver.kind != EXPR_NAME { return "unsupported" }
+            callee = String.concat(left: String.concat(left: receiver.text, right: "."), right: expression.text)
+        }
+        let mut out = String.concat(left: String.concat(left: "call ", right: callee), right: "(")
+        let mut i = 0
+        while i < List.len(list: expression.args) {
+            let argument = List.get<CallArg>(list: expression.args, index: i)
+            if i > 0 { out = String.concat(left: out, right: ",") }
+            if String.len(value: argument.label) > 0 {
+                out = String.concat(left: String.concat(left: out, right: argument.label), right: "=")
+            }
+            out = String.concat(left: out, right: expression_text(program, index: argument.value))
+            i = i + 1
+        }
+        return String.concat(left: out, right: ")")
+    }
+    return "unsupported"
+}
+
+// Canonical IR keeps the Rust oracle's intentionally narrow pattern surface:
+// bare bindings/literals/variants and positional variants. Rich patterns stay
+// explicitly unsupported until the backend has corresponding semantics.
+fn pattern_text(program: Program, index: Int) -> String {
+    if index < 0 || index >= List.len(list: program.patterns) { return "unsupported" }
+    let pattern = List.get<Pattern>(list: program.patterns, index: index)
+    if pattern.kind == PAT_WILDCARD { return "name _" }
+    if pattern.kind == PAT_BINDING { return String.concat(left: "name ", right: pattern.name) }
+    if pattern.kind == PAT_LITERAL { return String.concat(left: "literal ", right: pattern.name) }
+    if pattern.kind == PAT_VARIANT {
+        if List.len(list: pattern.children) == 0 { return String.concat(left: "name ", right: pattern.name) }
+        let mut out = String.concat(left: String.concat(left: "call ", right: pattern.name), right: "(")
+        let mut childIndex = 0
+        while childIndex < List.len(list: pattern.children) {
+            if childIndex > 0 { out = String.concat(left: out, right: ",") }
+            out = String.concat(left: out, right: pattern_text(program: program, index: List.get<Int>(list: pattern.children, index: childIndex)))
+            childIndex = childIndex + 1
+        }
+        return String.concat(left: out, right: ")")
+    }
+    return "unsupported"
+}
+
+fn place_text(program: Program, index: Int) -> String {
+    if index < 0 || index >= List.len(list: program.expressions) { return "unsupported" }
+    let expression = List.get<Expr>(list: program.expressions, index)
+    if expression.kind == EXPR_NAME { return expression.text }
+    return expression_text(program, index: index)
+}
+
+fn parameter_text(program: Program, parameters: List<Param>) -> String {
+    let mut out = ""
+    let mut i = 0
+    while i < List.len(list: parameters) {
+        let parameter = List.get<Param>(list: parameters, index: i)
+        if i > 0 { out = String.concat(left: out, right: ",") }
+        let mut effect = parameter.effect
+        if String.len(value: effect) == 0 { effect = "read" }
+        let head = String.concat(left: parameter.name, right: ":")
+        let mut text = String.concat(left: String.concat(left: head, right: effect), right: String.concat(left: " ", right: parameter.typeText))
+        if parameter.defaultExpression >= 0 {
+            text = String.concat(left: text, right: String.concat(left: "=", right: expression_text(program: program, index: parameter.defaultExpression)))
+        }
+        out = String.concat(left: out, right: text)
+        i = i + 1
+    }
+    return out
+}
+
+fn generic_text(generics: List<GenericParam>) -> String {
+    if List.len(list: generics) == 0 { return "" }
+    let mut out = "<"
+    let mut i = 0
+    while i < List.len(list: generics) {
+        let generic = List.get<GenericParam>(list: generics, index: i)
+        if i > 0 { out = String.concat(left: out, right: ",") }
+        out = String.concat(left: out, right: generic.name)
+        if String.len(value: generic.boundText) > 0 {
+            out = String.concat(left: out, right: String.concat(left: ":", right: generic.boundText))
+        }
+        i = i + 1
+    }
+    return String.concat(left: out, right: ">")
+}
+
+fn emit_effects(effects: List<EffectName>) -> Unit {
+    let mut i = 0
+    while i < List.len(list: effects) {
+        let effect = List.get<EffectName>(list: effects, index: i)
+        if effect.isRetains {
+            Log.write(message: String.concat(left: "  effect retains ", right: effect.target))
+        } else {
+            Log.write(message: String.concat(left: "  effect ", right: effect.name))
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn derives_text(derives: List<FeatureName>) -> String {
+    let mut out = ""
+    let mut i = 0
+    while i < List.len(list: derives) {
+        let derive = List.get<FeatureName>(list: derives, index: i)
+        if i > 0 { out = String.concat(left: out, right: ",") }
+        out = String.concat(left: out, right: derive.name)
+        i = i + 1
+    }
+    return out
+}
+
+fn bool_text(value: Bool) -> String {
+    if value { return "true" }
+    return "false"
+}
+
+fn emit_data(item: Item) -> Unit {
+    let name = String.concat(left: item.name, right: generic_text(generics: item.generics))
+    let mut head = String.concat(left: String.concat(left: "type ", right: item.dataKind), right: " ")
+    head = String.concat(left: head, right: name)
+    head = String.concat(left: head, right: String.concat(left: " public=", right: bool_text(value: item.isPublic)))
+    head = String.concat(left: head, right: String.concat(left: " opaque=", right: bool_text(value: item.isOpaque)))
+    Log.write(message: head)
+    let derives = derives_text(derives: item.derives)
+    if String.len(value: derives) > 0 { Log.write(message: String.concat(left: "  derives ", right: derives)) }
+    let mut i = 0
+    while i < List.len(list: item.fields) {
+        let field = List.get<Field>(list: item.fields, index: i)
+        let mut line = String.concat(left: String.concat(left: "  field ", right: field.name), right: String.concat(left: ":", right: field.typeText))
+        if field.isHandle { line = String.concat(left: line, right: " handle") }
+        if field.isWeak { line = String.concat(left: line, right: " weak") }
+        Log.write(message: line)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn emit_sum(item: Item) -> Unit {
+    let name = String.concat(left: item.name, right: generic_text(generics: item.generics))
+    let mut head = String.concat(left: "sum ", right: name)
+    head = String.concat(left: head, right: String.concat(left: " public=", right: bool_text(value: item.isPublic)))
+    Log.write(message: head)
+    let derives = derives_text(derives: item.derives)
+    if String.len(value: derives) > 0 { Log.write(message: String.concat(left: "  derives ", right: derives)) }
+    let mut i = 0
+    while i < List.len(list: item.variants) {
+        let variant = List.get<Variant>(list: item.variants, index: i)
+        Log.write(message: String.concat(left: "  variant ", right: variant.name))
+        let mut fieldIndex = 0
+        while fieldIndex < List.len(list: variant.fields) {
+            let field = List.get<Field>(list: variant.fields, index: fieldIndex)
+            let mut line = String.concat(left: String.concat(left: "    field ", right: field.name), right: String.concat(left: ":", right: field.typeText))
+            if field.isHandle { line = String.concat(left: line, right: " handle") }
+            if field.isWeak { line = String.concat(left: line, right: " weak") }
+            Log.write(message: line)
+            fieldIndex = fieldIndex + 1
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn emit_alias(item: Item) -> Unit {
+    let name = String.concat(left: item.name, right: generic_text(generics: item.generics))
+    let mut line = String.concat(left: String.concat(left: "alias ", right: name), right: String.concat(left: "=", right: item.aliasTarget))
+    line = String.concat(left: line, right: String.concat(left: " public=", right: bool_text(value: item.isPublic)))
+    Log.write(message: line)
+    return Unit
+}
+
+fn emit_const(program: Program, item: Item) -> Unit {
+    let mut line = String.concat(left: String.concat(left: "const ", right: item.name), right: String.concat(left: ":", right: item.constType))
+    line = String.concat(left: line, right: String.concat(left: "=", right: expression_text(program, index: item.constExpression)))
+    line = String.concat(left: line, right: String.concat(left: " public=", right: bool_text(value: item.isPublic)))
+    Log.write(message: line)
+    return Unit
+}
+
+fn emit_protocol(item: Item) -> Unit {
+    Log.write(message: String.concat(left: "protocol ", right: item.protocol))
+    return Unit
+}
+
+fn emit_module(item: Item) -> Unit {
+    Log.write(message: String.concat(left: "module ", right: item.name))
+    return Unit
+}
+
+fn emit_use(item: Item) -> Unit {
+    let mut line = String.concat(left: "use ", right: item.name)
+    if item.useGlob {
+        line = String.concat(left: line, right: ".*")
+    } else if String.len(value: item.useAlias) > 0 {
+        line = String.concat(left: line, right: String.concat(left: " as ", right: item.useAlias))
+    }
+    Log.write(message: line)
+    return Unit
+}
+
+fn emit_impl(item: Item) -> Unit {
+    let mut line = String.concat(left: String.concat(left: "impl ", right: item.protocol), right: " for ")
+    line = String.concat(left: line, right: item.implType)
+    Log.write(message: line)
+    let mut i = 0
+    while i < List.len(list: item.mappings) {
+        let mapping = List.get<ProtocolMapping>(list: item.mappings, index: i)
+        let mut mappingLine = String.concat(left: String.concat(left: "  map ", right: mapping.method), right: "=")
+        mappingLine = String.concat(left: mappingLine, right: mapping.target)
+        Log.write(message: mappingLine)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn indentation(depth: Int) -> String {
+    let mut out = ""
+    let mut i = 0
+    while i < depth {
+        out = String.concat(left: out, right: "  ")
+        i = i + 1
+    }
+    return out
+}
+
+fn emit_statements(program: Program, indexes: List<Int>, depth: Int) -> Unit {
+    let mut i = 0
+    while i < List.len(list: indexes) {
+        let statement = List.get<Stmt>(list: program.statements, index: List.get<Int>(list: indexes, index: i))
+        let prefix = indentation(depth: depth)
+        if statement.kind == STMT_LET {
+            let mut head = String.concat(left: prefix, right: "let ")
+            if statement.isMutable { head = String.concat(left: prefix, right: "let mut ") }
+            Log.write(message: String.concat(left: String.concat(left: head, right: statement.name), right: String.concat(left: " = ", right: expression_text(program, index: statement.expression))))
+        } else if statement.kind == STMT_ASSIGN || statement.kind == STMT_INDEX_ASSIGN {
+            Log.write(message: String.concat(left: String.concat(left: prefix, right: String.concat(left: "assign ", right: place_text(program, index: statement.target))), right: String.concat(left: " = ", right: expression_text(program, index: statement.expression))))
+        } else if statement.kind == STMT_EXPR {
+            Log.write(message: String.concat(left: prefix, right: String.concat(left: "expr ", right: expression_text(program, index: statement.expression))))
+        } else if statement.kind == STMT_RETURN {
+            Log.write(message: String.concat(left: prefix, right: String.concat(left: "return ", right: expression_text(program, index: statement.expression))))
+        } else if statement.kind == STMT_IF {
+            Log.write(message: String.concat(left: prefix, right: String.concat(left: "if ", right: expression_text(program, index: statement.expression))))
+            emit_statements(program, indexes: statement.children, depth: depth + 1)
+            if List.len(list: statement.elseChildren) > 0 {
+                Log.write(message: String.concat(left: prefix, right: "else"))
+                emit_statements(program, indexes: statement.elseChildren, depth: depth + 1)
+            }
+            Log.write(message: String.concat(left: prefix, right: "end"))
+        } else if statement.kind == STMT_WHILE {
+            Log.write(message: String.concat(left: prefix, right: String.concat(left: "while ", right: expression_text(program, index: statement.expression))))
+            emit_statements(program, indexes: statement.children, depth: depth + 1)
+            Log.write(message: String.concat(left: prefix, right: "end"))
+        } else if statement.kind == STMT_LOOP {
+            Log.write(message: String.concat(left: prefix, right: "loop"))
+            emit_statements(program, indexes: statement.children, depth: depth + 1)
+            Log.write(message: String.concat(left: prefix, right: "end"))
+        } else if statement.kind == STMT_FOR {
+            let head = String.concat(left: String.concat(left: String.concat(left: prefix, right: "for "), right: statement.name), right: " in ")
+            Log.write(message: String.concat(left: head, right: expression_text(program, index: statement.expression)))
+            emit_statements(program, indexes: statement.children, depth: depth + 1)
+            Log.write(message: String.concat(left: prefix, right: "end"))
+        } else if statement.kind == STMT_WITH {
+            let head = String.concat(left: String.concat(left: String.concat(left: prefix, right: "with "), right: expression_text(program, index: statement.expression)), right: " as ")
+            Log.write(message: String.concat(left: head, right: statement.name))
+            emit_statements(program, indexes: statement.children, depth: depth + 1)
+            Log.write(message: String.concat(left: prefix, right: "end"))
+        } else if statement.kind == STMT_MATCH {
+            Log.write(message: String.concat(left: prefix, right: String.concat(left: "match ", right: expression_text(program, index: statement.expression))))
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.arms) {
+                let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+                let mut head = String.concat(left: String.concat(left: prefix, right: "  arm "), right: pattern_text(program: program, index: arm.patternNode))
+                if arm.guard >= 0 { head = String.concat(left: String.concat(left: head, right: " if "), right: expression_text(program, index: arm.guard)) }
+                Log.write(message: head)
+                emit_statements(program, indexes: arm.body, depth: depth + 2)
+                armIndex = armIndex + 1
+            }
+            Log.write(message: String.concat(left: prefix, right: "end"))
+        } else if statement.kind == STMT_SELECT {
+            Log.write(message: String.concat(left: prefix, right: "select"))
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.selectArms) {
+                let arm = List.get<SelectArm>(list: statement.selectArms, index: armIndex)
+                let head = String.concat(left: String.concat(left: String.concat(left: prefix, right: "  arm "), right: arm.binding), right: " = ")
+                Log.write(message: String.concat(left: head, right: expression_text(program, index: arm.operation)))
+                emit_statements(program, indexes: arm.body, depth: depth + 2)
+                armIndex = armIndex + 1
+            }
+            Log.write(message: String.concat(left: prefix, right: "end"))
+        } else if statement.kind == STMT_TASK_GROUP {
+            Log.write(message: String.concat(left: prefix, right: "task_group"))
+            emit_statements(program, indexes: statement.children, depth: depth + 1)
+            Log.write(message: String.concat(left: prefix, right: "end"))
+        } else {
+            Log.write(message: String.concat(left: prefix, right: "unsupported"))
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn emit_function(program: Program, item: Item) -> Unit {
+    let named = String.concat(left: item.name, right: generic_text(generics: item.generics))
+    let head = String.concat(left: String.concat(left: "fn ", right: named), right: "(")
+    let signature = String.concat(left: String.concat(left: head, right: parameter_text(program: program, parameters: item.params)), right: ")->")
+    Log.write(message: String.concat(left: signature, right: item.returnType))
+    emit_effects(effects: item.effects)
+    emit_statements(program, indexes: item.statements, depth: 1)
+    return Unit
+}
+
+fn main() -> Unit {
+    let source = Args.get_or_default(index: 0, default: "")
+    let tokens = tokenize(source: source)
+    let program = parse_program(toks: tokens)
+    Log.write(message: "rss-ir-v1")
+    let mut i = 0
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
+        if item.kind == ITEM_PROTOCOL { emit_protocol(item) }
+        i = i + 1
+    }
+    i = 0
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
+        if item.kind == ITEM_IMPL { emit_impl(item) }
+        i = i + 1
+    }
+    i = 0
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
+        if item.kind == ITEM_MODULE { emit_module(item) }
+        else if item.kind == ITEM_USE { emit_use(item) }
+        else if item.kind == ITEM_TYPE { emit_data(item) }
+        else if item.kind == ITEM_SUM { emit_sum(item) }
+        else if item.kind == ITEM_TYPE_ALIAS { emit_alias(item) }
+        else if item.kind == ITEM_CONST { emit_const(program, item) }
+        else if item.kind == ITEM_FUNCTION { emit_function(program, item) }
+        i = i + 1
+    }
+    return Unit
+}

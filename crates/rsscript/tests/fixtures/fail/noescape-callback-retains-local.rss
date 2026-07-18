@@ -6,7 +6,7 @@ struct ImageData {
     size: Int
 }
 
-fn Cache.store(image: read ImageData) -> Unit
+fn Cache.store(image: ImageData) -> Unit
     effects(retains(image))
 
 fn apply(callback: noescape Fn()) -> Unit {
@@ -17,7 +17,7 @@ fn apply(callback: noescape Fn()) -> Unit {
 fn main() -> Unit {
     apply(callback: || {
         local image = ImageData(size: 1)
-        Cache.store(image: read image)
+        Cache.store(image)
     })
     return Unit
 }

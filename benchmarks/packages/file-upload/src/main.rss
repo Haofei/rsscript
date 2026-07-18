@@ -1,15 +1,15 @@
 features: async
 
-async fn upload_batch_0(body: read String) -> Result<Unit, String> {
+async fn upload_batch_0(body: String) -> Result<Unit, String> {
     task_group {
-        async let upload_0 = Upload.put(path: read "/upload/rss-0.bin", body: read body)
-        async let upload_1 = Upload.put(path: read "/upload/rss-1.bin", body: read body)
-        async let upload_2 = Upload.put(path: read "/upload/rss-2.bin", body: read body)
-        async let upload_3 = Upload.put(path: read "/upload/rss-3.bin", body: read body)
-        async let upload_4 = Upload.put(path: read "/upload/rss-4.bin", body: read body)
-        async let upload_5 = Upload.put(path: read "/upload/rss-5.bin", body: read body)
-        async let upload_6 = Upload.put(path: read "/upload/rss-6.bin", body: read body)
-        async let upload_7 = Upload.put(path: read "/upload/rss-7.bin", body: read body)
+        async let upload_0 = Upload.put(path: "/upload/rss-0.bin", body: body)
+        async let upload_1 = Upload.put(path: "/upload/rss-1.bin", body: body)
+        async let upload_2 = Upload.put(path: "/upload/rss-2.bin", body: body)
+        async let upload_3 = Upload.put(path: "/upload/rss-3.bin", body: body)
+        async let upload_4 = Upload.put(path: "/upload/rss-4.bin", body: body)
+        async let upload_5 = Upload.put(path: "/upload/rss-5.bin", body: body)
+        async let upload_6 = Upload.put(path: "/upload/rss-6.bin", body: body)
+        async let upload_7 = Upload.put(path: "/upload/rss-7.bin", body: body)
 
         await upload_0?
         await upload_1?
@@ -23,16 +23,16 @@ async fn upload_batch_0(body: read String) -> Result<Unit, String> {
     return Ok(Unit)
 }
 
-async fn upload_batch_1(body: read String) -> Result<Unit, String> {
+async fn upload_batch_1(body: String) -> Result<Unit, String> {
     task_group {
-        async let upload_8 = Upload.put(path: read "/upload/rss-8.bin", body: read body)
-        async let upload_9 = Upload.put(path: read "/upload/rss-9.bin", body: read body)
-        async let upload_10 = Upload.put(path: read "/upload/rss-10.bin", body: read body)
-        async let upload_11 = Upload.put(path: read "/upload/rss-11.bin", body: read body)
-        async let upload_12 = Upload.put(path: read "/upload/rss-12.bin", body: read body)
-        async let upload_13 = Upload.put(path: read "/upload/rss-13.bin", body: read body)
-        async let upload_14 = Upload.put(path: read "/upload/rss-14.bin", body: read body)
-        async let upload_15 = Upload.put(path: read "/upload/rss-15.bin", body: read body)
+        async let upload_8 = Upload.put(path: "/upload/rss-8.bin", body: body)
+        async let upload_9 = Upload.put(path: "/upload/rss-9.bin", body: body)
+        async let upload_10 = Upload.put(path: "/upload/rss-10.bin", body: body)
+        async let upload_11 = Upload.put(path: "/upload/rss-11.bin", body: body)
+        async let upload_12 = Upload.put(path: "/upload/rss-12.bin", body: body)
+        async let upload_13 = Upload.put(path: "/upload/rss-13.bin", body: body)
+        async let upload_14 = Upload.put(path: "/upload/rss-14.bin", body: body)
+        async let upload_15 = Upload.put(path: "/upload/rss-15.bin", body: body)
 
         await upload_8?
         await upload_9?
@@ -46,16 +46,16 @@ async fn upload_batch_1(body: read String) -> Result<Unit, String> {
     return Ok(Unit)
 }
 
-async fn upload_batch_2(body: read String) -> Result<Unit, String> {
+async fn upload_batch_2(body: String) -> Result<Unit, String> {
     task_group {
-        async let upload_16 = Upload.put(path: read "/upload/rss-16.bin", body: read body)
-        async let upload_17 = Upload.put(path: read "/upload/rss-17.bin", body: read body)
-        async let upload_18 = Upload.put(path: read "/upload/rss-18.bin", body: read body)
-        async let upload_19 = Upload.put(path: read "/upload/rss-19.bin", body: read body)
-        async let upload_20 = Upload.put(path: read "/upload/rss-20.bin", body: read body)
-        async let upload_21 = Upload.put(path: read "/upload/rss-21.bin", body: read body)
-        async let upload_22 = Upload.put(path: read "/upload/rss-22.bin", body: read body)
-        async let upload_23 = Upload.put(path: read "/upload/rss-23.bin", body: read body)
+        async let upload_16 = Upload.put(path: "/upload/rss-16.bin", body: body)
+        async let upload_17 = Upload.put(path: "/upload/rss-17.bin", body: body)
+        async let upload_18 = Upload.put(path: "/upload/rss-18.bin", body: body)
+        async let upload_19 = Upload.put(path: "/upload/rss-19.bin", body: body)
+        async let upload_20 = Upload.put(path: "/upload/rss-20.bin", body: body)
+        async let upload_21 = Upload.put(path: "/upload/rss-21.bin", body: body)
+        async let upload_22 = Upload.put(path: "/upload/rss-22.bin", body: body)
+        async let upload_23 = Upload.put(path: "/upload/rss-23.bin", body: body)
 
         await upload_16?
         await upload_17?
@@ -71,8 +71,8 @@ async fn upload_batch_2(body: read String) -> Result<Unit, String> {
 
 async fn main() -> Result<Unit, String> {
     let body = "rss payload seed"
-    await upload_batch_0(body: read body)?
-    await upload_batch_1(body: read body)?
-    await upload_batch_2(body: read body)?
+    await upload_batch_0(body)?
+    await upload_batch_1(body)?
+    await upload_batch_2(body)?
     return Ok(Unit)
 }

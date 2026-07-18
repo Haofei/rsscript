@@ -35,32 +35,32 @@ class RetainedImageStore {
 
 fn RetainedImageStore.new(capacity: Int) -> RetainedImageStore
 
-fn RetainedImageStore.store(cache: mut RetainedImageStore, image: read Image) -> Unit
+fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Image) -> Unit
     effects(retains(image))
 
-fn User.lookup(id: read String) -> User
+fn User.lookup(id: String) -> User
 
-fn User.touch(user: read User) -> Unit
+fn User.touch(user: User) -> Unit
 
 fn audit_step(callback: noescape Fn()) -> Unit {
     callback()
     return Unit
 }
 
-fn HttpError.from_config(error: read ConfigError) -> HttpError
-fn HttpError.from_json(error: read JsonError) -> HttpError
-fn HttpError.from_image(error: read ImageError) -> HttpError
-fn HttpError.from_db(error: read DbError) -> HttpError
-fn HttpError.from_csv(error: read CsvError) -> HttpError
+fn HttpError.from_config(error: ConfigError) -> HttpError
+fn HttpError.from_json(error: JsonError) -> HttpError
+fn HttpError.from_image(error: ImageError) -> HttpError
+fn HttpError.from_db(error: DbError) -> HttpError
+fn HttpError.from_csv(error: CsvError) -> HttpError
 
-fn parse_plan(request: read Request) -> Result<fresh UploadPlan, JsonError> {
-    let body = Request.path(request: read request)
-    let json = Json.parse(text: read body)?
-    local input_text = Json.field_string(value: read json, name: read "input")?
-    local output_text = Json.field_string(value: read json, name: read "output")?
-    local trace_id = Json.field_string(value: read json, name: read "trace")?
-    local input = Path.from_string(value: read input_text)
-    local output = Path.from_string(value: read output_text)
+fn parse_plan(request: Request) -> Result<fresh UploadPlan, JsonError> {
+    let body = Request.path(request)
+    let json = Json.parse(text: body)?
+    local input_text = Json.field_string(value: json, name: "input")?
+    local output_text = Json.field_string(value: json, name: "output")?
+    local trace_id = Json.field_string(value: json, name: "trace")?
+    local input = Path.from_string(value: input_text)
+    local output = Path.from_string(value: output_text)
 
     return UploadPlan(
         input: take input,
@@ -69,62 +69,62 @@ fn parse_plan(request: read Request) -> Result<fresh UploadPlan, JsonError> {
     )
 }
 
-fn build_session(owner: read User, trace_id: read String) -> fresh Session {
+fn build_session(owner: User, trace_id: String) -> fresh Session {
     return Session(
-        owner: Weak.from(value: read owner),
+        owner: Weak.from(value: owner),
         trace_id: read trace_id,
     )
 }
 
-fn inspect_session(session: read Session) -> Unit {
-    let maybe_owner = Weak.upgrade(value: read session.owner)
+fn inspect_session(session: Session) -> Unit {
+    let maybe_owner = Weak.upgrade(value: session.owner)
 
     match maybe_owner {
         Some(owner) => {
-            User.touch(user: read owner)
+            User.touch(user: owner)
         }
         None => {
-            Log.write(message: read session.trace_id)
+            Log.write(message: session.trace_id)
         }
     }
 
     audit_step(callback: || {
-        Log.write(message: read session.trace_id)
+        Log.write(message: session.trace_id)
     })
 
     return Unit
 }
 
-fn build_work_item(request: read Request, owner_id: read String) -> Result<fresh WorkItem, JsonError> {
-    local plan = parse_plan(request: read request)?
-    let owner = User.lookup(id: read owner_id)
-    local session = build_session(owner: read owner, trace_id: read plan.trace_id)
+fn build_work_item(request: Request, owner_id: String) -> Result<fresh WorkItem, JsonError> {
+    local plan = parse_plan(request)?
+    let owner = User.lookup(id: owner_id)
+    local session = build_session(owner, trace_id: plan.trace_id)
 
     return WorkItem(plan: take plan, session: take session)
 }
 
-fn load_request_row(path: read Path) -> Result<fresh Row, CsvError> {
+fn load_request_row(path: Path) -> Result<fresh Row, CsvError> {
     local buffer = RowBuffer.new(size: 8192)
 
-    with Csv.open_read(path: read path)? as file {
+    with Csv.open_read(path)? as file {
         Csv.read_into(file: mut file, buffer: mut buffer)?
     }
 
-    return Csv.parse_row(buffer: read buffer)
+    return Csv.parse_row(buffer)
 }
 
-fn decode_row_status(path: read Path) -> Result<String, CsvError> {
-    let row = load_request_row(path: read path)?
-    let status = Row.field_string(row: read row, index: 1)?
+fn decode_row_status(path: Path) -> Result<String, CsvError> {
+    let row = load_request_row(path)?
+    let status = Row.field_string(row, index: 1)?
 
     return Ok(status)
 }
 
-fn process_image(plan: read UploadPlan, cache: mut RetainedImageStore) -> Result<Unit, ImageError> {
-    local image = Image.load(path: read plan.input)?
+fn process_image(plan: UploadPlan, cache: mut RetainedImageStore) -> Result<Unit, ImageError> {
+    local image = Image.load(path: plan.input)?
 
     audit_step(callback: || {
-        Image.inspect(image: read image)
+        Image.inspect(image)
     })
 
     Image.resize(image: mut image, width: 1024, height: 768)
@@ -132,8 +132,8 @@ fn process_image(plan: read UploadPlan, cache: mut RetainedImageStore) -> Result
     Image.sharpen(image: mut image)
 
     let shared = manage image
-    RetainedImageStore.store(cache: mut cache, image: read shared)
-    Image.save(image: read shared, path: read plan.output)?
+    RetainedImageStore.store(cache: mut cache, image: shared)
+    Image.save(image: shared, path: plan.output)?
 
     return Ok(Unit)
 }
@@ -142,164 +142,164 @@ fn build_image_store() -> RetainedImageStore {
     return RetainedImageStore.new(capacity: 64)
 }
 
-fn refresh_config(path: read Path, store: mut ConfigStore) -> Result<Unit, ConfigError> {
-    let config = Config.load(path: read path)?
-    ConfigStore.replace(store: mut store, value: read config)
+fn refresh_config(path: Path, store: mut ConfigStore) -> Result<Unit, ConfigError> {
+    let config = Config.load(path)?
+    ConfigStore.replace(store: mut store, value: config)
 
     return Ok(Unit)
 }
 
-fn load_rules_config(path: read Path) -> Result<fresh Config, ConfigError> {
-    let rules = RuleLoader.load_rules(path: read path)?
-    let name = String.concat(left: read "rules:", right: read "active")
+fn load_rules_config(path: Path) -> Result<fresh Config, ConfigError> {
+    let rules = RuleLoader.load_rules(path)?
+    let name = String.concat(left: "rules:", right: "active")
 
-    return Config.new(name: read name, rules: read rules)
+    return Config.new(name, rules)
 }
 
-fn replace_global_rules(path: read Path, global: mut GlobalConfig) -> Result<Unit, ConfigError> {
-    let config = load_rules_config(path: read path)?
-    GlobalConfig.replace(global: mut global, value: read config)
+fn replace_global_rules(path: Path, global: mut GlobalConfig) -> Result<Unit, ConfigError> {
+    let config = load_rules_config(path)?
+    GlobalConfig.replace(global: mut global, value: config)
 
     return Ok(Unit)
 }
 
-fn initialize_global_rules(path: read Path) -> Result<fresh GlobalConfig, ConfigError> {
-    let config = load_rules_config(path: read path)?
+fn initialize_global_rules(path: Path) -> Result<fresh GlobalConfig, ConfigError> {
+    let config = load_rules_config(path)?
 
-    return GlobalConfig.new(value: read config)
+    return GlobalConfig.new(value: config)
 }
 
-fn run_audit_query(url: read Url, trace_id: read String) -> Result<Unit, DbError> {
+fn run_audit_query(url: Url, trace_id: String) -> Result<Unit, DbError> {
     local pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.open(url: read url),
+        create: || DbConnection.open(url),
         max_size: 2,
     )
 
     with ResourcePool.borrow(pool: mut pool) as conn {
-        DbConnection.query(conn: mut conn, sql: read trace_id)?
+        DbConnection.query(conn: mut conn, sql: trace_id)?
     }
 
     return Ok(Unit)
 }
 
-fn run_status_query(url: read Url, status: read String) -> Result<Unit, DbError> {
+fn run_status_query(url: Url, status: String) -> Result<Unit, DbError> {
     local pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.open(url: read url),
+        create: || DbConnection.open(url),
         max_size: 1,
     )
 
     with ResourcePool.borrow(pool: mut pool) as conn {
-        DbConnection.query(conn: mut conn, sql: read status)?
+        DbConnection.query(conn: mut conn, sql: status)?
     }
 
     return Ok(Unit)
 }
 
-fn persist_trace(cache: mut Cache, trace_id: read String, status: read String) -> Unit {
-    Cache.insert(cache: mut cache, key: read trace_id, value: read status)
+fn persist_trace(cache: mut Cache, trace_id: String, status: String) -> Unit {
+    Cache.insert(cache: mut cache, key: trace_id, value: status)
     return Unit
 }
 
-fn lookup_trace(cache: read Cache, trace_id: read String) -> String {
-    let status = Cache.lookup(cache: read cache, key: read trace_id)
+fn lookup_trace(cache: Cache, trace_id: String) -> String {
+    let status = Cache.lookup(cache, key: trace_id)
 
     return status
 }
 
-fn build_audit_record(trace_id: read String, status: read String) -> fresh AuditRecord {
+fn build_audit_record(trace_id: String, status: String) -> fresh AuditRecord {
     return AuditRecord(trace_id: read trace_id, status: read status)
 }
 
-fn save_audit_record(cache: mut Cache, record: read AuditRecord) -> Unit {
-    Cache.insert(cache: mut cache, key: read record.trace_id, value: read record.status)
+fn save_audit_record(cache: mut Cache, record: AuditRecord) -> Unit {
+    Cache.insert(cache: mut cache, key: record.trace_id, value: record.status)
     return Unit
 }
 
-fn write_response_file(path: read Path, text: read String) -> Result<Unit, FileError> {
-    let bytes = Bytes.from_string(value: read text)
-    with File.open_write(path: read path)? as file {
-        File.write(file: mut file, data: read bytes)?
+fn write_response_file(path: Path, text: String) -> Result<Unit, FileError> {
+    let bytes = Bytes.from_string(value: text)
+    with File.open_write(path)? as file {
+        File.write(file: mut file, data: bytes)?
     }
 
     return Ok(Unit)
 }
 
-fn refresh_config_http(path: read Path, store: mut ConfigStore) -> Result<Unit, HttpError> {
-    match refresh_config(path: read path, store: mut store) {
+fn refresh_config_http(path: Path, store: mut ConfigStore) -> Result<Unit, HttpError> {
+    match refresh_config(path, store: mut store) {
         Ok(unit) => {
             return Ok(Unit)
         }
         Err(error) => {
-            return Err(HttpError.from_config(error: read error))
+            return Err(HttpError.from_config(error))
         }
     }
 }
 
-fn replace_global_rules_http(path: read Path, global: mut GlobalConfig) -> Result<Unit, HttpError> {
-    match replace_global_rules(path: read path, global: mut global) {
+fn replace_global_rules_http(path: Path, global: mut GlobalConfig) -> Result<Unit, HttpError> {
+    match replace_global_rules(path, global: mut global) {
         Ok(unit) => {
             return Ok(Unit)
         }
         Err(error) => {
-            return Err(HttpError.from_config(error: read error))
+            return Err(HttpError.from_config(error))
         }
     }
 }
 
 fn build_work_item_http(
-    request: read Request,
-    owner_id: read String,
+    request: Request,
+    owner_id: String,
 ) -> Result<WorkItem, HttpError> {
-    match build_work_item(request: read request, owner_id: read owner_id) {
+    match build_work_item(request, owner_id) {
         Ok(item) => {
             return Ok(item)
         }
         Err(error) => {
-            return Err(HttpError.from_json(error: read error))
+            return Err(HttpError.from_json(error))
         }
     }
 }
 
-fn process_image_http(plan: read UploadPlan, cache: mut RetainedImageStore) -> Result<Unit, HttpError> {
-    match process_image(plan: read plan, cache: mut cache) {
+fn process_image_http(plan: UploadPlan, cache: mut RetainedImageStore) -> Result<Unit, HttpError> {
+    match process_image(plan, cache: mut cache) {
         Ok(unit) => {
             return Ok(Unit)
         }
         Err(error) => {
-            return Err(HttpError.from_image(error: read error))
+            return Err(HttpError.from_image(error))
         }
     }
 }
 
-fn run_audit_query_http(url: read Url, trace_id: read String) -> Result<Unit, HttpError> {
-    match run_audit_query(url: read url, trace_id: read trace_id) {
+fn run_audit_query_http(url: Url, trace_id: String) -> Result<Unit, HttpError> {
+    match run_audit_query(url, trace_id) {
         Ok(unit) => {
             return Ok(Unit)
         }
         Err(error) => {
-            return Err(HttpError.from_db(error: read error))
+            return Err(HttpError.from_db(error))
         }
     }
 }
 
-fn decode_row_status_http(path: read Path) -> Result<String, HttpError> {
-    match decode_row_status(path: read path) {
+fn decode_row_status_http(path: Path) -> Result<String, HttpError> {
+    match decode_row_status(path) {
         Ok(status) => {
             return Ok(status)
         }
         Err(error) => {
-            return Err(HttpError.from_csv(error: read error))
+            return Err(HttpError.from_csv(error))
         }
     }
 }
 
-fn run_status_query_http(url: read Url, status: read String) -> Result<Unit, HttpError> {
-    match run_status_query(url: read url, status: read status) {
+fn run_status_query_http(url: Url, status: String) -> Result<Unit, HttpError> {
+    match run_status_query(url, status) {
         Ok(unit) => {
             return Ok(Unit)
         }
         Err(error) => {
-            return Err(HttpError.from_db(error: read error))
+            return Err(HttpError.from_db(error))
         }
     }
 }
@@ -314,34 +314,34 @@ fn consume_local_buffer() -> Unit {
 
 fn build_environment() -> Environment {
     let root = Environment.root()
-    let child = Environment.child(parent: read root)
-    let function = FunctionObject.new(closure: read child)
-    Environment.bind_function(env: mut child, function: read function)
+    let child = Environment.child(parent: root)
+    let function = FunctionObject.new(closure: child)
+    Environment.bind_function(env: mut child, function)
 
     return child
 }
 
-fn inspect_environment(env: read Environment, function: read FunctionObject) -> Unit {
-    let has_parent = Environment.has_parent(env: read env)
-    let has_function = Environment.has_function(env: read env)
-    let has_closure = FunctionObject.has_closure(function: read function)
+fn inspect_environment(env: Environment, function: FunctionObject) -> Unit {
+    let has_parent = Environment.has_parent(env)
+    let has_function = Environment.has_function(env)
+    let has_closure = FunctionObject.has_closure(function)
 
     if has_parent {
-        Log.write(message: read "parent")
+        Log.write(message: "parent")
     } else {
-        Log.write(message: read "root")
+        Log.write(message: "root")
     }
 
     if has_function {
-        Log.write(message: read "function")
+        Log.write(message: "function")
     } else {
-        Log.write(message: read "empty")
+        Log.write(message: "empty")
     }
 
     if has_closure {
-        Log.write(message: read "closure")
+        Log.write(message: "closure")
     } else {
-        Log.write(message: read "no closure")
+        Log.write(message: "no closure")
     }
 
     return Unit
@@ -349,88 +349,88 @@ fn inspect_environment(env: read Environment, function: read FunctionObject) -> 
 
 fn count_request(counter: mut Counter) -> Int {
     Counter.add(counter: mut counter, amount: 1)
-    let value = Counter.value(counter: read counter)
+    let value = Counter.value(counter)
 
     return value
 }
 
-fn verify_status(expected: read String, actual: read String) -> Unit {
-    Assert.equal(left: read expected, right: read actual)
+fn verify_status(expected: String, actual: String) -> Unit {
+    Assert.equal(left: expected, right: actual)
     return Unit
 }
 
-fn render_response(status: read String) -> Result<fresh RenderResult, HttpError> {
-    local response = Response.ok(body: read status)?
+fn render_response(status: String) -> Result<fresh RenderResult, HttpError> {
+    local response = Response.ok(body: status)?
 
     return RenderResult(response: take response, status: read status)
 }
 
 fn complete_request(
-    request: read Request,
-    owner_id: read String,
+    request: Request,
+    owner_id: String,
     image_store: mut RetainedImageStore,
     config_store: mut ConfigStore,
     rules_global: mut GlobalConfig,
     status_cache: mut Cache,
     counter: mut Counter,
-    db_url: read Url,
-    csv_path: read Path,
+    db_url: Url,
+    csv_path: Path,
 ) -> Result<fresh Response, HttpError> {
-    let config_path = Path.from_string(value: read "config.json")
-    let rules_path = Path.from_string(value: read "rules.json")
-    refresh_config_http(path: read config_path, store: mut config_store)?
-    replace_global_rules_http(path: read rules_path, global: mut rules_global)?
+    let config_path = Path.from_string(value: "config.json")
+    let rules_path = Path.from_string(value: "rules.json")
+    refresh_config_http(path: config_path, store: mut config_store)?
+    replace_global_rules_http(path: rules_path, global: mut rules_global)?
 
-    let item = build_work_item_http(request: read request, owner_id: read owner_id)?
-    inspect_session(session: read item.session)
+    let item = build_work_item_http(request, owner_id)?
+    inspect_session(session: item.session)
 
-    process_image_http(plan: read item.plan, cache: mut image_store)?
-    run_audit_query_http(url: read db_url, trace_id: read item.plan.trace_id)?
+    process_image_http(plan: item.plan, cache: mut image_store)?
+    run_audit_query_http(url: db_url, trace_id: item.plan.trace_id)?
 
-    let csv_status = decode_row_status_http(path: read csv_path)?
-    run_status_query_http(url: read db_url, status: read csv_status)?
+    let csv_status = decode_row_status_http(path: csv_path)?
+    run_status_query_http(url: db_url, status: csv_status)?
 
-    let status = ConfigStore.name(store: read config_store)
-    let record = build_audit_record(trace_id: read item.plan.trace_id, status: read status)
-    save_audit_record(cache: mut status_cache, record: read record)
-    persist_trace(cache: mut status_cache, trace_id: read item.plan.trace_id, status: read csv_status)
+    let status = ConfigStore.name(store: config_store)
+    let record = build_audit_record(trace_id: item.plan.trace_id, status)
+    save_audit_record(cache: mut status_cache, record)
+    persist_trace(cache: mut status_cache, trace_id: item.plan.trace_id, status: csv_status)
 
-    let cached = lookup_trace(cache: read status_cache, trace_id: read item.plan.trace_id)
-    verify_status(expected: read status, actual: read cached)
+    let cached = lookup_trace(cache: status_cache, trace_id: item.plan.trace_id)
+    verify_status(expected: status, actual: cached)
 
     count_request(counter: mut counter)
     consume_local_buffer()
 
-    Log.write(message: read status)
+    Log.write(message: status)
 
-    return Response.ok(body: read status)?
+    return Response.ok(body: status)?
 }
 
 fn main_handler(
-    request: read Request,
-    owner_id: read String,
+    request: Request,
+    owner_id: String,
     config_store: mut ConfigStore,
     rules_global: mut GlobalConfig,
     status_cache: mut Cache,
     counter: mut Counter,
-    db_url: read Url,
-    csv_path: read Path,
+    db_url: Url,
+    csv_path: Path,
 ) -> Result<fresh Response, HttpError> {
     let image_store = build_image_store()
     let env = build_environment()
-    let child = Environment.child(parent: read env)
-    let function = FunctionObject.new(closure: read child)
-    inspect_environment(env: read child, function: read function)
+    let child = Environment.child(parent: env)
+    let function = FunctionObject.new(closure: child)
+    inspect_environment(env: child, function)
 
     return complete_request(
-        request: read request,
-        owner_id: read owner_id,
+        request,
+        owner_id,
         image_store: mut image_store,
         config_store: mut config_store,
         rules_global: mut rules_global,
         status_cache: mut status_cache,
         counter: mut counter,
-        db_url: read db_url,
-        csv_path: read csv_path,
+        db_url,
+        csv_path,
     )?
 }

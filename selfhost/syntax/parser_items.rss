@@ -10,47 +10,239 @@ use selfhost.syntax.parser_stmts.*
 
 // First name token after top-level modifiers. Non-function declarations still
 // use this small normalizer; function headers use the scanner's explicit helper.
-fn item_name_index(toks: read List<Tok>, i: read Int) -> Int {
+fn item_name_index(toks: List<Tok>, i: Int) -> Int {
     let mut j = i
-    while at_symbol(toks: read toks, i: read j, code: read SYM_HASH) { j = j + 5 }
+    while at_symbol(toks: toks, i: j, code: SYM_HASH) { j = j + 5 }
     let mut modifiers = true
     while modifiers {
-        if at_ident(toks: read toks, i: read j, wid: read WORD_PUB) || at_ident(toks: read toks, i: read j, wid: read WORD_ASYNC) || at_ident(toks: read toks, i: read j, wid: read WORD_NATIVE) {
+        if at_ident(toks: toks, i: j, wid: WORD_PUB) || at_ident(toks: toks, i: j, wid: WORD_ASYNC) || at_ident(toks: toks, i: j, wid: WORD_NATIVE) {
             j = j + 1
         } else {
             modifiers = false
         }
     }
-    if at_ident(toks: read toks, i: read j, wid: read WORD_OPAQUE) { j = j + 1 }
-    if at_ident(toks: read toks, i: read j, wid: read WORD_FN) || at_ident(toks: read toks, i: read j, wid: read WORD_CLASS) || at_ident(toks: read toks, i: read j, wid: read WORD_STRUCT) || at_ident(toks: read toks, i: read j, wid: read WORD_RESOURCE) || at_ident(toks: read toks, i: read j, wid: read WORD_OPAQUE) || at_ident(toks: read toks, i: read j, wid: read WORD_SUM) || at_ident(toks: read toks, i: read j, wid: read WORD_TYPE) || at_ident(toks: read toks, i: read j, wid: read WORD_CONST) || at_ident(toks: read toks, i: read j, wid: read WORD_PROTOCOL) {
+    if at_ident(toks: toks, i: j, wid: WORD_OPAQUE) { j = j + 1 }
+    if at_ident(toks: toks, i: j, wid: WORD_FN) || at_ident(toks: toks, i: j, wid: WORD_CLASS) || at_ident(toks: toks, i: j, wid: WORD_STRUCT) || at_ident(toks: toks, i: j, wid: WORD_RESOURCE) || at_ident(toks: toks, i: j, wid: WORD_OPAQUE) || at_ident(toks: toks, i: j, wid: WORD_SUM) || at_ident(toks: toks, i: j, wid: WORD_TYPE) || at_ident(toks: toks, i: j, wid: WORD_CONST) || at_ident(toks: toks, i: j, wid: WORD_PROTOCOL) {
         return j + 1
     }
     return j + 1
 }
 
-fn item_name(toks: read List<Tok>, i: read Int) -> String {
-    let nameIndex = item_name_index(toks: read toks, i: read i)
-    if is_ident_tok(toks: read toks, i: read nameIndex) {
-        let tok = List.get(list: read toks, index: read nameIndex)
+fn item_name(toks: List<Tok>, i: Int) -> String {
+    let nameIndex = item_name_index(toks, i)
+    if is_ident_tok(toks: toks, i: nameIndex) {
+        let tok = List.get(list: toks, index: nameIndex)
         return tok.text
     }
     return ""
 }
 
-fn push_item(program: mut Program, toks: read List<Tok>, i: read Int, kind: Int, name: read String) -> Unit {
-    let tok = List.get(list: read toks, index: read i)
-    local ownedName = String.copy(value: read name)
+fn push_item(program: mut Program, toks: List<Tok>, i: Int, kind: Int, name: String) -> Unit {
+    let tok = List.get(list: toks, index: i)
+    local ownedName = String.copy(value: name)
     let item = Item.plain(kind: kind, name: take ownedName, line: tok.line, column: tok.col, length: tok.len)
-    Program.push(self: mut program, item: read item)
+    Program.push(self: mut program, item: item)
 }
 
-fn modifier_present(toks: read List<Tok>, start: read Int, word: read Int) -> Bool {
+fn use_path_end(toks: List<Tok>, start: Int, end: Int) -> Int {
     let mut i = start
-    while at_symbol(toks: read toks, i: read i, code: read SYM_HASH) { i = i + 5 }
+    while i < end {
+        if at_ident(toks: toks, i: i, wid: WORD_AS) { return i }
+        if at_symbol(toks: toks, i: i, code: SYM_STAR) { return i - 1 }
+        i = i + 1
+    }
+    return end
+}
+
+fn push_use_item(program: mut Program, toks: List<Tok>, start: Int, end: Int) -> Unit {
+    let tok = List.get<Tok>(list: toks, index: start)
+    let pathEnd = use_path_end(toks: toks, start: (start + 1), end: end)
+    local path = dotted_name(toks: toks, start: (start + 1), end: pathEnd)
+    let mut item = Item.plain(kind: ITEM_USE, name: take path, line: tok.line, column: tok.col, length: tok.len)
+    let mut i = pathEnd
+    while i < end {
+        if at_symbol(toks: toks, i: i, code: SYM_STAR) { item.useGlob = true }
+        if at_ident(toks: toks, i: i, wid: WORD_AS) && is_ident_tok(toks: toks, i: (i + 1)) {
+            let alias = List.get<Tok>(list: toks, index: (i + 1))
+            item.useAlias = String.copy(value: alias.text)
+        }
+        i = i + 1
+    }
+    Program.push(self: mut program, item: item)
+}
+
+fn push_feature_item(program: mut Program, toks: List<Tok>, start: Int, end: Int) -> Unit {
+    let tok = List.get(list: toks, index: start)
+    local name = "features"
+    let mut item = Item.plain(ITEM_FEATURES, take name, tok.line, tok.col, tok.len)
+    let mut i = start + 2
+    while i < end {
+        if is_ident_tok(toks: toks, i: i) {
+            let featureTok = List.get<Tok>(list: toks, index: i)
+            local featureName = String.copy(value: featureTok.text)
+            let feature = FeatureName.from(name: take featureName, line: featureTok.line, column: featureTok.col, length: featureTok.len)
+            List.push<FeatureName>(list: mut item.features, value: feature)
+        }
+        i = i + 1
+    }
+    Program.push(self: mut program, item: item)
+}
+
+// Data declarations use the same Item record as functions. These helpers own
+// only syntax shape; type resolution and field-default expressions remain in
+// the semantic and expression layers.
+fn data_decl_name_end(toks: List<Tok>, start: Int) -> Int {
+    let nameStart = item_name_index(toks, i: start)
+    return take_function_name(toks: toks, i: nameStart)
+}
+
+fn collect_data_derives(toks: List<Tok>, start: Int, end: Int, derives: mut List<FeatureName>) -> Int {
+    let mut i = start
+    if at_symbol(toks: toks, i: i, code: SYM_LANGLE) {
+        let genericClose = find_matching(toks: toks, open: i, openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
+        if genericClose < 0 { return i }
+        i = genericClose + 1
+    }
+    if at_ident(toks: toks, i: i, wid: WORD_DERIVES) == false { return i }
+    if at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) == false { return i }
+    let close = find_matching(toks: toks, open: (i + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+    if close < 0 || close >= end { return i }
+    let mut member = i + 2
+    while member < close {
+        if is_ident_tok(toks: toks, i: member) {
+            let tok = List.get<Tok>(list: toks, index: member)
+            local name = String.copy(value: tok.text)
+            let derive = FeatureName.from(name: take name, line: tok.line, column: tok.col, length: tok.len)
+            List.push<FeatureName>(list: mut derives, value: derive)
+        }
+        member = member + 1
+    }
+    return close + 1
+}
+
+fn data_body_open(toks: List<Tok>, start: Int, end: Int) -> Int {
+    let nameEnd = data_decl_name_end(toks, start)
+    if nameEnd < 0 { return -1 }
+    local ignored = List<FeatureName>.new()
+    let afterDerives = collect_data_derives(toks, start: nameEnd, end, derives: mut ignored)
+    if at_symbol(toks: toks, i: afterDerives, code: SYM_LBRACE) { return afterDerives }
+    return -1
+}
+
+fn data_kind(toks: List<Tok>, start: Int) -> String {
+    let mut i = start
+    if at_ident(toks: toks, i: i, wid: WORD_PUB) { i = i + 1 }
+    if at_ident(toks: toks, i: i, wid: WORD_OPAQUE) { i = i + 1 }
+    if at_ident(toks: toks, i: i, wid: WORD_SUM) { return "sum" }
+    if at_ident(toks: toks, i: i, wid: WORD_CLASS) { return "class" }
+    if at_ident(toks: toks, i: i, wid: WORD_RESOURCE) { return "resource" }
+    return "struct"
+}
+
+fn token_text_is(toks: List<Tok>, i: Int, value: String) -> Bool {
+    if is_ident_tok(toks: toks, i: i) == false { return false }
+    let tok = List.get<Tok>(list: toks, index: i)
+    return tok.text == value
+}
+
+fn field_name_text(toks: List<Tok>, start: Int) -> String {
+    if at_symbol(toks: toks, i: (start + 1), code: SYM_COLON) {
+        let tok = List.get<Tok>(list: toks, index: start)
+        return String.copy(value: tok.text)
+    }
+    return ""
+}
+
+fn push_data_field(toks: List<Tok>, start: Int, end: Int, fields: mut List<Field>) -> Unit {
+    if start >= end || is_ident_tok(toks: toks, i: start) == false { return Unit }
+    let nameTok = List.get<Tok>(list: toks, index: start)
+    let mut typeStart = start
+    local name = field_name_text(toks, start)
+    if at_symbol(toks: toks, i: (start + 1), code: SYM_COLON) {
+        typeStart = start + 2
+    }
+    let mut isHandle = false
+    let mut isWeak = false
+    if token_text_is(toks, i: typeStart, value: "handle") { isHandle = true; typeStart = typeStart + 1 }
+    else if token_text_is(toks, i: typeStart, value: "weak") { isWeak = true; typeStart = typeStart + 1 }
+    let typeEnd = param_type_end(toks, start: typeStart, end)
+    if typeStart >= typeEnd { return Unit }
+    let typeTok = List.get<Tok>(list: toks, index: typeStart)
+    local typeText = canonical_type_text(toks: toks, start: typeStart, end: typeEnd)
+    local typeSyntax = parse_type_syntax(toks, start: typeStart, end: typeEnd)
+    let field = Field.from(name: take name, typeText: take typeText, typeSyntax: take typeSyntax, isHandle: isHandle, isWeak: isWeak, line: nameTok.line, column: nameTok.col, length: nameTok.len, typeLine: typeTok.line, typeColumn: typeTok.col, typeLength: typeTok.len)
+    List.push<Field>(list: mut fields, value: field)
+}
+
+fn collect_data_fields(toks: List<Tok>, open: Int, close: Int, fields: mut List<Field>) -> Unit {
+    let mut i = open + 1
+    while i < close {
+        let lineEnd = next_line_or_block_end(toks: toks, start: i, end: close)
+        push_data_field(toks, start: i, end: lineEnd, fields: mut fields)
+        if lineEnd > i { i = lineEnd } else { i = i + 1 }
+    }
+    return Unit
+}
+
+fn collect_sum_variants(toks: List<Tok>, open: Int, close: Int, variants: mut List<Variant>) -> Unit {
+    let mut i = open + 1
+    while i < close {
+        let lineEnd = next_line_or_block_end(toks: toks, start: i, end: close)
+        if is_ident_tok(toks: toks, i: i) {
+            let tok = List.get<Tok>(list: toks, index: i)
+            local fields = List<Field>.new()
+            if at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) {
+                let fieldsClose = find_matching(toks: toks, open: (i + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+                if fieldsClose >= 0 && fieldsClose <= lineEnd {
+                    let mut fieldStart = i + 2
+                    while fieldStart < fieldsClose {
+                        let comma = split_top_level_comma(toks: toks, start: fieldStart, end: fieldsClose)
+                        let mut fieldEnd = fieldsClose
+                        if comma >= 0 { fieldEnd = comma }
+                        push_data_field(toks, start: fieldStart, end: fieldEnd, fields: mut fields)
+                        if comma < 0 { fieldStart = fieldsClose } else { fieldStart = comma + 1 }
+                    }
+                }
+            }
+            local name = String.copy(value: tok.text)
+            let variant = Variant.from(name: take name, line: tok.line, column: tok.col, length: tok.len, fields: take fields)
+            List.push<Variant>(list: mut variants, value: variant)
+        }
+        if lineEnd > i { i = lineEnd } else { i = i + 1 }
+    }
+    return Unit
+}
+
+fn push_data_item(program: mut Program, toks: List<Tok>, start: Int, end: Int, kind: Int) -> Unit {
+    let tok = List.get<Tok>(list: toks, index: start)
+    local name = item_name(toks, i: start)
+    let mut item = Item.plain(kind: kind, name: take name, line: tok.line, column: tok.col, length: tok.len)
+    item.isPublic = modifier_present(toks, start, word: WORD_PUB)
+    item.isOpaque = modifier_present(toks, start, word: WORD_OPAQUE)
+    item.dataKind = data_kind(toks, start)
+    let nameEnd = data_decl_name_end(toks, start)
+    if nameEnd >= 0 {
+        parse_generic_params(toks, nameEnd, signatureEnd: end, generics: mut item.generics)
+        let afterDerives = collect_data_derives(toks, start: nameEnd, end, derives: mut item.derives)
+        if at_symbol(toks: toks, i: afterDerives, code: SYM_LBRACE) {
+            let close = find_matching(toks: toks, open: afterDerives, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+            if close >= 0 {
+                item.hasBody = true
+                if kind == ITEM_SUM { collect_sum_variants(toks, open: afterDerives, close, variants: mut item.variants) }
+                else { collect_data_fields(toks, open: afterDerives, close, fields: mut item.fields) }
+            }
+        }
+    }
+    Program.push(self: mut program, item: item)
+}
+
+fn modifier_present(toks: List<Tok>, start: Int, word: Int) -> Bool {
+    let mut i = start
+    while at_symbol(toks: toks, i: i, code: SYM_HASH) { i = i + 5 }
     let mut scanning = true
     while scanning {
-        if at_ident(toks: read toks, i: read i, wid: read word) { return true }
-        if at_ident(toks: read toks, i: read i, wid: read WORD_PUB) || at_ident(toks: read toks, i: read i, wid: read WORD_ASYNC) || at_ident(toks: read toks, i: read i, wid: read WORD_NATIVE) {
+        if at_ident(toks: toks, i: i, wid: word) { return true }
+        if at_ident(toks: toks, i: i, wid: WORD_PUB) || at_ident(toks: toks, i: i, wid: WORD_ASYNC) || at_ident(toks: toks, i: i, wid: WORD_NATIVE) {
             i = i + 1
         } else {
             scanning = false
@@ -59,20 +251,48 @@ fn modifier_present(toks: read List<Tok>, start: read Int, word: read Int) -> Bo
     return false
 }
 
-fn dotted_name(toks: read List<Tok>, start: read Int, end: read Int) -> String {
+// The scanner represents each attribute as `# name ( value )`. Preserve the
+// lower-name pin in the shared declaration AST so semantic checks do not need
+// to rescan the function header.
+fn function_lower_name(toks: List<Tok>, start: Int) -> String {
+    let mut i = start
+    let mut result = ""
+    while at_symbol(toks: toks, i: i, code: SYM_HASH) {
+        let name = List.get<Tok>(list: toks, index: (i + 1))
+        let value = List.get<Tok>(list: toks, index: (i + 3))
+        if name.text == "lower_name" && at_symbol(toks: toks, i: (i + 2), code: SYM_LPAREN) && tk_kind(toks: toks, i: (i + 3)) == TOK_STRING {
+            result = value.text
+        }
+        i = i + 5
+    }
+    return result
+}
+
+fn function_has_lower_name(toks: List<Tok>, start: Int) -> Bool {
+    let mut i = start
+    let mut found = false
+    while at_symbol(toks: toks, i: i, code: SYM_HASH) {
+        let name = List.get<Tok>(list: toks, index: (i + 1))
+        if name.text == "lower_name" { found = true }
+        i = i + 5
+    }
+    return found
+}
+
+fn dotted_name(toks: List<Tok>, start: Int, end: Int) -> String {
     let mut out = ""
     let mut i = start
     while i < end {
-        let tok = List.get(list: read toks, index: read i)
-        out = String.concat(left: read out, right: read tok.text)
+        let tok = List.get(list: toks, index: i)
+        out = String.concat(left: out, right: tok.text)
         i = i + 1
     }
     return out
 }
 
-fn data_effect(toks: read List<Tok>, i: read Int) -> String {
-    if is_ident_tok(toks: read toks, i: read i) == false { return "" }
-    let tok = List.get(list: read toks, index: read i)
+fn data_effect(toks: List<Tok>, i: Int) -> String {
+    if is_ident_tok(toks: toks, i: i) == false { return "" }
+    let tok = List.get(list: toks, index: i)
     if tok.text == "read" { return "read" }
     if tok.text == "mut" { return "mut" }
     if tok.text == "take" { return "take" }
@@ -82,17 +302,17 @@ fn data_effect(toks: read List<Tok>, i: read Int) -> String {
 // A parameter's default expression starts at a top-level `=`. Nested generic,
 // tuple, and function types may contain punctuation, so only depth-zero `=`
 // terminates the syntax type range.
-fn param_type_end(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
+fn param_type_end(toks: List<Tok>, start: Int, end: Int) -> Int {
     let mut i = start
     let mut depth = 0
     while i < end {
-        let opener = at_symbol(toks: read toks, i: read i, code: read SYM_LPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_LANGLE)
-        let closer = at_symbol(toks: read toks, i: read i, code: read SYM_RPAREN) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACKET) || at_symbol(toks: read toks, i: read i, code: read SYM_RBRACE) || at_symbol(toks: read toks, i: read i, code: read SYM_RANGLE)
+        let opener = at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) || at_symbol(toks: toks, i: i, code: SYM_LANGLE)
+        let closer = at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) || at_symbol(toks: toks, i: i, code: SYM_RBRACE) || at_symbol(toks: toks, i: i, code: SYM_RANGLE)
         if opener {
             depth = depth + 1
         } else if closer {
             if depth > 0 { depth = depth - 1 }
-        } else if depth == 0 && at_symbol(toks: read toks, i: read i, code: read SYM_EQ) {
+        } else if depth == 0 && at_symbol(toks: toks, i: i, code: SYM_EQ) {
             return i
         }
         i = i + 1
@@ -100,210 +320,528 @@ fn param_type_end(toks: read List<Tok>, start: read Int, end: read Int) -> Int {
     return end
 }
 
-fn push_param(toks: read List<Tok>, start: read Int, end: read Int, params: mut List<Param>) -> Unit {
-    if start >= end || is_ident_tok(toks: read toks, i: read start) == false { return Unit }
-    if String.len(value: read data_effect(toks: read toks, i: read start)) > 0 { return Unit }
-    let nameTok = List.get(list: read toks, index: read start)
+fn param_type_is_copy(toks: List<Tok>, start: Int, end: Int) -> Bool {
+    let mut i = start
+    let mut freshOrNoescape = false
+    let mut scanning = true
+    while i < end && scanning {
+        let tok = List.get<Tok>(list: toks, index: i)
+        if tok.text == "fresh" || tok.text == "noescape" {
+            freshOrNoescape = true
+            i = i + 1
+        } else if tok.text == "owned" || tok.text == "handle" || tok.text == "weak" {
+            i = i + 1
+        } else {
+            scanning = false
+        }
+    }
+    if freshOrNoescape || i >= end || is_ident_tok(toks: toks, i: i) == false { return false }
+    let base = List.get<Tok>(list: toks, index: i)
+    let scalar = base.text == "Int" || base.text == "Float" || base.text == "Bool" || base.text == "Char" || base.text == "Unit"
+    return scalar && at_symbol(toks: toks, i: (i + 1), code: SYM_LANGLE) == false
+}
+
+fn type_has_text(toks: List<Tok>, start: Int, end: Int, value: String) -> Bool {
+    let mut i = start
+    while i < end {
+        let tok = List.get<Tok>(list: toks, index: i)
+        if tok.text == value { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn type_base_index(toks: List<Tok>, start: Int, end: Int) -> Int {
+    let mut i = start
+    let mut scanning = true
+    while i < end && scanning {
+        let tok = List.get<Tok>(list: toks, index: i)
+        if tok.text == "fresh" || tok.text == "noescape" || tok.text == "owned" || tok.text == "handle" || tok.text == "weak" || tok.text == "&" {
+            i = i + 1
+        } else {
+            scanning = false
+        }
+    }
+    return i
+}
+
+fn type_base_text(toks: List<Tok>, baseIndex: Int, end: Int) -> String {
+    if baseIndex < end && is_ident_tok(toks: toks, i: baseIndex) {
+        let base = List.get<Tok>(list: toks, index: baseIndex)
+        return String.copy(value: base.text)
+    }
+    return ""
+}
+
+fn parse_type_syntax(toks: List<Tok>, start: Int, end: Int) -> fresh TypeSyntax {
+    let baseIndex = type_base_index(toks, start, end)
+    local base = type_base_text(toks, baseIndex, end)
+    let mut hasArguments = false
+    if baseIndex < end && is_ident_tok(toks: toks, i: baseIndex) {
+        let nameEnd = take_function_name(toks: toks, i: baseIndex)
+        hasArguments = nameEnd >= 0 && at_symbol(toks: toks, i: nameEnd, code: SYM_LANGLE)
+    }
+    let fresh = type_has_text(toks, start, end, value: "fresh")
+    let noescape = type_has_text(toks, start, end, value: "noescape")
+    let owned = type_has_text(toks, start, end, value: "owned")
+    let surfaceReference = type_has_text(toks, start, end, value: "&")
+    let mentionsFd = type_has_text(toks, start, end, value: "Fd")
+    let copy = param_type_is_copy(toks, start, end)
+    return TypeSyntax.from(base: take base, hasArguments: hasArguments, isFresh: fresh, isNoescape: noescape, isOwned: owned, isSurfaceReference: surfaceReference, mentionsFd: mentionsFd, isCopy: copy)
+}
+
+fn push_param(program: mut Program, toks: List<Tok>, start: Int, end: Int, params: mut List<Param>) -> Unit {
+    if start >= end || is_ident_tok(toks: toks, i: start) == false { return Unit }
+    if String.len(value: data_effect(toks, i: start)) > 0 { return Unit }
+    let nameTok = List.get(list: toks, index: start)
     let mut typeStart = start + 1
     let mut effect = ""
-    if at_symbol(toks: read toks, i: read typeStart, code: read SYM_COLON) {
+    if at_symbol(toks: toks, i: typeStart, code: SYM_COLON) {
         typeStart = typeStart + 1
-        effect = data_effect(toks: read toks, i: read typeStart)
-        if String.len(value: read effect) > 0 { typeStart = typeStart + 1 }
+        effect = data_effect(toks, i: typeStart)
+        if String.len(value: effect) > 0 { typeStart = typeStart + 1 }
     }
-    local name = String.copy(value: read nameTok.text)
-    local ownedEffect = String.copy(value: read effect)
-    let defaultEq = param_type_end(toks: read toks, start: read typeStart, end: read end)
-    local typeText = canonical_type_text(toks: read toks, start: read typeStart, end: read defaultEq)
-    let hasDefault = defaultEq < end && at_symbol(toks: read toks, i: read defaultEq, code: read SYM_EQ) && (defaultEq + 1) < end
+    local name = String.copy(value: nameTok.text)
+    local ownedEffect = String.copy(value: effect)
+    let defaultEq = param_type_end(toks, start: typeStart, end)
+    local typeText = canonical_type_text(toks: toks, start: typeStart, end: defaultEq)
+    local typeSyntax = parse_type_syntax(toks, start: typeStart, end: defaultEq)
+    let isCopy = typeSyntax.isCopy
+    let mut typeLine = 0
+    let mut typeColumn = 0
+    let mut typeLength = 0
+    if typeStart < defaultEq {
+        let typeTok = List.get<Tok>(list: toks, index: typeStart)
+        typeLine = typeTok.line
+        typeColumn = typeTok.col
+        typeLength = typeTok.len
+    }
+    let hasDefault = defaultEq < end && at_symbol(toks: toks, i: defaultEq, code: SYM_EQ) && (defaultEq + 1) < end
     let mut defaultLine = 0
     let mut defaultColumn = 0
     let mut defaultLength = 0
+    let mut defaultExpression = -1
     if hasDefault {
-        let defaultTok = List.get(list: read toks, index: read (defaultEq + 1))
+        let defaultTok = List.get(list: toks, index: (defaultEq + 1))
         defaultLine = defaultTok.line
         defaultColumn = defaultTok.col
         defaultLength = defaultTok.len
+        defaultExpression = parse_expression(program: mut program, toks, start: (defaultEq + 1), end: end)
     }
-    let param = Param.from(name: take name, effect: take ownedEffect, typeText: take typeText, hasDefault: hasDefault, defaultLine: defaultLine, defaultColumn: defaultColumn, defaultLength: defaultLength, line: nameTok.line, column: nameTok.col, length: nameTok.len)
-    List.push<Param>(list: mut params, value: read param)
+    let param = Param.from(name: take name, effect: take ownedEffect, typeText: take typeText, typeSyntax: take typeSyntax, isCopy: isCopy, typeLine: typeLine, typeColumn: typeColumn, typeLength: typeLength, hasDefault: hasDefault, defaultLine: defaultLine, defaultColumn: defaultColumn, defaultLength: defaultLength, defaultExpression: defaultExpression, line: nameTok.line, column: nameTok.col, length: nameTok.len)
+    List.push<Param>(list: mut params, value: param)
 }
 
-fn parse_params(toks: read List<Tok>, open: read Int, close: read Int, params: mut List<Param>) -> Unit {
+fn parse_params(program: mut Program, toks: List<Tok>, open: Int, close: Int, params: mut List<Param>) -> Unit {
     let mut start = open + 1
     while start < close {
-        let comma = split_top_level_comma(toks: read toks, start: read start, end: read close)
+        let comma = split_top_level_comma(toks: toks, start: start, end: close)
         let mut end = close
         if comma >= 0 { end = comma }
-        push_param(toks: read toks, start: read start, end: read end, params: mut params)
+        push_param(program: mut program, toks, start, end, params: mut params)
         if comma < 0 { start = close } else { start = comma + 1 }
     }
     return Unit
 }
 
-fn push_generic_param(toks: read List<Tok>, start: read Int, end: read Int, generics: mut List<GenericParam>) -> Unit {
-    if start >= end || is_ident_tok(toks: read toks, i: read start) == false { return Unit }
-    let tok = List.get(list: read toks, index: read start)
-    local name = String.copy(value: read tok.text)
+fn push_generic_param(toks: List<Tok>, start: Int, end: Int, generics: mut List<GenericParam>) -> Unit {
+    if start >= end || is_ident_tok(toks: toks, i: start) == false { return Unit }
+    let tok = List.get(list: toks, index: start)
+    local name = String.copy(value: tok.text)
     let mut boundStart = end
-    if at_symbol(toks: read toks, i: read (start + 1), code: read SYM_COLON) { boundStart = start + 2 }
-    local boundText = canonical_type_text(toks: read toks, start: read boundStart, end: read end)
+    if at_symbol(toks: toks, i: (start + 1), code: SYM_COLON) { boundStart = start + 2 }
+    local boundText = canonical_type_text(toks: toks, start: boundStart, end: end)
     let generic = GenericParam.from(name: take name, boundText: take boundText, line: tok.line, column: tok.col, length: tok.len)
-    List.push<GenericParam>(list: mut generics, value: read generic)
+    List.push<GenericParam>(list: mut generics, value: generic)
 }
 
-fn parse_generic_params(toks: read List<Tok>, nameEnd: read Int, signatureEnd: read Int, generics: mut List<GenericParam>) -> Unit {
-    if at_symbol(toks: read toks, i: read nameEnd, code: read SYM_LANGLE) == false { return Unit }
-    let close = find_matching(toks: read toks, open: read nameEnd, openSym: read SYM_LANGLE, closeSym: read SYM_RANGLE)
+fn parse_generic_params(toks: List<Tok>, nameEnd: Int, signatureEnd: Int, generics: mut List<GenericParam>) -> Unit {
+    if at_symbol(toks: toks, i: nameEnd, code: SYM_LANGLE) == false { return Unit }
+    let close = find_matching(toks: toks, open: nameEnd, openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
     if close < 0 || close >= signatureEnd { return Unit }
     let mut start = nameEnd + 1
     while start < close {
-        let comma = split_top_level_comma(toks: read toks, start: read start, end: read close)
+        let comma = split_top_level_comma(toks: toks, start: start, end: close)
         let mut end = close
         if comma >= 0 { end = comma }
-        push_generic_param(toks: read toks, start: read start, end: read end, generics: mut generics)
+        push_generic_param(toks, start, end, generics: mut generics)
         if comma < 0 { start = close } else { start = comma + 1 }
     }
     return Unit
 }
 
-fn return_type(toks: read List<Tok>, start: read Int, end: read Int) -> String {
+fn return_type(toks: List<Tok>, start: Int, end: Int) -> String {
     let mut arrow = -1
     let mut i = start
     while i < end && arrow < 0 {
-        if at_symbol(toks: read toks, i: read i, code: read SYM_ARROW) { arrow = i }
+        if at_symbol(toks: toks, i: i, code: SYM_ARROW) { arrow = i }
         i = i + 1
     }
     if arrow < 0 { return "" }
     let mut typeEnd = end
     i = arrow + 1
     while i < end {
-        if at_ident(toks: read toks, i: read i, wid: read WORD_EFFECTS) || at_symbol(toks: read toks, i: read i, code: read SYM_EQ) || at_symbol(toks: read toks, i: read i, code: read SYM_LBRACE) {
+        if at_ident(toks: toks, i: i, wid: WORD_EFFECTS) || at_symbol(toks: toks, i: i, code: SYM_EQ) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) {
             typeEnd = i
             i = end
         } else {
             i = i + 1
         }
     }
-    return canonical_type_text(toks: read toks, start: read (arrow + 1), end: read typeEnd)
+    return canonical_type_text(toks: toks, start: (arrow + 1), end: typeEnd)
 }
 
-fn collect_effects(toks: read List<Tok>, start: read Int, end: read Int, effects: mut List<EffectName>) -> Unit {
+fn retains_target_text(toks: List<Tok>, start: Int, isRetains: Bool) -> String {
+    if isRetains && is_ident_tok(toks: toks, i: (start + 2)) {
+        let target = List.get<Tok>(list: toks, index: (start + 2))
+        return String.copy(value: target.text)
+    }
+    return ""
+}
+
+fn effect_segment_is_well_formed(toks: List<Tok>, start: Int, end: Int) -> Bool {
+    if start >= end || is_ident_tok(toks: toks, i: start) == false { return false }
+    let head = List.get<Tok>(list: toks, index: start)
+    if head.text == "retains" {
+        return (start + 4) == end && at_symbol(toks: toks, i: (start + 1), code: SYM_LPAREN) && is_ident_tok(toks: toks, i: (start + 2)) && at_symbol(toks: toks, i: (start + 3), code: SYM_RPAREN)
+    }
+    return (start + 1) == end
+}
+
+fn effects_clause_is_well_formed(toks: List<Tok>, open: Int, close: Int) -> Bool {
+    if open + 1 >= close { return false }
+    let mut segmentStart = open + 1
+    let mut valid = true
+    while segmentStart < close && valid {
+        let comma = split_top_level_comma(toks: toks, start: segmentStart, end: close)
+        let mut segmentEnd = close
+        if comma >= 0 { segmentEnd = comma }
+        if effect_segment_is_well_formed(toks, start: segmentStart, end: segmentEnd) == false { valid = false }
+        if comma < 0 { segmentStart = close } else { segmentStart = comma + 1 }
+    }
+    return valid
+}
+
+fn collect_effects(toks: List<Tok>, start: Int, end: Int, effects: mut List<EffectName>) -> Unit {
     let mut i = start
     let mut open = -1
     while i < end && open < 0 {
-        if at_ident(toks: read toks, i: read i, wid: read WORD_EFFECTS) && at_symbol(toks: read toks, i: read (i + 1), code: read SYM_LPAREN) {
+        if at_ident(toks: toks, i: i, wid: WORD_EFFECTS) && at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) {
             open = i + 1
         }
         i = i + 1
     }
     if open < 0 { return Unit }
-    let close = find_matching(toks: read toks, open: read open, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
+    let close = find_matching(toks: toks, open: open, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
     if close < 0 || close > end { return Unit }
+    if effects_clause_is_well_formed(toks, open, close) == false { return Unit }
     let mut segmentStart = open + 1
     while segmentStart < close {
-        let comma = split_top_level_comma(toks: read toks, start: read segmentStart, end: read close)
-        if is_ident_tok(toks: read toks, i: read segmentStart) {
-            let tok = List.get(list: read toks, index: read segmentStart)
-            local name = String.copy(value: read tok.text)
-            let effect = EffectName.from(name: take name, line: tok.line, column: tok.col, length: tok.len)
-            List.push<EffectName>(list: mut effects, value: read effect)
+        let comma = split_top_level_comma(toks: toks, start: segmentStart, end: close)
+        if is_ident_tok(toks: toks, i: segmentStart) {
+            let tok = List.get(list: toks, index: segmentStart)
+            local name = String.copy(value: tok.text)
+            let isRetains = tok.text == "retains" && at_symbol(toks: toks, i: (segmentStart + 1), code: SYM_LPAREN)
+            local target = retains_target_text(toks, start: segmentStart, isRetains)
+            let effect = EffectName.from(name: take name, target: take target, isRetains: isRetains, line: tok.line, column: tok.col, length: tok.len)
+            List.push<EffectName>(list: mut effects, value: effect)
         }
         if comma < 0 { segmentStart = close } else { segmentStart = comma + 1 }
     }
     return Unit
 }
 
-fn push_function_item(program: mut Program, toks: read List<Tok>, start: read Int, end: read Int) -> Unit {
-    let nameStart = function_decl_name_start(toks: read toks, i: read start)
-    let nameEnd = take_function_name(toks: read toks, i: read nameStart)
-    let sigEnd = function_signature_end(toks: read toks, start: read (nameStart - 1))
-    let paramOpen = function_param_open(toks: read toks, from: read nameEnd, end: read sigEnd)
-    local generics = List<GenericParam>.new()
-    parse_generic_params(toks: read toks, nameEnd: read nameEnd, signatureEnd: read sigEnd, generics: mut generics)
-    local params = List<Param>.new()
-    if paramOpen >= 0 {
-        let paramClose = find_matching(toks: read toks, open: read paramOpen, openSym: read SYM_LPAREN, closeSym: read SYM_RPAREN)
-        if paramClose >= 0 { parse_params(toks: read toks, open: read paramOpen, close: read paramClose, params: mut params) }
+fn function_default_impl_marker(toks: List<Tok>, start: Int, end: Int) -> Bool {
+    let mut i = start
+    while i + 1 < end {
+        if at_symbol(toks: toks, i: i, code: SYM_EQ) && at_ident(toks: toks, i: (i + 1), wid: WORD_UNDERSCORE) {
+            return true
+        }
+        i = i + 1
     }
-    local effects = List<EffectName>.new()
-    collect_effects(toks: read toks, start: read nameEnd, end: read sigEnd, effects: mut effects)
-    local name = dotted_name(toks: read toks, start: read nameStart, end: read nameEnd)
-    local ret = return_type(toks: read toks, start: read nameEnd, end: read sigEnd)
-    let bodyOpen = sigEnd
-    let hasBody = at_symbol(toks: read toks, i: read bodyOpen, code: read SYM_LBRACE)
-    local statements = List<Int>.new()
-    if hasBody {
-        let bodyClose = find_matching(toks: read toks, open: read bodyOpen, openSym: read SYM_LBRACE, closeSym: read SYM_RBRACE)
-        if bodyClose >= 0 { parse_body_statements(program: mut program, toks: read toks, open: read bodyOpen, close: read bodyClose, statements: mut statements) }
-    }
-    let tok = List.get(list: read toks, index: read start)
-    let item = Item.function(name: take name, line: tok.line, column: tok.col, length: tok.len, isPublic: modifier_present(toks: read toks, start: read start, word: read WORD_PUB), isAsync: modifier_present(toks: read toks, start: read start, word: read WORD_ASYNC), isNative: modifier_present(toks: read toks, start: read start, word: read WORD_NATIVE), hasBody: hasBody, generics: take generics, params: take params, effects: take effects, statements: take statements, returnType: take ret)
-    Program.push(self: mut program, item: read item)
+    return false
 }
 
-// Parse all recoverable top-level declarations. Unknown and malformed items are
-// represented explicitly so a later diagnostic pass can report them without
-// reparsing source text.
-fn parse_program(toks: read List<Tok>) -> Program {
+fn function_name_is_qualified(name: String) -> Bool {
+    match String.index_of(value: name, needle: ".") {
+        Some(_) => { return true }
+        None => { return false }
+    }
+}
+
+// `includeBodies` keeps the shared header parser reusable for consumers such as
+// astdump that render bodies with their own streaming traversal. Checker, IR,
+// and package consumers retain the full statement/expression arena.
+fn push_function_item(program: mut Program, toks: List<Tok>, start: Int, end: Int, protocolName: String, includeBodies: Bool) -> Unit {
+    let nameStart = function_decl_name_start(toks: toks, i: start)
+    let nameEnd = take_function_name(toks: toks, i: nameStart)
+    let sigEnd = function_signature_end(toks: toks, start: (nameStart - 1))
+    let paramOpen = function_param_open(toks: toks, from: nameEnd, end: sigEnd)
+    local generics = List<GenericParam>.new()
+    parse_generic_params(toks, nameEnd, signatureEnd: sigEnd, generics: mut generics)
+    local params = List<Param>.new()
+    if paramOpen >= 0 {
+        let paramClose = find_matching(toks: toks, open: paramOpen, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+        if paramClose >= 0 { parse_params(program: mut program, toks, open: paramOpen, close: paramClose, params: mut params) }
+    }
+    local effects = List<EffectName>.new()
+    collect_effects(toks, start: nameEnd, end: sigEnd, effects: mut effects)
+    local name = dotted_name(toks, start: nameStart, end: nameEnd)
+    let hasLowerName = function_has_lower_name(toks, start: start)
+    local lowerName = function_lower_name(toks, start: start)
+    local ret = return_type(toks, start: nameEnd, end: sigEnd)
+    let bodyOpen = sigEnd
+    let hasBody = at_symbol(toks: toks, i: bodyOpen, code: SYM_LBRACE)
+    local statements = List<Int>.new()
+    if hasBody && includeBodies {
+        let bodyClose = find_matching(toks: toks, open: bodyOpen, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+        if bodyClose >= 0 { parse_body_statements(program: mut program, toks: toks, open: bodyOpen, close: bodyClose, statements: mut statements) }
+    }
+    let tok = List.get(list: toks, index: start)
+    let mut item = Item.function(name: take name, line: tok.line, column: tok.col, length: tok.len, isPublic: modifier_present(toks, start, word: WORD_PUB), isAsync: modifier_present(toks, start, word: WORD_ASYNC), isNative: modifier_present(toks, start, word: WORD_NATIVE), hasBody: hasBody, hasLowerName: hasLowerName, lowerName: take lowerName, generics: take generics, params: take params, effects: take effects, statements: take statements, returnType: take ret)
+    if String.len(value: protocolName) > 0 {
+        item.isPublic = true
+        item.protocol = String.copy(value: protocolName)
+        if function_name_is_qualified(name: item.name) == false {
+            item.name = String.concat(left: String.concat(left: protocolName, right: "."), right: item.name)
+        }
+        let selfTok = List.get<Tok>(list: toks, index: start)
+        local selfName = "Self"
+        local selfBound = "Managed"
+        let selfGeneric = GenericParam.from(name: take selfName, boundText: take selfBound, line: selfTok.line, column: selfTok.col, length: selfTok.len)
+        List.push<GenericParam>(list: mut item.generics, value: selfGeneric)
+    }
+    item.hasDefaultImplMarker = function_default_impl_marker(toks: toks, start: start, end: end)
+    collect_fresh_return_targets(toks: toks, start: nameEnd, end: sigEnd, targets: mut item.freshReturnTargets)
+    Program.push(self: mut program, item: item)
+}
+
+fn collect_fresh_return_targets(toks: List<Tok>, start: Int, end: Int, targets: mut List<FreshReturnTarget>) -> Unit {
+    let mut i = start
+    while i + 1 < end {
+        if is_ident_tok(toks: toks, i: i) {
+            let freshTok = List.get<Tok>(list: toks, index: i)
+            if freshTok.text == "fresh" && is_ident_tok(toks: toks, i: (i + 1)) {
+                let targetTok = List.get<Tok>(list: toks, index: (i + 1))
+                local name = String.copy(value: targetTok.text)
+                let target = FreshReturnTarget.from(name: take name, line: targetTok.line, column: targetTok.col, length: targetTok.len)
+                List.push<FreshReturnTarget>(list: mut targets, value: target)
+            }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn push_protocol_item(program: mut Program, toks: List<Tok>, start: Int, end: Int, includeBodies: Bool) -> Unit {
+    let tok = List.get(list: toks, index: start)
+    local name = item_name(toks: toks, i: start)
+    let mut item = Item.plain(kind: ITEM_PROTOCOL, name: take name, line: tok.line, column: tok.col, length: tok.len)
+    item.protocol = String.copy(value: item.name)
+    local protocolName = String.copy(value: item.protocol)
+    Program.push(self: mut program, item: item)
+    let mut open = start + 1
+    while open < end && at_symbol(toks: toks, i: open, code: SYM_LBRACE) == false {
+        open = open + 1
+    }
+    if open >= end { return Unit }
+    let close = find_matching(toks: toks, open: open, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+    if close < 0 { return Unit }
+    let mut i = open + 1
+    while i < close {
+        if at_ident(toks: toks, i: i, wid: WORD_FN) || at_ident(toks: toks, i: i, wid: WORD_PUB) || at_ident(toks: toks, i: i, wid: WORD_ASYNC) || at_ident(toks: toks, i: i, wid: WORD_NATIVE) || at_symbol(toks: toks, i: i, code: SYM_HASH) {
+            let methodEnd = parse_function_decl(toks: toks, i: i)
+            if methodEnd > i {
+                push_function_item(program: mut program, toks: toks, start: i, end: methodEnd, protocolName: protocolName, includeBodies: includeBodies)
+                i = methodEnd
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+}
+
+fn impl_type_name(toks: List<Tok>, start: Int) -> String {
+    let protocolEnd = take_ident_name(toks: toks, i: (start + 1))
+    if protocolEnd < 0 || at_ident(toks: toks, i: protocolEnd, wid: WORD_FOR) == false { return "" }
+    let typeEnd = take_function_name(toks: toks, i: (protocolEnd + 1))
+    if typeEnd < 0 { return "" }
+    return dotted_name(toks: toks, start: (protocolEnd + 1), end: typeEnd)
+}
+
+fn impl_protocol_name(toks: List<Tok>, start: Int) -> String {
+    if is_ident_tok(toks: toks, i: (start + 1)) == false { return "" }
+    let tok = List.get<Tok>(list: toks, index: (start + 1))
+    return String.copy(value: tok.text)
+}
+
+fn collect_impl_mappings(toks: List<Tok>, open: Int, close: Int, mappings: mut List<ProtocolMapping>) -> Unit {
+    let mut i = open + 1
+    while i < close {
+        if is_ident_tok(toks: toks, i: i) && at_symbol(toks: toks, i: (i + 1), code: SYM_EQ) {
+            let mut targetEnd = take_function_name(toks: toks, i: (i + 2))
+            if targetEnd >= 0 {
+                let tok = List.get<Tok>(list: toks, index: i)
+                local method = String.copy(value: tok.text)
+                local target = dotted_name(toks: toks, start: (i + 2), end: targetEnd)
+                let mapping = ProtocolMapping.from(method: take method, target: take target, line: tok.line, column: tok.col, length: tok.len)
+                List.push<ProtocolMapping>(list: mut mappings, value: mapping)
+                i = targetEnd
+            } else {
+                i = i + 1
+            }
+        } else {
+            i = i + 1
+        }
+    }
+    return Unit
+}
+
+fn push_impl_item(program: mut Program, toks: List<Tok>, start: Int, end: Int) -> Unit {
+    let tok = List.get(list: toks, index: start)
+    local name = impl_protocol_name(toks: toks, start: start)
+    let mut item = Item.plain(kind: ITEM_IMPL, name: take name, line: tok.line, column: tok.col, length: tok.len)
+    item.protocol = String.copy(value: item.name)
+    item.implType = impl_type_name(toks: toks, start: start)
+    let mut open = start
+    while open < end && at_symbol(toks: toks, i: open, code: SYM_LBRACE) == false {
+        open = open + 1
+    }
+    if open >= end { open = 0 - 1 }
+    if open >= 0 {
+        let close = find_matching(toks: toks, open: open, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+        if close >= 0 { collect_impl_mappings(toks: toks, open: open, close: close, mappings: mut item.mappings) }
+    }
+    Program.push(self: mut program, item: item)
+}
+
+// Alias targets and const values remain syntax text for now. Materializing
+// them on Item lets package-contract consumers avoid reopening declarations;
+// expression/type resolution belongs to later semantic layers.
+fn declaration_equal_index(toks: List<Tok>, start: Int, end: Int) -> Int {
+    let mut i = start
+    while i < end {
+        if at_symbol(toks: toks, i: i, code: SYM_EQ) { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+fn declaration_text(toks: List<Tok>, start: Int, end: Int) -> String {
+    let mut out = ""
+    let mut i = start
+    while i < end {
+        let tok = List.get<Tok>(list: toks, index: i)
+        out = String.concat(left: out, right: tok.text)
+        i = i + 1
+    }
+    return out
+}
+
+fn push_type_alias_item(program: mut Program, toks: List<Tok>, start: Int, end: Int) -> Unit {
+    let tok = List.get<Tok>(list: toks, index: start)
+    local name = item_name(toks: toks, i: start)
+    let mut item = Item.plain(kind: ITEM_TYPE_ALIAS, name: take name, line: tok.line, column: tok.col, length: tok.len)
+    item.isPublic = modifier_present(toks: toks, start: start, word: WORD_PUB)
+    let nameIndex = item_name_index(toks: toks, i: start)
+    parse_generic_params(toks, nameIndex + 1, signatureEnd: end, generics: mut item.generics)
+    let equal = declaration_equal_index(toks: toks, start: start, end: end)
+    if equal >= 0 { item.aliasTarget = declaration_text(toks: toks, start: (equal + 1), end: end) }
+    Program.push(self: mut program, item: item)
+}
+
+fn push_const_item(program: mut Program, toks: List<Tok>, start: Int, end: Int) -> Unit {
+    let tok = List.get<Tok>(list: toks, index: start)
+    local name = item_name(toks: toks, i: start)
+    let mut item = Item.plain(kind: ITEM_CONST, name: take name, line: tok.line, column: tok.col, length: tok.len)
+    item.isPublic = modifier_present(toks: toks, start: start, word: WORD_PUB)
+    let equal = declaration_equal_index(toks: toks, start: start, end: end)
+    if equal >= 0 {
+        item.constValue = declaration_text(toks: toks, start: (equal + 1), end: end)
+        item.constExpression = parse_expression(program: mut program, toks, start: (equal + 1), end: end)
+        let nameEnd = take_function_name(toks: toks, i: item_name_index(toks: toks, i: start))
+        if nameEnd >= 0 && at_symbol(toks: toks, i: nameEnd, code: SYM_COLON) {
+            item.constType = declaration_text(toks: toks, start: (nameEnd + 1), end: equal)
+        }
+    }
+    Program.push(self: mut program, item: item)
+}
+
+// Parse all recoverable declarations, including materialized bodies for semantic
+// consumers. Unknown and malformed items remain explicit for diagnostics.
+fn parse_program(toks: List<Tok>) -> Program {
+    return parse_program_mode(toks: toks, includeBodies: true)
+}
+
+// Astdump already owns its body renderer. Reuse the same declaration/signature
+// parser without first constructing an unused body arena for every function.
+fn parse_program_headers(toks: List<Tok>) -> Program {
+    return parse_program_mode(toks: toks, includeBodies: false)
+}
+
+fn parse_program_mode(toks: List<Tok>, includeBodies: Bool) -> Program {
     let mut program = Program.empty()
-    let ntok = List.len(list: read toks)
+    program.bodiesMaterialized = includeBodies
+    let ntok = List.len(list: toks)
     let mut i = 0
     let mut running = true
     while running {
-        if i >= ntok || tk_kind(toks: read toks, i: read i) == TOK_EOF {
+        if i >= ntok || tk_kind(toks: toks, i: i) == TOK_EOF {
             running = false
         } else {
-            let cls = classify_top(toks: read toks, i: read i)
+            let cls = classify_top(toks: toks, i: i)
             let isPub = cls.isPub
             if cls.isFeatures {
-                push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_FEATURES, name: read "features")
-                i = declaration_line_end(toks: read toks, start: read i)
+                let end = declaration_line_end(toks: toks, start: i)
+                push_feature_item(program: mut program, toks, start: i, end)
+                i = end
             } else if cls.isProfile {
-                push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_PROFILE, name: read "profile")
-                i = declaration_line_end(toks: read toks, start: read i)
-            } else if starts_type_decl(toks: read toks, i: read i, isPub: read isPub) {
-                let r = parse_type_decl(toks: read toks, i: read i)
-                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
-                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_TYPE, name: read item_name(toks: read toks, i: read i)) ; i = r }
+                push_item(program: mut program, toks, i, kind: ITEM_PROFILE, name: "profile")
+                i = declaration_line_end(toks: toks, start: i)
+            } else if starts_type_decl(toks: toks, i: i, isPub: isPub) {
+                let r = parse_type_decl(toks: toks, i: i)
+                if r < 0 { push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "") ; i = i + 1 }
+                else { push_data_item(program: mut program, toks, start: i, end: r, kind: ITEM_TYPE) ; i = r }
             } else if cls.isSum {
-                let r = parse_sum_decl(toks: read toks, i: read i)
-                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
-                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_SUM, name: read item_name(toks: read toks, i: read i)) ; i = r }
-            } else if at_ident(toks: read toks, i: read i, wid: read WORD_PROTOCOL) {
-                let r = parse_protocol_decl(toks: read toks, i: read i)
-                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
-                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_PROTOCOL, name: read item_name(toks: read toks, i: read i)) ; i = r }
-            } else if at_ident(toks: read toks, i: read i, wid: read WORD_IMPL) {
-                let r = parse_impl_decl(toks: read toks, i: read i)
-                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
-                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_IMPL, name: read "") ; i = r }
+                let r = parse_sum_decl(toks: toks, i: i)
+                if r < 0 { push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "") ; i = i + 1 }
+                else { push_data_item(program: mut program, toks, start: i, end: r, kind: ITEM_SUM) ; i = r }
+            } else if at_ident(toks: toks, i: i, wid: WORD_PROTOCOL) {
+                let r = parse_protocol_decl(toks: toks, i: i)
+                if r < 0 { push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "") ; i = i + 1 }
+                else { push_protocol_item(program: mut program, toks: toks, start: i, end: r, includeBodies: includeBodies) ; i = r }
+            } else if at_ident(toks: toks, i: i, wid: WORD_IMPL) {
+                let r = parse_impl_decl(toks: toks, i: i)
+                if r < 0 { push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "") ; i = i + 1 }
+                else { push_impl_item(program: mut program, toks: toks, start: i, end: r) ; i = r }
             } else if cls.isNativeMod {
-                let r = parse_native_module_decl(toks: read toks, i: read i)
-                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
-                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_NATIVE_MODULE, name: read item_name(toks: read toks, i: read i)) ; i = r }
+                let r = parse_native_module_decl(toks: toks, i: i)
+                if r < 0 { push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "") ; i = i + 1 }
+                else { push_item(program: mut program, toks, i, kind: ITEM_NATIVE_MODULE, name: item_name(toks, i)) ; i = r }
             } else if cls.isTypeAlias {
-                let r = parse_type_alias_decl(toks: read toks, i: read i)
-                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
-                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_TYPE_ALIAS, name: read item_name(toks: read toks, i: read i)) ; i = r }
+                let r = parse_type_alias_decl(toks: toks, i: i)
+                if r < 0 { push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "") ; i = i + 1 }
+                else { push_type_alias_item(program: mut program, toks: toks, start: i, end: r) ; i = r }
             } else if cls.isConst {
-                let r = parse_const_decl(toks: read toks, i: read i)
-                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
-                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_CONST, name: read item_name(toks: read toks, i: read i)) ; i = r }
-            } else if at_ident(toks: read toks, i: read i, wid: read WORD_MODULE) {
-                let r = parse_module_decl(toks: read toks, i: read i)
-                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
-                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_MODULE, name: read item_name(toks: read toks, i: read i)) ; i = r }
-            } else if at_ident(toks: read toks, i: read i, wid: read WORD_USE) {
-                let r = parse_use_decl(toks: read toks, i: read i)
-                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
-                else { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_USE, name: read "") ; i = r }
-            } else if starts_fn_like(toks: read toks, i: read i, isPub: read isPub) {
-                let r = parse_function_decl(toks: read toks, i: read i)
-                if r < 0 { push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "") ; i = i + 1 }
-                else { push_function_item(program: mut program, toks: read toks, start: read i, end: read r) ; i = r }
+                let r = parse_const_decl(toks: toks, i: i)
+                if r < 0 { push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "") ; i = i + 1 }
+                else { push_const_item(program: mut program, toks: toks, start: i, end: r) ; i = r }
+            } else if at_ident(toks: toks, i: i, wid: WORD_MODULE) {
+                let r = parse_module_decl(toks: toks, i: i)
+                if r < 0 { push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "") ; i = i + 1 }
+                else { push_item(program: mut program, toks, i, kind: ITEM_MODULE, name: dotted_name(toks: toks, start: (i + 1), end: r)) ; i = r }
+            } else if at_ident(toks: toks, i: i, wid: WORD_USE) {
+                let r = parse_use_decl(toks: toks, i: i)
+                if r < 0 { push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "") ; i = i + 1 }
+                else { push_use_item(program: mut program, toks: toks, start: i, end: r) ; i = r }
+            } else if starts_fn_like(toks: toks, i: i, isPub: isPub) {
+                let r = parse_function_decl(toks: toks, i: i)
+                if r < 0 { push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "") ; i = i + 1 }
+                else { push_function_item(program: mut program, toks, start: i, end: r, protocolName: "", includeBodies: includeBodies) ; i = r }
             } else {
-                push_item(program: mut program, toks: read toks, i: read i, kind: ITEM_UNKNOWN, name: read "")
+                push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "")
                 i = i + 1
             }
         }

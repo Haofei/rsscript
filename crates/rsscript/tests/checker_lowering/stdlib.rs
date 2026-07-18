@@ -29,7 +29,7 @@ fn run(path: read Path) -> Result<Int, FileError> {
 
     assert!(rust.contains("rsscript_runtime::list_set"));
     assert!(rust.contains("rsscript_runtime::list_append"));
-    assert!(rust.contains("rsscript_runtime::list_append(&mut items, &copy);"));
+    assert!(rust.contains("rsscript_runtime::list_append(&mut items, &(copy));"));
     assert!(rust.contains("rsscript_runtime::list_pop"));
     assert!(rust.contains("rsscript_runtime::list_slice"));
     assert!(rust.contains("rsscript_runtime::file_exists"));
@@ -194,7 +194,10 @@ fn main() -> Result<Unit, JsonError> {
     assert!(rust.contains("let found = rsscript_runtime::list_find(&(list), |item| {"));
     assert!(rust.contains("let filtered = rsscript_runtime::list_filter(&(list), |item| {"));
     assert!(rust.contains("let mapped = rsscript_runtime::list_map(&(list), |item| {"));
-    assert!(rust.contains("let receiver_mapped = rsscript_runtime::list_map(&list, |item: i64| {"));
+    assert!(
+        rust.contains("let receiver_mapped = rsscript_runtime::list_map(&list, |item: &i64| {"),
+        "{rust}"
+    );
     assert!(rust.contains("let order = rsscript_runtime::ord_compare(&(1i64), &(2i64));"));
     assert!(rust.contains("rsscript_runtime::list_sort(&mut list);"));
     assert!(rust.contains("rsscript_runtime::list_sort_with(&mut list, |left, right| {"));
@@ -690,20 +693,26 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     assert!(rust.contains("let age_at = rsscript_runtime::json_int_at_or"));
     assert!(rust.contains("let active_at = rsscript_runtime::json_bool_at_or"));
     assert!(rust.contains("let parsed_from_method = rsscript_runtime::json_parse(&text)?;"));
+    assert!(
+        rust.contains(
+            "let raw_message_from_method = rsscript_runtime::json_string_at_or(&text, &(\"profile\".to_string()), &(\"{}\".to_string()));"
+        ),
+        "{rust}"
+    );
+    assert!(
+        rust.contains(
+            "let age_from_method = rsscript_runtime::json_int_at_or(&text, &(\"profile.age\".to_string()), 0i64);"
+        ),
+        "{rust}"
+    );
     assert!(rust.contains(
-        "let raw_message_from_method = rsscript_runtime::json_string_at_or(&text, &\"profile\".to_string(), &\"{}\".to_string());"
+        "let active_from_method = rsscript_runtime::json_bool_at_or(&text, &(\"profile.active\".to_string()), false);"
     ));
     assert!(rust.contains(
-        "let age_from_method = rsscript_runtime::json_int_at_or(&text, &\"profile.age\".to_string(), 0i64);"
+        "let profile_or_root = rsscript_runtime::json_at_or(&value, &(\"profile\".to_string()), &(value));"
     ));
     assert!(rust.contains(
-        "let active_from_method = rsscript_runtime::json_bool_at_or(&text, &\"profile.active\".to_string(), false);"
-    ));
-    assert!(rust.contains(
-        "let profile_or_root = rsscript_runtime::json_at_or(&value, &\"profile\".to_string(), &value);"
-    ));
-    assert!(rust.contains(
-        "let profile = rsscript_runtime::json_field(&value, &\"profile\".to_string())?;"
+        "let profile = rsscript_runtime::json_field(&value, &(\"profile\".to_string()))?;"
     ));
     assert!(rust.contains("let profile_again = rsscript_runtime::json_value_at(&(value), &(\"profile\".to_string()))?;"));
     assert!(rust.contains("let count = rsscript_runtime::json_array_len(&(value))?;"));
@@ -715,10 +724,10 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     assert!(rust.contains("let has_profile_prefix = rsscript_runtime::json_array_contains_substring(&(value), &(\"prof\".to_string()))?;"));
     assert!(rust.contains("let has_profile_named_prefix = rsscript_runtime::json_array_contains_prefix(&(value), &(\"pro\".to_string()))?;"));
     assert!(
-        rust.contains("let matching = rsscript_runtime::json_array_count_where(&(value), |item: rsscript_runtime::JsonValue| {")
+        rust.contains("let matching = rsscript_runtime::json_array_count_where(&(value), |item: &rsscript_runtime::JsonValue| {")
     );
-    assert!(rust.contains("let folded = rsscript_runtime::json_array_fold(&(value), &(IntBox { value: 0i64 }), |state, item: rsscript_runtime::JsonValue| {"));
-    assert!(rust.contains("let text = rsscript_runtime::json_as_string(&(item))?;"));
+    assert!(rust.contains("let folded = rsscript_runtime::json_array_fold(&(value), &(IntBox { value: 0i64 }), |state, item: &rsscript_runtime::JsonValue| {"));
+    assert!(rust.contains("let text = rsscript_runtime::json_as_string(item)?;"));
     assert!(rust.contains(
         "return Ok(rsscript_runtime::string_starts_with(text, &(\"pro\".to_string())));"
     ));
@@ -1219,16 +1228,17 @@ fn main() -> Unit {
     assert!(rust.contains(
         "let message = format!(\"{}{}\", &(\"hello \".to_string()), &(\"world\".to_string()));"
     ));
+    assert!(rust.contains(
+        "let suffixed = rsscript_runtime::string_concat(&message, &(\"!\".to_string()));"
+    ));
     assert!(
         rust.contains(
-            "let suffixed = rsscript_runtime::string_concat(&message, &\"!\".to_string());"
-        )
+            "let literal_joined = rsscript_runtime::string_concat(&\"agent HTTP status \".to_string(), &(rsscript_runtime::string_from_int(500i64)));"
+        ),
+        "{rust}"
     );
     assert!(rust.contains(
-        "let literal_joined = rsscript_runtime::string_concat(&\"agent HTTP status \".to_string(), &rsscript_runtime::string_from_int(500i64));"
-    ));
-    assert!(rust.contains(
-        "let literal_joined_len = rsscript_runtime::string_len(&rsscript_runtime::string_concat(&\"prefix\".to_string(), &\"suffix\".to_string()));"
+        "let literal_joined_len = rsscript_runtime::string_len(&rsscript_runtime::string_concat(&\"prefix\".to_string(), &(\"suffix\".to_string())));"
     ));
     assert!(rust.contains("let copied = rsscript_runtime::string_copy(&(message));"));
     assert!(rust.contains("let count = rsscript_runtime::string_from_int(42i64);"));
@@ -1240,7 +1250,7 @@ fn main() -> Unit {
     );
     assert!(
         rust.contains(
-            "let receiver_joined = rsscript_runtime::list_join(&vec![\"root=\".to_string(), root.clone(), \" ok\".to_string()], &\"\".to_string());"
+            "let receiver_joined = rsscript_runtime::list_join(&vec![\"root=\".to_string(), root.clone(), \" ok\".to_string()], &(\"\".to_string()));"
         ),
         "List.join receiver calls should borrow the separator, got:\n{rust}"
     );
@@ -1422,7 +1432,7 @@ fn fetch_status(url: read Url) -> Result<Int, HttpError> {
     assert!(rust.contains("rsscript_runtime::env_set_current_dir(&(current))?;"));
     assert!(rust.contains("let configured = rsscript_runtime::env_get_or_default"));
     assert!(rust.contains(
-        "let configured_method = rsscript_runtime::env_get_or_default(&\"RSS_MODE\".to_string(), &\"dev\".to_string());"
+        "let configured_method = rsscript_runtime::env_get_or_default(&\"RSS_MODE\".to_string(), &(\"dev\".to_string()));"
     ));
     assert!(rust.contains("let now = rsscript_runtime::clock_now();"));
     assert!(rust.contains("let elapsed = rsscript_runtime::instant_elapsed(&(now));"));

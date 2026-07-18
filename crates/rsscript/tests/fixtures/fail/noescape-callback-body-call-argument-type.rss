@@ -5,6 +5,6 @@ fn apply(callback: noescape Fn(Int) -> Int) -> Unit {
 }
 
 fn main() -> Unit {
-    apply(callback: |value| String.len(value: read value))
+    apply(callback: |value| String.len(value))
     return Unit
 }

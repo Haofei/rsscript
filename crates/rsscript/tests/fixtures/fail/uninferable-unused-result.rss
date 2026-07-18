@@ -6,6 +6,6 @@
 // (`let v: Result<Float, String> = ...`) or remove it.
 fn main() -> Unit {
     let v = Ok(1.0)
-    Log.write(message: read "ok")
+    Log.write(message: "ok")
     return Unit
 }

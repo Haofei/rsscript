@@ -4,8 +4,8 @@
 // call tests.
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -24,8 +24,8 @@ fn hot(limit: Int) -> Float {
     let mut total = 0.0
     while i < limit {
         let residue = i % 97
-        let f = Int.to_float(value: read residue)
-        total = total + scale(value: read f, factor: read 1.25)
+        let f = Int.to_float(value: residue)
+        total = total + scale(value: f, factor: 1.25)
         i = i + 1
     }
     return total
@@ -33,7 +33,7 @@ fn hot(limit: Int) -> Float {
 
 fn main() -> Unit {
     let limit = bench_size(default: 750000)
-    let result = hot(limit: limit)
-    Log.write(message: read Float.to_string(value: read result))
+    let result = hot(limit)
+    Log.write(message: Float.to_string(value: result))
     return Unit
 }

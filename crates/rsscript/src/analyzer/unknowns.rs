@@ -1,7 +1,7 @@
 use super::*;
 
 impl Analyzer<'_> {
-    pub(super) fn check_unknown_types(&mut self) {
+    pub(crate) fn check_unknown_types(&mut self) {
         let items = self.syntax_program.items.clone();
         for item in &items {
             match item {
@@ -93,7 +93,7 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_unknown_fields(&mut self) {
+    pub(crate) fn check_unknown_fields(&mut self) {
         let items = self.syntax_program.items.clone();
         for item in &items {
             let Item::Function(function) = item else {
@@ -116,7 +116,7 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_unknown_bindings(&mut self) {
+    pub(crate) fn check_unknown_bindings(&mut self) {
         // Collect top-level const names and sum type variant names as globally visible bindings
         let mut global_names: HashSet<String> = HashSet::new();
         for item in &self.syntax_program.items {
@@ -323,7 +323,7 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_fresh_generic_return_bound(
+    pub(crate) fn check_fresh_generic_return_bound(
         &mut self,
         function_name: &str,
         return_ty: &TypeRef,
@@ -359,7 +359,7 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_generic_resource_pool_type_ref(
+    pub(crate) fn check_generic_resource_pool_type_ref(
         &mut self,
         ty: &TypeRef,
         bounds: &HashMap<String, Option<GenericBound>>,
@@ -382,7 +382,7 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_resource_type_param_field(
+    pub(crate) fn check_resource_type_param_field(
         &mut self,
         ty: &TypeRef,
         bounds: &HashMap<String, Option<GenericBound>>,

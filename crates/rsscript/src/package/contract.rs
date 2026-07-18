@@ -1345,7 +1345,7 @@ fn package_field_contract(field: &FieldDecl) -> PackageFieldContract {
 fn package_param_contract(param: &Param) -> PackageParamContract {
     PackageParamContract {
         name: param.name.clone(),
-        effect: param.effect.map(package_effect_label),
+        effect: param.effective_effect().map(package_effect_label),
         type_name: package_type_name(&param.ty),
     }
 }

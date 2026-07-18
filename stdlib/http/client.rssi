@@ -4,7 +4,7 @@ struct HttpResponse
 struct HttpRequest
 struct HttpError
 
-pub native fn HttpRequest.json(url: read Url, body: read String) -> fresh HttpRequest
+pub native fn HttpRequest.json(url: Url, body: String) -> fresh HttpRequest
     effects(native)
 
 pub native fn HttpRequest.with_timeout(
@@ -22,34 +22,34 @@ pub native fn HttpRequest.with_retry(
 
 pub native fn HttpRequest.with_header(
     request: take HttpRequest,
-    name: read String,
-    value: read String,
+    name: String,
+    value: String,
 ) -> fresh HttpRequest
     effects(native)
 
-pub native fn Http.get(url: read Url) -> Result<fresh HttpResponse, HttpError>
+pub native fn Http.get(url: Url) -> Result<fresh HttpResponse, HttpError>
     effects(native)
 
-pub native fn Http.post_json(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
+pub native fn Http.post_json(url: Url, body: String) -> Result<fresh HttpResponse, HttpError>
     effects(native)
 
-pub native fn Http.post_form(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
+pub native fn Http.post_form(url: Url, body: String) -> Result<fresh HttpResponse, HttpError>
     effects(native)
 
-pub native fn HttpResponse.status(response: read HttpResponse) -> Int
+pub native fn HttpResponse.status(response: HttpResponse) -> Int
     effects(native)
 
-pub native fn HttpResponse.text(response: read HttpResponse) -> fresh String
+pub native fn HttpResponse.text(response: HttpResponse) -> fresh String
     effects(native)
 
-pub native fn HttpResponse.bytes(response: read HttpResponse) -> fresh Bytes
+pub native fn HttpResponse.bytes(response: HttpResponse) -> fresh Bytes
     effects(native)
 
-pub native fn HttpResponse.lines(response: read HttpResponse) -> fresh List<String>
+pub native fn HttpResponse.lines(response: HttpResponse) -> fresh List<String>
     effects(native)
 
-pub native fn HttpResponse.is_success(response: read HttpResponse) -> Bool
+pub native fn HttpResponse.is_success(response: HttpResponse) -> Bool
     effects(native)
 
-pub native fn HttpError.message(error: read HttpError) -> String
+pub native fn HttpError.message(error: HttpError) -> String
     effects(native)

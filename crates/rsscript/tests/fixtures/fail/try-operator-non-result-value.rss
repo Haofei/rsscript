@@ -4,11 +4,11 @@ struct Image {
     pixels: Buffer
 }
 
-fn load(path: read Path) -> Image {
+fn load(path: Path) -> Image {
     return Image(pixels: Buffer.empty())
 }
 
-fn bad(path: read Path) -> Result<fresh Image, ImageError> {
-    let image = load(path: read path)?
+fn bad(path: Path) -> Result<fresh Image, ImageError> {
+    let image = load(path)?
     return Ok(image)
 }

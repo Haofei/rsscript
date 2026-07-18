@@ -7,14 +7,14 @@ struct Holder {
     image: Image
 }
 
-fn make_holder(path: read Path) -> fresh Holder
+fn make_holder(path: Path) -> fresh Holder
 
 fn consume(image: take Image) -> Unit
 
-fn inspect(image: read Image) -> Unit
+fn inspect(image: Image) -> Unit
 
-fn bad_take_field(path: read Path) -> Unit {
-    local holder = make_holder(path: read path)
+fn bad_take_field(path: Path) -> Unit {
+    local holder = make_holder(path)
     consume(image: take holder.image)
-    inspect(image: read holder.image)
+    inspect(image: holder.image)
 }

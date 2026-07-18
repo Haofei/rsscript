@@ -220,7 +220,7 @@ impl RustLowerer<'_> {
                 .enumerate()
                 .map(|(index, param)| {
                     let lowered = self.lower_type_ref(param, ManagedPosition::Param);
-                    match ty.fn_param_effects.get(index).copied().flatten() {
+                    match ty.effective_fn_param_effect(index) {
                         Some(DataEffect::Read) => format!("&{lowered}"),
                         Some(DataEffect::Mut) => format!("&mut {lowered}"),
                         Some(DataEffect::Take) | None => lowered,

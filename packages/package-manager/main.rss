@@ -94,168 +94,168 @@ struct InterfaceSnapshot {
     text: String
 }
 
-fn json_error(prefix: read String, error: read JsonError) -> fresh String {
-    let message = JsonError.message(error: read error)
-    let first = String.concat(left: read prefix, right: read ": ")
+fn json_error(prefix: String, error: JsonError) -> fresh String {
+    let message = JsonError.message(error)
+    let first = String.concat(left: prefix, right: ": ")
 
-    return String.concat(left: read first, right: read message)
+    return String.concat(left: first, right: message)
 }
 
-fn file_error(prefix: read String, error: read FileError) -> fresh String {
-    let message = FileError.message(error: read error)
-    let first = String.concat(left: read prefix, right: read ": ")
+fn file_error(prefix: String, error: FileError) -> fresh String {
+    let message = FileError.message(error)
+    let first = String.concat(left: prefix, right: ": ")
 
-    return String.concat(left: read first, right: read message)
+    return String.concat(left: first, right: message)
 }
 
 fn root_path() -> fresh Path {
     let input = Args.get_or_default(
         index: 1,
-        default: read "tests/fixtures/pass/selfhost-package-source-set",
+        default: "tests/fixtures/pass/selfhost-package-source-set",
     )
 
-    return Path.from_string(value: read input)
+    return Path.from_string(value: input)
 }
 
 fn output_path() -> fresh Path {
     let input = Args.get_or_default(
         index: 2,
-        default: read "target/rsscript-selfhost-package-manager-output",
+        default: "target/rsscript-selfhost-package-manager-output",
     )
 
-    return Path.from_string(value: read input)
+    return Path.from_string(value: input)
 }
 
-fn manifest_path(root: read Path) -> fresh Path {
-    return Path.join(base: read root, child: read "rsspkg.toml")
+fn manifest_path(root: Path) -> fresh Path {
+    return Path.join(base: root, child: "rsspkg.toml")
 }
 
-fn parse_toml_result(path: read Path) -> Result<JsonValue, String> {
-    match Toml.parse_file(path: read path) {
+fn parse_toml_result(path: Path) -> Result<JsonValue, String> {
+    match Toml.parse_file(path) {
         Ok(value) => {
             return Ok(value)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "manifest parse", error: read error))
+            return Err(json_error(prefix: "manifest parse", error))
         }
     }
 }
 
 fn json_field_result(
-    value: read JsonValue,
-    name: read String,
+    value: JsonValue,
+    name: String,
 ) -> Result<JsonValue, String> {
-    match Json.field(value: read value, name: read name) {
+    match Json.field(value, name) {
         Ok(field) => {
             return Ok(field)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "manifest field", error: read error))
+            return Err(json_error(prefix: "manifest field", error))
         }
     }
 }
 
 fn json_field_string_result(
-    value: read JsonValue,
-    name: read String,
+    value: JsonValue,
+    name: String,
 ) -> Result<String, String> {
-    match Json.field_string(value: read value, name: read name) {
+    match Json.field_string(value, name) {
         Ok(text) => {
             return Ok(text)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "manifest string", error: read error))
+            return Err(json_error(prefix: "manifest string", error))
         }
     }
 }
 
-fn json_array_len_result(value: read JsonValue) -> Result<Int, String> {
-    match Json.array_len(value: read value) {
+fn json_array_len_result(value: JsonValue) -> Result<Int, String> {
+    match Json.array_len(value) {
         Ok(length) => {
             return Ok(length)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "manifest array length", error: read error))
+            return Err(json_error(prefix: "manifest array length", error))
         }
     }
 }
 
-fn json_array_strings_result(value: read JsonValue) -> Result<List<String>, String> {
-    match Json.array_strings(value: read value) {
+fn json_array_strings_result(value: JsonValue) -> Result<List<String>, String> {
+    match Json.array_strings(value) {
         Ok(items) => {
             return Ok(items)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "manifest array strings", error: read error))
+            return Err(json_error(prefix: "manifest array strings", error))
         }
     }
 }
 
-fn json_object_keys_result(value: read JsonValue) -> Result<List<String>, String> {
-    match Json.object_keys(value: read value) {
+fn json_object_keys_result(value: JsonValue) -> Result<List<String>, String> {
+    match Json.object_keys(value) {
         Ok(items) => {
             return Ok(items)
         }
         Err(error) => {
-            return Err(json_error(prefix: read "manifest object keys", error: read error))
+            return Err(json_error(prefix: "manifest object keys", error))
         }
     }
 }
 
-fn package_manifest_facts(root: read Path) -> Result<fresh PackageManifestFacts, String> {
-    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
-    let package = json_field_result(value: read manifest, name: read "package")?
-    let interfaces = json_field_result(value: read manifest, name: read "interfaces")?
-    let interface_paths = json_field_result(value: read interfaces, name: read "paths")?
-    let sources = json_field_result(value: read manifest, name: read "sources")?
-    let source_paths = json_field_result(value: read sources, name: read "paths")?
+fn package_manifest_facts(root: Path) -> Result<fresh PackageManifestFacts, String> {
+    let manifest = parse_toml_result(path: manifest_path(root))?
+    let package = json_field_result(value: manifest, name: "package")?
+    let interfaces = json_field_result(value: manifest, name: "interfaces")?
+    let interface_paths = json_field_result(value: interfaces, name: "paths")?
+    let sources = json_field_result(value: manifest, name: "sources")?
+    let source_paths = json_field_result(value: sources, name: "paths")?
 
     return PackageManifestFacts(
-        package_name: json_field_string_result(value: read package, name: read "name")?,
-        version: json_field_string_result(value: read package, name: read "version")?,
-        edition: json_field_string_result(value: read package, name: read "edition")?,
-        interface_paths: json_array_len_result(value: read interface_paths)?,
-        source_paths: json_array_len_result(value: read source_paths)?,
+        package_name: json_field_string_result(value: package, name: "name")?,
+        version: json_field_string_result(value: package, name: "version")?,
+        edition: json_field_string_result(value: package, name: "edition")?,
+        interface_paths: json_array_len_result(value: interface_paths)?,
+        source_paths: json_array_len_result(value: source_paths)?,
     )
 }
 
 fn manifest_array_field(
-    manifest: read JsonValue,
-    section: read String,
-    field: read String,
+    manifest: JsonValue,
+    section: String,
+    field: String,
 ) -> Result<JsonValue, String> {
-    let section_value = json_field_result(value: read manifest, name: read section)?
-    return json_field_result(value: read section_value, name: read field)
+    let section_value = json_field_result(value: manifest, name: section)?
+    return json_field_result(value: section_value, name: field)
 }
 
-fn manifest_interface_roots(manifest: read JsonValue) -> Result<List<String>, String> {
+fn manifest_interface_roots(manifest: JsonValue) -> Result<List<String>, String> {
     let paths = manifest_array_field(
-        manifest: read manifest,
-        section: read "interfaces",
-        field: read "paths",
+        manifest,
+        section: "interfaces",
+        field: "paths",
     )?
 
-    return json_array_strings_result(value: read paths)
+    return json_array_strings_result(value: paths)
 }
 
-fn manifest_source_roots(manifest: read JsonValue) -> Result<List<String>, String> {
+fn manifest_source_roots(manifest: JsonValue) -> Result<List<String>, String> {
     let paths = manifest_array_field(
-        manifest: read manifest,
-        section: read "sources",
-        field: read "paths",
+        manifest,
+        section: "sources",
+        field: "paths",
     )?
 
-    return json_array_strings_result(value: read paths)
+    return json_array_strings_result(value: paths)
 }
 
-fn ensure_parent_directory(path: read Path) -> Result<Unit, String> {
-    match Path.parent(path: read path) {
+fn ensure_parent_directory(path: Path) -> Result<Unit, String> {
+    match Path.parent(path) {
         Some(parent) => {
-            match Directory.create_all(path: read parent) {
+            match Directory.create_all(path: parent) {
                 Ok(_) => {
                 }
                 Err(error) => {
-                    return Err(file_error(prefix: read "create parent", error: read error))
+                    return Err(file_error(prefix: "create parent", error))
                 }
             }
         }
@@ -266,202 +266,202 @@ fn ensure_parent_directory(path: read Path) -> Result<Unit, String> {
     return Ok(Unit)
 }
 
-fn require_directory(path: read Path, label: read String) -> Result<Unit, String> {
-    if Directory.exists(path: read path) == false {
-        return Err(String.concat(left: read "missing directory ", right: read label))
+fn require_directory(path: Path, label: String) -> Result<Unit, String> {
+    if Directory.exists(path) == false {
+        return Err(String.concat(left: "missing directory ", right: label))
     }
 
-    if Directory.is_dir(path: read path) == false {
-        return Err(String.concat(left: read "not a directory ", right: read label))
-    }
-
-    return Ok(Unit)
-}
-
-fn write_text_file(path: read Path, text: read String) -> Result<Unit, FileError> {
-    with File.open_write(path: read path)? as file {
-        File.write_string(file: mut file, text: read text)?
+    if Directory.is_dir(path) == false {
+        return Err(String.concat(left: "not a directory ", right: label))
     }
 
     return Ok(Unit)
 }
 
-fn write_text_result(path: read Path, text: read String) -> Result<Unit, String> {
-    ensure_parent_directory(path: read path)?
+fn write_text_file(path: Path, text: String) -> Result<Unit, FileError> {
+    with File.open_write(path)? as file {
+        File.write_string(file: mut file, text)?
+    }
 
-    match write_text_file(path: read path, text: read text) {
+    return Ok(Unit)
+}
+
+fn write_text_result(path: Path, text: String) -> Result<Unit, String> {
+    ensure_parent_directory(path)?
+
+    match write_text_file(path, text) {
         Ok(_) => {
             return Ok(Unit)
         }
         Err(error) => {
-            return Err(file_error(prefix: read "write file", error: read error))
+            return Err(file_error(prefix: "write file", error))
         }
     }
 }
 
-fn read_text_file(path: read Path) -> Result<String, FileError> {
-    with File.open_read(path: read path)? as file {
+fn read_text_file(path: Path) -> Result<String, FileError> {
+    with File.open_read(path)? as file {
         let text = File.read_all_string(file: mut file)?
 
         return Ok(text)
     }
 }
 
-fn read_text_result(path: read Path) -> Result<String, String> {
-    match read_text_file(path: read path) {
+fn read_text_result(path: Path) -> Result<String, String> {
+    match read_text_file(path) {
         Ok(text) => {
             return Ok(text)
         }
         Err(error) => {
-            return Err(file_error(prefix: read "read file", error: read error))
+            return Err(file_error(prefix: "read file", error))
         }
     }
 }
 
-fn list_files_result(path: read Path) -> Result<List<String>, String> {
-    match Directory.list_files(path: read path) {
+fn list_files_result(path: Path) -> Result<List<String>, String> {
+    match Directory.list_files(path) {
         Ok(files) => {
             return Ok(files)
         }
         Err(error) => {
-            return Err(file_error(prefix: read "list files", error: read error))
+            return Err(file_error(prefix: "list files", error))
         }
     }
 }
 
 fn count_files_with_suffix(
-    root: read Path,
-    child: read String,
-    suffix: read String,
+    root: Path,
+    child: String,
+    suffix: String,
 ) -> Result<Int, String> {
-    let directory = Path.join(base: read root, child: read child)
-    require_directory(path: read directory, label: read child)?
-    let files = list_files_result(path: read directory)?
+    let directory = Path.join(base: root, child)
+    require_directory(path: directory, label: child)?
+    let files = list_files_result(path: directory)?
     let counter = Counter.new(value: 0)
 
     for file in files {
-        if String.ends_with(value: read file, suffix: read suffix) {
+        if String.ends_with(value: file, suffix) {
             Counter.add(counter: mut counter, amount: 1)
         }
     }
 
-    return Ok(Counter.value(counter: read counter))
+    return Ok(Counter.value(counter))
 }
 
 fn count_root_files_with_suffix(
-    root: read Path,
-    children: read List<String>,
-    suffix: read String,
+    root: Path,
+    children: List<String>,
+    suffix: String,
 ) -> Result<Int, String> {
     let counter = Counter.new(value: 0)
 
     for child in children {
         let count = count_files_with_suffix(
-            root: read root,
-            child: read child,
-            suffix: read suffix,
+            root,
+            child,
+            suffix,
         )?
         Counter.add(counter: mut counter, amount: count)
     }
 
-    return Ok(Counter.value(counter: read counter))
+    return Ok(Counter.value(counter))
 }
 
-fn create_dir_result(path: read Path) -> Result<Unit, String> {
-    match Directory.create_all(path: read path) {
+fn create_dir_result(path: Path) -> Result<Unit, String> {
+    match Directory.create_all(path) {
         Ok(_) => {
             return Ok(Unit)
         }
         Err(error) => {
-            return Err(file_error(prefix: read "create directory", error: read error))
+            return Err(file_error(prefix: "create directory", error))
         }
     }
 }
 
-fn package_check_facts(root: read Path) -> Result<fresh PackageCheckFacts, String> {
-    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
-    let package = json_field_result(value: read manifest, name: read "package")?
-    let interface_roots = manifest_interface_roots(manifest: read manifest)?
-    let source_roots = manifest_source_roots(manifest: read manifest)?
+fn package_check_facts(root: Path) -> Result<fresh PackageCheckFacts, String> {
+    let manifest = parse_toml_result(path: manifest_path(root))?
+    let package = json_field_result(value: manifest, name: "package")?
+    let interface_roots = manifest_interface_roots(manifest)?
+    let source_roots = manifest_source_roots(manifest)?
     let interface_files = count_root_files_with_suffix(
-        root: read root,
-        children: read interface_roots,
-        suffix: read ".rssi",
+        root,
+        children: interface_roots,
+        suffix: ".rssi",
     )?
     let source_files = count_root_files_with_suffix(
-        root: read root,
-        children: read source_roots,
-        suffix: read ".rss",
+        root,
+        children: source_roots,
+        suffix: ".rss",
     )?
 
     return PackageCheckFacts(
-        package_name: json_field_string_result(value: read package, name: read "name")?,
-        interface_roots: List.len(list: read interface_roots),
-        source_roots: List.len(list: read source_roots),
+        package_name: json_field_string_result(value: package, name: "name")?,
+        interface_roots: List.len(list: interface_roots),
+        source_roots: List.len(list: source_roots),
         interface_files: interface_files,
         source_files: source_files,
     )
 }
 
-fn package_metadata_json(facts: read PackageManifestFacts) -> fresh String {
+fn package_metadata_json(facts: PackageManifestFacts) -> fresh String {
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "{\n")
-    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
-    let package_name = Json.quote_string(value: read facts.package_name)
-    StringBuilder.push(builder: mut builder, value: read package_name)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"version\": ")
-    let version = Json.quote_string(value: read facts.version)
-    StringBuilder.push(builder: mut builder, value: read version)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"edition\": ")
-    let edition = Json.quote_string(value: read facts.edition)
-    StringBuilder.push(builder: mut builder, value: read edition)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"interface_paths\": ")
+    StringBuilder.push(builder: mut builder, value: "{\n")
+    StringBuilder.push(builder: mut builder, value: "  \"package\": ")
+    let package_name = Json.quote_string(value: facts.package_name)
+    StringBuilder.push(builder: mut builder, value: package_name)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"version\": ")
+    let version = Json.quote_string(value: facts.version)
+    StringBuilder.push(builder: mut builder, value: version)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"edition\": ")
+    let edition = Json.quote_string(value: facts.edition)
+    StringBuilder.push(builder: mut builder, value: edition)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"interface_paths\": ")
     let interface_paths = String.from_int(value: facts.interface_paths)
-    StringBuilder.push(builder: mut builder, value: read interface_paths)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"source_paths\": ")
+    StringBuilder.push(builder: mut builder, value: interface_paths)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"source_paths\": ")
     let source_paths = String.from_int(value: facts.source_paths)
-    StringBuilder.push(builder: mut builder, value: read source_paths)
-    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+    StringBuilder.push(builder: mut builder, value: source_paths)
+    StringBuilder.push(builder: mut builder, value: "\n}\n")
 
     return StringBuilder.finish(builder: take builder)
 }
 
-fn package_check_json(facts: read PackageCheckFacts) -> fresh String {
+fn package_check_json(facts: PackageCheckFacts) -> fresh String {
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "{\n")
-    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
-    let package_name = Json.quote_string(value: read facts.package_name)
-    StringBuilder.push(builder: mut builder, value: read package_name)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"ok\": true")
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"interface_roots\": ")
+    StringBuilder.push(builder: mut builder, value: "{\n")
+    StringBuilder.push(builder: mut builder, value: "  \"package\": ")
+    let package_name = Json.quote_string(value: facts.package_name)
+    StringBuilder.push(builder: mut builder, value: package_name)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"ok\": true")
+    StringBuilder.push(builder: mut builder, value: ",\n  \"interface_roots\": ")
     let interface_roots = String.from_int(value: facts.interface_roots)
-    StringBuilder.push(builder: mut builder, value: read interface_roots)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"source_roots\": ")
+    StringBuilder.push(builder: mut builder, value: interface_roots)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"source_roots\": ")
     let source_roots = String.from_int(value: facts.source_roots)
-    StringBuilder.push(builder: mut builder, value: read source_roots)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"interface_files\": ")
+    StringBuilder.push(builder: mut builder, value: source_roots)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"interface_files\": ")
     let interface_files = String.from_int(value: facts.interface_files)
-    StringBuilder.push(builder: mut builder, value: read interface_files)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"source_files\": ")
+    StringBuilder.push(builder: mut builder, value: interface_files)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"source_files\": ")
     let source_files = String.from_int(value: facts.source_files)
-    StringBuilder.push(builder: mut builder, value: read source_files)
-    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+    StringBuilder.push(builder: mut builder, value: source_files)
+    StringBuilder.push(builder: mut builder, value: "\n}\n")
 
     return StringBuilder.finish(builder: take builder)
 }
 
-fn empty_package_tree_facts(package_name: read String) -> fresh PackageTreeFacts {
+fn empty_package_tree_facts(package_name: String) -> fresh PackageTreeFacts {
     return PackageTreeFacts(
-        package_name: read package_name,
+        package_name,
         packages: 1,
         path_dependencies: 0,
         unresolved_dependencies: 0,
     )
 }
 
-fn add_unresolved_dependency(facts: read PackageTreeFacts) -> fresh PackageTreeFacts {
+fn add_unresolved_dependency(facts: PackageTreeFacts) -> fresh PackageTreeFacts {
     return PackageTreeFacts(
-        package_name: read facts.package_name,
+        package_name: facts.package_name,
         packages: facts.packages + 1,
         path_dependencies: facts.path_dependencies,
         unresolved_dependencies: facts.unresolved_dependencies + 1,
@@ -469,38 +469,38 @@ fn add_unresolved_dependency(facts: read PackageTreeFacts) -> fresh PackageTreeF
 }
 
 fn add_path_dependency(
-    facts: read PackageTreeFacts,
-    dependency: read PackageTreeFacts,
+    facts: PackageTreeFacts,
+    dependency: PackageTreeFacts,
 ) -> fresh PackageTreeFacts {
     return PackageTreeFacts(
-        package_name: read facts.package_name,
+        package_name: facts.package_name,
         packages: facts.packages + dependency.packages,
         path_dependencies: facts.path_dependencies + dependency.path_dependencies + 1,
         unresolved_dependencies: facts.unresolved_dependencies + dependency.unresolved_dependencies,
     )
 }
 
-fn package_tree_json(facts: read PackageTreeFacts) -> fresh String {
+fn package_tree_json(facts: PackageTreeFacts) -> fresh String {
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "{\n")
-    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
-    let package_name = Json.quote_string(value: read facts.package_name)
-    StringBuilder.push(builder: mut builder, value: read package_name)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"packages\": ")
+    StringBuilder.push(builder: mut builder, value: "{\n")
+    StringBuilder.push(builder: mut builder, value: "  \"package\": ")
+    let package_name = Json.quote_string(value: facts.package_name)
+    StringBuilder.push(builder: mut builder, value: package_name)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"packages\": ")
     let packages = String.from_int(value: facts.packages)
-    StringBuilder.push(builder: mut builder, value: read packages)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"path_dependencies\": ")
+    StringBuilder.push(builder: mut builder, value: packages)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"path_dependencies\": ")
     let path_dependencies = String.from_int(value: facts.path_dependencies)
-    StringBuilder.push(builder: mut builder, value: read path_dependencies)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"unresolved_dependencies\": ")
+    StringBuilder.push(builder: mut builder, value: path_dependencies)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"unresolved_dependencies\": ")
     let unresolved = String.from_int(value: facts.unresolved_dependencies)
-    StringBuilder.push(builder: mut builder, value: read unresolved)
-    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+    StringBuilder.push(builder: mut builder, value: unresolved)
+    StringBuilder.push(builder: mut builder, value: "\n}\n")
 
     return StringBuilder.finish(builder: take builder)
 }
 
-fn package_review_risk(facts: read PackageReviewFacts) -> String {
+fn package_review_risk(facts: PackageReviewFacts) -> String {
     if facts.unknown_apis > 0 {
         return "unknown"
     }
@@ -528,53 +528,53 @@ fn package_review_risk(facts: read PackageReviewFacts) -> String {
     return "low"
 }
 
-fn package_review_json(facts: read PackageReviewFacts) -> fresh String {
+fn package_review_json(facts: PackageReviewFacts) -> fresh String {
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "{\n")
-    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
-    let package_name = Json.quote_string(value: read facts.package_name)
-    StringBuilder.push(builder: mut builder, value: read package_name)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"risk\": ")
-    let risk = Json.quote_string(value: read package_review_risk(facts: read facts))
-    StringBuilder.push(builder: mut builder, value: read risk)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"public_types\": ")
+    StringBuilder.push(builder: mut builder, value: "{\n")
+    StringBuilder.push(builder: mut builder, value: "  \"package\": ")
+    let package_name = Json.quote_string(value: facts.package_name)
+    StringBuilder.push(builder: mut builder, value: package_name)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"risk\": ")
+    let risk = Json.quote_string(value: package_review_risk(facts))
+    StringBuilder.push(builder: mut builder, value: risk)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"public_types\": ")
     let public_types = String.from_int(value: facts.public_types)
-    StringBuilder.push(builder: mut builder, value: read public_types)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"public_apis\": ")
+    StringBuilder.push(builder: mut builder, value: public_types)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"public_apis\": ")
     let public_apis = String.from_int(value: facts.public_apis)
-    StringBuilder.push(builder: mut builder, value: read public_apis)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"mutating_apis\": ")
+    StringBuilder.push(builder: mut builder, value: public_apis)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"mutating_apis\": ")
     let mutating = String.from_int(value: facts.mutating_apis)
-    StringBuilder.push(builder: mut builder, value: read mutating)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"retaining_apis\": ")
+    StringBuilder.push(builder: mut builder, value: mutating)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"retaining_apis\": ")
     let retaining = String.from_int(value: facts.retaining_apis)
-    StringBuilder.push(builder: mut builder, value: read retaining)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"resource_apis\": ")
+    StringBuilder.push(builder: mut builder, value: retaining)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"resource_apis\": ")
     let resources = String.from_int(value: facts.resource_apis)
-    StringBuilder.push(builder: mut builder, value: read resources)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"fresh_apis\": ")
+    StringBuilder.push(builder: mut builder, value: resources)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"fresh_apis\": ")
     let fresh = String.from_int(value: facts.fresh_apis)
-    StringBuilder.push(builder: mut builder, value: read fresh)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"native_apis\": ")
+    StringBuilder.push(builder: mut builder, value: fresh)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"native_apis\": ")
     let native = String.from_int(value: facts.native_apis)
-    StringBuilder.push(builder: mut builder, value: read native)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"parallel_apis\": ")
+    StringBuilder.push(builder: mut builder, value: native)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"parallel_apis\": ")
     let parallel = String.from_int(value: facts.parallel_apis)
-    StringBuilder.push(builder: mut builder, value: read parallel)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"unsafe_apis\": ")
+    StringBuilder.push(builder: mut builder, value: parallel)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"unsafe_apis\": ")
     let unsafe_count = String.from_int(value: facts.unsafe_apis)
-    StringBuilder.push(builder: mut builder, value: read unsafe_count)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"unknown_apis\": ")
+    StringBuilder.push(builder: mut builder, value: unsafe_count)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"unknown_apis\": ")
     let unknown = String.from_int(value: facts.unknown_apis)
-    StringBuilder.push(builder: mut builder, value: read unknown)
-    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+    StringBuilder.push(builder: mut builder, value: unknown)
+    StringBuilder.push(builder: mut builder, value: "\n}\n")
 
     return StringBuilder.finish(builder: take builder)
 }
 
-fn empty_package_review_facts(package_name: read String) -> fresh PackageReviewFacts {
+fn empty_package_review_facts(package_name: String) -> fresh PackageReviewFacts {
     return PackageReviewFacts(
-        package_name: read package_name,
+        package_name,
         public_types: 0,
         public_apis: 0,
         mutating_apis: 0,
@@ -588,9 +588,9 @@ fn empty_package_review_facts(package_name: read String) -> fresh PackageReviewF
     )
 }
 
-fn copy_package_review_facts(facts: read PackageReviewFacts) -> fresh PackageReviewFacts {
+fn copy_package_review_facts(facts: PackageReviewFacts) -> fresh PackageReviewFacts {
     return PackageReviewFacts(
-        package_name: read facts.package_name,
+        package_name: facts.package_name,
         public_types: facts.public_types,
         public_apis: facts.public_apis,
         mutating_apis: facts.mutating_apis,
@@ -604,26 +604,26 @@ fn copy_package_review_facts(facts: read PackageReviewFacts) -> fresh PackageRev
     )
 }
 
-fn add_review_line(facts: read PackageReviewFacts, line: read String) -> fresh PackageReviewFacts {
-    let trimmed = String.trim(value: read line)
-    let is_type = String.starts_with(value: read trimmed, prefix: read "struct ")
-    let is_public_type = String.starts_with(value: read trimmed, prefix: read "pub struct ")
-    let is_fn = String.starts_with(value: read trimmed, prefix: read "pub fn ")
-    let is_native_fn = String.starts_with(value: read trimmed, prefix: read "pub native fn ")
+fn add_review_line(facts: PackageReviewFacts, line: String) -> fresh PackageReviewFacts {
+    let trimmed = String.trim(value: line)
+    let is_type = String.starts_with(value: trimmed, prefix: "struct ")
+    let is_public_type = String.starts_with(value: trimmed, prefix: "pub struct ")
+    let is_fn = String.starts_with(value: trimmed, prefix: "pub fn ")
+    let is_native_fn = String.starts_with(value: trimmed, prefix: "pub native fn ")
     let is_api = is_fn || is_native_fn
-    let has_mut = String.contains(value: read trimmed, needle: read " mut ")
-    let has_retains = String.contains(value: read trimmed, needle: read "effects(retains")
-    let has_resource_pool = String.contains(value: read trimmed, needle: read "ResourcePool")
-    let has_resource_name = String.contains(value: read trimmed, needle: read "resource")
+    let has_mut = String.contains(value: trimmed, needle: " mut ")
+    let has_retains = String.contains(value: trimmed, needle: "effects(retains")
+    let has_resource_pool = String.contains(value: trimmed, needle: "ResourcePool")
+    let has_resource_name = String.contains(value: trimmed, needle: "resource")
     let has_resource = has_resource_pool || has_resource_name
-    let has_fresh = String.contains(value: read trimmed, needle: read "fresh ")
-    let has_native = is_native_fn || String.contains(value: read trimmed, needle: read "effects(native")
-    let has_parallel = String.contains(value: read trimmed, needle: read "parallel")
-    let has_unsafe = String.contains(value: read trimmed, needle: read "unsafe")
-    let has_unknown = String.contains(value: read trimmed, needle: read "unknown")
+    let has_fresh = String.contains(value: trimmed, needle: "fresh ")
+    let has_native = is_native_fn || String.contains(value: trimmed, needle: "effects(native")
+    let has_parallel = String.contains(value: trimmed, needle: "parallel")
+    let has_unsafe = String.contains(value: trimmed, needle: "unsafe")
+    let has_unknown = String.contains(value: trimmed, needle: "unknown")
 
     return PackageReviewFacts(
-        package_name: read facts.package_name,
+        package_name: facts.package_name,
         public_types: facts.public_types + bool_count(value: is_type || is_public_type),
         public_apis: facts.public_apis + bool_count(value: is_api),
         mutating_apis: facts.mutating_apis + bool_count(value: is_api && has_mut),
@@ -638,69 +638,69 @@ fn add_review_line(facts: read PackageReviewFacts, line: read String) -> fresh P
 }
 
 fn review_interface_file(
-    root: read Path,
-    child: read String,
-    file: read String,
-    facts: read PackageReviewFacts,
+    root: Path,
+    child: String,
+    file: String,
+    facts: PackageReviewFacts,
 ) -> Result<fresh PackageReviewFacts, String> {
-    if String.ends_with(value: read file, suffix: read ".rssi") == false {
-        return Ok(copy_package_review_facts(facts: read facts))
+    if String.ends_with(value: file, suffix: ".rssi") == false {
+        return Ok(copy_package_review_facts(facts))
     }
 
-    let directory = Path.join(base: read root, child: read child)
-    let path = Path.join(base: read directory, child: read file)
-    let text = read_text_result(path: read path)?
-    let lines = String.lines(value: read text)
+    let directory = Path.join(base: root, child)
+    let path = Path.join(base: directory, child: file)
+    let text = read_text_result(path)?
+    let lines = String.lines(value: text)
 
     return List.fold<String, PackageReviewFacts>(
-        list: read lines,
-        initial: read facts,
+        list: lines,
+        initial: facts,
         folder: |state, line| {
-            return add_review_line(facts: read state, line: read line)
+            return add_review_line(facts: state, line)
         },
     )
 }
 
 fn review_interface_root(
-    root: read Path,
-    child: read String,
-    facts: read PackageReviewFacts,
+    root: Path,
+    child: String,
+    facts: PackageReviewFacts,
 ) -> Result<fresh PackageReviewFacts, String> {
-    let directory = Path.join(base: read root, child: read child)
-    require_directory(path: read directory, label: read child)?
-    let files = list_files_result(path: read directory)?
+    let directory = Path.join(base: root, child)
+    require_directory(path: directory, label: child)?
+    let files = list_files_result(path: directory)?
 
     return List.try_fold<String, PackageReviewFacts, String>(
-        list: read files,
-        initial: read facts,
+        list: files,
+        initial: facts,
         folder: |state, file| {
             return review_interface_file(
-                root: read root,
-                child: read child,
-                file: read file,
-                facts: read state,
+                root,
+                child,
+                file,
+                facts: state,
             )
         },
     )
 }
 
-fn package_review_facts(root: read Path) -> Result<fresh PackageReviewFacts, String> {
-    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
-    let package = json_field_result(value: read manifest, name: read "package")?
-    let package_name = json_field_string_result(value: read package, name: read "name")?
-    let interface_roots = manifest_interface_roots(manifest: read manifest)?
+fn package_review_facts(root: Path) -> Result<fresh PackageReviewFacts, String> {
+    let manifest = parse_toml_result(path: manifest_path(root))?
+    let package = json_field_result(value: manifest, name: "package")?
+    let package_name = json_field_string_result(value: package, name: "name")?
+    let interface_roots = manifest_interface_roots(manifest)?
 
     return List.try_fold<String, PackageReviewFacts, String>(
-        list: read interface_roots,
-        initial: read empty_package_review_facts(package_name: read package_name),
+        list: interface_roots,
+        initial: empty_package_review_facts(package_name),
         folder: |facts, child| {
-            return review_interface_root(root: read root, child: read child, facts: read facts)
+            return review_interface_root(root, child, facts)
         },
     )
 }
 
-fn manifest_dependencies(manifest: read JsonValue) -> Result<Option<JsonValue>, String> {
-    match Json.field(value: read manifest, name: read "dependencies") {
+fn manifest_dependencies(manifest: JsonValue) -> Result<Option<JsonValue>, String> {
+    match Json.field(value: manifest, name: "dependencies") {
         Ok(dependencies) => {
             return Ok(Some(dependencies))
         }
@@ -711,66 +711,66 @@ fn manifest_dependencies(manifest: read JsonValue) -> Result<Option<JsonValue>, 
 }
 
 fn add_dependency_tree(
-    root: read Path,
-    dependencies: read JsonValue,
-    facts: read PackageTreeFacts,
-    name: read String,
+    root: Path,
+    dependencies: JsonValue,
+    facts: PackageTreeFacts,
+    name: String,
 ) -> Result<fresh PackageTreeFacts, String> {
-    let spec = json_field_result(value: read dependencies, name: read name)?
+    let spec = json_field_result(value: dependencies, name)?
 
-    if Json.is_object(value: read spec) {
-        match Json.field_string(value: read spec, name: read "path") {
+    if Json.is_object(value: spec) {
+        match Json.field_string(value: spec, name: "path") {
             Ok(path) => {
-                let dependency_root = Path.join(base: read root, child: read path)
-                let dependency_facts = package_tree_facts(root: read dependency_root)?
+                let dependency_root = Path.join(base: root, child: path)
+                let dependency_facts = package_tree_facts(root: dependency_root)?
 
                 return add_path_dependency(
-                    facts: read facts,
-                    dependency: read dependency_facts,
+                    facts,
+                    dependency: dependency_facts,
                 )
             }
             Err(_) => {
-                return add_unresolved_dependency(facts: read facts)
+                return add_unresolved_dependency(facts)
             }
         }
     }
 
-    return add_unresolved_dependency(facts: read facts)
+    return add_unresolved_dependency(facts)
 }
 
 fn add_dependencies_tree(
-    root: read Path,
-    dependencies: read JsonValue,
-    facts: read PackageTreeFacts,
+    root: Path,
+    dependencies: JsonValue,
+    facts: PackageTreeFacts,
 ) -> Result<fresh PackageTreeFacts, String> {
-    let names = json_object_keys_result(value: read dependencies)?
+    let names = json_object_keys_result(value: dependencies)?
 
     return List.try_fold<String, PackageTreeFacts, String>(
-        list: read names,
-        initial: read facts,
+        list: names,
+        initial: facts,
         folder: |state, name| {
             return add_dependency_tree(
-                root: read root,
-                dependencies: read dependencies,
-                facts: read state,
-                name: read name,
+                root,
+                dependencies,
+                facts: state,
+                name,
             )
         },
     )
 }
 
-fn package_tree_facts(root: read Path) -> Result<fresh PackageTreeFacts, String> {
-    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
-    let package = json_field_result(value: read manifest, name: read "package")?
-    let package_name = json_field_string_result(value: read package, name: read "name")?
-    local facts = empty_package_tree_facts(package_name: read package_name)
+fn package_tree_facts(root: Path) -> Result<fresh PackageTreeFacts, String> {
+    let manifest = parse_toml_result(path: manifest_path(root))?
+    let package = json_field_result(value: manifest, name: "package")?
+    let package_name = json_field_string_result(value: package, name: "name")?
+    local facts = empty_package_tree_facts(package_name)
 
-    match manifest_dependencies(manifest: read manifest)? {
+    match manifest_dependencies(manifest)? {
         Some(dependencies) => {
             return add_dependencies_tree(
-                root: read root,
-                dependencies: read dependencies,
-                facts: read facts,
+                root,
+                dependencies,
+                facts,
             )
         }
         None => {
@@ -796,9 +796,9 @@ fn bool_count(value: Bool) -> Int {
     return 0
 }
 
-fn add_file_facts(facts: read VendorCopyFacts, relative_path: read String) -> fresh VendorCopyFacts {
-    let is_interface = String.ends_with(value: read relative_path, suffix: read ".rssi")
-    let is_source = String.ends_with(value: read relative_path, suffix: read ".rss")
+fn add_file_facts(facts: VendorCopyFacts, relative_path: String) -> fresh VendorCopyFacts {
+    let is_interface = String.ends_with(value: relative_path, suffix: ".rssi")
+    let is_source = String.ends_with(value: relative_path, suffix: ".rss")
     let is_manifest = relative_path == "rsspkg.toml"
 
     return VendorCopyFacts(
@@ -810,63 +810,63 @@ fn add_file_facts(facts: read VendorCopyFacts, relative_path: read String) -> fr
 }
 
 fn copy_relative_file(
-    source: read Path,
-    vendor: read Path,
-    facts: read VendorCopyFacts,
-    relative_path: read String,
+    source: Path,
+    vendor: Path,
+    facts: VendorCopyFacts,
+    relative_path: String,
 ) -> Result<fresh VendorCopyFacts, String> {
-    let input = Path.join(base: read source, child: read relative_path)
-    let output = Path.join(base: read vendor, child: read relative_path)
-    let contents = read_text_result(path: read input)?
-    write_text_result(path: read output, text: read contents)?
+    let input = Path.join(base: source, child: relative_path)
+    let output = Path.join(base: vendor, child: relative_path)
+    let contents = read_text_result(path: input)?
+    write_text_result(path: output, text: contents)?
 
-    return add_file_facts(facts: read facts, relative_path: read relative_path)
+    return add_file_facts(facts, relative_path)
 }
 
 fn copy_package_tree(
-    source: read Path,
-    vendor: read Path,
-    files: read List<String>,
+    source: Path,
+    vendor: Path,
+    files: List<String>,
 ) -> Result<fresh VendorCopyFacts, String> {
     return List.try_fold<String, VendorCopyFacts, String>(
-        list: read files,
-        initial: read empty_vendor_facts(),
+        list: files,
+        initial: empty_vendor_facts(),
         folder: |facts, relative_path| {
             return copy_relative_file(
-                source: read source,
-                vendor: read vendor,
-                facts: read facts,
-                relative_path: read relative_path,
+                source,
+                vendor,
+                facts,
+                relative_path,
             )
         },
     )
 }
 
 fn vendor_metadata_json(
-    manifest: read PackageManifestFacts,
-    facts: read VendorCopyFacts,
+    manifest: PackageManifestFacts,
+    facts: VendorCopyFacts,
 ) -> fresh String {
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "{\n")
-    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
-    let package_name = Json.quote_string(value: read manifest.package_name)
-    StringBuilder.push(builder: mut builder, value: read package_name)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"version\": ")
-    let version = Json.quote_string(value: read manifest.version)
-    StringBuilder.push(builder: mut builder, value: read version)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"copied_files\": ")
+    StringBuilder.push(builder: mut builder, value: "{\n")
+    StringBuilder.push(builder: mut builder, value: "  \"package\": ")
+    let package_name = Json.quote_string(value: manifest.package_name)
+    StringBuilder.push(builder: mut builder, value: package_name)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"version\": ")
+    let version = Json.quote_string(value: manifest.version)
+    StringBuilder.push(builder: mut builder, value: version)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"copied_files\": ")
     let copied = String.from_int(value: facts.copied_files)
-    StringBuilder.push(builder: mut builder, value: read copied)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"interface_files\": ")
+    StringBuilder.push(builder: mut builder, value: copied)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"interface_files\": ")
     let interfaces = String.from_int(value: facts.interface_files)
-    StringBuilder.push(builder: mut builder, value: read interfaces)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"source_files\": ")
+    StringBuilder.push(builder: mut builder, value: interfaces)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"source_files\": ")
     let sources = String.from_int(value: facts.source_files)
-    StringBuilder.push(builder: mut builder, value: read sources)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"manifest_files\": ")
+    StringBuilder.push(builder: mut builder, value: sources)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"manifest_files\": ")
     let manifests = String.from_int(value: facts.manifest_files)
-    StringBuilder.push(builder: mut builder, value: read manifests)
-    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+    StringBuilder.push(builder: mut builder, value: manifests)
+    StringBuilder.push(builder: mut builder, value: "\n}\n")
 
     return StringBuilder.finish(builder: take builder)
 }
@@ -879,46 +879,46 @@ fn json_bool_text(value: Bool) -> String {
     return "false"
 }
 
-fn copy_string(value: read String) -> fresh String {
-    return String.concat(left: read "", right: read value)
+fn copy_string(value: String) -> fresh String {
+    return String.concat(left: "", right: value)
 }
 
-fn json_field_string_or_empty(value: read JsonValue, name: read String) -> fresh String {
-    match Json.field_string(value: read value, name: read name) {
+fn json_field_string_or_empty(value: JsonValue, name: String) -> fresh String {
+    match Json.field_string(value, name) {
         Ok(text) => {
-            return copy_string(value: read text)
+            return copy_string(value: text)
         }
         Err(_) => {
-            return copy_string(value: read "")
+            return copy_string(value: "")
         }
     }
 }
 
 fn manifest_package_string_or_empty(
-    manifest: read JsonValue,
-    field: read String,
+    manifest: JsonValue,
+    field: String,
 ) -> fresh String {
-    match Json.field(value: read manifest, name: read "package") {
+    match Json.field(value: manifest, name: "package") {
         Ok(package) => {
-            let text = json_field_string_or_empty(value: read package, name: read field)
-            return copy_string(value: read text)
+            let text = json_field_string_or_empty(value: package, name: field)
+            return copy_string(value: text)
         }
         Err(_) => {
-            return copy_string(value: read "")
+            return copy_string(value: "")
         }
     }
 }
 
 fn manifest_array_strings_or_empty(
-    manifest: read JsonValue,
-    section: read String,
-    field: read String,
+    manifest: JsonValue,
+    section: String,
+    field: String,
 ) -> fresh List<String> {
-    match Json.field(value: read manifest, name: read section) {
+    match Json.field(value: manifest, name: section) {
         Ok(section_value) => {
-            match Json.field(value: read section_value, name: read field) {
+            match Json.field(value: section_value, name: field) {
                 Ok(items_value) => {
-                    match Json.array_strings(value: read items_value) {
+                    match Json.array_strings(value: items_value) {
                         Ok(items) => {
                             return items
                         }
@@ -938,14 +938,14 @@ fn manifest_array_strings_or_empty(
     }
 }
 
-fn public_interface_line_count(line: read String) -> Int {
-    let trimmed = String.trim(value: read line)
-    let is_public_fn = String.starts_with(value: read trimmed, prefix: read "pub fn ")
+fn public_interface_line_count(line: String) -> Int {
+    let trimmed = String.trim(value: line)
+    let is_public_fn = String.starts_with(value: trimmed, prefix: "pub fn ")
     let is_public_native_fn = String.starts_with(
-        value: read trimmed,
-        prefix: read "pub native fn ",
+        value: trimmed,
+        prefix: "pub native fn ",
     )
-    let is_public_struct = String.starts_with(value: read trimmed, prefix: read "pub struct ")
+    let is_public_struct = String.starts_with(value: trimmed, prefix: "pub struct ")
 
     return bool_count(value: is_public_fn || is_public_native_fn || is_public_struct)
 }
@@ -960,7 +960,7 @@ fn empty_interface_summary() -> fresh InterfaceSummary {
     )
 }
 
-fn copy_interface_summary(summary: read InterfaceSummary) -> fresh InterfaceSummary {
+fn copy_interface_summary(summary: InterfaceSummary) -> fresh InterfaceSummary {
     return InterfaceSummary(
         interface_files: summary.interface_files,
         interface_lines: summary.interface_lines,
@@ -971,209 +971,209 @@ fn copy_interface_summary(summary: read InterfaceSummary) -> fresh InterfaceSumm
 }
 
 fn add_interface_summary_from_text(
-    summary: read InterfaceSummary,
-    text: read String,
+    summary: InterfaceSummary,
+    text: String,
 ) -> fresh InterfaceSummary {
-    let lines = String.lines(value: read text)
+    let lines = String.lines(value: text)
     let public_apis = List.fold<String, Int>(
-        list: read lines,
-        initial: read 0,
+        list: lines,
+        initial: 0,
         folder: |count, line| {
-            return count + public_interface_line_count(line: read line)
+            return count + public_interface_line_count(line)
         },
     )
-    let trimmed = String.trim(value: read text)
+    let trimmed = String.trim(value: text)
 
     return InterfaceSummary(
         interface_files: summary.interface_files + 1,
-        interface_lines: summary.interface_lines + List.len(list: read lines),
+        interface_lines: summary.interface_lines + List.len(list: lines),
         public_apis: summary.public_apis + public_apis,
-        empty_files: summary.empty_files + bool_count(value: String.len(value: read trimmed) == 0),
+        empty_files: summary.empty_files + bool_count(value: String.len(value: trimmed) == 0),
         non_public_files: summary.non_public_files + bool_count(value: public_apis == 0),
     )
 }
 
 fn summarize_interface_file(
-    root: read Path,
-    child: read String,
-    file: read String,
-    summary: read InterfaceSummary,
+    root: Path,
+    child: String,
+    file: String,
+    summary: InterfaceSummary,
 ) -> Result<fresh InterfaceSummary, String> {
-    if String.ends_with(value: read file, suffix: read ".rssi") == false {
-        return copy_interface_summary(summary: read summary)
+    if String.ends_with(value: file, suffix: ".rssi") == false {
+        return copy_interface_summary(summary)
     }
 
-    let directory = Path.join(base: read root, child: read child)
-    let path = Path.join(base: read directory, child: read file)
-    let text = read_text_result(path: read path)?
+    let directory = Path.join(base: root, child)
+    let path = Path.join(base: directory, child: file)
+    let text = read_text_result(path)?
 
-    return add_interface_summary_from_text(summary: read summary, text: read text)
+    return add_interface_summary_from_text(summary, text)
 }
 
 fn summarize_interface_root(
-    root: read Path,
-    child: read String,
-    summary: read InterfaceSummary,
+    root: Path,
+    child: String,
+    summary: InterfaceSummary,
 ) -> Result<fresh InterfaceSummary, String> {
-    let directory = Path.join(base: read root, child: read child)
-    if Directory.exists(path: read directory) == false {
-        return copy_interface_summary(summary: read summary)
+    let directory = Path.join(base: root, child)
+    if Directory.exists(path: directory) == false {
+        return copy_interface_summary(summary)
     }
 
-    if Directory.is_dir(path: read directory) == false {
-        return copy_interface_summary(summary: read summary)
+    if Directory.is_dir(path: directory) == false {
+        return copy_interface_summary(summary)
     }
 
-    let files = list_files_result(path: read directory)?
+    let files = list_files_result(path: directory)?
 
     return List.try_fold<String, InterfaceSummary, String>(
-        list: read files,
-        initial: read summary,
+        list: files,
+        initial: summary,
         folder: |state, file| {
             return summarize_interface_file(
-                root: read root,
-                child: read child,
-                file: read file,
-                summary: read state,
+                root,
+                child,
+                file,
+                summary: state,
             )
         },
     )
 }
 
-fn package_interface_summary(root: read Path) -> Result<fresh InterfaceSummary, String> {
-    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
+fn package_interface_summary(root: Path) -> Result<fresh InterfaceSummary, String> {
+    let manifest = parse_toml_result(path: manifest_path(root))?
     let interface_roots = manifest_array_strings_or_empty(
-        manifest: read manifest,
-        section: read "interfaces",
-        field: read "paths",
+        manifest,
+        section: "interfaces",
+        field: "paths",
     )
 
     return List.try_fold<String, InterfaceSummary, String>(
-        list: read interface_roots,
-        initial: read empty_interface_summary(),
+        list: interface_roots,
+        initial: empty_interface_summary(),
         folder: |summary, child| {
             return summarize_interface_root(
-                root: read root,
-                child: read child,
-                summary: read summary,
+                root,
+                child,
+                summary,
             )
         },
     )
 }
 
 fn count_existing_files_with_suffix(
-    root: read Path,
-    child: read String,
-    suffix: read String,
+    root: Path,
+    child: String,
+    suffix: String,
 ) -> Result<Int, String> {
-    let directory = Path.join(base: read root, child: read child)
-    if Directory.exists(path: read directory) == false {
+    let directory = Path.join(base: root, child)
+    if Directory.exists(path: directory) == false {
         return 0
     }
 
-    if Directory.is_dir(path: read directory) == false {
+    if Directory.is_dir(path: directory) == false {
         return 0
     }
 
-    let files = list_files_result(path: read directory)?
+    let files = list_files_result(path: directory)?
     let counter = Counter.new(value: 0)
 
     for file in files {
-        if String.ends_with(value: read file, suffix: read suffix) {
+        if String.ends_with(value: file, suffix) {
             Counter.add(counter: mut counter, amount: 1)
         }
     }
 
-    return Counter.value(counter: read counter)
+    return Counter.value(counter)
 }
 
 fn count_existing_root_files_with_suffix(
-    root: read Path,
-    children: read List<String>,
-    suffix: read String,
+    root: Path,
+    children: List<String>,
+    suffix: String,
 ) -> Result<Int, String> {
     let counter = Counter.new(value: 0)
 
     for child in children {
         let count = count_existing_files_with_suffix(
-            root: read root,
-            child: read child,
-            suffix: read suffix,
+            root,
+            child,
+            suffix,
         )?
         Counter.add(counter: mut counter, amount: count)
     }
 
-    return Counter.value(counter: read counter)
+    return Counter.value(counter)
 }
 
 fn collect_interface_snapshots_from_files(
-    root: read Path,
-    child: read String,
-    files: read List<String>,
+    root: Path,
+    child: String,
+    files: List<String>,
     index: Int,
     snapshots: mut List<InterfaceSnapshot>,
 ) -> Result<Unit, String> {
-    if index >= List.len(list: read files) {
+    if index >= List.len(list: files) {
         return Ok(Unit)
     }
 
-    let file = List.get(list: read files, index: index)
-    if String.ends_with(value: read file, suffix: read ".rssi") {
-        let directory = Path.join(base: read root, child: read child)
-        let path = Path.join(base: read directory, child: read file)
-        let text = read_text_result(path: read path)?
-        let prefix = String.concat(left: read child, right: read "/")
-        let relative_path = String.concat(left: read prefix, right: read file)
-        let snapshot = InterfaceSnapshot(relative_path: read relative_path, text: read text)
-        List.push(list: mut snapshots, value: read snapshot)
+    let file = List.get(list: files, index)
+    if String.ends_with(value: file, suffix: ".rssi") {
+        let directory = Path.join(base: root, child)
+        let path = Path.join(base: directory, child: file)
+        let text = read_text_result(path)?
+        let prefix = String.concat(left: child, right: "/")
+        let relative_path = String.concat(left: prefix, right: file)
+        let snapshot = InterfaceSnapshot(relative_path, text)
+        List.push(list: mut snapshots, value: snapshot)
     }
 
     return collect_interface_snapshots_from_files(
-        root: read root,
-        child: read child,
-        files: read files,
+        root,
+        child,
+        files,
         index: index + 1,
         snapshots: mut snapshots,
     )
 }
 
 fn collect_interface_snapshots_from_roots(
-    root: read Path,
-    children: read List<String>,
+    root: Path,
+    children: List<String>,
     index: Int,
     snapshots: mut List<InterfaceSnapshot>,
 ) -> Result<Unit, String> {
-    if index >= List.len(list: read children) {
+    if index >= List.len(list: children) {
         return Ok(Unit)
     }
 
-    let child = List.get(list: read children, index: index)
-    let directory = Path.join(base: read root, child: read child)
-    require_directory(path: read directory, label: read child)?
-    let files = list_files_result(path: read directory)?
+    let child = List.get(list: children, index)
+    let directory = Path.join(base: root, child)
+    require_directory(path: directory, label: child)?
+    let files = list_files_result(path: directory)?
     collect_interface_snapshots_from_files(
-        root: read root,
-        child: read child,
-        files: read files,
+        root,
+        child,
+        files,
         index: 0,
         snapshots: mut snapshots,
     )?
 
     return collect_interface_snapshots_from_roots(
-        root: read root,
-        children: read children,
+        root,
+        children,
         index: index + 1,
         snapshots: mut snapshots,
     )
 }
 
-fn package_interface_snapshots(root: read Path) -> Result<fresh List<InterfaceSnapshot>, String> {
-    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
-    let interface_roots = manifest_interface_roots(manifest: read manifest)?
+fn package_interface_snapshots(root: Path) -> Result<fresh List<InterfaceSnapshot>, String> {
+    let manifest = parse_toml_result(path: manifest_path(root))?
+    let interface_roots = manifest_interface_roots(manifest)?
     local snapshots = List<InterfaceSnapshot>.new()
     collect_interface_snapshots_from_roots(
-        root: read root,
-        children: read interface_roots,
+        root,
+        children: interface_roots,
         index: 0,
         snapshots: mut snapshots,
     )?
@@ -1182,48 +1182,48 @@ fn package_interface_snapshots(root: read Path) -> Result<fresh List<InterfaceSn
 }
 
 fn find_snapshot_text(
-    snapshots: read List<InterfaceSnapshot>,
+    snapshots: List<InterfaceSnapshot>,
     index: Int,
-    path: read String,
+    path: String,
 ) -> Option<String> {
-    if index >= List.len(list: read snapshots) {
+    if index >= List.len(list: snapshots) {
         return None
     }
 
-    let snapshot = List.get(list: read snapshots, index: index)
+    let snapshot = List.get(list: snapshots, index)
     if snapshot.relative_path == path {
-        return Some(read snapshot.text)
+        return Some(snapshot.text)
     }
 
     return find_snapshot_text(
-        snapshots: read snapshots,
+        snapshots,
         index: index + 1,
-        path: read path,
+        path,
     )
 }
 
 fn count_removed_snapshots(
-    left: read List<InterfaceSnapshot>,
-    right: read List<InterfaceSnapshot>,
+    left: List<InterfaceSnapshot>,
+    right: List<InterfaceSnapshot>,
     index: Int,
 ) -> Int {
-    if index >= List.len(list: read left) {
+    if index >= List.len(list: left) {
         return 0
     }
 
-    let snapshot = List.get(list: read left, index: index)
+    let snapshot = List.get(list: left, index)
     match find_snapshot_text(
-        snapshots: read right,
+        snapshots: right,
         index: 0,
-        path: read snapshot.relative_path,
+        path: snapshot.relative_path,
     ) {
         Some(_) => {
-            return count_removed_snapshots(left: read left, right: read right, index: index + 1)
+            return count_removed_snapshots(left, right, index: index + 1)
         }
         None => {
             return 1 + count_removed_snapshots(
-                left: read left,
-                right: read right,
+                left,
+                right,
                 index: index + 1,
             )
         }
@@ -1231,27 +1231,27 @@ fn count_removed_snapshots(
 }
 
 fn count_added_snapshots(
-    left: read List<InterfaceSnapshot>,
-    right: read List<InterfaceSnapshot>,
+    left: List<InterfaceSnapshot>,
+    right: List<InterfaceSnapshot>,
     index: Int,
 ) -> Int {
-    if index >= List.len(list: read right) {
+    if index >= List.len(list: right) {
         return 0
     }
 
-    let snapshot = List.get(list: read right, index: index)
+    let snapshot = List.get(list: right, index)
     match find_snapshot_text(
-        snapshots: read left,
+        snapshots: left,
         index: 0,
-        path: read snapshot.relative_path,
+        path: snapshot.relative_path,
     ) {
         Some(_) => {
-            return count_added_snapshots(left: read left, right: read right, index: index + 1)
+            return count_added_snapshots(left, right, index: index + 1)
         }
         None => {
             return 1 + count_added_snapshots(
-                left: read left,
-                right: read right,
+                left,
+                right,
                 index: index + 1,
             )
         }
@@ -1259,45 +1259,45 @@ fn count_added_snapshots(
 }
 
 fn count_modified_snapshots(
-    left: read List<InterfaceSnapshot>,
-    right: read List<InterfaceSnapshot>,
+    left: List<InterfaceSnapshot>,
+    right: List<InterfaceSnapshot>,
     index: Int,
 ) -> Int {
-    if index >= List.len(list: read left) {
+    if index >= List.len(list: left) {
         return 0
     }
 
-    let snapshot = List.get(list: read left, index: index)
+    let snapshot = List.get(list: left, index)
     match find_snapshot_text(
-        snapshots: read right,
+        snapshots: right,
         index: 0,
-        path: read snapshot.relative_path,
+        path: snapshot.relative_path,
     ) {
         Some(text) => {
             return bool_count(value: text != snapshot.text) + count_modified_snapshots(
-                left: read left,
-                right: read right,
+                left,
+                right,
                 index: index + 1,
             )
         }
         None => {
-            return count_modified_snapshots(left: read left, right: read right, index: index + 1)
+            return count_modified_snapshots(left, right, index: index + 1)
         }
     }
 }
 
 fn collect_lock_entries_from_manifest(
-    root: read Path,
-    manifest: read JsonValue,
+    root: Path,
+    manifest: JsonValue,
     entries: mut List<LockEntry>,
 ) -> Result<Unit, String> {
-    match manifest_dependencies(manifest: read manifest)? {
+    match manifest_dependencies(manifest)? {
         Some(dependencies) => {
-            let names = json_object_keys_result(value: read dependencies)?
+            let names = json_object_keys_result(value: dependencies)?
             return collect_lock_entries_from_dependencies(
-                root: read root,
-                dependencies: read dependencies,
-                names: read names,
+                root,
+                dependencies,
+                names,
                 index: 0,
                 entries: mut entries,
             )
@@ -1309,38 +1309,38 @@ fn collect_lock_entries_from_manifest(
 }
 
 fn collect_lock_entries_from_dependencies(
-    root: read Path,
-    dependencies: read JsonValue,
-    names: read List<String>,
+    root: Path,
+    dependencies: JsonValue,
+    names: List<String>,
     index: Int,
     entries: mut List<LockEntry>,
 ) -> Result<Unit, String> {
-    if index >= List.len(list: read names) {
+    if index >= List.len(list: names) {
         return Ok(Unit)
     }
 
-    let name = List.get(list: read names, index: index)
-    let spec = json_field_result(value: read dependencies, name: read name)?
-    if Json.is_object(value: read spec) {
-        match Json.field_string(value: read spec, name: read "path") {
+    let name = List.get(list: names, index)
+    let spec = json_field_result(value: dependencies, name)?
+    if Json.is_object(value: spec) {
+        match Json.field_string(value: spec, name: "path") {
             Ok(path) => {
-                let dependency_root = Path.join(base: read root, child: read path)
+                let dependency_root = Path.join(base: root, child: path)
                 let dependency_manifest = parse_toml_result(
-                    path: read manifest_path(root: read dependency_root),
+                    path: manifest_path(root: dependency_root),
                 )?
-                let package = json_field_result(value: read dependency_manifest, name: read "package")?
-                let package_name = json_field_string_result(value: read package, name: read "name")?
-                let summary = package_interface_summary(root: read dependency_root)?
+                let package = json_field_result(value: dependency_manifest, name: "package")?
+                let package_name = json_field_string_result(value: package, name: "name")?
+                let summary = package_interface_summary(root: dependency_root)?
                 let entry = LockEntry(
-                    name: read package_name,
-                    path: read path,
+                    name: package_name,
+                    path,
                     interface_lines: summary.interface_lines,
                     public_apis: summary.public_apis,
                 )
-                List.push(list: mut entries, value: read entry)
+                List.push(list: mut entries, value: entry)
                 collect_lock_entries_from_manifest(
-                    root: read dependency_root,
-                    manifest: read dependency_manifest,
+                    root: dependency_root,
+                    manifest: dependency_manifest,
                     entries: mut entries,
                 )?
             }
@@ -1350,20 +1350,20 @@ fn collect_lock_entries_from_dependencies(
     }
 
     return collect_lock_entries_from_dependencies(
-        root: read root,
-        dependencies: read dependencies,
-        names: read names,
+        root,
+        dependencies,
+        names,
         index: index + 1,
         entries: mut entries,
     )
 }
 
-fn package_lock_entries(root: read Path) -> Result<fresh List<LockEntry>, String> {
-    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
+fn package_lock_entries(root: Path) -> Result<fresh List<LockEntry>, String> {
+    let manifest = parse_toml_result(path: manifest_path(root))?
     local entries = List<LockEntry>.new()
     collect_lock_entries_from_manifest(
-        root: read root,
-        manifest: read manifest,
+        root,
+        manifest,
         entries: mut entries,
     )?
 
@@ -1387,140 +1387,140 @@ fn removed_api_count(before: Int, after: Int) -> Int {
 }
 
 fn append_lock_entries_json(
-    entries: read List<LockEntry>,
+    entries: List<LockEntry>,
     index: Int,
     builder: mut StringBuilder,
 ) -> Unit {
-    if index >= List.len(list: read entries) {
+    if index >= List.len(list: entries) {
         return Unit
     }
 
     if index > 0 {
-        StringBuilder.push(builder: mut builder, value: read ",\n")
+        StringBuilder.push(builder: mut builder, value: ",\n")
     }
 
-    let entry = List.get(list: read entries, index: index)
-    StringBuilder.push(builder: mut builder, value: read "    {\n      \"name\": ")
-    let name = Json.quote_string(value: read entry.name)
-    StringBuilder.push(builder: mut builder, value: read name)
-    StringBuilder.push(builder: mut builder, value: read ",\n      \"path\": ")
-    let path = Json.quote_string(value: read entry.path)
-    StringBuilder.push(builder: mut builder, value: read path)
-    StringBuilder.push(builder: mut builder, value: read ",\n      \"interface_lines\": ")
+    let entry = List.get(list: entries, index)
+    StringBuilder.push(builder: mut builder, value: "    {\n      \"name\": ")
+    let name = Json.quote_string(value: entry.name)
+    StringBuilder.push(builder: mut builder, value: name)
+    StringBuilder.push(builder: mut builder, value: ",\n      \"path\": ")
+    let path = Json.quote_string(value: entry.path)
+    StringBuilder.push(builder: mut builder, value: path)
+    StringBuilder.push(builder: mut builder, value: ",\n      \"interface_lines\": ")
     let interface_lines = String.from_int(value: entry.interface_lines)
-    StringBuilder.push(builder: mut builder, value: read interface_lines)
-    StringBuilder.push(builder: mut builder, value: read ",\n      \"public_apis\": ")
+    StringBuilder.push(builder: mut builder, value: interface_lines)
+    StringBuilder.push(builder: mut builder, value: ",\n      \"public_apis\": ")
     let public_apis = String.from_int(value: entry.public_apis)
-    StringBuilder.push(builder: mut builder, value: read public_apis)
-    StringBuilder.push(builder: mut builder, value: read "\n    }")
+    StringBuilder.push(builder: mut builder, value: public_apis)
+    StringBuilder.push(builder: mut builder, value: "\n    }")
 
     return append_lock_entries_json(
-        entries: read entries,
+        entries,
         index: index + 1,
         builder: mut builder,
     )
 }
 
-fn package_lock_json(facts: read LockFacts, entries: read List<LockEntry>) -> fresh String {
+fn package_lock_json(facts: LockFacts, entries: List<LockEntry>) -> fresh String {
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "{\n")
-    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
-    let package_name = Json.quote_string(value: read facts.package_name)
-    StringBuilder.push(builder: mut builder, value: read package_name)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"version\": ")
-    let version = Json.quote_string(value: read facts.version)
-    StringBuilder.push(builder: mut builder, value: read version)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"edition\": ")
-    let edition = Json.quote_string(value: read facts.edition)
-    StringBuilder.push(builder: mut builder, value: read edition)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"entries\": ")
+    StringBuilder.push(builder: mut builder, value: "{\n")
+    StringBuilder.push(builder: mut builder, value: "  \"package\": ")
+    let package_name = Json.quote_string(value: facts.package_name)
+    StringBuilder.push(builder: mut builder, value: package_name)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"version\": ")
+    let version = Json.quote_string(value: facts.version)
+    StringBuilder.push(builder: mut builder, value: version)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"edition\": ")
+    let edition = Json.quote_string(value: facts.edition)
+    StringBuilder.push(builder: mut builder, value: edition)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"entries\": ")
     let entry_count = String.from_int(value: facts.entries)
-    StringBuilder.push(builder: mut builder, value: read entry_count)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"dependencies\": [\n")
-    append_lock_entries_json(entries: read entries, index: 0, builder: mut builder)
-    StringBuilder.push(builder: mut builder, value: read "\n  ]\n}\n")
+    StringBuilder.push(builder: mut builder, value: entry_count)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"dependencies\": [\n")
+    append_lock_entries_json(entries, index: 0, builder: mut builder)
+    StringBuilder.push(builder: mut builder, value: "\n  ]\n}\n")
 
     return StringBuilder.finish(builder: take builder)
 }
 
-fn package_diff_json(facts: read DiffFacts) -> fresh String {
+fn package_diff_json(facts: DiffFacts) -> fresh String {
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "{\n")
-    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
-    let package_name = Json.quote_string(value: read facts.package_name)
-    StringBuilder.push(builder: mut builder, value: read package_name)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"added_apis\": ")
+    StringBuilder.push(builder: mut builder, value: "{\n")
+    StringBuilder.push(builder: mut builder, value: "  \"package\": ")
+    let package_name = Json.quote_string(value: facts.package_name)
+    StringBuilder.push(builder: mut builder, value: package_name)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"added_apis\": ")
     let added_apis = String.from_int(value: facts.added_apis)
-    StringBuilder.push(builder: mut builder, value: read added_apis)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"removed_apis\": ")
+    StringBuilder.push(builder: mut builder, value: added_apis)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"removed_apis\": ")
     let removed_apis = String.from_int(value: facts.removed_apis)
-    StringBuilder.push(builder: mut builder, value: read removed_apis)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"changed_interfaces\": ")
+    StringBuilder.push(builder: mut builder, value: removed_apis)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"changed_interfaces\": ")
     let changed_interfaces = String.from_int(value: facts.changed_interfaces)
-    StringBuilder.push(builder: mut builder, value: read changed_interfaces)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"risk_changed\": ")
+    StringBuilder.push(builder: mut builder, value: changed_interfaces)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"risk_changed\": ")
     let risk_changed = json_bool_text(value: facts.risk_changed)
-    StringBuilder.push(builder: mut builder, value: read risk_changed)
-    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+    StringBuilder.push(builder: mut builder, value: risk_changed)
+    StringBuilder.push(builder: mut builder, value: "\n}\n")
 
     return StringBuilder.finish(builder: take builder)
 }
 
-fn package_publish_json(facts: read PublishCheckFacts) -> fresh String {
+fn package_publish_json(facts: PublishCheckFacts) -> fresh String {
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "{\n")
-    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
-    let package_name = Json.quote_string(value: read facts.package_name)
-    StringBuilder.push(builder: mut builder, value: read package_name)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"version\": ")
-    let version = Json.quote_string(value: read facts.version)
-    StringBuilder.push(builder: mut builder, value: read version)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"interface_files\": ")
+    StringBuilder.push(builder: mut builder, value: "{\n")
+    StringBuilder.push(builder: mut builder, value: "  \"package\": ")
+    let package_name = Json.quote_string(value: facts.package_name)
+    StringBuilder.push(builder: mut builder, value: package_name)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"version\": ")
+    let version = Json.quote_string(value: facts.version)
+    StringBuilder.push(builder: mut builder, value: version)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"interface_files\": ")
     let interface_files = String.from_int(value: facts.interface_files)
-    StringBuilder.push(builder: mut builder, value: read interface_files)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"source_files\": ")
+    StringBuilder.push(builder: mut builder, value: interface_files)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"source_files\": ")
     let source_files = String.from_int(value: facts.source_files)
-    StringBuilder.push(builder: mut builder, value: read source_files)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"public_apis\": ")
+    StringBuilder.push(builder: mut builder, value: source_files)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"public_apis\": ")
     let public_apis = String.from_int(value: facts.public_apis)
-    StringBuilder.push(builder: mut builder, value: read public_apis)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"ok\": ")
+    StringBuilder.push(builder: mut builder, value: public_apis)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"ok\": ")
     let ok = json_bool_text(value: facts.ok)
-    StringBuilder.push(builder: mut builder, value: read ok)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"errors\": ")
+    StringBuilder.push(builder: mut builder, value: ok)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"errors\": ")
     let errors = String.from_int(value: facts.errors)
-    StringBuilder.push(builder: mut builder, value: read errors)
-    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+    StringBuilder.push(builder: mut builder, value: errors)
+    StringBuilder.push(builder: mut builder, value: "\n}\n")
 
     return StringBuilder.finish(builder: take builder)
 }
 
-fn package_publish_check_facts(root: read Path) -> Result<fresh PublishCheckFacts, String> {
-    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
-    let package_name = manifest_package_string_or_empty(manifest: read manifest, field: read "name")
-    let version = manifest_package_string_or_empty(manifest: read manifest, field: read "version")
-    let edition = manifest_package_string_or_empty(manifest: read manifest, field: read "edition")
+fn package_publish_check_facts(root: Path) -> Result<fresh PublishCheckFacts, String> {
+    let manifest = parse_toml_result(path: manifest_path(root))?
+    let package_name = manifest_package_string_or_empty(manifest, field: "name")
+    let version = manifest_package_string_or_empty(manifest, field: "version")
+    let edition = manifest_package_string_or_empty(manifest, field: "edition")
     let source_roots = manifest_array_strings_or_empty(
-        manifest: read manifest,
-        section: read "sources",
-        field: read "paths",
+        manifest,
+        section: "sources",
+        field: "paths",
     )
-    let interface_summary = package_interface_summary(root: read root)?
+    let interface_summary = package_interface_summary(root)?
     let source_files = count_existing_root_files_with_suffix(
-        root: read root,
-        children: read source_roots,
-        suffix: read ".rss",
+        root,
+        children: source_roots,
+        suffix: ".rss",
     )?
-    let missing_name = bool_count(value: String.len(value: read package_name) == 0)
-    let missing_version = bool_count(value: String.len(value: read version) == 0)
-    let missing_edition = bool_count(value: String.len(value: read edition) == 0)
+    let missing_name = bool_count(value: String.len(value: package_name) == 0)
+    let missing_version = bool_count(value: String.len(value: version) == 0)
+    let missing_edition = bool_count(value: String.len(value: edition) == 0)
     let missing_interfaces = bool_count(value: interface_summary.interface_files == 0)
     let missing_sources = bool_count(value: source_files == 0)
     let errors = missing_name + missing_version + missing_edition + missing_interfaces + missing_sources + interface_summary.empty_files + interface_summary.non_public_files
 
     return PublishCheckFacts(
-        package_name: read package_name,
-        version: read version,
+        package_name,
+        version,
         interface_files: interface_summary.interface_files,
         source_files: source_files,
         public_apis: interface_summary.public_apis,
@@ -1529,239 +1529,239 @@ fn package_publish_check_facts(root: read Path) -> Result<fresh PublishCheckFact
     )
 }
 
-fn run_metadata(root: read Path, output: read Path) -> Result<Unit, String> {
-    let facts = package_manifest_facts(root: read root)?
-    let text = package_metadata_json(facts: read facts)
-    write_text_result(path: read output, text: read text)?
+fn run_metadata(root: Path, output: Path) -> Result<Unit, String> {
+    let facts = package_manifest_facts(root)?
+    let text = package_metadata_json(facts)
+    write_text_result(path: output, text)?
     let message = String.concat(
-        left: read "rss package manager metadata ",
-        right: read facts.package_name,
+        left: "rss package manager metadata ",
+        right: facts.package_name,
     )
-    Log.write(message: read message)
+    Log.write(message)
 
     return Ok(Unit)
 }
 
-fn run_vendor(root: read Path, vendor: read Path) -> Result<Unit, String> {
-    create_dir_result(path: read vendor)?
-    let manifest = package_manifest_facts(root: read root)?
-    let files = list_files_result(path: read root)?
-    let facts = copy_package_tree(source: read root, vendor: read vendor, files: read files)?
-    let metadata_path = Path.join(base: read vendor, child: read "rss-vendor.json")
-    let metadata = vendor_metadata_json(manifest: read manifest, facts: read facts)
-    write_text_result(path: read metadata_path, text: read metadata)?
+fn run_vendor(root: Path, vendor: Path) -> Result<Unit, String> {
+    create_dir_result(path: vendor)?
+    let manifest = package_manifest_facts(root)?
+    let files = list_files_result(path: root)?
+    let facts = copy_package_tree(source: root, vendor, files)?
+    let metadata_path = Path.join(base: vendor, child: "rss-vendor.json")
+    let metadata = vendor_metadata_json(manifest, facts)
+    write_text_result(path: metadata_path, text: metadata)?
 
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "rss package manager vendor copied=")
+    StringBuilder.push(builder: mut builder, value: "rss package manager vendor copied=")
     let copied = String.from_int(value: facts.copied_files)
-    StringBuilder.push(builder: mut builder, value: read copied)
-    StringBuilder.push(builder: mut builder, value: read " interfaces=")
+    StringBuilder.push(builder: mut builder, value: copied)
+    StringBuilder.push(builder: mut builder, value: " interfaces=")
     let interfaces = String.from_int(value: facts.interface_files)
-    StringBuilder.push(builder: mut builder, value: read interfaces)
-    StringBuilder.push(builder: mut builder, value: read " sources=")
+    StringBuilder.push(builder: mut builder, value: interfaces)
+    StringBuilder.push(builder: mut builder, value: " sources=")
     let sources = String.from_int(value: facts.source_files)
-    StringBuilder.push(builder: mut builder, value: read sources)
-    StringBuilder.push(builder: mut builder, value: read " manifests=")
+    StringBuilder.push(builder: mut builder, value: sources)
+    StringBuilder.push(builder: mut builder, value: " manifests=")
     let manifests = String.from_int(value: facts.manifest_files)
-    StringBuilder.push(builder: mut builder, value: read manifests)
+    StringBuilder.push(builder: mut builder, value: manifests)
     let message = StringBuilder.finish(builder: take builder)
-    Log.write(message: read message)
+    Log.write(message)
 
     return Ok(Unit)
 }
 
-fn run_check(root: read Path, output: read Path) -> Result<Unit, String> {
-    let facts = package_check_facts(root: read root)?
-    let text = package_check_json(facts: read facts)
-    write_text_result(path: read output, text: read text)?
+fn run_check(root: Path, output: Path) -> Result<Unit, String> {
+    let facts = package_check_facts(root)?
+    let text = package_check_json(facts)
+    write_text_result(path: output, text)?
 
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "rss package manager check ")
-    StringBuilder.push(builder: mut builder, value: read facts.package_name)
-    StringBuilder.push(builder: mut builder, value: read " interfaces=")
+    StringBuilder.push(builder: mut builder, value: "rss package manager check ")
+    StringBuilder.push(builder: mut builder, value: facts.package_name)
+    StringBuilder.push(builder: mut builder, value: " interfaces=")
     let interfaces = String.from_int(value: facts.interface_files)
-    StringBuilder.push(builder: mut builder, value: read interfaces)
-    StringBuilder.push(builder: mut builder, value: read " sources=")
+    StringBuilder.push(builder: mut builder, value: interfaces)
+    StringBuilder.push(builder: mut builder, value: " sources=")
     let sources = String.from_int(value: facts.source_files)
-    StringBuilder.push(builder: mut builder, value: read sources)
+    StringBuilder.push(builder: mut builder, value: sources)
     let message = StringBuilder.finish(builder: take builder)
-    Log.write(message: read message)
+    Log.write(message)
 
     return Ok(Unit)
 }
 
-fn run_tree(root: read Path, output: read Path) -> Result<Unit, String> {
-    let facts = package_tree_facts(root: read root)?
-    let text = package_tree_json(facts: read facts)
-    write_text_result(path: read output, text: read text)?
+fn run_tree(root: Path, output: Path) -> Result<Unit, String> {
+    let facts = package_tree_facts(root)?
+    let text = package_tree_json(facts)
+    write_text_result(path: output, text)?
 
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "rss package manager tree ")
-    StringBuilder.push(builder: mut builder, value: read facts.package_name)
-    StringBuilder.push(builder: mut builder, value: read " packages=")
+    StringBuilder.push(builder: mut builder, value: "rss package manager tree ")
+    StringBuilder.push(builder: mut builder, value: facts.package_name)
+    StringBuilder.push(builder: mut builder, value: " packages=")
     let packages = String.from_int(value: facts.packages)
-    StringBuilder.push(builder: mut builder, value: read packages)
-    StringBuilder.push(builder: mut builder, value: read " path=")
+    StringBuilder.push(builder: mut builder, value: packages)
+    StringBuilder.push(builder: mut builder, value: " path=")
     let path_dependencies = String.from_int(value: facts.path_dependencies)
-    StringBuilder.push(builder: mut builder, value: read path_dependencies)
-    StringBuilder.push(builder: mut builder, value: read " unresolved=")
+    StringBuilder.push(builder: mut builder, value: path_dependencies)
+    StringBuilder.push(builder: mut builder, value: " unresolved=")
     let unresolved = String.from_int(value: facts.unresolved_dependencies)
-    StringBuilder.push(builder: mut builder, value: read unresolved)
+    StringBuilder.push(builder: mut builder, value: unresolved)
     let message = StringBuilder.finish(builder: take builder)
-    Log.write(message: read message)
+    Log.write(message)
 
     return Ok(Unit)
 }
 
-fn run_review(root: read Path, output: read Path) -> Result<Unit, String> {
-    let facts = package_review_facts(root: read root)?
-    let text = package_review_json(facts: read facts)
-    write_text_result(path: read output, text: read text)?
+fn run_review(root: Path, output: Path) -> Result<Unit, String> {
+    let facts = package_review_facts(root)?
+    let text = package_review_json(facts)
+    write_text_result(path: output, text)?
 
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "rss package manager review ")
-    StringBuilder.push(builder: mut builder, value: read facts.package_name)
-    StringBuilder.push(builder: mut builder, value: read " risk=")
-    let risk = package_review_risk(facts: read facts)
-    StringBuilder.push(builder: mut builder, value: read risk)
-    StringBuilder.push(builder: mut builder, value: read " apis=")
+    StringBuilder.push(builder: mut builder, value: "rss package manager review ")
+    StringBuilder.push(builder: mut builder, value: facts.package_name)
+    StringBuilder.push(builder: mut builder, value: " risk=")
+    let risk = package_review_risk(facts)
+    StringBuilder.push(builder: mut builder, value: risk)
+    StringBuilder.push(builder: mut builder, value: " apis=")
     let apis = String.from_int(value: facts.public_apis)
-    StringBuilder.push(builder: mut builder, value: read apis)
-    StringBuilder.push(builder: mut builder, value: read " native=")
+    StringBuilder.push(builder: mut builder, value: apis)
+    StringBuilder.push(builder: mut builder, value: " native=")
     let native = String.from_int(value: facts.native_apis)
-    StringBuilder.push(builder: mut builder, value: read native)
-    StringBuilder.push(builder: mut builder, value: read " unknown=")
+    StringBuilder.push(builder: mut builder, value: native)
+    StringBuilder.push(builder: mut builder, value: " unknown=")
     let unknown = String.from_int(value: facts.unknown_apis)
-    StringBuilder.push(builder: mut builder, value: read unknown)
+    StringBuilder.push(builder: mut builder, value: unknown)
     let message = StringBuilder.finish(builder: take builder)
-    Log.write(message: read message)
+    Log.write(message)
 
     return Ok(Unit)
 }
 
-fn run_lock(root: read Path, output: read Path) -> Result<Unit, String> {
-    let manifest = parse_toml_result(path: read manifest_path(root: read root))?
-    let package = json_field_result(value: read manifest, name: read "package")?
-    let package_name = json_field_string_result(value: read package, name: read "name")?
-    let version = json_field_string_result(value: read package, name: read "version")?
-    let edition = json_field_string_result(value: read package, name: read "edition")?
-    let entries = package_lock_entries(root: read root)?
+fn run_lock(root: Path, output: Path) -> Result<Unit, String> {
+    let manifest = parse_toml_result(path: manifest_path(root))?
+    let package = json_field_result(value: manifest, name: "package")?
+    let package_name = json_field_string_result(value: package, name: "name")?
+    let version = json_field_string_result(value: package, name: "version")?
+    let edition = json_field_string_result(value: package, name: "edition")?
+    let entries = package_lock_entries(root)?
     let facts = LockFacts(
-        package_name: read package_name,
-        version: read version,
-        edition: read edition,
-        entries: List.len(list: read entries),
+        package_name,
+        version,
+        edition,
+        entries: List.len(list: entries),
     )
-    let text = package_lock_json(facts: read facts, entries: read entries)
-    write_text_result(path: read output, text: read text)?
+    let text = package_lock_json(facts, entries)
+    write_text_result(path: output, text)?
 
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "rss package manager lock ")
-    StringBuilder.push(builder: mut builder, value: read package_name)
-    StringBuilder.push(builder: mut builder, value: read " entries=")
+    StringBuilder.push(builder: mut builder, value: "rss package manager lock ")
+    StringBuilder.push(builder: mut builder, value: package_name)
+    StringBuilder.push(builder: mut builder, value: " entries=")
     let entry_count = String.from_int(value: facts.entries)
-    StringBuilder.push(builder: mut builder, value: read entry_count)
+    StringBuilder.push(builder: mut builder, value: entry_count)
     let message = StringBuilder.finish(builder: take builder)
-    Log.write(message: read message)
+    Log.write(message)
 
     return Ok(Unit)
 }
 
-fn run_diff(root: read Path, other: read Path, output: read Path) -> Result<Unit, String> {
-    let before = package_review_facts(root: read root)?
-    let after = package_review_facts(root: read other)?
-    let before_snapshots = package_interface_snapshots(root: read root)?
-    let after_snapshots = package_interface_snapshots(root: read other)?
+fn run_diff(root: Path, other: Path, output: Path) -> Result<Unit, String> {
+    let before = package_review_facts(root)?
+    let after = package_review_facts(root: other)?
+    let before_snapshots = package_interface_snapshots(root)?
+    let after_snapshots = package_interface_snapshots(root: other)?
     let facts = DiffFacts(
-        package_name: read before.package_name,
+        package_name: before.package_name,
         added_apis: added_api_count(before: before.public_apis, after: after.public_apis),
         removed_apis: removed_api_count(before: before.public_apis, after: after.public_apis),
         changed_interfaces: count_removed_snapshots(
-                left: read before_snapshots,
-                right: read after_snapshots,
+                left: before_snapshots,
+                right: after_snapshots,
                 index: 0,
             ) + count_added_snapshots(
-                left: read before_snapshots,
-                right: read after_snapshots,
+                left: before_snapshots,
+                right: after_snapshots,
                 index: 0,
             ) + count_modified_snapshots(
-                left: read before_snapshots,
-                right: read after_snapshots,
+                left: before_snapshots,
+                right: after_snapshots,
                 index: 0,
             ),
-        risk_changed: package_review_risk(facts: read before) != package_review_risk(facts: read after),
+        risk_changed: package_review_risk(facts: before) != package_review_risk(facts: after),
     )
-    let text = package_diff_json(facts: read facts)
-    write_text_result(path: read output, text: read text)?
+    let text = package_diff_json(facts)
+    write_text_result(path: output, text)?
 
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "rss package manager diff ")
-    StringBuilder.push(builder: mut builder, value: read before.package_name)
-    StringBuilder.push(builder: mut builder, value: read " changed_interfaces=")
+    StringBuilder.push(builder: mut builder, value: "rss package manager diff ")
+    StringBuilder.push(builder: mut builder, value: before.package_name)
+    StringBuilder.push(builder: mut builder, value: " changed_interfaces=")
     let changed_interfaces = String.from_int(value: facts.changed_interfaces)
-    StringBuilder.push(builder: mut builder, value: read changed_interfaces)
+    StringBuilder.push(builder: mut builder, value: changed_interfaces)
     let message = StringBuilder.finish(builder: take builder)
-    Log.write(message: read message)
+    Log.write(message)
 
     return Ok(Unit)
 }
 
-fn run_publish(root: read Path, output: read Path) -> Result<Unit, String> {
-    let facts = package_publish_check_facts(root: read root)?
-    let text = package_publish_json(facts: read facts)
-    write_text_result(path: read output, text: read text)?
+fn run_publish(root: Path, output: Path) -> Result<Unit, String> {
+    let facts = package_publish_check_facts(root)?
+    let text = package_publish_json(facts)
+    write_text_result(path: output, text)?
 
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "rss package manager publish ")
-    StringBuilder.push(builder: mut builder, value: read facts.package_name)
-    StringBuilder.push(builder: mut builder, value: read " errors=")
+    StringBuilder.push(builder: mut builder, value: "rss package manager publish ")
+    StringBuilder.push(builder: mut builder, value: facts.package_name)
+    StringBuilder.push(builder: mut builder, value: " errors=")
     let errors = String.from_int(value: facts.errors)
-    StringBuilder.push(builder: mut builder, value: read errors)
+    StringBuilder.push(builder: mut builder, value: errors)
     let message = StringBuilder.finish(builder: take builder)
-    Log.write(message: read message)
+    Log.write(message)
 
     return Ok(Unit)
 }
 
 pub fn main() -> Result<Unit, String> {
-    let command = Args.get_or_default(index: 0, default: read "metadata")
+    let command = Args.get_or_default(index: 0, default: "metadata")
     let root = root_path()
     let output = output_path()
 
     if command == "metadata" {
-        return run_metadata(root: read root, output: read output)
+        return run_metadata(root, output)
     }
 
     if command == "vendor" {
-        return run_vendor(root: read root, vendor: read output)
+        return run_vendor(root, vendor: output)
     }
 
     if command == "check" {
-        return run_check(root: read root, output: read output)
+        return run_check(root, output)
     }
 
     if command == "tree" {
-        return run_tree(root: read root, output: read output)
+        return run_tree(root, output)
     }
 
     if command == "review" {
-        return run_review(root: read root, output: read output)
+        return run_review(root, output)
     }
 
     if command == "lock" {
-        return run_lock(root: read root, output: read output)
+        return run_lock(root, output)
     }
 
     if command == "diff" {
-        let other = Args.get_or_default(index: 3, default: read ".")
-        let other_path = Path.from_string(value: read other)
-        return run_diff(root: read root, other: read other_path, output: read output)
+        let other = Args.get_or_default(index: 3, default: ".")
+        let other_path = Path.from_string(value: other)
+        return run_diff(root, other: other_path, output)
     }
 
     if command == "publish" {
-        return run_publish(root: read root, output: read output)
+        return run_publish(root, output)
     }
 
-    let message = String.concat(left: read "unknown package command: ", right: read command)
+    let message = String.concat(left: "unknown package command: ", right: command)
     return Err(message)
 }

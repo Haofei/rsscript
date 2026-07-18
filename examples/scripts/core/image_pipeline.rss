@@ -1,32 +1,32 @@
 features: local
 
-fn process_image(input: read Path, output: read Path) -> Result<Unit, ImageError> {
-    local image = Image.load(path: read input)?
+fn process_image(input: Path, output: Path) -> Result<Unit, ImageError> {
+    local image = Image.load(path: input)?
     Image.resize(image: mut image, width: 320, height: 240)
     Image.normalize(image: mut image)
     Image.sharpen(image: mut image)
-    Image.inspect(image: read image)
-    Image.save(image: read image, path: read output)?
+    Image.inspect(image)
+    Image.save(image, path: output)?
 
-    Log.write(message: read "image pipeline ran")
+    Log.write(message: "image pipeline ran")
     return Ok(Unit)
 }
 
 fn main() -> Result<Unit, FileError> {
-    let input = Path.from_string(value: read "rsscript-image-input.bin")
-    let output = Path.from_string(value: read "rsscript-image-output.bin")
-    let data = Bytes.from_string(value: read "raw image bytes")
+    let input = Path.from_string(value: "rsscript-image-input.bin")
+    let output = Path.from_string(value: "rsscript-image-output.bin")
+    let data = Bytes.from_string(value: "raw image bytes")
 
-    with File.open_write(path: read input)? as file {
-        File.write(file: mut file, data: read data)?
+    with File.open_write(path: input)? as file {
+        File.write(file: mut file, data)?
     }
 
-    match process_image(input: read input, output: read output) {
+    match process_image(input, output) {
         Ok(unit) => {
             return Ok(Unit)
         }
         Err(error) => {
-            Log.write(message: read "image pipeline failed")
+            Log.write(message: "image pipeline failed")
             return Ok(Unit)
         }
     }

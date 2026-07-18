@@ -1,48 +1,48 @@
 features: async
 
 async fn upload_report(
-    bucket: read String,
-    key: read String,
-    body: read String,
+    bucket: String,
+    key: String,
+    body: String,
 ) -> Result<Unit, String> {
-    await S3.put_object(bucket: read bucket, key: read key, body: read body)?
+    await S3.put_object(bucket: bucket, key: key, body: body)?
     return Ok(Unit)
 }
 
 pub fn Reports.upload_batch(
-    bucket: read String,
-    day: read String,
+    bucket: String,
+    day: String,
 ) -> Result<Unit, String> {
     task_group {
         async let summary = upload_report(
-            bucket: read bucket,
-            key: read "reports/summary.json",
-            body: read day,
+            bucket,
+            key: "reports/summary.json",
+            body: day,
         )
         async let audit = S3.put_object(
-            bucket: read bucket,
-            key: read "reports/audit.json",
-            body: read day,
+            bucket: bucket,
+            key: "reports/audit.json",
+            body: day,
         )
         async let metrics = S3.put_object(
-            bucket: read bucket,
-            key: read "reports/metrics.json",
-            body: read day,
+            bucket: bucket,
+            key: "reports/metrics.json",
+            body: day,
         )
         async let inventory = S3.put_object(
-            bucket: read bucket,
-            key: read "reports/inventory.json",
-            body: read day,
+            bucket: bucket,
+            key: "reports/inventory.json",
+            body: day,
         )
         async let finance = S3.put_object(
-            bucket: read bucket,
-            key: read "reports/finance.json",
-            body: read day,
+            bucket: bucket,
+            key: "reports/finance.json",
+            body: day,
         )
         async let security = S3.put_object(
-            bucket: read bucket,
-            key: read "reports/security.json",
-            body: read day,
+            bucket: bucket,
+            key: "reports/security.json",
+            body: day,
         )
 
         await summary?

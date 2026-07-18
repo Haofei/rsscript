@@ -6,11 +6,11 @@ features: native
 //
 // `url` is a sqlx connection string whose scheme selects the backend (`sqlite:`
 // or `postgres:`). Queries read the first column of each row as text.
-native fn SqlxFfi.execute(url: read String, sql: read String) -> Result<Unit, String>
+native fn SqlxFfi.execute(url: String, sql: String) -> Result<Unit, String>
     effects(native)
 
-native fn SqlxFfi.query_strings(url: read String, sql: read String) -> Result<fresh List<String>, String>
+native fn SqlxFfi.query_strings(url: String, sql: String) -> Result<fresh List<String>, String>
     effects(native)
 
-native fn SqlxFfi.query_one_string(url: read String, sql: read String) -> Result<Option<String>, String>
+native fn SqlxFfi.query_one_string(url: String, sql: String) -> Result<Option<String>, String>
     effects(native)

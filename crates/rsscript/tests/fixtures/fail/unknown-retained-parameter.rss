@@ -4,7 +4,7 @@ struct Image {
     pixels: Buffer
 }
 
-fn cache_put(image: read Image) -> Unit
+fn cache_put(image: Image) -> Unit
     effects(retains(value))
 {
     return Unit

@@ -5,11 +5,11 @@ struct TimerError
 pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
     effects(native)
 
-pub async native fn Timer.sleep_until(deadline: read Deadline) -> Result<Unit, TimerError>
+pub async native fn Timer.sleep_until(deadline: Deadline) -> Result<Unit, TimerError>
     effects(native)
 
 pub async native fn Timer.sleep_cancellable(
     ms: Int,
-    token: read CancellationToken,
+    token: CancellationToken,
 ) -> Result<Unit, TimerError>
     effects(native)

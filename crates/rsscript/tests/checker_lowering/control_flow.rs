@@ -16,7 +16,7 @@ pub fn main() -> String {
     let rust = lower_source_to_rust("private-positional.rss", source).expect("source should lower");
 
     assert!(
-        rust.contains("join_pair(&\"a\".to_string(), &\"b\".to_string())"),
+        rust.contains("join_pair(&(\"a\".to_string()), &(\"b\".to_string()))"),
         "private positional read arguments should lower as borrows, got:\n{rust}"
     );
 }
@@ -341,8 +341,8 @@ fn main() -> Int {
 
     assert!(rust.contains("rsscript_runtime::list_push"));
     assert!(rust.contains("&mut items"));
-    assert!(rust.contains("&1"));
-    assert!(rust.contains("&2"));
+    assert!(rust.contains("&(1i64)"));
+    assert!(rust.contains("&(2i64)"));
     assert!(rust.contains("let count = rsscript_runtime::list_len(&items);"));
     assert!(rust.contains("let first = rsscript_runtime::list_get(&items, 0i64);"));
     assert!(rust.contains("return count;"));
@@ -476,11 +476,11 @@ fn main() -> Int {
         lower_source_to_rust("map-receiver-call-lower.rss", source).expect("source should lower");
 
     assert!(
-        rust.contains("rsscript_runtime::map_insert(&mut names, &1i64, &(\"one\".to_string()));")
+        rust.contains("rsscript_runtime::map_insert(&mut names, &(1i64), &(\"one\".to_string()));")
     );
-    assert!(rust.contains("let found = rsscript_runtime::map_get(&names, &1i64);"));
-    assert!(rust.contains("let removed = rsscript_runtime::map_remove(&mut names, &1i64);"));
-    assert!(rust.contains("rsscript_runtime::map_insert(&mut payloads, &7i64, &rsscript_runtime::json_value(&rsscript_runtime::json_object"));
+    assert!(rust.contains("let found = rsscript_runtime::map_get(&names, &(1i64));"));
+    assert!(rust.contains("let removed = rsscript_runtime::map_remove(&mut names, &(1i64));"));
+    assert!(rust.contains("rsscript_runtime::map_insert(&mut payloads, &(7i64), &(rsscript_runtime::json_value(&rsscript_runtime::json_object"));
 }
 
 #[test]

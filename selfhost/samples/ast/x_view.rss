@@ -4,8 +4,8 @@
 // return — same rule as any `with` resource.
 features: local
 
-fn bad(data: read Bytes) -> BytesView {
-    view v = Bytes.view(value: read data, start: 0, len: 1)
+fn bad(data: Bytes) -> BytesView {
+    view v = Bytes.view(value: data, start: 0, len: 1)
     return v
 }
 

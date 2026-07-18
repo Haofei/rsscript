@@ -1,7 +1,7 @@
 fn ToolRuntime.execute(
-    runtime: read ToolRuntime,
-    request: read ToolRequest,
-    config: read AgentConfig,
+    runtime: ToolRuntime,
+    request: ToolRequest,
+    config: AgentConfig,
 ) -> fresh ToolAction {
     match runtime {
         CoreToolRuntime => {
@@ -10,7 +10,7 @@ fn ToolRuntime.execute(
     }
 }
 
-fn execute_core_tool(request: read ToolRequest, config: read AgentConfig) -> fresh ToolAction {
+fn execute_core_tool(request: ToolRequest, config: AgentConfig) -> fresh ToolAction {
     match request.name {
         "read" => {
             return execute_read(request.arguments, config)
@@ -40,26 +40,26 @@ fn execute_core_tool(request: read ToolRequest, config: read AgentConfig) -> fre
             return execute_finish(request.arguments)
         }
         _ => {
-            return ToolAction.error(content: read ["error: unknown tool ", String.copy(value: read request.name)].join(""))
+            return ToolAction.error(content: ["error: unknown tool ", String.copy(value: request.name)].join(""))
         }
     }
 }
 
-fn push_tool_response(messages: mut List<ChatMessage>, request: read ToolRequest, output: read ToolOutput) -> Unit {
+fn push_tool_response(messages: mut List<ChatMessage>, request: ToolRequest, output: ToolOutput) -> Unit {
     let envelope = {
         "tool": request.name,
         "is_error": output.is_error,
         "content": output.content,
     }
-    let tool_output = ToolOutput.respond(content: read Json.encode(value: read envelope))
-    mut messages.push(ChatMessage.tool(request: read request, output: read tool_output))
+    let tool_output = ToolOutput.respond(content: Json.encode(value: envelope))
+    mut messages.push(ChatMessage.tool(request: request, output: tool_output))
 }
 
 fn execute_tool_calls(
-    response: read String,
-    messages: read List<ChatMessage>,
-    config: read AgentConfig,
-    logger: read StructuredLogger,
+    response: String,
+    messages: List<ChatMessage>,
+    config: AgentConfig,
+    logger: StructuredLogger,
 ) -> fresh ToolLoopResult {
     let runtime = CoreToolRuntime
     let mut called_tool = false
@@ -67,13 +67,13 @@ fn execute_tool_calls(
     let mut final_answer = ""
     let mut next_messages = List<ChatMessage>.new()
     mut next_messages.append(messages)
-    let assistant_message = ChatResponse.assistant_message(response: read response)
+    let assistant_message = ChatResponse.assistant_message(response: response)
     mut next_messages.push(assistant_message)
-    let requests = ChatResponse.tool_requests(message: read assistant_message)
+    let requests = ChatResponse.tool_requests(message: assistant_message)
     let mut index = 0
     for request in requests {
-        if finished == false {
-            StructuredLogger.event(logger: read logger, event: read "tool.requested", message: read request.name)
+        if !finished  {
+            StructuredLogger.event(logger: logger, event: "tool.requested", message: request.name)
             called_tool = true
             if index >= config.max_tool_calls {
                 let body = {
@@ -83,14 +83,14 @@ fn execute_tool_calls(
                     "tool_index": index,
                     "tool": request.name,
                 }
-                push_tool_response(mut next_messages, request, ToolOutput.error(content: read Json.encode(value: read body)))
+                push_tool_response(mut next_messages, request, ToolOutput.error(content: Json.encode(value: body)))
                 index = index + 1
                 continue
             }
             let action = runtime.execute(request, config)
             match action.response {
                 Some(output) => {
-                    Log.write(message: read output.content)
+                    Log.write(message: output.content)
                     push_tool_response(mut next_messages, request, output)
                     if action.abort {
                         return ToolLoopResult(

@@ -7,7 +7,7 @@ features: async
 // produce a never-cancelled token. The token must be passed in as a parameter.
 async fn worker() -> Result<Unit, TimerError> {
     let token = Task.cancellation_token()
-    await Timer.sleep_cancellable(ms: 1, token: read token)?
+    await Timer.sleep_cancellable(ms: 1, token)?
     return Ok(Unit)
 }
 

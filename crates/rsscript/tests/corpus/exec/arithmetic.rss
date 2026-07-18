@@ -1,6 +1,6 @@
 fn main() -> Unit {
     let a = 6
     let b = 7
-    Log.write(message: read String.from_int(value: a * b + 0))
+    Log.write(message: String.from_int(value: a * b + 0))
     return Unit
 }

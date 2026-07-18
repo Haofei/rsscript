@@ -8,99 +8,555 @@ use selfhost.scan.*
 use selfhost.semantics.context.*
 use selfhost.semantics.diagnostics.*
 use selfhost.syntax.ast.*
+use selfhost.types.*
 
-fn copy_function_context(context: read FunctionContext) -> fresh FunctionContext {
+fn copy_function_context(context: FunctionContext) -> fresh FunctionContext {
     local bindings = Map<String, String>.new()
-    let keys = Map.keys<String, String>(map: read context.bindings)
+    let keys = Map.keys<String, String>(map: context.bindings)
     let mut i = 0
-    while i < List.len(list: read keys) {
-        let key = List.get<String>(list: read keys, index: read i)
-        let value = Map.get_or_default<String, String>(map: read context.bindings, key: read key, default: read "")
-        let ownedKey = String.copy(value: read key)
-        let ownedValue = String.copy(value: read value)
-        Map.insert<String, String>(map: mut bindings, key: read ownedKey, value: read ownedValue)
+    while i < List.len(list: keys) {
+        let key = List.get<String>(list: keys, index: i)
+        let value = Map.get_or_default<String, String>(map: context.bindings, key, default: "")
+        let ownedKey = String.copy(value: key)
+        let ownedValue = String.copy(value)
+        Map.insert<String, String>(map: mut bindings, key: ownedKey, value: ownedValue)
         i = i + 1
     }
     return FunctionContext(bindings: take bindings)
 }
 
-fn known_non_bool_type(ty: read String) -> Bool {
+fn ast_site_key(line: Int, column: Int, length: Int) -> String {
+    let prefix = String.concat(left: String.concat(left: String.from_int(value: line), right: ":"), right: String.from_int(value: column))
+    return String.concat(left: prefix, right: String.concat(left: ":", right: String.from_int(value: length)))
+}
+
+fn known_non_bool_type(ty: String) -> Bool {
     return ty == "Int" || ty == "String" || ty == "Char" || ty == "Float" || ty == "Unit"
 }
 
-fn known_non_iterable_type(ty: read String) -> Bool {
-    return known_non_bool_type(ty: read ty) || ty == "Bool"
+fn known_non_iterable_type(ty: String) -> Bool {
+    return known_non_bool_type(ty) || ty == "Bool"
 }
 
-fn scalar_type(ty: read String) -> Bool {
-    return known_non_iterable_type(ty: read ty)
+fn variant_arity_key(name: String, arity: Int) -> String {
+    return String.concat(left: String.concat(left: name, right: ":"), right: String.from_int(value: arity))
 }
 
-fn type_is_option(ty: read String) -> Bool {
-    return String.starts_with(value: read ty, prefix: read "Option<")
+fn collect_program_variant_arities(program: Program, names: mut Set<String>, arities: mut Set<String>) -> Unit {
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_SUM {
+            let mut variantIndex = 0
+            while variantIndex < List.len(list: item.variants) {
+                let variant = List.get<Variant>(list: item.variants, index: variantIndex)
+                Set.insert<String>(set: mut names, value: variant.name)
+                let key = variant_arity_key(name: variant.name, arity: List.len(list: variant.fields))
+                Set.insert<String>(set: mut arities, value: key)
+                variantIndex = variantIndex + 1
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
 }
 
-fn type_is_result(ty: read String) -> Bool {
-    return String.starts_with(value: read ty, prefix: read "Result<")
+fn collect_variant_arity_expression(program: Program, expressionIndex: Int, names: Set<String>, arities: Set<String>, diagnostics: mut DiagnosticBag) -> Unit {
+    if expressionIndex < 0 || expressionIndex >= List.len(list: program.expressions) { return Unit }
+    let expression = List.get<Expr>(list: program.expressions, index: expressionIndex)
+    if expression.kind == EXPR_MATCH {
+        let mut armIndex = 0
+        while armIndex < List.len(list: expression.arms) {
+            let arm = List.get<MatchArm>(list: expression.arms, index: armIndex)
+            collect_variant_arity_arm(program, arm, names, arities, diagnostics: mut diagnostics)
+            armIndex = armIndex + 1
+        }
+    }
+    let mut childIndex = 0
+    while childIndex < List.len(list: expression.children) {
+        collect_variant_arity_expression(program, expressionIndex: List.get<Int>(list: expression.children, index: childIndex), names, arities, diagnostics: mut diagnostics)
+        childIndex = childIndex + 1
+    }
+    return Unit
 }
 
-fn literal_pattern_mismatches(ty: read String, pattern: read Expr) -> Bool {
-    if pattern.kind != EXPR_LITERAL { return false }
+fn collect_variant_arity_arm(program: Program, arm: MatchArm, names: Set<String>, arities: Set<String>, diagnostics: mut DiagnosticBag) -> Unit {
+    collect_variant_arity_pattern(program: program, patternIndex: arm.patternNode, names, arities, diagnostics: mut diagnostics)
+    let mut bodyIndex = 0
+    while bodyIndex < List.len(list: arm.body) {
+        collect_variant_arity_statement(program, statementIndex: List.get<Int>(list: arm.body, index: bodyIndex), names, arities, diagnostics: mut diagnostics)
+        bodyIndex = bodyIndex + 1
+    }
+    return Unit
+}
+
+// Pattern is the single recursive source for positional variant arity. Named
+// struct fields live in Pattern.fields, so only PAT_VARIANT's child list is a
+// positional payload and can participate in RS0037.
+fn collect_variant_arity_pattern(program: Program, patternIndex: Int, names: Set<String>, arities: Set<String>, diagnostics: mut DiagnosticBag) -> Unit {
+    if patternIndex < 0 || patternIndex >= List.len(list: program.patterns) { return Unit }
+    let pattern = List.get<Pattern>(list: program.patterns, index: patternIndex)
+    if pattern.kind == PAT_VARIANT && List.len(list: pattern.children) > 0 && Set.contains<String>(set: names, value: pattern.name) {
+        let key = variant_arity_key(name: pattern.name, arity: List.len(list: pattern.children))
+        if Set.contains<String>(set: arities, value: key) == false {
+            DiagnosticBag.add(self: mut diagnostics, code: "RS0037", line: pattern.line, column: pattern.column, length: pattern.length)
+        }
+    }
+    let mut childIndex = 0
+    while childIndex < List.len(list: pattern.children) {
+        collect_variant_arity_pattern(program: program, patternIndex: List.get<Int>(list: pattern.children, index: childIndex), names, arities, diagnostics: mut diagnostics)
+        childIndex = childIndex + 1
+    }
+    let mut fieldIndex = 0
+    while fieldIndex < List.len(list: pattern.fields) {
+        let field = List.get<PatternField>(list: pattern.fields, index: fieldIndex)
+        collect_variant_arity_pattern(program: program, patternIndex: field.pattern, names, arities, diagnostics: mut diagnostics)
+        fieldIndex = fieldIndex + 1
+    }
+    return Unit
+}
+
+fn collect_variant_arity_statement(program: Program, statementIndex: Int, names: Set<String>, arities: Set<String>, diagnostics: mut DiagnosticBag) -> Unit {
+    if statementIndex < 0 || statementIndex >= List.len(list: program.statements) { return Unit }
+    let statement = List.get<Stmt>(list: program.statements, index: statementIndex)
+    collect_variant_arity_expression(program, expressionIndex: statement.expression, names, arities, diagnostics: mut diagnostics)
+    let mut armIndex = 0
+    while armIndex < List.len(list: statement.arms) {
+        let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+        collect_variant_arity_arm(program, arm, names, arities, diagnostics: mut diagnostics)
+        armIndex = armIndex + 1
+    }
+    let mut childIndex = 0
+    while childIndex < List.len(list: statement.children) {
+        collect_variant_arity_statement(program, statementIndex: List.get<Int>(list: statement.children, index: childIndex), names, arities, diagnostics: mut diagnostics)
+        childIndex = childIndex + 1
+    }
+    let mut elseIndex = 0
+    while elseIndex < List.len(list: statement.elseChildren) {
+        collect_variant_arity_statement(program, statementIndex: List.get<Int>(list: statement.elseChildren, index: elseIndex), names, arities, diagnostics: mut diagnostics)
+        elseIndex = elseIndex + 1
+    }
+    return Unit
+}
+
+fn collect_program_variant_arity_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut names = Set<String>.new()
+    let mut arities = Set<String>.new()
+    collect_program_variant_arities(program, names: mut names, arities: mut arities)
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            let mut statementIndex = 0
+            while statementIndex < List.len(list: item.statements) {
+                collect_variant_arity_statement(program, statementIndex: List.get<Int>(list: item.statements, index: statementIndex), names, arities, diagnostics: mut diagnostics)
+                statementIndex = statementIndex + 1
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+fn expression_has_unmodelled_async_context(program: Program, index: Int) -> Bool {
+    if index < 0 || index >= List.len(list: program.expressions) { return false }
+    let expression = List.get<Expr>(list: program.expressions, index)
+    if expression.kind == EXPR_UNKNOWN || expression.kind == EXPR_CLOSURE { return true }
+    let mut i = 0
+    while i < List.len(list: expression.children) {
+        if expression_has_unmodelled_async_context(program: program, index: List.get<Int>(list: expression.children, index: i)) { return true }
+        i = i + 1
+    }
+    i = 0
+    while i < List.len(list: expression.args) {
+        let argument = List.get<CallArg>(list: expression.args, index: i)
+        if expression_has_unmodelled_async_context(program: program, index: argument.value) { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn statements_have_unmodelled_async_context(program: Program, statements: List<Int>) -> Bool {
+    let mut i = 0
+    while i < List.len(list: statements) {
+        let statementIndex = List.get<Int>(list: statements, index: i)
+        if statementIndex >= 0 && statementIndex < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index: statementIndex)
+            if statement.kind == STMT_SELECT || expression_has_unmodelled_async_context(program: program, index: statement.expression) { return true }
+            if statements_have_unmodelled_async_context(program: program, statements: statement.children) || statements_have_unmodelled_async_context(program: program, statements: statement.elseChildren) { return true }
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.arms) {
+                let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+                if expression_has_unmodelled_async_context(program: program, index: arm.guard) || statements_have_unmodelled_async_context(program: program, statements: arm.body) { return true }
+                armIndex = armIndex + 1
+            }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+fn collect_await_expression_diagnostics(program: Program, index: Int, asyncContext: Bool, diagnostics: mut DiagnosticBag) -> Unit {
+    if index < 0 || index >= List.len(list: program.expressions) { return Unit }
+    let expression = List.get<Expr>(list: program.expressions, index)
+    if expression.kind == EXPR_AWAIT && asyncContext == false {
+        DiagnosticBag.add(self: mut diagnostics, code: "RS0029", line: expression.line, column: expression.column, length: expression.length)
+    }
+    let mut i = 0
+    while i < List.len(list: expression.children) {
+        collect_await_expression_diagnostics(program: program, index: List.get<Int>(list: expression.children, index: i), asyncContext: asyncContext, diagnostics: mut diagnostics)
+        i = i + 1
+    }
+    i = 0
+    while i < List.len(list: expression.args) {
+        let argument = List.get<CallArg>(list: expression.args, index: i)
+        collect_await_expression_diagnostics(program: program, index: argument.value, asyncContext: asyncContext, diagnostics: mut diagnostics)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn collect_await_statement_diagnostics(program: Program, statements: List<Int>, asyncContext: Bool, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut i = 0
+    while i < List.len(list: statements) {
+        let statementIndex = List.get<Int>(list: statements, index: i)
+        if statementIndex >= 0 && statementIndex < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index: statementIndex)
+            collect_await_expression_diagnostics(program: program, index: statement.expression, asyncContext: asyncContext, diagnostics: mut diagnostics)
+            let childAsyncContext = asyncContext || statement.kind == STMT_TASK_GROUP
+            collect_await_statement_diagnostics(program: program, statements: statement.children, asyncContext: childAsyncContext, diagnostics: mut diagnostics)
+            collect_await_statement_diagnostics(program: program, statements: statement.elseChildren, asyncContext: asyncContext, diagnostics: mut diagnostics)
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.arms) {
+                let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+                collect_await_statement_diagnostics(program: program, statements: arm.body, asyncContext: asyncContext, diagnostics: mut diagnostics)
+                armIndex = armIndex + 1
+            }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn collect_program_await_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut i = 0
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
+        if item.kind == ITEM_FUNCTION && item.isAsync == false && statements_have_unmodelled_async_context(program: program, statements: item.statements) == false {
+            collect_await_statement_diagnostics(program: program, statements: item.statements, asyncContext: false, diagnostics: mut diagnostics)
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn program_async_function_names(program: Program) -> fresh Set<String> {
+    local names = Set<String>.new()
+    let mut i = 0
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
+        if item.kind == ITEM_FUNCTION && item.isAsync { Set.insert<String>(set: mut names, value: item.name) }
+        i = i + 1
+    }
+    return names
+}
+
+fn is_unqualified_call_name(name: String) -> Bool {
+    match String.index_of(value: name, needle: ".") {
+        Some(_) => { return false }
+        None => { return true }
+    }
+}
+
+fn collect_unconsumed_async_expression_diagnostics(program: Program, index: Int, asyncNames: Set<String>, consumed: Bool, diagnostics: mut DiagnosticBag) -> Unit {
+    if index < 0 || index >= List.len(list: program.expressions) { return Unit }
+    let expression = List.get<Expr>(list: program.expressions, index)
+    if expression.kind == EXPR_CALL && consumed == false && is_unqualified_call_name(name: expression.text) && Set.contains<String>(set: asyncNames, value: expression.text) {
+        DiagnosticBag.add(self: mut diagnostics, code: "RS0022", line: expression.line, column: expression.column, length: expression.length)
+    }
+    let childConsumed = expression.kind == EXPR_AWAIT
+    let mut i = 0
+    while i < List.len(list: expression.children) {
+        collect_unconsumed_async_expression_diagnostics(program: program, index: List.get<Int>(list: expression.children, index: i), asyncNames: asyncNames, consumed: childConsumed, diagnostics: mut diagnostics)
+        i = i + 1
+    }
+    i = 0
+    while i < List.len(list: expression.args) {
+        let argument = List.get<CallArg>(list: expression.args, index: i)
+        collect_unconsumed_async_expression_diagnostics(program: program, index: argument.value, asyncNames: asyncNames, consumed: false, diagnostics: mut diagnostics)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn collect_unconsumed_async_statement_diagnostics(program: Program, statements: List<Int>, asyncNames: Set<String>, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut i = 0
+    while i < List.len(list: statements) {
+        let statementIndex = List.get<Int>(list: statements, index: i)
+        if statementIndex >= 0 && statementIndex < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index: statementIndex)
+            collect_unconsumed_async_expression_diagnostics(program: program, index: statement.expression, asyncNames: asyncNames, consumed: statement.isAsync, diagnostics: mut diagnostics)
+            collect_unconsumed_async_statement_diagnostics(program: program, statements: statement.children, asyncNames: asyncNames, diagnostics: mut diagnostics)
+            collect_unconsumed_async_statement_diagnostics(program: program, statements: statement.elseChildren, asyncNames: asyncNames, diagnostics: mut diagnostics)
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.arms) {
+                let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+                collect_unconsumed_async_statement_diagnostics(program: program, statements: arm.body, asyncNames: asyncNames, diagnostics: mut diagnostics)
+                armIndex = armIndex + 1
+            }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn collect_program_unconsumed_async_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let asyncNames = program_async_function_names(program: program)
+    if Set.is_empty<String>(set: asyncNames) { return Unit }
+    let mut i = 0
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
+        if item.kind == ITEM_FUNCTION && statements_have_unmodelled_async_context(program: program, statements: item.statements) == false {
+            collect_unconsumed_async_statement_diagnostics(program: program, statements: item.statements, asyncNames: asyncNames, diagnostics: mut diagnostics)
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn scalar_type(ty: String) -> Bool {
+    return known_non_iterable_type(ty)
+}
+
+fn type_is_option(ty: String) -> Bool {
+    return String.starts_with(value: ty, prefix: "Option<")
+}
+
+fn type_is_result(ty: String) -> Bool {
+    return String.starts_with(value: ty, prefix: "Result<")
+}
+
+fn arm_pattern_name(program: Program, arm: MatchArm) -> String {
+    if arm.patternNode >= 0 && arm.patternNode < List.len(list: program.patterns) {
+        let pattern = List.get<Pattern>(list: program.patterns, index: arm.patternNode)
+        return pattern.name
+    }
+    return ""
+}
+
+fn match_has_unguarded_pattern(program: Program, arms: List<MatchArm>, name: String) -> Bool {
+    let mut i = 0
+    while i < List.len(list: arms) {
+        let arm = List.get<MatchArm>(list: arms, index: i)
+        if arm.guard < 0 && arm_pattern_name(program: program, arm: arm) == name { return true }
+        i = i + 1
+    }
+    return false
+}
+
+fn match_has_unguarded_wildcard(program: Program, arms: List<MatchArm>) -> Bool {
+    return match_has_unguarded_pattern(program: program, arms: arms, name: "_")
+}
+
+// This is the shared-AST exhaustiveness slice. Unknown nominal and collection
+// shapes deliberately remain with the legacy checker until their pattern model
+// is materialized; known scalar, Option, Result, and Bool cases are complete.
+fn known_match_is_non_exhaustive(program: Program, arms: List<MatchArm>, ty: String) -> Bool {
+    if String.len(value: ty) == 0 || match_has_unguarded_wildcard(program: program, arms: arms) { return false }
+    if type_is_option(ty) {
+        return match_has_unguarded_pattern(program: program, arms: arms, name: "Some") == false || match_has_unguarded_pattern(program: program, arms: arms, name: "None") == false
+    }
+    if type_is_result(ty) {
+        return match_has_unguarded_pattern(program: program, arms: arms, name: "Ok") == false || match_has_unguarded_pattern(program: program, arms: arms, name: "Err") == false
+    }
+    if ty == "Bool" {
+        return match_has_unguarded_pattern(program: program, arms: arms, name: "true") == false || match_has_unguarded_pattern(program: program, arms: arms, name: "false") == false
+    }
+    return scalar_type(ty)
+}
+
+fn add_match_exhaustiveness_diagnostic(program: Program, statement: Stmt, context: FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
+    if statement.kind == STMT_MATCH {
+        let ty = infer_expression_type(program: program, context: context, index: statement.expression)
+        if known_match_is_non_exhaustive(program: program, arms: statement.arms, ty: ty) {
+            DiagnosticBag.add(self: mut diagnostics, code: "RS0021", line: statement.line, column: statement.column, length: statement.length)
+        }
+        return Unit
+    }
+    if statement.expression < 0 || statement.expression >= List.len(list: program.expressions) { return Unit }
+    let expression = List.get<Expr>(list: program.expressions, index: statement.expression)
+    if expression.kind != EXPR_MATCH || List.len(list: expression.children) == 0 { return Unit }
+    let scrutinee = List.get<Int>(list: expression.children, index: 0)
+    let ty = infer_expression_type(program: program, context: context, index: scrutinee)
+    if known_match_is_non_exhaustive(program: program, arms: expression.arms, ty: ty) {
+        DiagnosticBag.add(self: mut diagnostics, code: "RS0021", line: expression.line, column: expression.column, length: expression.length)
+    }
+    return Unit
+}
+
+fn literal_pattern_mismatches(ty: String, pattern: Pattern) -> Bool {
+    if pattern.kind != PAT_LITERAL { return false }
     if pattern.tokenKind == TOK_NUMBER { return ty != "Int" }
     if pattern.tokenKind == TOK_STRING { return ty != "String" }
     if pattern.tokenKind == TOK_CHAR { return ty != "Char" }
     return false
 }
 
-fn add_match_pattern_diagnostics(program: read Program, statement: read Stmt, context: read FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
+fn add_one_match_pattern_diagnostic(program: Program, arm: MatchArm, ty: String, diagnostics: mut DiagnosticBag) -> Unit {
+    if arm.patternNode < 0 || arm.patternNode >= List.len(list: program.patterns) { return Unit }
+    let pattern = List.get<Pattern>(list: program.patterns, index: arm.patternNode)
+    let optionVariant = pattern.kind == PAT_VARIANT && (pattern.name == "Some" || pattern.name == "None")
+    let resultVariant = pattern.kind == PAT_VARIANT && (pattern.name == "Ok" || pattern.name == "Err")
+    let bareScalarName = scalar_type(ty) && pattern.kind == PAT_VARIANT && List.len(list: pattern.children) == 0 && pattern.name != "true" && pattern.name != "false" && !optionVariant && !resultVariant
+    let tupleOnScalar = pattern.kind == PAT_TUPLE && scalar_type(ty)
+    let listOnNonList = pattern.kind == PAT_LIST && String.starts_with(value: ty, prefix: "List<") == false
+    let invalid = tupleOnScalar || listOnNonList || ((pattern.kind != PAT_TUPLE && pattern.kind != PAT_LIST && pattern.kind != PAT_STRUCT) && ((optionVariant && type_is_option(ty) == false) || (resultVariant && type_is_result(ty) == false) || literal_pattern_mismatches(ty: ty, pattern: pattern) || bareScalarName))
+    if invalid {
+        if tupleOnScalar || listOnNonList { DiagnosticBag.add(self: mut diagnostics, code: "RS0209", line: arm.line, column: arm.column, length: arm.length) }
+        else { DiagnosticBag.add(self: mut diagnostics, code: "RS0209", line: pattern.line, column: pattern.column, length: pattern.length) }
+    }
+    return Unit
+}
+
+fn add_match_pattern_diagnostics(program: Program, statement: Stmt, context: FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
     if statement.kind != STMT_MATCH { return Unit }
-    let ty = infer_expression_type(program: read program, context: read context, index: read statement.expression)
-    if String.len(value: read ty) == 0 { return Unit }
+    let ty = infer_expression_type(program: program, context: context, index: statement.expression)
+    if String.len(value: ty) == 0 { return Unit }
     let mut i = 0
-    while i < List.len(list: read statement.arms) {
-        let arm = List.get<MatchArm>(list: read statement.arms, index: read i)
-        if arm.pattern >= 0 && arm.pattern < List.len(list: read program.expressions) {
-            let pattern = List.get<Expr>(list: read program.expressions, index: read arm.pattern)
-            let optionVariant = pattern.text == "Some" || pattern.text == "None"
-            let resultVariant = pattern.text == "Ok" || pattern.text == "Err"
-            let bareScalarName = scalar_type(ty: read ty) && pattern.kind == EXPR_NAME && pattern.text != "_" && pattern.text != "true" && pattern.text != "false" && optionVariant == false && resultVariant == false
-            let tupleOnScalar = arm.shape == "(" && scalar_type(ty: read ty)
-            let listOnNonList = arm.shape == "[" && String.starts_with(value: read ty, prefix: read "List<") == false
-            let invalid = (optionVariant && type_is_option(ty: read ty) == false) || (resultVariant && type_is_result(ty: read ty) == false) || literal_pattern_mismatches(ty: read ty, pattern: read pattern) || bareScalarName || tupleOnScalar || listOnNonList
-            if invalid {
-                if tupleOnScalar || listOnNonList { DiagnosticBag.add(self: mut diagnostics, code: read "RS0209", line: arm.line, column: arm.column, length: arm.length) }
-                else { DiagnosticBag.add(self: mut diagnostics, code: read "RS0209", line: pattern.line, column: pattern.column, length: pattern.length) }
-            }
-        }
+    while i < List.len(list: statement.arms) {
+        let arm = List.get<MatchArm>(list: statement.arms, index: i)
+        add_one_match_pattern_diagnostic(program: program, arm: arm, ty: ty, diagnostics: mut diagnostics)
         i = i + 1
     }
     return Unit
 }
 
-fn add_control_type_diagnostic(program: read Program, statement: read Stmt, context: read FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
+fn add_match_expression_pattern_diagnostics(program: Program, expression: Expr, context: FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
+    if expression.kind != EXPR_MATCH || List.len(list: expression.children) == 0 { return Unit }
+    let scrutinee = List.get<Int>(list: expression.children, index: 0)
+    let ty = infer_expression_type(program: program, context: context, index: scrutinee)
+    if String.len(value: ty) == 0 { return Unit }
+    let mut i = 0
+    while i < List.len(list: expression.arms) {
+        let arm = List.get<MatchArm>(list: expression.arms, index: i)
+        add_one_match_pattern_diagnostic(program: program, arm: arm, ty: ty, diagnostics: mut diagnostics)
+        i = i + 1
+    }
+    return Unit
+}
+
+fn add_control_type_diagnostic(program: Program, statement: Stmt, context: FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
     if statement.kind != STMT_IF && statement.kind != STMT_WHILE && statement.kind != STMT_FOR { return Unit }
-    let ty = infer_expression_type(program: read program, context: read context, index: read statement.expression)
-    let invalid = (statement.kind == STMT_FOR && known_non_iterable_type(ty: read ty)) || (statement.kind != STMT_FOR && known_non_bool_type(ty: read ty))
-    if invalid == false { return Unit }
-    if statement.expression < 0 || statement.expression >= List.len(list: read program.expressions) { return Unit }
-    let expression = List.get<Expr>(list: read program.expressions, index: read statement.expression)
-    DiagnosticBag.add(self: mut diagnostics, code: read "RS0209", line: expression.line, column: expression.column, length: expression.length)
+    let ty = infer_expression_type(program: program, context: context, index: statement.expression)
+    let invalid = (statement.kind == STMT_FOR && known_non_iterable_type(ty)) || (statement.kind != STMT_FOR && known_non_bool_type(ty))
+    if !invalid  { return Unit }
+    if statement.expression < 0 || statement.expression >= List.len(list: program.expressions) { return Unit }
+    let expression = List.get<Expr>(list: program.expressions, index: statement.expression)
+    DiagnosticBag.add(self: mut diagnostics, code: "RS0209", line: expression.line, column: expression.column, length: expression.length)
 }
 
-fn collect_statement_type_diagnostics(program: read Program, statements: read List<Int>, context: mut FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
+// The legacy RS0601 walker already owns explicit read/mut/take parameters. A
+// default parameter effect is read as well, but that fact was lost to its token
+// probe. The shared Param record makes this narrow, non-overlapping slice
+// explicit: a non-Copy default-read parameter cannot prove a fresh return.
+fn add_default_read_fresh_return_diagnostic(program: Program, item: Item, statement: Stmt, diagnostics: mut DiagnosticBag) -> Unit {
+    if statement.kind != STMT_RETURN || str_find(s: item.returnType, needle: "fresh") < 0 { return Unit }
+    if statement.expression < 0 || statement.expression >= List.len(list: program.expressions) { return Unit }
+    let expression = List.get<Expr>(list: program.expressions, index: statement.expression)
+    let mut value = expression
+    if (expression.text == "Some" || expression.text == "Ok") && List.len(list: expression.args) == 1 {
+        let argument = List.get<CallArg>(list: expression.args, index: 0)
+        if argument.value >= 0 && argument.value < List.len(list: program.expressions) {
+            value = List.get<Expr>(list: program.expressions, index: argument.value)
+        }
+    }
+    if value.kind != EXPR_NAME { return Unit }
+    let mut paramIndex = 0
+    while paramIndex < List.len(list: item.params) {
+        let param = List.get<Param>(list: item.params, index: paramIndex)
+        if param.name == value.text && String.len(value: param.effect) == 0 && param.isCopy == false {
+            DiagnosticBag.add(self: mut diagnostics, code: "RS0601", line: expression.line, column: expression.column, length: expression.length)
+            return Unit
+        }
+        paramIndex = paramIndex + 1
+    }
+    return Unit
+}
+
+fn match_arm_context(program: Program, arm: MatchArm, scrutineeType: String, base: FunctionContext) -> fresh FunctionContext {
+    let mut context = copy_function_context(context: base)
+    if arm.patternNode >= 0 && arm.patternNode < List.len(list: program.patterns) {
+        let pattern = List.get<Pattern>(list: program.patterns, index: arm.patternNode)
+        if pattern.kind != PAT_VARIANT || List.len(list: pattern.children) != 1 { return context }
+        let bindingIndex = List.get<Int>(list: pattern.children, index: 0)
+        if bindingIndex < 0 || bindingIndex >= List.len(list: program.patterns) { return context }
+        let binding = List.get<Pattern>(list: program.patterns, index: bindingIndex)
+        if binding.kind != PAT_BINDING || binding.name == "_" { return context }
+        let root = str_type_root(s: scrutineeType)
+        let mut payload = ""
+        if pattern.name == "Some" && root == "Option" { payload = str_top_arg(s: scrutineeType, which: 0) }
+        if pattern.name == "Ok" && root == "Result" { payload = str_top_arg(s: scrutineeType, which: 0) }
+        if pattern.name == "Err" && root == "Result" { payload = str_top_arg(s: scrutineeType, which: 1) }
+        if String.len(value: payload) > 0 { Map.insert<String, String>(map: mut context.bindings, key: binding.name, value: payload) }
+        return context
+    }
+    return context
+}
+
+fn match_arm_value_type(program: Program, arm: MatchArm, context: FunctionContext) -> String {
+    let count = List.len(list: arm.body)
+    if count == 0 { return "" }
+    let statementIndex = List.get<Int>(list: arm.body, index: (count - 1))
+    if statementIndex < 0 || statementIndex >= List.len(list: program.statements) { return "" }
+    let statement = List.get<Stmt>(list: program.statements, index: statementIndex)
+    return infer_expression_type(program: program, context: context, index: statement.expression)
+}
+
+// Rust HIR derives a match expression's type from its first inferable arm and
+// anchors later incompatible arms at the pattern. Keep this intentionally
+// narrow until pattern bindings and guards have shared semantic models too.
+fn add_match_expression_arm_type_diagnostics(program: Program, statement: Stmt, context: FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
+    if statement.expression < 0 || statement.expression >= List.len(list: program.expressions) { return Unit }
+    let expression = List.get<Expr>(list: program.expressions, index: statement.expression)
+    if expression.kind != EXPR_MATCH || List.len(list: expression.arms) == 0 { return Unit }
+    if List.len(list: expression.children) == 0 { return Unit }
+    add_match_expression_pattern_diagnostics(program, expression, context, diagnostics: mut diagnostics)
+    let first = List.get<MatchArm>(list: expression.arms, index: 0)
+    let scrutinee = List.get<Int>(list: expression.children, index: 0)
+    let scrutineeType = infer_expression_type(program: program, context: context, index: scrutinee)
+    let firstContext = match_arm_context(program, arm: first, scrutineeType, base: context)
+    let expected = match_arm_value_type(program, arm: first, context: firstContext)
+    if String.len(value: expected) == 0 { return Unit }
+    let mut i = 1
+    while i < List.len(list: expression.arms) {
+        let arm = List.get<MatchArm>(list: expression.arms, index: i)
+        let armContext = match_arm_context(program, arm, scrutineeType, base: context)
+        let actual = match_arm_value_type(program, arm, context: armContext)
+        if String.len(value: actual) > 0 && actual != expected {
+            DiagnosticBag.add(self: mut diagnostics, code: "RS0209", line: arm.line, column: arm.column, length: arm.length)
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn collect_statement_type_diagnostics(program: Program, item: Item, statements: List<Int>, context: mut FunctionContext, diagnostics: mut DiagnosticBag) -> Unit {
     let mut i = 0
-    while i < List.len(list: read statements) {
-        let index = List.get<Int>(list: read statements, index: read i)
-        if index >= 0 && index < List.len(list: read program.statements) {
-            let statement = List.get<Stmt>(list: read program.statements, index: read index)
-            add_control_type_diagnostic(program: read program, statement: read statement, context: read context, diagnostics: mut diagnostics)
-            add_match_pattern_diagnostics(program: read program, statement: read statement, context: read context, diagnostics: mut diagnostics)
-            infer_statement_type(program: read program, context: mut context, index: read index)
+    while i < List.len(list: statements) {
+        let index = List.get<Int>(list: statements, index: i)
+        if index >= 0 && index < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index)
+            add_control_type_diagnostic(program, statement, context, diagnostics: mut diagnostics)
+            add_match_pattern_diagnostics(program, statement, context, diagnostics: mut diagnostics)
+            add_match_exhaustiveness_diagnostic(program, statement, context, diagnostics: mut diagnostics)
+            add_match_expression_arm_type_diagnostics(program, statement, context, diagnostics: mut diagnostics)
+            add_default_read_fresh_return_diagnostic(program, item: item, statement: statement, diagnostics: mut diagnostics)
+            infer_statement_type(program: program, context: mut context, index: index)
             if statement.kind == STMT_IF || statement.kind == STMT_WHILE || statement.kind == STMT_LOOP || statement.kind == STMT_FOR || statement.kind == STMT_MATCH {
-                let mut childContext = copy_function_context(context: read context)
-                collect_statement_type_diagnostics(program: read program, statements: read statement.children, context: mut childContext, diagnostics: mut diagnostics)
-                let mut elseContext = copy_function_context(context: read context)
-                collect_statement_type_diagnostics(program: read program, statements: read statement.elseChildren, context: mut elseContext, diagnostics: mut diagnostics)
+                let mut childContext = copy_function_context(context)
+                collect_statement_type_diagnostics(program, item: item, statements: statement.children, context: mut childContext, diagnostics: mut diagnostics)
+                let mut elseContext = copy_function_context(context)
+                collect_statement_type_diagnostics(program, item: item, statements: statement.elseChildren, context: mut elseContext, diagnostics: mut diagnostics)
             }
         }
         i = i + 1
@@ -108,15 +564,58 @@ fn collect_statement_type_diagnostics(program: read Program, statements: read Li
     return Unit
 }
 
-fn collect_program_type_diagnostics(program: read Program, diagnostics: mut DiagnosticBag) -> Unit {
+fn collect_program_type_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
     let mut i = 0
-    while i < Program.len(self: read program) {
-        let item = List.get<Item>(list: read program.items, index: read i)
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
         if item.kind == ITEM_FUNCTION {
-            let mut context = FunctionContext.from_item(item: read item)
-            collect_statement_type_diagnostics(program: read program, statements: read item.statements, context: mut context, diagnostics: mut diagnostics)
+            let mut context = FunctionContext.from_item(item: item)
+            collect_statement_type_diagnostics(program, item: item, statements: item.statements, context: mut context, diagnostics: mut diagnostics)
+        }
+        i = i + 1
+    }
+    collect_program_await_diagnostics(program: program, diagnostics: mut diagnostics)
+    collect_program_unconsumed_async_diagnostics(program: program, diagnostics: mut diagnostics)
+    return Unit
+}
+
+fn collect_match_expression_sites_in_statements(program: Program, statements: List<Int>, sites: mut Set<String>) -> Unit {
+    let mut i = 0
+    while i < List.len(list: statements) {
+        let index = List.get<Int>(list: statements, index: i)
+        if index >= 0 && index < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index)
+            if statement.kind == STMT_MATCH {
+                let key = ast_site_key(line: statement.line, column: statement.column, length: statement.length)
+                Set.insert<String>(set: mut sites, value: key)
+            }
+            if statement.expression >= 0 && statement.expression < List.len(list: program.expressions) {
+                let expression = List.get<Expr>(list: program.expressions, index: statement.expression)
+                if expression.kind == EXPR_MATCH {
+                    let key = ast_site_key(line: expression.line, column: expression.column, length: expression.length)
+                    Set.insert<String>(set: mut sites, value: key)
+                }
+            }
+            collect_match_expression_sites_in_statements(program, statements: statement.children, sites: mut sites)
+            collect_match_expression_sites_in_statements(program, statements: statement.elseChildren, sites: mut sites)
         }
         i = i + 1
     }
     return Unit
+}
+
+// These materialized match sites own their type checks. The legacy token walker
+// must not re-check them, because it has different arm-boundary recovery and
+// cannot safely resolve imported generic return types.
+fn collect_match_expression_sites(program: Program) -> fresh Set<String> {
+    local sites = Set<String>.new()
+    let mut i = 0
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
+        if item.kind == ITEM_FUNCTION {
+            collect_match_expression_sites_in_statements(program, statements: item.statements, sites: mut sites)
+        }
+        i = i + 1
+    }
+    return sites
 }

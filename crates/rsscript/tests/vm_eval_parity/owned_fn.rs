@@ -83,7 +83,7 @@ fn ubin(o: Ops, a: read UOp, b: read UOp) -> fresh UOp {
     local s = List.new<UOp>()
     List.push(list: mut s, value: read a)
     List.push(list: mut s, value: read b)
-    return UOp(op: o, src: take s, arg: 0)
+    return UOp(op: o.clone(), src: take s, arg: 0)
 }
 
 fn is_const(u: read UOp, v: Int) -> Bool {
@@ -286,7 +286,7 @@ fn ubin(o: Ops, a: read UOp, b: read UOp) -> fresh UOp {
     local s = List.new<UOp>()
     List.push(list: mut s, value: read a)
     List.push(list: mut s, value: read b)
-    return UOp(op: o, src: take s, arg: 0)
+    return UOp(op: o.clone(), src: take s, arg: 0)
 }
 
 fn is_const(u: read UOp, v: Int) -> Bool {

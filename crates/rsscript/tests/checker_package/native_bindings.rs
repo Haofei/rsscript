@@ -284,7 +284,7 @@ fn s3_iam_reir_demo_lowers_native_s3_binding_to_runtime_tokio_pending() {
     assert!(
         package
             .lib_rs
-            .contains("rsscript_runtime::pending_try(rss_s3_demo_native::put_object_start(&(bucket), &(key), &(body)), move |_rsscript_unit| { rsscript_runtime::pending_ready(Ok(())) })"),
+            .contains("rsscript_runtime::pending_try(rss_s3_demo_native::put_object_start(bucket, key, body), move |_rsscript_unit| { rsscript_runtime::pending_ready(Ok(())) })"),
         "a leaf async fn awaiting the native S3 call should compose it via pending_try:\n{}",
         package.lib_rs
     );

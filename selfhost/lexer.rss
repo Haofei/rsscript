@@ -14,7 +14,7 @@ use selfhost.scan.*
 // `tokenize` and prints one dump line per token.
 
 // Map a Tok.kind int to the canonical KIND name.
-fn kind_name(k: read Int) -> String {
+fn kind_name(k: Int) -> String {
     if k == TOK_IDENT { return "Ident" }
     if k == TOK_NUMBER { return "Number" }
     if k == TOK_STRING { return "String" }
@@ -29,28 +29,28 @@ fn kind_name(k: read Int) -> String {
 }
 
 // Source char length of a token (span length), tier-2 field.
-fn tok_len(t: read Tok) -> Int {
+fn tok_len(t: Tok) -> Int {
     return t.len
 }
 
 fn main() -> Unit {
-    let source = Args.get_or_default(index: 0, default: read "")
-    let toks = tokenize(source: read source)
-    let ntok = List.len(list: read toks)
+    let source = Args.get_or_default(index: 0, default: "")
+    let toks = tokenize(source: source)
+    let ntok = List.len(list: toks)
     let mut i = 0
     while i < ntok {
-        let t = List.get(list: read toks, index: read i)
-        let kn = kind_name(k: read t.kind)
-        let esc = escape(s: read t.text)
+        let t = List.get(list: toks, index: i)
+        let kn = kind_name(k: t.kind)
+        let esc = escape(s: t.text)
         // <line>:<col>:<len>  — line/col are real (tier 1); len is the token's
         // char length (tier 2), 0 for the synthetic EOF.
-        let pos = String.concat(left: read String.concat(left: read String.concat(left: read String.from_int(value: t.line), right: read ":"), right: read String.from_int(value: t.col)), right: read ":")
-        let plen = String.concat(left: read pos, right: read String.from_int(value: tok_len(t: read t)))
-        let a = String.concat(left: read plen, right: read "\t")
-        let b = String.concat(left: read a, right: read kn)
-        let c = String.concat(left: read b, right: read "\t")
-        let line = String.concat(left: read c, right: read esc)
-        Log.write(message: read line)
+        let pos = String.concat(left: String.concat(left: String.concat(left: String.from_int(value: t.line), right: ":"), right: String.from_int(value: t.col)), right: ":")
+        let plen = String.concat(left: pos, right: String.from_int(value: tok_len(t)))
+        let a = String.concat(left: plen, right: "\t")
+        let b = String.concat(left: a, right: kn)
+        let c = String.concat(left: b, right: "\t")
+        let line = String.concat(left: c, right: esc)
+        Log.write(message: line)
         i = i + 1
     }
     return Unit

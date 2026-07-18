@@ -1,0 +1,446 @@
+features: local
+// AST-backed binding rules. These rules inspect one materialized function body
+// instead of reopening its token range, so later name-resolution work has one
+// place to extend rather than another checker-specific token probe.
+
+module selfhost.semantics.check_bindings
+
+use selfhost.scan.*
+use selfhost.semantics.diagnostics.*
+use selfhost.syntax.ast.*
+
+fn valid_expression_index(program: Program, index: Int) -> Bool {
+    return index >= 0 && index < List.len(list: program.expressions)
+}
+
+fn valid_pattern_index(program: Program, index: Int) -> Bool {
+    return index >= 0 && index < List.len(list: program.patterns)
+}
+
+// Patterns are not expressions. Preserve the old use-search meaning for a
+// payload-free variant while recursively exposing bindings in every structured
+// pattern form to the binding rule.
+fn pattern_uses_name(program: Program, index: Int, name: String) -> Bool {
+    if valid_pattern_index(program, index) == false { return false }
+    let pattern = List.get<Pattern>(list: program.patterns, index: index)
+    if pattern.kind == PAT_BINDING && pattern.name == name { return true }
+    if pattern.kind == PAT_VARIANT && List.len(list: pattern.children) == 0 && pattern.name == name { return true }
+    let mut childIndex = 0
+    while childIndex < List.len(list: pattern.children) {
+        if pattern_uses_name(program: program, index: List.get<Int>(list: pattern.children, index: childIndex), name: name) { return true }
+        childIndex = childIndex + 1
+    }
+    let mut fieldIndex = 0
+    while fieldIndex < List.len(list: pattern.fields) {
+        let field = List.get<PatternField>(list: pattern.fields, index: fieldIndex)
+        if field.binding == name || pattern_uses_name(program: program, index: field.pattern, name: name) { return true }
+        fieldIndex = fieldIndex + 1
+    }
+    return false
+}
+
+fn pattern_is_complete(program: Program, index: Int) -> Bool {
+    if valid_pattern_index(program, index) == false { return false }
+    let pattern = List.get<Pattern>(list: program.patterns, index: index)
+    if pattern.kind == PAT_UNKNOWN { return false }
+    let mut childIndex = 0
+    while childIndex < List.len(list: pattern.children) {
+        if pattern_is_complete(program: program, index: List.get<Int>(list: pattern.children, index: childIndex)) == false { return false }
+        childIndex = childIndex + 1
+    }
+    let mut fieldIndex = 0
+    while fieldIndex < List.len(list: pattern.fields) {
+        let field = List.get<PatternField>(list: pattern.fields, index: fieldIndex)
+        if field.pattern >= 0 && pattern_is_complete(program: program, index: field.pattern) == false { return false }
+        fieldIndex = fieldIndex + 1
+    }
+    return true
+}
+
+fn expression_uses_name(program: Program, index: Int, name: String) -> Bool {
+    if valid_expression_index(program, index) == false { return false }
+    let expression = List.get<Expr>(list: program.expressions, index)
+    if expression.kind == EXPR_NAME && expression.text == name { return true }
+    let mut i = 0
+    while i < List.len(list: expression.children) {
+        if expression_uses_name(program, index: List.get<Int>(list: expression.children, index: i), name) { return true }
+        i = i + 1
+    }
+    i = 0
+    while i < List.len(list: expression.arms) {
+        let arm = List.get<MatchArm>(list: expression.arms, index: i)
+        if pattern_uses_name(program: program, index: arm.patternNode, name: name) || expression_uses_name(program, index: arm.guard, name) { return true }
+        if statements_use_name(program, statements: arm.body, name, skipStatement: -1) { return true }
+        i = i + 1
+    }
+    if statements_use_name(program, statements: expression.closureStatements, name, skipStatement: -1) { return true }
+    return false
+}
+
+// An unknown expression may hide an otherwise valid name use (notably a
+// closure or postfix chain that has not reached the shared expression model).
+// Binding diagnostics must remain false-positive-free while that migration is
+// incomplete, so a function containing one is not eligible for RS0034.
+fn expression_is_complete(program: Program, index: Int) -> Bool {
+    if valid_expression_index(program, index) == false { return true }
+    let expression = List.get<Expr>(list: program.expressions, index)
+    if expression.kind == EXPR_UNKNOWN { return false }
+    let mut i = 0
+    while i < List.len(list: expression.children) {
+        if expression_is_complete(program, index: List.get<Int>(list: expression.children, index: i)) == false { return false }
+        i = i + 1
+    }
+    i = 0
+    while i < List.len(list: expression.arms) {
+        let arm = List.get<MatchArm>(list: expression.arms, index: i)
+        if pattern_is_complete(program: program, index: arm.patternNode) == false || expression_is_complete(program, index: arm.guard) == false { return false }
+        if statements_are_complete(program, statements: arm.body) == false { return false }
+        i = i + 1
+    }
+    if statements_are_complete(program, statements: expression.closureStatements) == false { return false }
+    return true
+}
+
+fn statements_use_name(program: Program, statements: List<Int>, name: String, skipStatement: Int) -> Bool {
+    let mut i = 0
+    while i < List.len(list: statements) {
+        let index = List.get<Int>(list: statements, index: i)
+        if index >= 0 && index < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index)
+            // The legacy rule treats a later same-name binding as a use. Keep
+            // that conservative behavior until lexical scopes are explicit.
+            if index != skipStatement && statement.kind == STMT_LET && statement.name == name { return true }
+            if expression_uses_name(program, index: statement.expression, name) { return true }
+            if statements_use_name(program, statements: statement.children, name, skipStatement) { return true }
+            if statements_use_name(program, statements: statement.elseChildren, name, skipStatement) { return true }
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.arms) {
+                let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+                if pattern_uses_name(program: program, index: arm.patternNode, name: name) || expression_uses_name(program, index: arm.guard, name) { return true }
+                if statements_use_name(program, statements: arm.body, name, skipStatement) { return true }
+                armIndex = armIndex + 1
+            }
+            let mut selectIndex = 0
+            while selectIndex < List.len(list: statement.selectArms) {
+                let arm = List.get<SelectArm>(list: statement.selectArms, index: selectIndex)
+                if expression_uses_name(program, index: arm.operation, name) { return true }
+                if statements_use_name(program, statements: arm.body, name, skipStatement) { return true }
+                selectIndex = selectIndex + 1
+            }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+fn statements_are_complete(program: Program, statements: List<Int>) -> Bool {
+    let mut i = 0
+    while i < List.len(list: statements) {
+        let index = List.get<Int>(list: statements, index: i)
+        if index >= 0 && index < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index)
+            if expression_is_complete(program, index: statement.expression) == false { return false }
+            if statements_are_complete(program, statements: statement.children) == false || statements_are_complete(program, statements: statement.elseChildren) == false { return false }
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.arms) {
+                let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+                if pattern_is_complete(program: program, index: arm.patternNode) == false || expression_is_complete(program, index: arm.guard) == false || statements_are_complete(program, statements: arm.body) == false { return false }
+                armIndex = armIndex + 1
+            }
+            let mut selectIndex = 0
+            while selectIndex < List.len(list: statement.selectArms) {
+                let arm = List.get<SelectArm>(list: statement.selectArms, index: selectIndex)
+                if expression_is_complete(program, index: arm.operation) == false || statements_are_complete(program, statements: arm.body) == false { return false }
+                selectIndex = selectIndex + 1
+            }
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn open_variant_constructor(program: Program, index: Int) -> Bool {
+    if valid_expression_index(program, index) == false { return false }
+    let expression = List.get<Expr>(list: program.expressions, index)
+    if expression.kind == EXPR_NAME { return expression.text == "None" }
+    return expression.kind == EXPR_CALL && (expression.text == "Ok" || expression.text == "Err")
+}
+
+fn scalar_mut_parameter(parameter: Param) -> Bool {
+    if parameter.effect != "mut" { return false }
+    return parameter.typeText == "Int" || parameter.typeText == "Float" || parameter.typeText == "Bool" || parameter.typeText == "Char" || parameter.typeText == "Byte"
+}
+
+fn scalar_type_category(ty: String) -> String {
+    if ty == "String" { return "S" }
+    if ty == "Bool" { return "B" }
+    if ty == "Char" { return "C" }
+    if ty == "Int" || ty == "Float" { return "N" }
+    return ""
+}
+
+// Keep this aligned with the prior conservative token rule: Bool literals are
+// intentionally not inferred here because the production assignment rule does
+// not attach RS0313 to that form yet.
+fn direct_literal_category(program: Program, index: Int) -> String {
+    if valid_expression_index(program, index) == false { return "" }
+    let expression = List.get<Expr>(list: program.expressions, index)
+    if expression.tokenKind == TOK_STRING { return "S" }
+    if expression.tokenKind == TOK_NUMBER { return "N" }
+    if expression.tokenKind == TOK_CHAR { return "C" }
+    return ""
+}
+
+fn non_indexable_collection_type(ty: String) -> Bool {
+    return ty == "Map" || ty == "Set" || ty == "Deque" || String.starts_with(value: ty, prefix: "Map<") || String.starts_with(value: ty, prefix: "Set<") || String.starts_with(value: ty, prefix: "Deque<")
+}
+
+fn collect_non_indexable_collections(program: Program, statements: List<Int>, names: mut Set<String>) -> Unit {
+    let mut i = 0
+    while i < List.len(list: statements) {
+        let index = List.get<Int>(list: statements, index: i)
+        if index >= 0 && index < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index)
+            if statement.kind == STMT_LET && String.len(value: statement.name) > 0 && (non_indexable_collection_type(ty: statement.typeText) || non_indexable_collection_type(ty: statement.expressionRoot)) {
+                Set.insert<String>(set: mut names, value: statement.name)
+            }
+            collect_non_indexable_collections(program, statements: statement.children, names: mut names)
+            collect_non_indexable_collections(program, statements: statement.elseChildren, names: mut names)
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.arms) {
+                let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+                collect_non_indexable_collections(program, statements: arm.body, names: mut names)
+                armIndex = armIndex + 1
+            }
+            let mut selectIndex = 0
+            while selectIndex < List.len(list: statement.selectArms) {
+                let arm = List.get<SelectArm>(list: statement.selectArms, index: selectIndex)
+                collect_non_indexable_collections(program, statements: arm.body, names: mut names)
+                selectIndex = selectIndex + 1
+            }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+// Index declaration types once per function. The former token probe re-walked
+// a body for every assignment; that becomes visible on the full corpus now
+// that assignments are materialized. First declaration wins to preserve the
+// previous conservative shadowing behavior.
+fn collect_declared_types(program: Program, statements: List<Int>, types: mut Map<String, String>) -> Unit {
+    let mut i = 0
+    while i < List.len(list: statements) {
+        let index = List.get<Int>(list: statements, index: i)
+        if index >= 0 && index < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index)
+            if statement.kind == STMT_LET && String.len(value: statement.name) > 0 && String.len(value: statement.typeText) > 0 && Map.contains_key<String, String>(map: types, key: statement.name) == false {
+                Map.insert<String, String>(map: mut types, key: statement.name, value: statement.typeText)
+            }
+            collect_declared_types(program, statements: statement.children, types: mut types)
+            collect_declared_types(program, statements: statement.elseChildren, types: mut types)
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.arms) {
+                let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+                collect_declared_types(program, statements: arm.body, types: mut types)
+                armIndex = armIndex + 1
+            }
+            let mut selectIndex = 0
+            while selectIndex < List.len(list: statement.selectArms) {
+                let arm = List.get<SelectArm>(list: statement.selectArms, index: selectIndex)
+                collect_declared_types(program, statements: arm.body, types: mut types)
+                selectIndex = selectIndex + 1
+            }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn collect_binding_kinds(program: Program, statements: List<Int>, immutable: mut Set<String>, mutable: mut Set<String>) -> Unit {
+    let mut i = 0
+    while i < List.len(list: statements) {
+        let index = List.get<Int>(list: statements, index: i)
+        if index >= 0 && index < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index)
+            if statement.kind == STMT_LET && String.len(value: statement.name) > 0 {
+                Set.insert<String>(set: mut immutable, value: statement.name)
+                if statement.isMutable { Set.insert<String>(set: mut mutable, value: statement.name) }
+            }
+            collect_binding_kinds(program, statements: statement.children, immutable: mut immutable, mutable: mut mutable)
+            collect_binding_kinds(program, statements: statement.elseChildren, immutable: mut immutable, mutable: mut mutable)
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.arms) {
+                let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+                collect_binding_kinds(program, statements: arm.body, immutable: mut immutable, mutable: mut mutable)
+                armIndex = armIndex + 1
+            }
+            let mut selectIndex = 0
+            while selectIndex < List.len(list: statement.selectArms) {
+                let arm = List.get<SelectArm>(list: statement.selectArms, index: selectIndex)
+                collect_binding_kinds(program, statements: arm.body, immutable: mut immutable, mutable: mut mutable)
+                selectIndex = selectIndex + 1
+            }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn collect_assignment_diagnostics(program: Program, statements: List<Int>, immutable: Set<String>, mutable: Set<String>, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut i = 0
+    while i < List.len(list: statements) {
+        let index = List.get<Int>(list: statements, index: i)
+        if index >= 0 && index < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index)
+            if statement.kind == STMT_ASSIGN && statement.target >= 0 && statement.target < List.len(list: program.expressions) {
+                let target = List.get<Expr>(list: program.expressions, index: statement.target)
+                if target.kind == EXPR_NAME && Set.contains<String>(set: immutable, value: statement.name) && Set.contains<String>(set: mutable, value: statement.name) == false {
+                    DiagnosticBag.add(self: mut diagnostics, code: "RS0311", line: statement.line, column: statement.column, length: statement.length)
+                }
+            }
+            collect_assignment_diagnostics(program, statements: statement.children, immutable, mutable, diagnostics: mut diagnostics)
+            collect_assignment_diagnostics(program, statements: statement.elseChildren, immutable, mutable, diagnostics: mut diagnostics)
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.arms) {
+                let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+                collect_assignment_diagnostics(program, statements: arm.body, immutable, mutable, diagnostics: mut diagnostics)
+                armIndex = armIndex + 1
+            }
+            let mut selectIndex = 0
+            while selectIndex < List.len(list: statement.selectArms) {
+                let arm = List.get<SelectArm>(list: statement.selectArms, index: selectIndex)
+                collect_assignment_diagnostics(program, statements: arm.body, immutable, mutable, diagnostics: mut diagnostics)
+                selectIndex = selectIndex + 1
+            }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn collect_assignment_type_diagnostics(program: Program, statements: List<Int>, declaredTypes: Map<String, String>, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut i = 0
+    while i < List.len(list: statements) {
+        let index = List.get<Int>(list: statements, index: i)
+        if index >= 0 && index < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index)
+            if statement.kind == STMT_ASSIGN && statement.target >= 0 && statement.target < List.len(list: program.expressions) {
+                let target = List.get<Expr>(list: program.expressions, index: statement.target)
+                if target.kind == EXPR_NAME {
+                let declaredType = Map.get_or_default<String, String>(map: declaredTypes, key: statement.name, default: "")
+                let declared = scalar_type_category(ty: declaredType)
+                let actual = direct_literal_category(program, index: statement.expression)
+                if declared != "" && actual != "" && declared != actual {
+                    DiagnosticBag.add(self: mut diagnostics, code: "RS0313", line: statement.line, column: statement.column, length: statement.length)
+                }
+                }
+            }
+            collect_assignment_type_diagnostics(program, statements: statement.children, declaredTypes, diagnostics: mut diagnostics)
+            collect_assignment_type_diagnostics(program, statements: statement.elseChildren, declaredTypes, diagnostics: mut diagnostics)
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.arms) {
+                let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+                collect_assignment_type_diagnostics(program, statements: arm.body, declaredTypes, diagnostics: mut diagnostics)
+                armIndex = armIndex + 1
+            }
+            let mut selectIndex = 0
+            while selectIndex < List.len(list: statement.selectArms) {
+                let arm = List.get<SelectArm>(list: statement.selectArms, index: selectIndex)
+                collect_assignment_type_diagnostics(program, statements: arm.body, declaredTypes, diagnostics: mut diagnostics)
+                selectIndex = selectIndex + 1
+            }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn collect_index_assignment_diagnostics(program: Program, statements: List<Int>, nonIndexable: Set<String>, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut i = 0
+    while i < List.len(list: statements) {
+        let index = List.get<Int>(list: statements, index: i)
+        if index >= 0 && index < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index)
+            if statement.kind == STMT_INDEX_ASSIGN && Set.contains<String>(set: nonIndexable, value: statement.name) {
+                DiagnosticBag.add(self: mut diagnostics, code: "RS0312", line: statement.line, column: statement.column, length: statement.length)
+            }
+            collect_index_assignment_diagnostics(program, statements: statement.children, nonIndexable, diagnostics: mut diagnostics)
+            collect_index_assignment_diagnostics(program, statements: statement.elseChildren, nonIndexable, diagnostics: mut diagnostics)
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.arms) {
+                let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+                collect_index_assignment_diagnostics(program, statements: arm.body, nonIndexable, diagnostics: mut diagnostics)
+                armIndex = armIndex + 1
+            }
+            let mut selectIndex = 0
+            while selectIndex < List.len(list: statement.selectArms) {
+                let arm = List.get<SelectArm>(list: statement.selectArms, index: selectIndex)
+                collect_index_assignment_diagnostics(program, statements: arm.body, nonIndexable, diagnostics: mut diagnostics)
+                selectIndex = selectIndex + 1
+            }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn collect_binding_diagnostics_in_statements(program: Program, rootStatements: List<Int>, statements: List<Int>, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut i = 0
+    while i < List.len(list: statements) {
+        let index = List.get<Int>(list: statements, index: i)
+        if index >= 0 && index < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index)
+            if statement.kind == STMT_LET && String.len(value: statement.name) > 0 && String.len(value: statement.typeText) == 0 && open_variant_constructor(program, index: statement.expression) && statements_use_name(program, statements: rootStatements, name: statement.name, skipStatement: index) == false {
+                DiagnosticBag.add(self: mut diagnostics, code: "RS0034", line: statement.line, column: statement.column, length: statement.length)
+            }
+            collect_binding_diagnostics_in_statements(program, rootStatements, statements: statement.children, diagnostics: mut diagnostics)
+            collect_binding_diagnostics_in_statements(program, rootStatements, statements: statement.elseChildren, diagnostics: mut diagnostics)
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.arms) {
+                let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+                collect_binding_diagnostics_in_statements(program, rootStatements, statements: arm.body, diagnostics: mut diagnostics)
+                armIndex = armIndex + 1
+            }
+            let mut selectIndex = 0
+            while selectIndex < List.len(list: statement.selectArms) {
+                let arm = List.get<SelectArm>(list: statement.selectArms, index: selectIndex)
+                collect_binding_diagnostics_in_statements(program, rootStatements, statements: arm.body, diagnostics: mut diagnostics)
+                selectIndex = selectIndex + 1
+            }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+fn collect_program_binding_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+    let mut i = 0
+    while i < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: i)
+        if item.kind == ITEM_FUNCTION {
+            if statements_are_complete(program, statements: item.statements) {
+                collect_binding_diagnostics_in_statements(program, rootStatements: item.statements, statements: item.statements, diagnostics: mut diagnostics)
+            }
+            let mut immutable = Set<String>.new()
+            let mut mutable = Set<String>.new()
+            let mut parameterIndex = 0
+            while parameterIndex < List.len(list: item.params) {
+                let parameter = List.get<Param>(list: item.params, index: parameterIndex)
+                Set.insert<String>(set: mut immutable, value: parameter.name)
+                if scalar_mut_parameter(parameter) { Set.insert<String>(set: mut mutable, value: parameter.name) }
+                parameterIndex = parameterIndex + 1
+            }
+            collect_binding_kinds(program, statements: item.statements, immutable: mut immutable, mutable: mut mutable)
+            collect_assignment_diagnostics(program, statements: item.statements, immutable, mutable, diagnostics: mut diagnostics)
+            let mut declaredTypes = Map<String, String>.new()
+            collect_declared_types(program, statements: item.statements, types: mut declaredTypes)
+            collect_assignment_type_diagnostics(program, statements: item.statements, declaredTypes, diagnostics: mut diagnostics)
+            let mut nonIndexable = Set<String>.new()
+            collect_non_indexable_collections(program, statements: item.statements, names: mut nonIndexable)
+            collect_index_assignment_diagnostics(program, statements: item.statements, nonIndexable, diagnostics: mut diagnostics)
+        }
+        i = i + 1
+    }
+    return Unit
+}

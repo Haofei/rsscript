@@ -4,49 +4,49 @@ struct StringBuilder
 
 struct StringView
 
-pub fn Char.is_digit(value: read Char) -> Bool
+pub fn Char.is_digit(value: Char) -> Bool
     effects(pure)
 
-pub fn Char.is_alpha(value: read Char) -> Bool
+pub fn Char.is_alpha(value: Char) -> Bool
     effects(pure)
 
-pub fn Char.is_whitespace(value: read Char) -> Bool
+pub fn Char.is_whitespace(value: Char) -> Bool
     effects(pure)
 
-pub fn Char.is_alphanumeric(value: read Char) -> Bool
+pub fn Char.is_alphanumeric(value: Char) -> Bool
     effects(pure)
 
-pub fn Char.is_lower(value: read Char) -> Bool
+pub fn Char.is_lower(value: Char) -> Bool
     effects(pure)
 
-pub fn Char.is_upper(value: read Char) -> Bool
+pub fn Char.is_upper(value: Char) -> Bool
     effects(pure)
 
-pub fn Char.to_lower(value: read Char) -> Char
+pub fn Char.to_lower(value: Char) -> Char
     effects(pure)
 
-pub fn Char.to_upper(value: read Char) -> Char
+pub fn Char.to_upper(value: Char) -> Char
     effects(pure)
 
-pub fn Char.to_code(value: read Char) -> Int
+pub fn Char.to_code(value: Char) -> Int
     effects(pure)
 
 pub fn Char.from_code(value: Int) -> Option<Char>
     effects(pure)
 
-pub fn Char.compare(left: read Char, right: read Char) -> Int
+pub fn Char.compare(left: Char, right: Char) -> Int
     effects(pure)
 
-pub fn Char.to_string(value: read Char) -> fresh String
+pub fn Char.to_string(value: Char) -> fresh String
     effects(pure)
 
-pub fn String.concat(left: read String, right: read String) -> fresh String
+pub fn String.concat(left: String, right: String) -> fresh String
     effects(pure)
 
-pub fn String.copy(value: read String) -> fresh String
+pub fn String.copy(value: String) -> fresh String
     effects(pure)
 
-pub fn String.clone(value: read String) -> fresh String
+pub fn String.clone(value: String) -> fresh String
     effects(pure)
 
 pub fn String.from_int(value: Int) -> fresh String
@@ -58,22 +58,22 @@ pub fn String.from_float(value: Float) -> fresh String
 pub fn String.from_bool(value: Bool) -> fresh String
     effects(pure)
 
-pub fn Int.to_string(value: read Int) -> fresh String
+pub fn Int.to_string(value: Int) -> fresh String
     effects(pure)
 
-pub fn Int.to_float(value: read Int) -> Float
+pub fn Int.to_float(value: Int) -> Float
     effects(pure)
 
-pub fn Float.to_string(value: read Float) -> fresh String
+pub fn Float.to_string(value: Float) -> fresh String
     effects(pure)
 
-pub fn Float.is_nan(value: read Float) -> Bool
+pub fn Float.is_nan(value: Float) -> Bool
     effects(pure)
 
-pub fn Float.is_finite(value: read Float) -> Bool
+pub fn Float.is_finite(value: Float) -> Bool
     effects(pure)
 
-pub fn Float.is_infinite(value: read Float) -> Bool
+pub fn Float.is_infinite(value: Float) -> Bool
     effects(pure)
 
 pub fn Int.bit_and(left: Int, right: Int) -> Int
@@ -94,217 +94,217 @@ pub fn Int.shift_left(value: Int, bits: Int) -> Int
 pub fn Int.shift_right(value: Int, bits: Int) -> Int
     effects(pure)
 
-pub fn String.to_path(value: read String) -> fresh Path
+pub fn String.to_path(value: String) -> fresh Path
     effects(pure)
 
-pub fn String.safe_relative(value: read String) -> Result<fresh Path, String>
+pub fn String.safe_relative(value: String) -> Result<fresh Path, String>
     effects(pure)
 
-pub fn String.to_url(value: read String) -> fresh Url
+pub fn String.to_url(value: String) -> fresh Url
     effects(pure)
 
-pub fn String.to_bytes(value: read String) -> fresh Bytes
+pub fn String.to_bytes(value: String) -> fresh Bytes
     effects(pure)
 
-pub fn String.env(value: read String) -> Option<fresh String>
+pub fn String.env(value: String) -> Option<fresh String>
     effects(native)
 
-pub fn String.env_or(value: read String, default: read String) -> fresh String
+pub fn String.env_or(value: String, default: String) -> fresh String
     effects(native)
 
-pub fn String.len(value: read String) -> Int
+pub fn String.len(value: String) -> Int
     effects(pure)
 
-pub fn String.is_empty(value: read String) -> Bool
+pub fn String.is_empty(value: String) -> Bool
     effects(pure)
 
-pub fn String.trim(value: read String) -> fresh String
+pub fn String.trim(value: String) -> fresh String
     effects(pure)
 
-pub fn String.trim_start(value: read String) -> fresh String
+pub fn String.trim_start(value: String) -> fresh String
     effects(pure)
 
-pub fn String.trim_end(value: read String) -> fresh String
+pub fn String.trim_end(value: String) -> fresh String
     effects(pure)
 
-pub fn String.to_lowercase(value: read String) -> fresh String
+pub fn String.to_lowercase(value: String) -> fresh String
     effects(pure)
 
-pub fn String.to_uppercase(value: read String) -> fresh String
+pub fn String.to_uppercase(value: String) -> fresh String
     effects(pure)
 
 pub fn String.replace(
-    value: read String,
-    from: read String,
-    to: read String,
+    value: String,
+    from: String,
+    to: String,
 ) -> fresh String
     effects(pure)
 
 pub fn String.replace_first(
-    value: read String,
-    from: read String,
-    to: read String,
+    value: String,
+    from: String,
+    to: String,
 ) -> fresh String
     effects(pure)
 
 pub fn String.count(
-    value: read String,
-    needle: read String,
+    value: String,
+    needle: String,
 ) -> Int
     effects(pure)
 
 pub fn String.pad_left(
-    value: read String,
+    value: String,
     width: Int,
-    fill: read String,
+    fill: String,
 ) -> fresh String
     effects(pure)
 
 pub fn String.pad_right(
-    value: read String,
+    value: String,
     width: Int,
-    fill: read String,
+    fill: String,
 ) -> fresh String
     effects(pure)
 
-pub fn String.reverse(value: read String) -> fresh String
+pub fn String.reverse(value: String) -> fresh String
     effects(pure)
 
 pub fn String.char_at(
-    value: read String,
+    value: String,
     index: Int,
 ) -> Option<Char>
     effects(pure)
 
 pub fn String.starts_with(
-    value: read String,
-    prefix: read String,
+    value: String,
+    prefix: String,
 ) -> Bool
     effects(pure)
 
 pub fn String.ends_with(
-    value: read String,
-    suffix: read String,
+    value: String,
+    suffix: String,
 ) -> Bool
     effects(pure)
 
 pub fn String.contains(
-    value: read String,
-    needle: read String,
+    value: String,
+    needle: String,
 ) -> Bool
     effects(pure)
 
-pub fn String.lines(value: read String) -> fresh List<String>
+pub fn String.lines(value: String) -> fresh List<String>
     effects(pure)
 
-pub fn String.chars(value: read String) -> fresh List<Char>
+pub fn String.chars(value: String) -> fresh List<Char>
     effects(pure)
 
 pub fn String.join(
-    parts: read List<String>,
-    separator: read String,
+    parts: List<String>,
+    separator: String,
 ) -> fresh String
     effects(pure)
 
 pub fn String.format(
-    template: read String,
-    args: read List<String>,
+    template: String,
+    args: List<String>,
 ) -> fresh String
     effects(pure)
 
 pub fn String.strip_prefix(
-    value: read String,
-    prefix: read String,
+    value: String,
+    prefix: String,
 ) -> Option<String>
     effects(pure)
 
 pub fn String.before(
-    value: read String,
-    delimiter: read String,
+    value: String,
+    delimiter: String,
 ) -> Option<String>
     effects(pure)
 
 pub fn String.after(
-    value: read String,
-    delimiter: read String,
+    value: String,
+    delimiter: String,
 ) -> Option<String>
     effects(pure)
 
 pub fn String.split(
-    value: read String,
-    delimiter: read String,
+    value: String,
+    delimiter: String,
 ) -> fresh List<String>
     effects(pure)
 
 pub fn String.slice(
-    value: read String,
+    value: String,
     start: Int,
     len: Int,
 ) -> fresh String
     effects(pure)
 
 pub fn String.index_of(
-    value: read String,
-    needle: read String,
+    value: String,
+    needle: String,
 ) -> Option<Int>
     effects(pure)
 
 pub fn String.repeat(
-    value: read String,
+    value: String,
     count: Int,
 ) -> fresh String
     effects(pure)
 
-pub fn String.parse_int(value: read String) -> Option<Int>
+pub fn String.parse_int(value: String) -> Option<Int>
     effects(pure)
 
-pub fn String.parse_float(value: read String) -> Option<Float>
+pub fn String.parse_float(value: String) -> Option<Float>
     effects(pure)
 
 pub fn String.view(
-    value: read String,
+    value: String,
     start: Int,
     len: Int,
 ) -> StringView
     effects(pure)
 
 pub fn StringView.slice(
-    value: read StringView,
+    value: StringView,
     start: Int,
     len: Int,
 ) -> StringView
     effects(pure)
 
-pub fn StringView.len(value: read StringView) -> Int
+pub fn StringView.len(value: StringView) -> Int
     effects(pure)
 
-pub fn StringView.is_empty(value: read StringView) -> Bool
+pub fn StringView.is_empty(value: StringView) -> Bool
     effects(pure)
 
-pub fn StringView.to_string(value: read StringView) -> fresh String
+pub fn StringView.to_string(value: StringView) -> fresh String
     effects(pure)
 
 pub fn StringView.starts_with(
-    value: read StringView,
-    prefix: read String,
+    value: StringView,
+    prefix: String,
 ) -> Bool
     effects(pure)
 
 pub fn StringView.contains(
-    value: read StringView,
-    needle: read String,
+    value: StringView,
+    needle: String,
 ) -> Bool
     effects(pure)
 
 pub fn StringView.before(
-    value: read StringView,
-    delimiter: read String,
+    value: StringView,
+    delimiter: String,
 ) -> Option<StringView>
     effects(pure)
 
 pub fn StringView.after(
-    value: read StringView,
-    delimiter: read String,
+    value: StringView,
+    delimiter: String,
 ) -> Option<StringView>
     effects(pure)
 
@@ -312,7 +312,7 @@ pub fn StringBuilder.new() -> fresh StringBuilder
 
 pub fn StringBuilder.push(
     builder: mut StringBuilder,
-    value: read String,
+    value: String,
 ) -> Unit
 
 pub fn StringBuilder.finish(builder: take StringBuilder) -> fresh String

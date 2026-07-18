@@ -7,5 +7,5 @@ fn may_panic(value: Int) -> Int {
 fn promised_no_panic(value: Int) -> Int
     effects(no_panic)
 {
-    return may_panic(value: value)
+    return may_panic(value)
 }

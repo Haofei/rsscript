@@ -9,15 +9,17 @@ use selfhost.semantics.diagnostics.*
 use selfhost.syntax.parser_items.*
 
 fn main() -> Unit {
-    let source = Args.get_or_default(index: 0, default: read "")
-    let toks = tokenize(source: read source)
-    let program = parse_program(toks: read toks)
+    let source = Args.get_or_default(index: 0, default: "")
+    let toks = tokenize(source: source)
+    let program = parse_program(toks: toks)
     local diagnostics = DiagnosticBag.empty()
-    collect_program_type_diagnostics(program: read program, diagnostics: mut diagnostics)
+    collect_program_type_diagnostics(program: program, diagnostics: mut diagnostics)
     let mut i = 0
-    while i < List.len(list: read diagnostics.items) {
-        let diagnostic = List.get<Diagnostic>(list: read diagnostics.items, index: read i)
-        Log.write(message: read String.concat(left: read String.concat(left: read String.concat(left: read String.concat(left: read String.concat(left: read diagnostic.code, right: read "\t"), right: read String.from_int(value: read diagnostic.line)), right: read "\t"), right: read String.from_int(value: read diagnostic.column)), right: read String.concat(left: read "\t", right: read String.from_int(value: read diagnostic.length))))
+    while i < List.len(list: diagnostics.items) {
+        let diagnostic = List.get<Diagnostic>(list: diagnostics.items, index: i)
+        if diagnostic.code == "RS0209" {
+            Log.write(message: String.concat(left: String.concat(left: String.concat(left: String.concat(left: String.concat(left: diagnostic.code, right: "\t"), right: String.from_int(value: diagnostic.line)), right: "\t"), right: String.from_int(value: diagnostic.column)), right: String.concat(left: "\t", right: String.from_int(value: diagnostic.length))))
+        }
         i = i + 1
     }
     return Unit

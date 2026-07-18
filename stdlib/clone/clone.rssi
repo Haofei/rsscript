@@ -10,5 +10,5 @@
 // cannot be moved into a constructor. `Clone` is a pure contract: it introduces
 // no mutation, retention, native, or unsafe boundary.
 protocol Clone {
-    fn clone(self: read Self) -> fresh Self
+    fn clone(self: Self) -> fresh Self
 }

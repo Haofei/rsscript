@@ -9,11 +9,11 @@ resource DbConnection {
     }
 }
 
-fn DbConnection.open(url: read String) -> DbConnection
+fn DbConnection.open(url: String) -> DbConnection
 
-fn bad_pool(url: read String) -> Unit {
+fn bad_pool(url: String) -> Unit {
     local pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.open(url: read url),
+        create: || DbConnection.open(url),
         max_size: 0,
     )
 }

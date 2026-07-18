@@ -729,15 +729,14 @@ fn run(items: read List<Int>) -> Unit {
 
 #[test]
 fn missing_data_effect_fix_carries_machine_applicable_edit() {
-    // The `add_data_effect` fix must now ship a concrete, machine-applicable edit
-    // (an insertion of `read ` before the argument value) so `rss fix` can apply
-    // it. Without the edit payload the fix would be advisory only.
+    // `read` is the default, but an omitted exclusive effect must still carry a
+    // concrete machine-applicable edit so `rss fix` can restore the contract.
     let source = concat!(
-        "fn use_it(value: read String) -> Unit {\n",
+        "fn use_it(value: mut String) -> Unit {\n",
         "    return Unit\n",
         "}\n",
         "fn main() -> Unit {\n",
-        "    let v = \"x\"\n",
+        "    let mut v = \"x\"\n",
         "    use_it(value: v)\n",
         "    return Unit\n",
         "}\n",
@@ -754,7 +753,7 @@ fn missing_data_effect_fix_carries_machine_applicable_edit() {
         .expect("add_data_effect fix");
     assert_eq!(fix.applicability, "machine-applicable");
     let edit = fix.edit.as_ref().expect("fix carries a concrete edit");
-    assert_eq!(edit.replacement, "read ");
+    assert_eq!(edit.replacement, "mut ");
     assert_eq!(edit.span.length, 0, "an insertion has zero-length span");
     assert_eq!(edit.span.line, 6, "edit points at the call argument line");
 }

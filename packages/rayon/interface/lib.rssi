@@ -1,12 +1,12 @@
 features: native
 
-native fn Rayon.sum_int(values: read List<Int>) -> Int
+native fn Rayon.sum_int(values: List<Int>) -> Int
     effects(native, parallel)
 
-native fn Rayon.sum_squares(values: read List<Int>) -> Int
+native fn Rayon.sum_squares(values: List<Int>) -> Int
     effects(native, parallel)
 
-native fn Rayon.count_positive_int(values: read List<Int>) -> Int
+native fn Rayon.count_positive_int(values: List<Int>) -> Int
     effects(native, parallel)
 
 native fn Rayon.sort_int(values: mut List<Int>) -> Unit

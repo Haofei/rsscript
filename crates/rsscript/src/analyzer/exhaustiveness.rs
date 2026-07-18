@@ -496,23 +496,6 @@ impl Analyzer<'_> {
         }
     }
 
-    /// A payload-less sum type (every variant carries no fields) behaves like a
-    /// plain C-style enum: it is cheap to copy and may be passed by value without
-    /// an explicit data effect, mirroring how primitive Copy types are treated.
-    pub(super) fn is_payloadless_sum_type(&self, ty: &TypeRef) -> bool {
-        if !ty.args.is_empty() || ty.is_noescape || ty.is_owned || ty.is_fresh {
-            return false;
-        }
-        let root = type_root_name(&ty.name);
-        if self.hir.type_kind(root) != Some(HirTypeKind::Sum) {
-            return false;
-        }
-        match self.sum_variants_for_type(root) {
-            Some(variants) => variants.iter().all(|(_, fields)| fields.is_empty()),
-            None => false,
-        }
-    }
-
     pub(super) fn sum_variants_for_type(
         &self,
         root: &str,

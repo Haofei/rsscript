@@ -20,6 +20,6 @@ fn make_pair(a: Int, b: Int) -> fresh Ops {
 }
 
 fn from_local(k: Int) -> fresh Ops {
-    let op = kind_to_op(k: k)
+    let op = kind_to_op(k)
     return op
 }

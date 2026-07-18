@@ -5,11 +5,11 @@ struct Image {
     pixels: Buffer
 }
 
-fn bad_fresh(path: read Path) -> fresh Image {
-    local image = Image.load(path: read path)
+fn bad_fresh(path: Path) -> fresh Image {
+    local image = Image.load(path)
 
     let callback = || {
-        Image.inspect(image: read image)
+        Image.inspect(image)
     }
 
     return image

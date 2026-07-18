@@ -1,5 +1,5 @@
-fn parse(value: read String) -> Result<Int, String> {
-    match String.parse_int(value: read value) {
+fn parse(value: String) -> Result<Int, String> {
+    match String.parse_int(value) {
         Some(number) => {
             return Ok(number)
         }
@@ -10,8 +10,8 @@ fn parse(value: read String) -> Result<Int, String> {
 }
 
 fn run() -> Result<Unit, String> {
-    let number = parse(value: read "41")?
-    Log.write(message: read String.from_int(value: number + 1))
+    let number = parse(value: "41")?
+    Log.write(message: String.from_int(value: number + 1))
     return Ok(Unit)
 }
 
@@ -21,7 +21,7 @@ fn main() -> Unit {
             return Unit
         }
         Err(message) => {
-            Log.write(message: read message)
+            Log.write(message)
         }
     }
     return Unit

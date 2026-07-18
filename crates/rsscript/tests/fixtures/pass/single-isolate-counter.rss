@@ -9,6 +9,6 @@ fn increment(counter: mut Counter) -> Unit {
     return Unit
 }
 
-fn read_counter(counter: read Counter) -> Int {
-    return Counter.value(counter: read counter)
+fn read_counter(counter: Counter) -> Int {
+    return Counter.value(counter)
 }

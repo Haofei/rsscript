@@ -1,8 +1,8 @@
 features: local
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -12,11 +12,11 @@ fn bench_size(default: Int) -> Int {
     }
 }
 
-fn len_loop(seen: read SortedSet<Int>, reps: Int) -> Int {
+fn len_loop(seen: SortedSet<Int>, reps: Int) -> Int {
     let mut i = 0
     let mut total = 0
     while i < reps {
-        total = total + SortedSet.len<Int>(set: read seen)
+        total = total + SortedSet.len<Int>(set: seen)
         i = i + 1
     }
     return total
@@ -27,10 +27,10 @@ fn main() -> Unit {
     local seen = SortedSet.new<Int>()
     let mut i = 0
     while i < 32 {
-        let _inserted = SortedSet.insert<Int>(set: mut seen, value: read i)
+        let _inserted = SortedSet.insert<Int>(set: mut seen, value: i)
         i = i + 1
     }
 
-    Log.write(message: read String.from_int(value: len_loop(seen: read seen, reps: reps)))
+    Log.write(message: String.from_int(value: len_loop(seen, reps)))
     return Unit
 }

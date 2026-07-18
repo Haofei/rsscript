@@ -4,6 +4,6 @@ own struct Buffer {
     bytes: Bytes
 }
 
-fn make_buffer(bytes: read Bytes) -> fresh Buffer {
-    return Buffer(bytes: read bytes)
+fn make_buffer(bytes: Bytes) -> fresh Buffer {
+    return Buffer(bytes: bytes)
 }

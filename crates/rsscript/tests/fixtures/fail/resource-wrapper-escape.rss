@@ -9,16 +9,16 @@ resource LogFile {
     }
 }
 
-fn LogFile.open(path: read Path) -> LogFile
+fn LogFile.open(path: Path) -> LogFile
 
-fn bad_return(path: read Path) -> Unit {
-    with LogFile.open(path: read path) as file {
+fn bad_return(path: Path) -> Unit {
+    with LogFile.open(path) as file {
         return Ok(file)
     }
 }
 
-fn bad_binding(path: read Path) -> Unit {
-    with LogFile.open(path: read path) as file {
+fn bad_binding(path: Path) -> Unit {
+    with LogFile.open(path) as file {
         let saved = Some(file)
     }
 }

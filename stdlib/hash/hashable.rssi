@@ -14,5 +14,5 @@
 // memoization over user-defined managed types are expressible while a
 // non-hashable key is rejected in RSScript instead of leaking from rustc.
 protocol Hashable {
-    fn hash_value(self: read Self) -> Int
+    fn hash_value(self: Self) -> Int
 }

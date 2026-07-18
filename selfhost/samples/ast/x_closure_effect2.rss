@@ -9,17 +9,17 @@ struct Image {
     pixels: Buffer
 }
 
-fn schedule(scheduler: mut Scheduler, callback: read Callback) -> Unit
+fn schedule(scheduler: mut Scheduler, callback: Callback) -> Unit
     effects(retains(callback))
 {
 }
 
-fn bad_schedule(scheduler: mut Scheduler, path: read Path) -> Unit {
-    local image = Image.load(path: read path)
+fn bad_schedule(scheduler: mut Scheduler, path: Path) -> Unit {
+    local image = Image.load(path)
     schedule(
         scheduler: mut scheduler,
-        callback: read || {
-            Image.inspect(image: read image)
+        callback: || {
+            Image.inspect(image)
         },
     )
 }

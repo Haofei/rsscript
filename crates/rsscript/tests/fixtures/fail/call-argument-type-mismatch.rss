@@ -1,5 +1,5 @@
 // expect: RS0207
 fn bad() -> Unit {
-    Log.write(message: read 42)
+    Log.write(message: 42)
     return Unit
 }

@@ -2,35 +2,35 @@ features: native
 
 struct DecodeError
 
-pub native fn Base64.encode(value: read String) -> fresh String
+pub native fn Base64.encode(value: String) -> fresh String
     effects(native)
 
-pub native fn Base64.encode_bytes(value: read Bytes) -> fresh String
+pub native fn Base64.encode_bytes(value: Bytes) -> fresh String
     effects(native)
 
-pub native fn Base64.decode(text: read String) -> Result<fresh Bytes, DecodeError>
+pub native fn Base64.decode(text: String) -> Result<fresh Bytes, DecodeError>
     effects(native)
 
-pub native fn Base64.decode_string(text: read String) -> Result<fresh String, DecodeError>
+pub native fn Base64.decode_string(text: String) -> Result<fresh String, DecodeError>
     effects(native)
 
-pub native fn Hex.encode(value: read Bytes) -> fresh String
+pub native fn Hex.encode(value: Bytes) -> fresh String
     effects(native)
 
-pub native fn Hex.encode_string(value: read String) -> fresh String
+pub native fn Hex.encode_string(value: String) -> fresh String
     effects(native)
 
-pub native fn Hex.decode(text: read String) -> Result<fresh Bytes, DecodeError>
+pub native fn Hex.decode(text: String) -> Result<fresh Bytes, DecodeError>
     effects(native)
 
-pub native fn Gzip.decompress_bytes(value: read Bytes) -> Result<fresh Bytes, DecodeError>
+pub native fn Gzip.decompress_bytes(value: Bytes) -> Result<fresh Bytes, DecodeError>
     effects(native)
 
-pub native fn Url.encode_component(value: read String) -> fresh String
+pub native fn Url.encode_component(value: String) -> fresh String
     effects(native)
 
-pub native fn Url.decode_component(value: read String) -> Result<fresh String, DecodeError>
+pub native fn Url.decode_component(value: String) -> Result<fresh String, DecodeError>
     effects(native)
 
-pub native fn DecodeError.message(error: read DecodeError) -> String
+pub native fn DecodeError.message(error: DecodeError) -> String
     effects(native)

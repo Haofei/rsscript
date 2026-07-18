@@ -27,6 +27,32 @@ const EXPR_LITERAL: Int = 3
 const EXPR_CALL: Int = 4
 const EXPR_BINARY: Int = 5
 const EXPR_UNARY: Int = 6
+const EXPR_MATCH: Int = 7
+const EXPR_AWAIT: Int = 8
+const EXPR_FIELD: Int = 9
+const EXPR_INDEX: Int = 10
+const EXPR_EFFECT: Int = 11
+const EXPR_TRY: Int = 12
+const EXPR_CLOSURE: Int = 13
+const EXPR_MANAGE: Int = 14
+const EXPR_ARRAY: Int = 15
+const EXPR_SPAWN: Int = 16
+
+const CALLEE_NAME: Int = 1
+const CALLEE_QUALIFIED: Int = 2
+const CALLEE_RECEIVER: Int = 3
+
+// Match patterns have their own recursive arena. They are intentionally not
+// expressions: a lower-case name means different things at an arm root and in
+// a variant payload, and struct/list rest forms have no expression analogue.
+const PAT_UNKNOWN: Int = 1
+const PAT_WILDCARD: Int = 2
+const PAT_BINDING: Int = 3
+const PAT_VARIANT: Int = 4
+const PAT_LITERAL: Int = 5
+const PAT_TUPLE: Int = 6
+const PAT_LIST: Int = 7
+const PAT_STRUCT: Int = 8
 
 const STMT_UNKNOWN: Int = 1
 const STMT_RETURN: Int = 2
@@ -37,6 +63,11 @@ const STMT_LOOP: Int = 6
 const STMT_WHILE: Int = 7
 const STMT_FOR: Int = 8
 const STMT_MATCH: Int = 9
+const STMT_WITH: Int = 10
+const STMT_SELECT: Int = 11
+const STMT_ASSIGN: Int = 12
+const STMT_INDEX_ASSIGN: Int = 13
+const STMT_TASK_GROUP: Int = 14
 
 struct Expr {
     kind: Int
@@ -45,38 +76,124 @@ struct Expr {
     line: Int
     column: Int
     length: Int
+    // Explicit call type arguments, e.g. `Map.new<Key, Value>()`.
+    typeArgs: List<String>
+    calleeKind: Int
+    // Receiver expression for CALLEE_RECEIVER, otherwise -1. Call arguments
+    // remain in args/children so a callee is not mistaken for an argument.
+    calleeReceiver: Int
     children: List<Int>
+    args: List<CallArg>
+    arms: List<MatchArm>
+    closureParams: List<String>
+    closureBody: Int
+    closureStatements: List<Int>
+}
+
+struct CallArg {
+    label: String
+    value: Int
+    line: Int
+    column: Int
+    length: Int
 }
 
 struct Stmt {
     kind: Int
     name: String
+    // `async let` consumes an async call and establishes a task-group handle.
+    // This belongs to the statement, not its expression, just as it does in HIR.
+    isAsync: Bool
+    // Preserve `local` versus managed `let`; serializers and later lowering
+    // must not infer storage ownership from the initializer.
+    isLocal: Bool
+    isMutable: Bool
+    // Control-flow parsers retain structural completeness so consumers never
+    // confuse recovery nodes with a valid empty block.
+    hasValidHeader: Bool
+    hasBlock: Bool
+    hasElse: Bool
+    hasElseBlock: Bool
+    malformedArms: Int
+    // Distinguishes `let name` from a malformed `let name =`; an absent
+    // expression alone cannot preserve that recovery fact.
+    hasInitializer: Bool
+    destructure: List<String>
     typeText: String
+    expressionRoot: String
     line: Int
     column: Int
     length: Int
+    // Assignment destination when this statement writes a place. Keeping the
+    // place as an expression makes field and index writes share one AST model.
+    target: Int
     expression: Int
     children: List<Int>
     elseChildren: List<Int>
     arms: List<MatchArm>
+    selectArms: List<SelectArm>
 }
 
 struct MatchArm {
-    pattern: Int
+    // The canonical shared recursive pattern.
+    patternNode: Int
+    guard: Int
     shape: String
     line: Int
     column: Int
     length: Int
+    // Statement indices in Program.statements. A direct arm expression is
+    // represented as one STMT_EXPR, so every arm body has one ownership model.
+    body: List<Int>
+}
+
+struct Pattern {
+    kind: Int
+    tokenKind: Int
+    name: String
+    line: Int
+    column: Int
+    length: Int
+    // Variant payloads, tuple elements, and list prefix/suffix values.
+    children: List<Int>
+    // List rest is `none`, `ignore`, or the bound name. `restIndex` is the
+    // number of children before it, preserving prefix/suffix placement.
+    rest: String
+    restIndex: Int
+    fields: List<PatternField>
+}
+
+struct PatternField {
+    name: String
+    ignored: Bool
+    effect: String
+    binding: String
+    pattern: Int
+}
+
+struct SelectArm {
+    binding: String
+    operation: Int
+    line: Int
+    column: Int
+    length: Int
+    body: List<Int>
 }
 
 struct Param {
     name: String
     effect: String
     typeText: String
+    typeSyntax: TypeSyntax
+    isCopy: Bool
+    typeLine: Int
+    typeColumn: Int
+    typeLength: Int
     hasDefault: Bool
     defaultLine: Int
     defaultColumn: Int
     defaultLength: Int
+    defaultExpression: Int
     line: Int
     column: Int
     length: Int
@@ -92,9 +209,76 @@ struct GenericParam {
 
 struct EffectName {
     name: String
+    target: String
+    isRetains: Bool
     line: Int
     column: Int
     length: Int
+}
+
+struct FeatureName {
+    name: String
+    line: Int
+    column: Int
+    length: Int
+}
+
+// Data declarations share field records with positional sum variants. The
+// parser keeps the type spelling here; resolution belongs to semantics.
+struct Field {
+    name: String
+    typeText: String
+    typeSyntax: TypeSyntax
+    isHandle: Bool
+    isWeak: Bool
+    line: Int
+    column: Int
+    length: Int
+    typeLine: Int
+    typeColumn: Int
+    typeLength: Int
+}
+
+struct Variant {
+    name: String
+    line: Int
+    column: Int
+    length: Int
+    fields: List<Field>
+}
+
+// A protocol implementation is a declaration fact, not an executable item.
+// Keeping mappings in the shared AST lets contract checks avoid reopening the
+// implementation body token range.
+struct ProtocolMapping {
+    method: String
+    target: String
+    line: Int
+    column: Int
+    length: Int
+}
+
+// Every fresh return target is preserved separately because return types may
+// nest fresh values inside Result/Option.
+struct FreshReturnTarget {
+    name: String
+    line: Int
+    column: Int
+    length: Int
+}
+
+// A non-recursive, reusable view of a type spelling. It intentionally keeps
+// argument bodies textual for now while exposing the facts semantic rules need
+// without reopening token ranges.
+struct TypeSyntax {
+    base: String
+    hasArguments: Bool
+    isFresh: Bool
+    isNoescape: Bool
+    isOwned: Bool
+    isSurfaceReference: Bool
+    mentionsFd: Bool
+    isCopy: Bool
 }
 
 struct Item {
@@ -106,10 +290,29 @@ struct Item {
     isPublic: Bool
     isAsync: Bool
     isNative: Bool
+    isOpaque: Bool
     hasBody: Bool
+    hasDefaultImplMarker: Bool
+    hasLowerName: Bool
+    lowerName: String
+    protocol: String
+    implType: String
+    aliasTarget: String
+    constType: String
+    constValue: String
+    constExpression: Int
+    useAlias: String
+    useGlob: Bool
+    mappings: List<ProtocolMapping>
+    freshReturnTargets: List<FreshReturnTarget>
+    dataKind: String
     generics: List<GenericParam>
     params: List<Param>
     effects: List<EffectName>
+    features: List<FeatureName>
+    derives: List<FeatureName>
+    fields: List<Field>
+    variants: List<Variant>
     statements: List<Int>
     returnType: String
 }
@@ -118,66 +321,146 @@ struct Program {
     items: List<Item>
     expressions: List<Expr>
     statements: List<Stmt>
+    patterns: List<Pattern>
+    // Header-only consumers deliberately omit function bodies. This must be
+    // explicit so an absent arena is never mistaken for a valid empty body.
+    bodiesMaterialized: Bool
 }
 
 fn Expr.from(kind: Int, tokenKind: Int, text: take String, line: Int, column: Int, length: Int, children: take List<Int>) -> fresh Expr {
-    return Expr(kind: kind, tokenKind: tokenKind, text: take text, line: line, column: column, length: length, children: take children)
+    return Expr(kind: kind, tokenKind: tokenKind, text: take text, line: line, column: column, length: length, typeArgs: List<String>.new(), calleeKind: CALLEE_NAME, calleeReceiver: -1, children: take children, args: List<CallArg>.new(), arms: List<MatchArm>.new(), closureParams: List<String>.new(), closureBody: -1, closureStatements: List<Int>.new())
 }
 
-fn Stmt.from(kind: Int, name: take String, typeText: take String, line: Int, column: Int, length: Int, expression: Int, children: take List<Int>, elseChildren: take List<Int>, arms: take List<MatchArm>) -> fresh Stmt {
-    return Stmt(kind: kind, name: take name, typeText: take typeText, line: line, column: column, length: length, expression: expression, children: take children, elseChildren: take elseChildren, arms: take arms)
+fn Expr.match(tokenKind: Int, line: Int, column: Int, length: Int, scrutinee: Int, arms: take List<MatchArm>) -> fresh Expr {
+    local children = List<Int>.new()
+    if scrutinee >= 0 { List.push<Int>(list: mut children, value: scrutinee) }
+    local text = "match"
+    return Expr(kind: EXPR_MATCH, tokenKind: tokenKind, text: take text, line: line, column: column, length: length, typeArgs: List<String>.new(), calleeKind: CALLEE_NAME, calleeReceiver: -1, children: take children, args: List<CallArg>.new(), arms: take arms, closureParams: List<String>.new(), closureBody: -1, closureStatements: List<Int>.new())
 }
 
-fn MatchArm.from(pattern: Int, shape: take String, line: Int, column: Int, length: Int) -> fresh MatchArm {
-    return MatchArm(pattern: pattern, shape: take shape, line: line, column: column, length: length)
+fn CallArg.from(label: take String, value: Int, line: Int, column: Int, length: Int) -> fresh CallArg {
+    return CallArg(label: take label, value: value, line: line, column: column, length: length)
 }
 
-fn Param.from(name: take String, effect: take String, typeText: take String, hasDefault: Bool, defaultLine: Int, defaultColumn: Int, defaultLength: Int, line: Int, column: Int, length: Int) -> fresh Param {
-    return Param(name: take name, effect: take effect, typeText: take typeText, hasDefault: hasDefault, defaultLine: defaultLine, defaultColumn: defaultColumn, defaultLength: defaultLength, line: line, column: column, length: length)
+fn Expr.call(tokenKind: Int, text: take String, line: Int, column: Int, length: Int, typeArgs: take List<String>, calleeKind: Int, calleeReceiver: Int, children: take List<Int>, args: take List<CallArg>) -> fresh Expr {
+    return Expr(kind: EXPR_CALL, tokenKind: tokenKind, text: take text, line: line, column: column, length: length, typeArgs: take typeArgs, calleeKind: calleeKind, calleeReceiver: calleeReceiver, children: take children, args: take args, arms: List<MatchArm>.new(), closureParams: List<String>.new(), closureBody: -1, closureStatements: List<Int>.new())
+}
+
+fn Expr.closure(tokenKind: Int, line: Int, column: Int, length: Int, params: take List<String>, body: Int, statements: take List<Int>) -> fresh Expr {
+    local children = List<Int>.new()
+    if body >= 0 { List.push<Int>(list: mut children, value: body) }
+    local text = "closure"
+    return Expr(kind: EXPR_CLOSURE, tokenKind: tokenKind, text: take text, line: line, column: column, length: length, typeArgs: List<String>.new(), calleeKind: CALLEE_NAME, calleeReceiver: -1, children: take children, args: List<CallArg>.new(), arms: List<MatchArm>.new(), closureParams: take params, closureBody: body, closureStatements: take statements)
+}
+
+fn Stmt.from(kind: Int, name: take String, isAsync: Bool, isLocal: Bool, isMutable: Bool, hasValidHeader: Bool, hasBlock: Bool, hasElse: Bool, hasElseBlock: Bool, malformedArms: Int, hasInitializer: Bool, destructure: take List<String>, typeText: take String, expressionRoot: take String, line: Int, column: Int, length: Int, target: Int, expression: Int, children: take List<Int>, elseChildren: take List<Int>, arms: take List<MatchArm>, selectArms: take List<SelectArm>) -> fresh Stmt {
+    return Stmt(kind: kind, name: take name, isAsync: isAsync, isLocal: isLocal, isMutable: isMutable, hasValidHeader: hasValidHeader, hasBlock: hasBlock, hasElse: hasElse, hasElseBlock: hasElseBlock, malformedArms: malformedArms, hasInitializer: hasInitializer, destructure: take destructure, typeText: take typeText, expressionRoot: take expressionRoot, line: line, column: column, length: length, target: target, expression: expression, children: take children, elseChildren: take elseChildren, arms: take arms, selectArms: take selectArms)
+}
+
+fn MatchArm.from(patternNode: Int, guard: Int, shape: take String, line: Int, column: Int, length: Int, body: take List<Int>) -> fresh MatchArm {
+    return MatchArm(patternNode: patternNode, guard: guard, shape: take shape, line: line, column: column, length: length, body: take body)
+}
+
+fn Pattern.from(kind: Int, tokenKind: Int, name: take String, line: Int, column: Int, length: Int, children: take List<Int>, rest: take String) -> fresh Pattern {
+    return Pattern(kind: kind, tokenKind: tokenKind, name: take name, line: line, column: column, length: length, children: take children, rest: take rest, restIndex: -1, fields: List<PatternField>.new())
+}
+
+fn Pattern.list(tokenKind: Int, line: Int, column: Int, length: Int, children: take List<Int>, rest: take String, restIndex: Int) -> fresh Pattern {
+    local name = ""
+    return Pattern(kind: PAT_LIST, tokenKind: tokenKind, name: take name, line: line, column: column, length: length, children: take children, rest: take rest, restIndex: restIndex, fields: List<PatternField>.new())
+}
+
+fn PatternField.from(name: take String, ignored: Bool, effect: take String, binding: take String, pattern: Int) -> fresh PatternField {
+    return PatternField(name: take name, ignored: ignored, effect: take effect, binding: take binding, pattern: pattern)
+}
+
+fn SelectArm.from(binding: take String, operation: Int, line: Int, column: Int, length: Int, body: take List<Int>) -> fresh SelectArm {
+    return SelectArm(binding: take binding, operation: operation, line: line, column: column, length: length, body: take body)
+}
+
+fn TypeSyntax.from(base: take String, hasArguments: Bool, isFresh: Bool, isNoescape: Bool, isOwned: Bool, isSurfaceReference: Bool, mentionsFd: Bool, isCopy: Bool) -> fresh TypeSyntax {
+    return TypeSyntax(base: take base, hasArguments: hasArguments, isFresh: isFresh, isNoescape: isNoescape, isOwned: isOwned, isSurfaceReference: isSurfaceReference, mentionsFd: mentionsFd, isCopy: isCopy)
+}
+
+fn TypeSyntax.empty() -> fresh TypeSyntax {
+    local base = ""
+    return TypeSyntax.from(base: take base, hasArguments: false, isFresh: false, isNoescape: false, isOwned: false, isSurfaceReference: false, mentionsFd: false, isCopy: false)
+}
+
+fn Param.from(name: take String, effect: take String, typeText: take String, typeSyntax: take TypeSyntax, isCopy: Bool, typeLine: Int, typeColumn: Int, typeLength: Int, hasDefault: Bool, defaultLine: Int, defaultColumn: Int, defaultLength: Int, defaultExpression: Int, line: Int, column: Int, length: Int) -> fresh Param {
+    return Param(name: take name, effect: take effect, typeText: take typeText, typeSyntax: take typeSyntax, isCopy: isCopy, typeLine: typeLine, typeColumn: typeColumn, typeLength: typeLength, hasDefault: hasDefault, defaultLine: defaultLine, defaultColumn: defaultColumn, defaultLength: defaultLength, defaultExpression: defaultExpression, line: line, column: column, length: length)
 }
 
 fn GenericParam.from(name: take String, boundText: take String, line: Int, column: Int, length: Int) -> fresh GenericParam {
     return GenericParam(name: take name, boundText: take boundText, line: line, column: column, length: length)
 }
 
-fn EffectName.from(name: take String, line: Int, column: Int, length: Int) -> fresh EffectName {
-    return EffectName(name: take name, line: line, column: column, length: length)
+fn EffectName.from(name: take String, target: take String, isRetains: Bool, line: Int, column: Int, length: Int) -> fresh EffectName {
+    return EffectName(name: take name, target: take target, isRetains: isRetains, line: line, column: column, length: length)
+}
+
+fn FeatureName.from(name: take String, line: Int, column: Int, length: Int) -> fresh FeatureName {
+    return FeatureName(name: take name, line: line, column: column, length: length)
+}
+
+fn Field.from(name: take String, typeText: take String, typeSyntax: take TypeSyntax, isHandle: Bool, isWeak: Bool, line: Int, column: Int, length: Int, typeLine: Int, typeColumn: Int, typeLength: Int) -> fresh Field {
+    return Field(name: take name, typeText: take typeText, typeSyntax: take typeSyntax, isHandle: isHandle, isWeak: isWeak, line: line, column: column, length: length, typeLine: typeLine, typeColumn: typeColumn, typeLength: typeLength)
+}
+
+fn Variant.from(name: take String, line: Int, column: Int, length: Int, fields: take List<Field>) -> fresh Variant {
+    return Variant(name: take name, line: line, column: column, length: length, fields: take fields)
+}
+
+fn ProtocolMapping.from(method: take String, target: take String, line: Int, column: Int, length: Int) -> fresh ProtocolMapping {
+    return ProtocolMapping(method: take method, target: take target, line: line, column: column, length: length)
+}
+
+fn FreshReturnTarget.from(name: take String, line: Int, column: Int, length: Int) -> fresh FreshReturnTarget {
+    return FreshReturnTarget(name: take name, line: line, column: column, length: length)
 }
 
 fn Item.plain(kind: Int, name: take String, line: Int, column: Int, length: Int) -> fresh Item {
-    return Item(kind: kind, name: take name, line: line, column: column, length: length, isPublic: false, isAsync: false, isNative: false, hasBody: false, generics: List<GenericParam>.new(), params: List<Param>.new(), effects: List<EffectName>.new(), statements: List<Int>.new(), returnType: "")
+    return Item(kind: kind, name: take name, line: line, column: column, length: length, isPublic: false, isAsync: false, isNative: false, isOpaque: false, hasBody: false, hasDefaultImplMarker: false, hasLowerName: false, lowerName: "", protocol: "", implType: "", aliasTarget: "", constType: "", constValue: "", constExpression: -1, useAlias: "", useGlob: false, mappings: List<ProtocolMapping>.new(), freshReturnTargets: List<FreshReturnTarget>.new(), dataKind: "", generics: List<GenericParam>.new(), params: List<Param>.new(), effects: List<EffectName>.new(), features: List<FeatureName>.new(), derives: List<FeatureName>.new(), fields: List<Field>.new(), variants: List<Variant>.new(), statements: List<Int>.new(), returnType: "")
 }
 
-fn Item.function(name: take String, line: Int, column: Int, length: Int, isPublic: Bool, isAsync: Bool, isNative: Bool, hasBody: Bool, generics: take List<GenericParam>, params: take List<Param>, effects: take List<EffectName>, statements: take List<Int>, returnType: take String) -> fresh Item {
-    return Item(kind: ITEM_FUNCTION, name: take name, line: line, column: column, length: length, isPublic: isPublic, isAsync: isAsync, isNative: isNative, hasBody: hasBody, generics: take generics, params: take params, effects: take effects, statements: take statements, returnType: take returnType)
+fn Item.function(name: take String, line: Int, column: Int, length: Int, isPublic: Bool, isAsync: Bool, isNative: Bool, hasBody: Bool, hasLowerName: Bool, lowerName: take String, generics: take List<GenericParam>, params: take List<Param>, effects: take List<EffectName>, statements: take List<Int>, returnType: take String) -> fresh Item {
+    return Item(kind: ITEM_FUNCTION, name: take name, line: line, column: column, length: length, isPublic: isPublic, isAsync: isAsync, isNative: isNative, isOpaque: false, hasBody: hasBody, hasDefaultImplMarker: false, hasLowerName: hasLowerName, lowerName: take lowerName, protocol: "", implType: "", aliasTarget: "", constType: "", constValue: "", constExpression: -1, useAlias: "", useGlob: false, mappings: List<ProtocolMapping>.new(), freshReturnTargets: List<FreshReturnTarget>.new(), dataKind: "", generics: take generics, params: take params, effects: take effects, features: List<FeatureName>.new(), derives: List<FeatureName>.new(), fields: List<Field>.new(), variants: List<Variant>.new(), statements: take statements, returnType: take returnType)
 }
 
 fn Program.empty() -> fresh Program {
-    return Program(items: List<Item>.new(), expressions: List<Expr>.new(), statements: List<Stmt>.new())
+    return Program(items: List<Item>.new(), expressions: List<Expr>.new(), statements: List<Stmt>.new(), patterns: List<Pattern>.new(), bodiesMaterialized: true)
 }
 
-fn Program.push(self: mut Program, item: read Item) -> Unit
+fn Program.push(self: mut Program, item: Item) -> Unit
     effects(retains(item))
 {
-    List.push<Item>(list: mut self.items, value: read item)
+    List.push<Item>(list: mut self.items, value: item)
 }
 
-fn Program.push_expression(self: mut Program, expression: read Expr) -> Int
+fn Program.push_expression(self: mut Program, expression: Expr) -> Int
     effects(retains(expression))
 {
-    let index = List.len(list: read self.expressions)
-    List.push<Expr>(list: mut self.expressions, value: read expression)
+    let index = List.len(list: self.expressions)
+    List.push<Expr>(list: mut self.expressions, value: expression)
     return index
 }
 
-fn Program.push_statement(self: mut Program, statement: read Stmt) -> Int
+fn Program.push_statement(self: mut Program, statement: Stmt) -> Int
     effects(retains(statement))
 {
-    let index = List.len(list: read self.statements)
-    List.push<Stmt>(list: mut self.statements, value: read statement)
+    let index = List.len(list: self.statements)
+    List.push<Stmt>(list: mut self.statements, value: statement)
     return index
 }
 
-fn Program.len(self: read Program) -> Int {
-    return List.len(list: read self.items)
+fn Program.push_pattern(self: mut Program, pattern: Pattern) -> Int
+    effects(retains(pattern))
+{
+    let index = List.len(list: self.patterns)
+    List.push<Pattern>(list: mut self.patterns, value: pattern)
+    return index
+}
+
+fn Program.len(self: Program) -> Int {
+    return List.len(list: self.items)
 }

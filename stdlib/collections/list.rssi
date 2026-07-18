@@ -4,14 +4,14 @@ pub fn List.new<T>() -> fresh List<T>
 
 pub fn List.push<T>(
     list: mut List<T>,
-    value: read T,
+    value: T,
 ) -> Unit
     effects(retains(value))
 
 pub fn List.set<T>(
     list: mut List<T>,
     index: Int,
-    value: read T,
+    value: T,
 ) -> Unit
     effects(retains(value))
 
@@ -21,91 +21,91 @@ pub fn List.clear<T>(list: mut List<T>) -> Unit
 
 pub fn List.append<T>(
     list: mut List<T>,
-    values: read List<T>,
+    values: List<T>,
 ) -> Unit
     effects(retains(values))
 
-pub fn List.len<T>(list: read List<T>) -> Int
+pub fn List.len<T>(list: List<T>) -> Int
 
 pub fn List.get<T>(
-    list: read List<T>,
+    list: List<T>,
     index: Int,
 ) -> T
 
 pub fn List.count_where<T>(
-    list: read List<T>,
+    list: List<T>,
     predicate: noescape Fn(T) -> Bool,
 ) -> Int
 
 pub fn List.any<T>(
-    list: read List<T>,
+    list: List<T>,
     predicate: noescape Fn(T) -> Bool,
 ) -> Bool
 
 pub fn List.all<T>(
-    list: read List<T>,
+    list: List<T>,
     predicate: noescape Fn(T) -> Bool,
 ) -> Bool
 
 pub fn List.find<T>(
-    list: read List<T>,
+    list: List<T>,
     predicate: noescape Fn(T) -> Bool,
 ) -> Option<T>
 
 pub fn List.filter<T>(
-    list: read List<T>,
+    list: List<T>,
     predicate: noescape Fn(T) -> Bool,
 ) -> fresh List<T>
 
 pub fn List.map<T, U>(
-    list: read List<T>,
+    list: List<T>,
     mapper: noescape Fn(T) -> U,
 ) -> fresh List<U>
 
 pub fn List.fold<T, U: Struct>(
-    list: read List<T>,
-    initial: read U,
+    list: List<T>,
+    initial: U,
     folder: noescape Fn(U, T) -> fresh U,
 ) -> fresh U
 
 pub fn List.try_fold<T, U: Struct, E>(
-    list: read List<T>,
-    initial: read U,
+    list: List<T>,
+    initial: U,
     folder: noescape Fn(U, T) -> Result<fresh U, E>,
 ) -> Result<fresh U, E>
 
 pub fn List.consume<T>(list: take List<T>) -> Unit
 
 pub fn List.contains<T>(
-    list: read List<T>,
+    list: List<T>,
     predicate: noescape Fn(T) -> Bool,
 ) -> Bool
 
 pub fn List.contains_value<T>(
-    list: read List<T>,
-    value: read T,
+    list: List<T>,
+    value: T,
 ) -> Bool
 
-pub fn List.is_empty<T>(list: read List<T>) -> Bool
+pub fn List.is_empty<T>(list: List<T>) -> Bool
 
-pub fn List.sum(list: read List<Int>) -> Int
+pub fn List.sum(list: List<Int>) -> Int
 
-pub fn List.min(list: read List<Int>) -> Option<Int>
+pub fn List.min(list: List<Int>) -> Option<Int>
 
-pub fn List.max(list: read List<Int>) -> Option<Int>
+pub fn List.max(list: List<Int>) -> Option<Int>
 
-pub fn List.flatten<T>(list: read List<List<T>>) -> fresh List<T>
+pub fn List.flatten<T>(list: List<List<T>>) -> fresh List<T>
 
-pub fn List.dedup<T>(list: read List<T>) -> fresh List<T>
+pub fn List.dedup<T>(list: List<T>) -> fresh List<T>
 
 pub fn List.zip<T>(
-    left: read List<T>,
-    right: read List<T>,
+    left: List<T>,
+    right: List<T>,
 ) -> fresh List<List<T>>
 
-pub fn List.enumerate(list: read List<Int>) -> fresh List<List<Int>>
+pub fn List.enumerate(list: List<Int>) -> fresh List<List<Int>>
 
-pub fn List.reverse<T>(list: read List<T>) -> fresh List<T>
+pub fn List.reverse<T>(list: List<T>) -> fresh List<T>
 
 pub fn List.sort<T: Ord>(
     list: mut List<T>,
@@ -117,55 +117,55 @@ pub fn List.sort_with<T>(
 ) -> Unit
 
 pub fn List.sort_by<T, K>(
-    list: read List<T>,
+    list: List<T>,
     key: noescape Fn(T) -> K,
     compare: noescape Fn(K, K) -> Int,
 ) -> fresh List<T>
 
 pub fn List.group_by<T, K>(
-    list: read List<T>,
+    list: List<T>,
     key: noescape Fn(T) -> K,
 ) -> fresh Map<K, List<T>>
 
 pub fn List.partition<T>(
-    list: read List<T>,
+    list: List<T>,
     predicate: noescape Fn(T) -> Bool,
 ) -> fresh List<List<T>>
 
 pub fn List.flat_map<T, U>(
-    list: read List<T>,
+    list: List<T>,
     mapper: noescape Fn(T) -> List<U>,
 ) -> fresh List<U>
 
 pub fn List.take<T>(
-    list: read List<T>,
+    list: List<T>,
     count: Int,
 ) -> fresh List<T>
 
 pub fn List.slice<T>(
-    list: read List<T>,
+    list: List<T>,
     start: Int,
     len: Int,
 ) -> fresh List<T>
 
 pub fn List.skip<T>(
-    list: read List<T>,
+    list: List<T>,
     count: Int,
 ) -> fresh List<T>
 
-pub fn List.first<T>(list: read List<T>) -> Option<T>
+pub fn List.first<T>(list: List<T>) -> Option<T>
 
-pub fn List.last<T>(list: read List<T>) -> Option<T>
+pub fn List.last<T>(list: List<T>) -> Option<T>
 
 pub fn List.remove_at<T>(
     list: mut List<T>,
     index: Int,
 ) -> Option<T>
 
-pub fn List.join(list: read List<String>, separator: read String) -> fresh String
+pub fn List.join(list: List<String>, separator: String) -> fresh String
 
-pub fn List.to_json_strings(list: read List<String>) -> fresh JsonValue
+pub fn List.to_json_strings(list: List<String>) -> fresh JsonValue
     effects(pure)
 
-pub fn List.to_json_values(list: read List<JsonValue>) -> fresh JsonValue
+pub fn List.to_json_values(list: List<JsonValue>) -> fresh JsonValue
     effects(pure)

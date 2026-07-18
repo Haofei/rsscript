@@ -31,7 +31,9 @@ impl RegVm {
                     .map(|index| VmValue::some(VmValue::string(&value[..index])))
                     .unwrap_or(VmValue::OptionNone))
             }
-            RegIntrinsic::StringBuilderNew => Ok(VmValue::string("")),
+            RegIntrinsic::StringBuilderNew => {
+                Ok(VmValue::Managed(Rc::new(RefCell::new(VmValue::string("")))))
+            }
             RegIntrinsic::StringCharAt => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let index = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;

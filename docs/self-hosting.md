@@ -66,25 +66,30 @@ There are also two runtime dependency milestones:
   `crates/runtime` implementation means this stronger milestone is still
   pending even after an RSS compiler first reaches stage2.
 
-Before Stage 4 completes, choose and document one runtime path: migrate the
-bootstrap-required runtime core to portable C/RSS, or define a stable C ABI and
-maintain an independently buildable implementation behind it. Optional platform
-features may remain separate native libraries, but the minimal compiler rebuild
-must not invoke Cargo.
+**Stage 4 runtime decision:** RSS will use a stable portable-C ABI, with an
+independently buildable implementation maintained in `selfhost/runtime/`.
+`rssrt.h`/`rssrt.c` are the initial ABI implementation: `rssrt_print_int` is
+the scalar-program output primitive used by the bootstrap C emitter. The ABI is
+additive and versioned by header contract; the emitter may not call libc
+directly for an operation once that operation has an `rssrt_*` entry point.
+Optional platform features may remain separate native libraries, but the
+minimal compiler rebuild must not invoke Cargo.
 
 ## Current Architecture
 
 | Component | Current implementation | What it proves | Principal gap |
 |-----------|------------------------|----------------|---------------|
-| Shared scanner | `selfhost/scan.rss` | Reusable tokenization primitives | Not yet the sole token source for one frontend |
+| Shared scanner | `selfhost/scan.rss` | Reusable tokenization primitives and precomputed `()[]{}` partner indexes | Not yet the sole token source for one frontend |
 | Lexer | `selfhost/lexer.rss` | Full-corpus canonical token parity | Runs only through the test harness |
 | Recognizer | `selfhost/parser.rss` | Top-level accept/reject parity | Does not produce the reusable AST |
-| AST producer | `selfhost/astdump.rss` | Canonical AST dump parity | Reparses tokens and streams text instead of building an AST |
+| AST producer | `selfhost/astdump.rss` | Canonical AST dump parity; top-level records, ordinary-function signatures, data fields/variants, and validated bodies with bindings, places, effects, control flow, `with`/`select`, `spawn`, implicit pipe closures, and scalar/positional-variant `match` patterns render from shared `Program` | Rich struct/list/tuple `match` rendering, explicit/capturing closures, receiver-call effects, type/default-expression children, `let-else`, and protocol method bodies still use the legacy renderer |
 | Type helpers | `selfhost/types.rss` | Shared canonical type-string operations | Not a complete symbol/type representation |
-| Single-file checker | `selfhost/check.rss` | Presence parity for 83 diagnostic families; occurrence+span parity for 81 families | Two remaining families still use independent file-level token probes |
+| Single-file checker | `selfhost/check.rss` | Presence parity for 82 diagnostic families; occurrence+span parity for 80 families | Two remaining families still use independent file-level token probes |
 | Package checker | `selfhost/package_contract.rss` | `RS1301` parity for functions, data declarations, protocols/impls, native exemptions, and resolved multi-file bundles | Path-sensitive bundle records and semantic edge cases remain |
-| Lowering and IR | Rust | Production compilation | No RSS implementation |
-| VM/JIT/AOT backend | Rust | Production execution and code generation | No bootstrap backend written in RSS |
+| Canonical bootstrap IR | `selfhost/ir/canonical.rss` | Versioned RSS-to-IR parity for signatures, scalar/control-flow forms, calls, reads, and field/index places | Initial slice only; production lowering remains Rust |
+| Lowering and IR | Rust | Production compilation | RSS canonical IR does not yet cover ownership/effects, generics, closures, intrinsics, or package artifacts |
+| Bootstrap C backend | `selfhost/backend/c_emit.rss` plus `selfhost/runtime/rssrt.{h,c}` | Emits and executes the initial portable scalar C ABI from `rss-ir-v1` | Int-only scalar `main`, plus acyclic zero/one-parameter pure helpers; no heap |
+| VM/JIT/AOT backend | Rust | Production execution and code generation | Production backend remains Rust; the RSS C emitter is bootstrap-only |
 
 The harness in `crates/rsscript/src/selfhost_parity.rs` resolves the RSS modules,
 compiles them through the normal register VM compiler, runs them in-process, and
@@ -220,24 +225,63 @@ must not be confused with bootstrap correctness.
 
 ## Current Baseline
 
-Snapshot: **2026-07-12**, from local Docker runs against this worktree.
+Snapshot: **2026-07-18**, from local Docker runs against this worktree. The
+manifest contains 642 files; corpus-wide rows without an auditable completed
+run at that size are explicitly marked as not established.
 
 | Gate | Result | Scope |
 |------|--------|-------|
-| Self-host parity unit/smoke suite | 98 passed, 6 ignored | Non-exhaustive harness tests; cached-checker Docker run on 2026-07-12 took 86.88s |
-| Lexer corpus parity, tier 2 | 622 / 622 | Full checked-in RSS corpus |
-| Parser recognition parity, tier 1 | 622 / 622 | Full checked-in RSS corpus |
-| Checker FAST parity | 618 / 618 | Non-giant inputs; diagnostic-code presence only |
+| Self-host parity unit/smoke suite | 166 passed, 6 ignored | 2026-07-17 Docker run; non-exhaustive harness tests, 584.55s |
+| Lexer corpus parity, tier 2 | 642 / 642 | 2026-07-18 Docker release run; 2.59s, 0 run failures, 0 token mismatches |
+| Parser recognition parity, tier 1 | 642 / 642 | 2026-07-18 Docker release run; 1.94s, 0 run failures, 0 verdict mismatches |
+| Checker FAST parity | Not established | 2026-07-17 Docker run: 593 / 632 match, 39 diagnostic-code mismatches, 0 run failures, 456.86s; 6 inputs over 40 KiB excluded |
 | Package-contract parity | Passed | Functions, types, sums, aliases, consts, protocols/impls, and native-exemption cases |
 | Curated AST parity | Passed | Fast representative sample set |
-| Full AST corpus parity | Not established for this snapshot | Scheduled/manual because of runtime |
+| Full AST corpus parity | Not established for this snapshot | Deterministic progress exists. Repeated 2026-07-17 Docker runs remained in `selfhost/check.rss`: a later five-minute probe still did not complete after delimiter-partner caching, an `indent` fast path, same-tier binary-chain analysis, mutable VM `StringBuilder` storage, and batched renderer output. The 588,275-byte file produces 84,596 dump lines (3,590,923 bytes); the remaining bottleneck is renderer traversal, not corpus discovery or per-line output dispatch. Do not promote this gate until the whole run completes audibly. |
 | Checker FULL parity | Not established for this snapshot | Scheduled/manual; includes giant inputs |
 | Remote CI | Not established for this snapshot | Local Docker results only |
 
-`selfhost/corpus.txt` contains 622 repository-relative `.rss` paths. Any count
+`selfhost/corpus.txt` contains 642 repository-relative `.rss` paths. Any count
 change must update that manifest in the same change. FAST excludes checker input
 files over 40 KiB; FULL sets `RSS_SELFHOST_FULL=1`. Historical numbers below
 describe their original milestones and do not override this snapshot.
+
+**Current AST-performance evidence (2026-07-17):** the renderer now preserves
+left-associative same-precedence binary chains with one top-level scan instead
+of repeatedly rescanning their shrinking left prefixes; it also looks up a
+shared source-order `Program` item by binary search rather than copying every
+preceding item. The dedicated
+`astdump_parity_long_left_associative_binary_chain` test and the curated AST
+suite prove byte-for-byte parity for these changes. `StringBuilder` is now a
+mutable VM-owned buffer rather than a whole-string copy on every `push`, while
+the renderer threads one builder through its recursive emission path and writes
+once at completion. Before full-`Program` astdump integration, the focused
+47-KiB `check.rss` `main` body completed with exact parity in 24.24 seconds
+(from 26.30 seconds before the builder work). The current Stage 2 integration
+is exact but takes 32.53 seconds: materializing the full body AST while most of
+that body still falls back to the legacy renderer adds a measurable 34% cost.
+A five-minute release-Docker whole-file probe still did not finish. This rules
+out per-line output dispatch as the sole bottleneck; the next work must remove
+the temporary parse-plus-fallback double traversal by expanding direct coverage
+and measuring each family. These are local, parity-tested improvements, not
+evidence that full-corpus AST parity is established.
+
+**Header-only renderer boundary (2026-07-18):** `Program` now records whether
+function bodies were materialized. `astdump` consumes a header-only Program for
+declaration facts and explicitly rejects direct body emission in that mode,
+falling back to its canonical streaming body renderer. This prevents an absent
+body arena from being mistaken for a real empty body. On the same Docker
+environment, the ignored 47-KiB `check.rss` main parity test remained
+byte-exact and fell from 94.14 seconds to 75.94 seconds in immediate before/
+after runs. The variance means this is a directional local measurement, not a
+new baseline; the remaining cost is legacy body rendering.
+
+**Language-surface update (2026-07-13):** an omitted ordinary parameter or
+named-argument data effect now means `read`; explicit `read` remains accepted,
+while `mut` and `take` remain mandatory. RS0008 is consequently reserved and
+removed from the active self-host checker target. The checker target now covers
+82 active diagnostic families, and its RS0202 parity fixture proves that a bare
+argument satisfies only a read parameter.
 
 ## Delivery Stages
 
@@ -254,33 +298,35 @@ type model, or IR to bypass an unfinished earlier stage.
    causes, and fix identifiers where stable.
 3. Keep malformed tool output, unreadable corpus files, stale corpus discovery,
    and invalid tier values fail-closed.
+4. Make the exhaustive AST gate finish in bounded Docker time, beginning with
+   measured renderer hot paths in `selfhost/check.rss`; retain a byte-exact
+   Rust-oracle regression test for every traversal optimization.
 
 Exit: every supported frontend result is deterministic and compared at the
 correct semantic level, including package contracts.
 
 Structured checker migration currently covers RS0002-RS0014, RS0018-RS0024,
 RS0016-RS0017, RS0022-RS0024, RS0027-RS0029, RS0032-RS0037, RS0101, RS0201, RS0205, RS0211-RS0212, RS0301, RS0306-RS0308,
-RS0302-RS0305, RS0309, RS0311-RS0313, RS0401, RS0501, RS0601, RS0603-RS0604, RS0701-RS0711, RS0801-RS0805, RS0901-RS0904, and RS1001-RS1004 (81 of 83
+RS0302-RS0305, RS0309, RS0311-RS0313, RS0401, RS0501, RS0601, RS0603-RS0604, RS0701-RS0711, RS0801-RS0805, RS0901-RS0904, and RS1001-RS1004 (80 of 82
 presence-parity families).
 The canonical wire record is
 `code<TAB>line<TAB>column<TAB>length`; records are sorted and compared as
-multisets without deduplication. Code-presence mode remains the fast 83-family
+multisets without deduplication. Code-presence mode remains the fast 82-family
 corpus gate until every family has migrated. Family-level tests filter the
 checker's complete structured stream by target code before comparing that
 code's multiset, so fixtures may exercise overlapping diagnostics without
 discarding occurrences.
 
-`RS0209` records currently cover conditions, `for` subjects, scrutinees, and
-pattern occurrences. Match-expression arm-value typing remains presence-only:
-the token-probe checker does not yet share the Rust frontend's arm type model.
-It is an explicit Stage 2 shared-AST migration item, not a span-normalization
-problem.
+`RS0209` records currently cover conditions, `for` subjects, scrutinees,
+pattern occurrences, and the inferable direct/single-payload match-expression
+arm values represented in the shared AST. Compound arm expressions remain a
+Stage 2 type-model migration item, not a span-normalization problem.
 
 `RS0207` has structured anchors for annotated bindings and direct named call
 arguments, including same-file and curated stdlib signatures. Callback bodies,
 interpolations, and generic receiver calls remain presence-only because their
 Rust diagnostics attach to typed subexpressions that the token-probe checker
-does not materialize. It therefore remains outside the 81-family structured
+does not materialize. It therefore remains outside the 80-family structured
 count until Stage 2 supplies that shared expression model.
 
 The inventory audit added the previously omitted reachable single-source
@@ -302,8 +348,12 @@ parity is exact, and the compiler's RSS sources pass self-analysis.
 
 The first Stage 2 slice is present: `selfhost/syntax/ast.rss` defines a
 materialized top-level `Program`, and `selfhost/syntax/parser_items.rss` builds
-it from the shared scanner. `parser.rss` invokes that parser while preserving
-the established recognition protocol. Every item retains declaration kind,
+it from the shared scanner. Data declarations now retain kind
+(`struct`/`class`/`resource`/`sum`), public/opaque modifiers, generic bounds,
+derives, fields (including `handle`/`weak`), and sum variants with payload
+fields. AST consumers invoke that parser while `parser.rss` preserves its
+separate, scanner-only recognition protocol; constructing an unused `Program`
+in the recognition hot path is intentionally avoided. Every item retains declaration kind,
 name, and representative span. Function items additionally retain public,
 async, and native modifiers; body presence; ordered parameter records
 (name, data effect, canonical syntax type, optional default-expression start
@@ -314,19 +364,122 @@ an attribute-led declaration following a body-less function. Signatures still
 lack default-expression AST nodes. Function bodies now begin as a flat
 arena: `return`, `let`/`local`, expression statements, and `if`/`while`/`loop`
 blocks materialize name/literal/call/top-level-binary expressions and nested statement indices.
+Call expressions retain explicit generic arguments, so shared type inference can
+preserve constructor facts such as `Map.new<Key, Value>() -> Map<Key, Value>`
+without reparsing a call token range.
+The shared statement model records `async let`, and its semantic walker carries
+`task_group` context into nested blocks; this has moved the structured
+`RS0022`/`RS0029` cases out of token adjacency checks. The shared type context
+also derives collection construction types from explicit call arguments. The
+first receiver-based protocol slice, `Map.contains_key`/`Map.get`/`Map.len`
+and `Set.insert`/`Set.contains`/`Set.len`, uses inferred local or direct
+file-local field receiver types to contribute `RS0032` through the diagnostic
+bag. Explicit method type arguments remain distinct and do not take this
+inferred-receiver path. The legacy token probe remains only for receiver forms
+the AST does not yet model.
+Tuple `let` bindings retain their ordered names in the shared statement node.
 The current expression subset also preserves grouping, `!`, and `&&`/`||`
 conditions, while retaining `while` separately from unconditional `loop`.
-`for` retains its subject expression, and `match` retains its scrutinee plus a
-flat arm arena with pattern expressions and stable pattern spans. Guards, arm
-values, compound expressions, `with`/`select`, and destructuring patterns remain to be
-materialized before this
+`for` retains its subject expression; `with` retains its resource expression,
+binding, and body; and `select` retains each binding, awaited operation, and
+body. Both statement and expression `match`
+forms retain their scrutinee plus a flat arm arena with stable spans and body
+statement indices. `Program.patterns` is now a separate recursive pattern arena
+for wildcard, binding, literal, positional-variant, tuple, list/rest, and
+struct syntax. Struct fields retain shorthand and ignored bindings, optional
+`read`/`mut`/`take` effects, nested patterns, and `..` rest; direct AST output
+for struct, tuple, and list patterns is byte-exact against the Rust oracle.
+List nodes retain the rest position so prefix and suffix serialization does not
+depend on reparsing tokens. `MatchArm` no longer carries a parallel Expr
+pattern: checker rules, outline serialization, AST dumping, and canonical IR
+all consume the same Pattern node. The first AST-backed
+match-expression arm-type rule covers inferable direct and single-payload
+Option/Result pattern-bound arm values. Match guards are materialized in the
+shared AST but await the shared effect/ownership model; compound expressions,
+recursive/typed destructuring semantics remain to be materialized before this
 can replace `astdump.rss` or `check.rss`. `selfhost/serialize/outline.rss` is
 the test-only deterministic serializer for this slice and proves that consumers
-read `Program`, rather than reparsing source text. `check.rss` now consumes
-these function and parameter nodes for RS0002 and RS0003, including their
+read `Program`, rather than reparsing source text. It also serializes
+`protocol` methods with their synthetic `Self: Managed` generic, `= _`
+markers, and `impl Protocol for Type` mappings, so protocol contract review
+and checking consume the same AST facts. `check.rss` now consumes
+these function, parameter, effect, profile, and feature-header nodes for RS0002, RS0003, RS0004, RS0006, RS0010, RS0011, RS0012, RS0016, and RS0017, including their
 structured spans through the initial shared `DiagnosticBag`; the previous two
-token probes were removed. Its RS0015 native-function-body predicate also reads
-the shared function flags/body marker rather than scanning declaration tokens.
+token probes were removed. RS0005 duplicate declaration and duplicate-field
+`selfhost/package_contract.rss` also derives function contracts, native
+exemptions, and struct/class/resource/sum/protocol/impl contracts from this
+same `Program`, removing duplicate function-header and structural-declaration
+scanners. Type-alias targets and constant type/RHS values are also materialized
+on `Item`, so this package-contract frontier no longer reparses declarations.
+It builds exactly one `Program` per interface/source input and shares it across
+function and declaration contract collection.
+
+checking also consumes `Program` directly, preserving structured occurrence
+and span parity while removing its declaration/field token rescan. Its RS0015
+native-function-body predicate reads the shared function flags/body marker
+rather than scanning declaration tokens. Function effects now retain the target
+of `retains(...)`, and parameter nodes retain their syntax-level Copy
+classification; RS0007 validates those shared nodes with structured parity
+instead of reopening function headers. `TypeSyntax` now records each
+parameter/field type's base, prefix facts, generic-argument presence, Copy,
+surface-reference, and `Fd` facts; RS0008 consumes that representation plus
+the shared payloadless-sum summary rather than reparsing parameter ranges.
+Call and variant-pattern nodes retain ordered argument records with an optional
+label, so positional pattern arity can be distinguished from named payload
+patterns. RS0037 now derives declared variant arities and walks shared match
+nodes recursively instead of reopening sum and match token ranges. RS0205 uses
+the same records to detect repeated named arguments at the exact second-label
+span, including calls nested in shared expression and statement nodes.
+`selfhost.semantics.check_types` owns the former pattern rule and now reads
+shared Pattern nodes for match exhaustiveness plus Option/Result payload
+bindings; the matching call rule is isolated in `selfhost.semantics.check_calls`, mirroring Rust's
+`checks/types.rs` and `checks/calls.rs` phase boundary.
+Feature/profile diagnostics are likewise isolated in
+`selfhost.semantics.features`, matching Rust's `checks/features.rs` boundary.
+`astdump` now materializes the same full `Program` as checker, package,
+outline, and canonical-IR consumers. It directly renders a recursively
+validated function-body subset: `return`, simple `let`/`local`, literal/name,
+binary expressions with production-parser precedence, and name, qualified, or
+receiver calls with nested named arguments. `Expr` retains the callee kind and
+receiver expression instead of treating every dotted call as qualified. `Stmt`
+retains `local` ownership and whether an initializer was written, so a missing
+initializer is not mistaken for an intentionally valueless binding. Any body
+containing an unmaterialized node explicitly falls back to the legacy streaming
+renderer; the fallback is temporary compatibility machinery, not a second
+parser. The direct subset now also includes field/index reads, arrays, unary
+`!`, `read`/`mut`/`take`, `manage`, `await`, postfix `?`, `spawn`, expression
+statements, local/field/index assignments, and recursive `match` patterns
+(wildcards, bindings, literals, positional variants, structs, tuples, and
+lists with prefix/rest/suffix). Focused byte-exact fixtures and the 62-file
+curated AST gate cover that expansion. Forms whose shared representation is
+not yet equivalent remain fail-closed on the legacy renderer: `break`,
+`continue`, receiver-call effects such as `mut xs.push(...)`, and scoped
+`view name = value` bindings.
+The next direct statement slice covers structurally complete `if`/`else`,
+`while`, `loop`, `for`, `task_group`, and `with` blocks. `Stmt` now carries
+header/block/else completeness facts, so malformed recovery forms such as
+`loop true { ... }` remain on the legacy renderer rather than being mistaken
+for a valid empty or unconditional control node. Focused control-flow and
+`with` fixtures, plus the curated 62-file gate, prove the byte-exact output.
+`select` arms and common `match` arms likewise render from their shared
+binding/operation/body records. The shared expression model now represents
+`spawn` and implicit pipe closures (both expression and braced statement
+bodies); explicit or capturing closures remain on the fallback path until
+capture/effect declarations are materialized.
+
+**Current Stage 2 work:** expand direct body rendering one recursively validated
+statement/expression family at a time. This is both the architectural
+convergence step and the next measured path for making the exhaustive AST gate
+bounded. The current parse-plus-fallback implementation is intentionally not a
+performance win: direct coverage must become large enough to remove its 34%
+focused-body cost before the exhaustive gate can be promoted. Any function
+containing an unmaterialized or unsupported node must retain the legacy renderer
+until its byte-exact Rust-oracle regression is in place. Do not add a second
+body parser or claim full AST parity while fallback coverage remains material.
+The Rust analyzer entrypoints now share one prepared-input pipeline while
+preserving the public single-source, many-source, and interface-policy APIs;
+this keeps the Rust oracle boundary explicit without creating a second
+semantic implementation.
 The remaining checker families are still token-probe based and must migrate one
 semantic group at a time with their existing parity gates.
 
@@ -346,10 +499,65 @@ branch-local context copies, and appends canonical
 scrutinees against `Some`/`None`, `Ok`/`Err`, scalar literals, and invalid bare
 names on scalar values, plus tuple patterns on scalars and list patterns on
 non-lists. Its focused oracle tests cover nested occurrences and spans.
-`check.rss` now consumes these AST records first; the legacy RS0209 walker
-receives their span keys and supplies only unmatched cases, including unknown
-matchability and arm-value typing. This keeps the full family intact while
-preventing duplicate records during the migration.
+`check.rss` now consumes these AST records as the sole owner of materialized
+control-flow and match semantics. The former token walker is retained only as
+an inert compatibility boundary while the remaining checker families migrate;
+it no longer guesses types for generic qualified calls or match arms. This
+prevents duplicate records and removes a source of false positives.
+
+`RS0021` now follows the same ownership boundary for materialized, inferable
+`Option`, `Result`, `Bool`, and scalar match sites. The AST rule accepts only
+unguarded coverage, emits the `match` span through `DiagnosticBag`, and marks
+that site as owned before the legacy exhaustiveness scan runs. Nominal sums,
+tuple/list destructuring, and unknown scrutinee types remain on the legacy path
+until the shared pattern/type model can represent them without approximation.
+
+`RS0029` likewise owns `await` nodes in non-async functions when their entire
+statement tree is materialized and contains neither `select`, closures, nor
+unknown expressions. `Stmt` records `async let`, and the shared walker carries
+the structured `task_group` context into its child block, matching the Rust
+HIR rule: awaits of task-group pending handles are legal even if the enclosing
+function is synchronous. The token rule remains responsible for `select`,
+closures, and recovery cases that do not yet have complete AST context.
+
+For the same fully materialized function subset, `RS0022` resolves the
+same-file async function names from `Program` and reports direct calls unless
+their immediate shared-AST parent is `await` or the call is the RHS of an AST
+recorded `async let`. Qualified calls and `spawn`/closure/recovery paths remain
+owned by the token rule until their consumption records are represented in the
+AST.
+
+`selfhost.semantics.check_bindings` now owns `RS0034`: an unannotated, unused
+`let` binding initialized directly from `Ok(...)`, `Err(...)`, or `None`. It
+walks the materialized statement and expression arenas, including nested blocks
+and match/select arms, instead of reopening a function's token range. The
+checker driver emits its structured diagnostic records directly from the shared
+diagnostic bag; the former per-function token probe has been removed. The same
+module now owns the supported `RS0311` slice: bare local/parameter assignment.
+`Stmt` records `let mut` and the parser materializes `name = expression` as a
+separate assignment node. The rule preserves the prior conservative contract:
+field/index writes remain outside this slice, and only scalar `mut` parameters
+are reassignable. Its old whole-function token walker has been removed. The
+same assignment nodes now own the matching conservative `RS0313` slice:
+explicit scalar local annotations versus direct string/number/character
+literals. Bool and non-literal assignment inference remains outside the slice,
+matching the Rust checker's current structured-parity contract.
+`name[index] = value` is likewise materialized for the existing `RS0312`
+subset: explicit or constructor-inferred `Map`, `Set`, and `Deque` locals are
+rejected, while `List` and unresolved receivers remain outside the rule. The
+binding module indexes declared scalar types once per function before checking
+assignments, avoiding repeated full-body scans on the corpus.
+Until closures and postfix expressions are materialized, RS0034 declines a
+function containing an `EXPR_UNKNOWN` node rather than risk treating an
+unmodeled use as an unused binding.
+
+The Rust reference analyzer now prepares each analysis through one
+`PreparedAnalysis`: bundled and caller-supplied interfaces are parsed once,
+HIR is built from those parsed programs, and type-alias targets and parameters
+are collected in the same preparation pass. The historical interface policies
+remain distinct. This removes duplicate oracle work and gives the RSS port a
+clear preparation boundary; it does not by itself migrate another checker rule
+or complete Stage 2.
 
 #### Stage 2 target architecture
 
@@ -377,7 +585,10 @@ selfhost/semantics/symbols.rss
 selfhost/semantics/types.rss
 selfhost/semantics/diagnostics.rss
 selfhost/semantics/check_signatures.rss
+selfhost/semantics/check_calls.rss
 selfhost/semantics/check_types.rss
+selfhost/semantics/check_bindings.rss
+selfhost/semantics/features.rss
 selfhost/semantics/check_ownership.rss
 selfhost/semantics/check_closures.rss
 selfhost/semantics/check_resources.rss
@@ -416,7 +627,26 @@ of raw `Int` modes and `-1` sentinels. Inherent methods may provide domain
 operations such as `cursor.peek`, `cursor.advance`, and token/span lookup so
 algorithmic code is not dominated by `List.get` plumbing.
 
-### Stage 3 — Self-Hosted Lowering and IR (pending)
+### Stage 3 — Self-Hosted Lowering and IR (in progress)
+
+The first executable slice is `selfhost/ir/canonical.rss`. It lowers the shared
+`Program` AST to `rss-ir-v1`. It currently covers module/use declarations, protocols and implementations, struct/class/resource and sum
+declarations, aliases, constants, function signatures, generic bounds, and declared effects, `let`,
+`return`, assignments to locals, fields, and indices, nested `if`/`else`, `while`/`loop`, and
+simple `for`, `with`, `match`, `select`, and `task_group` blocks, expression statements, names, scalar and array literals, and binary
+operators, field/index reads and places, direct and simple receiver calls,
+named arguments, direct pipe closures, and braced pipe closures containing a sequence of `let`, assignment, expression, and `return` statements (with braced bodies materialized in the shared statement arena), explicit `read`/`mut`/`take` value effects, `manage`, `await`, and postfix `?`. It deliberately emits
+`unsupported` for every source form outside that contract.
+The Rust oracle in
+`selfhost_parity.rs` serializes the same subset and the parity test compares the
+full output byte-for-byte. This proves the lowering boundary and versioned
+serialization contract; it does not yet claim production compiler coverage.
+`selfhost/samples/ir/` is the explicit Stage 3 supported-subset corpus. The
+non-ignored `canonical_ir_parity_samples` gate compiles the RSS lowerer once and
+compares every sample byte-for-byte with the Rust canonical serializer. Recovery
+and richer frontend samples are intentionally not included until their IR
+contract is implemented on both sides; they remain covered by their focused
+lowering tests and frontend parity gates.
 
 1. Define a deterministic, versioned compiler IR that can be serialized and
    compared independently of addresses or map iteration order.
@@ -428,7 +658,7 @@ algorithmic code is not dominated by `List.get` plumbing.
 Exit: RSS and Rust frontends produce equivalent canonical IR for the supported
 language, and the RSS compiler can lower its own sources.
 
-### Stage 4 — Bootstrap Backend (pending)
+### Stage 4 — Bootstrap Backend (in progress)
 
 1. Specify the runtime ABI used by generated code.
 2. Implement a minimal C emitter in RSS from the stable IR.
@@ -439,6 +669,49 @@ language, and the RSS compiler can lower its own sources.
 
 Exit: stage0 can produce a standalone stage1 compiler without compiling new
 Rust code. A system C compiler/linker is permitted; the Rust toolchain is not.
+
+The first executable slice is `selfhost/backend/c_emit.rss`. It consumes
+`rss-ir-v1` text, never RSS source, and deliberately accepts a scalar `Int`
+`main`, plus a deliberately narrow pure-helper ABI. It preserves the IR statement
+order for `let`/`let mut` declarations and `assign name = scalar-expression`
+updates, then returns a scalar expression. Expressions are decimal literals,
+declared names, or one binary arithmetic operation over literal/name operands.
+Assignments require a previously declared `let mut` target; every name must
+already be declared. It also lowers properly nested scalar `while` and
+`if`/`else` blocks with the same statement subset, including comparison and
+integer/bitwise binary conditions and Boolean literals. Its block parser tracks whether a block is a
+loop or an `if` and rejects misplaced or repeated `else` lines. The integration gate lowers RSS source
+to canonical IR before passing that artifact to the emitter. It writes the C output, compiles it with
+`cc -std=c11 -Wall -Werror`, and executes the binary. This establishes the
+Stage 3 -> Stage 4 artifact boundary and the first portable scalar ABI; it is
+not yet a compiler backend for general RSS programs.
+
+The current bootstrap ABI is intentionally concrete and narrow:
+
+```text
+input:  rss-ir-v1 / zero-argument Int main plus acyclic pure helpers with zero or one `read Int` parameter / ordered scalar local, scalar assignment, scalar while, scalar if/else, and return instructions
+output: ISO C11 `int main(void)`
+result: decimal Int written to stdout followed by `\n`
+errors: unsupported or malformed IR emits no artifact
+```
+
+The generated program includes `rssrt.h` and links `rssrt.c`; it does not call
+libc for RSS-visible operations itself. No RSS heap, object layout, ownership,
+or foreign-call ABI is implied by this slice. Those become Stage 4 work only
+when the canonical IR supports a program that needs them.
+
+The first native-call convention is also present for pure scalar helpers:
+`fn name() -> Int` and `fn name(value: read Int) -> Int` functions with a
+straight-line scalar body of `let`/`let mut` declarations followed by one final
+`return` lower to `static long long rss_fn_name(void)` or `static long long
+rss_fn_name(long long value)`. The emitter validates all function bodies before
+writing any C, emits helper bodies before C `main`, and rejects calls to a
+later declaration. That declaration-order rule makes the bootstrap call graph
+acyclic, while malformed late functions still cannot leave a partial artifact.
+Calls may use previously declared scalar locals as their named argument.
+Multi-parameter calls, assignments or control flow inside helpers, recursion,
+and heap values remain unsupported until the shared
+function-body renderer grows those semantics.
 
 ### Stage 5 — Reproducible Bootstrap and Release (pending)
 
@@ -466,13 +739,20 @@ The next implementation sessions remain frontend-focused:
    corpus gates.
 3. Introduce `Diagnostic`/`DiagnosticBag`, derive both output protocols from it,
    and remove unreachable or duplicated output wiring.
-4. Introduce the materialized RSS `Program` AST and migrate AST dump first.
-5. Build the shared symbol/type/effect context and migrate checker families by
+4. Render the validated function-body subset directly from the existing
+   materialized RSS `Program` AST, retaining the legacy renderer only as an
+   explicit unsupported-node fallback until exact parity proves each expansion.
+5. Extend the shared symbol/type/effect context and migrate checker families by
    ownership group, deleting each superseded token probe after its parity gate.
 6. Move focused fixtures beside their rule groups and maintain an
    `RSxxxx -> RSS module -> Rust oracle test` ownership index in this document.
-7. Make exhaustive AST/checker gates sustainable in Docker.
-8. Design the stable IR only after the frontend exit criteria hold.
+7. Make exhaustive AST/checker gates sustainable in Docker: report deterministic
+   corpus progress, retain reusable setup across files, measure and remove
+   renderer hot paths in the largest inputs, then record an auditable 642-file
+   baseline before promoting either gate.
+8. Extend `rss-ir-v1` one semantic family at a time, each with a byte-exact
+   Rust oracle fixture; keep unsupported nodes explicit until their lowering is
+   specified and tested.
 
 JIT/VM collection performance is tracked outside this roadmap. It affects how
 quickly self-hosting tests execute, but it is not a correctness prerequisite for
@@ -532,13 +812,13 @@ Each RSS-written layer runs against the same input as its production Rust oracle
 | Lexer | `selfhost/lexer.rss` | `crate::lexer::lex`; canonical token records |
 | Parser recognition | `selfhost/parser.rss` | `crate::syntax::parse_source_raw`; accept/reject and position tier |
 | AST dump | `selfhost/astdump.rss` | surface-preserving Rust AST dump; byte-exact text |
-| Checker | `selfhost/check.rss` | `crate::analyze_source`; target-code presence for 83 families and structured occurrence+span parity for 81 |
+| Checker | `selfhost/check.rss` | `crate::analyze_source`; target-code presence for 82 families and structured occurrence+span parity for 80 |
 | Package contract | `selfhost/package_contract.rss` | `crate::review_package_dir`; filtered `RS1301` results |
 | Future lowering | RSS lowering | normalized Rust IR; byte-exact canonical serialization |
 | Future backend | RSS C emitter | VM/existing AOT observable behavior and generated-artifact checks |
 
 The legacy checker corpus gate compares diagnostic-code presence only. The
-structured migration compares occurrence counts and stable spans for 81
+structured migration compares occurrence counts and stable spans for 80
 families, but does not yet compare messages, label classes, causes, or fixes.
 Stage 1 explicitly closes that limitation family by family.
 

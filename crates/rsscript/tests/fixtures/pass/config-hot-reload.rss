@@ -8,8 +8,8 @@ struct Config {
     rules: handle List<Rule>
 }
 
-fn load_config(path: read Path) -> Result<fresh Config, ConfigError> {
-    let rules = RuleLoader.load_rules(path: read path)?
+fn load_config(path: Path) -> Result<fresh Config, ConfigError> {
+    let rules = RuleLoader.load_rules(path)?
 
     return Config(
         name: read "default",
@@ -17,9 +17,9 @@ fn load_config(path: read Path) -> Result<fresh Config, ConfigError> {
     )
 }
 
-fn reload_config(path: read Path, global: mut GlobalConfig) -> Result<Unit, ConfigError> {
-    let next = load_config(path: read path)?
-    GlobalConfig.replace(global: mut global, value: read next)
+fn reload_config(path: Path, global: mut GlobalConfig) -> Result<Unit, ConfigError> {
+    let next = load_config(path)?
+    GlobalConfig.replace(global: mut global, value: next)
 
     return Ok(Unit)
 }

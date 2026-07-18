@@ -4,6 +4,6 @@ struct Box<T: Unknown> {
     value: handle T
 }
 
-fn bad<read T>(value: read String) -> Unit {
+fn bad<read T>(value: String) -> Unit {
     return Unit
 }

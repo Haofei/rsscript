@@ -13,13 +13,13 @@ class Registry {
     entries: List<File>
 }
 
-fn register(registry: mut Registry, file: read File) -> Unit
+fn register(registry: mut Registry, file: File) -> Unit
     effects(retains(file))
 {
 }
 
-fn bad_retain(registry: mut Registry, path: read Path) -> Unit {
-    with File.open(path: read path)? as file {
-        register(registry: mut registry, file: read file)
+fn bad_retain(registry: mut Registry, path: Path) -> Unit {
+    with File.open(path)? as file {
+        register(registry: mut registry, file)
     }
 }

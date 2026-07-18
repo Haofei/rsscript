@@ -9,11 +9,11 @@ resource File {
     }
 }
 
-fn File.open(path: read Path) -> File
+fn File.open(path: Path) -> File
 fn File.read_all(file: mut File) -> String
 
-fn bad_capture(path: read Path) -> Unit {
-    with File.open(path: read path) as file {
+fn bad_capture(path: Path) -> Unit {
+    with File.open(path) as file {
         let callback = Some(|| {
             File.read_all(file: mut file)
         })

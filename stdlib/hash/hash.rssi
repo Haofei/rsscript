@@ -1,31 +1,31 @@
 features: native
 
-pub native fn Hash.sha256_string(value: read String) -> fresh String
+pub native fn Hash.sha256_string(value: String) -> fresh String
     effects(native)
 
-pub native fn Hash.sha256_bytes(value: read Bytes) -> fresh String
+pub native fn Hash.sha256_bytes(value: Bytes) -> fresh String
     effects(native)
 
-pub native fn Hash.sha3_224_bytes(value: read Bytes) -> fresh Bytes
+pub native fn Hash.sha3_224_bytes(value: Bytes) -> fresh Bytes
     effects(native)
 
-pub native fn Hash.sha3_256_bytes(value: read Bytes) -> fresh Bytes
+pub native fn Hash.sha3_256_bytes(value: Bytes) -> fresh Bytes
     effects(native)
 
-pub native fn Hash.shake128_bytes(value: read Bytes, out_len: Int) -> fresh Bytes
+pub native fn Hash.shake128_bytes(value: Bytes, out_len: Int) -> fresh Bytes
     effects(native)
 
-pub native fn Hash.sha256_file(path: read Path) -> Result<fresh String, FileError>
+pub native fn Hash.sha256_file(path: Path) -> Result<fresh String, FileError>
     effects(native)
 
 pub native fn Hmac.sha256_string(
-    key: read String,
-    value: read String,
+    key: String,
+    value: String,
 ) -> fresh String
     effects(native)
 
 pub native fn Hmac.sha256_bytes(
-    key: read Bytes,
-    value: read Bytes,
+    key: Bytes,
+    value: Bytes,
 ) -> fresh String
     effects(native)

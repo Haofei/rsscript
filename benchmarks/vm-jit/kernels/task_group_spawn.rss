@@ -11,8 +11,8 @@ features: async
 // scales linearly. See README finding #4.
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -29,7 +29,7 @@ async fn work(seed: Int) -> Result<Int, String> {
 fn run_round(seed: Int) -> Result<Int, String> {
     let mut sum = 0
     task_group {
-        async let a = work(seed: seed)
+        async let a = work(seed)
         async let b = work(seed: seed + 1)
         async let c = work(seed: seed + 2)
         let ra = await a?
@@ -51,6 +51,6 @@ fn main() -> Result<Unit, String> {
         index = index + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Log.write(message: String.from_int(value: total))
     return Ok(Unit)
 }

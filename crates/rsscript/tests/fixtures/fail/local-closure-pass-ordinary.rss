@@ -3,13 +3,13 @@ features: local
 
 struct Callback
 
-fn store(callback: read Callback) -> Unit
+fn store(callback: Callback) -> Unit
 
 fn bad() -> Unit {
     local callback = || {
         return Unit
     }
 
-    store(callback: read callback)
+    store(callback)
     return Unit
 }

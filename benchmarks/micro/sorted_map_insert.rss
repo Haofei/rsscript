@@ -1,8 +1,8 @@
 features: local
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -24,7 +24,7 @@ fn main() -> Unit {
     while index < limit {
         let key = index
         let value = key * 3
-        SortedMap.insert<Int, Int>(map: mut table, key: read key, value: read value)
+        SortedMap.insert<Int, Int>(map: mut table, key, value)
         index = index + 1
     }
 
@@ -32,7 +32,7 @@ fn main() -> Unit {
     let mut total = 0
     while index < limit {
         let key = index + 1
-        match SortedMap.get<Int, Int>(map: read table, key: read key) {
+        match SortedMap.get<Int, Int>(map: table, key) {
             Some(value) => {
                 total = total + value
             }
@@ -43,6 +43,6 @@ fn main() -> Unit {
         index = index + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Log.write(message: String.from_int(value: total))
     return Unit
 }

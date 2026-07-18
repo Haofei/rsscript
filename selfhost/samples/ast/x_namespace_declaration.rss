@@ -3,7 +3,7 @@ namespace Json
 
 opaque struct JsonValue
 
-pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
+pub fn parse(text: String) -> Result<fresh JsonValue, JsonError>
 
 fn main() -> Unit {
     return Unit

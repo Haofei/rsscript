@@ -8,7 +8,7 @@ fn run_workers() -> Result<Unit, TimerError> {
         let token = Task.cancellation_token()
 
         async let quick = Timer.sleep(ms: 1)
-        async let cancellable = Timer.sleep_cancellable(ms: 1, token: read token)
+        async let cancellable = Timer.sleep_cancellable(ms: 1, token)
 
         await quick?
         await cancellable?
@@ -18,6 +18,6 @@ fn run_workers() -> Result<Unit, TimerError> {
 
 fn main() -> Result<Unit, TimerError> {
     run_workers()?
-    Log.write(message: read "task group done")
+    Log.write(message: "task group done")
     return Ok(Unit)
 }

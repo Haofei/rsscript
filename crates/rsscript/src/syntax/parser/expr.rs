@@ -20,6 +20,12 @@ pub(super) fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<E
         return Some(number);
     }
 
+    if tokens[start].is_ident_text("if") {
+        if let Some(if_expr) = parse_if_expr(tokens, start, end) {
+            return Some(if_expr);
+        }
+    }
+
     if tokens[start].symbol("|")
         && let Some(closure) = parse_closure_expr(tokens, start, end)
     {
@@ -193,6 +199,48 @@ pub(super) fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<E
         )),
         _ => Some(Expr::Unknown(tokens[start].span.clone())),
     }
+}
+
+fn parse_if_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
+    let then_open = find_control_body_open(tokens, start, end)?;
+    let then_close = find_matching(tokens, then_open, "{", "}")?;
+    let else_index = then_close + 1;
+    if !tokens.get(else_index)?.is_ident_text("else") || !tokens.get(else_index + 1)?.symbol("{") {
+        return None;
+    }
+    let else_open = else_index + 1;
+    let else_close = find_matching(tokens, else_open, "{", "}")?;
+    if else_close + 1 != end {
+        return None;
+    }
+    let condition = parse_expr(tokens, start + 1, then_open)?;
+    Some(Expr::Match {
+        value: Box::new(condition),
+        scrutinee_effect: None,
+        arms: vec![
+            MatchArm {
+                pattern: MatchPattern::Literal {
+                    value: MatchLiteral::Bool(true),
+                    span: tokens[start].span.clone(),
+                },
+                guard: None,
+                body: parse_block(tokens, then_open, then_close),
+                span: tokens[start].span.clone(),
+            },
+            MatchArm {
+                pattern: MatchPattern::Literal {
+                    value: MatchLiteral::Bool(false),
+                    span: tokens[else_index].span.clone(),
+                },
+                guard: None,
+                body: parse_block(tokens, else_open, else_close),
+                span: tokens[else_index].span.clone(),
+            },
+        ],
+        from_if_expression: true,
+        malformed_arm_spans: Vec::new(),
+        span: tokens[start].span.clone(),
+    })
 }
 
 fn parse_interpolated_string_expr(value: &str, span: &Span) -> Expr {

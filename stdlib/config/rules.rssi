@@ -4,19 +4,19 @@ struct Config
 
 struct GlobalConfig
 
-pub fn RuleLoader.load_rules(path: read Path) -> Result<fresh List<Rule>, ConfigError>
+pub fn RuleLoader.load_rules(path: Path) -> Result<fresh List<Rule>, ConfigError>
 
-pub fn Config.new(name: read String, rules: read List<Rule>) -> fresh Config
+pub fn Config.new(name: String, rules: List<Rule>) -> fresh Config
 
-pub fn Config.rule_count(config: read Config) -> Int
+pub fn Config.rule_count(config: Config) -> Int
 
-pub fn GlobalConfig.new(value: read Config) -> fresh GlobalConfig
+pub fn GlobalConfig.new(value: Config) -> fresh GlobalConfig
     effects(retains(value))
 
 pub fn GlobalConfig.replace(
     global: mut GlobalConfig,
-    value: read Config,
+    value: Config,
 ) -> Unit
     effects(retains(value))
 
-pub fn GlobalConfig.rule_count(global: read GlobalConfig) -> Int
+pub fn GlobalConfig.rule_count(global: GlobalConfig) -> Int

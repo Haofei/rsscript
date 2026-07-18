@@ -1,14 +1,14 @@
 features: async, native
 
 pub async native fn S3.put_object(
-    bucket: read String,
-    key: read String,
-    body: read String,
+    bucket: String,
+    key: String,
+    body: String,
 ) -> Result<Unit, String>
     effects(native)
 
 pub async native fn S3.delete_object(
-    bucket: read String,
-    key: read String,
+    bucket: String,
+    key: String,
 ) -> Result<Unit, String>
     effects(native)

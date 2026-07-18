@@ -4,7 +4,7 @@ struct Image {
     pixels: Buffer
 }
 
-fn cached(cache: read Cache) -> fresh Image {
-    let image = Cache.get(cache: read cache)
+fn cached(cache: Cache) -> fresh Image {
+    let image = Cache.get(cache)
     return image
 }

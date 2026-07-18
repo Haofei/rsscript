@@ -4,8 +4,8 @@
 // `String.len` consumes that native-created concat result before returning Int.
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -15,7 +15,7 @@ fn bench_size(default: Int) -> Int {
     }
 }
 
-fn hot(prefix: read String, limit: Int, seed: Int) -> Int {
+fn hot(prefix: String, limit: Int, seed: Int) -> Int {
     let mut i = 0
     let mut total = seed
     while i < limit {
@@ -23,13 +23,13 @@ fn hot(prefix: read String, limit: Int, seed: Int) -> Int {
         i = i + 1
     }
     let suffix = String.from_int(value: total)
-    let text = String.concat(left: read prefix, right: read suffix)
-    return String.len(value: read text)
+    let text = String.concat(left: prefix, right: suffix)
+    return String.len(value: text)
 }
 
 fn main() -> Unit {
     let limit = bench_size(default: 2000000)
-    let result = hot(prefix: read "item-", limit: limit, seed: 0)
-    Log.write(message: read String.from_int(value: result))
+    let result = hot(prefix: "item-", limit, seed: 0)
+    Log.write(message: String.from_int(value: result))
     return Unit
 }

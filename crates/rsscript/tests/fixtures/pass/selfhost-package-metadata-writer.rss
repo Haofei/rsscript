@@ -12,16 +12,16 @@ struct PackageMetadataInput {
 fn output_path() -> fresh Path {
     let input = Args.get_or_default(
         index: 0,
-        default: read "target/rsscript-selfhost-package-metadata.txt",
+        default: "target/rsscript-selfhost-package-metadata.txt",
     )
 
-    return Path.from_string(value: read input)
+    return Path.from_string(value: input)
 }
 
 fn package_metadata_input() -> fresh PackageMetadataInput {
-    let package_name = Args.get_or_default(index: 1, default: read "rss-selfhost-package")
-    let version = Args.get_or_default(index: 2, default: read "0.5.0")
-    let edition = Args.get_or_default(index: 3, default: read "2024")
+    let package_name = Args.get_or_default(index: 1, default: "rss-selfhost-package")
+    let version = Args.get_or_default(index: 2, default: "0.5.0")
+    let edition = Args.get_or_default(index: 3, default: "2024")
 
     return PackageMetadataInput(
         package_name: package_name,
@@ -33,36 +33,36 @@ fn package_metadata_input() -> fresh PackageMetadataInput {
     )
 }
 
-fn metadata_text(input: read PackageMetadataInput) -> fresh String {
+fn metadata_text(input: PackageMetadataInput) -> fresh String {
     local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: read "{\n")
-    StringBuilder.push(builder: mut builder, value: read "  \"package\": ")
-    let package_name = Json.quote_string(value: read input.package_name)
-    StringBuilder.push(builder: mut builder, value: read package_name)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"version\": ")
-    let version = Json.quote_string(value: read input.version)
-    StringBuilder.push(builder: mut builder, value: read version)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"edition\": ")
-    let edition = Json.quote_string(value: read input.edition)
-    StringBuilder.push(builder: mut builder, value: read edition)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"public_apis\": ")
+    StringBuilder.push(builder: mut builder, value: "{\n")
+    StringBuilder.push(builder: mut builder, value: "  \"package\": ")
+    let package_name = Json.quote_string(value: input.package_name)
+    StringBuilder.push(builder: mut builder, value: package_name)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"version\": ")
+    let version = Json.quote_string(value: input.version)
+    StringBuilder.push(builder: mut builder, value: version)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"edition\": ")
+    let edition = Json.quote_string(value: input.edition)
+    StringBuilder.push(builder: mut builder, value: edition)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"public_apis\": ")
     let public_apis = String.from_int(value: input.public_apis)
-    StringBuilder.push(builder: mut builder, value: read public_apis)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"native_apis\": ")
+    StringBuilder.push(builder: mut builder, value: public_apis)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"native_apis\": ")
     let native_apis = String.from_int(value: input.native_apis)
-    StringBuilder.push(builder: mut builder, value: read native_apis)
-    StringBuilder.push(builder: mut builder, value: read ",\n  \"unknown_apis\": ")
+    StringBuilder.push(builder: mut builder, value: native_apis)
+    StringBuilder.push(builder: mut builder, value: ",\n  \"unknown_apis\": ")
     let unknown_apis = String.from_int(value: input.unknown_apis)
-    StringBuilder.push(builder: mut builder, value: read unknown_apis)
-    StringBuilder.push(builder: mut builder, value: read "\n}\n")
+    StringBuilder.push(builder: mut builder, value: unknown_apis)
+    StringBuilder.push(builder: mut builder, value: "\n}\n")
 
     return StringBuilder.finish(builder: take builder)
 }
 
-fn ensure_parent_directory(path: read Path) -> Result<Unit, FileError> {
-    match Path.parent(path: read path) {
+fn ensure_parent_directory(path: Path) -> Result<Unit, FileError> {
+    match Path.parent(path) {
         Some(parent) => {
-            Directory.create_all(path: read parent)?
+            Directory.create_all(path: parent)?
         }
         None => {
         }
@@ -71,11 +71,11 @@ fn ensure_parent_directory(path: read Path) -> Result<Unit, FileError> {
     return Ok(Unit)
 }
 
-fn write_metadata_file(path: read Path, text: read String) -> Result<Unit, FileError> {
-    ensure_parent_directory(path: read path)?
+fn write_metadata_file(path: Path, text: String) -> Result<Unit, FileError> {
+    ensure_parent_directory(path)?
 
-    with File.open_write(path: read path)? as file {
-        File.write_string(file: mut file, text: read text)?
+    with File.open_write(path)? as file {
+        File.write_string(file: mut file, text)?
     }
 
     return Ok(Unit)
@@ -84,15 +84,15 @@ fn write_metadata_file(path: read Path, text: read String) -> Result<Unit, FileE
 pub fn main() -> Result<Unit, FileError> {
     let path = output_path()
     let input = package_metadata_input()
-    let text = metadata_text(input: read input)
+    let text = metadata_text(input)
 
-    write_metadata_file(path: read path, text: read text)?
+    write_metadata_file(path, text)?
 
     let message = String.concat(
-        left: read "selfhost package metadata wrote ",
-        right: read input.package_name,
+        left: "selfhost package metadata wrote ",
+        right: input.package_name,
     )
-    Log.write(message: read message)
+    Log.write(message)
 
     return Ok(Unit)
 }

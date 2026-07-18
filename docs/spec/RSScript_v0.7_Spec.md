@@ -20,7 +20,7 @@ Core execution:
     and bounded MPSC `Channel`/`Stream` via `rss-async` (§14.4).
 
 Surface and control flow:
-  - Receiver-call shorthand with mandatory effect keyword and unique resolution
+  - Receiver-call shorthand with optional default `read` and unique resolution
     (§14.6.1); match in expression position (§5A).
   - `?` early-return on both `Result` and `Option`; the two forms do not mix
     (§5A; mismatch `RS0013`).
@@ -493,59 +493,43 @@ meaning axis     Among {read, mut, take}, read is the least-privilege baseline �
 (default?)       the effect you have when you intend nothing special.
                  -> read IS the semantic default.
 
-surface axis     Is the token written, or omitted/inferred? read is mandatory at
-(explicit?)      the call site; an omitted effect is the error RS0202, never an
-                 inferred read.
-                 -> read IS syntactically explicit.
+surface axis     Is the token written, or omitted? In a data-effect slot an
+(explicit?)      omitted effect means read; writing `read` is an equivalent,
+                 review-visible annotation.
+                 -> read IS syntactically optional.
 ```
 
-So `read` is a **default-valued effect that the language requires you to write**.
-"Default" places it in the meaning lattice; "explicit" places it on the surface.
-The two never conflict because they are different axes. Plot every marker on both
-and `read` is the lone anomaly:
+So `read` is a **default-valued effect that may be written for emphasis**.
+`mut` and `take` remain mandatory surface markers because neither may be inferred
+from an omitted token. Plot every marker on both axes:
 
 ```text
                       surface: silent             surface: written
-meaning: default      managed, sync, safe,        read   <- the only default
-(baseline)            non-fresh, non-retaining            that is written out
+meaning: default      managed, sync, safe,        read (optional annotation)
+(baseline)            non-fresh, non-retaining
 meaning: departure    (impossible: a hidden       mut, take, local, manage,
                        departure would be hidden    fresh, retains, native,
                        behavior — Article III)      unsafe, async
 ```
 
-Every other default is silent; every departure is written; the one off-pattern
-cell is the call-site `read`:
+The normal spelling therefore hides `read` and makes departures stand out:
 
 ```rust
-cache_put(cache: mut cache, key: read key, value: read value)
-//                          ^^^^        ^^^^   the default, written at every use
+cache_put(cache: mut cache, key: key, value: value)
+//                          ^^^^                   the non-default operation
 ```
 
-By §2A.2's rule — mark the departure, hide the norm — `read` *should* be silent,
-and spelling it out dilutes the load-bearing `mut`. RSScript overrides the rule
-here deliberately, under Article VIII, because at this site it values one property
-above signal density:
+This follows §2A.2 directly: mark the departure and hide the norm. A bare
+argument is not ambiguous: it makes the positive local claim that the argument is
+read-only. If the resolved parameter requires `mut` or `take`, the call is rejected
+and the diagnostic requires that non-default effect to be written. No omission can
+silently upgrade a capability.
 
-```text
-absence must be an error, never an inferred read.
-```
-
-If `read` were omittable, a bare `f(x: value)` would be ambiguous between "I
-confirmed this is read-only" and "I forgot to annotate," and an un-annotated
-argument could pass review as if it had been reviewed. Making the default a
-required token keeps the effect a positive, present claim, lets the checker demand
-it (RS0202), and keeps mutation and consumption legible at the call without
-resolving a callee signature that may live in another file or a package interface.
-
-The cost is acknowledged, not denied: uniform `read` is partly wallpaper. The
-alternative is therefore preserved, not excluded (Article VI). A future form may
-make `read` the omittable default so that only `mut`/`take` are written, if
-call-site self-description is judged to buy less than the gain in signal density.
-The binding constraint any such form must satisfy is unchanged: **an omitted
-effect must remain a hard error, never an inferred `read`**, so absence can never
-quietly mean "unreviewed." Until then the spec spends this ceremony knowingly,
-with its justification on the record — which is what Article VIII requires of any
-spelled-out default.
+Explicit `read` remains valid for public API review, teaching, and complex
+ownership flows. A formatter preserves a written `read`, but never inserts one for
+an omitted default. Syntax retains whether the annotation was written; semantic
+analysis normalizes both forms to the same read capability before interface, VM,
+AOT, or JIT lowering.
 
 ### 2A.4 Consequence for feature admission
 
@@ -1389,6 +1373,28 @@ fn direction_name(d: read Direction) -> String {
 }
 ```
 
+### `if` (expression form)
+
+```text
+if <condition> { <expr> } else { <expr> }
+```
+
+An `if` may appear wherever an expression is accepted. Its condition must be
+`Bool`; `else` is required; and each branch is a block whose last expression is
+the produced value. The branches must produce compatible types. Resource,
+effect, and branch-join rules are the same as for a two-arm `match` on `true`
+and `false`.
+
+```rust
+fn choose(flag: Bool) -> Int {
+    return if flag {
+        7
+    } else {
+        11
+    }
+}
+```
+
 Match expressions compose with `let` bindings, function arguments, and `return`:
 
 ```rust
@@ -1683,8 +1689,8 @@ Use `with` or `ResourcePool<T: Resource>`.
 
 ### 6.8 Copy types
 
-`Copy` is a core distinction: Copy parameters do not require a data effect
-(§10.5), Copy fields are inline (§6.5), and managed containers and closures may
+`Copy` is a core distinction: Copy values are passed by value even when their
+parameter has the default `read` effect (§10.5), Copy fields are inline (§6.5), and managed containers and closures may
 hold Copy values freely. v0.7 therefore fixes the Copy set explicitly.
 
 The Copy types in v0.7 are exactly the compiler-declared scalar primitives:
@@ -2236,11 +2242,19 @@ This is not optional for constructors or variants. `Ok(x)`, `Some(x)`, `Point(x:
 
 ### 9.2 Named arguments
 
-All ordinary function arguments and struct/class constructor fields are named.
+All ordinary function arguments and struct/class constructor fields are named,
+except for **same-name punning**. A bare identifier may omit its label when it
+resolves to an ordinary function parameter with the same name and default `read`
+effect, or to a constructor field with the same name. Constructor field effects
+still apply after the field is resolved: a handle field, for example, still
+requires its explicit `read` effect. This is not positional calling: literals,
+expressions, `mut`, `take`, and unknown calls remain explicitly named.
 
 ```rust
 Image.resize(image: mut image, width: 800, height: 600)
+Image.resize(image: mut image, width, height)
 let point = Point(x: 1.0, y: 2.0)
+let point = Point(x, y)
 ```
 
 Invalid:
@@ -2346,6 +2360,10 @@ A `read` parameter may be inspected.
 ```rust
 fn hash(data: read Bytes) -> UInt64
 hash(data: read bytes)
+
+// The ordinary spelling omits the default on both sides.
+fn hash_default(data: Bytes) -> UInt64
+hash_default(data: bytes)
 ```
 
 For managed values, implementation may acquire a runtime read guard. Such guards are implementation details and cannot escape a function call.
@@ -2380,30 +2398,18 @@ A managed value cannot be passed to `take`. A handle field cannot be taken. A lo
 
 ### 10.5 Copy parameters
 
-A Copy parameter (§6.8) is passed by value, so there is no borrow to mark. The
-canonical spelling has one rule with one exception:
-
-```text
-- A Copy parameter is written WITHOUT a data effect (`read`/`mut`/`take`).
-- Exception: the receiver (first parameter) of a method exposed for receiver-call
-  shorthand (§14.6.1) declares `read` even when Copy, so the shorthand's mandatory
-  call-site effect (`read x.method(...)`) has a declared effect to match.
-```
-
-This is a single canonical form per role (§2.3), not a stylistic choice — and the
-exception is what explains the two stdlib shapes the surface uses:
+Copy parameters (§6.8) use the same omitted-effect rule as every ordinary data
+parameter: an omitted effect is `read`. Copy values remain passed by value, so
+the effect records the call contract without introducing a borrow. `mut` and
+`take` remain explicit.
 
 ```rust
-fn resize(image: mut Image, width: Int, height: Int) -> Unit  // plain Copy params: no effect
-
-pub fn Int.to_string(value: read Int) -> fresh String  // receiver of `n.to_string()`: read
-pub fn String.from_int(value: Int) -> fresh String     // constructor-style, never a receiver: no effect
+fn resize(image: mut Image, width: Int, height: Int) -> Unit
+pub fn Int.to_string(value: Int) -> fresh String
 ```
 
-`width`/`height` are plain Copy parameters, so they carry no effect; a Copy
-argument at the call site is likewise written bare
-(`resize(image: mut img, width: 800, height: 600)`). `Int.to_string`'s `value`
-is `read` only because it is the receiver position for `n.to_string()`.
+Call arguments are bare for the default effect:
+`resize(image: mut img, width: 800, height: 600)`.
 
 ### 10.6 Runtime effects and guarantees
 
@@ -2608,8 +2614,8 @@ fn is_even(x: Int) -> Bool { return x % 2 == 0 }
 List.filter(list: read xs, predicate: is_even)
 ```
 
-`Int` is Copy, so its parameter carries no data effect (§10.5); only non-Copy
-parameters and receivers spell `read`/`mut`/`take`. This is a desugaring: a
+`Int` uses the default `read` effect (§10.5), so its parameter is written bare.
+This is a desugaring: a
 function name in argument position is rewritten to a forwarding closure over the
 function's own parameters (`(x) { return is_even(x: x) }`), so the checker and
 every backend see an
@@ -3046,7 +3052,7 @@ Public functions must have explicit:
 ```text
 parameter names
 parameter types
-parameter data effects for non-Copy parameters
+parameter data effects (`read` may be omitted; `mut` and `take` are explicit)
 return type
 guarantee effects if any
 native/unsafe/retention effects if any
@@ -3631,13 +3637,15 @@ or protocol method call. It has the form:
 <effect> <receiver>.<method>(<named args>)
 ```
 
-where `<effect>` is `read`, `mut`, or `take`. The effect keyword is mandatory;
-bare `receiver.method(...)` without an effect prefix is rejected.
+where `<effect>` is `read`, `mut`, or `take`. The effect keyword is optional only
+for `read`: bare `receiver.method(...)` means `read receiver.method(...)`.
+`mut` and `take` remain mandatory because a bare receiver never gains either
+capability.
 
 Examples:
 
 ```rust
-read user.name()
+user.name()
 mut cache.put(key: read key, value: read value)
 take builder.finish()
 mut writer.write(message: read msg)
@@ -3648,7 +3656,7 @@ supplied as the method's **first parameter** (by position, under the written
 effect):
 
 ```rust
-User.name(user: read user)
+User.name(user: user)
 Cache.put(cache: mut cache, key: read key, value: read value)
 StringBuilder.finish(builder: take builder)
 Writer.write(self: mut writer, message: read msg)
@@ -3831,8 +3839,9 @@ A form that cannot meet them is not admitted:
    contract, so the call's mutation/retention/resource behavior stays known.
 2. Coercion to a protocol-typed value is explicit (e.g. an explicit `as Protocol`
    or wrapper construction), never an implicit upcast.
-3. Calls stay explicit and qualified: `Protocol.method(self: read value, ...)`
-   or via receiver-call shorthand `read value.method(...)` (§14.6.1).
+3. Calls stay named and qualified: `Protocol.method(self: value, ...)` or via
+   receiver-call shorthand `value.method(...)` (§14.6.1). Non-default `mut` and
+   `take` remain explicit.
 4. A protocol-typed value is an ordinary managed handle (single-isolate, not
    `Send`); its allocation is the normal managed allocation, not hidden boxing.
 5. Review classification: a protocol-dynamic call would need an explicit
@@ -5767,8 +5776,8 @@ macro-heavy metaprogramming
 What is excluded is the *Rust-style* trait-object machinery: implicit coercion,
 auto method resolution, object safety rules, and type-erased dispatch with no
 effect contract. The receiver-call shorthand (§14.6.1) is not auto method
-resolution: it requires a mandatory effect keyword at the call site, resolves
-only when exactly one candidate exists, and expands to a single canonical
+resolution: it defaults an omitted effect to `read`, resolves only when exactly
+one candidate exists, and expands to a single canonical
 qualified call. Protocol-typed dynamic dispatch is also not part of v0.7; any
 future explicit, effect-carrying form must be admitted as a separate feature
 with source, checker, lowering, package-review, and REIR support (section 14.6).
@@ -5960,15 +5969,17 @@ async-let   = "async" "let" ident "=" expr ;
 select      = "select" "{" { select-arm } "}" ;      (* first-ready arm, §14.4 *)
 select-arm  = pattern "=" "await" expr [ "?" ] "=>" block ;
 
-expr        = call | receiver-call | match | literal | interp-string | tuple
+expr        = call | receiver-call | if-expr | match | literal | interp-string | tuple
             | collection | ident | field | index | unary | binary | closure
             | ( data-effect expr ) | ( "manage" expr ) | ( "await" expr )
             | ( expr "?" ) ;
+if-expr     = "if" expr block "else" block ;
 call        = ( name | type "." name ) [ generic-args ] "(" [ args ] ")" ;
 generic-args = "<" type { "," type } ">" ;           (* e.g. List<Int>.new(), §14.5 *)
-receiver-call = data-effect expr "." name "(" [ args ] ")" ;   (* §14.6.1 *)
+receiver-call = [ data-effect ] expr "." name "(" [ args ] ")" ; (* §14.6.1 *)
 args        = arg { "," arg } ;
-arg         = ident ":" [ data-effect ] expr ;       (* all arguments are named *)
+arg         = ident ":" [ data-effect ] expr
+            | ident ;                                 (* resolved same-name read punning only *)
 closure     = "|" [ idents ] "|" ( block | expr ) ;  (* pipe params; noescape/owned per Fn type *)
 interp-string = "$\"" { text | "{" expr "}" } "\"" ;  (* §A.1; `{{`/`}}` are literal braces *)
 tuple       = "(" expr "," expr { "," expr } ")" ;   (* arity >= 2, §6.10 *)

@@ -1,5 +1,5 @@
 // expect: RS0015
 
-fn bad(, path: read Path) -> Unit {
+fn bad(, path: Path) -> Unit {
     return Unit
 }

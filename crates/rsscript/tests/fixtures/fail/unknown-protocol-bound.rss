@@ -1,7 +1,7 @@
 // expect: RS0027
 fn write_line<W: MissingWriter>(
     writer: mut W,
-    message: read String,
+    message: String,
 ) -> Unit {
-    MissingWriter.write(self: mut writer, message: read message)
+    MissingWriter.write(self: mut writer, message: message)
 }

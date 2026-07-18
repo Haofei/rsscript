@@ -1,12 +1,12 @@
 features: local
 
-fn lists_equal(left: read List<Int>, right: read List<Int>) -> Bool {
-    if List.len(list: read left) != List.len(list: read right) {
+fn lists_equal(left: List<Int>, right: List<Int>) -> Bool {
+    if List.len(list: left) != List.len(list: right) {
         return false
     }
     let mut index = 0
-    while index < List.len(list: read left) {
-        if List.get(list: read left, index: index) != List.get(list: read right, index: index) {
+    while index < List.len(list: left) {
+        if List.get(list: left, index) != List.get(list: right, index) {
             return false
         }
         index = index + 1
@@ -19,10 +19,10 @@ fn is_even(value: Int) -> Bool {
     return quotient * 2 == value
 }
 
-fn list_contains_value(values: read List<Int>, needle: Int) -> Bool {
+fn list_contains_value(values: List<Int>, needle: Int) -> Bool {
     let mut index = 0
-    while index < List.len(list: read values) {
-        if List.get(list: read values, index: index) == needle {
+    while index < List.len(list: values) {
+        if List.get(list: values, index) == needle {
             return true
         }
         index = index + 1
@@ -30,124 +30,124 @@ fn list_contains_value(values: read List<Int>, needle: Int) -> Bool {
     return false
 }
 
-fn prop_reverse_reverse(values: read List<Int>) -> fresh PropertyResult {
-    let once = List.reverse(list: read values)
-    let twice = List.reverse(list: read once)
-    return Property.expect_bool(value: lists_equal(left: read values, right: read twice))
+fn prop_reverse_reverse(values: List<Int>) -> fresh PropertyResult {
+    let once = List.reverse(list: values)
+    let twice = List.reverse(list: once)
+    return Property.expect_bool(value: lists_equal(left: values, right: twice))
 }
 
-fn prop_take_skip_rebuild(values: read List<Int>) -> fresh PropertyResult {
-    let count = List.len(list: read values) / 2
-    local rebuilt = List.take(list: read values, count: count)
-    let suffix = List.skip(list: read values, count: count)
-    List.append(list: mut rebuilt, values: read suffix)
-    return Property.expect_bool(value: lists_equal(left: read values, right: read rebuilt))
+fn prop_take_skip_rebuild(values: List<Int>) -> fresh PropertyResult {
+    let count = List.len(list: values) / 2
+    local rebuilt = List.take(list: values, count)
+    let suffix = List.skip(list: values, count)
+    List.append(list: mut rebuilt, values: suffix)
+    return Property.expect_bool(value: lists_equal(left: values, right: rebuilt))
 }
 
-fn prop_filter_count_matches(values: read List<Int>) -> fresh PropertyResult {
+fn prop_filter_count_matches(values: List<Int>) -> fresh PropertyResult {
     let filtered = List.filter(
-        list: read values,
+        list: values,
         predicate: |value| {
-            return is_even(value: value)
+            return is_even(value)
         },
     )
     let counted = List.count_where(
-        list: read values,
+        list: values,
         predicate: |value| {
-            return is_even(value: value)
+            return is_even(value)
         },
     )
-    return Property.expect_bool(value: List.len(list: read filtered) == counted)
+    return Property.expect_bool(value: List.len(list: filtered) == counted)
 }
 
-fn prop_list_first_last_match_indices(values: read List<Int>) -> fresh PropertyResult {
-    if List.len(list: read values) == 0 {
+fn prop_list_first_last_match_indices(values: List<Int>) -> fresh PropertyResult {
+    if List.len(list: values) == 0 {
         return Property.discard()
     }
 
-    match List.first(list: read values) {
+    match List.first(list: values) {
         Some(first) => {
-            match List.last(list: read values) {
+            match List.last(list: values) {
                 Some(last) => {
-                    let expected_first = List.get(list: read values, index: 0)
-                    let expected_last = List.get(list: read values, index: List.len(list: read values) - 1)
+                    let expected_first = List.get(list: values, index: 0)
+                    let expected_last = List.get(list: values, index: List.len(list: values) - 1)
                     return Property.expect_bool(value: first == expected_first && last == expected_last)
                 }
                 None => {
-                    return Property.fail(message: read "last returned none for non-empty list", counterexample: read "")
+                    return Property.fail(message: "last returned none for non-empty list", counterexample: "")
                 }
             }
         }
         None => {
-            return Property.fail(message: read "first returned none for non-empty list", counterexample: read "")
+            return Property.fail(message: "first returned none for non-empty list", counterexample: "")
         }
     }
 }
 
-fn prop_list_pop_removes_last(values: read List<Int>) -> fresh PropertyResult {
-    if List.len(list: read values) == 0 {
+fn prop_list_pop_removes_last(values: List<Int>) -> fresh PropertyResult {
+    if List.len(list: values) == 0 {
         return Property.discard()
     }
 
-    local copy = List.slice(list: read values, start: 0, len: List.len(list: read values))
-    let expected_last = List.get(list: read values, index: List.len(list: read values) - 1)
+    local copy = List.slice(list: values, start: 0, len: List.len(list: values))
+    let expected_last = List.get(list: values, index: List.len(list: values) - 1)
     match List.pop(list: mut copy) {
         Some(popped) => {
-            let len_ok = List.len(list: read copy) == List.len(list: read values) - 1
+            let len_ok = List.len(list: copy) == List.len(list: values) - 1
             return Property.expect_bool(value: popped == expected_last && len_ok)
         }
         None => {
-            return Property.fail(message: read "pop returned none for non-empty list", counterexample: read "")
+            return Property.fail(message: "pop returned none for non-empty list", counterexample: "")
         }
     }
 }
 
-fn prop_list_set_updates_index(value: read IntPair) -> fresh PropertyResult {
+fn prop_list_set_updates_index(value: IntPair) -> fresh PropertyResult {
     local values = List<Int>.new()
-    List.push(list: mut values, value: read value.left)
-    List.set(list: mut values, index: 0, value: read value.right)
-    return Property.expect_bool(value: List.get(list: read values, index: 0) == value.right && List.len(list: read values) == 1)
+    List.push(list: mut values, value: value.left)
+    List.set(list: mut values, index: 0, value: value.right)
+    return Property.expect_bool(value: List.get(list: values, index: 0) == value.right && List.len(list: values) == 1)
 }
 
-fn prop_list_remove_at_decreases_len(values: read List<Int>) -> fresh PropertyResult {
-    if List.len(list: read values) == 0 {
+fn prop_list_remove_at_decreases_len(values: List<Int>) -> fresh PropertyResult {
+    if List.len(list: values) == 0 {
         return Property.discard()
     }
 
-    let index = List.len(list: read values) / 2
-    let expected = List.get(list: read values, index: index)
-    local copy = List.slice(list: read values, start: 0, len: List.len(list: read values))
-    match List.remove_at(list: mut copy, index: index) {
+    let index = List.len(list: values) / 2
+    let expected = List.get(list: values, index)
+    local copy = List.slice(list: values, start: 0, len: List.len(list: values))
+    match List.remove_at(list: mut copy, index) {
         Some(removed) => {
-            let len_ok = List.len(list: read copy) == List.len(list: read values) - 1
+            let len_ok = List.len(list: copy) == List.len(list: values) - 1
             return Property.expect_bool(value: removed == expected && len_ok)
         }
         None => {
-            return Property.fail(message: read "remove_at returned none for valid index", counterexample: read "")
+            return Property.fail(message: "remove_at returned none for valid index", counterexample: "")
         }
     }
 }
 
-fn prop_list_clear_empties(values: read List<Int>) -> fresh PropertyResult {
-    local copy = List.slice(list: read values, start: 0, len: List.len(list: read values))
+fn prop_list_clear_empties(values: List<Int>) -> fresh PropertyResult {
+    local copy = List.slice(list: values, start: 0, len: List.len(list: values))
     List.clear(list: mut copy)
-    return Property.expect_bool(value: List.len(list: read copy) == 0 && List.is_empty(list: read copy))
+    return Property.expect_bool(value: List.len(list: copy) == 0 && List.is_empty(list: copy))
 }
 
-fn prop_map_insert_get(values: read List<Int>) -> fresh PropertyResult {
+fn prop_map_insert_get(values: List<Int>) -> fresh PropertyResult {
     local map = Map<Int, Int>.new()
     let mut index = 0
-    while index < List.len(list: read values) {
-        let value = List.get(list: read values, index: index)
-        Map.insert(map: mut map, key: read value, value: read value)
-        match Map.get(map: read map, key: read value) {
+    while index < List.len(list: values) {
+        let value = List.get(list: values, index)
+        Map.insert(map: mut map, key: value, value)
+        match Map.get(map, key: value) {
             Some(found) => {
                 if found != value {
-                    return Property.fail(message: read "map returned wrong value", counterexample: read String.from_int(value: value))
+                    return Property.fail(message: "map returned wrong value", counterexample: String.from_int(value))
                 }
             }
             None => {
-                return Property.fail(message: read "map lost inserted key", counterexample: read String.from_int(value: value))
+                return Property.fail(message: "map lost inserted key", counterexample: String.from_int(value))
             }
         }
         index = index + 1
@@ -157,195 +157,195 @@ fn prop_map_insert_get(values: read List<Int>) -> fresh PropertyResult {
 
 fn prop_map_get_or_default_after_insert(value: Int) -> fresh PropertyResult {
     local map = Map<Int, Int>.new()
-    Map.insert(map: mut map, key: read value, value: read value)
+    Map.insert(map: mut map, key: value, value)
     let next = value + 1
-    let found = Map.get_or_default(map: read map, key: read value, default: read next)
-    let missing = Map.get_or_default(map: read map, key: read next, default: read value)
+    let found = Map.get_or_default(map, key: value, default: next)
+    let missing = Map.get_or_default(map, key: next, default: value)
     return Property.expect_bool(value: found == value && missing == value)
 }
 
 fn prop_map_remove_deletes_key(value: Int) -> fresh PropertyResult {
     local map = Map<Int, Int>.new()
-    Map.insert(map: mut map, key: read value, value: read value)
-    match Map.remove(map: mut map, key: read value) {
+    Map.insert(map: mut map, key: value, value)
+    match Map.remove(map: mut map, key: value) {
         Some(removed) => {
-            let missing = Map.contains_key(map: read map, key: read value) == false
+            let missing = Map.contains_key(map, key: value) == false
             return Property.expect_bool(value: removed == value && missing)
         }
         None => {
-            return Property.fail(message: read "remove returned none for inserted key", counterexample: read String.from_int(value: value))
+            return Property.fail(message: "remove returned none for inserted key", counterexample: String.from_int(value))
         }
     }
 }
 
-fn prop_map_keys_values_match_len(values: read List<Int>) -> fresh PropertyResult {
+fn prop_map_keys_values_match_len(values: List<Int>) -> fresh PropertyResult {
     local map = Map<Int, Int>.new()
     let mut index = 0
-    while index < List.len(list: read values) {
-        let value = List.get(list: read values, index: index)
-        Map.insert(map: mut map, key: read value, value: read value)
+    while index < List.len(list: values) {
+        let value = List.get(list: values, index)
+        Map.insert(map: mut map, key: value, value)
         index = index + 1
     }
 
-    let keys = Map.keys(map: read map)
-    let map_values = Map.values(map: read map)
-    return Property.expect_bool(value: List.len(list: read keys) == Map.len(map: read map) && List.len(list: read map_values) == Map.len(map: read map))
+    let keys = Map.keys(map)
+    let map_values = Map.values(map)
+    return Property.expect_bool(value: List.len(list: keys) == Map.len(map) && List.len(list: map_values) == Map.len(map))
 }
 
-fn prop_map_clear_empties(values: read List<Int>) -> fresh PropertyResult {
+fn prop_map_clear_empties(values: List<Int>) -> fresh PropertyResult {
     local map = Map<Int, Int>.new()
     let mut index = 0
-    while index < List.len(list: read values) {
-        let value = List.get(list: read values, index: index)
-        Map.insert(map: mut map, key: read value, value: read value)
+    while index < List.len(list: values) {
+        let value = List.get(list: values, index)
+        Map.insert(map: mut map, key: value, value)
         index = index + 1
     }
 
     Map.clear(map: mut map)
-    return Property.expect_bool(value: Map.len(map: read map) == 0 && Map.is_empty(map: read map))
+    return Property.expect_bool(value: Map.len(map) == 0 && Map.is_empty(map))
 }
 
 fn prop_map_insert_old_reports_previous(value: Int) -> fresh PropertyResult {
     local map = Map<Int, Int>.new()
-    Map.insert(map: mut map, key: read value, value: read value)
+    Map.insert(map: mut map, key: value, value)
     let next = value + 1
-    match Map.insert_old(map: mut map, key: read value, value: read next) {
+    match Map.insert_old(map: mut map, key: value, value: next) {
         Some(previous) => {
             return Property.expect_bool(value: previous == value)
         }
         None => {
-            return Property.fail(message: read "insert_old did not return previous value", counterexample: read String.from_int(value: value))
+            return Property.fail(message: "insert_old did not return previous value", counterexample: String.from_int(value))
         }
     }
 }
 
 fn prop_set_remove_deletes_value(value: Int) -> fresh PropertyResult {
     local set = Set<Int>.new()
-    Set.insert(set: mut set, value: read value)
-    let removed = Set.remove(set: mut set, value: read value)
-    return Property.expect_bool(value: removed && Set.contains(set: read set, value: read value) == false)
+    Set.insert(set: mut set, value)
+    let removed = Set.remove(set: mut set, value)
+    return Property.expect_bool(value: removed && Set.contains(set, value) == false)
 }
 
-fn prop_set_clear_empties(values: read List<Int>) -> fresh PropertyResult {
-    local set = set_from_list(values: read values)
+fn prop_set_clear_empties(values: List<Int>) -> fresh PropertyResult {
+    local set = set_from_list(values)
     Set.clear(set: mut set)
-    return Property.expect_bool(value: Set.len(set: read set) == 0 && Set.is_empty(set: read set))
+    return Property.expect_bool(value: Set.len(set) == 0 && Set.is_empty(set))
 }
 
-fn prop_set_subset_reflexive(values: read List<Int>) -> fresh PropertyResult {
-    let set = set_from_list(values: read values)
-    return Property.expect_bool(value: Set.is_subset(left: read set, right: read set))
+fn prop_set_subset_reflexive(values: List<Int>) -> fresh PropertyResult {
+    let set = set_from_list(values)
+    return Property.expect_bool(value: Set.is_subset(left: set, right: set))
 }
 
-fn prop_set_insert_contains(values: read List<Int>) -> fresh PropertyResult {
+fn prop_set_insert_contains(values: List<Int>) -> fresh PropertyResult {
     local set = Set<Int>.new()
     let mut index = 0
-    while index < List.len(list: read values) {
-        let value = List.get(list: read values, index: index)
-        Set.insert(set: mut set, value: read value)
-        if Set.contains(set: read set, value: read value) == false {
-            return Property.fail(message: read "set lost inserted value", counterexample: read String.from_int(value: value))
+    while index < List.len(list: values) {
+        let value = List.get(list: values, index)
+        Set.insert(set: mut set, value)
+        if Set.contains(set, value) == false {
+            return Property.fail(message: "set lost inserted value", counterexample: String.from_int(value))
         }
         index = index + 1
     }
-    return Property.expect_bool(value: Set.len(set: read set) <= List.len(list: read values))
+    return Property.expect_bool(value: Set.len(set) <= List.len(list: values))
 }
 
-fn prop_set_to_list_membership(values: read List<Int>) -> fresh PropertyResult {
+fn prop_set_to_list_membership(values: List<Int>) -> fresh PropertyResult {
     local set = Set<Int>.new()
     let mut index = 0
-    while index < List.len(list: read values) {
-        let value = List.get(list: read values, index: index)
-        Set.insert(set: mut set, value: read value)
+    while index < List.len(list: values) {
+        let value = List.get(list: values, index)
+        Set.insert(set: mut set, value)
         index = index + 1
     }
 
-    let items = Set.to_list(set: read set)
+    let items = Set.to_list(set)
     let mut item_index = 0
-    while item_index < List.len(list: read items) {
-        let item = List.get(list: read items, index: item_index)
-        if list_contains_value(values: read values, needle: item) == false {
-            return Property.fail(message: read "set to_list returned unknown value", counterexample: read String.from_int(value: item))
+    while item_index < List.len(list: items) {
+        let item = List.get(list: items, index: item_index)
+        if list_contains_value(values, needle: item) == false {
+            return Property.fail(message: "set to_list returned unknown value", counterexample: String.from_int(value: item))
         }
         item_index = item_index + 1
     }
-    return Property.expect_bool(value: List.len(list: read items) == Set.len(set: read set))
+    return Property.expect_bool(value: List.len(list: items) == Set.len(set))
 }
 
-fn prop_set_union_contains_left(values: read List<Int>) -> fresh PropertyResult {
+fn prop_set_union_contains_left(values: List<Int>) -> fresh PropertyResult {
     local left = Set<Int>.new()
     local right = Set<Int>.new()
     let mut index = 0
-    while index < List.len(list: read values) {
-        let value = List.get(list: read values, index: index)
-        if is_even(value: value) {
-            Set.insert(set: mut left, value: read value)
+    while index < List.len(list: values) {
+        let value = List.get(list: values, index)
+        if is_even(value) {
+            Set.insert(set: mut left, value)
         } else {
-            Set.insert(set: mut right, value: read value)
+            Set.insert(set: mut right, value)
         }
         index = index + 1
     }
 
-    let union = Set.union(left: read left, right: read right)
-    let left_items = Set.to_list(set: read left)
+    let union = Set.union(left, right)
+    let left_items = Set.to_list(set: left)
     let mut left_index = 0
-    while left_index < List.len(list: read left_items) {
-        let item = List.get(list: read left_items, index: left_index)
-        if Set.contains(set: read union, value: read item) == false {
-            return Property.fail(message: read "union does not contain left item", counterexample: read String.from_int(value: item))
+    while left_index < List.len(list: left_items) {
+        let item = List.get(list: left_items, index: left_index)
+        if Set.contains(set: union, value: item) == false {
+            return Property.fail(message: "union does not contain left item", counterexample: String.from_int(value: item))
         }
         left_index = left_index + 1
     }
     return Property.pass()
 }
 
-fn prop_set_intersection_subset(values: read List<Int>) -> fresh PropertyResult {
+fn prop_set_intersection_subset(values: List<Int>) -> fresh PropertyResult {
     local left = Set<Int>.new()
     local right = Set<Int>.new()
     let mut index = 0
-    while index < List.len(list: read values) {
-        let value = List.get(list: read values, index: index)
-        Set.insert(set: mut left, value: read value)
-        if is_even(value: value) {
-            Set.insert(set: mut right, value: read value)
+    while index < List.len(list: values) {
+        let value = List.get(list: values, index)
+        Set.insert(set: mut left, value)
+        if is_even(value) {
+            Set.insert(set: mut right, value)
         }
         index = index + 1
     }
 
-    let intersection = Set.intersection(left: read left, right: read right)
-    return Property.expect_bool(value: Set.is_subset(left: read intersection, right: read left))
+    let intersection = Set.intersection(left, right)
+    return Property.expect_bool(value: Set.is_subset(left: intersection, right: left))
 }
 
-fn set_from_list(values: read List<Int>) -> fresh Set<Int> {
+fn set_from_list(values: List<Int>) -> fresh Set<Int> {
     local set = Set<Int>.new()
     let mut index = 0
-    while index < List.len(list: read values) {
-        let value = List.get(list: read values, index: index)
-        Set.insert(set: mut set, value: read value)
+    while index < List.len(list: values) {
+        let value = List.get(list: values, index)
+        Set.insert(set: mut set, value)
         index = index + 1
     }
     return set
 }
 
-fn prop_set_union_contains_both_sides(value: read IntListPair) -> fresh PropertyResult {
-    let left = set_from_list(values: read value.left)
-    let right = set_from_list(values: read value.right)
-    let union = Set.union(left: read left, right: read right)
+fn prop_set_union_contains_both_sides(value: IntListPair) -> fresh PropertyResult {
+    let left = set_from_list(values: value.left)
+    let right = set_from_list(values: value.right)
+    let union = Set.union(left, right)
 
     let mut left_index = 0
-    while left_index < List.len(list: read value.left) {
-        let item = List.get(list: read value.left, index: left_index)
-        if Set.contains(set: read union, value: read item) == false {
-            return Property.fail(message: read "union missing left input", counterexample: read String.from_int(value: item))
+    while left_index < List.len(list: value.left) {
+        let item = List.get(list: value.left, index: left_index)
+        if Set.contains(set: union, value: item) == false {
+            return Property.fail(message: "union missing left input", counterexample: String.from_int(value: item))
         }
         left_index = left_index + 1
     }
 
     let mut right_index = 0
-    while right_index < List.len(list: read value.right) {
-        let item = List.get(list: read value.right, index: right_index)
-        if Set.contains(set: read union, value: read item) == false {
-            return Property.fail(message: read "union missing right input", counterexample: read String.from_int(value: item))
+    while right_index < List.len(list: value.right) {
+        let item = List.get(list: value.right, index: right_index)
+        if Set.contains(set: union, value: item) == false {
+            return Property.fail(message: "union missing right input", counterexample: String.from_int(value: item))
         }
         right_index = right_index + 1
     }
@@ -353,17 +353,17 @@ fn prop_set_union_contains_both_sides(value: read IntListPair) -> fresh Property
     return Property.pass()
 }
 
-fn prop_set_difference_excludes_right(value: read IntListPair) -> fresh PropertyResult {
-    let left = set_from_list(values: read value.left)
-    let right = set_from_list(values: read value.right)
-    let difference = Set.difference(left: read left, right: read right)
+fn prop_set_difference_excludes_right(value: IntListPair) -> fresh PropertyResult {
+    let left = set_from_list(values: value.left)
+    let right = set_from_list(values: value.right)
+    let difference = Set.difference(left, right)
 
-    let right_items = Set.to_list(set: read right)
+    let right_items = Set.to_list(set: right)
     let mut index = 0
-    while index < List.len(list: read right_items) {
-        let item = List.get(list: read right_items, index: index)
-        if Set.contains(set: read difference, value: read item) {
-            return Property.fail(message: read "difference contains right item", counterexample: read String.from_int(value: item))
+    while index < List.len(list: right_items) {
+        let item = List.get(list: right_items, index)
+        if Set.contains(set: difference, value: item) {
+            return Property.fail(message: "difference contains right item", counterexample: String.from_int(value: item))
         }
         index = index + 1
     }
@@ -371,17 +371,17 @@ fn prop_set_difference_excludes_right(value: read IntListPair) -> fresh Property
     return Property.pass()
 }
 
-fn prop_set_intersection_contains_only_both(value: read IntListPair) -> fresh PropertyResult {
-    let left = set_from_list(values: read value.left)
-    let right = set_from_list(values: read value.right)
-    let intersection = Set.intersection(left: read left, right: read right)
-    let items = Set.to_list(set: read intersection)
+fn prop_set_intersection_contains_only_both(value: IntListPair) -> fresh PropertyResult {
+    let left = set_from_list(values: value.left)
+    let right = set_from_list(values: value.right)
+    let intersection = Set.intersection(left, right)
+    let items = Set.to_list(set: intersection)
 
     let mut index = 0
-    while index < List.len(list: read items) {
-        let item = List.get(list: read items, index: index)
-        if Set.contains(set: read left, value: read item) == false || Set.contains(set: read right, value: read item) == false {
-            return Property.fail(message: read "intersection item is not in both sets", counterexample: read String.from_int(value: item))
+    while index < List.len(list: items) {
+        let item = List.get(list: items, index)
+        if Set.contains(set: left, value: item) == false || Set.contains(set: right, value: item) == false {
+            return Property.fail(message: "intersection item is not in both sets", counterexample: String.from_int(value: item))
         }
         index = index + 1
     }
@@ -389,389 +389,389 @@ fn prop_set_intersection_contains_only_both(value: read IntListPair) -> fresh Pr
     return Property.pass()
 }
 
-fn prop_sort_adjacent_order(values: read List<Int>) -> fresh PropertyResult {
-    if List.len(list: read values) < 2 {
+fn prop_sort_adjacent_order(values: List<Int>) -> fresh PropertyResult {
+    if List.len(list: values) < 2 {
         return Property.discard()
     }
 
-    local sorted = List.slice(list: read values, start: 0, len: List.len(list: read values))
+    local sorted = List.slice(list: values, start: 0, len: List.len(list: values))
     List.sort(list: mut sorted)
     let mut index = 1
-    while index < List.len(list: read sorted) {
-        let previous = List.get(list: read sorted, index: index - 1)
-        let current = List.get(list: read sorted, index: index)
+    while index < List.len(list: sorted) {
+        let previous = List.get(list: sorted, index: index - 1)
+        let current = List.get(list: sorted, index)
         if previous > current {
-            return Property.fail(message: read "sort produced descending adjacent pair", counterexample: read "")
+            return Property.fail(message: "sort produced descending adjacent pair", counterexample: "")
         }
         index = index + 1
     }
     return Property.pass()
 }
 
-fn prop_sort_first_last(values: read List<Int>) -> fresh PropertyResult {
-    if List.len(list: read values) == 0 {
+fn prop_sort_first_last(values: List<Int>) -> fresh PropertyResult {
+    if List.len(list: values) == 0 {
         return Property.discard()
     }
 
-    local sorted = List.slice(list: read values, start: 0, len: List.len(list: read values))
+    local sorted = List.slice(list: values, start: 0, len: List.len(list: values))
     List.sort(list: mut sorted)
-    let first = List.get(list: read sorted, index: 0)
-    let last = List.get(list: read sorted, index: List.len(list: read sorted) - 1)
+    let first = List.get(list: sorted, index: 0)
+    let last = List.get(list: sorted, index: List.len(list: sorted) - 1)
     return Property.expect_bool(value: first <= last)
 }
 
 pub fn QuickCheckCollections.run() -> Unit {
     let reverse_summary = Property.check_int_list(
-        name: read "list reverse preserves length after two reverses",
+        name: "list reverse preserves length after two reverses",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_reverse_reverse(values: read values)
+            return prop_reverse_reverse(values)
         },
     )
-    Property.assert_passed(summary: read reverse_summary)
+    Property.assert_passed(summary: reverse_summary)
 
     let take_skip_summary = Property.check_int_list(
-        name: read "list take skip rebuilds original",
+        name: "list take skip rebuilds original",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_take_skip_rebuild(values: read values)
+            return prop_take_skip_rebuild(values)
         },
     )
-    Property.assert_passed(summary: read take_skip_summary)
+    Property.assert_passed(summary: take_skip_summary)
 
     let filter_count_summary = Property.check_int_list(
-        name: read "list filter count matches",
+        name: "list filter count matches",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_filter_count_matches(values: read values)
+            return prop_filter_count_matches(values)
         },
     )
-    Property.assert_passed(summary: read filter_count_summary)
+    Property.assert_passed(summary: filter_count_summary)
 
     let first_last_summary = Property.check_int_list(
-        name: read "list first last match indexed values",
+        name: "list first last match indexed values",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_list_first_last_match_indices(values: read values)
+            return prop_list_first_last_match_indices(values)
         },
     )
-    Property.assert_passed(summary: read first_last_summary)
+    Property.assert_passed(summary: first_last_summary)
 
     let pop_summary = Property.check_int_list(
-        name: read "list pop removes last value",
+        name: "list pop removes last value",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_list_pop_removes_last(values: read values)
+            return prop_list_pop_removes_last(values)
         },
     )
-    Property.assert_passed(summary: read pop_summary)
+    Property.assert_passed(summary: pop_summary)
 
     let set_index_summary = Property.check_int_pair(
-        name: read "list set updates selected index",
+        name: "list set updates selected index",
         cases: 200,
         seed: 20260602,
-        input: read IntPairGen.new(
-            left: read IntRange.new(min: -1000, max: 1000),
-            right: read IntRange.new(min: -1000, max: 1000),
+        input: IntPairGen.new(
+            left: IntRange.new(min: -1000, max: 1000),
+            right: IntRange.new(min: -1000, max: 1000),
         ),
         property: |value| {
-            return prop_list_set_updates_index(value: read value)
+            return prop_list_set_updates_index(value)
         },
     )
-    Property.assert_passed(summary: read set_index_summary)
+    Property.assert_passed(summary: set_index_summary)
 
     let remove_at_summary = Property.check_int_list(
-        name: read "list remove_at removes selected value",
+        name: "list remove_at removes selected value",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_list_remove_at_decreases_len(values: read values)
+            return prop_list_remove_at_decreases_len(values)
         },
     )
-    Property.assert_passed(summary: read remove_at_summary)
+    Property.assert_passed(summary: remove_at_summary)
 
     let clear_list_summary = Property.check_int_list(
-        name: read "list clear empties list",
+        name: "list clear empties list",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_list_clear_empties(values: read values)
+            return prop_list_clear_empties(values)
         },
     )
-    Property.assert_passed(summary: read clear_list_summary)
+    Property.assert_passed(summary: clear_list_summary)
 
     let map_insert_summary = Property.check_int_list(
-        name: read "map insert get roundtrip",
+        name: "map insert get roundtrip",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_map_insert_get(values: read values)
+            return prop_map_insert_get(values)
         },
     )
-    Property.assert_passed(summary: read map_insert_summary)
+    Property.assert_passed(summary: map_insert_summary)
 
     let map_default_summary = Property.check_int(
-        name: read "map get_or_default distinguishes found and missing",
+        name: "map get_or_default distinguishes found and missing",
         cases: 200,
         seed: 20260602,
-        range: read IntRange.new(min: -10000, max: 10000),
+        range: IntRange.new(min: -10000, max: 10000),
         property: |value| {
-            return prop_map_get_or_default_after_insert(value: value)
+            return prop_map_get_or_default_after_insert(value)
         },
     )
-    Property.assert_passed(summary: read map_default_summary)
+    Property.assert_passed(summary: map_default_summary)
 
     let map_remove_summary = Property.check_int(
-        name: read "map remove deletes inserted key",
+        name: "map remove deletes inserted key",
         cases: 200,
         seed: 20260602,
-        range: read IntRange.new(min: -10000, max: 10000),
+        range: IntRange.new(min: -10000, max: 10000),
         property: |value| {
-            return prop_map_remove_deletes_key(value: value)
+            return prop_map_remove_deletes_key(value)
         },
     )
-    Property.assert_passed(summary: read map_remove_summary)
+    Property.assert_passed(summary: map_remove_summary)
 
     let map_keys_values_summary = Property.check_int_list(
-        name: read "map keys and values match map length",
+        name: "map keys and values match map length",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_map_keys_values_match_len(values: read values)
+            return prop_map_keys_values_match_len(values)
         },
     )
-    Property.assert_passed(summary: read map_keys_values_summary)
+    Property.assert_passed(summary: map_keys_values_summary)
 
     let map_clear_summary = Property.check_int_list(
-        name: read "map clear empties map",
+        name: "map clear empties map",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_map_clear_empties(values: read values)
+            return prop_map_clear_empties(values)
         },
     )
-    Property.assert_passed(summary: read map_clear_summary)
+    Property.assert_passed(summary: map_clear_summary)
 
     let map_insert_old_summary = Property.check_int(
-        name: read "map insert_old returns previous value",
+        name: "map insert_old returns previous value",
         cases: 200,
         seed: 20260602,
-        range: read IntRange.new(min: -10000, max: 10000),
+        range: IntRange.new(min: -10000, max: 10000),
         property: |value| {
-            return prop_map_insert_old_reports_previous(value: value)
+            return prop_map_insert_old_reports_previous(value)
         },
     )
-    Property.assert_passed(summary: read map_insert_old_summary)
+    Property.assert_passed(summary: map_insert_old_summary)
 
     let set_remove_summary = Property.check_int(
-        name: read "set remove deletes inserted value",
+        name: "set remove deletes inserted value",
         cases: 200,
         seed: 20260602,
-        range: read IntRange.new(min: -10000, max: 10000),
+        range: IntRange.new(min: -10000, max: 10000),
         property: |value| {
-            return prop_set_remove_deletes_value(value: value)
+            return prop_set_remove_deletes_value(value)
         },
     )
-    Property.assert_passed(summary: read set_remove_summary)
+    Property.assert_passed(summary: set_remove_summary)
 
     let set_clear_summary = Property.check_int_list(
-        name: read "set clear empties set",
+        name: "set clear empties set",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_set_clear_empties(values: read values)
+            return prop_set_clear_empties(values)
         },
     )
-    Property.assert_passed(summary: read set_clear_summary)
+    Property.assert_passed(summary: set_clear_summary)
 
     let set_subset_summary = Property.check_int_list(
-        name: read "set subset is reflexive",
+        name: "set subset is reflexive",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_set_subset_reflexive(values: read values)
+            return prop_set_subset_reflexive(values)
         },
     )
-    Property.assert_passed(summary: read set_subset_summary)
+    Property.assert_passed(summary: set_subset_summary)
 
     let set_insert_summary = Property.check_int_list(
-        name: read "set insert contains values",
+        name: "set insert contains values",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_set_insert_contains(values: read values)
+            return prop_set_insert_contains(values)
         },
     )
-    Property.assert_passed(summary: read set_insert_summary)
+    Property.assert_passed(summary: set_insert_summary)
 
     let set_to_list_summary = Property.check_int_list(
-        name: read "set to_list only returns inserted values",
+        name: "set to_list only returns inserted values",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_set_to_list_membership(values: read values)
+            return prop_set_to_list_membership(values)
         },
     )
-    Property.assert_passed(summary: read set_to_list_summary)
+    Property.assert_passed(summary: set_to_list_summary)
 
     let set_union_summary = Property.check_int_list(
-        name: read "set union contains left side",
+        name: "set union contains left side",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_set_union_contains_left(values: read values)
+            return prop_set_union_contains_left(values)
         },
     )
-    Property.assert_passed(summary: read set_union_summary)
+    Property.assert_passed(summary: set_union_summary)
 
     let set_intersection_summary = Property.check_int_list(
-        name: read "set intersection is subset of left",
+        name: "set intersection is subset of left",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_set_intersection_subset(values: read values)
+            return prop_set_intersection_subset(values)
         },
     )
-    Property.assert_passed(summary: read set_intersection_summary)
+    Property.assert_passed(summary: set_intersection_summary)
 
     let set_union_pair_summary = Property.check_int_list_pair(
-        name: read "set union contains both input sides",
+        name: "set union contains both input sides",
         cases: 200,
         seed: 20260602,
-        input: read IntListPairGen.new(
+        input: IntListPairGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |value| {
-            return prop_set_union_contains_both_sides(value: read value)
+            return prop_set_union_contains_both_sides(value)
         },
     )
-    Property.assert_passed(summary: read set_union_pair_summary)
+    Property.assert_passed(summary: set_union_pair_summary)
 
     let set_difference_pair_summary = Property.check_int_list_pair(
-        name: read "set difference excludes right side",
+        name: "set difference excludes right side",
         cases: 200,
         seed: 20260602,
-        input: read IntListPairGen.new(
+        input: IntListPairGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |value| {
-            return prop_set_difference_excludes_right(value: read value)
+            return prop_set_difference_excludes_right(value)
         },
     )
-    Property.assert_passed(summary: read set_difference_pair_summary)
+    Property.assert_passed(summary: set_difference_pair_summary)
 
     let set_intersection_pair_summary = Property.check_int_list_pair(
-        name: read "set intersection contains only shared items",
+        name: "set intersection contains only shared items",
         cases: 200,
         seed: 20260602,
-        input: read IntListPairGen.new(
+        input: IntListPairGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |value| {
-            return prop_set_intersection_contains_only_both(value: read value)
+            return prop_set_intersection_contains_only_both(value)
         },
     )
-    Property.assert_passed(summary: read set_intersection_pair_summary)
+    Property.assert_passed(summary: set_intersection_pair_summary)
 
     let sort_adjacent_summary = Property.check_int_list(
-        name: read "list sort produces adjacent order",
+        name: "list sort produces adjacent order",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_sort_adjacent_order(values: read values)
+            return prop_sort_adjacent_order(values)
         },
     )
-    Property.assert_passed(summary: read sort_adjacent_summary)
+    Property.assert_passed(summary: sort_adjacent_summary)
 
     let sort_summary = Property.check_int_list(
-        name: read "list sort orders endpoints",
+        name: "list sort orders endpoints",
         cases: 200,
         seed: 20260602,
-        input: read IntListGen.new(
+        input: IntListGen.new(
             max_len: 50,
-            range: read IntRange.new(min: -100, max: 100),
+            range: IntRange.new(min: -100, max: 100),
         ),
         property: |values| {
-            return prop_sort_first_last(values: read values)
+            return prop_sort_first_last(values)
         },
     )
-    Property.assert_passed(summary: read sort_summary)
+    Property.assert_passed(summary: sort_summary)
 
     return Unit
 }

@@ -10,7 +10,7 @@ sum Direction derives(Clone, Eq, Ord, ReviewSchema) {
     West
 }
 
-fn describe(d: read Direction) -> String {
+fn describe(d: Direction) -> String {
     match d {
         North => { return "north" }
         South => { return "south" }
@@ -21,5 +21,5 @@ fn describe(d: read Direction) -> String {
 
 fn main() -> Unit {
     let d = North
-    let desc = describe(d: read d)
+    let desc = describe(d)
 }

@@ -11,18 +11,18 @@ fn sort_ascending(numbers: mut List<Int>) -> Unit {
     List.sort<Int>(list: mut numbers)
 }
 
-fn make_reversed(items: read List<Int>) -> fresh List<Int> {
-    local result = List.reverse<Int>(list: read items)
+fn make_reversed(items: List<Int>) -> fresh List<Int> {
+    local result = List.reverse<Int>(list: items)
     return result
 }
 
-fn check_empty(items: read List<Int>) -> Bool {
-    return List.is_empty<Int>(list: read items)
+fn check_empty(items: List<Int>) -> Bool {
+    return List.is_empty<Int>(list: items)
 }
 
-fn has_positive(items: read List<Int>) -> Bool {
+fn has_positive(items: List<Int>) -> Bool {
     return List.contains<Int>(
-        list: read items,
+        list: items,
         predicate: |x| x > 0,
     )
 }

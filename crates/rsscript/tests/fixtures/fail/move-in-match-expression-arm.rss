@@ -9,7 +9,7 @@ fn take_it(b: take Box) -> Int {
     return b.v
 }
 
-fn use_it(b: read Box) -> Int {
+fn use_it(b: Box) -> Int {
     return b.v
 }
 
@@ -18,11 +18,11 @@ fn main() -> Unit {
     let r = match true {
         true => {
             let moved = take_it(b: take b)
-            use_it(b: read b)
+            use_it(b)
         }
         false => {
             0
         }
     }
-    Log.write(message: read String.from_int(value: r))
+    Log.write(message: String.from_int(value: r))
 }

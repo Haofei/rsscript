@@ -42,7 +42,7 @@ fn PackageRisk.unknown() -> Int {
     return 4
 }
 
-fn package_risk_from_string(value: read String) -> Int {
+fn package_risk_from_string(value: String) -> Int {
     if value == "unknown" {
         return PackageRisk.unknown()
     }
@@ -58,7 +58,7 @@ fn package_risk_from_string(value: read String) -> Int {
     return PackageRisk.low()
 }
 
-fn package_reason_is_modeled(reason: read String) -> Bool {
+fn package_reason_is_modeled(reason: String) -> Bool {
     if reason == "manifest declares unknown package risk" {
         return true
     }
@@ -134,12 +134,12 @@ fn package_reason_is_modeled(reason: read String) -> Bool {
     return false
 }
 
-fn count_unmodeled_package_reasons(reasons: read JsonValue) -> Result<Int, JsonError> {
+fn count_unmodeled_package_reasons(reasons: JsonValue) -> Result<Int, JsonError> {
     return Json.array_count_where(
-        value: read reasons,
+        value: reasons,
         predicate: |item| {
-            let reason = Json.as_string(value: read item)?
-            if package_reason_is_modeled(reason: read reason) {
+            let reason = Json.as_string(value: item)?
+            if package_reason_is_modeled(reason) {
                 return Ok(false)
             }
 
@@ -148,29 +148,29 @@ fn count_unmodeled_package_reasons(reasons: read JsonValue) -> Result<Int, JsonE
     )
 }
 
-fn parse_package_risk_facts(value: read JsonValue) -> Result<fresh PackageRiskFacts, JsonError> {
-    let risk = Json.field_string(value: read value, name: read "risk")?
-    let reasons = Json.field(value: read value, name: read "reasons")?
-    let summary = Json.field(value: read value, name: read "summary")?
+fn parse_package_risk_facts(value: JsonValue) -> Result<fresh PackageRiskFacts, JsonError> {
+    let risk = Json.field_string(value, name: "risk")?
+    let reasons = Json.field(value, name: "reasons")?
+    let summary = Json.field(value, name: "summary")?
 
     return PackageRiskFacts(
-        declared_risk: package_risk_from_string(value: read risk),
-        errors: Json.field_int(value: read summary, name: read "errors")?,
-        has_manifest_unknown: Json.array_contains_string(value: read reasons, item: read "manifest declares unknown package risk")?,
-        has_review_unknown: Json.array_contains_string(value: read reasons, item: read "review map contains unknown functions")?,
-        has_interface_error: Json.array_contains_string(value: read reasons, item: read "public .rssi contract contains frontend errors")?,
-        has_native: Json.array_contains_string(value: read reasons, item: read "native Rust wrapper enabled")?,
-        has_native_build: Json.array_contains_string(value: read reasons, item: read "native Rust build scripts require review")?,
-        has_native_proc_macro: Json.array_contains_string(value: read reasons, item: read "native Rust proc macros require review")?,
-        has_native_unsafe: Json.array_contains_string(value: read reasons, item: read "native Rust unsafe policy requires review")?,
-        has_native_links: Json.array_contains_string(value: read reasons, item: read "native Rust links external libraries")?,
-        has_feature_boundary: Json.array_contains_string(value: read reasons, item: read "package feature `native-tls` may change native/unsafe/build risk")?,
-        has_review_must: Json.array_contains_string(value: read reasons, item: read "review map contains must-review functions")?,
-        unmodeled_reasons: count_unmodeled_package_reasons(reasons: read reasons)?,
+        declared_risk: package_risk_from_string(value: risk),
+        errors: Json.field_int(value: summary, name: "errors")?,
+        has_manifest_unknown: Json.array_contains_string(value: reasons, item: "manifest declares unknown package risk")?,
+        has_review_unknown: Json.array_contains_string(value: reasons, item: "review map contains unknown functions")?,
+        has_interface_error: Json.array_contains_string(value: reasons, item: "public .rssi contract contains frontend errors")?,
+        has_native: Json.array_contains_string(value: reasons, item: "native Rust wrapper enabled")?,
+        has_native_build: Json.array_contains_string(value: reasons, item: "native Rust build scripts require review")?,
+        has_native_proc_macro: Json.array_contains_string(value: reasons, item: "native Rust proc macros require review")?,
+        has_native_unsafe: Json.array_contains_string(value: reasons, item: "native Rust unsafe policy requires review")?,
+        has_native_links: Json.array_contains_string(value: reasons, item: "native Rust links external libraries")?,
+        has_feature_boundary: Json.array_contains_string(value: reasons, item: "package feature `native-tls` may change native/unsafe/build risk")?,
+        has_review_must: Json.array_contains_string(value: reasons, item: "review map contains must-review functions")?,
+        unmodeled_reasons: count_unmodeled_package_reasons(reasons)?,
     )
 }
 
-fn classify_package_risk(facts: read PackageRiskFacts) -> Int {
+fn classify_package_risk(facts: PackageRiskFacts) -> Int {
     if facts.has_manifest_unknown || facts.has_review_unknown || facts.has_interface_error {
         return PackageRisk.unknown()
     }
@@ -203,14 +203,14 @@ fn empty_package_risk_summary() -> fresh PackageRiskSummary {
 }
 
 fn add_package_risk_case(
-    summary: read PackageRiskSummary,
-    facts: read PackageRiskFacts,
+    summary: PackageRiskSummary,
+    facts: PackageRiskFacts,
 ) -> fresh PackageRiskSummary {
-    let actual = classify_package_risk(facts: read facts)
+    let actual = classify_package_risk(facts)
     let next_mismatches = next_mismatch_count(
-        summary: read summary,
-        facts: read facts,
-        actual: actual,
+        summary,
+        facts,
+        actual,
     )
     let next_unmodeled = summary.unmodeled_reasons + facts.unmodeled_reasons
 
@@ -262,8 +262,8 @@ fn add_package_risk_case(
 }
 
 fn next_mismatch_count(
-    summary: read PackageRiskSummary,
-    facts: read PackageRiskFacts,
+    summary: PackageRiskSummary,
+    facts: PackageRiskFacts,
     actual: Int,
 ) -> Int {
     if actual != facts.declared_risk {
@@ -274,33 +274,33 @@ fn next_mismatch_count(
 }
 
 fn fold_package_risk_case(
-    summary: read PackageRiskSummary,
-    item: read JsonValue,
+    summary: PackageRiskSummary,
+    item: JsonValue,
 ) -> Result<fresh PackageRiskSummary, JsonError> {
-    let facts = parse_package_risk_facts(value: read item)?
+    let facts = parse_package_risk_facts(value: item)?
 
-    return Ok(add_package_risk_case(summary: read summary, facts: read facts))
+    return Ok(add_package_risk_case(summary, facts))
 }
 
 fn selfhost_package_risk_summary() -> Result<fresh PackageRiskSummary, JsonError> {
     let input = Args.get_or_default(
         index: 0,
-        default: read "tests/fixtures/pass/selfhost-package-review.json",
+        default: "tests/fixtures/pass/selfhost-package-review.json",
     )
-    let path = Path.from_string(value: read input)
-    let json = Json.parse_file(path: read path)?
+    let path = Path.from_string(value: input)
+    let json = Json.parse_file(path)?
 
     return Json.array_fold<PackageRiskSummary>(
-        value: read json,
-        initial: read empty_package_risk_summary(),
+        value: json,
+        initial: empty_package_risk_summary(),
         folder: |summary, item| {
-            return fold_package_risk_case(summary: read summary, item: read item)
+            return fold_package_risk_case(summary, item)
         },
     )
 }
 
 fn package_risk_summary_line(
-    summary: read PackageRiskSummary,
+    summary: PackageRiskSummary,
 ) -> fresh String {
     let total = String.from_int(value: summary.total_cases)
     let mismatches = String.from_int(value: summary.mismatches)
@@ -309,27 +309,27 @@ fn package_risk_summary_line(
     let elevated = String.from_int(value: summary.elevated_cases)
     let high = String.from_int(value: summary.high_cases)
     let unknown = String.from_int(value: summary.unknown_cases)
-    let first = String.concat(left: read "selfhost package risk cases=", right: read total)
-    let second = String.concat(left: read first, right: read " mismatches=")
-    let third = String.concat(left: read second, right: read mismatches)
-    let fourth = String.concat(left: read third, right: read " unmodeled_reasons=")
-    let fifth = String.concat(left: read fourth, right: read unmodeled)
-    let sixth = String.concat(left: read fifth, right: read " low=")
-    let seventh = String.concat(left: read sixth, right: read low)
-    let eighth = String.concat(left: read seventh, right: read " elevated=")
-    let ninth = String.concat(left: read eighth, right: read elevated)
-    let tenth = String.concat(left: read ninth, right: read " high=")
-    let eleventh = String.concat(left: read tenth, right: read high)
-    let twelfth = String.concat(left: read eleventh, right: read " unknown=")
+    let first = String.concat(left: "selfhost package risk cases=", right: total)
+    let second = String.concat(left: first, right: " mismatches=")
+    let third = String.concat(left: second, right: mismatches)
+    let fourth = String.concat(left: third, right: " unmodeled_reasons=")
+    let fifth = String.concat(left: fourth, right: unmodeled)
+    let sixth = String.concat(left: fifth, right: " low=")
+    let seventh = String.concat(left: sixth, right: low)
+    let eighth = String.concat(left: seventh, right: " elevated=")
+    let ninth = String.concat(left: eighth, right: elevated)
+    let tenth = String.concat(left: ninth, right: " high=")
+    let eleventh = String.concat(left: tenth, right: high)
+    let twelfth = String.concat(left: eleventh, right: " unknown=")
 
-    return String.concat(left: read twelfth, right: read unknown)
+    return String.concat(left: twelfth, right: unknown)
 }
 
 pub fn main() -> Result<Unit, JsonError> {
     let summary = selfhost_package_risk_summary()?
-    let summary_line = package_risk_summary_line(summary: read summary)
+    let summary_line = package_risk_summary_line(summary)
 
-    Log.write(message: read summary_line)
+    Log.write(message: summary_line)
 
     Assert.equal_int(left: summary.total_cases, right: 5)
     Assert.equal_int(left: summary.mismatches, right: 0)

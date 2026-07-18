@@ -7,10 +7,10 @@ fn deposit() -> Int {
     account.balance = 10
 
     let mut items = List<Int>.new()
-    List.push(list: mut items, value: read 1)
+    List.push(list: mut items, value: 1)
     items[0] = account.balance
 
-    return List.get(list: read items, index: 0)
+    return List.get(list: items, index: 0)
 }
 
 fn main() -> Unit {

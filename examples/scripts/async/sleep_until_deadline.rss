@@ -2,8 +2,8 @@ features: async
 
 async fn main() -> Result<Unit, TimerError> {
     let budget = Duration.ms(value: 10)
-    let deadline = Deadline.after(duration: read budget)
-    await Timer.sleep_until(deadline: read deadline)?
-    Log.write(message: read "slept until deadline ok")
+    let deadline = Deadline.after(duration: budget)
+    await Timer.sleep_until(deadline)?
+    Log.write(message: "slept until deadline ok")
     return Ok(Unit)
 }

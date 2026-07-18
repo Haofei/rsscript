@@ -1349,7 +1349,7 @@ fn check_argument_effects(
     analyzer: &mut Analyzer<'_>,
     args: &[HirCallArg],
     call_name: &str,
-    allow_positional_args: bool,
+    _allow_positional_args: bool,
     param_effects: &HashMap<String, &'static str>,
     resolved_names: &[Option<&str>],
 ) {
@@ -1360,22 +1360,18 @@ fn check_argument_effects(
         let Some(expected) = param_effects.get(name) else {
             continue;
         };
-        if arg.name.is_none()
-            && allow_positional_args
-            && *expected == "read"
-            && expr_data_effect(&arg.value).is_none()
-        {
+        if *expected == "read" && expr_data_effect(&arg.value).is_none() {
             continue;
         }
         if expr_data_effect(&arg.value) != Some(*expected) {
             analyzer.diagnostics.push(
                 Diagnostic::error(
                     code::MISSING_DATA_EFFECT,
-                    format!("argument `{name}` for `{call_name}` is missing `{expected}`."),
+                    format!("argument `{name}` for `{call_name}` must use `{expected}`."),
                     hir_expr_span(&arg.value).clone(),
-                    "missing data effect",
+                    "data effect mismatch",
                 )
-                .with_cause("Non-Copy parameters require an explicit `read`, `mut`, or `take` call-site effect.")
+                .with_cause("A bare argument is `read`; `mut` and `take` must be written explicitly and match the parameter.")
                 .with_fix_edit(
                     "add_data_effect",
                     format!("Write `{name}: {expected} ...` at the call site."),
@@ -1620,6 +1616,18 @@ fn check_generic_call_bounds(
         let Some(actual) = substitutions.get(param) else {
             continue;
         };
+        // A substitution that still names the callee's own type parameter is
+        // unresolved, not evidence that the bound failed. A caller type
+        // parameter with the same spelling remains checkable through its own
+        // declared bound below.
+        if actual == param
+            && !function
+                .type_params
+                .iter()
+                .any(|function_param| function_param.name == *actual)
+        {
+            continue;
+        }
         if type_satisfies_protocol_bound(analyzer, function, actual, protocol) {
             continue;
         }
@@ -4610,6 +4618,20 @@ pub(crate) fn argument_type_matches(expected: &str, actual: &str) -> bool {
     if strip_fresh_type(expected) == strip_fresh_type(actual) {
         return true;
     }
+    if function_type_matches(expected, actual) {
+        return true;
+    }
+    if type_root_name(expected) == type_root_name(actual)
+        && let (Some(expected_args), Some(actual_args)) =
+            (type_arg_names(expected), type_arg_names(actual))
+        && expected_args.len() == actual_args.len()
+        && expected_args
+            .into_iter()
+            .zip(actual_args)
+            .all(|(expected, actual)| argument_type_matches(expected.trim(), actual.trim()))
+    {
+        return true;
+    }
     if actual == "Option<?>" {
         return type_root_name(expected) == "Option";
     }
@@ -4617,6 +4639,33 @@ pub(crate) fn argument_type_matches(expected: &str, actual: &str) -> bool {
         return type_root_name(expected) == "Result";
     }
     false
+}
+
+/// Function-type parameter effects are checked at closure/call boundaries.
+/// Type identity therefore compares their parameter types after normalizing an
+/// omitted effect to the same bare type as an explicit `read`.
+fn function_type_matches(expected: &str, actual: &str) -> bool {
+    if !is_fn_type(expected)
+        || !is_fn_type(actual)
+        || fn_type_prefix(expected) != fn_type_prefix(actual)
+    {
+        return false;
+    }
+    let expected_params = fn_param_types(expected);
+    let actual_params = fn_param_types(actual);
+    if expected_params.len() != actual_params.len()
+        || !expected_params
+            .iter()
+            .zip(actual_params.iter())
+            .all(|(expected, actual)| argument_type_matches(expected, actual))
+    {
+        return false;
+    }
+    match (fn_return_type(expected), fn_return_type(actual)) {
+        (Some(expected), Some(actual)) => argument_type_matches(expected, actual),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 fn json_value_accepts_literal(expected: &str, value: &HirExpr) -> bool {
@@ -4905,5 +4954,25 @@ mod substitution_tests {
         subs.insert("T".to_string(), "Int".to_string());
         let out = substitute_type_params(&ty, &subs);
         assert!(out.starts_with("List<List<"));
+    }
+
+    #[test]
+    fn function_type_matching_normalizes_omitted_read() {
+        assert!(argument_type_matches(
+            "Fn(Int) -> Int",
+            "Fn(read Int) -> Int"
+        ));
+        assert!(argument_type_matches(
+            "List<owned Fn(Int) -> Int>",
+            "List<owned Fn(read Int) -> Int>"
+        ));
+        assert!(!argument_type_matches(
+            "Fn(Int) -> Int",
+            "Fn(Int) -> String"
+        ));
+        assert!(!argument_type_matches(
+            "noescape Fn(Int) -> Int",
+            "Fn(read Int) -> Int"
+        ));
     }
 }

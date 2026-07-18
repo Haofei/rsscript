@@ -13,7 +13,7 @@ fn tool_specs() -> fresh JsonValue {
     return specs.to_json_values()
 }
 
-fn function_tool(name: read String, description: read String, parameters: read JsonValue) -> fresh JsonValue {
+fn function_tool(name: String, description: String, parameters: JsonValue) -> fresh JsonValue {
     return {
         "type": "function",
         "function": {

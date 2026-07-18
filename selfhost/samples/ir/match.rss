@@ -1,0 +1,6 @@
+fn classify(value: Int) -> Int {
+    match value {
+        0 => return 1
+        other => return other
+    }
+}

@@ -1,11 +1,11 @@
 // A named function can be passed where a `Fn(...)` is expected; it desugars to a
 // forwarding closure, so no inline lambda or defunctionalizing struct is needed.
 
-fn is_even(x: read Int) -> Bool {
+fn is_even(x: Int) -> Bool {
     return x % 2 == 0
 }
 
-fn count_evens(xs: read List<Int>) -> Int {
-    let evens = List.filter(list: read xs, predicate: is_even)
-    return List.len(list: read evens)
+fn count_evens(xs: List<Int>) -> Int {
+    let evens = List.filter(list: xs, predicate: is_even)
+    return List.len(list: evens)
 }

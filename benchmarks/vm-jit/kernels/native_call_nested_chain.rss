@@ -3,8 +3,8 @@
 // hot(limit) -> mid(value, salt) -> leaf(value, salt).
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -19,7 +19,7 @@ fn leaf(value: Int, salt: Int) -> Int {
 }
 
 fn mid(value: Int, salt: Int) -> Int {
-    let left = leaf(value: value, salt: salt)
+    let left = leaf(value, salt)
     let right = leaf(value: value + 1, salt: salt + 1)
     return left + right
 }
@@ -36,7 +36,7 @@ fn hot(limit: Int) -> Int {
 
 fn main() -> Unit {
     let limit = bench_size(default: 250000)
-    let result = hot(limit: limit)
-    Log.write(message: read String.from_int(value: result))
+    let result = hot(limit)
+    Log.write(message: String.from_int(value: result))
     return Unit
 }

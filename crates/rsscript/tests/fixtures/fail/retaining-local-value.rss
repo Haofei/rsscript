@@ -9,12 +9,12 @@ struct Image {
     pixels: Buffer
 }
 
-fn cache_put(cache: mut Cache, value: read Image) -> Unit
+fn cache_put(cache: mut Cache, value: Image) -> Unit
     effects(retains(value))
 {
 }
 
-fn run(cache: mut Cache, path: read Path) -> Unit {
-    local image = Image.load(path: read path)
-    cache_put(cache: mut cache, value: read image)
+fn run(cache: mut Cache, path: Path) -> Unit {
+    local image = Image.load(path)
+    cache_put(cache: mut cache, value: image)
 }

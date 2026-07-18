@@ -6,8 +6,8 @@ features: native
 // equal length, and paths must be unique. The call binds `address` and serves
 // requests until a fatal error, so a successful bind never returns `Ok`.
 native fn HttpServer.serve_static(
-    address: read String,
-    paths: read List<String>,
-    bodies: read List<String>,
+    address: String,
+    paths: List<String>,
+    bodies: List<String>,
 ) -> Result<Unit, String>
     effects(native)

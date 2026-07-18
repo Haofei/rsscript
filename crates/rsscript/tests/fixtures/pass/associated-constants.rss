@@ -5,10 +5,10 @@ const Device.DEFAULT: String = "cpu"
 const Device.COUNT: Int = 4
 
 fn describe() -> String {
-    return String.concat(left: read Device.DEFAULT, right: read String.from_int(value: Device.COUNT))
+    return String.concat(left: Device.DEFAULT, right: String.from_int(value: Device.COUNT))
 }
 
 fn main() -> Unit {
-    Log.write(message: read describe())
+    Log.write(message: describe())
     return Unit
 }

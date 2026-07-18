@@ -3,7 +3,7 @@ struct StringView {
     value: String
 }
 
-fn normalize_path(path: read String) -> fresh StringView
+fn normalize_path(path: String) -> fresh StringView
     effects(pure)
 {
     return StringView(value: read path)

@@ -8,7 +8,7 @@ struct UploadPlan {
 class RetainedImageStore {
 }
 
-fn RetainedImageStore.store(cache: mut RetainedImageStore, image: read Image) -> Unit
+fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Image) -> Unit
     effects(retains(image))
 
 fn audit_step(callback: noescape Fn()) -> Unit {
@@ -16,27 +16,27 @@ fn audit_step(callback: noescape Fn()) -> Unit {
     return Unit
 }
 
-fn HttpError.from_config(error: read ConfigError) -> HttpError
-fn HttpError.from_json(error: read JsonError) -> HttpError
-fn HttpError.from_image(error: read ImageError) -> HttpError
-fn HttpError.from_db(error: read DbError) -> HttpError
+fn HttpError.from_config(error: ConfigError) -> HttpError
+fn HttpError.from_json(error: JsonError) -> HttpError
+fn HttpError.from_image(error: ImageError) -> HttpError
+fn HttpError.from_db(error: DbError) -> HttpError
 
-fn decode_upload(request: read Request) -> Result<fresh UploadPlan, JsonError> {
-    let body = Request.path(request: read request)
-    let json = Json.parse(text: read body)?
-    local input_text = Json.field_string(value: read json, name: read "input")?
-    local output_text = Json.field_string(value: read json, name: read "output")?
-    local input = Path.from_string(value: read input_text)
-    local output = Path.from_string(value: read output_text)
+fn decode_upload(request: Request) -> Result<fresh UploadPlan, JsonError> {
+    let body = Request.path(request)
+    let json = Json.parse(text: body)?
+    local input_text = Json.field_string(value: json, name: "input")?
+    local output_text = Json.field_string(value: json, name: "output")?
+    local input = Path.from_string(value: input_text)
+    local output = Path.from_string(value: output_text)
 
     return UploadPlan(input: take input, output: take output)
 }
 
-fn transform_image(plan: read UploadPlan, cache: mut RetainedImageStore) -> Result<Unit, ImageError> {
-    local image = Image.load(path: read plan.input)?
+fn transform_image(plan: UploadPlan, cache: mut RetainedImageStore) -> Result<Unit, ImageError> {
+    local image = Image.load(path: plan.input)?
 
     audit_step(callback: || {
-        Image.inspect(image: read image)
+        Image.inspect(image)
     })
 
     Image.resize(image: mut image, width: 640, height: 480)
@@ -44,93 +44,93 @@ fn transform_image(plan: read UploadPlan, cache: mut RetainedImageStore) -> Resu
     Image.sharpen(image: mut image)
 
     let shared = manage image
-    RetainedImageStore.store(cache: mut cache, image: read shared)
-    Image.save(image: read shared, path: read plan.output)?
+    RetainedImageStore.store(cache: mut cache, image: shared)
+    Image.save(image: shared, path: plan.output)?
 
     return Ok(Unit)
 }
 
-fn reload_settings(path: read Path, store: mut ConfigStore) -> Result<Unit, ConfigError> {
-    let config = Config.load(path: read path)?
-    ConfigStore.replace(store: mut store, value: read config)
+fn reload_settings(path: Path, store: mut ConfigStore) -> Result<Unit, ConfigError> {
+    let config = Config.load(path)?
+    ConfigStore.replace(store: mut store, value: config)
 
     return Ok(Unit)
 }
 
-fn run_query(url: read Url, sql: read String) -> Result<Unit, DbError> {
+fn run_query(url: Url, sql: String) -> Result<Unit, DbError> {
     local pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.open(url: read url),
+        create: || DbConnection.open(url),
         max_size: 4,
     )
 
     with ResourcePool.borrow(pool: mut pool) as conn {
-        DbConnection.query(conn: mut conn, sql: read sql)?
+        DbConnection.query(conn: mut conn, sql)?
     }
 
     return Ok(Unit)
 }
 
-fn reload_settings_http(path: read Path, store: mut ConfigStore) -> Result<Unit, HttpError> {
-    match reload_settings(path: read path, store: mut store) {
+fn reload_settings_http(path: Path, store: mut ConfigStore) -> Result<Unit, HttpError> {
+    match reload_settings(path, store: mut store) {
         Ok(unit) => {
             return Ok(Unit)
         }
         Err(error) => {
-            return Err(HttpError.from_config(error: read error))
+            return Err(HttpError.from_config(error))
         }
     }
 }
 
-fn decode_upload_http(request: read Request) -> Result<UploadPlan, HttpError> {
-    match decode_upload(request: read request) {
+fn decode_upload_http(request: Request) -> Result<UploadPlan, HttpError> {
+    match decode_upload(request) {
         Ok(plan) => {
             return Ok(plan)
         }
         Err(error) => {
-            return Err(HttpError.from_json(error: read error))
+            return Err(HttpError.from_json(error))
         }
     }
 }
 
-fn transform_image_http(plan: read UploadPlan, cache: mut RetainedImageStore) -> Result<Unit, HttpError> {
-    match transform_image(plan: read plan, cache: mut cache) {
+fn transform_image_http(plan: UploadPlan, cache: mut RetainedImageStore) -> Result<Unit, HttpError> {
+    match transform_image(plan, cache: mut cache) {
         Ok(unit) => {
             return Ok(Unit)
         }
         Err(error) => {
-            return Err(HttpError.from_image(error: read error))
+            return Err(HttpError.from_image(error))
         }
     }
 }
 
-fn run_query_http(url: read Url, sql: read String) -> Result<Unit, HttpError> {
-    match run_query(url: read url, sql: read sql) {
+fn run_query_http(url: Url, sql: String) -> Result<Unit, HttpError> {
+    match run_query(url, sql) {
         Ok(unit) => {
             return Ok(Unit)
         }
         Err(error) => {
-            return Err(HttpError.from_db(error: read error))
+            return Err(HttpError.from_db(error))
         }
     }
 }
 
 fn handle_upload(
-    request: read Request,
+    request: Request,
     cache: mut RetainedImageStore,
     config_store: mut ConfigStore,
     counter: mut Counter,
-    db_url: read Url,
-    sql: read String,
+    db_url: Url,
+    sql: String,
 ) -> Result<fresh Response, HttpError> {
-    let config_path = Path.from_string(value: read "config.json")
-    reload_settings_http(path: read config_path, store: mut config_store)?
+    let config_path = Path.from_string(value: "config.json")
+    reload_settings_http(path: config_path, store: mut config_store)?
 
-    let plan = decode_upload_http(request: read request)?
-    transform_image_http(plan: read plan, cache: mut cache)?
-    run_query_http(url: read db_url, sql: read sql)?
+    let plan = decode_upload_http(request)?
+    transform_image_http(plan, cache: mut cache)?
+    run_query_http(url: db_url, sql)?
 
     Counter.add(counter: mut counter, amount: 1)
 
-    let body = ConfigStore.name(store: read config_store)
-    return Response.ok(body: read body)?
+    let body = ConfigStore.name(store: config_store)
+    return Response.ok(body)?
 }

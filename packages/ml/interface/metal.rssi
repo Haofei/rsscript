@@ -32,9 +32,9 @@ pub native fn Metal.device_name() -> fresh String
 // buffer(inputs.len()), sized `out_len` f32s, dispatched over `threads` linear grid
 // threads. Returns the output floats, or a TensorError on no-GPU / compile failure.
 pub native fn Metal.gpu_run_msl(
-    source: read String,
-    fn_name: read String,
-    inputs: read List<List<Float>>,
+    source: String,
+    fn_name: String,
+    inputs: List<List<Float>>,
     out_len: Int,
     threads: Int,
 ) -> Result<fresh List<Float>, TensorError>

@@ -9,9 +9,9 @@ resource DbConnection {
     }
 }
 
-fn bad_pool(url: read Url) -> Unit {
+fn bad_pool(url: Url) -> Unit {
     let pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.open(url: read url),
+        create: || DbConnection.open(url),
         max_size: 4,
     )
 }

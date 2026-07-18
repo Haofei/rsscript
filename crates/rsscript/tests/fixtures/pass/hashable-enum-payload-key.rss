@@ -10,7 +10,7 @@ sum Token derives(Clone, Eq, Hash) {
     Name(text: String)
 }
 
-fn classify(token: read Token) -> Int {
+fn classify(token: Token) -> Int {
     match token {
         End => { return 0 }
         Number(value) => { return value }
@@ -22,10 +22,10 @@ fn main() -> Unit {
     let counts = Map.new<Token, Int>()
     let end = End
 
-    Map.insert(map: mut counts, key: read end, value: read classify(token: read end))
-    let here = Map.contains_key(map: read counts, key: read end)
+    Map.insert(map: mut counts, key: end, value: classify(token: end))
+    let here = Map.contains_key(map: counts, key: end)
     if here {
-        Log.write(message: read "token seen")
+        Log.write(message: "token seen")
     }
     return Unit
 }

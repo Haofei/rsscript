@@ -3,6 +3,6 @@ struct Point {
     x: Int
 }
 
-fn bad(right: read Point) -> Unit {
+fn bad(right: Point) -> Unit {
     let sum = Point + right
 }

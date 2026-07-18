@@ -1,37 +1,37 @@
-pub fn Result.is_ok<T, E>(value: read Result<T, E>) -> Bool
+pub fn Result.is_ok<T, E>(value: Result<T, E>) -> Bool
     effects(pure)
 
-pub fn Result.is_err<T, E>(value: read Result<T, E>) -> Bool
+pub fn Result.is_err<T, E>(value: Result<T, E>) -> Bool
     effects(pure)
 
-pub fn Result.unwrap_or<T, E>(value: read Result<T, E>, default: read T) -> T
+pub fn Result.unwrap_or<T, E>(value: Result<T, E>, default: T) -> T
     effects(pure)
 
-pub fn Result.ok<T, E>(value: read Result<T, E>) -> Option<T>
+pub fn Result.ok<T, E>(value: Result<T, E>) -> Option<T>
     effects(pure)
 
-pub fn Result.err<T, E>(value: read Result<T, E>) -> Option<E>
+pub fn Result.err<T, E>(value: Result<T, E>) -> Option<E>
     effects(pure)
 
-pub fn Result.err_message<T, E>(value: read Result<T, E>) -> Option<String>
+pub fn Result.err_message<T, E>(value: Result<T, E>) -> Option<String>
     effects(pure)
 
 pub fn Result.map_error<T, E, F>(
-    result: read Result<T, E>,
+    result: Result<T, E>,
     mapper: noescape Fn(E) -> F,
 ) -> Result<T, F>
 
 pub fn Result.and_then<T, E, U>(
-    result: read Result<T, E>,
+    result: Result<T, E>,
     mapper: noescape Fn(T) -> Result<U, E>,
 ) -> Result<U, E>
 
 pub fn Result.map<T, E, U>(
-    result: read Result<T, E>,
+    result: Result<T, E>,
     mapper: noescape Fn(T) -> U,
 ) -> Result<U, E>
 
 pub fn Result.unwrap_or_else<T, E>(
-    result: read Result<T, E>,
+    result: Result<T, E>,
     fallback: noescape Fn(E) -> T,
 ) -> T

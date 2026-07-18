@@ -4,19 +4,19 @@ fn main() -> Unit {
     local root_value = Environment.root()
     let root = manage root_value
 
-    local child_value = Environment.child(parent: read root)
+    local child_value = Environment.child(parent: root)
     let child = manage child_value
 
-    local function_value = FunctionObject.new(closure: read child)
+    local function_value = FunctionObject.new(closure: child)
     let function = manage function_value
 
-    Environment.bind_function(env: mut child, function: read function)
+    Environment.bind_function(env: mut child, function)
 
-    if Environment.has_parent(env: read child)
-        && Environment.has_function(env: read child)
-        && FunctionObject.has_closure(function: read function)
+    if Environment.has_parent(env: child)
+        && Environment.has_function(env: child)
+        && FunctionObject.has_closure(function)
     {
-        Log.write(message: read "interpreter cycle linked")
+        Log.write(message: "interpreter cycle linked")
     }
 
     return Unit

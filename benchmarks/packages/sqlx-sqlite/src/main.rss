@@ -12,8 +12,8 @@ features: local
 // modes, so the difference between them is RSS execution + bridge overhead.
 
 fn arg_int(index: Int, default: Int) -> Int {
-    let raw = Args.get_or_default(index: index, default: read String.from_int(value: default))
-    match String.parse_int(value: read raw) {
+    let raw = Args.get_or_default(index, default: String.from_int(value: default))
+    match String.parse_int(value: raw) {
         Some(value) => {
             return value
         }
@@ -25,34 +25,34 @@ fn arg_int(index: Int, default: Int) -> Int {
 
 fn db_url() -> fresh String {
     let temp = Env.temp_dir()
-    let db_path = Path.join(base: read temp, child: read "rss-sqlx-bench.db")
-    let db_string = Path.to_string(path: read db_path)
-    let prefixed = String.concat(left: read "sqlite://", right: read db_string)
+    let db_path = Path.join(base: temp, child: "rss-sqlx-bench.db")
+    let db_string = Path.to_string(path: db_path)
+    let prefixed = String.concat(left: "sqlite://", right: db_string)
 
-    return String.concat(left: read prefixed, right: read "?mode=rwc")
+    return String.concat(left: prefixed, right: "?mode=rwc")
 }
 
-fn setup(url: read String, rows: Int) -> Result<Unit, String> {
-    Sqlx.execute(url: read url, sql: read "drop table if exists bench_item")?
-    Sqlx.execute(url: read url, sql: read "create table bench_item(name text)")?
+fn setup(url: String, rows: Int) -> Result<Unit, String> {
+    Sqlx.execute(url: url, sql: "drop table if exists bench_item")?
+    Sqlx.execute(url: url, sql: "create table bench_item(name text)")?
     let mut index = 0
     while index < rows {
-        Sqlx.execute(url: read url, sql: read "insert into bench_item values ('x')")?
+        Sqlx.execute(url: url, sql: "insert into bench_item values ('x')")?
         index = index + 1
     }
 
     return Ok(Unit)
 }
 
-fn run_queries(url: read String, limit: Int) -> Result<Int, String> {
+fn run_queries(url: String, limit: Int) -> Result<Int, String> {
     let mut index = 0
     let mut total = 0
     while index < limit {
         let names = Sqlx.query_strings(
-            url: read url,
-            sql: read "select name from bench_item",
+            url: url,
+            sql: "select name from bench_item",
         )?
-        total = total + List.len(list: read names)
+        total = total + List.len(list: names)
         index = index + 1
     }
 
@@ -63,9 +63,9 @@ fn main() -> Result<Unit, String> {
     let url = db_url()
     let limit = arg_int(index: 0, default: 500)
     let rows = arg_int(index: 1, default: 200)
-    setup(url: read url, rows: rows)?
-    let total = run_queries(url: read url, limit: limit)?
-    Log.write(message: read String.from_int(value: total))
+    setup(url, rows)?
+    let total = run_queries(url, limit)?
+    Log.write(message: String.from_int(value: total))
 
     return Ok(Unit)
 }

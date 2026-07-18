@@ -11,7 +11,7 @@ pub native fn Args.get(index: Int) -> Option<String>
 
 pub native fn Args.get_or_default(
     index: Int,
-    default: read String,
+    default: String,
 ) -> String
     effects(native)
 
