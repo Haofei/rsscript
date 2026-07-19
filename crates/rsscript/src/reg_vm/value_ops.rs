@@ -222,11 +222,11 @@ pub(super) fn sha3_256_digest(value: &[u8]) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
-pub(super) fn shake128_digest(value: &[u8], out_len: i64) -> Vec<u8> {
+pub(super) fn shake128_digest(value: &[u8], out_len: usize) -> Vec<u8> {
     let mut hasher = Shake128::default();
     Update::update(&mut hasher, value);
     let mut reader = hasher.finalize_xof();
-    let mut out = vec![0u8; out_len.max(0) as usize];
+    let mut out = vec![0u8; out_len];
     XofReader::read(&mut reader, &mut out);
     out
 }
@@ -652,15 +652,34 @@ pub(super) fn expect_json_ref(value: &VmValue) -> Result<&serde_json::Value, Eva
     }
 }
 
-pub(super) fn map_key_from_value(value: &VmValue) -> Result<VmMapKey, EvalError> {
+pub(super) fn map_key_from_value(value: &VmValue) -> Result<(VmMapKey, usize), EvalError> {
     // The checker guarantees a key's static type is `Hashable`, so this is a
     // defensive gate: it accepts every shape RSScript admits as a key — scalars,
     // strings/bytes, the structural `List`/`Deque`/`Option` containers, and
     // `derives(Eq, Hash)` structs/sums (recursively) — and rejects only the
     // genuinely unhashable values (`Float`, `Map`, raw `Json`, closures) with a
     // clean runtime error rather than a host panic.
-    fn is_hashable(value: &VmValue) -> bool {
-        match value {
+    fn is_hashable(
+        value: &VmValue,
+        active: &mut std::collections::HashSet<usize>,
+        depth: usize,
+        work: &mut usize,
+    ) -> bool {
+        *work = work.saturating_add(match value {
+            VmValue::String(value) => 1 + value.len() / 64,
+            VmValue::Bytes(value) => 1 + value.len() / 64,
+            _ => 1,
+        });
+        if depth > 256 || *work > 1_000_000 {
+            return false;
+        }
+        let node = crate::vm_value::vm_value_node_id(value);
+        if let Some(node) = node {
+            if !active.insert(node) {
+                return false;
+            }
+        }
+        let hashable = match value {
             VmValue::Unit
             | VmValue::Bool(_)
             | VmValue::Int(_)
@@ -669,21 +688,37 @@ pub(super) fn map_key_from_value(value: &VmValue) -> Result<VmMapKey, EvalError>
             | VmValue::Bytes(_)
             | VmValue::Native(_)
             | VmValue::OptionNone => true,
-            VmValue::OptionSomeHeap(inner) => is_hashable(inner),
+            VmValue::OptionSomeHeap(inner) => is_hashable(inner, active, depth + 1, work),
             // The inline payload is a scalar; recurse on the materialized value so
             // the hashability rule is identical to the heap arm (e.g. a
             // `Some(Float)` is inline yet still unhashable).
-            VmValue::OptionSomeScalar(scalar) => is_hashable(&scalar.to_value()),
-            VmValue::List(items) => items.borrow().iter().all(|v| is_hashable(&v)),
-            VmValue::Deque(items) => items.borrow().iter().all(is_hashable),
-            VmValue::Struct(data) | VmValue::Variant(data) => data.fields.iter().all(is_hashable),
-            VmValue::Managed(inner) => is_hashable(&inner.borrow()),
+            VmValue::OptionSomeScalar(scalar) => {
+                is_hashable(&scalar.to_value(), active, depth + 1, work)
+            }
+            VmValue::List(items) => items
+                .borrow()
+                .iter()
+                .all(|value| is_hashable(&value, active, depth + 1, work)),
+            VmValue::Deque(items) => items
+                .borrow()
+                .iter()
+                .all(|value| is_hashable(value, active, depth + 1, work)),
+            VmValue::Struct(data) | VmValue::Variant(data) => data
+                .fields
+                .iter()
+                .all(|value| is_hashable(value, active, depth + 1, work)),
+            VmValue::Managed(inner) => is_hashable(&inner.borrow(), active, depth + 1, work),
             VmValue::Float(_) | VmValue::Map(_) | VmValue::Json(_) | VmValue::Closure(_) => false,
+        };
+        if let Some(node) = node {
+            active.remove(&node);
         }
+        hashable
     }
 
-    if is_hashable(value) {
-        Ok(VmMapKey::new(value.clone()))
+    let mut work = 0;
+    if is_hashable(value, &mut std::collections::HashSet::new(), 0, &mut work) {
+        Ok((VmMapKey::new(value.clone()), work))
     } else {
         Err(EvalError::Runtime(format!(
             "reg VM Map key does not support `{}`.",
@@ -794,4 +829,20 @@ pub(super) enum JsonArrayStringMatch {
 pub(super) enum JsonPathPart {
     Field(String),
     Index(usize),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structural_map_key_reports_proportional_work() {
+        let scalar_work = map_key_from_value(&VmValue::Int(1)).expect("integer key").1;
+        let values = (0..128).map(VmValue::Int).collect::<Vec<_>>();
+        let list = VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(values))));
+        let list_work = map_key_from_value(&list).expect("list key").1;
+
+        assert_eq!(scalar_work, 1);
+        assert_eq!(list_work, 129);
+    }
 }

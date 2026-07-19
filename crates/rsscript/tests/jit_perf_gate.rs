@@ -394,7 +394,7 @@ fn run_bench(
     iterations: usize,
     warmup: usize,
 ) -> Result<Value, String> {
-    let _env = EnvGuard::set_many(case_env(&case.case));
+    let tier_up_threshold = case_tier_up_threshold(&case.case);
     let path = repo.join(&case.path);
     let path_label = path.display().to_string();
     let source = std::fs::read_to_string(&path)
@@ -404,14 +404,14 @@ fn run_bench(
     let args = [case.size.as_str()];
     for _ in 0..warmup {
         executable
-            .eval_main_with_args_native(args.iter().copied())
+            .eval_main_with_args_native_at_threshold(args.iter().copied(), tier_up_threshold)
             .map_err(|error| format!("warmup failed for {}: {error:?}", case.case))?;
     }
     let mut measurements = Vec::with_capacity(iterations);
     for _ in 0..iterations {
         let start = Instant::now();
         executable
-            .eval_main_with_args_native(args.iter().copied())
+            .eval_main_with_args_native_at_threshold(args.iter().copied(), tier_up_threshold)
             .map_err(|error| format!("run failed for {}: {error:?}", case.case))?;
         measurements.push(start.elapsed());
     }
@@ -421,13 +421,13 @@ fn run_bench(
     let mean = Duration::from_nanos((total_nanos / measurements.len() as u128) as u64);
 
     let (_output, warm_stats) = executable
-        .eval_main_with_args_native_with_stats(args.iter().copied())
+        .eval_main_with_args_native_with_stats_at_threshold(args.iter().copied(), tier_up_threshold)
         .map_err(|error| format!("warm stats failed for {}: {error:?}", case.case))?;
     let mut jit = warm_stats.to_json();
     let stats_executable = rsscript::reg_vm_compile_source(&path_label, &source)
         .map_err(|error| format!("stats compile failed for {}: {error:?}", case.case))?;
     let (_output, cold_stats) = stats_executable
-        .eval_main_with_args_native_with_stats(args.iter().copied())
+        .eval_main_with_args_native_with_stats_at_threshold(args.iter().copied(), tier_up_threshold)
         .map_err(|error| format!("cold stats failed for {}: {error:?}", case.case))?;
     jit["cold_start"] = cold_stats.to_json();
 
@@ -446,45 +446,11 @@ fn run_bench(
     }))
 }
 
-fn case_env(case: &str) -> &'static [(&'static str, &'static str)] {
+fn case_tier_up_threshold(case: &str) -> u32 {
     match case {
-        "profile_branch_cold_blocks.rss" => &[("RSS_JIT_TIER_THRESHOLD", "200")],
-        "profile_branch_side_exits.rss" => &[("RSS_JIT_TIER_THRESHOLD", "66")],
-        _ => &[],
-    }
-}
-
-struct EnvGuard {
-    saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
-}
-
-impl EnvGuard {
-    fn set_many(values: &'static [(&'static str, &'static str)]) -> Self {
-        let saved = values
-            .iter()
-            .map(|(key, _)| (*key, std::env::var_os(key)))
-            .collect::<Vec<_>>();
-        for (key, value) in values {
-            // These tests run through Make with `--test-threads=1`, and the JIT
-            // tier reads process environment knobs. Keep the mutation scoped.
-            unsafe {
-                std::env::set_var(key, value);
-            }
-        }
-        Self { saved }
-    }
-}
-
-impl Drop for EnvGuard {
-    fn drop(&mut self) {
-        for (key, value) in self.saved.drain(..).rev() {
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
-                }
-            }
-        }
+        "profile_branch_cold_blocks.rss" => 200,
+        "profile_branch_side_exits.rss" => 66,
+        _ => 0,
     }
 }
 

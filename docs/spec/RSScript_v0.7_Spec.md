@@ -2246,8 +2246,8 @@ All ordinary function arguments and struct/class constructor fields are named,
 except for **same-name punning**. A bare identifier may omit its label when it
 resolves to an ordinary function parameter with the same name and default `read`
 effect, or to a constructor field with the same name. Constructor field effects
-still apply after the field is resolved: a handle field, for example, still
-requires its explicit `read` effect. This is not positional calling: literals,
+still apply after the field is resolved: a handle field, for example, still has
+`read` semantics even when the optional token is omitted. This is not positional calling: literals,
 expressions, `mut`, `take`, and unknown calls remain explicitly named.
 
 ```rust
@@ -3626,7 +3626,11 @@ type are the same managed-value copy.
 
 `Hashable` is the bound on `Map<K, V>` keys and `Set<K>` elements (§18.2): a
 non-hashable key is rejected in RSScript with a `derives(Eq, Hash)` suggestion
-instead of leaking a trait-bound error from the Rust backend.
+instead of leaking a trait-bound error from the Rust backend. Insertion captures a
+deep value snapshot of the key. Later mutation through another managed alias cannot
+change the retained key's equality or hash, and key enumeration returns detached
+values rather than mutable aliases into the table. Cyclic or excessively deep key
+graphs are rejected; map/set iteration order is unspecified.
 
 #### 14.6.1 Receiver-call shorthand
 
@@ -4932,12 +4936,23 @@ pub fn Math.ceil(value: Float) -> Int
 pub fn Math.round(value: Float) -> Int
 ```
 
+`Math.abs(Int::MIN)` and an overflowing `Math.pow` produce the language's integer
+overflow error. `Math.pow` accepts only exponents in `0..=u32::MAX`; negative or
+larger exponents are invalid arguments. `Math.clamp`/`Math.clamp_float` require
+`min <= max`. These failures use the same structured runtime diagnostic in the VM,
+JIT fallback, and generated Rust backend; they are never raw Rust arithmetic panics.
+
+Size-parameterized byte intrinsics are bounded. In particular,
+`Hash.shake128_bytes` rejects negative lengths and has a 64 MiB per-call output
+ceiling in every backend. When `mem_budget` is armed, the VM also charges the
+output before allocation.
+
 The minimum `Path`, `Map`, and `Set` core surfaces cover package-manager-style
 path inspection and ordinary keyed/indexed working sets. A `Map<K, V>` key and a
 `Set<K>` element must satisfy the compiler-owned `Hashable` protocol (§14.6):
 a builtin scalar key, or a managed `struct`/`sum` that `derives(Eq, Hash)`. A
 non-hashable key is rejected in RSScript, not by the Rust backend. `Map` and
-`Set` retain inserted non-Copy values by contract:
+`Set` retain immutable value snapshots of inserted non-Copy keys by contract:
 
 ```rust
 pub fn Path.from_string(value: read String) -> fresh Path

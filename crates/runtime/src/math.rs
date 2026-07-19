@@ -1,5 +1,9 @@
 pub fn math_abs(value: i64) -> i64 {
-    value.abs()
+    value.checked_abs().unwrap_or_else(|| {
+        crate::error::panic_runtime_error(crate::error::integer_overflow_error(format!(
+            "Math.abs overflow: abs({value}) exceeds the Int range"
+        )))
+    })
 }
 
 pub fn math_min(left: i64, right: i64) -> i64 {
@@ -11,12 +15,25 @@ pub fn math_max(left: i64, right: i64) -> i64 {
 }
 
 pub fn math_clamp(value: i64, min: i64, max: i64) -> i64 {
+    if min > max {
+        crate::error::panic_runtime_error(crate::error::invalid_argument_error(format!(
+            "Math.clamp requires min <= max, got min {min} and max {max}"
+        )));
+    }
     value.clamp(min, max)
 }
 
 pub fn math_pow(base: i64, exponent: i64) -> i64 {
-    base.checked_pow(exponent.max(0) as u32).unwrap_or_else(|| {
-        panic!("Math.pow overflow: {base} raised to {exponent} exceeds the Int range")
+    let exponent = u32::try_from(exponent).unwrap_or_else(|_| {
+        crate::error::panic_runtime_error(crate::error::invalid_argument_error(format!(
+            "Math.pow exponent must be between 0 and {}, got {exponent}",
+            u32::MAX
+        )))
+    });
+    base.checked_pow(exponent).unwrap_or_else(|| {
+        crate::error::panic_runtime_error(crate::error::integer_overflow_error(format!(
+            "Math.pow overflow: {base} raised to {exponent} exceeds the Int range"
+        )))
     })
 }
 
@@ -61,6 +78,11 @@ pub fn math_max_float(left: f64, right: f64) -> f64 {
 }
 
 pub fn math_clamp_float(value: f64, min: f64, max: f64) -> f64 {
+    if min > max {
+        crate::error::panic_runtime_error(crate::error::invalid_argument_error(format!(
+            "Math.clamp_float requires min <= max, got min {min} and max {max}"
+        )));
+    }
     value.clamp(min, max)
 }
 
@@ -114,4 +136,28 @@ pub fn math_ceil(value: f64) -> i64 {
 
 pub fn math_round(value: f64) -> i64 {
     value.round() as i64
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn integer_math_rejects_invalid_domains_without_raw_std_panics() {
+        for call in [
+            || math_abs(i64::MIN),
+            || math_clamp(1, 2, 1),
+            || math_pow(2, -1),
+            || math_pow(2, i64::from(u32::MAX) + 1),
+            || math_pow(i64::MAX, 2),
+        ] {
+            let panic = std::panic::catch_unwind(call).expect_err("call must trap");
+            let message = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&str>().copied())
+                .unwrap_or_default();
+            assert!(message.starts_with(crate::diagnostics::RUNTIME_DIAGNOSTIC_PREFIX));
+        }
+    }
 }

@@ -5,11 +5,10 @@
 //! # What it compiles
 //!
 //! A [`JitFunction`] is a stable, versioned slice of the VM's bytecode: the subset
-//! that operates on unboxed scalar registers — `i64` (integers, and booleans as
-//! `0`/`1`) and `f64` (floats) — plus *side-effect-free* heap **reads** of `Int`
-//! struct fields and list elements (via [`HostHelpers`]) and narrow VM-owned
-//! transactional heap helper calls. It has no general heap mutation, no general
-//! calls, no async, and no other side effects. The main `rsscript` crate
+//! that operates on unboxed scalar registers — logical `Int`/`Bool` values stored
+//! in `i64` machine words and `Float` values stored in `f64` — plus heap reads,
+//! native-to-native calls, and a declared set of VM-owned transactional heap
+//! helpers. It has no arbitrary host mutation or async execution. The main `rsscript` crate
 //! translates an eligible `RegFunction` into this IR; everything outside the subset
 //! stays on the interpreter (per-function fallback). [`NativeModule::compile`]
 //! re-validates the IR ([`validate`]) before codegen, so a malformed producer fails
@@ -19,9 +18,9 @@
 //!
 //! `rsscript` is `#![forbid(unsafe_code)]`. Executing generated machine code and
 //! transmuting a code pointer to a callable function require `unsafe`, so they
-//! live here behind a **safe** API ([`NativeModule::call`]): the only `unsafe` is
-//! the call through a pointer whose ABI this crate itself emitted, so the safety
-//! invariant is locally verifiable.
+//! live here behind safe scalar and borrow-checked flat-buffer APIs. Raw ABI calls
+//! remain crate-controlled `unsafe` boundaries; generated pointers can only come
+//! from live Rust slices/references held for the duration of the call.
 //!
 //! # Gap-freeness
 //!
@@ -32,10 +31,10 @@
 //! shift — and likewise on a heap read the helper can't satisfy (wrong type or out
 //! of bounds, signalled via the bail flag). Float arithmetic never traps (it
 //! mirrors the interpreter's `f64` semantics, NaN/±inf included), so it needs no
-//! bail. Because the compiled subset is side-effect-free (reads only), the caller
-//! can then simply re-run the function on the interpreter, which is the single
-//! source of semantic truth. So the native tier can only ever be *faster*, never
-//! different.
+//! bail. Native writes are journaled by the embedding VM: success commits, while
+//! bailout/error restores heap and mutable-flat state before interpreter replay.
+//! Precise resume is admitted only when that transaction state is compatible with
+//! the safepoint. The interpreter remains the semantic source of truth.
 
 use cranelift_codegen::Context;
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
@@ -1170,6 +1169,13 @@ pub enum JitInstr {
     /// Placeholder that preserves 1:1 index alignment with the source bytecode
     /// (e.g. a deep-copy of an `Int`, which is a no-op on an unboxed register).
     Nop,
+    /// Count an optimized self-tail-call against the language's logical call-depth
+    /// limit. The top-level caller supplies the current interpreter/native depth;
+    /// exceeding `max_depth` takes an anonymous fallback so the interpreter replays
+    /// from the function entry and produces the canonical depth-limit error.
+    TailCallGuard {
+        max_depth: u32,
+    },
     LoadInt {
         dst: u32,
         value: i64,
@@ -1590,11 +1596,21 @@ type CompiledAbi = unsafe extern "C" fn(
     *mut i64,
     *mut i64,
     usize,
+    usize,
+    usize,
     *const i64,
 ) -> u8;
 
 #[derive(Debug)]
 pub struct JitError(pub String);
+
+/// Logical language-call depth supplied by an embedding VM. Native stack depth
+/// is tracked separately by the internal ABI.
+#[derive(Clone, Copy, Debug)]
+pub struct LogicalCallDepth {
+    pub current: usize,
+    pub limit: usize,
+}
 
 impl std::fmt::Display for JitError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -1624,6 +1640,7 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
         (matches!(
             instr,
             JitInstr::Nop
+                | JitInstr::TailCallGuard { .. }
                 | JitInstr::LoadInt { .. }
                 | JitInstr::LoadFloat { .. }
                 | JitInstr::LoadBool { .. }
@@ -1961,8 +1978,8 @@ pub enum NativeOutcome {
     /// register definitely assigned at the resume point with its captured value
     /// (per the J0.1a state-map); it is empty for a deopt rejected before the call
     /// (id/length mismatch). The caller's behavior depends on its mode (J0.2): by
-    /// default it re-runs the function from the top and ignores `live` (sound for the
-    /// side-effect-free subset); with precise deopt enabled (`RSS_JIT_PRECISE_DEOPT`)
+    /// default it re-runs the function from the top and ignores `live` (sound after
+    /// the embedding VM rolls back transactional writes); with precise deopt enabled (`RSS_JIT_PRECISE_DEOPT`)
     /// it consumes `live` to reconstruct the interpreter window and resumes at the
     /// safepoint's `resume_ip` instead. `child` is populated when this deopt came
     /// from a nested [`JitInstr::CallNative`] callee; embedders that support full
@@ -2067,9 +2084,9 @@ impl NativeModule {
     /// bail-flag deopt protocol — is byte-for-byte identical to the optimizing
     /// path; only the Cranelift ISA `opt_level` flag changes. The win is
     /// *compile latency* (less codegen work), at the cost of slightly less
-    /// optimized machine code. Because the compiled subset is the
-    /// side-effect-free scalar + read-only-heap set, the interpreter/`run_jit`
-    /// deopt oracle remains valid verbatim regardless of opt level.
+    /// optimized machine code. The interpreter/`run_jit` deopt oracle remains
+    /// valid regardless of opt level because the embedding VM rolls back every
+    /// journaled heap or mutable-flat write before replay.
     ///
     /// `baseline == false` keeps the optimizing hot-path tier (`opt_level="speed"`).
     pub fn new_with_opt(helpers: HostHelpers, baseline: bool) -> Result<Self, JitError> {
@@ -2225,22 +2242,8 @@ impl NativeModule {
         // `Handle` register returns an output-table handle, not a scalar. Determined
         // purely from the (validated) IR, before codegen. OSR functions never have a
         // top-level `Return` (they exit via `OsrExit`), so this stays `false`.
-        let returns_handle = osr_header.is_none()
-            && function.code.iter().any(|instr| {
-                matches!(instr, JitInstr::Return { src }
-                    if function.reg_types[*src as usize] == JitValueType::Handle)
-            });
-        let return_type = if osr_header.is_none() {
-            function.code.iter().find_map(|instr| {
-                if let JitInstr::Return { src } = instr {
-                    Some(function.reg_types[*src as usize])
-                } else {
-                    None
-                }
-            })
-        } else {
-            None
-        };
+        let return_type = validated_return_type(function, osr_header.is_some());
+        let returns_handle = return_type == Some(JitValueType::Handle);
         let scalar_leaf_callable =
             native_scalar_leaf_callable(function, osr_header.is_some(), returns_handle);
         let native_callees = self.resolve_native_callees(function)?;
@@ -2344,13 +2347,7 @@ impl NativeModule {
         let return_types: Vec<JitValueType> = funcs
             .iter()
             .map(|function| {
-                function
-                    .code
-                    .iter()
-                    .find_map(|instr| match instr {
-                        JitInstr::Return { src } => Some(function.reg_types[*src as usize]),
-                        _ => None,
-                    })
+                validated_return_type(function, false)
                     .ok_or_else(|| JitError("recursive group member has no Return".into()))
             })
             .collect::<Result<_, _>>()?;
@@ -2663,7 +2660,17 @@ impl NativeModule {
         host_ctx: HostCtx,
         limits_ptr: *const i64,
     ) -> NativeOutcome {
-        self.call_inner(id, args, lens, host_ctx, limits_ptr)
+        self.call_inner(
+            id,
+            args,
+            lens,
+            host_ctx,
+            LogicalCallDepth {
+                current: 0,
+                limit: usize::MAX,
+            },
+            limits_ptr,
+        )
     }
 
     fn decode_deopt_live(site: &DeoptSite, payload_base: usize, payload: &[i64]) -> Vec<DeoptReg> {
@@ -2756,6 +2763,31 @@ impl NativeModule {
         host_ctx: HostCtx,
         flat_args: &mut [FlatBufferArg<'_>],
     ) -> NativeOutcome {
+        self.call_with_host_ctx_at_depth(
+            id,
+            args,
+            lens,
+            host_ctx,
+            flat_args,
+            LogicalCallDepth {
+                current: 0,
+                limit: usize::MAX,
+            },
+        )
+    }
+
+    /// Equivalent to [`call_with_host_ctx`](Self::call_with_host_ctx), with the
+    /// current logical VM call depth and its configured limit supplied by the
+    /// embedding interpreter.
+    pub fn call_with_host_ctx_at_depth(
+        &self,
+        id: CompiledId,
+        args: &[i64],
+        lens: &[i64],
+        host_ctx: HostCtx,
+        flat_args: &mut [FlatBufferArg<'_>],
+        logical_depth: LogicalCallDepth,
+    ) -> NativeOutcome {
         let Some(func) = self.funcs.get(id.index).filter(|_| id.module_id == self.id) else {
             return anonymous_deopt();
         };
@@ -2802,7 +2834,7 @@ impl NativeModule {
                 return anonymous_deopt();
             }
         }
-        self.call_inner(id, args, lens, host_ctx, std::ptr::null())
+        self.call_inner(id, args, lens, host_ctx, logical_depth, std::ptr::null())
     }
 
     fn call_inner(
@@ -2811,6 +2843,7 @@ impl NativeModule {
         args: &[i64],
         lens: &[i64],
         host_ctx: HostCtx,
+        logical_depth: LogicalCallDepth,
         limits_ptr: *const i64,
     ) -> NativeOutcome {
         // Reject an id from a different module and an out-of-range index: either
@@ -2910,9 +2943,11 @@ impl NativeModule {
                             bail_ptr,
                             safepoint_ptr,
                             payload_ptr,
-                            // Top-level native entry: the native call chain starts at
-                            // depth 0 (native-call-ABI slice 1).
+                            // Host native stack depth starts at zero independently of
+                            // the language's logical call depth.
                             0,
+                            logical_depth.current,
+                            logical_depth.limit,
                             // J0.5 limits cell (null for unarmed variants, which ignore
                             // it). The generated armed OSR variant reads/writes it.
                             limits_ptr,
@@ -3193,6 +3228,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
         Ok(())
     };
 
+    let mut returns = Vec::new();
     for (i, instr) in program.code.iter().enumerate() {
         // Conditional branches fall through to `i + 1` (`build_function` indexes
         // `block_for[i + 1]`), so the instruction must not be the last one.
@@ -3206,7 +3242,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             }
         };
         match instr {
-            JitInstr::Nop | JitInstr::Bail => {}
+            JitInstr::Nop | JitInstr::TailCallGuard { .. } | JitInstr::Bail => {}
             JitInstr::LoadInt { dst, .. } => require_class(*dst, JitValueType::Int, "LoadInt")?,
             JitInstr::LoadFloat { dst, .. } => {
                 require_class(*dst, JitValueType::Float, "LoadFloat")?
@@ -3503,6 +3539,11 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 check_fallthrough()?;
             }
             JitInstr::Return { src } => {
+                if osr {
+                    return Err(JitError(
+                        "Return: OSR functions must exit through OsrExit".into(),
+                    ));
+                }
                 check_reg(*src)?;
                 // Heap-result return ABI: a scalar (`Int`/`Float`) or a
                 // `Handle` register may be returned. A `Handle` return's i64 is an
@@ -3510,11 +3551,12 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 // it); see [`NativeOutcome::CompletedHandle`]. A FLAT-array register is
                 // still rejected — it is a (pointer, length) pair, not a single
                 // returnable word.
-                if matches!(class(*src), JitValueType::FlatInt | JitValueType::FlatFloat) {
+                if is_flat_type(class(*src)) {
                     return Err(JitError(
                         "Return: cannot return a flat-array register".into(),
                     ));
                 }
+                returns.push((i, class(*src)));
             }
             JitInstr::ListGetIntDirect { dst, base, index } => {
                 require_flat_param(*base, JitValueType::FlatInt, "ListGetIntDirect base")?;
@@ -3611,10 +3653,66 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             // OSR-exit is a parameterless terminator (an unconditional deopt at its
             // own ip); its live set is computed from definite-assignment, so it
             // carries no operands to validate.
-            JitInstr::OsrExit => {}
+            JitInstr::OsrExit => {
+                if !osr {
+                    return Err(JitError(
+                        "OsrExit: normal functions must exit through Return".into(),
+                    ));
+                }
+            }
+        }
+    }
+    let reachable = reachable_jit_instrs(program);
+    let mut reachable_return_type = None;
+    for (ip, ty) in returns {
+        if !reachable[ip] {
+            continue;
+        }
+        match reachable_return_type {
+            Some(expected) if expected != ty => {
+                return Err(JitError(format!(
+                    "Return: inconsistent result types ({expected:?} vs {ty:?})"
+                )));
+            }
+            None => reachable_return_type = Some(ty),
+            Some(_) => {}
         }
     }
     Ok(())
+}
+
+/// Return the ABI result type after [`validate`] has established that every
+/// return agrees and that OSR entries contain no `Return` instruction.
+fn validated_return_type(program: &JitFunction, osr: bool) -> Option<JitValueType> {
+    if osr {
+        return None;
+    }
+    let reachable = reachable_jit_instrs(program);
+    program.code.iter().enumerate().find_map(|(ip, instr)| {
+        if !reachable[ip] {
+            return None;
+        }
+        match instr {
+            JitInstr::Return { src } => Some(program.reg_types[*src as usize]),
+            _ => None,
+        }
+    })
+}
+
+fn reachable_jit_instrs(program: &JitFunction) -> Vec<bool> {
+    let mut reachable = vec![false; program.code.len()];
+    if program.code.is_empty() {
+        return reachable;
+    }
+    let mut pending = vec![0usize];
+    while let Some(ip) = pending.pop() {
+        if reachable[ip] {
+            continue;
+        }
+        reachable[ip] = true;
+        pending.extend(successors(program, ip));
+    }
+    reachable
 }
 
 /// The register an instruction definitely writes (its `dst`), if any. Control
@@ -3656,6 +3754,7 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
         | JitInstr::ListLenDirect { dst, .. }
         | JitInstr::ListIsEmptyDirect { dst, .. } => Some(*dst),
         JitInstr::Nop
+        | JitInstr::TailCallGuard { .. }
         | JitInstr::Jump { .. }
         | JitInstr::JumpIfBool { .. }
         | JitInstr::JumpIfIntCompare { .. }
@@ -4302,6 +4401,8 @@ fn push_compiled_abi_signature(
     func.signature.params.push(AbiParam::new(ptr_ty)); // safepoint id out ptr
     func.signature.params.push(AbiParam::new(ptr_ty)); // deopt payload out ptr
     func.signature.params.push(AbiParam::new(ptr_ty)); // native call depth (slice 1)
+    func.signature.params.push(AbiParam::new(ptr_ty)); // logical VM call depth
+    func.signature.params.push(AbiParam::new(ptr_ty)); // logical VM depth limit
     func.signature.params.push(AbiParam::new(ptr_ty)); // limits ptr (J0.5)
     func.signature.returns.push(AbiParam::new(types::I8));
 }
@@ -4478,10 +4579,12 @@ fn build_function(
     // caller. Forwarded as `depth + 1` to native callees so a future entry guard can
     // bail before host-stack overflow; not yet checked.
     let native_call_depth = params[8];
+    let logical_call_depth = params[9];
+    let logical_depth_limit = params[10];
     // Limits cell pointer (J0.5): `[steps, step_budget, cancel_addr]`. Read only by an
     // armed OSR variant; forwarded verbatim to native callees so the whole native
     // chain shares one accounting/cancel cell.
-    let limits_ptr = params[9];
+    let limits_ptr = params[11];
     // J0.5 limit-tracking variables, materialized only for an armed compile so an
     // unarmed function emits byte-identical code. `steps_var` accumulates the
     // interpreter-equivalent instruction count (one tick per instruction); `limit_var`
@@ -4489,6 +4592,14 @@ fn build_function(
     let steps_var = limit_checks.step.then(|| bcx.declare_var(types::I64));
     let limit_var = limit_checks.step.then(|| bcx.declare_var(types::I64));
     let cancel_addr_var = limit_checks.cancel.then(|| bcx.declare_var(ptr_ty));
+    let tail_depth_var = program
+        .code
+        .iter()
+        .any(|instr| matches!(instr, JitInstr::TailCallGuard { .. }))
+        .then(|| bcx.declare_var(ptr_ty));
+    if let Some(tail_depth_var) = tail_depth_var {
+        bcx.def_var(tail_depth_var, logical_call_depth);
+    }
     if let (Some(steps_var), Some(limit_var)) = (steps_var, limit_var) {
         let steps0 = bcx
             .ins()
@@ -4799,6 +4910,25 @@ fn build_function(
         }
         match &program.code[i] {
             JitInstr::Nop => {}
+            JitInstr::TailCallGuard { max_depth } => {
+                let tail_depth_var = tail_depth_var.expect("tail guard declares depth state");
+                let depth = bcx.use_var(tail_depth_var);
+                let next_depth = bcx.ins().iadd_imm(depth, 1);
+                bcx.def_var(tail_depth_var, next_depth);
+                let built_in_limit = bcx.ins().iconst(ptr_ty, i64::from(*max_depth));
+                let use_configured =
+                    bcx.ins()
+                        .icmp(IntCC::UnsignedLessThan, logical_depth_limit, built_in_limit);
+                let limit = bcx
+                    .ins()
+                    .select(use_configured, logical_depth_limit, built_in_limit);
+                let over = bcx
+                    .ins()
+                    .icmp(IntCC::UnsignedGreaterThan, next_depth, limit);
+                let cont = bcx.create_block();
+                bcx.ins().brif(over, fallback, &[], cont, &[]);
+                bcx.switch_to_block(cont);
+            }
             JitInstr::LoadInt { dst, value } => {
                 let v = bcx.ins().iconst(types::I64, *value);
                 bcx.def_var(reg(*dst), v);
@@ -5111,6 +5241,10 @@ fn build_function(
                 // slice 1): a native callee's depth is one deeper than its caller's.
                 let one_depth = bcx.ins().iconst(ptr_ty, 1);
                 let child_depth = bcx.ins().iadd(native_call_depth, one_depth);
+                let caller_logical_depth = tail_depth_var
+                    .map(|tail_depth_var| bcx.use_var(tail_depth_var))
+                    .unwrap_or(logical_call_depth);
+                let child_logical_depth = bcx.ins().iadd(caller_logical_depth, one_depth);
                 let call = bcx.ins().call(
                     native_ref(*callee),
                     &[
@@ -5123,6 +5257,8 @@ fn build_function(
                         safepoint_ptr_v,
                         payload_ptr_v,
                         child_depth,
+                        child_logical_depth,
+                        logical_depth_limit,
                         limits_ptr,
                     ],
                 );
@@ -5194,6 +5330,10 @@ fn build_function(
                 let nargs_v = bcx.ins().iconst(ptr_ty, n_params as i64);
                 let one_depth = bcx.ins().iconst(ptr_ty, 1);
                 let child_depth = bcx.ins().iadd(native_call_depth, one_depth);
+                let caller_logical_depth = tail_depth_var
+                    .map(|tail_depth_var| bcx.use_var(tail_depth_var))
+                    .unwrap_or(logical_call_depth);
+                let child_logical_depth = bcx.ins().iadd(caller_logical_depth, one_depth);
                 let call = bcx.ins().call(
                     self_ref,
                     &[
@@ -5206,6 +5346,8 @@ fn build_function(
                         safepoint_ptr,
                         payload_ptr,
                         child_depth,
+                        child_logical_depth,
+                        logical_depth_limit,
                         limits_ptr,
                     ],
                 );
@@ -5305,6 +5447,10 @@ fn build_function(
                 let nargs_v = bcx.ins().iconst(ptr_ty, member.n_params as i64);
                 let one_depth = bcx.ins().iconst(ptr_ty, 1);
                 let child_depth = bcx.ins().iadd(native_call_depth, one_depth);
+                let caller_logical_depth = tail_depth_var
+                    .map(|tail_depth_var| bcx.use_var(tail_depth_var))
+                    .unwrap_or(logical_call_depth);
+                let child_logical_depth = bcx.ins().iadd(caller_logical_depth, one_depth);
                 let call = bcx.ins().call(
                     member_ref,
                     &[
@@ -5317,6 +5463,8 @@ fn build_function(
                         safepoint_ptr_v,
                         payload_ptr_v,
                         child_depth,
+                        child_logical_depth,
+                        logical_depth_limit,
                         limits_ptr,
                     ],
                 );
@@ -5861,7 +6009,8 @@ fn build_function(
                 // interpreter if it isn't the speculated callee `expected`. The
                 // helper is total (returns -1 on a non-closure handle), so the
                 // compare alone decides; the bail reuses the standard re-run-from-top
-                // fallback, sound because the inlined subset is side-effect-free.
+                // fallback, sound because this guard precedes observable commit and
+                // the embedding VM rolls back any journaled writes before replay.
                 let handle = bcx.use_var(reg(*base));
                 let call = bcx
                     .ins()
@@ -9149,9 +9298,22 @@ mod tests {
             super::validate(&prog, false).is_err(),
             "non-param flat base must be rejected by a normal compile"
         );
-        // Under OSR the same shape validates (the window is n_regs-wide).
+        // Under OSR the same dataflow shape validates once it uses the OSR exit
+        // contract (the window is n_regs-wide).
+        let osr_prog = ft(
+            1,
+            vec![Int, Int, FlatInt, Int],
+            vec![
+                JitInstr::ListGetIntDirect {
+                    dst: 1,
+                    base: 2,
+                    index: 0,
+                },
+                JitInstr::OsrExit,
+            ],
+        );
         assert!(
-            super::validate(&prog, true).is_ok(),
+            super::validate(&osr_prog, true).is_ok(),
             "an OSR-window flat base (index >= n_params) must validate"
         );
     }
@@ -9717,6 +9879,90 @@ mod tests {
     fn rejects_params_exceeding_regs() {
         let err = validate(&f(4, 2, vec![])).unwrap_err();
         assert!(err.0.contains("n_params"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_inconsistent_return_types() {
+        use JitValueType::{Bool, Handle, Int};
+        let err = validate(&ft(
+            1,
+            vec![Bool, Int, Handle],
+            vec![
+                JitInstr::JumpIfBool {
+                    cond: 0,
+                    expected: true,
+                    target: 3,
+                },
+                JitInstr::LoadInt { dst: 1, value: 7 },
+                JitInstr::Return { src: 1 },
+                JitInstr::Return { src: 2 },
+            ],
+        ))
+        .unwrap_err();
+        assert!(err.0.contains("inconsistent result types"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_mutable_flat_returns() {
+        for ty in [JitValueType::FlatIntMut, JitValueType::FlatFloatMut] {
+            let err = validate(&ft(1, vec![ty], vec![JitInstr::Return { src: 0 }])).unwrap_err();
+            assert!(err.0.contains("flat-array"), "{}", err.0);
+        }
+    }
+
+    #[test]
+    fn tail_call_guard_uses_embedding_logical_depth() {
+        let mut module = module();
+        let function = ft(
+            0,
+            vec![JitValueType::Int],
+            vec![
+                JitInstr::TailCallGuard { max_depth: 100 },
+                JitInstr::LoadInt { dst: 0, value: 7 },
+                JitInstr::Return { src: 0 },
+            ],
+        );
+        let id = module.compile(&function).expect("compile");
+        assert_eq!(
+            module.call_with_host_ctx_at_depth(
+                id,
+                &[],
+                &[],
+                0,
+                &mut [],
+                LogicalCallDepth {
+                    current: 1,
+                    limit: 2,
+                },
+            ),
+            NativeOutcome::Completed(7)
+        );
+        assert!(matches!(
+            module.call_with_host_ctx_at_depth(
+                id,
+                &[],
+                &[],
+                0,
+                &mut [],
+                LogicalCallDepth {
+                    current: 2,
+                    limit: 2,
+                },
+            ),
+            NativeOutcome::Deopt {
+                safepoint_id: SafepointId::ANONYMOUS,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn enforces_normal_and_osr_terminators() {
+        let normal = f(0, 0, vec![JitInstr::OsrExit]);
+        assert!(super::validate(&normal, false).is_err());
+
+        let osr = f(1, 1, vec![JitInstr::Return { src: 0 }]);
+        assert!(super::validate(&osr, true).is_err());
     }
 
     #[test]

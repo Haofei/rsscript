@@ -148,6 +148,33 @@ impl RegVm {
         Ok(())
     }
 
+    /// Charge host work hidden behind one bytecode operation (currently structural
+    /// map/set key validation and hashing). The unarmed path is a single branch;
+    /// when fuel is armed, large keys consume proportional budget instead of one
+    /// nominal VM instruction.
+    #[inline]
+    pub(super) fn charge_work(&mut self, units: usize) -> Result<(), EvalError> {
+        if self.limits.step_budget.is_none() && self.limits.cancel.is_none() {
+            return Ok(());
+        }
+        self.steps = self
+            .steps
+            .saturating_add(u64::try_from(units).unwrap_or(u64::MAX));
+        if let Some(limit) = self.limits.step_budget
+            && self.steps > limit
+        {
+            return Err(EvalError::Runtime(format!(
+                "step budget exceeded ({limit} steps)"
+            )));
+        }
+        if let Some(cancel) = &self.limits.cancel
+            && cancel.load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return Err(EvalError::Runtime("evaluation cancelled".into()));
+        }
+        Ok(())
+    }
+
     /// Account `bytes` of container growth against the memory ceiling. A no-op
     /// (no add, no check) when `limits.mem_budget` is `None`, so the off path is
     /// near-free. When a budget is set and the cumulative estimate exceeds it,
@@ -407,10 +434,11 @@ impl RegVm {
                 );
             }
             RegInstr::MakeMap { dst, entries } => {
-                self.account_bytes(entries.len() * MAP_ENTRY_BYTES)?;
                 let mut map = ValueMap::with_capacity_and_hasher(entries.len(), Default::default());
+                self.account_bytes(map.capacity() * MAP_ENTRY_BYTES)?;
                 for (key, value) in entries {
-                    let key = map_key_from_value(self.reg(base + *key))?;
+                    let (key, work) = map_key_from_value(self.reg(base + *key))?;
+                    self.charge_work(work)?;
                     map.insert(key, self.reg(base + *value).clone());
                 }
                 self.set_reg(base + *dst, VmValue::Map(Rc::new(RefCell::new(map))));
@@ -622,7 +650,8 @@ impl RegVm {
                 none_ip,
             } => {
                 let map = expect_map_ref(self.reg(base + *map))?;
-                let key = map_key_from_value(self.reg(base + *key))?;
+                let (key, work) = map_key_from_value(self.reg(base + *key))?;
+                self.charge_work(work)?;
                 if let Some(value) = map.borrow().get(&key).cloned() {
                     self.set_reg(base + *value_dst, value);
                     *ip = *some_ip;
@@ -720,7 +749,8 @@ impl RegVm {
             } => self.exec_list_set(base, *dst, *list, *index, *value)?,
             RegInstr::MapGet { dst, map, key } => {
                 let map = expect_map_ref(self.reg(base + *map))?;
-                let key = map_key_from_value(self.reg(base + *key))?;
+                let (key, work) = map_key_from_value(self.reg(base + *key))?;
+                self.charge_work(work)?;
                 let value = map
                     .borrow()
                     .get(&key)
@@ -740,9 +770,20 @@ impl RegVm {
                 value,
             } => {
                 let map = expect_map_ref(self.reg(base + *map))?;
-                let key = map_key_from_value(self.reg(base + *key))?;
+                let (key, work) = map_key_from_value(self.reg(base + *key))?;
+                self.charge_work(work)?;
                 let value = self.reg(base + *value).clone();
-                map.borrow_mut().insert(key, value);
+                let mut map = map.borrow_mut();
+                if !map.contains_key(&key) {
+                    let old_capacity = map.capacity();
+                    map.try_reserve(1).map_err(|error| {
+                        EvalError::Runtime(format!("Map.insert allocation failed: {error}"))
+                    })?;
+                    self.account_bytes(
+                        map.capacity().saturating_sub(old_capacity) * MAP_ENTRY_BYTES,
+                    )?;
+                }
+                map.insert(key, value);
                 self.set_reg(base + *dst, VmValue::Unit);
             }
             RegInstr::MapInsertOld {
@@ -752,9 +793,20 @@ impl RegVm {
                 value,
             } => {
                 let map = expect_map_ref(self.reg(base + *map))?;
-                let key = map_key_from_value(self.reg(base + *key))?;
+                let (key, work) = map_key_from_value(self.reg(base + *key))?;
+                self.charge_work(work)?;
                 let value = self.reg(base + *value).clone();
-                let old = map.borrow_mut().insert(key, value);
+                let mut map = map.borrow_mut();
+                if !map.contains_key(&key) {
+                    let old_capacity = map.capacity();
+                    map.try_reserve(1).map_err(|error| {
+                        EvalError::Runtime(format!("Map.insert allocation failed: {error}"))
+                    })?;
+                    self.account_bytes(
+                        map.capacity().saturating_sub(old_capacity) * MAP_ENTRY_BYTES,
+                    )?;
+                }
+                let old = map.insert(key, value);
                 self.set_reg(
                     base + *dst,
                     old.map(|value| VmValue::some(value))
@@ -763,7 +815,8 @@ impl RegVm {
             }
             RegInstr::MapRemove { dst, map, key } => {
                 let map = expect_map_ref(self.reg(base + *map))?;
-                let key = map_key_from_value(self.reg(base + *key))?;
+                let (key, work) = map_key_from_value(self.reg(base + *key))?;
+                self.charge_work(work)?;
                 let old = map.borrow_mut().remove(&key);
                 self.set_reg(
                     base + *dst,
@@ -1098,6 +1151,7 @@ impl RegVm {
             base,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })?;
         match self.drive(unit, floor)? {
             Outcome::Completed(value) => Ok(value),
@@ -1333,6 +1387,21 @@ impl RegVm {
                         continue 'frames;
                     }
                     PureStep::NotPure => match instr {
+                        RegInstr::TailCallGuard => {
+                            let physical_depth = self.frames.len();
+                            let frame = self.frames.last_mut().expect("active frame");
+                            if physical_depth
+                                .saturating_add(frame.tail_calls)
+                                .saturating_add(1)
+                                > self.limits.max_depth
+                            {
+                                let max_depth = self.limits.max_depth;
+                                return Err(EvalError::Runtime(format!(
+                                    "recursion depth limit exceeded ({max_depth} frames)"
+                                )));
+                            }
+                            frame.tail_calls += 1;
+                        }
                         RegInstr::ResourceDrop { resource } => {
                             let value = self.reg(base + *resource).clone();
                             self.run_resource_drop(unit, value, next_base)?;
@@ -1394,6 +1463,7 @@ impl RegVm {
                                 base: next_base,
                                 ret_dst: base + *dst,
                                 mut_writeback,
+                                tail_calls: 0,
                             })?;
                             continue 'frames;
                         }
@@ -1446,6 +1516,7 @@ impl RegVm {
                                 base: next_base,
                                 ret_dst: base + *dst,
                                 mut_writeback,
+                                tail_calls: 0,
                             })?;
                             continue 'frames;
                         }
@@ -1713,13 +1784,27 @@ impl RegVm {
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::SetInsert { dst, set, value } => {
-                            let key = map_key_from_value(self.reg(base + *value))?;
+                            let (key, work) = map_key_from_value(self.reg(base + *value))?;
+                            self.charge_work(work)?;
                             let map = expect_map_ref(self.reg(base + *set))?;
-                            let inserted = map.borrow_mut().insert(key, VmValue::Unit).is_none();
+                            let mut map = map.borrow_mut();
+                            if !map.contains_key(&key) {
+                                let old_capacity = map.capacity();
+                                map.try_reserve(1).map_err(|error| {
+                                    EvalError::Runtime(format!(
+                                        "Set.insert allocation failed: {error}"
+                                    ))
+                                })?;
+                                self.account_bytes(
+                                    map.capacity().saturating_sub(old_capacity) * MAP_ENTRY_BYTES,
+                                )?;
+                            }
+                            let inserted = map.insert(key, VmValue::Unit).is_none();
                             self.set_reg(base + *dst, VmValue::Bool(inserted));
                         }
                         RegInstr::SetRemove { dst, set, value } => {
-                            let key = map_key_from_value(self.reg(base + *value))?;
+                            let (key, work) = map_key_from_value(self.reg(base + *value))?;
+                            self.charge_work(work)?;
                             let map = expect_map_ref(self.reg(base + *set))?;
                             let removed = map.borrow_mut().remove(&key).is_some();
                             self.set_reg(base + *dst, VmValue::Bool(removed));

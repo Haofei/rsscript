@@ -1133,6 +1133,9 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 // everywhere else, so a copy of it is likewise a no-op.)
                 JitInstr::Nop
             }
+            RegInstr::TailCallGuard => JitInstr::TailCallGuard {
+                max_depth: u32::try_from(DEFAULT_MAX_DEPTH).ok()?,
+            },
             RegInstr::AddInt { dst, lhs, rhs } => {
                 require(int_triple_or_same_numeric(*dst, *lhs, *rhs))?;
                 JitInstr::Add {
@@ -4203,6 +4206,9 @@ fn translate_osr_loop_inner(
                 }
             }
             RegInstr::DeepCopy { .. } | RegInstr::DeepCopyElided { .. } => JitInstr::Nop,
+            RegInstr::TailCallGuard => JitInstr::TailCallGuard {
+                max_depth: u32::try_from(DEFAULT_MAX_DEPTH).ok()?,
+            },
             RegInstr::AddInt { dst, lhs, rhs } => {
                 require(numeric_pair_or_int_free(*lhs, *rhs))?;
                 JitInstr::Add {

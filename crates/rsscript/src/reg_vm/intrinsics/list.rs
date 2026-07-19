@@ -122,7 +122,8 @@ impl RegVm {
                     let value = list_item_at(&list, index, "List.group_by")?;
                     let key_value =
                         self.call_closure_one(unit, &key_fn, value.clone(), next_base)?;
-                    let key = map_key_from_value(&key_value)?;
+                    let (key, work) = map_key_from_value(&key_value)?;
+                    self.charge_work(work)?;
                     match groups.get(&key) {
                         Some(VmValue::List(items)) => {
                             items.borrow_mut().push(value);

@@ -164,7 +164,8 @@ impl RegVm {
             }
             RegIntrinsic::CacheLookup => {
                 let cache = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let key = map_key_from_value(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let (key, work) = map_key_from_value(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                self.charge_work(work)?;
                 Ok(cache
                     .borrow()
                     .get(&key)
@@ -1435,9 +1436,29 @@ impl RegVm {
                 Ok(VmValue::Bytes(Rc::new(sha3_256_digest(value))))
             }
             RegIntrinsic::HashShake128Bytes => {
-                let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let value = match intrinsic_arg(&self.stack, base, args, 0)? {
+                    VmValue::Bytes(value) => Rc::clone(value),
+                    other => {
+                        return Err(EvalError::Runtime(format!(
+                            "reg VM expected Bytes, got `{}`.",
+                            other.display()
+                        )));
+                    }
+                };
                 let out_len = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::Bytes(Rc::new(shake128_digest(value, out_len))))
+                let out_len = usize::try_from(out_len).map_err(|_| {
+                    EvalError::Runtime(format!(
+                        "Hash.shake128_bytes output length must be non-negative, got {out_len}"
+                    ))
+                })?;
+                if out_len > MAX_INTRINSIC_OUTPUT_BYTES {
+                    return Err(EvalError::Runtime(format!(
+                        "Hash.shake128_bytes output exceeds the {} byte limit",
+                        MAX_INTRINSIC_OUTPUT_BYTES
+                    )));
+                }
+                self.account_bytes(out_len)?;
+                Ok(VmValue::Bytes(Rc::new(shake128_digest(&value, out_len))))
             }
             RegIntrinsic::HmacSha256Bytes => {
                 let key = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

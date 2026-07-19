@@ -317,7 +317,7 @@ The VM accepts a `VmLimits` budget enforced during execution:
 
 | Field | Meaning | Default |
 |-------|---------|---------|
-| `max_depth` | Max simultaneous call frames (recursion). Checked before every frame push. | Generous, default-on |
+| `max_depth` | Max logical call depth. Checked before every frame push and every optimized self-tail-call. | Generous, default-on |
 | `step_budget` | Max executed instructions over the whole run; stops `while true {}`. | `None` (unlimited) |
 | `mem_budget` | Best-effort ceiling on bytes held in VM-managed containers. | `None` (no accounting) |
 | `cancel` | Host preemption flag (e.g. watchdog/timeout); checked at a throttled step tick, even inside a tight non-awaiting loop. Preempts the whole eval with a "cancelled" runtime error. | `None` (near-free off path) |
@@ -332,6 +332,18 @@ the two intrinsic-dispatch entry points, so it counts identically whether a call
 is reached via the interpreter or the tier-0 executor (a JIT-eligible or
 native-eligible function never contains an effectful intrinsic, so there is no
 tier on which the count can diverge).
+
+Tail-call optimization may reuse a physical frame, but it does not erase logical
+calls from `max_depth`. The interpreter carries a per-frame tail-call counter; the
+native tier receives the current logical depth and guards each optimized tail edge.
+An exceeded native guard falls back anonymously so interpreter replay emits the
+canonical depth-limit error rather than resuming with a partially counted frame.
+
+Structural Map/Set key validation and hashing consume step budget proportional to
+the traversed nodes/bytes, with bounded key depth and size. Hash tables use a
+per-process randomized hasher; deterministic iteration is not a language contract.
+Container capacity growth and size-parameterized intrinsic outputs are charged to
+`mem_budget` when armed.
 
 ### 6.2 Limits bind every tier, including native code (normative)
 
@@ -522,8 +534,8 @@ if/when native code reconstructs errors itself.
 
 ### 7.2 Fallback equivalence (the proof obligation)
 
-Because the native subset only **reads** (scalars + the read-only helpers above)
-and confines every **write** to the commit-on-success transaction of §7.1 rule 9,
+Because native heap and mutable-flat effects are confined to the
+commit-on-success transaction of §7.1 rule 9,
 a bail at *any* point — an arithmetic guard, a divide-by-zero edge, a helper that
 cannot satisfy a read, or one that has already journaled a heap mutation — leaves
 **no observable effect** behind: the transaction aborts and restores any touched
@@ -720,10 +732,11 @@ Built verification-first; the governing invariants are §2 (parity) and §7
   crate behind a safe API (§6, §7.1). ~64× faster than the interpreter on numeric
   kernels. Cranelift at `opt_level=speed`; the stable versioned IR is
   `JitInstr`/`JitFunction` (`IR_VERSION`); value glue unboxes by storage class;
-  side-effect-free heap **reads** go through `extern "C"` host helpers and bail to
-  the interpreter on any unsatisfiable read; eligibility requires every parameter's
-  runtime value to match its declared register class; `vm-jit::validate`
-  independently re-checks the IR before codegen.
+  heap reads and declared transactional writes go through `extern "C"` host helpers;
+  direct mutable-flat writes are snapshotted by the embedding VM. Any unsatisfied
+  guard bails, rolls back, and replays in the interpreter. Eligibility requires every
+  parameter's runtime value to match its declared register class;
+  `vm-jit::validate` independently re-checks the IR before codegen.
 - **Phase 3 — tiering / deopt / fuzz. Done (baseline).** Per-function hot-call
   counter (`tier_up_threshold`) defers native compilation until hot; OSR-entry is
   specified-but-staged (§7). Native bails at every arithmetic guard and the interpreter
@@ -799,8 +812,8 @@ runtime helper → JIT-only optimization), the decision, and the pinning tests.
   out-of-range shift are language-level runtime errors.
 - **AOT:** same checked semantics in generated Rust.
 - **JIT need:** run unchecked-then-guard; bail to interpreter on any edge.
-- **Gap:** none — the native subset is side-effect-free, so re-running reproduces
-  the exact error.
+- **Gap:** none — arithmetic has no committed side effect, and any surrounding
+  journaled mutation is rolled back before re-running to reproduce the exact error.
 - **Home:** language rule (checked arithmetic) + JIT-only optimization (guarded
   native ops).
 - **Decision:** native emits `sadd_overflow`/checked div/etc. and bails on the

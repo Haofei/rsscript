@@ -897,6 +897,7 @@ impl RegVm {
             base: child_base,
             ret_dst: caller_base + *dst,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .is_ok()
             && child.child.as_deref().is_none_or(|grandchild| {
@@ -1384,6 +1385,7 @@ impl RegVm {
         // (a float register stored its `f64` bit pattern). The call is scoped so
         // `flat_guards` (the pinned shared borrows of the flat list args) drops
         // immediately after, before the scratch buffers are returned to the pool.
+        let initial_depth = self.frames.len();
         let (result, elapsed) = {
             let Some(native_ref) = self.native.as_ref() else {
                 heap_tx.abort();
@@ -1395,12 +1397,16 @@ impl RegVm {
             let collect_stats = native_ref.collect_stats;
             let started = collect_stats.then(std::time::Instant::now);
             let _literal_guard = jit_install_string_literals(&string_literals);
-            let result = native_ref.module.call_with_host_ctx(
+            let result = native_ref.module.call_with_host_ctx_at_depth(
                 id,
                 &scratch.args,
                 &scratch.lens,
                 heap_tx.host_ctx(),
                 &mut flat_args,
+                vm_jit::LogicalCallDepth {
+                    current: initial_depth,
+                    limit: self.limits.max_depth,
+                },
             );
             let elapsed = started.map(|started| started.elapsed().as_nanos());
             (result, elapsed)
@@ -2682,12 +2688,17 @@ impl RegVm {
         let started = collect_stats.then(std::time::Instant::now);
         let _literal_guard = jit_install_string_literals(&string_literals);
         debug_assert!(!armed, "armed OSR is rejected before compilation/dispatch");
-        let result = native_ref.module.call_with_host_ctx(
+        let initial_depth = self.frames.len();
+        let result = native_ref.module.call_with_host_ctx_at_depth(
             id,
             &scratch.window,
             &scratch.lens,
             heap_tx.host_ctx(),
             &mut flat_args,
+            vm_jit::LogicalCallDepth {
+                current: initial_depth,
+                limit: self.limits.max_depth,
+            },
         );
         let elapsed = started.map(|started| started.elapsed().as_nanos());
         // The pinned borrows are no longer needed once the native call returns.
@@ -3158,11 +3169,20 @@ impl RegVm {
         }
         let lens = vec![0i64; int_args.len()];
         let mut heap_tx = JitNativeCallFrame::begin();
+        let initial_depth = self.frames.len();
         let outcome = {
             let native = self.native.as_ref()?;
-            native
-                .module
-                .call_with_host_ctx(id, &int_args, &lens, heap_tx.host_ctx(), &mut [])
+            native.module.call_with_host_ctx_at_depth(
+                id,
+                &int_args,
+                &lens,
+                heap_tx.host_ctx(),
+                &mut [],
+                vm_jit::LogicalCallDepth {
+                    current: initial_depth,
+                    limit: self.limits.max_depth,
+                },
+            )
         };
         match outcome {
             vm_jit::NativeOutcome::Completed(bits) => {
@@ -3320,11 +3340,20 @@ impl RegVm {
         }
         let lens = vec![0i64; int_args.len()];
         let mut heap_tx = JitNativeCallFrame::begin();
+        let initial_depth = self.frames.len();
         let outcome = {
             let native = self.native.as_ref()?;
-            native
-                .module
-                .call_with_host_ctx(id, &int_args, &lens, heap_tx.host_ctx(), &mut [])
+            native.module.call_with_host_ctx_at_depth(
+                id,
+                &int_args,
+                &lens,
+                heap_tx.host_ctx(),
+                &mut [],
+                vm_jit::LogicalCallDepth {
+                    current: initial_depth,
+                    limit: self.limits.max_depth,
+                },
+            )
         };
         match outcome {
             vm_jit::NativeOutcome::Completed(bits) => {

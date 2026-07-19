@@ -3438,101 +3438,6 @@ fn main() -> Unit {
     );
 }
 
-/// Adaptive-tiering knob: `RSS_JIT_OSR_THRESHOLD` overrides the OSR auto-trigger
-/// (counting `jit-native`) backedge threshold for sweeps WITHOUT recompiling per
-/// value, mirroring `RSS_JIT_OSR`. Default behavior is unchanged (unset ⇒ 1000).
-/// Fixed medium-loop kernel whose trip count (600) sits BELOW the default 1000:
-/// at the default threshold the counting auto-trigger must NOT fire
-/// (`osr_entries == 0`), but with the override lowered to 100 the SAME loop must
-/// OSR (`osr_entries > 0`). Deterministic: trip count, kernel, and thresholds
-/// are all fixed.
-#[cfg(feature = "native-jit")]
-#[test]
-fn rss_jit_osr_threshold_env_overrides_auto_trigger_fire_point() {
-    // Native-INELIGIBLE function (Log.write tangled around it) with one hot scalar
-    // loop of 600 iterations: only OSR can run the loop natively.
-    let source = "\
-fn hot(limit: Int, seed: Int) -> Int {
-    Log.write(message: read \"begin\")
-    let mut i = 0
-    let mut total = seed
-    while i < limit {
-        total = total + i * 3 - i / 2 + 7
-        i = i + 1
-    }
-    Log.write(message: read String.from_int(value: total))
-    return total
-}
-
-fn main() -> Unit {
-    Log.write(message: read String.from_int(value: hot(limit: read 600, seed: read 0)))
-    return Unit
-}
-";
-
-    let osr_entries = |threshold: Option<&str>| -> u64 {
-        let _osr_guard = EnvGuard::remove("RSS_JIT_OSR");
-        let _threshold_guard = EnvGuard::set_or_remove("RSS_JIT_OSR_THRESHOLD", threshold);
-        let executable = rsscript::reg_vm_compile_source("rss-osr-threshold-probe.rss", source)
-            .expect("threshold probe compiles");
-        let (_output, stats) = executable
-            .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
-            .expect("native run with stats");
-        stats.osr_entries
-    };
-
-    struct EnvGuard {
-        key: &'static str,
-        old: Option<std::ffi::OsString>,
-    }
-
-    impl EnvGuard {
-        fn remove(key: &'static str) -> Self {
-            let old = std::env::var_os(key);
-            unsafe {
-                std::env::remove_var(key);
-            }
-            Self { key, old }
-        }
-
-        fn set_or_remove(key: &'static str, value: Option<&str>) -> Self {
-            let old = std::env::var_os(key);
-            unsafe {
-                match value {
-                    Some(value) => std::env::set_var(key, value),
-                    None => std::env::remove_var(key),
-                }
-            }
-            Self { key, old }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            unsafe {
-                match self.old.take() {
-                    Some(value) => std::env::set_var(self.key, value),
-                    None => std::env::remove_var(self.key),
-                }
-            }
-        }
-    }
-
-    // Default threshold (1000): trip=600 < 1000 ⇒ counting auto-trigger never fires.
-    let default_entries = osr_entries(None);
-    // Override lowered to 100: trip=600 > 100 ⇒ the same loop now OSRs.
-    let lowered_entries = osr_entries(Some("100"));
-
-    assert_eq!(
-        default_entries, 0,
-        "trip=600 below default 1000 must NOT OSR at the default threshold",
-    );
-    assert!(
-        lowered_entries > 0,
-        "RSS_JIT_OSR_THRESHOLD=100 must make trip=600 OSR via the counting auto-trigger",
-    );
-}
-
 /// OSR × J3 for RESULTS (deopt-before-heap, Slice 1) — POSITIVE. A leaf `checked`
 /// returns `Result<Int, String>`; its COLD `Err` arm builds a heap `String`. Called
 /// in an I/O-tangled hot loop where the argument is ALWAYS >= 0 (the Err arm is never
@@ -4183,6 +4088,38 @@ fn main() -> Int {
         msg.contains("recursion depth"),
         "expected a clean recursion-depth error (TCO must not convert a baseless \
          self-tail-recursion to an infinite loop), got: {msg}"
+    );
+}
+
+#[cfg(feature = "native-jit")]
+#[test]
+fn tco_unreachable_base_case_preserves_depth_limit() {
+    let source = "\
+fn spin(n: Int) -> Int {
+    if n == 0 {
+        return 0
+    }
+    return spin(n: n)
+}
+
+fn main() -> Int {
+    return spin(n: 1)
+}
+";
+    let executable =
+        rsscript::reg_vm_compile_source("tco-unreachable-base.rss", source).expect("compile");
+    let err = executable
+        .eval_main_with_args_native_with_limits(
+            std::iter::empty::<String>(),
+            rsscript::VmLimits {
+                max_depth: 32,
+                ..rsscript::VmLimits::default()
+            },
+        )
+        .expect_err("an unreachable base case must not turn recursion into an unbounded loop");
+    assert!(
+        matches!(err, rsscript::EvalError::Runtime(ref message) if message.contains("recursion depth limit")),
+        "expected recursion-depth error, got {err:?}"
     );
 }
 
@@ -6105,7 +6042,7 @@ fn main() -> Unit {
     };
     let (output, stats) = exe
         .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), limits)
-        .expect("map-insert loop must run under mem_budget (map inserts charge zero)");
+        .expect("map-insert loop must run under mem_budget without transformed OSR");
     assert_eq!(
         interp.stdout, output.stdout,
         "the map-insert loop must stay interpreter-identical under mem_budget"

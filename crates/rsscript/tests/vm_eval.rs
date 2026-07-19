@@ -58,6 +58,33 @@ fn main() -> Int {
     assert_eq!(output.value, "7");
 }
 
+#[test]
+fn map_keys_are_stable_value_snapshots() {
+    let source = r#"
+struct Key derives(Eq, Hash) {
+    id: Int
+}
+
+fn change_id(key: mut Key, new_id: Int) -> Unit {
+    key.id = new_id
+    return Unit
+}
+
+fn main() -> Bool {
+    let key = Key(id: 1)
+    let map = Map.new<Key, Int>()
+    Map.insert<Key, Int>(map: mut map, key, value: 7)
+    change_id(key: mut key, new_id: 2)
+    let original = Key(id: 1)
+    return Map.contains_key<Key, Int>(map: map, key: original)
+        && !Map.contains_key<Key, Int>(map: map, key: key)
+}
+"#;
+
+    let output = eval_source_main("stable-map-key.rss", source).expect("eval should succeed");
+    assert_eq!(output.value, "true");
+}
+
 /// Build a program that folds a large `List<Float>` with `folder_body` and
 /// returns the sum formatted as a string. The list values are deterministic so
 /// the fast and slow folders must agree bit-for-bit.

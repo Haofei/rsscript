@@ -1,12 +1,21 @@
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::eval_types::NativeValue;
-use crate::fnv::{FnvBuildHasher, FnvHasher};
+use crate::fnv::FnvHasher;
 
-/// VM `Map` value (key → value), FNV-hashed.
-pub(crate) type ValueMap = HashMap<VmMapKey, VmValue, FnvBuildHasher>;
+/// VM `Map` value (key -> value), keyed with Rust's per-process randomized
+/// hasher so adversarial scripts cannot precompute one global collision set.
+pub(crate) type ValueMap = HashMap<VmMapKey, VmValue>;
+
+#[cfg(any(feature = "native-jit", test))]
+#[allow(clippy::mutable_key_type)] // VmMapKey owns an unreachable deep snapshot.
+pub(crate) fn clone_value_map_preserving_capacity(map: &ValueMap) -> ValueMap {
+    let mut cloned = ValueMap::with_capacity_and_hasher(map.capacity(), map.hasher().clone());
+    cloned.extend(map.iter().map(|(key, value)| (key.clone(), value.clone())));
+    cloned
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum VmValue {
@@ -883,16 +892,24 @@ pub(crate) struct VmMapKey(VmValue);
 
 impl VmMapKey {
     pub(crate) fn new(value: VmValue) -> Self {
-        VmMapKey(value)
+        VmMapKey(snapshot_key_value(&value))
     }
 
     pub(crate) fn from_string(value: impl Into<String>) -> Self {
         VmMapKey(VmValue::string(value))
     }
 
-    /// The underlying value, returned as-is by `Map.keys()` / `Set.to_list()`.
+    /// Borrow the table's private immutable snapshot for internal operations.
     pub(crate) fn value(&self) -> &VmValue {
         &self.0
+    }
+
+    /// Return a value-semantics copy that shares no mutable storage with the key
+    /// retained by the hash table. Exposing the retained `Rc<RefCell<_>>` itself
+    /// through `Map.keys`/`Set.to_list` would let user code mutate the key after
+    /// insertion and invalidate the table's hash buckets.
+    pub(crate) fn detached_value(&self) -> VmValue {
+        snapshot_key_value(&self.0)
     }
 
     /// The key's string contents, when it is a `String` key (e.g. JSON object
@@ -915,6 +932,55 @@ impl VmMapKey {
         self.0
             .native_value()
             .unwrap_or_else(|| NativeValue::String(self.0.display()))
+    }
+}
+
+/// Materialize the immutable value snapshot stored by `Map`/`Set`. RSScript's
+/// AOT backend passes value keys by value; the VM must do the same instead of
+/// retaining aliases to its `Rc<RefCell<_>>` representation.
+fn snapshot_key_value(value: &VmValue) -> VmValue {
+    match value {
+        VmValue::Unit => VmValue::Unit,
+        VmValue::Int(value) => VmValue::Int(*value),
+        VmValue::Float(value) => VmValue::Float(*value),
+        VmValue::Bool(value) => VmValue::Bool(*value),
+        VmValue::Char(value) => VmValue::Char(*value),
+        VmValue::Bytes(value) => VmValue::Bytes(Rc::clone(value)),
+        VmValue::String(value) => VmValue::String(Rc::clone(value)),
+        VmValue::Json(value) => VmValue::Json(Rc::clone(value)),
+        VmValue::List(items) => VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+            items
+                .borrow()
+                .iter()
+                .map(|item| snapshot_key_value(&item))
+                .collect(),
+        )))),
+        VmValue::Deque(items) => VmValue::Deque(Rc::new(RefCell::new(
+            items.borrow().iter().map(snapshot_key_value).collect(),
+        ))),
+        VmValue::Map(entries) => VmValue::Map(Rc::new(RefCell::new(
+            entries
+                .borrow()
+                .iter()
+                .map(|(key, value)| (key.clone(), snapshot_key_value(value)))
+                .collect(),
+        ))),
+        VmValue::OptionSomeHeap(value) => {
+            VmValue::OptionSomeHeap(Box::new(snapshot_key_value(value)))
+        }
+        VmValue::OptionSomeScalar(value) => VmValue::OptionSomeScalar(*value),
+        VmValue::OptionNone => VmValue::OptionNone,
+        VmValue::Struct(data) => VmValue::Struct(Rc::new(VmStruct::with_layout(
+            Rc::clone(&data.layout),
+            data.fields.iter().map(snapshot_key_value).collect(),
+        ))),
+        VmValue::Variant(data) => VmValue::Variant(Rc::new(VmStruct::with_layout(
+            Rc::clone(&data.layout),
+            data.fields.iter().map(snapshot_key_value).collect(),
+        ))),
+        VmValue::Native(data) => VmValue::Native(Rc::clone(data)),
+        VmValue::Managed(value) => snapshot_key_value(&value.borrow()),
+        VmValue::Closure(value) => VmValue::Closure(Rc::clone(value)),
     }
 }
 
@@ -941,7 +1007,7 @@ impl std::hash::Hash for VmMapKey {
 /// Hash the discriminant prefix of the heap `Some` arm. The inline `Some` arm
 /// calls this so it hashes with the *same* "Some" discriminant the heap arm
 /// (and the pre-V1 `OptionSome`) emits — keeping `Some(scalar)` hashes, and thus
-/// `Map` order, byte-identical. The discriminant is cached once (it is `Copy`
+/// the same structural stream. The discriminant is cached once (it is `Copy`
 /// and cheap to re-hash) so there is no per-hash `Box` allocation.
 fn hash_some_prefix<H: std::hash::Hasher>(state: &mut H) {
     use std::hash::Hash;
@@ -955,24 +1021,49 @@ fn hash_some_prefix<H: std::hash::Hasher>(state: &mut H) {
 }
 
 fn hash_vm_value<H: std::hash::Hasher>(value: &VmValue, state: &mut H) {
+    hash_vm_value_inner(value, state, &mut HashMap::new(), 0);
+}
+
+fn hash_vm_value_inner<H: std::hash::Hasher>(
+    value: &VmValue,
+    state: &mut H,
+    active: &mut HashMap<usize, u64>,
+    depth: u64,
+) {
     use std::hash::Hash;
 
+    let node = vm_value_node_id(value);
+    if let Some(node) = node {
+        if let Some(first_depth) = active.get(&node) {
+            0x5253_5343_5943_4c45_u64.hash(state);
+            first_depth.hash(state);
+            return;
+        }
+        active.insert(node, depth);
+    }
+
     if let VmValue::Managed(inner) = value {
-        hash_vm_value(&inner.borrow(), state);
+        hash_vm_value_inner(&inner.borrow(), state, active, depth + 1);
+        if let Some(node) = node {
+            active.remove(&node);
+        }
         return;
     }
 
     // The inline `Some` form must hash *byte-identically* to the old
-    // `OptionSome(Box(scalar))` so `Map` iteration order (FNV-1a over these
-    // hashes, observable via `Map.keys()`/`values()`) is unchanged. We achieve
-    // that by hashing the inline arm exactly as the heap arm: emit the *heap*
+    // `OptionSome(Box(scalar))` so representation changes do not alter structural
+    // hash equality. We achieve that by hashing the inline arm exactly as the
+    // heap arm: emit the *heap*
     // discriminant ("Some") prefix, then the payload sequence. Because
     // `OptionSomeScalar` was added at the END of the enum, `OptionSomeHeap`
     // retains the old `OptionSome` discriminant, so the cached prefix below is
     // bit-for-bit the old prefix. No `Box` is allocated per hash.
     if let VmValue::OptionSomeScalar(scalar) = value {
         hash_some_prefix(state);
-        hash_vm_value(&scalar.to_value(), state);
+        hash_vm_value_inner(&scalar.to_value(), state, active, depth + 1);
+        if let Some(node) = node {
+            active.remove(&node);
+        }
         return;
     }
 
@@ -992,28 +1083,28 @@ fn hash_vm_value<H: std::hash::Hasher>(value: &VmValue, state: &mut H) {
         VmValue::List(items) => {
             // Hash through the *logical* element sequence so a typed (`Ints`/
             // `Floats`) list and a `Boxed` list with the same values emit the
-            // identical byte stream (parity §2 — `Map` order with list keys must
-            // not shift). `iter()` materializes each scalar as a `VmValue`.
+            // identical byte stream. `iter()` materializes each scalar as a
+            // `VmValue`.
             let items = items.borrow();
             items.len().hash(state);
             for item in items.iter() {
-                hash_vm_value(&item, state);
+                hash_vm_value_inner(&item, state, active, depth + 1);
             }
         }
         VmValue::Deque(items) => {
             let items = items.borrow();
             items.len().hash(state);
             for item in items.iter() {
-                hash_vm_value(item, state);
+                hash_vm_value_inner(item, state, active, depth + 1);
             }
         }
-        VmValue::OptionSomeHeap(inner) => hash_vm_value(inner, state),
+        VmValue::OptionSomeHeap(inner) => hash_vm_value_inner(inner, state, active, depth + 1),
         // Hashed via the early-return above (as the heap form); unreachable here.
         VmValue::OptionSomeScalar(_) => unreachable!("OptionSomeScalar handled above"),
         VmValue::Struct(data) | VmValue::Variant(data) => {
             data.name().hash(state);
             for field in &data.fields {
-                hash_vm_value(field, state);
+                hash_vm_value_inner(field, state, active, depth + 1);
             }
         }
         VmValue::Native(data) => {
@@ -1027,13 +1118,27 @@ fn hash_vm_value<H: std::hash::Hasher>(value: &VmValue, state: &mut H) {
             for (key, value) in entries.borrow().iter() {
                 let mut hasher = FnvHasher::default();
                 key.hash(&mut hasher);
-                hash_vm_value(value, &mut hasher);
+                hash_vm_value_inner(value, &mut hasher, active, depth + 1);
                 acc = acc.wrapping_add(std::hash::Hasher::finish(&hasher));
             }
             acc.hash(state);
         }
         VmValue::Closure(closure) => (Rc::as_ptr(closure) as usize).hash(state),
         VmValue::Managed(_) => unreachable!("Managed handled above"),
+    }
+    if let Some(node) = node {
+        active.remove(&node);
+    }
+}
+
+pub(crate) fn vm_value_node_id(value: &VmValue) -> Option<usize> {
+    match value {
+        VmValue::List(value) => Some(Rc::as_ptr(value) as usize),
+        VmValue::Deque(value) => Some(Rc::as_ptr(value) as usize),
+        VmValue::Map(value) => Some(Rc::as_ptr(value) as usize),
+        VmValue::Struct(value) | VmValue::Variant(value) => Some(Rc::as_ptr(value) as usize),
+        VmValue::Managed(value) => Some(Rc::as_ptr(value) as usize),
+        _ => None,
     }
 }
 
@@ -1109,7 +1214,19 @@ impl VmValue {
     }
 
     pub(crate) fn display(&self) -> String {
-        match self {
+        self.display_inner(&mut DisplayState::default())
+    }
+
+    fn display_inner(&self, state: &mut DisplayState) -> String {
+        let node = vm_value_node_id(self);
+        if let Some(node) = node {
+            let id = state.id_for(node);
+            if !state.active.insert(node) {
+                return format!("<cycle#{id}>");
+            }
+        }
+
+        let rendered = match self {
             Self::Unit => "Unit".to_string(),
             Self::Int(value) => value.to_string(),
             Self::Float(value) => value.to_string(),
@@ -1124,7 +1241,7 @@ impl VmValue {
                 let values = values
                     .borrow()
                     .iter()
-                    .map(|value| value.display())
+                    .map(|value| value.display_inner(state))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{values}]")
@@ -1133,7 +1250,7 @@ impl VmValue {
                 let values = values
                     .borrow()
                     .iter()
-                    .map(VmValue::display)
+                    .map(|value| value.display_inner(state))
                     .collect::<Vec<_>>()
                     .join(", ");
                 format!("[{values}]")
@@ -1142,35 +1259,52 @@ impl VmValue {
                 let mut values = entries
                     .borrow()
                     .iter()
-                    .map(|(key, value)| format!("{}: {}", key.display(), value.display()))
+                    .map(|(key, value)| {
+                        format!("{}: {}", key.display(), value.display_inner(state))
+                    })
                     .collect::<Vec<_>>();
                 values.sort();
                 let values = values.join(", ");
                 format!("{{{values}}}")
             }
-            Self::OptionSomeHeap(value) => format!("Some({})", value.display()),
+            Self::OptionSomeHeap(value) => format!("Some({})", value.display_inner(state)),
             Self::OptionSomeScalar(scalar) => format!("Some({})", scalar.to_value().display()),
             Self::OptionNone => "None".to_string(),
             Self::Struct(data) | Self::Variant(data) => {
                 if data.is_empty() {
-                    return data.name().to_string();
+                    data.name().to_string()
+                } else {
+                    let mut values = data
+                        .iter()
+                        .map(|(key, value)| format!("{key}: {}", value.display_inner(state)))
+                        .collect::<Vec<_>>();
+                    values.sort();
+                    let values = values.join(", ");
+                    format!("{} {{ {values} }}", data.name())
                 }
-                let mut values = data
-                    .iter()
-                    .map(|(key, value)| format!("{key}: {}", value.display()))
-                    .collect::<Vec<_>>();
-                values.sort();
-                let values = values.join(", ");
-                format!("{} {{ {values} }}", data.name())
             }
             Self::Native(data) => format!("<native {}#{}>", data.type_name, data.id),
-            Self::Managed(value) => value.borrow().display(),
+            Self::Managed(value) => value.borrow().display_inner(state),
             Self::Closure(_) => "<closure>".to_string(),
+        };
+        if let Some(node) = node {
+            state.active.remove(&node);
         }
+        rendered
     }
 
     pub(crate) fn native_value(&self) -> Option<NativeValue> {
-        match self {
+        self.native_value_inner(&mut HashSet::new())
+    }
+
+    fn native_value_inner(&self, active: &mut HashSet<usize>) -> Option<NativeValue> {
+        let node = vm_value_node_id(self);
+        if let Some(node) = node
+            && !active.insert(node)
+        {
+            return None;
+        }
+        let converted = match self {
             Self::Unit => Some(NativeValue::Unit),
             Self::Int(value) => Some(NativeValue::Int(*value)),
             Self::Float(value) => Some(NativeValue::Float(*value)),
@@ -1182,7 +1316,7 @@ impl VmValue {
             Self::List(values) => values
                 .borrow()
                 .iter()
-                .map(|value| value.native_value())
+                .map(|value| value.native_value_inner(active))
                 .collect::<Option<Vec<_>>>()
                 .map(NativeValue::List),
             // No `Deque` in the native ABI — a deque crosses the host boundary as
@@ -1190,20 +1324,20 @@ impl VmValue {
             Self::Deque(values) => values
                 .borrow()
                 .iter()
-                .map(VmValue::native_value)
+                .map(|value| value.native_value_inner(active))
                 .collect::<Option<Vec<_>>>()
                 .map(NativeValue::List),
             Self::Map(entries) => entries
                 .borrow()
                 .iter()
-                .map(|(key, value)| Some((key.native_value(), value.native_value()?)))
+                .map(|(key, value)| Some((key.native_value(), value.native_value_inner(active)?)))
                 .collect::<Option<Vec<_>>>()
                 .map(NativeValue::Map),
-            Self::Struct(data) => native_fields(data).map(|fields| NativeValue::Struct {
+            Self::Struct(data) => native_fields(data, active).map(|fields| NativeValue::Struct {
                 name: data.name().to_string(),
                 fields,
             }),
-            Self::Variant(data) => native_fields(data).map(|fields| NativeValue::Variant {
+            Self::Variant(data) => native_fields(data, active).map(|fields| NativeValue::Variant {
                 name: data.name().to_string(),
                 fields,
             }),
@@ -1211,72 +1345,148 @@ impl VmValue {
                 type_name: data.type_name.to_string(),
                 id: data.id,
             }),
-            Self::Managed(value) => value.borrow().native_value(),
+            Self::Managed(value) => value.borrow().native_value_inner(active),
             Self::OptionSomeHeap(_)
             | Self::OptionSomeScalar(_)
             | Self::OptionNone
             | Self::Closure(_) => None,
+        };
+        if let Some(node) = node {
+            active.remove(&node);
         }
+        converted
     }
 }
 
-fn native_fields(data: &VmStruct) -> Option<BTreeMap<String, NativeValue>> {
+fn native_fields(
+    data: &VmStruct,
+    active: &mut HashSet<usize>,
+) -> Option<BTreeMap<String, NativeValue>> {
     data.iter()
-        .map(|(field, value)| Some((field.to_string(), value.native_value()?)))
+        .map(|(field, value)| Some((field.to_string(), value.native_value_inner(active)?)))
         .collect()
 }
 
 impl PartialEq for VmValue {
     fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Unit, Self::Unit) => true,
-            (Self::Int(left), Self::Int(right)) => left == right,
-            // Use IEEE `==` (not bitwise) so the interpreter matches the AOT
-            // backend: `NaN == NaN` is false and `0.0 == -0.0` is true. Floats
-            // are never used as map keys (see `VmMapKey`), so this does not affect
-            // hashing.
-            (Self::Float(left), Self::Float(right)) => left == right,
-            (Self::Bool(left), Self::Bool(right)) => left == right,
-            (Self::Char(left), Self::Char(right)) => left == right,
-            (Self::Bytes(left), Self::Bytes(right)) => left == right,
-            (Self::String(left), Self::String(right)) => left == right,
-            (Self::Json(left), Self::Json(right)) => left == right,
-            (Self::OptionSomeHeap(left), Self::OptionSomeHeap(right)) => left == right,
-            (Self::OptionSomeScalar(left), Self::OptionSomeScalar(right)) => {
-                // Compare via the materialized scalar so this reuses the exact
-                // `VmValue` scalar equality (e.g. IEEE float `==`, `0.0 == -0.0`)
-                // — identical to the old boxed `Some` comparison.
-                left.to_value() == right.to_value()
-            }
-            // Canonical disjointness (V1.3): a scalar `Some` is *always* inline
-            // and a non-scalar `Some` *always* heap, so an inline arm and a heap
-            // arm can never represent the same logical value. They are therefore
-            // unconditionally unequal — no cross-representation normalization.
-            (Self::OptionSomeScalar(_), Self::OptionSomeHeap(_))
-            | (Self::OptionSomeHeap(_), Self::OptionSomeScalar(_)) => false,
-            (Self::OptionNone, Self::OptionNone) => true,
-            (Self::List(left), Self::List(right)) => *left.borrow() == *right.borrow(),
-            (Self::Deque(left), Self::Deque(right)) => *left.borrow() == *right.borrow(),
-            (Self::Map(left), Self::Map(right)) => *left.borrow() == *right.borrow(),
-            (Self::Struct(left), Self::Struct(right)) => {
-                left.name() == right.name() && left.fields == right.fields
-            }
-            (Self::Variant(left), Self::Variant(right)) => {
-                left.name() == right.name() && left.fields == right.fields
-            }
-            (Self::Native(left), Self::Native(right)) => {
-                left.type_name == right.type_name && left.id == right.id
-            }
-            (Self::Managed(left), Self::Managed(right)) => *left.borrow() == *right.borrow(),
-            (Self::Managed(left), right) => *left.borrow() == *right,
-            (left, Self::Managed(right)) => *left == *right.borrow(),
-            (Self::Closure(left), Self::Closure(right)) => Rc::ptr_eq(left, right),
-            _ => false,
-        }
+        vm_values_equal(self, other, &mut HashSet::new())
     }
 }
 
+fn vm_values_equal(left: &VmValue, right: &VmValue, active: &mut HashSet<(usize, usize)>) -> bool {
+    let pair = match (vm_value_node_id(left), vm_value_node_id(right)) {
+        (Some(left), Some(right)) => {
+            if left == right {
+                return true;
+            }
+            let pair = (left, right);
+            if !active.insert(pair) {
+                return true;
+            }
+            Some(pair)
+        }
+        _ => None,
+    };
+
+    let equal = match (left, right) {
+        (VmValue::Unit, VmValue::Unit) => true,
+        (VmValue::Int(left), VmValue::Int(right)) => left == right,
+        // Use IEEE `==` (not bitwise) so the interpreter matches the AOT
+        // backend: `NaN == NaN` is false and `0.0 == -0.0` is true. Floats
+        // are never used as map keys (see `VmMapKey`), so this does not affect
+        // hashing.
+        (VmValue::Float(left), VmValue::Float(right)) => left == right,
+        (VmValue::Bool(left), VmValue::Bool(right)) => left == right,
+        (VmValue::Char(left), VmValue::Char(right)) => left == right,
+        (VmValue::Bytes(left), VmValue::Bytes(right)) => left == right,
+        (VmValue::String(left), VmValue::String(right)) => left == right,
+        (VmValue::Json(left), VmValue::Json(right)) => left == right,
+        (VmValue::OptionSomeHeap(left), VmValue::OptionSomeHeap(right)) => {
+            vm_values_equal(left, right, active)
+        }
+        (VmValue::OptionSomeScalar(left), VmValue::OptionSomeScalar(right)) => {
+            // Compare via the materialized scalar so this reuses the exact
+            // `VmValue` scalar equality (e.g. IEEE float `==`, `0.0 == -0.0`)
+            // — identical to the old boxed `Some` comparison.
+            left.to_value() == right.to_value()
+        }
+        // Canonical disjointness (V1.3): a scalar `Some` is *always* inline
+        // and a non-scalar `Some` *always* heap, so an inline arm and a heap
+        // arm can never represent the same logical value. They are therefore
+        // unconditionally unequal — no cross-representation normalization.
+        (VmValue::OptionSomeScalar(_), VmValue::OptionSomeHeap(_))
+        | (VmValue::OptionSomeHeap(_), VmValue::OptionSomeScalar(_)) => false,
+        (VmValue::OptionNone, VmValue::OptionNone) => true,
+        (VmValue::List(left), VmValue::List(right)) => {
+            let left = left.borrow();
+            let right = right.borrow();
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right.iter())
+                    .all(|(left, right)| vm_values_equal(&left, &right, active))
+        }
+        (VmValue::Deque(left), VmValue::Deque(right)) => {
+            let left = left.borrow();
+            let right = right.borrow();
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right.iter())
+                    .all(|(left, right)| vm_values_equal(left, right, active))
+        }
+        (VmValue::Map(left), VmValue::Map(right)) => {
+            let left = left.borrow();
+            let right = right.borrow();
+            left.len() == right.len()
+                && left.iter().all(|(key, left_value)| {
+                    right
+                        .get(key)
+                        .is_some_and(|right_value| vm_values_equal(left_value, right_value, active))
+                })
+        }
+        (VmValue::Struct(left), VmValue::Struct(right))
+        | (VmValue::Variant(left), VmValue::Variant(right)) => {
+            left.name() == right.name()
+                && left.fields.len() == right.fields.len()
+                && left
+                    .fields
+                    .iter()
+                    .zip(&right.fields)
+                    .all(|(left, right)| vm_values_equal(left, right, active))
+        }
+        (VmValue::Native(left), VmValue::Native(right)) => {
+            left.type_name == right.type_name && left.id == right.id
+        }
+        (VmValue::Managed(left), VmValue::Managed(right)) => {
+            vm_values_equal(&left.borrow(), &right.borrow(), active)
+        }
+        (VmValue::Managed(left), right) => vm_values_equal(&left.borrow(), right, active),
+        (left, VmValue::Managed(right)) => vm_values_equal(left, &right.borrow(), active),
+        (VmValue::Closure(left), VmValue::Closure(right)) => Rc::ptr_eq(left, right),
+        _ => false,
+    };
+
+    if let Some(pair) = pair {
+        active.remove(&pair);
+    }
+    equal
+}
+
 impl Eq for VmValue {}
+
+#[derive(Default)]
+struct DisplayState {
+    active: HashSet<usize>,
+    ids: HashMap<usize, usize>,
+}
+
+impl DisplayState {
+    fn id_for(&mut self, node: usize) -> usize {
+        let next = self.ids.len() + 1;
+        *self.ids.entry(node).or_insert(next)
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -1296,6 +1506,23 @@ mod tests {
     }
 
     #[test]
+    fn cyclic_values_have_bounded_display_and_equality() {
+        fn self_cycle() -> VmValue {
+            let cell = Rc::new(RefCell::new(VmValue::Unit));
+            let managed = VmValue::Managed(Rc::clone(&cell));
+            *cell.borrow_mut() = VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(vec![
+                managed.clone(),
+            ]))));
+            managed
+        }
+
+        let left = self_cycle();
+        let right = self_cycle();
+        assert!(left.display().contains("<cycle#"));
+        assert_eq!(left, right);
+    }
+
+    #[test]
     fn vm_struct_shrank_after_name_moved_to_layout() {
         // V2.0: the type name moved off each `VmStruct` instance onto the shared
         // interned `Rc<TypeLayout>`. The instance is now `{ layout: Rc<TypeLayout>
@@ -1308,8 +1535,8 @@ mod tests {
         assert_eq!(struct_size, 32, "VmStruct expected 32 bytes after V2.0");
     }
 
-    /// Hash a single value with the VM's FNV hasher (the same path `VmMapKey`
-    /// uses for `Map` iteration order).
+    /// Hash a single value with a deterministic hasher to verify structural hash
+    /// equivalence independent of the randomized outer map table.
     fn fnv_hash(value: &VmValue) -> u64 {
         let mut hasher = FnvHasher::default();
         hash_vm_value(value, &mut hasher);
@@ -1445,12 +1672,10 @@ mod tests {
 
     #[test]
     #[allow(clippy::mutable_key_type)]
-    fn map_iteration_order_snapshot_unchanged() {
-        // Canary for the determinism hazard (§3): build a map with mixed inline
-        // (scalar) and heap (string/list) `Some` keys, plus other key shapes, and
-        // assert the FNV-1a iteration order is a fixed snapshot. If the inline
-        // `Some` hash ever diverges from the old boxed hash, this order shifts and
-        // the snapshot breaks — exactly the parity hazard this slice must avoid.
+    fn randomized_map_preserves_mixed_key_lookup() {
+        // Iteration order is intentionally unspecified. This exercises the mixed
+        // key representations through lookup instead of pinning a weak deterministic
+        // hash-table order.
         let mut map: ValueMap = ValueMap::default();
         let keys = [
             VmValue::some(VmValue::Int(1)),
@@ -1465,24 +1690,12 @@ mod tests {
         for (index, key) in keys.iter().enumerate() {
             map.insert(VmMapKey::new(key.clone()), VmValue::Int(index as i64));
         }
-        let order: Vec<String> = map.keys().map(VmMapKey::display).collect();
-        // Snapshot captured against this representation; the per-key hash for the
-        // scalar-`Some` keys is the pre-V1 boxed hash, so this order is identical
-        // to what the pre-V1 representation produced.
-        assert_eq!(
-            order,
-            vec![
-                "7".to_string(),
-                "Some(heap)".to_string(),
-                "Some(false)".to_string(),
-                "None".to_string(),
-                "Some(a)".to_string(),
-                "Some(2)".to_string(),
-                "Some(1)".to_string(),
-                "plain".to_string(),
-            ],
-            "Map iteration order shifted — scalar-Some hash is no longer byte-identical"
-        );
+        for (index, key) in keys.iter().enumerate() {
+            assert_eq!(
+                map.get(&VmMapKey::new(key.clone())),
+                Some(&VmValue::Int(index as i64))
+            );
+        }
     }
 
     // ===== TV1 (Valhalla typed scalar list storage) =====================
@@ -1672,6 +1885,15 @@ mod tests {
     }
 
     #[test]
+    fn map_transaction_snapshot_preserves_spare_capacity() {
+        let mut map = ValueMap::with_capacity_and_hasher(128, Default::default());
+        map.insert(VmMapKey::new(VmValue::Int(1)), VmValue::Int(2));
+        let snapshot = clone_value_map_preserving_capacity(&map);
+        assert_eq!(snapshot, map);
+        assert_eq!(snapshot.capacity(), map.capacity());
+    }
+
+    #[test]
     fn checked_push_accounted_amortizes_and_stays_conservative() {
         // TV2.1: the fused push charges only on capacity reallocation, and the
         // total charged over a build never *under*-counts the live length (it
@@ -1740,9 +1962,10 @@ mod tests {
 
     #[test]
     #[allow(clippy::mutable_key_type)]
-    fn map_order_with_list_int_keys_is_stable() {
-        // `List<Int>` is a hashable map key. Snapshot the iteration order keyed by
-        // typed `Ints` lists; a typed-vs-boxed hash divergence would shift it.
+    fn typed_and_boxed_list_keys_share_hash_and_equality() {
+        // `List<Int>` is a hashable map key. Iteration order is unspecified; the
+        // semantic contract is that typed and boxed representations resolve the
+        // same entries.
         let mut map: ValueMap = ValueMap::default();
         let keys = [
             list_value(TypedVec::Ints(vec![3, 1])),
@@ -1753,17 +1976,7 @@ mod tests {
         for (index, key) in keys.iter().enumerate() {
             map.insert(VmMapKey::new(key.clone()), VmValue::Int(index as i64));
         }
-        let order: Vec<String> = map.keys().map(VmMapKey::display).collect();
-        assert_eq!(
-            order,
-            vec![
-                "[1]".to_string(),
-                "[3, 1]".to_string(),
-                "[2, 2, 2]".to_string(),
-                "[]".to_string(),
-            ],
-            "Map order over List<Int> keys shifted — typed/boxed hash diverged"
-        );
+        assert_eq!(map.len(), keys.len());
 
         // And a Boxed key of the same values resolves to the SAME entry (kind-
         // agnostic eq+hash), proving interchangeability.

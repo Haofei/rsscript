@@ -107,6 +107,76 @@ fn main() -> Int {
     }
 }
 
+#[test]
+fn map_capacity_growth_is_charged_to_memory_budget() {
+    let source = r#"
+fn main() -> Int {
+    let map = Map.new<Int, Int>()
+    let mut index = 0
+    while index < 1000000 {
+        Map.insert<Int, Int>(map: mut map, key: index, value: index)
+        index = index + 1
+    }
+    return Map.len<Int, Int>(map)
+}
+"#;
+    let error = eval_limited(
+        source,
+        VmLimits {
+            mem_budget: Some(16 * 1024),
+            step_budget: Some(10_000_000),
+            ..VmLimits::default()
+        },
+    )
+    .expect_err("map growth must hit memory budget");
+    assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+}
+
+#[test]
+fn shake_output_respects_memory_budget_and_hard_cap() {
+    let source = r#"
+fn main() -> Int {
+    let bytes = Bytes.from_string(value: "input")
+    let output = Hash.shake128_bytes(value: bytes, out_len: 1048576)
+    return Bytes.len(value: output)
+}
+"#;
+    let error = eval_limited(
+        source,
+        VmLimits {
+            mem_budget: Some(64 * 1024),
+            ..VmLimits::default()
+        },
+    )
+    .expect_err("SHAKE output must hit memory budget");
+    assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+
+    let too_large = source.replace("1048576", "67108865");
+    let error = eval_limited(&too_large, VmLimits::default())
+        .expect_err("SHAKE output above hard cap must fail");
+    assert!(matches!(error, EvalError::Runtime(message) if message.contains("output exceeds")));
+}
+
+#[test]
+fn integer_math_invalid_domains_return_language_errors() {
+    let cases = [
+        "Math.abs(value: -9223372036854775807 - 1)",
+        "Math.clamp(value: 1, min: 2, max: 1)",
+        "Math.pow(base: 2, exponent: -1)",
+        "Math.pow(base: 2, exponent: 4294967296)",
+        "Math.pow(base: 9223372036854775807, exponent: 2)",
+    ];
+    for expression in cases {
+        let source = format!("fn main() -> Int {{ return {expression} }}");
+        let error = eval_limited(&source, VmLimits::default())
+            .expect_err("invalid math domain must return a language error");
+        assert!(
+            matches!(error, EvalError::Runtime(_)),
+            "{expression}: {error:?}"
+        );
+    }
+}
+
 /// Default limits must NOT trip on ordinary code: a trusted run leaves the
 /// step/memory budgets off and the depth cap generous, so a normal program
 /// (modest recursion + a real loop + a list build) completes cleanly.

@@ -1691,6 +1691,7 @@ fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
         | RegInstr::LoadString { .. }
         | RegInstr::LoadChar { .. }
         | RegInstr::LoadNone { .. }
+        | RegInstr::TailCallGuard
         | RegInstr::Jump { .. }
         | RegInstr::RuntimeError { .. } => S(vec![]),
         RegInstr::Move { src, .. }
@@ -1966,6 +1967,7 @@ fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
         | RegInstr::GreaterEqualInt { .. }
         | RegInstr::Equal { .. }
         | RegInstr::NotEqual { .. }
+        | RegInstr::TailCallGuard
         | RegInstr::Jump { .. }
         | RegInstr::JumpIfBool { .. }
         | RegInstr::JumpIfIntCompare { .. }

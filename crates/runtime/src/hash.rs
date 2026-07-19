@@ -9,6 +9,7 @@ use std::io::Read;
 use crate::fs::RuntimePath;
 
 type HmacSha256 = Hmac<Sha256>;
+const MAX_HASH_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 
 pub fn hash_sha256_string(value: &str) -> String {
     let mut hasher = Sha256::new();
@@ -35,10 +36,20 @@ pub fn hash_sha3_256_bytes(value: &[u8]) -> Vec<u8> {
 }
 
 pub fn hash_shake128_bytes(value: &[u8], out_len: i64) -> Vec<u8> {
+    let out_len = usize::try_from(out_len).unwrap_or_else(|_| {
+        crate::error::panic_runtime_error(crate::error::invalid_argument_error(format!(
+            "Hash.shake128_bytes output length must be non-negative, got {out_len}"
+        )))
+    });
+    if out_len > MAX_HASH_OUTPUT_BYTES {
+        crate::error::panic_runtime_error(crate::error::invalid_argument_error(format!(
+            "Hash.shake128_bytes output exceeds the {MAX_HASH_OUTPUT_BYTES} byte limit"
+        )));
+    }
     let mut hasher = Shake128::default();
     Update::update(&mut hasher, value);
     let mut reader = hasher.finalize_xof();
-    let mut out = vec![0u8; out_len.max(0) as usize];
+    let mut out = vec![0u8; out_len];
     XofReader::read(&mut reader, &mut out);
     out
 }

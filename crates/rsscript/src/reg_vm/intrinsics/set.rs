@@ -16,7 +16,8 @@ impl RegVm {
         match intrinsic {
             RegIntrinsic::SetContains => {
                 let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let key = map_key_from_value(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let (key, work) = map_key_from_value(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                self.charge_work(work)?;
                 Ok(VmValue::Bool(set.borrow().contains_key(&key)))
             }
             RegIntrinsic::SetDifference => {

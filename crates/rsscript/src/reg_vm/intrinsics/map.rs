@@ -16,7 +16,8 @@ impl RegVm {
         match intrinsic {
             RegIntrinsic::MapContainsKey => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let key = map_key_from_value(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let (key, work) = map_key_from_value(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                self.charge_work(work)?;
                 Ok(VmValue::Bool(map.borrow().contains_key(&key)))
             }
             RegIntrinsic::MapFilter => {
@@ -84,7 +85,8 @@ impl RegVm {
             }
             RegIntrinsic::MapGetOrDefault => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let key = map_key_from_value(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let (key, work) = map_key_from_value(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                self.charge_work(work)?;
                 let default = intrinsic_arg(&self.stack, base, args, 2)?.clone();
                 Ok(map.borrow().get(&key).cloned().unwrap_or(default))
             }

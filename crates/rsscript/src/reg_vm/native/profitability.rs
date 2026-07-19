@@ -269,7 +269,11 @@ pub(in crate::reg_vm) fn native_region_profitability(
                 // after report-mode data.
                 p.native_calls += 1;
             }
-            JitInstr::Nop | JitInstr::Return { .. } | JitInstr::Bail | JitInstr::OsrExit => {}
+            JitInstr::Nop
+            | JitInstr::TailCallGuard { .. }
+            | JitInstr::Return { .. }
+            | JitInstr::Bail
+            | JitInstr::OsrExit => {}
         }
     }
     p.score = score;

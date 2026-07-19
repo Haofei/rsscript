@@ -32,6 +32,7 @@ impl RegVm {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         }];
         self.tasks.insert(
             tid,

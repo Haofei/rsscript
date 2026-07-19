@@ -2,10 +2,11 @@
 //! constructors (regex/csv/row/stream/image error values), JSON/native-value
 //! conversions, field read/write, and deep copy. Split out of `reg_vm/mod.rs`.
 
+use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::eval_types::{EvalError, NativeValue};
-use crate::vm_value::{TypedVec, ValueMap, VmMapKey, VmStruct, VmValue};
+use crate::vm_value::{TypedVec, ValueMap, VmMapKey, VmStruct, VmValue, vm_value_node_id};
 
 use super::*;
 
@@ -439,13 +440,6 @@ fn write_struct_field_in_place(
     Ok(())
 }
 
-pub(super) fn unmanage_vm_value(value: VmValue) -> VmValue {
-    match value {
-        VmValue::Managed(value) => unmanage_vm_value(value.borrow().clone()),
-        other => other,
-    }
-}
-
 /// Recursively copy a value so the result shares no mutable interior with the
 /// original: every `List`/`Map` gets a fresh `Rc<RefCell>` and structs/variants
 /// are rebuilt with copied fields. `Managed` is the language's explicit shared
@@ -507,26 +501,41 @@ pub(super) fn deep_copy_struct(data: &Rc<VmStruct>) -> Rc<VmStruct> {
 }
 
 pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, EvalError> {
-    match unmanage_vm_value(value) {
+    native_value_from_vm_value_inner(&value, &mut HashSet::new())
+}
+
+fn native_value_from_vm_value_inner(
+    value: &VmValue,
+    active: &mut HashSet<usize>,
+) -> Result<NativeValue, EvalError> {
+    let node = vm_value_node_id(value);
+    if let Some(node) = node {
+        if !active.insert(node) {
+            return Err(EvalError::Runtime(
+                "cyclic value cannot cross a native binding boundary".to_string(),
+            ));
+        }
+    }
+
+    let converted = match value {
         VmValue::Unit => Ok(NativeValue::Unit),
-        VmValue::Int(value) => Ok(NativeValue::Int(value)),
-        VmValue::Float(value) => Ok(NativeValue::Float(value)),
-        VmValue::Bool(value) => Ok(NativeValue::Bool(value)),
-        VmValue::Char(value) => Ok(NativeValue::Char(value)),
+        VmValue::Int(value) => Ok(NativeValue::Int(*value)),
+        VmValue::Float(value) => Ok(NativeValue::Float(*value)),
+        VmValue::Bool(value) => Ok(NativeValue::Bool(*value)),
+        VmValue::Char(value) => Ok(NativeValue::Char(*value)),
         VmValue::Bytes(value) => Ok(NativeValue::Bytes(value.as_ref().clone())),
         VmValue::String(value) => Ok(NativeValue::String(value.to_string())),
         VmValue::Json(value) => Ok(NativeValue::Json(value.as_ref().clone())),
         VmValue::List(items) => items
             .borrow()
             .iter()
-            .map(native_value_from_vm_value)
+            .map(|value| native_value_from_vm_value_inner(&value, active))
             .collect::<Result<Vec<_>, _>>()
             .map(NativeValue::List),
         VmValue::Deque(items) => items
             .borrow()
             .iter()
-            .cloned()
-            .map(native_value_from_vm_value)
+            .map(|value| native_value_from_vm_value_inner(value, active))
             .collect::<Result<Vec<_>, _>>()
             .map(NativeValue::List),
         VmValue::Map(entries) => entries
@@ -535,7 +544,7 @@ pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, 
             .map(|(key, value)| {
                 Ok((
                     key.native_value(),
-                    native_value_from_vm_value(value.clone())?,
+                    native_value_from_vm_value_inner(value, active)?,
                 ))
             })
             .collect::<Result<Vec<_>, EvalError>>()
@@ -545,7 +554,7 @@ pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, 
             .map(|(field, value)| {
                 Ok((
                     field.to_string(),
-                    native_value_from_vm_value(value.clone())?,
+                    native_value_from_vm_value_inner(value, active)?,
                 ))
             })
             .collect::<Result<BTreeMap<_, _>, EvalError>>()
@@ -558,7 +567,7 @@ pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, 
             .map(|(field, value)| {
                 Ok((
                     field.to_string(),
-                    native_value_from_vm_value(value.clone())?,
+                    native_value_from_vm_value_inner(value, active)?,
                 ))
             })
             .collect::<Result<BTreeMap<_, _>, EvalError>>()
@@ -570,14 +579,15 @@ pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, 
             type_name: data.type_name.to_string(),
             id: data.id,
         }),
-        VmValue::Managed(_) => Err(EvalError::Runtime(
-            "reg VM native argument stayed managed after unwrapping.".to_string(),
-        )),
+        VmValue::Managed(value) => native_value_from_vm_value_inner(&value.borrow(), active),
         // Mirror the return direction: bridge `Option` as a `Some`/`None`
         // variant so native bindings can accept it.
         VmValue::OptionSomeHeap(value) => {
             let mut fields = BTreeMap::new();
-            fields.insert("value".to_string(), native_value_from_vm_value(*value)?);
+            fields.insert(
+                "value".to_string(),
+                native_value_from_vm_value_inner(value, active)?,
+            );
             Ok(NativeValue::Variant {
                 name: "Some".to_string(),
                 fields,
@@ -587,7 +597,7 @@ pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, 
             let mut fields = BTreeMap::new();
             fields.insert(
                 "value".to_string(),
-                native_value_from_vm_value(scalar.to_value())?,
+                native_value_from_vm_value_inner(&scalar.to_value(), active)?,
             );
             Ok(NativeValue::Variant {
                 name: "Some".to_string(),
@@ -601,7 +611,12 @@ pub(super) fn native_value_from_vm_value(value: VmValue) -> Result<NativeValue, 
         VmValue::Closure(_) => Err(EvalError::Runtime(
             "reg VM cannot pass Closure to native host binding.".to_string(),
         )),
+    };
+
+    if let Some(node) = node {
+        active.remove(&node);
     }
+    converted
 }
 
 pub(super) fn vm_value_from_native_value(value: NativeValue) -> VmValue {
@@ -674,6 +689,18 @@ mod tests {
     //! fallback. This is the host boundary, so a missed arm here is a silently
     //! wrong value at a native call.
     use super::*;
+
+    #[test]
+    fn native_conversion_rejects_cyclic_values() {
+        let cell = Rc::new(RefCell::new(VmValue::Unit));
+        let managed = VmValue::Managed(Rc::clone(&cell));
+        *cell.borrow_mut() = VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(vec![
+            managed.clone(),
+        ]))));
+
+        let error = native_value_from_vm_value(managed).expect_err("cycle must be rejected");
+        assert!(matches!(error, EvalError::Runtime(message) if message.contains("cyclic value")));
+    }
     use crate::vm_value::{VmClosure, VmNative};
     use std::collections::{BTreeMap, VecDeque};
 

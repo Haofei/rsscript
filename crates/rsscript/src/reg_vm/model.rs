@@ -576,6 +576,10 @@ pub(crate) enum RegInstr {
         dst: Reg,
         src: Reg,
     },
+    /// Logical self-tail-call boundary inserted by the TCO pass. The interpreter
+    /// increments the current frame's elided-call count and enforces
+    /// `VmLimits::max_depth` exactly as if another frame had been pushed.
+    TailCallGuard,
     /// Replace `reg` with a deep copy of its value (fresh `Rc` for every mutable
     /// container in the tree, recursing through structs/variants/options; shared
     /// reference values like `Managed` keep their handle). Emitted at the function
@@ -1984,7 +1988,7 @@ fn deepcopy_collect_regs(instr: &RegInstr, out: &mut Vec<Reg>) {
             out.push(*lhs);
             out.push(*rhs);
         }
-        RegInstr::Jump { .. } | RegInstr::RuntimeError { .. } => {}
+        RegInstr::TailCallGuard | RegInstr::Jump { .. } | RegInstr::RuntimeError { .. } => {}
         RegInstr::JumpIfBool { cond, .. } => out.push(*cond),
         RegInstr::JumpIfIntCompare { lhs, rhs, .. } => {
             out.push(*lhs);
@@ -2557,7 +2561,8 @@ fn deepcopy_instr_forces_keep(instr: &RegInstr, tainted: &[bool], n_regs: usize)
         | RegInstr::LoadString { .. }
         | RegInstr::LoadChar { .. }
         | RegInstr::LoadNone { .. }
-        | RegInstr::RuntimeError { .. } => false,
+        | RegInstr::RuntimeError { .. }
+        | RegInstr::TailCallGuard => false,
 
         // ---- UNCLASSIFIED → KEEP (fail-safe default; SOUNDNESS BACKBONE — DO NOT WEAKEN). ----
         // Everything else (stores, returns, captures, spawns, `Manage`, `Match*MapGet` extractions,

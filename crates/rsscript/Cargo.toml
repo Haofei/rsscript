@@ -84,3 +84,10 @@ path = "tests/soak.rs"
 [[test]]
 name = "jit_cost_model"
 path = "tests/jit_cost_model.rs"
+
+# Process-isolated because this test intentionally verifies process environment
+# configuration. Keeping it out of `runtime` prevents parallel tests from seeing
+# a temporary JIT threshold.
+[[test]]
+name = "jit_env"
+path = "tests/jit_env.rs"

@@ -2294,6 +2294,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -2358,6 +2359,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -2427,6 +2429,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -2498,6 +2501,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -2569,6 +2573,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -2644,6 +2649,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -2712,6 +2718,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -2786,6 +2793,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -6042,6 +6050,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -6127,6 +6136,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -6182,6 +6192,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -6278,6 +6289,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -6541,6 +6553,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -6708,6 +6721,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -7044,6 +7058,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -7098,6 +7113,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -7139,6 +7155,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -7175,6 +7192,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -7224,6 +7242,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
 
@@ -7792,6 +7811,7 @@ fn main() -> Unit {
             base: 0,
             ret_dst: usize::MAX,
             mut_writeback: Vec::new(),
+            tail_calls: 0,
         })
         .expect("push frame");
         let outcome = vm.try_native(func, 0);

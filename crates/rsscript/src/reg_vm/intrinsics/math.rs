@@ -14,9 +14,14 @@ impl RegVm {
         let _ = next_base;
         let _ = unit;
         match intrinsic {
-            RegIntrinsic::MathAbs => Ok(VmValue::Int(
-                expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.abs(),
-            )),
+            RegIntrinsic::MathAbs => {
+                let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                value.checked_abs().map(VmValue::Int).ok_or_else(|| {
+                    EvalError::Runtime(format!(
+                        "Math.abs overflow: abs({value}) exceeds the Int range"
+                    ))
+                })
+            }
             RegIntrinsic::MathAbsFloat => Ok(VmValue::Float(
                 expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.abs(),
             )),
@@ -116,8 +121,14 @@ impl RegVm {
             RegIntrinsic::MathPow => {
                 let base_value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let exponent = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
+                let exponent = u32::try_from(exponent).map_err(|_| {
+                    EvalError::Runtime(format!(
+                        "Math.pow exponent must be between 0 and {}, got {exponent}",
+                        u32::MAX
+                    ))
+                })?;
                 base_value
-                    .checked_pow(exponent.max(0) as u32)
+                    .checked_pow(exponent)
                     .map(VmValue::Int)
                     .ok_or_else(|| {
                         EvalError::Runtime(format!(

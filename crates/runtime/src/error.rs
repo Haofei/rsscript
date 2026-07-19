@@ -10,6 +10,8 @@ pub enum RuntimeErrorKind {
     AssertionFailed,
     ResourcePoolBorrowConflict,
     ResourcePoolEmpty,
+    InvalidArgument,
+    IntegerOverflow,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +63,8 @@ impl RuntimeErrorKind {
             Self::AssertionFailed => "assertion_failed",
             Self::ResourcePoolBorrowConflict => "resource_pool_borrow_conflict",
             Self::ResourcePoolEmpty => "resource_pool_empty",
+            Self::InvalidArgument => "invalid_argument",
+            Self::IntegerOverflow => "integer_overflow",
         }
     }
 }
@@ -72,6 +76,22 @@ pub(crate) fn panic_runtime_error(error: RuntimeError) -> ! {
 pub(crate) fn assertion_failed_error(message: String) -> RuntimeError {
     RuntimeError {
         kind: RuntimeErrorKind::AssertionFailed,
+        message,
+        span: None,
+    }
+}
+
+pub(crate) fn invalid_argument_error(message: String) -> RuntimeError {
+    RuntimeError {
+        kind: RuntimeErrorKind::InvalidArgument,
+        message,
+        span: None,
+    }
+}
+
+pub(crate) fn integer_overflow_error(message: String) -> RuntimeError {
+    RuntimeError {
+        kind: RuntimeErrorKind::IntegerOverflow,
         message,
         span: None,
     }

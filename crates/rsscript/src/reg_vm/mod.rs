@@ -41,6 +41,8 @@ use crate::text_util::{
     decode_char_token, decode_string_token, string_format, string_pad, string_slice_range,
     type_arg_names, type_root_name,
 };
+#[cfg(feature = "native-jit")]
+use crate::vm_value::clone_value_map_preserving_capacity;
 use crate::vm_value::{
     TypeLayout, TypedVec, ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue, intern_layout,
 };
@@ -569,6 +571,7 @@ fn optimize_self_tail_calls(function: &mut RegFunction, function_id: usize) {
             })
             .collect();
         let block_start = function.code.len();
+        function.code.push(RegInstr::TailCallGuard);
         for (slot, &arg) in args.iter().enumerate() {
             function.code.push(RegInstr::Move {
                 dst: staging[slot],
@@ -1426,6 +1429,49 @@ impl RegVmExecutable {
         )
     }
 
+    /// Benchmark/test entry point that pins tier-up without mutating process
+    /// environment. Keeping this explicit prevents parallel test cases from
+    /// changing one another's native compilation policy.
+    #[doc(hidden)]
+    #[cfg(feature = "native-jit")]
+    pub fn eval_main_with_args_native_at_threshold(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        tier_up_threshold: u32,
+    ) -> Result<EvalOutput, EvalError> {
+        self.eval_main_with_args_native_inner(
+            args,
+            tier_up_threshold,
+            false,
+            false,
+            true,
+            false,
+            None,
+            false,
+        )
+        .map(|(output, _stats)| output)
+    }
+
+    /// Stats variant of [`Self::eval_main_with_args_native_at_threshold`].
+    #[doc(hidden)]
+    #[cfg(feature = "native-jit")]
+    pub fn eval_main_with_args_native_with_stats_at_threshold(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        tier_up_threshold: u32,
+    ) -> Result<(EvalOutput, NativeStats), EvalError> {
+        self.eval_main_with_args_native_inner(
+            args,
+            tier_up_threshold,
+            false,
+            true,
+            true,
+            false,
+            None,
+            false,
+        )
+    }
+
     /// Like [`Self::eval_main_with_args_native_osr`] but also returns the
     /// native-tier [`NativeStats`] (notably `osr_entries`) for bench telemetry.
     #[cfg(feature = "native-jit")]
@@ -2003,6 +2049,9 @@ struct Frame {
     /// the parameter's final (possibly mutated) value, so `mut` params propagate.
     /// Empty for the overwhelmingly common no-`mut`-arg call (then a no-op).
     mut_writeback: Vec<(usize, usize)>,
+    /// Number of self-tail calls elided by TCO in this activation. Combined with
+    /// the physical frame depth to preserve `VmLimits::max_depth` observability.
+    tail_calls: usize,
 }
 
 /// Result of driving a task's call stack one slice at a time.
@@ -2136,6 +2185,7 @@ const CANCEL_POLL_INTERVAL: u64 = 1024;
 /// Estimated bytes charged per map entry: a key plus a `VmValue`, with hashmap
 /// bookkeeping folded into the key term as a rough fudge factor.
 const MAP_ENTRY_BYTES: usize = std::mem::size_of::<VmValue>() * 2;
+const MAX_INTRINSIC_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
 
 impl Default for VmLimits {
     fn default() -> Self {
@@ -2210,9 +2260,9 @@ struct RegVm {
     /// resizes and list/map element/entry additions) and do NOT subtract frees,
     /// so this is a cumulative high-water-ish figure, not a precise live-set. It
     /// exists only to trip `limits.mem_budget`; when that is `None` we skip all
-    /// accounting so the overhead is zero. Accounted sites: `ensure_regs`,
-    /// `MakeList`/`MakeMap` literal construction, and the `ListPush`/`ListAppend`
-    /// growth handlers (the dominant allocators for adversarial blow-ups).
+    /// accounting so the overhead is zero. Accounted sites include register-stack
+    /// growth, collection construction and capacity growth, and bounded intrinsic
+    /// outputs such as SHAKE digests.
     live_bytes: usize,
     /// Number of stdlib/runtime intrinsic calls dispatched so far (the
     /// `host_call_budget` fuel gauge). Only consulted when that budget is `Some`;
@@ -4388,8 +4438,10 @@ fn jit_snapshot_map_before_write(handle: i64, map: &Rc<RefCell<ValueMap>>) -> bo
         return true;
     }
     JIT_HEAP_WRITE_UNDO.with(|undo| {
-        undo.borrow_mut()
-            .push(JitHeapWriteUndo::Map(Rc::clone(map), map.borrow().clone()));
+        undo.borrow_mut().push(JitHeapWriteUndo::Map(
+            Rc::clone(map),
+            clone_value_map_preserving_capacity(&map.borrow()),
+        ));
     });
     true
 }
@@ -6941,7 +6993,7 @@ fn ensure_option_value(value: VmValue) -> Result<VmValue, EvalError> {
 }
 
 fn vm_value_from_map_key(key: &VmMapKey) -> VmValue {
-    key.value().clone()
+    key.detached_value()
 }
 
 fn as_task_handle(value: &VmValue) -> Option<TaskId> {
