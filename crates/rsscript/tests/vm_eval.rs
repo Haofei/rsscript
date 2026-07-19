@@ -587,8 +587,8 @@ fn main() -> Unit {
         source,
         std::iter::empty::<&str>(),
         [
-            ("Host.echo", host_echo as NativeInterpreterFn),
-            ("Host.tag", host_tag as NativeInterpreterFn),
+            ("Host.echo", NativeInterpreterFn::from_fn(host_echo)),
+            ("Host.tag", NativeInterpreterFn::from_fn(host_tag)),
         ],
     )
     .expect("native host binding eval should succeed");
@@ -689,10 +689,13 @@ fn main() -> Unit {
         source,
         std::iter::empty::<&str>(),
         [
-            ("Alpha.open", alpha_open as NativeInterpreterFn),
-            ("Alpha.describe", alpha_describe as NativeInterpreterFn),
-            ("Beta.open", beta_open as NativeInterpreterFn),
-            ("Beta.describe", beta_describe as NativeInterpreterFn),
+            ("Alpha.open", NativeInterpreterFn::from_fn(alpha_open)),
+            (
+                "Alpha.describe",
+                NativeInterpreterFn::from_fn(alpha_describe),
+            ),
+            ("Beta.open", NativeInterpreterFn::from_fn(beta_open)),
+            ("Beta.describe", NativeInterpreterFn::from_fn(beta_describe)),
         ],
     )
     .expect("receiver native host binding eval should succeed");
@@ -942,9 +945,9 @@ fn main() -> Unit {
         source,
         std::iter::empty::<&str>(),
         [
-            ("Host.open", host_open as NativeInterpreterFn),
-            ("Host.describe", host_describe as NativeInterpreterFn),
-            ("Host.echo", host_echo as NativeInterpreterFn),
+            ("Host.open", NativeInterpreterFn::from_fn(host_open)),
+            ("Host.describe", NativeInterpreterFn::from_fn(host_describe)),
+            ("Host.echo", NativeInterpreterFn::from_fn(host_echo)),
         ],
     )
     .expect("interpreter should run native host binding");

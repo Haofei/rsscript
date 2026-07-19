@@ -190,8 +190,8 @@ impl GatePolicyFile {
 
     /// Resolve the effective gate policy for `target`: start from the built-in
     /// default, layer the `[default]` section, then the target-specific section.
-    pub fn gate_policy_for(&self, target: Option<&str>) -> crate::format::CiGatePolicy {
-        let mut policy = crate::format::CiGatePolicy::default();
+    pub fn gate_policy_for(&self, target: Option<&str>) -> crate::GatePolicy {
+        let mut policy = crate::GatePolicy::default();
         self.default.apply_to(&mut policy);
         if let Some(name) = target {
             if let Some(target_policy) = self.target.get(name) {
@@ -203,7 +203,7 @@ impl GatePolicyFile {
 }
 
 impl TargetGatePolicy {
-    pub fn apply_to(&self, policy: &mut crate::format::CiGatePolicy) {
+    pub fn apply_to(&self, policy: &mut crate::GatePolicy) {
         if let Some(value) = self.fail_on_missing {
             policy.fail_on_missing = value;
         }

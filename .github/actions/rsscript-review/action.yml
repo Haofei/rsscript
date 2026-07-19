@@ -16,21 +16,21 @@ inputs:
     required: false
     default: 'true'
   fail-on-missing:
-    description: 'Fail the action if required capabilities are missing'
+    description: 'Override missing-capability policy: true, false, or empty to use the policy/default'
     required: false
-    default: 'true'
+    default: ''
   fail-on-unknown:
-    description: 'Fail the action if capabilities are unknown (absence of evidence). Recommended true for protected branches.'
+    description: 'Override unknown-capability policy: true, false, or empty to use the policy/default'
     required: false
-    default: 'true'
+    default: ''
   fail-on-excess:
-    description: 'Fail the action if granted capabilities exceed requirements (over-privilege). Recommended true for protected branches.'
+    description: 'Override excess-capability policy: true, false, or empty to use the policy/default'
     required: false
-    default: 'true'
+    default: ''
   require-verified-capabilities:
-    description: 'Fail if a required capability is only author-declared (rsspkg.toml binding) with no independent evidence. Off by default; turn on for high-security gates.'
+    description: 'Override verified-capability policy: true, false, or empty to use the policy/default'
     required: false
-    default: 'false'
+    default: ''
   policy:
     description: 'Path to an rss-policy.toml gate policy file (per-target fail-on-* rules). Overlaid by the explicit fail-on-* inputs.'
     required: false
@@ -59,18 +59,14 @@ runs:
     - name: Install RSScript toolchain
       shell: bash
       run: |
-        if ! command -v rss &> /dev/null || ! command -v reir &> /dev/null; then
-          echo "::group::Building RSScript from the pinned action checkout"
-          RSSCRIPT_ACTION_ROOT="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
-          cargo build --quiet --release --manifest-path "$RSSCRIPT_ACTION_ROOT/Cargo.toml" --bin rss -p rsscript
-          cargo build --quiet --release --manifest-path "$RSSCRIPT_ACTION_ROOT/Cargo.toml" --bin reir -p reir
-          echo "$RSSCRIPT_ACTION_ROOT/target/release" >> $GITHUB_PATH
-          echo "::endgroup::"
-        else
-          # Ambient binaries are not provenance-pinned. For a protected gate, pin
-          # this action to a release SHA so the toolchain is built from that ref.
-          echo "::warning::Using packages/reir already on PATH. These are not provenance-pinned; pin this action to a release SHA for a trusted supply-chain gate ($(command -v rss), $(command -v reir))."
-        fi
+        echo "::group::Building RSScript from the pinned action checkout"
+        RSSCRIPT_ACTION_ROOT="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
+        cargo build --quiet --locked --release \
+          --manifest-path "$RSSCRIPT_ACTION_ROOT/Cargo.toml" \
+          --bin rss -p rsscript --bin reir -p reir
+        echo "RSS_BIN=$RSSCRIPT_ACTION_ROOT/target/release/rss" >> "$GITHUB_ENV"
+        echo "REIR_BIN=$RSSCRIPT_ACTION_ROOT/target/release/reir" >> "$GITHUB_ENV"
+        echo "::endgroup::"
 
     - name: Run RSScript and REIR review
       id: review
@@ -94,9 +90,9 @@ runs:
         COMMENT_FILE="$TEMP_DIR/pr-comment.md"
 
         set +e
-        rss pkg review --json "$INPUT_HEAD" > "$PACKAGE_REVIEW_JSON"
+        "$RSS_BIN" pkg review --json "$INPUT_HEAD" > "$PACKAGE_REVIEW_JSON"
         PACKAGE_REVIEW_EXIT_CODE=$?
-        rss pkg ci --json "$INPUT_HEAD" > "$PACKAGE_CHECK_JSON"
+        "$RSS_BIN" pkg ci --json "$INPUT_HEAD" > "$PACKAGE_CHECK_JSON"
         PACKAGE_CHECK_EXIT_CODE=$?
         set -e
         if [ $PACKAGE_REVIEW_EXIT_CODE -ne 0 ] && [ ! -s "$PACKAGE_REVIEW_JSON" ]; then
@@ -107,29 +103,37 @@ runs:
           echo "::error::rss pkg ci --json failed without producing package check JSON"
           exit $PACKAGE_CHECK_EXIT_CODE
         fi
-        reir collect \
+        "$REIR_BIN" collect \
           --producer rsscript \
           --package-review "$PACKAGE_REVIEW_JSON" \
           --package-check "$PACKAGE_CHECK_JSON" \
           --out "$REQUIRED_REIR_JSON"
 
-        # Build the policy flags from inputs so the gate fails closed by default.
+        # Empty input means use policy/default; an explicit true or false is a
+        # symmetric command-line override.
         REPORT_FLAGS=()
         [ -n "$INPUT_POLICY" ] && REPORT_FLAGS+=(--policy "$INPUT_POLICY")
-        [ "$INPUT_FAIL_ON_MISSING" = "true" ] || REPORT_FLAGS+=(--allow-missing)
-        [ "$INPUT_FAIL_ON_UNKNOWN" = "true" ] && REPORT_FLAGS+=(--fail-on-unknown)
-        [ "$INPUT_FAIL_ON_EXCESS" = "true" ] && REPORT_FLAGS+=(--fail-on-excess)
-        [ "$INPUT_REQUIRE_VERIFIED" = "true" ] && REPORT_FLAGS+=(--require-verified-capabilities)
+        case "$INPUT_FAIL_ON_MISSING" in
+          true) REPORT_FLAGS+=(--fail-on-missing) ;; false) REPORT_FLAGS+=(--allow-missing) ;; "") ;; *) echo "::error::fail-on-missing must be true, false, or empty"; exit 2 ;; esac
+        case "$INPUT_FAIL_ON_UNKNOWN" in
+          true) REPORT_FLAGS+=(--fail-on-unknown) ;; false) REPORT_FLAGS+=(--allow-unknown) ;; "") ;; *) echo "::error::fail-on-unknown must be true, false, or empty"; exit 2 ;; esac
+        case "$INPUT_FAIL_ON_EXCESS" in
+          true) REPORT_FLAGS+=(--fail-on-excess) ;; false) REPORT_FLAGS+=(--allow-excess) ;; "") ;; *) echo "::error::fail-on-excess must be true, false, or empty"; exit 2 ;; esac
+        case "$INPUT_REQUIRE_VERIFIED" in
+          true) REPORT_FLAGS+=(--require-verified-capabilities) ;; false) REPORT_FLAGS+=(--allow-unverified-capabilities) ;; "") ;; *) echo "::error::require-verified-capabilities must be true, false, or empty"; exit 2 ;; esac
 
         set +e
-        reir report-pr \
+        "$REIR_BIN" report-pr \
           --required "$REQUIRED_REIR_JSON" \
           --granted "$INPUT_GRANTS" \
           --target "$INPUT_TARGET" \
           "${REPORT_FLAGS[@]}" > "$REVIEW_OUTPUT_FILE"
         EXIT_CODE=$?
         set -e
-        cp "$REVIEW_OUTPUT_FILE" "$COMMENT_FILE"
+        {
+          echo '<!-- rsscript-review -->'
+          cat "$REVIEW_OUTPUT_FILE"
+        } > "$COMMENT_FILE"
 
         # Write outputs
         COMMENT_DELIMITER="RSSCRIPT_REVIEW_$(uuidgen 2>/dev/null || date +%s%N)"
@@ -142,7 +146,7 @@ runs:
 
         # Also produce CI JSON for structured consumption
         set +e
-        reir report-pr \
+        "$REIR_BIN" report-pr \
           --required "$REQUIRED_REIR_JSON" \
           --granted "$INPUT_GRANTS" \
           --target "$INPUT_TARGET" \
@@ -158,10 +162,11 @@ runs:
 
         # SARIF for GitHub code scanning / inline PR annotations.
         SARIF_FILE="$TEMP_DIR/rsscript-review.sarif"
-        reir report-pr \
+        "$REIR_BIN" report-pr \
           --required "$REQUIRED_REIR_JSON" \
           --granted "$INPUT_GRANTS" \
           --target "$INPUT_TARGET" \
+          "${REPORT_FLAGS[@]}" \
           --sarif > "$SARIF_FILE" 2>/dev/null || true
         if [ -s "$SARIF_FILE" ]; then
           echo "sarif=$SARIF_FILE" >> "$GITHUB_OUTPUT"
@@ -191,18 +196,34 @@ runs:
       run: |
         COMMENT_FILE="${{ steps.review.outputs.comment_file }}"
         if [ -s "$COMMENT_FILE" ]; then
-          gh pr comment ${{ github.event.pull_request.number }} \
-            --body-file "$COMMENT_FILE" \
-            --edit-last || \
-          gh pr comment ${{ github.event.pull_request.number }} \
-            --body-file "$COMMENT_FILE"
+          BOT_LOGIN="$(gh api user --jq .login)"
+          COMMENT_ID="$(gh api --paginate \
+            "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --jq ".[] | select(.user.login == \"$BOT_LOGIN\" and (.body | contains(\"<!-- rsscript-review -->\"))) | .id" | tail -n 1)"
+          if [ -n "$COMMENT_ID" ]; then
+            jq -Rs '{body: .}' < "$COMMENT_FILE" | gh api --method PATCH \
+              "repos/${{ github.repository }}/issues/comments/$COMMENT_ID" --input - >/dev/null
+          else
+            gh pr comment ${{ github.event.pull_request.number }} --body-file "$COMMENT_FILE"
+          fi
         fi
 
     - name: Gate on capability reconciliation
-      if: ${{ inputs.fail-on-missing == 'true' || inputs.fail-on-unknown == 'true' || inputs.fail-on-excess == 'true' }}
+      if: ${{ always() }}
       shell: bash
       run: |
-        if [ "${{ steps.review.outputs.status }}" = "fail" ]; then
-          echo "::error::RSScript review failed capability reconciliation (missing/unknown/excess per policy). See PR comment for details."
+        if [ "${{ steps.review.outcome }}" != "success" ]; then
+          echo "::error::RSScript review did not complete successfully"
           exit 1
         fi
+        case "${{ steps.review.outputs.status }}" in
+          pass|warn) ;;
+          fail)
+            echo "::error::RSScript review gate failed. See the decision artifacts for blocker details."
+            exit 1
+            ;;
+          *)
+            echo "::error::RSScript review produced an invalid or missing gate status"
+            exit 1
+            ;;
+        esac

@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Serialize)]
 struct CorePackageIndex {
@@ -124,38 +124,79 @@ fn main() {
 /// stale executable result from an earlier build.
 fn write_compiled_cache_fingerprint() -> Result<(), String> {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
-    // The generated executable is a result of the complete compiler, not only
-    // the Rust lowerer. Hash the whole source tree so a checker, VM, ABI, or
-    // lowering edit cannot accidentally reuse an earlier result.
-    let roots = [manifest_dir.join("src")];
+    let workspace_root = workspace_root(&manifest_dir)?;
+    let roots = [
+        manifest_dir.join("src"),
+        manifest_dir.join("build.rs"),
+        manifest_dir.join("Cargo.toml"),
+        workspace_root.join("Cargo.toml"),
+        workspace_root.join("Cargo.lock"),
+        workspace_root.join("stdlib"),
+        workspace_root.join("packages"),
+    ];
     let mut files = Vec::new();
     for root in &roots {
-        collect_rust_sources(root, &mut files)?;
+        collect_fingerprint_inputs(root, &mut files)?;
     }
     files.sort();
+    files.dedup();
 
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    "rsscript-compiled-cache-v3".hash(&mut hasher);
+    let mut hasher = Sha256::new();
+    hasher.update(b"rsscript-compiled-cache-v4\0");
     for path in files {
         println!("cargo:rerun-if-changed={}", path.display());
-        path.strip_prefix(&manifest_dir)
-            .unwrap_or(&path)
-            .to_string_lossy()
-            .hash(&mut hasher);
-        fs::read(&path)
-            .map_err(|error| format!("failed to read {}: {error}", path.display()))?
-            .hash(&mut hasher);
+        hasher.update(
+            path.strip_prefix(&workspace_root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .as_bytes(),
+        );
+        hasher.update([0]);
+        hasher.update(
+            fs::read(&path)
+                .map_err(|error| format!("failed to read {}: {error}", path.display()))?,
+        );
     }
-    println!(
-        "cargo:rustc-env=RSSCRIPT_COMPILED_CACHE_FINGERPRINT={:016x}",
-        hasher.finish()
-    );
+    for name in ["TARGET", "HOST", "PROFILE", "RUSTC"] {
+        println!("cargo:rerun-if-env-changed={name}");
+        hasher.update(name.as_bytes());
+        hasher.update([0]);
+        hasher.update(env::var(name).unwrap_or_default().as_bytes());
+    }
+    let mut features = env::vars()
+        .filter(|(name, _)| name.starts_with("CARGO_FEATURE_"))
+        .collect::<Vec<_>>();
+    features.sort();
+    for (name, value) in features {
+        hasher.update(name.as_bytes());
+        hasher.update([0]);
+        hasher.update(value.as_bytes());
+    }
+    let rustc = env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let rustc_version = std::process::Command::new(rustc)
+        .arg("-Vv")
+        .output()
+        .map_err(|error| format!("failed to inspect rustc: {error}"))?;
+    if !rustc_version.status.success() {
+        return Err("rustc -Vv failed while computing compiler fingerprint".to_string());
+    }
+    hasher.update(rustc_version.stdout);
+    let fingerprint = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    println!("cargo:rustc-env=RSSCRIPT_COMPILED_CACHE_FINGERPRINT={fingerprint}");
     Ok(())
 }
 
-fn collect_rust_sources(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+fn collect_fingerprint_inputs(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
     if path.is_file() {
-        if path.extension().is_some_and(|extension| extension == "rs") {
+        if path.file_name().is_some_and(|name| name == "Cargo.lock")
+            || path.extension().is_some_and(|extension| {
+                matches!(extension.to_str(), Some("rs" | "rss" | "rssi" | "toml"))
+            })
+        {
             files.push(path.to_path_buf());
         }
         return Ok(());
@@ -164,7 +205,12 @@ fn collect_rust_sources(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), Str
         fs::read_dir(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?
     {
         let entry = entry.map_err(|error| format!("failed to read entry: {error}"))?;
-        collect_rust_sources(&entry.path(), files)?;
+        if entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false)
+            && matches!(entry.file_name().to_str(), Some("target" | ".git"))
+        {
+            continue;
+        }
+        collect_fingerprint_inputs(&entry.path(), files)?;
     }
     Ok(())
 }

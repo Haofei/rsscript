@@ -10,11 +10,14 @@
 use std::collections::BTreeMap;
 use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::fs::OpenOptions;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use fs2::FileExt;
 use rss_native_abi::NativeInterpreterFn;
+use sha2::{Digest, Sha256};
 
 use crate::package::package_lowering_input;
 use crate::syntax::ast::{DataEffect, Item, Param, TypeRef};
@@ -149,57 +152,212 @@ fn build_shim_library(
     bindings: &[ShimBinding],
 ) -> Result<PathBuf, String> {
     let abi_path = format!("{}/../native-abi", env!("CARGO_MANIFEST_DIR"));
+    let canonical_package = package_dir
+        .canonicalize()
+        .map_err(|error| format!("failed to canonicalize {}: {error}", package_dir.display()))?;
 
     // Stable per-package shim crate name (valid Rust identifier).
     let mut hasher = DefaultHasher::new();
-    package_dir.hash(&mut hasher);
+    canonical_package.hash(&mut hasher);
     let crate_name = format!("rss_shim_{:016x}", hasher.finish());
 
     let shim = generate_shim_crate(&crate_name, native_deps, &abi_path, bindings);
+    let cache_key = shim_cache_key(&shim.cargo_toml, &shim.lib_rs, native_deps, &abi_path)?;
+    let cache_root = std::env::var_os("RSS_NATIVE_PLUGIN_CACHE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("rss-native-plugins-v2"));
+    create_private_dir(&cache_root)?;
+    create_private_dir(&cache_root.join("locks"))?;
+    create_private_dir(&cache_root.join("entries"))?;
+    create_private_dir(&cache_root.join("staging"))?;
 
-    let crate_dir = std::env::temp_dir()
-        .join("rss-native-plugins")
-        .join(&crate_name);
-    fs::create_dir_all(crate_dir.join("src"))
-        .map_err(|error| format!("failed to create shim crate dir: {error}"))?;
-    write_if_changed(&crate_dir.join("Cargo.toml"), &shim.cargo_toml)?;
-    write_if_changed(&crate_dir.join("src/lib.rs"), &shim.lib_rs)?;
+    let lock_path = cache_root.join("locks").join(format!("{cache_key}.lock"));
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .map_err(|error| format!("failed to open shim cache lock: {error}"))?;
+    lock.lock_exclusive()
+        .map_err(|error| format!("failed to lock shim cache entry: {error}"))?;
 
-    let manifest = crate_dir.join("Cargo.toml");
+    let published = cache_root.join("entries").join(&cache_key);
+    if let Some(library) = verified_cached_library(&published, &crate_name)? {
+        return Ok(library);
+    }
+    if published.exists() {
+        fs::remove_dir_all(&published)
+            .map_err(|error| format!("failed to remove invalid shim cache entry: {error}"))?;
+    }
+
+    let staging = cache_root.join("staging").join(format!(
+        "{cache_key}.{}.{}",
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    create_private_dir(&staging.join("src"))?;
+    fs::write(staging.join("Cargo.toml"), &shim.cargo_toml)
+        .map_err(|error| format!("failed to write shim manifest: {error}"))?;
+    fs::write(staging.join("src/lib.rs"), &shim.lib_rs)
+        .map_err(|error| format!("failed to write shim source: {error}"))?;
+
+    let manifest = staging.join("Cargo.toml");
+    let lock_output = Command::new("cargo")
+        .arg("generate-lockfile")
+        .arg("--manifest-path")
+        .arg(&manifest)
+        .output()
+        .map_err(|error| format!("failed to generate native shim lockfile: {error}"))?;
+    if !lock_output.status.success() {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(format!(
+            "failed to lock native shim dependencies:\n{}",
+            String::from_utf8_lossy(&lock_output.stderr)
+        ));
+    }
     let output = Command::new("cargo")
         .arg("build")
+        .arg("--locked")
         .arg("--release")
         .arg("--manifest-path")
         .arg(&manifest)
         .output()
         .map_err(|error| format!("failed to run cargo to build native shim: {error}"))?;
     if !output.status.success() {
+        let _ = fs::remove_dir_all(&staging);
         return Err(format!(
             "failed to build native shim crate:\n{}",
             String::from_utf8_lossy(&output.stderr)
         ));
     }
 
-    let library_path = crate_dir
+    let library_path = staging
         .join("target/release")
         .join(library_file_name(&crate_name));
     if !library_path.exists() {
+        let _ = fs::remove_dir_all(&staging);
         return Err(format!(
             "native shim built but library was not found at {}",
             library_path.display()
         ));
     }
-    Ok(library_path)
+    let digest = file_sha256(&library_path)?;
+    fs::write(staging.join("artifact.sha256"), format!("{digest}\n"))
+        .map_err(|error| format!("failed to write shim artifact digest: {error}"))?;
+    fs::rename(&staging, &published)
+        .map_err(|error| format!("failed to publish shim cache entry atomically: {error}"))?;
+    Ok(published
+        .join("target/release")
+        .join(library_file_name(&crate_name)))
 }
 
-/// Write `contents` only if the file differs, so an unchanged shim does not bump
-/// mtimes and force a cargo rebuild.
-fn write_if_changed(path: &Path, contents: &str) -> Result<(), String> {
-    if fs::read_to_string(path).is_ok_and(|existing| existing == contents) {
+fn shim_cache_key(
+    cargo_toml: &str,
+    lib_rs: &str,
+    native_deps: &[(String, String)],
+    abi_path: &str,
+) -> Result<String, String> {
+    let mut digest = Sha256::new();
+    digest.update(b"rss-native-shim-cache-v2\0");
+    digest.update(rss_native_abi::ABI_VERSION.to_le_bytes());
+    digest.update(cargo_toml.as_bytes());
+    digest.update([0]);
+    digest.update(lib_rs.as_bytes());
+    let rustc = Command::new("rustc")
+        .arg("-Vv")
+        .output()
+        .map_err(|error| format!("failed to inspect rustc for shim cache key: {error}"))?;
+    if !rustc.status.success() {
+        return Err("rustc -Vv failed while computing shim cache key".to_string());
+    }
+    digest.update(&rustc.stdout);
+    digest.update(std::env::consts::ARCH.as_bytes());
+    digest.update(std::env::consts::OS.as_bytes());
+    hash_source_tree(Path::new(abi_path), &mut digest)?;
+    for (_, path) in native_deps {
+        hash_source_tree(Path::new(path), &mut digest)?;
+    }
+    Ok(hex::encode(digest.finalize()))
+}
+
+fn hash_source_tree(path: &Path, digest: &mut Sha256) -> Result<(), String> {
+    let mut files = Vec::new();
+    collect_cache_inputs(path, &mut files)?;
+    files.sort();
+    for file in files {
+        digest.update(file.to_string_lossy().as_bytes());
+        digest.update([0]);
+        digest.update(
+            fs::read(&file)
+                .map_err(|error| format!("failed to read {}: {error}", file.display()))?,
+        );
+    }
+    Ok(())
+}
+
+fn collect_cache_inputs(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "failed to inspect native source {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "native shim cache input may not be a symlink: {}",
+            path.display()
+        ));
+    }
+    if path.is_file() {
+        files.push(path.to_path_buf());
         return Ok(());
     }
-    fs::write(path, contents)
-        .map_err(|error| format!("failed to write {}: {error}", path.display()))
+    for entry in fs::read_dir(path)
+        .map_err(|error| format!("failed to read native source {}: {error}", path.display()))?
+    {
+        let entry =
+            entry.map_err(|error| format!("failed to read native source entry: {error}"))?;
+        let child = entry.path();
+        let name = entry.file_name();
+        if child.is_dir() && matches!(name.to_str(), Some("target" | ".git")) {
+            continue;
+        }
+        collect_cache_inputs(&child, files)?;
+    }
+    Ok(())
+}
+
+fn verified_cached_library(entry: &Path, crate_name: &str) -> Result<Option<PathBuf>, String> {
+    let library = entry
+        .join("target/release")
+        .join(library_file_name(crate_name));
+    let expected = match fs::read_to_string(entry.join("artifact.sha256")) {
+        Ok(value) => value.trim().to_string(),
+        Err(_) => return Ok(None),
+    };
+    if !library.is_file() || file_sha256(&library)? != expected {
+        return Ok(None);
+    }
+    Ok(Some(library))
+}
+
+fn file_sha256(path: &Path) -> Result<String, String> {
+    let bytes =
+        fs::read(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    Ok(hex::encode(Sha256::digest(bytes)))
+}
+
+fn create_private_dir(path: &Path) -> Result<(), String> {
+    fs::create_dir_all(path)
+        .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .map_err(|error| format!("failed to secure {}: {error}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn library_file_name(crate_name: &str) -> String {
@@ -226,6 +384,7 @@ mod tests {
     use super::*;
     use crate::syntax::ast::Item;
     use crate::syntax::parse_source;
+    use rss_native_abi::NativeValue;
 
     fn sig(src: &str) -> (Vec<Param>, Option<TypeRef>) {
         let program = parse_source("t.rssi", src);
@@ -297,5 +456,61 @@ mod tests {
     fn rejects_unsupported_return_type() {
         let (params, ret) = sig("native fn X.h(a: Int) -> Config\n    effects(native)\n");
         assert!(try_build_binding("X.h", "x::h", &params, ret.as_ref()).is_none());
+    }
+
+    #[test]
+    fn shim_build_is_atomic_and_uses_versioned_byte_abi() {
+        let root = std::env::temp_dir().join(format!(
+            "rss-native-shim-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let native = root.join("native");
+        fs::create_dir_all(native.join("src")).expect("native source directory should create");
+        fs::write(
+            native.join("Cargo.toml"),
+            "[package]\nname = \"shim_test_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n",
+        )
+        .expect("native manifest should write");
+        fs::write(
+            native.join("src/lib.rs"),
+            "pub fn add_one(value: i64) -> i64 { value + 1 }\n",
+        )
+        .expect("native source should write");
+        let deps = vec![(
+            "shim_test_native".to_string(),
+            native.to_string_lossy().into_owned(),
+        )];
+        let bindings = vec![ShimBinding {
+            symbol: "Demo.add_one".to_string(),
+            rust_path: "shim_test_native::add_one".to_string(),
+            params: vec![ShimType::Int],
+            ret: ShimReturn::Plain(ShimType::Int),
+            mut_indices: vec![],
+        }];
+
+        let paths = std::thread::scope(|scope| {
+            let first = scope.spawn(|| build_shim_library(&root, &deps, &bindings));
+            let second = scope.spawn(|| build_shim_library(&root, &deps, &bindings));
+            [
+                first.join().expect("first build thread should not panic"),
+                second.join().expect("second build thread should not panic"),
+            ]
+        });
+        let first = paths[0].as_ref().expect("first shim build should pass");
+        let second = paths[1].as_ref().expect("second shim build should pass");
+        assert_eq!(first, second);
+
+        let loaded = rss_native_abi::load_registry(first).expect("registry should load");
+        let (_, function) = loaded
+            .iter()
+            .find(|(name, _)| name == "Demo.add_one")
+            .expect("generated binding should exist");
+        assert_eq!(
+            function.call(vec![NativeValue::Int(4)]),
+            Ok(NativeValue::Int(5))
+        );
+        drop(loaded);
+        fs::remove_dir_all(&root).expect("test source should clean up");
     }
 }

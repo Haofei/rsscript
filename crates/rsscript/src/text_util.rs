@@ -115,6 +115,7 @@ pub(crate) fn string_pad(value: &str, width: i64, fill: &str, left: bool) -> Str
 }
 
 /// Byte length of [`string_pad`] without materializing the padded string.
+#[cfg(any(feature = "native-jit", test))]
 pub(crate) fn string_pad_len(value: &str, width: i64, fill: &str) -> Option<i64> {
     let target = width.max(0) as usize;
     if value.len() >= target || fill.is_empty() {

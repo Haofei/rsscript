@@ -12,12 +12,24 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: 1.96.1
+
+      - name: Put hostile ambient tools on PATH
+        shell: bash
+        run: |
+          mkdir -p target/fake-tools
+          printf '#!/bin/sh\nexit 99\n' > target/fake-tools/rss
+          printf '#!/bin/sh\nexit 99\n' > target/fake-tools/reir
+          chmod +x target/fake-tools/rss target/fake-tools/reir
+          echo "$PWD/target/fake-tools" >> "$GITHUB_PATH"
 
       - name: Run review action smoke
+        id: smoke
         uses: ./.github/actions/rsscript-review
         with:
           head: examples/packages/code-agent
@@ -25,3 +37,57 @@ jobs:
           target: prod
           post-comment: false
           fail-on-missing: false
+
+      - name: Create strict excess policy
+        shell: bash
+        run: |
+          cat > target/action-policy.toml <<'EOF'
+          [default]
+          fail_on_excess = true
+          EOF
+
+      - name: Policy-only failure is not swallowed
+        id: policy_failure
+        continue-on-error: true
+        uses: ./.github/actions/rsscript-review
+        with:
+          head: packages/test-runner
+          grants: examples/demos/s3-iam-reir/expected/prod-grants.reir.json
+          target: prod
+          policy: target/action-policy.toml
+          post-comment: false
+          fail-on-missing: false
+          fail-on-unknown: false
+          require-verified-capabilities: false
+
+      - name: Assert policy failure propagated
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          [ "${{ steps.policy_failure.outcome }}" = "failure" ] || {
+            echo "::error::policy-only failure was swallowed"
+            exit 1
+          }
+
+      - name: Unverified-capability failure is not swallowed
+        id: unverified_failure
+        continue-on-error: true
+        uses: ./.github/actions/rsscript-review
+        with:
+          head: packages/core/crypto
+          grants: examples/demos/s3-iam-reir/expected/prod-grants.reir.json
+          target: prod
+          post-comment: false
+          fail-on-missing: false
+          fail-on-unknown: false
+          fail-on-excess: false
+          require-verified-capabilities: true
+
+      - name: Assert verification failure propagated
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          [ "${{ steps.unverified_failure.outcome }}" = "failure" ] || {
+            echo "::error::unverified-capability failure was swallowed"
+            exit 1
+          }

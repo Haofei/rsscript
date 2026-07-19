@@ -73,8 +73,8 @@ raw artifact.
     head: my-service/
     grants: infra/prod-grants.reir.json
     target: prod
-    # Fail closed by default: missing, unknown (absence of evidence), and
-    # excess (over-privilege) all block. Override per input if you must.
+    # Protected-branch policy: missing, unknown (absence of evidence), and
+    # excess (over-privilege) all block.
     fail-on-missing: 'true'
     fail-on-unknown: 'true'
     fail-on-excess: 'true'
@@ -83,11 +83,13 @@ raw artifact.
 The action posts a PR comment with the review decision and exits non-zero when
 capability reconciliation fails under the policy above.
 
+Policy inputs are three-state: omit one to use `rss-policy.toml` (or REIR's
+built-in default), and set it to `'true'` or `'false'` for an explicit override.
+
 > **Not a production enforcement gate yet.** The toolchain and artifact schemas
 > are `0.1.x` prototype surfaces. Before relying on this to authorize a deploy:
-> pin the action to a release SHA (not `@main`), do not depend on ambient
-> `rss`/`reir` binaries on `PATH` (the action warns when it finds them), keep the
-> fail-on-unknown / fail-on-excess defaults on, and pair it with an independent
+> pin the action to a release SHA (not `@main`), configure unknown/excess and
+> verification policy explicitly, and pair it with an independent
 > native/capability audit — capability bindings are author declarations unless
 > separately verified.
 

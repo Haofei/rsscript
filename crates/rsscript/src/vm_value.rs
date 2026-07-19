@@ -169,6 +169,7 @@ impl TypedVec {
     /// Clone values while preserving spare capacity. Heap-transaction rollback
     /// uses this snapshot so interpreter replay observes the same future growth
     /// and therefore the same capacity-based memory charges.
+    #[cfg(any(feature = "native-jit", test))]
     pub(crate) fn clone_preserving_capacity(&self) -> Self {
         fn clone_vec<T: Clone>(values: &[T], capacity: usize) -> Vec<T> {
             let mut cloned = Vec::with_capacity(capacity);

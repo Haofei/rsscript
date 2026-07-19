@@ -2832,7 +2832,7 @@ impl NativeModule {
                 };
             }
         };
-        if func.requires_limits != !limits_ptr.is_null() {
+        if func.requires_limits == limits_ptr.is_null() {
             return anonymous_deopt();
         }
         // Ordinary CallNative edges are static. Checking their maximum chain once

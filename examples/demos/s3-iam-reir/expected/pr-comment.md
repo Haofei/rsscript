@@ -18,4 +18,10 @@ Status: FAIL
 
 ### Review decision
 
-Block this PR before deploy. Either remove the code paths above, or update IAM and review why the missing access is needed.
+- blocker: Evidence is invalid because diagnostic `fact.package.rss_s3_uploader_0_2_0.diagnostic.RS0030.2` reports an error. (fact.package.rss_s3_uploader_0_2_0.diagnostic.RS0030.2)
+- blocker: Evidence is invalid because diagnostic `fact.package.rss_s3_uploader_0_2_0.diagnostic.RS0030.3` reports an error. (fact.package.rss_s3_uploader_0_2_0.diagnostic.RS0030.3)
+- blocker: Evidence is invalid because diagnostic `fact.package.rss_s3_uploader_0_2_0.diagnostic.RS0206.0` reports an error. (fact.package.rss_s3_uploader_0_2_0.diagnostic.RS0206.0)
+- blocker: Evidence is invalid because diagnostic `fact.package.rss_s3_uploader_0_2_0.diagnostic.RS0206.1` reports an error. (fact.package.rss_s3_uploader_0_2_0.diagnostic.RS0206.1)
+- blocker: Evidence is invalid because diagnostic `fact.package.rss_s3_uploader_0_2_0.diagnostic.RS1301.4` reports an error. (fact.package.rss_s3_uploader_0_2_0.diagnostic.RS1301.4)
+- blocker: Evidence is invalid because diagnostic `fact.package.rss_s3_uploader_0_2_0.diagnostic.RS1301.5` reports an error. (fact.package.rss_s3_uploader_0_2_0.diagnostic.RS1301.5)
+- blocker: Required capability is not granted by the deployment target. (ObjectStorageDelete / aws / s3 / s3:DeleteObject / arn:aws:s3:::reports-prod/*)

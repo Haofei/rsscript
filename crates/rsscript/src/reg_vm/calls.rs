@@ -132,7 +132,7 @@ impl RegVm {
         mut_args: &[usize],
         base: usize,
     ) -> Result<VmValue, EvalError> {
-        let Some(function) = self.native_bindings.get(key).copied() else {
+        let Some(function) = self.native_bindings.get(key).cloned() else {
             return Err(EvalError::Runtime(format!(
                 "reg VM native function `{key}` has no host binding."
             )));
@@ -141,7 +141,8 @@ impl RegVm {
             .iter()
             .map(|reg| native_value_from_vm_value(self.reg(base + *reg).clone()))
             .collect::<Result<Vec<_>, _>>()?;
-        let raw = function(arg_values)
+        let raw = function
+            .call(arg_values)
             .map_err(|error| EvalError::Runtime(format!("native host binding failed: {error}")))?;
 
         // No `mut` params: the binding returns its result directly.

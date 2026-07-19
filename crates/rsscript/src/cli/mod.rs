@@ -7,6 +7,7 @@ use rsscript::{
     Diagnostic, format_diagnostics_human, format_diagnostics_json, lower_source_to_rust_package,
     lower_sources_to_rust_package_with_options, package_lowering_input,
 };
+use sha2::{Digest, Sha256};
 
 mod check;
 mod fix;
@@ -299,12 +300,7 @@ fn stable_input_key(input_path: &str) -> String {
 }
 
 fn stable_hash_hex(value: &str) -> String {
-    let mut hash = 0xcbf29ce484222325_u64;
-    for byte in value.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    format!("{hash:016x}")
+    hex::encode(Sha256::digest(value.as_bytes()))
 }
 
 fn sanitize_path_component(value: &str) -> String {
@@ -436,6 +432,32 @@ mod tests {
                 .and_then(|name| name.to_str())
                 .is_some_and(|name| name.starts_with("demo-"))
         );
+    }
+
+    #[test]
+    fn run_fingerprint_changes_for_every_run_specific_input() {
+        let root = unique_temp_dir("run-fingerprint");
+        let source = root.join("main.rss");
+        fs::write(&source, "fn main() -> Unit { return Unit }\n").expect("source should write");
+        let source = source.to_string_lossy();
+        let first = super::run_input_fingerprint(&source, &root.join("runtime-a"), false)
+            .expect("fingerprint should compute");
+        let release = super::run_input_fingerprint(&source, &root.join("runtime-a"), true)
+            .expect("release fingerprint should compute");
+        let runtime = super::run_input_fingerprint(&source, &root.join("runtime-b"), false)
+            .expect("runtime fingerprint should compute");
+        fs::write(
+            &*source,
+            "fn main() -> Unit { Log.write(message: \"changed\") }\n",
+        )
+        .expect("source should change");
+        let changed = super::run_input_fingerprint(&source, &root.join("runtime-a"), false)
+            .expect("changed fingerprint should compute");
+
+        assert_ne!(first, release);
+        assert_ne!(first, runtime);
+        assert_ne!(first, changed);
+        fs::remove_dir_all(root).expect("temp directory should clean up");
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

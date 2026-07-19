@@ -90,6 +90,7 @@ pub fn format_reconciliations_human(reconciliations: &[Reconciliation]) -> Strin
 
 /// Format a deployment review as a PR-bot style comment.
 pub fn format_pr_review_comment(
+    decision: &GateDecision,
     required_facts: &[Fact],
     granted_facts: &[Fact],
     reconciliations: &[Reconciliation],
@@ -107,10 +108,12 @@ pub fn format_pr_review_comment(
     writeln!(
         output,
         "Status: {}\n",
-        if missing_groups.is_empty() {
+        if decision.status == GateStatus::Pass {
             "PASS"
-        } else {
+        } else if decision.status == GateStatus::Fail {
             "FAIL"
+        } else {
+            "WARN"
         }
     )
     .unwrap();
@@ -166,14 +169,26 @@ pub fn format_pr_review_comment(
     }
 
     writeln!(output, "### Review decision\n").unwrap();
-    if missing_groups.is_empty() {
-        writeln!(output, "No missing deployment capability was found.").unwrap();
-    } else {
+    if decision.blockers.is_empty() && decision.warnings.is_empty() {
         writeln!(
             output,
-            "Block this PR before deploy. Either remove the code paths above, or update IAM and review why the missing access is needed."
+            "All requirements satisfy the effective gate policy."
         )
         .unwrap();
+    } else {
+        for issue in decision.blockers.iter().chain(&decision.warnings) {
+            let level = if decision.blockers.contains(issue) {
+                "blocker"
+            } else {
+                "warning"
+            };
+            let subject = issue
+                .capability
+                .as_deref()
+                .or(issue.fact_id.as_deref())
+                .unwrap_or("gate input");
+            writeln!(output, "- {level}: {} ({subject})", issue.message).unwrap();
+        }
     }
     output
 }
@@ -189,6 +204,11 @@ pub struct CiGateOutput {
     pub valid_for_gating: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gating_reason: Option<String>,
+    pub effective_policy: GatePolicy,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blockers: Vec<GateIssue>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<GateIssue>,
     pub summary: CiGateSummary,
     pub required_capabilities: Vec<CiCapabilityFact>,
     pub granted_capabilities: Vec<CiCapabilityFact>,
@@ -198,14 +218,8 @@ pub struct CiGateOutput {
     pub review_decision: CiReviewDecision,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CiGateStatus {
-    Pass,
-    Fail,
-    Warn,
-    Unknown,
-}
+pub type CiGateStatus = GateStatus;
+pub type CiGatePolicy = GatePolicy;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CiGateSummary {
@@ -276,30 +290,6 @@ pub struct CiReviewDecision {
     pub missing_summary: Vec<String>,
 }
 
-/// Which reconciliation states fail the CI gate. Absence of evidence (unknown)
-/// and over-grant (excess) are off by default for backwards compatibility, but a
-/// protected-branch gate should turn them on.
-#[derive(Debug, Clone, Copy)]
-pub struct CiGatePolicy {
-    pub fail_on_missing: bool,
-    pub fail_on_unknown: bool,
-    pub fail_on_excess: bool,
-    /// Fail when a required capability is backed only by author-declared evidence
-    /// (e.g. an `rsspkg.toml` binding) with no independent corroboration.
-    pub require_verified_capabilities: bool,
-}
-
-impl Default for CiGatePolicy {
-    fn default() -> Self {
-        Self {
-            fail_on_missing: true,
-            fail_on_unknown: false,
-            fail_on_excess: false,
-            require_verified_capabilities: false,
-        }
-    }
-}
-
 /// Whether a fact's acquisition mode is an author declaration (the package author
 /// asserted it) rather than independently established evidence.
 fn is_author_declared(fact: &Fact) -> bool {
@@ -332,6 +322,18 @@ pub fn format_ci_gate_output_with_policy(
     granted_facts: &[Fact],
     reconciliations: &[Reconciliation],
     policy: CiGatePolicy,
+) -> CiGateOutput {
+    let decision = decide_gate(required_facts, granted_facts, reconciliations, policy);
+    format_ci_gate_output_from_decision(&decision, required_facts, granted_facts, reconciliations)
+}
+
+/// Produce stable CI JSON data from the same decision consumed by every other
+/// review renderer.
+pub fn format_ci_gate_output_from_decision(
+    decision: &GateDecision,
+    required_facts: &[Fact],
+    granted_facts: &[Fact],
+    reconciliations: &[Reconciliation],
 ) -> CiGateOutput {
     let missing: Vec<_> = reconciliations
         .iter()
@@ -384,28 +386,6 @@ pub fn format_ci_gate_output_with_policy(
         0.0
     };
 
-    // Evidence derived from invalid source (error diagnostics) must not be
-    // trusted as a gate input, regardless of capability reconciliation.
-    let has_error_diagnostics = required_facts
-        .iter()
-        .chain(granted_facts.iter())
-        .any(|fact| fact.kind == FactKind::Diagnostic && fact.unknown_reason.is_some());
-    let valid_for_gating = !has_error_diagnostics;
-    let gating_reason = (!valid_for_gating).then(|| "error_diagnostics".to_string());
-
-    let fail = !valid_for_gating
-        || (policy.fail_on_missing && !missing.is_empty())
-        || (policy.fail_on_unknown && !unknown_facts.is_empty())
-        || (policy.fail_on_excess && !excess.is_empty())
-        || (policy.require_verified_capabilities && !unverified_facts.is_empty());
-    let status = if fail {
-        CiGateStatus::Fail
-    } else if !unknown_facts.is_empty() {
-        CiGateStatus::Warn
-    } else {
-        CiGateStatus::Pass
-    };
-
     let required_capabilities: Vec<_> = required_capability_facts
         .iter()
         .copied()
@@ -449,24 +429,20 @@ pub fn format_ci_gate_output_with_policy(
         .map(|f| fact_to_ci_capability(f))
         .collect();
 
-    let missing_summary: Vec<_> = missing_capabilities
+    let missing_summary: Vec<_> = decision
+        .blockers
         .iter()
-        .map(|r| r.capability.clone())
+        .filter_map(|issue| issue.capability.clone().or_else(|| issue.fact_id.clone()))
         .collect();
-
-    let (action, reason) = if !missing.is_empty() {
-        ("block", "Required capabilities not granted by deployment.")
-    } else if !unknown_facts.is_empty() {
-        ("warn", "Some capabilities have unknown coverage.")
-    } else {
-        ("approve", "All required capabilities are granted.")
-    };
 
     CiGateOutput {
         schema: "reir.ci.v0.2",
-        status,
-        valid_for_gating,
-        gating_reason,
+        status: decision.status,
+        valid_for_gating: decision.valid_for_gating,
+        gating_reason: decision.gating_reason.clone(),
+        effective_policy: decision.policy,
+        blockers: decision.blockers.clone(),
+        warnings: decision.warnings.clone(),
         summary: CiGateSummary {
             total_required,
             total_granted,
@@ -482,8 +458,8 @@ pub fn format_ci_gate_output_with_policy(
         excess_capabilities,
         unknown_capabilities,
         review_decision: CiReviewDecision {
-            action: action.to_owned(),
-            reason: reason.to_owned(),
+            action: decision.review_action().to_owned(),
+            reason: decision.review_reason(),
             missing_summary,
         },
     }
@@ -492,100 +468,6 @@ pub fn format_ci_gate_output_with_policy(
 /// Serialize CI gate output to JSON.
 pub fn format_ci_gate_json(output: &CiGateOutput) -> String {
     serde_json::to_string_pretty(output).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
-}
-
-/// Render reconciliation results as SARIF 2.1.0 so CI can upload them to GitHub
-/// code scanning and get inline PR annotations. Missing capabilities are errors;
-/// excess grants are warnings.
-pub fn format_sarif(reconciliations: &[Reconciliation]) -> String {
-    let mut results = Vec::new();
-    for reconciliation in reconciliations {
-        let (rule_id, level) = match reconciliation.kind {
-            ReconciliationKind::MissingCapability => ("missing_capability", "error"),
-            ReconciliationKind::ExcessCapability => ("excess_capability", "warning"),
-            _ => continue,
-        };
-        let capability = reconciliation
-            .capability
-            .as_ref()
-            .map(|capability| {
-                let mut parts = vec![format!("{:?}", capability.category)];
-                for value in [
-                    &capability.provider,
-                    &capability.service,
-                    &capability.action,
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    parts.push(value.clone());
-                }
-                parts.join(" / ")
-            })
-            .unwrap_or_else(|| "capability".to_string());
-        let text = match reconciliation.kind {
-            ReconciliationKind::MissingCapability => {
-                format!("Required capability not granted by target: {capability}")
-            }
-            ReconciliationKind::ExcessCapability => {
-                format!("Granted capability exceeds requirements (over-privilege): {capability}")
-            }
-            _ => unreachable!(),
-        };
-        let mut result = serde_json::json!({
-            "ruleId": rule_id,
-            "level": level,
-            "message": { "text": text },
-        });
-        // Attach a source location when the evidence carries one.
-        if let Some(evidence) = reconciliation
-            .evidence
-            .iter()
-            .find(|evidence| evidence.file.is_some())
-        {
-            let uri = evidence.file.clone().unwrap_or_default();
-            let mut region = serde_json::Map::new();
-            if let Some(line) = evidence.line {
-                region.insert("startLine".to_string(), serde_json::json!(line.max(1)));
-            }
-            if let Some(column) = evidence.column {
-                region.insert("startColumn".to_string(), serde_json::json!(column.max(1)));
-            }
-            result["locations"] = serde_json::json!([{
-                "physicalLocation": {
-                    "artifactLocation": { "uri": uri },
-                    "region": serde_json::Value::Object(region),
-                }
-            }]);
-        }
-        results.push(result);
-    }
-
-    let bundle = serde_json::json!({
-        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
-        "version": "2.1.0",
-        "runs": [{
-            "tool": {
-                "driver": {
-                    "name": "rsscript-reir",
-                    "informationUri": "https://github.com/Haofei/rsscript",
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "rules": [
-                        {
-                            "id": "missing_capability",
-                            "shortDescription": { "text": "Required capability is not granted by the deployment target." }
-                        },
-                        {
-                            "id": "excess_capability",
-                            "shortDescription": { "text": "Granted capability exceeds what the code requires (over-privilege)." }
-                        }
-                    ]
-                }
-            },
-            "results": results,
-        }]
-    });
-    serde_json::to_string_pretty(&bundle).unwrap_or_else(|e| format!("{{\"error\": \"{e}\"}}"))
 }
 
 fn is_capability_fact(fact: &Fact, role: FactRole) -> bool {
@@ -1331,6 +1213,28 @@ fn write_string_section(output: &mut String, title: &str, values: &[String]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_failed_outputs_agree(
+        decision: &GateDecision,
+        required: &[Fact],
+        granted: &[Fact],
+        reconciliations: &[Reconciliation],
+    ) {
+        assert_eq!(decision.status, GateStatus::Fail);
+        assert_eq!(decision.review_action(), "block");
+        let comment = format_pr_review_comment(decision, required, granted, reconciliations);
+        assert!(comment.contains("Status: FAIL"));
+        let ci = format_ci_gate_output_from_decision(decision, required, granted, reconciliations);
+        assert_eq!(ci.status, GateStatus::Fail);
+        assert_eq!(ci.review_decision.action, "block");
+        let sarif: serde_json::Value =
+            serde_json::from_str(&format_sarif(decision)).expect("SARIF should parse");
+        assert!(
+            sarif["runs"][0]["results"]
+                .as_array()
+                .is_some_and(|results| results.iter().any(|result| result["level"] == "error"))
+        );
+    }
     use crate::{ChainEdge, ChainEdgeKind, Exception, PolicyResult, Producer, ReconciliationRisk};
 
     fn source_evidence(file: &str, line: usize) -> Evidence {
@@ -1626,11 +1530,33 @@ mod tests {
             },
         );
         assert_eq!(strict.status, CiGateStatus::Fail);
+        let decision = decide_gate(
+            &[],
+            std::slice::from_ref(&granted),
+            std::slice::from_ref(&excess),
+            GatePolicy {
+                fail_on_excess: true,
+                ..Default::default()
+            },
+        );
+        assert_failed_outputs_agree(
+            &decision,
+            &[],
+            std::slice::from_ref(&granted),
+            std::slice::from_ref(&excess),
+        );
     }
 
     #[test]
     fn sarif_reports_missing_capability_as_error() {
-        let sarif = format_sarif(&[missing_reconciliation()]);
+        let reconciliation = missing_reconciliation();
+        let decision = decide_gate(
+            &[],
+            &[],
+            std::slice::from_ref(&reconciliation),
+            GatePolicy::default(),
+        );
+        let sarif = format_sarif(&decision);
         let value: serde_json::Value = serde_json::from_str(&sarif).expect("valid SARIF JSON");
         assert_eq!(value["version"], "2.1.0");
         let results = value["runs"][0]["results"]
@@ -1650,13 +1576,21 @@ mod tests {
             std::slice::from_ref(&granted),
         );
         let out = format_ci_gate_output(
-            &[required, diagnostic_fact("fact.diag.error")],
+            &[required.clone(), diagnostic_fact("fact.diag.error")],
             std::slice::from_ref(&granted),
             &recon,
         );
         assert!(!out.valid_for_gating);
         assert_eq!(out.gating_reason.as_deref(), Some("error_diagnostics"));
         assert_eq!(out.status, CiGateStatus::Fail);
+        let required = [required, diagnostic_fact("fact.diag.error")];
+        let decision = decide_gate(
+            &required,
+            std::slice::from_ref(&granted),
+            &recon,
+            GatePolicy::default(),
+        );
+        assert_failed_outputs_agree(&decision, &required, std::slice::from_ref(&granted), &recon);
     }
 
     #[test]
@@ -1689,6 +1623,21 @@ mod tests {
             },
         );
         assert_eq!(strict.status, CiGateStatus::Fail);
+        let decision = decide_gate(
+            std::slice::from_ref(&required),
+            std::slice::from_ref(&granted),
+            &recon,
+            GatePolicy {
+                require_verified_capabilities: true,
+                ..Default::default()
+            },
+        );
+        assert_failed_outputs_agree(
+            &decision,
+            std::slice::from_ref(&required),
+            std::slice::from_ref(&granted),
+            &recon,
+        );
     }
 
     #[test]

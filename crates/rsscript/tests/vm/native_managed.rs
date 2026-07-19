@@ -87,9 +87,9 @@ fn main() -> Unit {
         source,
         [],
         [
-            ("Host.open", host_open as NativeInterpreterFn),
-            ("Host.describe", host_describe as NativeInterpreterFn),
-            ("Host.echo", host_echo as NativeInterpreterFn),
+            ("Host.open", NativeInterpreterFn::from_fn(host_open)),
+            ("Host.describe", NativeInterpreterFn::from_fn(host_describe)),
+            ("Host.echo", NativeInterpreterFn::from_fn(host_echo)),
         ],
         "HostHandle:7\nhost:native\n",
     );
@@ -163,10 +163,13 @@ fn main() -> Unit {
         source,
         [],
         [
-            ("Alpha.open", alpha_open as NativeInterpreterFn),
-            ("Alpha.describe", alpha_describe as NativeInterpreterFn),
-            ("Beta.open", beta_open as NativeInterpreterFn),
-            ("Beta.describe", beta_describe as NativeInterpreterFn),
+            ("Alpha.open", NativeInterpreterFn::from_fn(alpha_open)),
+            (
+                "Alpha.describe",
+                NativeInterpreterFn::from_fn(alpha_describe),
+            ),
+            ("Beta.open", NativeInterpreterFn::from_fn(beta_open)),
+            ("Beta.describe", NativeInterpreterFn::from_fn(beta_describe)),
         ],
         "alpha:Alpha:1\nbeta:Beta:2\n",
     );

@@ -323,9 +323,28 @@ fn package_index_dependencies(
 }
 
 fn is_semver_like(version: &str) -> bool {
-    let parts = version.split('.').collect::<Vec<_>>();
-    parts.len() == 3
-        && parts.iter().all(|part| {
-            !part.is_empty() && part.chars().all(|character| character.is_ascii_digit())
-        })
+    semver::Version::parse(version).is_ok()
+}
+
+#[cfg(test)]
+mod version_tests {
+    use super::is_semver_like;
+
+    #[test]
+    fn publish_versions_follow_semver() {
+        for valid in [
+            "1.2.3",
+            "1.2.3-alpha.1",
+            "1.2.3+build.7",
+            "1.2.3-alpha+build.7",
+        ] {
+            assert!(is_semver_like(valid), "expected valid SemVer: {valid}");
+        }
+        for invalid in ["1.2", "01.2.3", "1.02.3", "1.2.03", "1.2.3-"] {
+            assert!(
+                !is_semver_like(invalid),
+                "expected invalid SemVer: {invalid}"
+            );
+        }
+    }
 }

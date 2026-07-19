@@ -15,6 +15,7 @@ struct TestCase {
     contains: String
     contains_all: List<String>
     ignored: Bool
+    allow_empty: Bool
 }
 
 struct TestRunSummary {
@@ -170,6 +171,7 @@ fn test_case_from_json(value: JsonValue) -> Result<fresh TestCase, String> {
         contains: json_string_or_default(value, name: "contains", default: ""),
         contains_all: json_string_list_or_empty(value, name: "contains_all"),
         ignored: json_bool_or_default(value, name: "ignored", default: false),
+        allow_empty: json_bool_or_default(value, name: "allow_empty", default: false),
     ))
 }
 
@@ -486,7 +488,11 @@ fn run_command_with_appended_args(
     appended_args: List<String>,
     jobs: Int,
     timeout_ms: Int,
+    allow_empty: Bool,
 ) -> Result<Bool, String> {
+    if List.len(list: appended_args) == 0 && allow_empty == false {
+        return Err("per-item test selected no inputs; set allow_empty = true only when intentional")
+    }
     match Process.run_many_stdout_timeout(
         command,
         args,
@@ -576,6 +582,7 @@ fn run_test(test: TestCase) -> Result<Bool, String> {
             appended_args: selected,
             jobs: test.jobs,
             timeout_ms: test.timeout_ms,
+            allow_empty: test.allow_empty,
         )
     }
 
@@ -597,6 +604,7 @@ fn run_test(test: TestCase) -> Result<Bool, String> {
                     appended_args: selected,
                     jobs: test.jobs,
                     timeout_ms: test.timeout_ms,
+                    allow_empty: test.allow_empty,
                 )
             }
             Err(error) => {
@@ -742,6 +750,10 @@ pub fn RssTest.run(manifest_path: Path, filter: String) -> Result<Unit, String> 
     let summary = run_tests(tests, filter)?
     let line = summary_line(summary)
     Log.write(message: line)
+
+    if summary.selected == 0 {
+        return Err("no tests matched the selected profile and filter")
+    }
 
     if summary.failed > 0 {
         return Err("rss test failures")

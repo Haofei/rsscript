@@ -321,10 +321,16 @@ fn s3_iam_reir_demo_pr_review_comment_matches_golden_output() {
     let demo_dir = repo.join("examples/demos/s3-iam-reir");
     let adds_delete_dir = demo_dir.join("scenarios/03-code-adds-delete");
 
-    let required = required_facts_for_demo(&adds_delete_dir);
+    let required = review_facts_for_demo(&adds_delete_dir);
     let grants = terraform_grants_from_fixture(&demo_dir, "fixed");
     let reconciliations = reir::reconcile_capabilities_for_target(&required, &grants, Some("prod"));
-    let comment = reir::format_pr_review_comment(&required, &grants, &reconciliations);
+    let decision = reir::decide_gate(
+        &required,
+        &grants,
+        &reconciliations,
+        reir::GatePolicy::default(),
+    );
+    let comment = reir::format_pr_review_comment(&decision, &required, &grants, &reconciliations);
     assert_eq!(comment, read_demo_text(&demo_dir, "expected/pr-comment.md"));
 
     println!("s3 iam pr review: blocked missing=s3:DeleteObject evidence=src/upload.rss:28");
@@ -523,15 +529,18 @@ fn s3_iam_reir_demo_postgres_write_scenario_reports_missing_then_covered() {
 }
 
 fn required_facts_for_demo(demo_dir: &Path) -> Vec<Fact> {
+    review_facts_for_demo(demo_dir)
+        .into_iter()
+        .filter(|fact| fact.role == Some(FactRole::Required))
+        .collect()
+}
+
+fn review_facts_for_demo(demo_dir: &Path) -> Vec<Fact> {
     let review = review_package_dir(demo_dir).expect("demo package review should succeed");
     let bundle: reir::Bundle =
         serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
             .expect("demo package review REIR should parse");
-    bundle
-        .facts
-        .into_iter()
-        .filter(|fact| fact.role == Some(FactRole::Required))
-        .collect()
+    bundle.facts
 }
 
 fn missing_capability_binding_report(review: &rsscript::PackageReview) -> String {

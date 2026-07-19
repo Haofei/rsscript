@@ -20,7 +20,7 @@ const USAGE: &str = "Usage:
   reir collect --producer terraform-plan --from plan.json [--out bundle.json] [--json]
   reir reconcile --required required.json --granted granted.json [--target name] [--json]
   reir reconcile [--bundle bundle.json] [--target name] [--out reconciled.json] [--json]
-  reir report-pr --required required.json --granted granted.json [--target name] [--ci-json]
+  reir report-pr --required required.json --granted granted.json [--target name] [--policy rss-policy.toml] [--ci-json | --sarif] [--fail-on-missing | --allow-missing] [--fail-on-unknown | --allow-unknown] [--fail-on-excess | --allow-excess] [--require-verified-capabilities | --allow-unverified-capabilities]
   reir diff --baseline baseline.json --current current.json [--json] [--fail-on-change]
   reir slice --bundle bundle.json [--kind <slice-kind>] [--json]
   reir merge file1.json file2.json [...] --out merged.json
@@ -317,10 +317,34 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
             "--policy" => policy_file = Some(take_value(args, &mut index, "--policy")?),
             "--ci-json" => ci_json = true,
             "--sarif" => sarif = true,
-            "--fail-on-unknown" => cli.fail_on_unknown = Some(true),
-            "--fail-on-excess" => cli.fail_on_excess = Some(true),
-            "--require-verified-capabilities" => cli.require_verified_capabilities = Some(true),
-            "--allow-missing" => cli.fail_on_missing = Some(false),
+            "--fail-on-missing" => {
+                set_policy_override(&mut cli.fail_on_missing, true, "missing capability policy")?
+            }
+            "--allow-missing" => {
+                set_policy_override(&mut cli.fail_on_missing, false, "missing capability policy")?
+            }
+            "--fail-on-unknown" => {
+                set_policy_override(&mut cli.fail_on_unknown, true, "unknown capability policy")?
+            }
+            "--allow-unknown" => {
+                set_policy_override(&mut cli.fail_on_unknown, false, "unknown capability policy")?
+            }
+            "--fail-on-excess" => {
+                set_policy_override(&mut cli.fail_on_excess, true, "excess capability policy")?
+            }
+            "--allow-excess" => {
+                set_policy_override(&mut cli.fail_on_excess, false, "excess capability policy")?
+            }
+            "--require-verified-capabilities" => set_policy_override(
+                &mut cli.require_verified_capabilities,
+                true,
+                "verified capability policy",
+            )?,
+            "--allow-unverified-capabilities" => set_policy_override(
+                &mut cli.require_verified_capabilities,
+                false,
+                "verified capability policy",
+            )?,
             unknown => {
                 return Err(CliError::usage(format!(
                     "unknown report-pr flag `{unknown}`"
@@ -353,18 +377,25 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
         target.as_deref(),
     );
 
-    let ci_output = reir::format_ci_gate_output_with_policy(
+    let decision = reir::decide_gate(
         &required_bundle.facts,
         &granted_bundle.facts,
         &reconciliations,
         policy,
     );
+    let ci_output = reir::format_ci_gate_output_from_decision(
+        &decision,
+        &required_bundle.facts,
+        &granted_bundle.facts,
+        &reconciliations,
+    );
     let output = if sarif {
-        reir::format_sarif(&reconciliations)
+        reir::format_sarif(&decision)
     } else if ci_json {
         reir::format_ci_gate_json(&ci_output)
     } else {
         format_pr_review_comment(
+            &decision,
             &required_bundle.facts,
             &granted_bundle.facts,
             &reconciliations,
@@ -372,12 +403,22 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
     };
     // The exit code follows the (policy-aware) gate status so --fail-on-excess /
     // --fail-on-unknown actually block, not just annotate.
-    let exit = if ci_output.status == reir::CiGateStatus::Fail {
+    let exit = if decision.status == reir::GateStatus::Fail {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
     };
     Ok((exit, output))
+}
+
+fn set_policy_override(slot: &mut Option<bool>, value: bool, name: &str) -> Result<(), CliError> {
+    if slot.is_some_and(|existing| existing != value) {
+        return Err(CliError::usage(format!(
+            "conflicting command-line values for {name}"
+        )));
+    }
+    *slot = Some(value);
+    Ok(())
 }
 
 fn try_run_reconcile(args: &[String]) -> Result<ExitCode, CliError> {

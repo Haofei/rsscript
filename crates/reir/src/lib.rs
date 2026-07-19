@@ -8,6 +8,7 @@
 pub mod adapters;
 pub mod bundle;
 pub mod capability;
+pub mod decision;
 pub mod diff;
 pub mod edge;
 pub mod evidence;
@@ -15,12 +16,14 @@ pub mod fact;
 pub mod format;
 pub mod policy;
 pub mod reconciliation;
+pub mod sarif;
 pub mod slice;
 pub mod subject;
 
 #[allow(unused_imports)]
 pub use bundle::*;
 pub use capability::*;
+pub use decision::*;
 #[allow(unused_imports)]
 pub use diff::*;
 pub use edge::*;
@@ -31,6 +34,7 @@ pub use format::*;
 pub use policy::*;
 #[allow(unused_imports)]
 pub use reconciliation::*;
+pub use sarif::*;
 #[allow(unused_imports)]
 pub use slice::*;
 pub use subject::*;

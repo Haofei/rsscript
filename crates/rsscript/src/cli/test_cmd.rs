@@ -10,6 +10,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
+use serde::Serialize;
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 
@@ -51,6 +55,8 @@ struct TestCase {
     contains_all: Vec<String>,
     #[serde(default)]
     ignored: bool,
+    #[serde(default)]
+    allow_empty: bool,
 }
 
 fn default_recursive() -> bool {
@@ -64,7 +70,7 @@ fn default_timeout_ms() -> u64 {
     60_000
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 struct Summary {
     total: usize,
     selected: usize,
@@ -73,6 +79,7 @@ struct Summary {
     skipped: usize,
 }
 
+#[derive(Serialize)]
 struct TestResult {
     name: String,
     status: &'static str,
@@ -218,7 +225,12 @@ pub(crate) fn run_test(args: &[String]) -> ExitCode {
         println!("{}", summary_line(&summary));
     }
 
-    if summary.failed > 0 {
+    if summary.selected == 0 {
+        if !options.json {
+            eprintln!("no tests matched the selected profile and filter");
+        }
+        ExitCode::from(1)
+    } else if summary.failed > 0 {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS
@@ -366,6 +378,7 @@ fn run_one(test: &TestCase) -> Result<bool, String> {
             &test.paths,
             test.jobs,
             test.timeout_ms,
+            test.allow_empty,
         ),
         "command_for_each_file" => {
             let files = collect_each_file(&test.directory, &test.extension, test.recursive)?;
@@ -375,6 +388,7 @@ fn run_one(test: &TestCase) -> Result<bool, String> {
                 &files,
                 test.jobs,
                 test.timeout_ms,
+                test.allow_empty,
             )
         }
         other => Err(format!("unsupported test kind `{other}`")),
@@ -432,7 +446,7 @@ fn run_command_os(
             Ok(Some(status)) => break Some(status),
             Ok(None) => {
                 if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                    let _ = child.kill();
+                    terminate_process_tree(&mut child);
                     let _ = child.wait();
                     timed_out = true;
                     break None;
@@ -481,12 +495,34 @@ fn spawn_with_fallback(command: &OsString, args: &[String]) -> Result<std::proce
 }
 
 fn spawn_piped(command: &OsString, args: &[String]) -> std::io::Result<std::process::Child> {
-    Command::new(command)
+    let mut command = Command::new(command);
+    command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    command.process_group(0);
+    command.spawn()
+}
+
+fn terminate_process_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let group = format!("-{}", child.id());
+        let _ = Command::new("kill").args(["-TERM", "--", &group]).status();
+        thread::sleep(Duration::from_millis(25));
+        if child.try_wait().ok().flatten().is_none() {
+            let _ = Command::new("kill").args(["-KILL", "--", &group]).status();
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
+            .status();
+    }
+    let _ = child.kill();
 }
 
 fn spawn_reader<R: Read + Send + 'static>(stream: Option<R>) -> thread::JoinHandle<String> {
@@ -508,12 +544,20 @@ fn run_each(
     items: &[String],
     jobs: i64,
     timeout_ms: u64,
+    allow_empty: bool,
 ) -> Result<bool, String> {
     if command.is_empty() {
         return Err("test is missing a `command`".to_string());
     }
     if items.is_empty() {
-        return Ok(true);
+        return if allow_empty {
+            Ok(true)
+        } else {
+            Err(
+                "per-item test selected no inputs; set `allow_empty = true` only when intentional"
+                    .to_string(),
+            )
+        };
     }
 
     let worker_count = resolve_jobs(jobs, items.len());
@@ -599,7 +643,9 @@ fn collect_each_file_into(
 ) -> Result<(), String> {
     let entries =
         fs::read_dir(dir).map_err(|error| format!("read directory {}: {error}", dir.display()))?;
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("read directory entry in {}: {error}", dir.display()))?;
         let path = entry.path();
         if path.is_dir() {
             if recursive {
@@ -636,39 +682,15 @@ fn summary_line(summary: &Summary) -> String {
 }
 
 fn summary_json(results: &[TestResult], summary: &Summary) -> String {
-    let mut tests = String::from("[");
-    for (index, result) in results.iter().enumerate() {
-        if index > 0 {
-            tests.push(',');
-        }
-        tests.push_str(&format!(
-            "{{\"name\":{},\"status\":\"{}\",\"duration_ms\":{}}}",
-            json_string(&result.name),
-            result.status,
-            result.duration_ms,
-        ));
-    }
-    tests.push(']');
-    format!(
-        "{{\"total\":{},\"selected\":{},\"passed\":{},\"failed\":{},\"skipped\":{},\"tests\":{tests}}}",
-        summary.total, summary.selected, summary.passed, summary.failed, summary.skipped
-    )
-}
-
-fn json_string(value: &str) -> String {
-    let mut escaped = String::from("\"");
-    for ch in value.chars() {
-        match ch {
-            '"' => escaped.push_str("\\\""),
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '\t' => escaped.push_str("\\t"),
-            '\r' => escaped.push_str("\\r"),
-            other => escaped.push(other),
-        }
-    }
-    escaped.push('"');
-    escaped
+    serde_json::to_string(&serde_json::json!({
+        "total": summary.total,
+        "selected": summary.selected,
+        "passed": summary.passed,
+        "failed": summary.failed,
+        "skipped": summary.skipped,
+        "tests": results,
+    }))
+    .expect("test summary should serialize")
 }
 
 #[cfg(test)]
@@ -895,13 +917,56 @@ mod tests {
     }
 
     #[test]
+    fn summary_json_escapes_all_control_characters() {
+        let summary = super::Summary {
+            total: 1,
+            selected: 1,
+            passed: 1,
+            ..super::Summary::default()
+        };
+        let results = [super::TestResult {
+            name: "control\u{0001}name".to_string(),
+            status: "pass",
+            duration_ms: 1,
+        }];
+        let json = super::summary_json(&results, &summary);
+        let parsed: serde_json::Value = serde_json::from_str(&json).expect("summary must be JSON");
+        assert_eq!(parsed["tests"][0]["name"], "control\u{0001}name");
+    }
+
+    #[test]
+    fn per_item_test_rejects_an_empty_input_set_by_default() {
+        let error = super::run_each("echo", &[], &[], 1, 1_000, false)
+            .expect_err("empty input should fail closed");
+        assert!(error.contains("selected no inputs"));
+        assert!(
+            super::run_each("echo", &[], &[], 1, 1_000, true)
+                .expect("explicitly allowed empty input should pass")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timeout_terminates_pipe_inheriting_descendants() {
+        let started = Instant::now();
+        let outcome = super::run_command(
+            "sh",
+            &["-c".to_string(), "(sleep 30) & wait".to_string()],
+            50,
+        )
+        .expect("timed command should return");
+        assert!(outcome.timed_out);
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
     fn file_contains_kind_runs_end_to_end() {
         let root = unique_temp_dir("test-file-contains");
         let target = root.join("data.txt");
         fs::write(&target, "the answer is 42\n").expect("write target");
         let manifest = format!(
             "[[tests]]\nname = \"answer present\"\nkind = \"file_contains\"\npath = {}\ncontains = \"42\"\n",
-            super::json_string(target.to_str().unwrap())
+            serde_json::to_string(target.to_str().unwrap()).expect("path should serialize")
         );
         let parsed = super::parse_manifest(&manifest).expect("manifest should parse");
 

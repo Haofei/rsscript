@@ -5,9 +5,7 @@ pub mod differential;
 use base64::Engine;
 use sha1::{Digest, Sha1};
 use std::collections::BTreeSet;
-use std::collections::hash_map::DefaultHasher;
 use std::fs;
-use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -153,13 +151,18 @@ pub fn try_run_compiled_source(
 }
 
 fn compiled_cache_key(file: &str, source: &str, args: &[&str]) -> String {
-    let mut hasher = DefaultHasher::new();
-    "rsscript-corpus-compiled-cache-v3".hash(&mut hasher);
-    env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT").hash(&mut hasher);
-    file.hash(&mut hasher);
-    source.hash(&mut hasher);
-    args.hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    let mut hasher = Sha1::new();
+    hasher.update(b"rsscript-corpus-compiled-cache-v4\0");
+    hasher.update(env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT").as_bytes());
+    hasher.update([0]);
+    hasher.update(file.as_bytes());
+    hasher.update([0]);
+    hasher.update(source.as_bytes());
+    for arg in args {
+        hasher.update([0]);
+        hasher.update(arg.as_bytes());
+    }
+    format!("{:x}", hasher.finalize())
 }
 
 fn compile_and_run(
