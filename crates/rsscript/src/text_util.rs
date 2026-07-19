@@ -93,7 +93,10 @@ pub(crate) fn string_slice_range(value: &str, start: i64, len: i64) -> &str {
     &value[byte_start..byte_end]
 }
 
-/// Pad `value` to `width` bytes with repetitions of `fill`, on the left or right.
+/// Pad `value` to at least `width` bytes with complete repetitions of `fill`.
+///
+/// A multibyte fill may make the result wider than requested; UTF-8 is never
+/// split and padding never silently underfills the requested byte width.
 pub(crate) fn string_pad(value: &str, width: i64, fill: &str, left: bool) -> String {
     let target = width.max(0) as usize;
     if value.len() >= target || fill.is_empty() {
@@ -104,9 +107,6 @@ pub(crate) fn string_pad(value: &str, width: i64, fill: &str, left: bool) -> Str
     while padding.len() < missing {
         padding.push_str(fill);
     }
-    while padding.len() > missing {
-        padding.pop();
-    }
     if left {
         format!("{padding}{value}")
     } else {
@@ -115,7 +115,6 @@ pub(crate) fn string_pad(value: &str, width: i64, fill: &str, left: bool) -> Str
 }
 
 /// Byte length of [`string_pad`] without materializing the padded string.
-#[cfg(any(feature = "native-jit", test))]
 pub(crate) fn string_pad_len(value: &str, width: i64, fill: &str) -> Option<i64> {
     let target = width.max(0) as usize;
     if value.len() >= target || fill.is_empty() {
@@ -126,11 +125,6 @@ pub(crate) fn string_pad_len(value: &str, width: i64, fill: &str) -> Option<i64>
     let mut padding_len = 0usize;
     while padding_len < missing {
         padding_len = padding_len.checked_add(fill.len())?;
-    }
-
-    let mut rev_char_lens = fill.chars().rev().map(char::len_utf8).cycle();
-    while padding_len > missing {
-        padding_len = padding_len.checked_sub(rev_char_lens.next()?)?;
     }
 
     i64::try_from(value.len().checked_add(padding_len)?).ok()
@@ -290,5 +284,12 @@ mod tests {
                 "value={value:?} width={width} fill={fill:?}",
             );
         }
+    }
+
+    #[test]
+    fn string_pad_never_underfills_multibyte_width() {
+        assert_eq!(string_pad("x", 2, "é", true), "éx");
+        assert_eq!(string_pad("x", 2, "é", false), "xé");
+        assert_eq!(string_pad_len("x", 2, "é"), Some(3));
     }
 }

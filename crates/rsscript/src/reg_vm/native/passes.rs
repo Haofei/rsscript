@@ -3839,7 +3839,8 @@ pub(in crate::reg_vm) fn native_scalar_replace_options(
                 });
             }
             RegInstr::Move { dst, src } if opt[*dst] => {
-                // Alias copy: move both tag and payload.
+                // Alias copy: payload scratch registers have an explicit typed-zero
+                // entry value in the lowered JIT IR, so None aliases remain defined.
                 new_code.push(RegInstr::Move {
                     dst: tag_reg[*dst],
                     src: tag_reg[*src],

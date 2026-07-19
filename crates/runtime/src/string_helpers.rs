@@ -340,9 +340,6 @@ fn string_pad(value: &str, width: i64, fill: &str, left: bool) -> String {
     while padding.len() < missing {
         padding.push_str(fill);
     }
-    while padding.len() > missing {
-        padding.pop();
-    }
     if left {
         format!("{padding}{value}")
     } else {
@@ -389,6 +386,14 @@ mod tests {
         assert_eq!(string_len(combining), 3);
         assert_eq!(string_char_at(combining, 0), Some('e'));
         assert_eq!(string_char_at(combining, 1), Some('\u{301}'));
+    }
+
+    #[test]
+    fn multibyte_padding_never_underfills_the_requested_byte_width() {
+        assert_eq!(string_pad_left("x", 2, "é"), "éx");
+        assert_eq!(string_pad_right("x", 2, "é"), "xé");
+        assert!(string_pad_left("x", 2, "é").len() >= 2);
+        assert!(string_pad_right("x", 2, "é").len() >= 2);
     }
 
     #[test]

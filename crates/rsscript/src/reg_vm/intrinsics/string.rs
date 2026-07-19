@@ -130,7 +130,12 @@ impl RegVm {
                 // Charge the (size-parameterized) result against `mem_budget` BEFORE
                 // allocating, so `pad_*` cannot allocate an arbitrarily large string
                 // in one step and bypass the memory ceiling.
-                self.account_bytes(value.len().max(width.max(0) as usize))?;
+                let result_len = crate::text_util::string_pad_len(&value, width, &fill)
+                    .and_then(|len| usize::try_from(len).ok())
+                    .ok_or_else(|| {
+                        EvalError::Runtime("String.pad_left result is too large".into())
+                    })?;
+                self.account_bytes(result_len)?;
                 Ok(VmValue::string(string_pad(&value, width, &fill, true)))
             }
             RegIntrinsic::StringPadRight => {
@@ -139,7 +144,12 @@ impl RegVm {
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_owned();
                 let fill =
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?.to_owned();
-                self.account_bytes(value.len().max(width.max(0) as usize))?;
+                let result_len = crate::text_util::string_pad_len(&value, width, &fill)
+                    .and_then(|len| usize::try_from(len).ok())
+                    .ok_or_else(|| {
+                        EvalError::Runtime("String.pad_right result is too large".into())
+                    })?;
+                self.account_bytes(result_len)?;
                 Ok(VmValue::string(string_pad(&value, width, &fill, false)))
             }
             RegIntrinsic::StringParseFloat => {

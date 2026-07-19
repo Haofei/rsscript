@@ -573,7 +573,7 @@ impl TypedVec {
 
     /// Allocated heap bytes of the backing buffer: `capacity * elem_bytes` for the
     /// *current* kind. Boxed counts each slot at the full `VmValue` size.
-    fn allocated_bytes(&self) -> usize {
+    pub(crate) fn allocated_bytes(&self) -> usize {
         match self {
             TypedVec::Ints(v) => v.capacity() * std::mem::size_of::<i64>(),
             TypedVec::Floats(v) => v.capacity() * std::mem::size_of::<f64>(),

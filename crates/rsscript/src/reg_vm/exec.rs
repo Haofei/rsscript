@@ -251,6 +251,29 @@ impl RegVm {
         Ok(())
     }
 
+    fn reserve_deque_entry_accounted(
+        &mut self,
+        deque: &mut VecDeque<VmValue>,
+    ) -> Result<(), EvalError> {
+        if deque.len() < deque.capacity() {
+            return Ok(());
+        }
+        let old_capacity = deque.capacity();
+        let projected_capacity = old_capacity.saturating_mul(2).saturating_add(1).max(1);
+        let projected_bytes = projected_capacity
+            .saturating_sub(old_capacity)
+            .saturating_mul(std::mem::size_of::<VmValue>());
+        self.ensure_memory_available(projected_bytes)?;
+        deque.try_reserve(1).map_err(|error| {
+            EvalError::Runtime(format!("Deque insertion allocation failed: {error}"))
+        })?;
+        let actual_bytes = deque
+            .capacity()
+            .saturating_sub(old_capacity)
+            .saturating_mul(std::mem::size_of::<VmValue>());
+        self.account_bytes(actual_bytes)
+    }
+
     pub(super) fn fresh_string(&mut self, value: String) -> Result<VmValue, EvalError> {
         self.account_bytes(value.len())?;
         Ok(VmValue::string(value))
@@ -1497,6 +1520,18 @@ impl RegVm {
                             args,
                             mut_args,
                         } => {
+                            // Native recursive fast paths do not push a VM `Frame`,
+                            // but the call is still one logical language frame. Check
+                            // the boundary before dispatch and seed native execution
+                            // with this callee depth so a base-case native call cannot
+                            // slip past the same limit enforced by `push_frame`.
+                            let callee_depth = self.frames.len().saturating_add(1);
+                            if callee_depth > self.limits.max_depth {
+                                let max_depth = self.limits.max_depth;
+                                return Err(EvalError::Runtime(format!(
+                                    "recursion depth limit exceeded ({max_depth} frames)"
+                                )));
+                            }
                             // Recursive native fast paths run Cranelift code that polls
                             // neither `step_budget` nor `cancel` (and allocates off the
                             // `mem_budget` meter), so they are gated on all three limits
@@ -1809,12 +1844,19 @@ impl RegVm {
                             // Sort a detached copy first so the comparator closure can read
                             // the list without a RefCell double-borrow, then overwrite the
                             // receiver's buffer in place so `mut list` propagates.
-                            let mut values =
-                                expect_list_ref(self.reg(base + *list))?.borrow().to_vec();
+                            let list = expect_list_ref(self.reg(base + *list))?.clone();
+                            let scratch_bytes = list
+                                .borrow()
+                                .len()
+                                .saturating_mul(std::mem::size_of::<VmValue>());
+                            self.ensure_memory_available(scratch_bytes.saturating_mul(2))?;
+                            self.account_bytes(scratch_bytes)?;
+                            let mut values = list.borrow().to_vec();
                             let compare = expect_closure_rc(self.reg(base + *compare))?;
                             self.sort_list_with_closure(unit, &mut values, &compare, next_base)?;
-                            *expect_list_ref(self.reg(base + *list))?.borrow_mut() =
-                                TypedVec::from_values(values);
+                            let replacement = TypedVec::from_values(values);
+                            self.account_list_storage(&replacement)?;
+                            *list.borrow_mut() = replacement;
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::DequeClear { dst, deque } => {
@@ -1841,16 +1883,18 @@ impl RegVm {
                         }
                         RegInstr::DequePushBack { dst, deque, value } => {
                             let value = self.reg(base + *value).clone();
-                            expect_deque_ref(self.reg(base + *deque))?
-                                .borrow_mut()
-                                .push_back(value);
+                            let deque = expect_deque_ref(self.reg(base + *deque))?.clone();
+                            let mut deque = deque.borrow_mut();
+                            self.reserve_deque_entry_accounted(&mut deque)?;
+                            deque.push_back(value);
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::DequePushFront { dst, deque, value } => {
                             let value = self.reg(base + *value).clone();
-                            expect_deque_ref(self.reg(base + *deque))?
-                                .borrow_mut()
-                                .push_front(value); // O(1), unlike the old `Vec::insert(0, _)`
+                            let deque = expect_deque_ref(self.reg(base + *deque))?.clone();
+                            let mut deque = deque.borrow_mut();
+                            self.reserve_deque_entry_accounted(&mut deque)?;
+                            deque.push_front(value); // O(1), unlike the old `Vec::insert(0, _)`
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::SetClear { dst, set } => {
@@ -1894,9 +1938,27 @@ impl RegVm {
                         }
                         RegInstr::SortedSetInsert { dst, set, value } => {
                             let value = self.reg(base + *value).clone();
-                            let list = expect_list_ref(self.reg(base + *set))?;
-                            let inserted =
-                                sorted_insert_vm(list.borrow_mut().as_boxed_mut(), value)?;
+                            let list = expect_list_ref(self.reg(base + *set))?.clone();
+                            let inserted = if sorted_contains_vm(&list.borrow(), &value)? {
+                                false
+                            } else {
+                                let before = list.borrow().allocated_bytes();
+                                let projected_total = list
+                                    .borrow()
+                                    .len()
+                                    .saturating_add(1)
+                                    .checked_next_power_of_two()
+                                    .unwrap_or(usize::MAX)
+                                    .saturating_mul(std::mem::size_of::<VmValue>());
+                                self.ensure_memory_available(
+                                    projected_total.saturating_sub(before),
+                                )?;
+                                let inserted =
+                                    sorted_insert_vm(list.borrow_mut().as_boxed_mut(), value)?;
+                                let growth = list.borrow().allocated_bytes().saturating_sub(before);
+                                self.account_bytes(growth)?;
+                                inserted
+                            };
                             self.set_reg(base + *dst, VmValue::Bool(inserted));
                         }
                         RegInstr::SortedSetRemove { dst, set, value } => {
@@ -1918,11 +1980,35 @@ impl RegVm {
                         } => {
                             let key = self.reg(base + *key).clone();
                             let value = self.reg(base + *value).clone();
-                            let list = expect_list_ref(self.reg(base + *map))?;
-                            sorted_map_insert_in_place(
+                            let list = expect_list_ref(self.reg(base + *map))?.clone();
+                            let updates_existing =
+                                sorted_map_get_in_place(&list.borrow(), &key)?.is_some();
+                            let before = list.borrow().allocated_bytes();
+                            let projected_total = list
+                                .borrow()
+                                .len()
+                                .saturating_add(1)
+                                .checked_next_power_of_two()
+                                .unwrap_or(usize::MAX)
+                                .saturating_mul(std::mem::size_of::<VmValue>());
+                            let pair_bytes = 2 * std::mem::size_of::<VmValue>();
+                            if !updates_existing {
+                                self.ensure_memory_available(
+                                    projected_total
+                                        .saturating_sub(before)
+                                        .saturating_add(pair_bytes),
+                                )?;
+                            }
+                            let inserted = sorted_map_insert_in_place(
                                 list.borrow_mut().as_boxed_mut(),
                                 key,
                                 value,
+                            )?;
+                            let growth = list.borrow().allocated_bytes().saturating_sub(before);
+                            self.account_bytes(
+                                growth.saturating_add(
+                                    usize::from(inserted).saturating_mul(pair_bytes),
+                                ),
                             )?;
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
@@ -1996,7 +2082,18 @@ impl RegVm {
                                         .to_string(),
                                 ));
                             };
-                            Rc::make_mut(text).push_str(value.as_str());
+                            let was_shared = Rc::strong_count(text) > 1;
+                            let projected = text.len().saturating_add(value.len());
+                            let projected_charge = if was_shared { projected } else { value.len() };
+                            self.ensure_memory_available(projected_charge)?;
+                            let text = Rc::make_mut(text);
+                            text.try_reserve(value.len()).map_err(|error| {
+                                EvalError::Runtime(format!(
+                                    "StringBuilder allocation failed: {error}"
+                                ))
+                            })?;
+                            text.push_str(value.as_str());
+                            self.account_bytes(projected_charge)?;
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::StringBuilderFinish { dst, builder } => {
@@ -2016,18 +2113,27 @@ impl RegVm {
                                         .to_string(),
                                 ));
                             };
-                            self.set_reg(base + *dst, VmValue::string(text.as_str()));
+                            self.ensure_memory_available(text.len())?;
+                            let value = self.fresh_string(text.as_str().to_string())?;
+                            self.set_reg(base + *dst, value);
                         }
                         RegInstr::StringConcat { dst, left, right } => {
+                            let total_len = {
+                                let left = expect_string_ref(self.reg(base + *left))?;
+                                let right = expect_string_ref(self.reg(base + *right))?;
+                                left.len().saturating_add(right.len())
+                            };
+                            self.ensure_memory_available(total_len)?;
                             let value = {
                                 let left = expect_string_ref(self.reg(base + *left))?;
                                 let right = expect_string_ref(self.reg(base + *right))?;
-                                let mut value = String::with_capacity(left.len() + right.len());
+                                let mut value = String::with_capacity(total_len);
                                 value.push_str(left);
                                 value.push_str(right);
                                 value
                             };
-                            self.set_reg(base + *dst, VmValue::string(value));
+                            let value = self.fresh_string(value)?;
+                            self.set_reg(base + *dst, value);
                         }
                         RegInstr::CallIntrinsic {
                             dst,

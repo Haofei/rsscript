@@ -97,7 +97,7 @@ Rules:
 
 ## 2. The Parity Invariant (supreme law)
 
-> For every program and input,
+> For every program and input, within the language-defined observability boundary,
 > **HIR-interp ≡ reg-VM ≡ tier-0 ≡ native ≡ native-force-deopt ≡ AOT**
 > on all observable behavior: return value, mutation of reachable state, emitted
 > output, and success-vs-failure (per the failure-equivalence rule below).
@@ -107,6 +107,15 @@ register VM running fully interpreted (no JIT), **tier-0**/**native** are the JI
 tiers, **native-force-deopt** is the native tier forced to bail at every guard,
 and **AOT** is the compiled backend. "interp" unqualified means the HIR
 interpreter. All six are differential backends (§2 consequence 3).
+
+An operation whose language contract deliberately leaves an outcome unspecified
+(notably raw `Map`/`Set` traversal order) denotes a set of permitted traces. In
+that case parity means that every backend stays within the same permitted trace
+set; it does not require byte-identical ordering. Programs that make order
+observable and require reproducibility MUST use `SortedMap`/`SortedSet` or sort
+the traversed values explicitly. Engine policy supplied outside the program,
+including `VmLimits`, is covered separately by §6 and is compared only between
+execution modes that accept the same policy.
 
 Consequences (all normative):
 
@@ -139,7 +148,8 @@ Consequences (all normative):
    seed every nondeterminism source (float NaN/ordering, map iteration order,
    time/random/env, scheduling, divide-by-zero) so any observed divergence is a
    real bug, not noise. (This bounds what the *generator* emits; it does not weaken
-   the parity guarantee for handwritten programs that use those features — see §5
+   the language contract for handwritten programs that use those features; such
+   programs remain constrained to the permitted traces described above. See §5
    on float parity by construction.)
 
 ### 2.1 Failure equivalence (what "same failure" means)
@@ -313,7 +323,12 @@ crate behind a safe API (§7.1).
 
 ### 6.1 Resource limits (`VmLimits`)
 
-The VM accepts a `VmLimits` budget enforced during execution:
+The register-VM execution API accepts a `VmLimits` budget enforced by the
+interpreter, tier-0, and native JIT. `VmLimits` is host execution policy, not a
+source-language value and not part of standalone generated-Rust AOT semantics;
+the AOT command has no `VmLimits` input. AOT remains subject to the host process's
+own resource controls. Runs may be compared for resource-limit parity only when
+the compared execution modes accept the same configured policy.
 
 | Field | Meaning | Default |
 |-------|---------|---------|
@@ -350,11 +365,12 @@ Container capacity growth and size-parameterized intrinsic outputs are charged t
 cumulatively, including list/map transforms such as `reverse`, `flat_map`,
 `group_by`, `keys`, `filter`, `merge`, `split`, `replace`, and `concat`.
 
-### 6.2 Limits bind every tier, including native code (normative)
+### 6.2 Limits bind every VM tier, including native code (normative)
 
-`VmLimits` constrain the *program's* execution, so they MUST hold no matter which
-tier runs a given function. A faster tier cannot escape a budget by bypassing the
-VM instruction loop. Concretely, native (and tier-0) code MUST satisfy **both**:
+Within one register-VM run, `VmLimits` constrain the *program's* execution, so
+they MUST hold no matter which VM tier runs a given function. A faster tier cannot
+escape a budget by bypassing the VM instruction loop. Concretely, native (and
+tier-0) code MUST satisfy **both**:
 
 1. **Enforce, or be ineligible.** While any of `step_budget`, `mem_budget`, or
    `cancel` is active, a function compiles to native **only if** the native code
@@ -608,7 +624,7 @@ Normative conventions (part of this contract):
 ## 9. JIT IR and Crate Boundary
 
 1. The native tier consumes a **stable, versioned IR** defined by `vm-jit`
-   (`JitInstr`/`JitFunction`, `vm_jit::IR_VERSION`, currently `2`). `rsscript`
+   (`JitInstr`/`JitFunction`, `vm_jit::IR_VERSION`, currently `22`). `rsscript`
    *translates* eligible `RegFunction`s into that IR rather than exposing its
    private `RegInstr`. The two layers MUST stay decoupled across this IR; a
    producer/consumer version mismatch is an error, not a silent miscompile.

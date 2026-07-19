@@ -200,6 +200,100 @@ fn main() -> Int {
 }
 
 #[test]
+fn ordinary_vm_growth_paths_respect_memory_budget() {
+    let cases = [
+        (
+            "string-concat",
+            r#"fn main() -> Int {
+    let value = String.concat(left: "abcdefghijklmnopqrstuvwxyz", right: "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    return String.len(value: value)
+}"#,
+            32,
+        ),
+        (
+            "string-builder",
+            r#"features: local
+fn main() -> Int {
+    local builder = StringBuilder.new()
+    StringBuilder.push(builder: mut builder, value: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    return String.len(value: StringBuilder.finish(builder: take builder))
+}"#,
+            32,
+        ),
+        (
+            "deque-growth",
+            r#"features: local
+fn main() -> Int {
+    local values = Deque<Int>.new()
+    let mut i = 0
+    while i < 64 {
+        Deque.push_back<Int>(deque: mut values, value: i)
+        i = i + 1
+    }
+    return Deque.len<Int>(deque: values)
+}"#,
+            256,
+        ),
+        (
+            "sorted-set-growth",
+            r#"features: local
+fn main() -> Int {
+    local values = SortedSet<Int>.new()
+    let mut i = 0
+    while i < 32 {
+        SortedSet.insert<Int>(set: mut values, value: i)
+        i = i + 1
+    }
+    return SortedSet.len<Int>(set: values)
+}"#,
+            256,
+        ),
+        (
+            "sorted-map-growth",
+            r#"features: local
+fn main() -> Int {
+    local values = SortedMap<Int, Int>.new()
+    let mut i = 0
+    while i < 24 {
+        SortedMap.insert<Int, Int>(map: mut values, key: i, value: i)
+        i = i + 1
+    }
+    return SortedMap.len<Int, Int>(map: values)
+}"#,
+            512,
+        ),
+        (
+            "list-sort-scratch",
+            r#"features: local
+fn main() -> Int {
+    let mut values = [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
+    List.sort_with<Int>(list: mut values, compare: |left, right| {
+        return left - right
+    })
+    return values[0]
+}"#,
+            200,
+        ),
+    ];
+
+    for (name, source, mem_budget) in cases {
+        let error = eval_limited(
+            source,
+            VmLimits {
+                mem_budget: Some(mem_budget),
+                step_budget: Some(1_000_000),
+                ..VmLimits::default()
+            },
+        )
+        .expect_err("allocation path must exceed its tight memory budget");
+        assert!(
+            matches!(error, EvalError::Runtime(ref message) if message.contains("memory limit")),
+            "{name}: expected memory-limit error, got {error:?}"
+        );
+    }
+}
+
+#[test]
 fn shake_output_respects_memory_budget_and_hard_cap() {
     let source = r#"
 fn main() -> Int {

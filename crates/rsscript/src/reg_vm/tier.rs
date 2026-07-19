@@ -417,7 +417,10 @@ fn native_compile_direct_scalar_callee(
     }
     let id = match compiled {
         Ok(id) => id,
-        Err(_) => {
+        Err(err) => {
+            if native.report {
+                eprintln!("jit-report: native callee compile failed: {err}");
+            }
             if native.collect_stats {
                 native.stats.compile_failed += 1;
             }
@@ -1107,7 +1110,13 @@ impl RegVm {
                                             precise_resume_safe,
                                         ))
                                     }
-                                    Err(_) => {
+                                    Err(err) => {
+                                        if native.report {
+                                            eprintln!(
+                                                "jit-report: fn `{}` compile failed: {err}",
+                                                func.name,
+                                            );
+                                        }
                                         if native.collect_stats {
                                             native.stats.compile_failed += 1;
                                         }
@@ -3030,6 +3039,13 @@ impl RegVm {
                 mut_args,
             } = instr
             {
+                let callee_depth = self.frames.len().saturating_add(1);
+                if callee_depth > self.limits.max_depth {
+                    let max_depth = self.limits.max_depth;
+                    return Err(EvalError::Runtime(format!(
+                        "recursion depth limit exceeded ({max_depth} frames)"
+                    )));
+                }
                 let callee = Rc::clone(&unit.functions[*callee_id]);
                 let next_base = base + func.regs;
                 self.prepare_frame(next_base, callee.regs)?;
@@ -3187,7 +3203,7 @@ impl RegVm {
         }
         let lens = vec![0i64; int_args.len()];
         let mut heap_tx = JitNativeCallFrame::begin();
-        let initial_depth = self.frames.len();
+        let initial_depth = self.frames.len().saturating_add(1);
         let outcome = {
             let native = self.native.as_ref()?;
             native.module.call_with_host_ctx_at_depth(
@@ -3358,7 +3374,7 @@ impl RegVm {
         }
         let lens = vec![0i64; int_args.len()];
         let mut heap_tx = JitNativeCallFrame::begin();
-        let initial_depth = self.frames.len();
+        let initial_depth = self.frames.len().saturating_add(1);
         let outcome = {
             let native = self.native.as_ref()?;
             native.module.call_with_host_ctx_at_depth(

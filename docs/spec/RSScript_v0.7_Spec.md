@@ -4806,6 +4806,12 @@ pub fn String.after(value: read String, delimiter: read String) -> Option<String
 pub fn String.split(value: read String, delimiter: read String) -> fresh List<String>
     effects(pure)
 
+pub fn String.pad_left(value: read String, width: Int, fill: read String) -> fresh String
+    effects(pure)
+
+pub fn String.pad_right(value: read String, width: Int, fill: read String) -> fresh String
+    effects(pure)
+
 pub fn StringBuilder.new() -> fresh StringBuilder
 
 pub fn StringBuilder.push(builder: mut StringBuilder, value: read String) -> Unit
@@ -4820,6 +4826,12 @@ offset down to a valid UTF-8 scalar boundary and never returns invalid UTF-8.
 offset returned by `String.index_of` is therefore directly composable with
 `String.slice`, but not with `String.char_at`. Grapheme-cluster indexing is not
 part of this API.
+
+`String.pad_left` and `String.pad_right` interpret `width` as a minimum UTF-8
+byte width. They append or prepend complete repetitions of `fill`; they never
+split a Unicode scalar or return a result narrower than `width`. Consequently a
+multibyte `fill` may produce the smallest complete repetition whose result is
+wider than the requested byte width. An empty `fill` leaves the value unchanged.
 
 The minimum `Json` core surface includes field access, array access, and a
 noescape predicate helper used by review tooling and self-hosted package validation:

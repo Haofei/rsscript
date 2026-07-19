@@ -302,6 +302,66 @@ mod register_window_tests {
         }
     }
 
+    #[test]
+    fn native_binding_return_respects_memory_budget() {
+        let unit = Rc::new(RegUnit {
+            functions: Vec::new(),
+            function_ids: HashMap::new(),
+            resource_drop_functions: HashMap::new(),
+            types: HashMap::new(),
+            native_signatures: HashMap::new(),
+            closure_identity_observable: true,
+        });
+        let binding = NativeInterpreterFn::new(|_| Ok(NativeValue::String("x".repeat(1024))));
+        let mut vm = RegVm::new(
+            unit,
+            Vec::new(),
+            [("test.big".to_string(), binding)].into_iter().collect(),
+        );
+        vm.set_limits(VmLimits {
+            mem_budget: Some(64),
+            ..VmLimits::default()
+        });
+        let error = vm
+            .call_native_key("test.big", &[], &[], 0)
+            .expect_err("large native result must be rejected before materialization");
+        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+    }
+
+    #[test]
+    fn native_binding_budget_failure_keeps_mutations_atomic() {
+        let unit = Rc::new(RegUnit {
+            functions: Vec::new(),
+            function_ids: HashMap::new(),
+            resource_drop_functions: HashMap::new(),
+            types: HashMap::new(),
+            native_signatures: HashMap::new(),
+            closure_identity_observable: true,
+        });
+        let binding = NativeInterpreterFn::new(|_| {
+            Ok(NativeValue::List(vec![
+                NativeValue::Unit,
+                NativeValue::String("x".repeat(1024)),
+            ]))
+        });
+        let mut vm = RegVm::new(
+            unit,
+            Vec::new(),
+            [("test.mutate".to_string(), binding)].into_iter().collect(),
+        );
+        vm.set_limits(VmLimits {
+            mem_budget: Some(64),
+            ..VmLimits::default()
+        });
+        vm.prepare_frame(0, 1).expect("register window");
+        vm.set_reg(0, VmValue::Int(7));
+        let error = vm
+            .call_native_key("test.mutate", &[0], &[0], 0)
+            .expect_err("mutation envelope must be rejected atomically");
+        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert_eq!(vm.reg(0), &VmValue::Int(7));
+    }
+
     #[cfg(feature = "native-jit")]
     fn native_test_function(
         name: &str,
@@ -5589,7 +5649,7 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
-    fn tier0_jit_pure_leaf_call_avoids_frame_push() {
+    fn tier0_jit_pure_leaf_call_still_obeys_logical_depth_limit() {
         let callee = native_test_function(
             "plus_one",
             1,
@@ -5628,11 +5688,15 @@ fn main() -> Unit {
         vm.prepare_frame(0, caller.regs).expect("frame");
         vm.set_reg(0, VmValue::Int(41));
 
-        let result = vm
+        let error = vm
             .run_jit(&unit, caller.as_ref(), 0)
-            .expect("pure leaf call should not push a VM frame");
+            .expect_err("an unframed pure leaf call is still a logical call");
 
-        assert_eq!(result, VmValue::Int(42));
+        assert!(matches!(
+            error,
+            EvalError::Runtime(message)
+                if message.contains("recursion depth limit exceeded (0 frames)")
+        ));
     }
 
     #[cfg(feature = "native-jit")]

@@ -106,6 +106,8 @@ fn main() -> Unit {
     Log.write(message: read String.trim_end(value: read "right  "))
     Log.write(message: read String.pad_left(value: read "7", width: 3, fill: read "0"))
     Log.write(message: read String.pad_right(value: read "x", width: 3, fill: read "."))
+    Log.write(message: read String.pad_left(value: read "x", width: 2, fill: read "é"))
+    Log.write(message: read String.pad_right(value: read "x", width: 2, fill: read "é"))
     Log.write(message: read String.reverse(value: read "abc"))
     Log.write(message: read String.replace_first(value: read "one one", from: read "one", to: read "two"))
     Log.write(message: read String.from_int(value: String.count(value: read "banana", needle: read "an")))

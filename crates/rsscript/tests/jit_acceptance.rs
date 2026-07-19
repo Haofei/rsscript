@@ -5276,6 +5276,7 @@ fn main() -> Unit {
 /// path wins (and actually ran natively). Prints the measured speedup.
 #[cfg(feature = "native-jit")]
 #[test]
+#[ignore = "release-only performance gate"]
 fn native_self_recursion_perf_beats_baseline() {
     let source = "\
 fn fib(n: Int) -> Int {

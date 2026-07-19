@@ -392,7 +392,7 @@ pub(super) fn sorted_map_insert_in_place(
     backing: &mut Vec<VmValue>,
     key: VmValue,
     value: VmValue,
-) -> Result<(), EvalError> {
+) -> Result<bool, EvalError> {
     vm_value_cmp(&key, &key)?;
     let mut lo = 0;
     let mut hi = backing.len();
@@ -419,7 +419,7 @@ pub(super) fn sorted_map_insert_in_place(
                 } else {
                     pair.push(value);
                 }
-                return Ok(());
+                return Ok(false);
             }
         }
     }
@@ -429,7 +429,7 @@ pub(super) fn sorted_map_insert_in_place(
             key, value,
         ])))),
     );
-    Ok(())
+    Ok(true)
 }
 
 /// Binary-search a sorted-map backing by key and remove the entry, returning its

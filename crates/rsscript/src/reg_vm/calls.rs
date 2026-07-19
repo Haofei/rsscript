@@ -1,5 +1,118 @@
 use super::*;
 
+const NATIVE_VALUE_MAX_DEPTH: usize = 128;
+const NATIVE_VALUE_MAX_NODES: usize = 1_000_000;
+
+fn native_json_storage_estimate(
+    value: &serde_json::Value,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<usize, EvalError> {
+    if depth > NATIVE_VALUE_MAX_DEPTH {
+        return Err(EvalError::Runtime(
+            "native binding result exceeds the maximum value depth".into(),
+        ));
+    }
+    *nodes = nodes.saturating_add(1);
+    if *nodes > NATIVE_VALUE_MAX_NODES {
+        return Err(EvalError::Runtime(
+            "native binding result exceeds the maximum value node count".into(),
+        ));
+    }
+    Ok(match value {
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => 0,
+        serde_json::Value::String(value) => value.len(),
+        serde_json::Value::Array(values) => {
+            let mut bytes = values
+                .len()
+                .saturating_mul(std::mem::size_of::<serde_json::Value>());
+            for value in values {
+                bytes =
+                    bytes.saturating_add(native_json_storage_estimate(value, depth + 1, nodes)?);
+            }
+            bytes
+        }
+        serde_json::Value::Object(values) => {
+            let mut bytes = values.len().saturating_mul(MAP_ENTRY_BYTES);
+            for (key, value) in values {
+                bytes = bytes
+                    .saturating_add(key.len())
+                    .saturating_add(native_json_storage_estimate(value, depth + 1, nodes)?);
+            }
+            bytes
+        }
+    })
+}
+
+fn native_value_storage_estimate_inner(
+    value: &NativeValue,
+    depth: usize,
+    nodes: &mut usize,
+) -> Result<usize, EvalError> {
+    if depth > NATIVE_VALUE_MAX_DEPTH {
+        return Err(EvalError::Runtime(
+            "native binding result exceeds the maximum value depth".into(),
+        ));
+    }
+    *nodes = nodes.saturating_add(1);
+    if *nodes > NATIVE_VALUE_MAX_NODES {
+        return Err(EvalError::Runtime(
+            "native binding result exceeds the maximum value node count".into(),
+        ));
+    }
+    Ok(match value {
+        NativeValue::Unit
+        | NativeValue::Int(_)
+        | NativeValue::Float(_)
+        | NativeValue::Bool(_)
+        | NativeValue::Char(_) => 0,
+        NativeValue::String(value) => value.len(),
+        NativeValue::Bytes(value) => value.capacity(),
+        NativeValue::List(values) => {
+            let mut bytes = values.len().saturating_mul(std::mem::size_of::<VmValue>());
+            for value in values {
+                bytes = bytes.saturating_add(native_value_storage_estimate_inner(
+                    value,
+                    depth + 1,
+                    nodes,
+                )?);
+            }
+            bytes
+        }
+        NativeValue::Map(entries) => {
+            let mut bytes = entries.len().saturating_mul(MAP_ENTRY_BYTES);
+            for (key, value) in entries {
+                bytes = bytes
+                    .saturating_add(native_value_storage_estimate_inner(key, depth + 1, nodes)?)
+                    .saturating_add(native_value_storage_estimate_inner(
+                        value,
+                        depth + 1,
+                        nodes,
+                    )?);
+            }
+            bytes
+        }
+        NativeValue::Json(value) => native_json_storage_estimate(value, depth + 1, nodes)?,
+        NativeValue::Struct { name, fields } | NativeValue::Variant { name, fields } => {
+            let mut bytes = name
+                .len()
+                .saturating_add(fields.len().saturating_mul(std::mem::size_of::<VmValue>()));
+            for (field, value) in fields {
+                bytes = bytes.saturating_add(field.len()).saturating_add(
+                    native_value_storage_estimate_inner(value, depth + 1, nodes)?,
+                );
+            }
+            bytes
+        }
+        NativeValue::Native { type_name, .. } => type_name.len(),
+    })
+}
+
+fn native_value_storage_estimate(value: &NativeValue) -> Result<usize, EvalError> {
+    let mut nodes = 0;
+    native_value_storage_estimate_inner(value, 0, &mut nodes)
+}
+
 #[derive(Clone)]
 pub(super) struct PureClosurePlan {
     regs: usize,
@@ -147,7 +260,11 @@ impl RegVm {
 
         // No `mut` params: the binding returns its result directly.
         if mut_args.is_empty() {
-            return vm_value_from_native_value(raw);
+            let bytes = native_value_storage_estimate(&raw)?;
+            self.ensure_memory_available(bytes)?;
+            let value = vm_value_from_native_value(raw)?;
+            self.account_bytes(bytes)?;
+            return Ok(value);
         }
 
         // With `mut` params the shim returns an envelope `List[result, mutated...]`
@@ -166,11 +283,18 @@ impl RegVm {
             )));
         }
         let mutated: Vec<NativeValue> = envelope.split_off(1);
-        let result = vm_value_from_native_value(envelope.pop().unwrap_or(NativeValue::Unit))?;
+        let result_raw = envelope.pop().unwrap_or(NativeValue::Unit);
+        let mut bytes = native_value_storage_estimate(&result_raw)?;
+        for value in &mutated {
+            bytes = bytes.saturating_add(native_value_storage_estimate(value)?);
+        }
+        self.ensure_memory_available(bytes)?;
+        let result = vm_value_from_native_value(result_raw)?;
         let mutated = mutated
             .into_iter()
             .map(vm_value_from_native_value)
             .collect::<Result<Vec<_>, _>>()?;
+        self.account_bytes(bytes)?;
         for (position, value) in mut_args.iter().zip(mutated) {
             let reg = base + args[*position];
             self.set_reg(reg, value);

@@ -387,7 +387,7 @@ pub struct HostHelpers {
 /// producer (`rsscript`) translates its private bytecode into this stable,
 /// versioned surface, so the two crates are decoupled: a breaking IR change bumps
 /// this and the producer is updated in lock-step.
-pub const IR_VERSION: u32 = 21;
+pub const IR_VERSION: u32 = 22;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostFailureMode {
@@ -1554,6 +1554,10 @@ pub struct JitFunction {
     pub n_regs: u32,
     /// Storage class per register index (length `n_regs`).
     pub reg_types: Vec<JitValueType>,
+    /// Non-parameter scalar scratch registers whose entry value is defined as zero.
+    /// Producers must list a register here when a transform intentionally needs a
+    /// typed placeholder on a path where the logical value is absent.
+    pub zero_init_regs: Vec<u32>,
     pub code: Vec<JitInstr>,
     /// Instruction indices that should start cold blocks. Producers may populate
     /// this from dynamic profile feedback; codegen treats it as a layout hint only.
@@ -3076,6 +3080,33 @@ pub fn signal_bail() {
     BAIL_FLAG.with(|flag| flag.set(1));
 }
 
+fn check_zero_init_reg(program: &JitFunction, reg: u32) -> Result<(), JitError> {
+    if reg >= program.n_regs {
+        return Err(JitError(format!(
+            "zero-initialized register {reg} is out of range (n_regs {})",
+            program.n_regs
+        )));
+    }
+    if reg < program.n_params {
+        return Err(JitError(format!(
+            "parameter register {reg} cannot be declared zero-initialized"
+        )));
+    }
+    if matches!(
+        program.reg_types[reg as usize],
+        JitValueType::Handle
+            | JitValueType::FlatInt
+            | JitValueType::FlatIntMut
+            | JitValueType::FlatFloat
+            | JitValueType::FlatFloatMut
+    ) {
+        return Err(JitError(format!(
+            "zero-initialized register {reg} must have a scalar type"
+        )));
+    }
+    Ok(())
+}
+
 /// Validate public IR before codegen. `build_function` assumes well-formed input
 /// (it indexes `reg_types`/`code` directly and relies on Cranelift register types
 /// matching each opcode); this turns every such assumption into a clean
@@ -3087,6 +3118,10 @@ pub fn signal_bail() {
 /// `Int`, comparisons yield an `Int` boolean, and `Handle` registers are only valid
 /// as the `base` of a heap read.
 fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
+    const MAX_JIT_REGS: usize = 65_536;
+    const MAX_JIT_PARAMS: usize = 16_384;
+    const MAX_JIT_INSTRUCTIONS: usize = 1_000_000;
+
     let n_regs = program.n_regs as usize;
     let n = program.code.len();
 
@@ -3101,6 +3136,25 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             "n_params {} exceeds n_regs {n_regs}",
             program.n_params
         )));
+    }
+    if n_regs > MAX_JIT_REGS {
+        return Err(JitError(format!(
+            "n_regs {n_regs} exceeds the JIT limit {MAX_JIT_REGS}"
+        )));
+    }
+    if program.n_params as usize > MAX_JIT_PARAMS {
+        return Err(JitError(format!(
+            "n_params {} exceeds the JIT limit {MAX_JIT_PARAMS}",
+            program.n_params
+        )));
+    }
+    if n > MAX_JIT_INSTRUCTIONS {
+        return Err(JitError(format!(
+            "code length {n} exceeds the JIT limit {MAX_JIT_INSTRUCTIONS}"
+        )));
+    }
+    for &reg in &program.zero_init_regs {
+        check_zero_init_reg(program, reg)?;
     }
     for &cold_ip in &program.cold_blocks {
         if (cold_ip as usize) >= n {
@@ -3688,6 +3742,66 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             Some(_) => {}
         }
     }
+
+    let assigned_in = definite_assignment(program, osr);
+    for (ip, instr) in program.code.iter().enumerate() {
+        if !reachable[ip] {
+            continue;
+        }
+        for used in instr_uses(instr) {
+            if !assigned_in[ip][used as usize] {
+                return Err(JitError(format!(
+                    "instruction {ip} reads register {used} before it is definitely assigned"
+                )));
+            }
+        }
+    }
+
+    let has_call_self = program
+        .code
+        .iter()
+        .enumerate()
+        .any(|(ip, instr)| reachable[ip] && matches!(instr, JitInstr::CallSelf { .. }));
+    if has_call_self {
+        let Some(return_type) = reachable_return_type else {
+            return Err(JitError(
+                "CallSelf requires a reachable function Return".into(),
+            ));
+        };
+        if program.reg_types[..program.n_params as usize]
+            .iter()
+            .any(|ty| is_flat_type(*ty))
+        {
+            return Err(JitError(
+                "CallSelf does not support flat-array parameters".into(),
+            ));
+        }
+        for (ip, instr) in program.code.iter().enumerate() {
+            let JitInstr::CallSelf { dst, .. } = instr else {
+                continue;
+            };
+            if reachable[ip] && program.reg_types[*dst as usize] != return_type {
+                return Err(JitError(format!(
+                    "CallSelf result register {dst} is {:?}, function returns {return_type:?}",
+                    program.reg_types[*dst as usize]
+                )));
+            }
+        }
+    }
+
+    if (has_call_self
+        || program
+            .code
+            .iter()
+            .any(|instr| matches!(instr, JitInstr::CallGroup { .. })))
+        && native_recursion_frame_bytes_estimate(program) > NATIVE_RECURSION_STACK_BUDGET_BYTES
+    {
+        return Err(JitError(format!(
+            "recursive native frame estimate {} bytes exceeds the {} byte stack budget",
+            native_recursion_frame_bytes_estimate(program),
+            NATIVE_RECURSION_STACK_BUDGET_BYTES
+        )));
+    }
     Ok(())
 }
 
@@ -3777,6 +3891,68 @@ fn instr_def(instr: &JitInstr) -> Option<u32> {
     }
 }
 
+/// Registers whose current values are semantically consumed by `instr`.
+/// Scratch/cache destinations owned by an instruction are intentionally excluded.
+fn instr_uses(instr: &JitInstr) -> Vec<u32> {
+    match instr {
+        JitInstr::Nop
+        | JitInstr::TailCallGuard { .. }
+        | JitInstr::LoadInt { .. }
+        | JitInstr::LoadFloat { .. }
+        | JitInstr::LoadBool { .. }
+        | JitInstr::Jump { .. }
+        | JitInstr::Bail
+        | JitInstr::OsrExit => Vec::new(),
+        JitInstr::Move { src, .. }
+        | JitInstr::IntToFloat { src, .. }
+        | JitInstr::FloatToInt { src, .. }
+        | JitInstr::Return { src } => vec![*src],
+        JitInstr::Add { lhs, rhs, .. }
+        | JitInstr::Sub { lhs, rhs, .. }
+        | JitInstr::Mul { lhs, rhs, .. }
+        | JitInstr::Div { lhs, rhs, .. }
+        | JitInstr::Mod { lhs, rhs, .. }
+        | JitInstr::BitAnd { lhs, rhs, .. }
+        | JitInstr::BitOr { lhs, rhs, .. }
+        | JitInstr::BitXor { lhs, rhs, .. }
+        | JitInstr::Shl { lhs, rhs, .. }
+        | JitInstr::Shr { lhs, rhs, .. }
+        | JitInstr::Compare { lhs, rhs, .. }
+        | JitInstr::Equal { lhs, rhs, .. }
+        | JitInstr::NotEqual { lhs, rhs, .. }
+        | JitInstr::JumpIfIntCompare { lhs, rhs, .. }
+        | JitInstr::ProfiledJumpIfIntCompare { lhs, rhs, .. } => vec![*lhs, *rhs],
+        JitInstr::HostCall { args, .. } | JitInstr::MemoizedHostCall { args, .. } => args
+            .iter()
+            .filter_map(|arg| match arg {
+                HostArg::Reg(reg) => Some(*reg),
+                HostArg::ImmI64(_) => None,
+            })
+            .collect(),
+        JitInstr::CallNative { args, .. }
+        | JitInstr::CallSelf { args, .. }
+        | JitInstr::CallGroup { args, .. } => args.clone(),
+        JitInstr::MatchMapGetInt { map, key, .. }
+        | JitInstr::MatchMapGetFloat { map, key, .. }
+        | JitInstr::MatchSortedMapGetInt { map, key, .. }
+        | JitInstr::MatchSortedMapGetFloat { map, key, .. } => vec![*map, *key],
+        JitInstr::JumpIfBool { cond, .. } | JitInstr::ProfiledJumpIfBool { cond, .. } => {
+            vec![*cond]
+        }
+        JitInstr::ListGetIntDirect { base, index, .. }
+        | JitInstr::ListGetFloatDirect { base, index, .. } => vec![*base, *index],
+        JitInstr::ListSetIntDirect {
+            base, index, value, ..
+        }
+        | JitInstr::ListSetFloatDirect {
+            base, index, value, ..
+        } => vec![*base, *index, *value],
+        JitInstr::ListLenDirect { base, .. }
+        | JitInstr::ListIsEmptyDirect { base, .. }
+        | JitInstr::GuardClosureId { base, .. } => vec![*base],
+    }
+}
+
 /// The control-flow successors of instruction `i` (indices into `program.code`):
 /// fallthrough to `i + 1` unless `i` is an unconditional `Jump`; conditional
 /// branches add their target; `Jump` goes only to its target; `Return`/`Bail` (and
@@ -3851,7 +4027,7 @@ fn successors(program: &JitFunction, i: usize) -> Vec<usize> {
 /// it). Non-entry `assigned_in` starts at the full set and the intersection shrinks
 /// it to the fixpoint; instruction 0's entry set is the params and is never
 /// intersected down.
-fn definite_assignment(program: &JitFunction) -> Vec<Vec<bool>> {
+fn definite_assignment(program: &JitFunction, osr_entry: bool) -> Vec<Vec<bool>> {
     let n = program.code.len();
     let n_regs = program.n_regs as usize;
     if n == 0 {
@@ -3867,12 +4043,17 @@ fn definite_assignment(program: &JitFunction) -> Vec<Vec<bool>> {
     }
 
     // Entry set for instruction 0: the parameters are assigned, nothing else.
-    let mut entry0 = vec![false; n_regs];
-    for slot in entry0
-        .iter_mut()
-        .take((program.n_params as usize).min(n_regs))
-    {
-        *slot = true;
+    let mut entry0 = vec![osr_entry; n_regs];
+    if !osr_entry {
+        for slot in entry0
+            .iter_mut()
+            .take((program.n_params as usize).min(n_regs))
+        {
+            *slot = true;
+        }
+        for &reg in &program.zero_init_regs {
+            entry0[reg as usize] = true;
+        }
     }
 
     // `assigned_in[0]` is pinned to the params; every other block starts at the
@@ -4428,11 +4609,6 @@ fn push_compiled_abi_signature(
 /// property — never overflow before bailing — without per-call SP plumbing.)
 const NATIVE_RECURSION_STACK_BUDGET_BYTES: i64 = 1 << 20; // 1 MiB
 
-/// Floor on the derived cap: never bail before a useful amount of native recursion,
-/// even for a wide-frame function (it still can't overflow — the floor times the
-/// largest plausible frame stays under the budget by construction of the ceiling).
-const NATIVE_RECURSION_DEPTH_CAP_MIN: i64 = 16;
-
 /// Ceiling on the derived cap. Small scalar recursive frames (a few hundred bytes)
 /// derive a cap far above any reasonable host-stack-safe depth, so we clamp to this
 /// historically-validated value — which also keeps small-frame behaviour identical
@@ -4449,21 +4625,33 @@ const NATIVE_RECURSION_DEPTH_CAP_MAX: i64 = 250;
 /// whose whole job is to bail before the stack overflows.
 fn native_recursion_frame_bytes_estimate(program: &JitFunction) -> i64 {
     const SLOT_BYTES: i64 = 8;
-    const FIXED_OVERHEAD_BYTES: i64 = 512;
+    const FIXED_OVERHEAD_BYTES: i64 = 4096;
     let regs = program.n_regs as i64;
-    FIXED_OVERHEAD_BYTES + SLOT_BYTES * regs * 2
+    let explicit_slots = program.code.iter().fold(0_i64, |total, instr| {
+        let words = match instr {
+            JitInstr::CallSelf { args, .. } => {
+                (args.len() as i64).saturating_mul(2).saturating_add(1)
+            }
+            JitInstr::CallGroup { args, .. } => (args.len() as i64)
+                .saturating_mul(2)
+                .saturating_add(regs)
+                .saturating_add(3),
+            _ => 0,
+        };
+        total.saturating_add(words.saturating_mul(SLOT_BYTES))
+    });
+    FIXED_OVERHEAD_BYTES
+        .saturating_add(SLOT_BYTES.saturating_mul(regs).saturating_mul(4))
+        .saturating_add(explicit_slots)
 }
 
 /// Derive the native recursion depth cap from a per-call frame estimate and the
-/// fixed stack budget, clamped to `[MIN, MAX]`. Frame-size-aware so a wide-frame
+/// fixed stack budget, clamped to `[0, MAX]`. Frame-size-aware so a wide-frame
 /// recursive function bails sooner than a scalar one instead of sharing one
 /// frame-blind constant.
 fn native_recursion_depth_cap(program: &JitFunction) -> i64 {
     let frame = native_recursion_frame_bytes_estimate(program).max(1);
-    (NATIVE_RECURSION_STACK_BUDGET_BYTES / frame).clamp(
-        NATIVE_RECURSION_DEPTH_CAP_MIN,
-        NATIVE_RECURSION_DEPTH_CAP_MAX,
-    )
+    (NATIVE_RECURSION_STACK_BUDGET_BYTES / frame).min(NATIVE_RECURSION_DEPTH_CAP_MAX)
 }
 
 /// In-generated-code `VmLimits` enforcement requested for this compile (J0.5,
@@ -4505,7 +4693,7 @@ fn build_function(
     // Definite-assignment ("must") sets per instruction, computed once up front so
     // each bail site can record its live (entry-assigned) registers. Purely
     // host-side analysis — it shapes no emitted code.
-    let assigned_in = definite_assignment(program);
+    let assigned_in = definite_assignment(program, osr_header.is_some());
     // Forward integer-interval analysis (J4.3): per-instruction sound ranges for
     // Int registers, used purely to elide provably-non-overflowing checks. Like
     // `definite_assignment`, host-side only — it shapes no code beyond choosing the
@@ -4806,7 +4994,7 @@ fn build_function(
         let at_cap = bcx
             .ins()
             .icmp(IntCC::UnsignedGreaterThanOrEqual, native_call_depth, cap);
-        let too_deep = if native_static_call_depth == 0 {
+        let native_too_deep = if native_static_call_depth == 0 {
             at_cap
         } else {
             let deepest = bcx
@@ -4815,6 +5003,12 @@ fn build_function(
             let descendants_exceed_cap = bcx.ins().icmp(IntCC::UnsignedGreaterThan, deepest, cap);
             bcx.ins().bor(at_cap, descendants_exceed_cap)
         };
+        let logical_too_deep = bcx.ins().icmp(
+            IntCC::UnsignedGreaterThan,
+            logical_call_depth,
+            logical_depth_limit,
+        );
+        let too_deep = bcx.ins().bor(native_too_deep, logical_too_deep);
         let cont = bcx.create_block();
         bcx.ins().brif(too_deep, fallback, &[], cont, &[]);
         bcx.switch_to_block(cont);
@@ -6502,6 +6696,15 @@ mod tests {
     }
 
     #[test]
+    fn execution_spec_tracks_the_public_ir_version() {
+        let spec = include_str!("../../../docs/spec/RSScript_Execution_Spec_v0.1.md");
+        assert!(
+            spec.contains(&format!("`vm_jit::IR_VERSION`, currently `{IR_VERSION}`")),
+            "execution spec must name vm-jit's current public IR version"
+        );
+    }
+
+    #[test]
     fn host_helper_descriptor_table_is_complete_and_unique() {
         let helpers = HostHelper::all();
         assert_eq!(helpers.len(), HostHelper::DESCRIPTORS.len());
@@ -6932,6 +7135,7 @@ mod tests {
             n_params,
             n_regs,
             reg_types: vec![JitValueType::Int; n_regs as usize],
+            zero_init_regs: Vec::new(),
             code,
             cold_blocks: Vec::new(),
         }
@@ -6943,6 +7147,7 @@ mod tests {
             n_params,
             n_regs: reg_types.len() as u32,
             reg_types,
+            zero_init_regs: Vec::new(),
             code,
             cold_blocks: Vec::new(),
         }
@@ -7902,6 +8107,24 @@ mod tests {
             NativeOutcome::Completed(v) => assert_eq!(v, 5050),
             other => panic!("sum(100) expected Completed(5050), got {other:?}"),
         }
+
+        // The embedding supplies the logical depth of this callee. A callee that
+        // would already be beyond the language limit must bail even when it takes
+        // its immediate base case and performs no recursive child call.
+        assert!(matches!(
+            m.call_with_host_ctx_at_depth(
+                sum,
+                &[0],
+                &[0],
+                0,
+                &mut [],
+                LogicalCallDepth {
+                    current: 9,
+                    limit: 8,
+                },
+            ),
+            NativeOutcome::Deopt { .. }
+        ));
 
         // Recursion deeper than the cap bails cleanly (NO host-stack overflow / crash):
         // the entry depth guard deopts, which the host re-runs on the interpreter.
@@ -9885,6 +10108,7 @@ mod tests {
             n_params: 0,
             n_regs: 3,
             reg_types: vec![JitValueType::Int; 2],
+            zero_init_regs: Vec::new(),
             code: vec![],
             cold_blocks: Vec::new(),
         };
@@ -9917,6 +10141,93 @@ mod tests {
         ))
         .unwrap_err();
         assert!(err.0.contains("inconsistent result types"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_callself_result_type_mismatch() {
+        use JitValueType::{Float, Int};
+        let err = validate(&ft(
+            1,
+            vec![Int, Int, Float],
+            vec![
+                JitInstr::LoadInt { dst: 1, value: 0 },
+                JitInstr::CallSelf {
+                    dst: 2,
+                    args: vec![1],
+                },
+                JitInstr::Return { src: 1 },
+            ],
+        ))
+        .expect_err("CallSelf destination must match the function return type");
+        assert!(err.0.contains("CallSelf result"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_callself_flat_parameters_until_lengths_are_supported() {
+        use JitValueType::{FlatInt, Int};
+        let err = validate(&ft(
+            1,
+            vec![FlatInt, Int],
+            vec![
+                JitInstr::CallSelf {
+                    dst: 1,
+                    args: vec![0],
+                },
+                JitInstr::Return { src: 1 },
+            ],
+        ))
+        .expect_err("CallSelf must not silently discard flat lengths");
+        assert!(err.0.contains("flat-array parameters"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_reachable_use_before_definition() {
+        let err = validate(&f(0, 1, vec![JitInstr::Return { src: 0 }]))
+            .expect_err("undefined register reads must not become zero");
+        assert!(
+            err.0.contains("before it is definitely assigned"),
+            "{}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn permits_explicit_scalar_zero_initialized_scratch() {
+        let mut program = f(0, 1, vec![JitInstr::Return { src: 0 }]);
+        program.zero_init_regs.push(0);
+        validate(&program).expect("declared scalar scratch has defined zero entry value");
+    }
+
+    #[test]
+    fn rejects_zero_initialized_handle_scratch() {
+        let mut program = ft(
+            0,
+            vec![JitValueType::Handle],
+            vec![JitInstr::Return { src: 0 }],
+        );
+        program.zero_init_regs.push(0);
+        let err = validate(&program).expect_err("a zero word is not a valid heap handle");
+        assert!(err.0.contains("scalar type"), "{}", err.0);
+    }
+
+    #[test]
+    fn recursive_stack_cap_never_exceeds_estimated_budget() {
+        let args = (0..4096).collect::<Vec<_>>();
+        let program = f(
+            4096,
+            4097,
+            vec![
+                JitInstr::CallSelf { dst: 4096, args },
+                JitInstr::Return { src: 4096 },
+            ],
+        );
+        let frame = native_recursion_frame_bytes_estimate(&program);
+        let cap = native_recursion_depth_cap(&program);
+        assert!(cap >= 0);
+        assert!(
+            frame.saturating_mul(cap) <= NATIVE_RECURSION_STACK_BUDGET_BYTES,
+            "frame={frame} cap={cap}"
+        );
     }
 
     #[test]
@@ -10661,6 +10972,7 @@ mod tests {
             n_params,
             n_regs,
             reg_types,
+            zero_init_regs: Vec::new(),
             code,
             cold_blocks: Vec::new(),
         }
@@ -10767,6 +11079,7 @@ mod tests {
                 n_params,
                 n_regs,
                 reg_types,
+                zero_init_regs: Vec::new(),
                 code,
                 cold_blocks: Vec::new(),
             };

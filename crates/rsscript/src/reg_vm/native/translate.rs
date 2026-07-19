@@ -2058,6 +2058,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         n_params: func.params as u32,
         n_regs: native_reg_types.len() as u32,
         reg_types,
+        zero_init_regs: scalar_payload_regs.iter().map(|&reg| reg as u32).collect(),
         code: jit_code,
         cold_blocks: profile_guidance.cold_blocks,
     };
@@ -5062,6 +5063,7 @@ fn translate_osr_loop_inner(
         n_params: n_params as u32,
         n_regs: native_reg_types.len() as u32,
         reg_types,
+        zero_init_regs: Vec::new(),
         code: jit_code,
         cold_blocks,
     };
