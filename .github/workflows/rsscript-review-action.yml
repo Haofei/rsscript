@@ -32,7 +32,7 @@ jobs:
         id: smoke
         # The review implementation comes from the protected branch, not the
         # pull request checkout being reviewed.
-        uses: Haofei/rsscript/.github/actions/rsscript-review@main
+        uses: Haofei/rsscript/.github/actions/rsscript-review@036f576f389a8001916b851440dc2578f0c8cdd9
         with:
           head: examples/packages/code-agent
           grants: examples/demos/s3-iam-reir/expected/prod-grants.reir.json
@@ -44,7 +44,7 @@ jobs:
       - name: Policy-only failure is not swallowed
         id: policy_failure
         continue-on-error: true
-        uses: Haofei/rsscript/.github/actions/rsscript-review@main
+        uses: Haofei/rsscript/.github/actions/rsscript-review@036f576f389a8001916b851440dc2578f0c8cdd9
         with:
           head: packages/test-runner
           grants: examples/demos/s3-iam-reir/expected/prod-grants.reir.json
@@ -68,7 +68,7 @@ jobs:
       - name: Unverified-capability failure is not swallowed
         id: unverified_failure
         continue-on-error: true
-        uses: Haofei/rsscript/.github/actions/rsscript-review@main
+        uses: Haofei/rsscript/.github/actions/rsscript-review@036f576f389a8001916b851440dc2578f0c8cdd9
         with:
           head: packages/core/crypto
           grants: examples/demos/s3-iam-reir/expected/prod-grants.reir.json
