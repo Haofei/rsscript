@@ -944,6 +944,58 @@ native fn Native.echo(message: read String) -> String
 }
 
 #[test]
+fn package_check_rejects_unsupported_native_binding_types() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-check-native-binding-type");
+    common::write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_config_native"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+struct Config
+
+native fn Native.load(config: read Config) -> Result<Int, Config>
+    effects(native)
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
+    fs::write(
+        temp_dir.join("native/bindings.rssbind.toml"),
+        r#"[bindings]
+"Native.load" = "rss_config_native::load"
+"#,
+    )
+    .expect("native binding manifest should be written");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_config_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml should be written");
+    fs::write(
+        temp_dir.join("native/rust/src/lib.rs"),
+        "pub fn load() {}\n",
+    )
+    .expect("native source should be written");
+
+    let check = check_package_dir(&temp_dir).expect("package check should complete");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(!check.ok);
+    assert!(check.diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "PKG0601"
+            && diagnostic.label == "unsupported native binding type"
+            && diagnostic.summary.contains("parameter `config`")
+    }));
+}
+
+#[test]
 fn package_check_reports_native_binding_crate_mismatch() {
     let temp_dir = common::unique_temp_dir("rsscript-package-check-native-binding-crate");
     common::write_package_fixture(

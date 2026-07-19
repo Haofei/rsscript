@@ -51,6 +51,10 @@ fn package_publish_archive_excludes_generated_review_artifacts() {
         publish.archive_hash,
         publish_before_ci_artifacts.archive_hash
     );
+    assert!(publish.checks.iter().any(|check| {
+        check.name == "package archive manifest deterministic"
+            && check.detail.contains("sorted into canonical")
+    }));
     assert!(!archive_paths.contains(&"review/package-review.json"));
     assert!(!archive_paths.contains(&"review/reir/rsscript.json"));
     assert!(!archive_paths.contains(&"review/reir/rsscript-check.json"));

@@ -2097,6 +2097,7 @@ dependencies = [
  "fs2",
  "hex",
  "hmac",
+ "libc",
  "percent-encoding",
  "proptest",
  "rand 0.8.6",

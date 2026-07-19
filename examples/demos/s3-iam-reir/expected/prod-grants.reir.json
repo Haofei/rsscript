@@ -12,9 +12,9 @@
   ],
   "subjects": [
     {
-      "kind": "cloud.policy",
-      "id": "terraform::aws_iam_role_policy.report_uploader",
-      "name": "aws_iam_role_policy.report_uploader",
+      "kind": "cloud.role",
+      "id": "prod/report-uploader",
+      "name": "report-uploader",
       "package": "terraform"
     }
   ],
@@ -26,9 +26,9 @@
       "kind": "capability",
       "role": "granted",
       "subject": {
-        "kind": "cloud.policy",
-        "id": "terraform::aws_iam_role_policy.report_uploader",
-        "name": "aws_iam_role_policy.report_uploader",
+        "kind": "cloud.role",
+        "id": "prod/report-uploader",
+        "name": "report-uploader",
         "package": "terraform"
       },
       "capability": {
@@ -56,6 +56,7 @@
           "resource": "arn:aws:s3:::reports-prod/*",
           "provider": "aws",
           "source": "terraform_iac",
+          "principal": "prod/report-uploader",
           "statement_index": 0,
           "action": "s3:PutObject"
         }

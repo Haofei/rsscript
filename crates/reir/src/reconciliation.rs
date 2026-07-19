@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Capability, Evidence, Fact};
+use crate::{Capability, Evidence, Fact, FactRole, FactValue, GateFactDomain};
 
 /// Compares facts with compatible capability keys and subject chains.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,16 +91,52 @@ pub fn reconcile_capabilities_for_target(
     granted: &[Fact],
     target: Option<&str>,
 ) -> Vec<Reconciliation> {
+    reconcile_capabilities_impl(required, granted, target, None, false)
+}
+
+pub fn reconcile_capabilities_for_gate(
+    required: &[Fact],
+    granted: &[Fact],
+    target: Option<&str>,
+    principal: Option<&str>,
+) -> Vec<Reconciliation> {
+    reconcile_capabilities_impl(required, granted, target, principal, true)
+}
+
+fn reconcile_capabilities_impl(
+    required: &[Fact],
+    granted: &[Fact],
+    target: Option<&str>,
+    principal: Option<&str>,
+    validate_input: bool,
+) -> Vec<Reconciliation> {
     let mut results = Vec::new();
     let target = target.map(str::to_owned);
 
     let required_with_capability: Vec<&Fact> = required
         .iter()
-        .filter(|fact| fact.capability.is_some())
+        .filter(|fact| {
+            fact.kind == crate::FactKind::Capability
+                && fact.role == Some(FactRole::Required)
+                && fact.capability.is_some()
+        })
         .collect();
     let granted_with_capability: Vec<&Fact> = granted
         .iter()
-        .filter(|fact| fact.capability.is_some())
+        .filter(|fact| {
+            fact.kind == crate::FactKind::Capability
+                && fact.role == Some(FactRole::Granted)
+                && fact.capability.is_some()
+        })
+        .collect();
+    let denied_with_capability: Vec<&Fact> = granted
+        .iter()
+        .filter(|fact| {
+            fact.kind == crate::FactKind::Capability
+                && fact.role == Some(FactRole::Denied)
+                && fact.capability.is_some()
+                && fact.value == FactValue::True
+        })
         .collect();
 
     for required_fact in &required_with_capability {
@@ -108,20 +144,85 @@ pub fn reconcile_capabilities_for_target(
             .capability
             .as_ref()
             .expect("filtered required fact should have capability");
+        if required_fact.value == FactValue::False {
+            continue;
+        }
+        let required_valid = !validate_input
+            || required_fact
+                .validate_for_gate(FactRole::Required, GateFactDomain::Requirement)
+                .is_empty();
         let matching_grants: Vec<&Fact> = granted_with_capability
             .iter()
             .copied()
             .filter(|granted_fact| {
-                granted_fact
-                    .capability
-                    .as_ref()
-                    .is_some_and(|granted_capability| {
-                        capability_covers(granted_capability, required_capability)
+                granted_fact.value == FactValue::True
+                    && principal.is_none_or(|id| granted_fact.matches_gate_principal(id))
+                    && !granted_fact.is_unknown_for_gate()
+                    && (!validate_input
+                        || granted_fact
+                            .validate_for_gate(FactRole::Granted, GateFactDomain::DeploymentGrant)
+                            .is_empty())
+                    && granted_fact
+                        .capability
+                        .as_ref()
+                        .is_some_and(|granted_capability| {
+                            capability_covers(granted_capability, required_capability)
+                        })
+                    && !denied_with_capability.iter().any(|denied_fact| {
+                        principal.is_none_or(|id| denied_fact.matches_gate_principal(id))
+                            && denied_fact.capability.as_ref().is_some_and(|denied| {
+                                capability_covers(denied, required_capability)
+                            })
                     })
             })
             .collect();
 
-        if matching_grants.is_empty() {
+        let has_unknown_coverage = !required_valid
+            || required_fact.is_unknown_for_gate()
+            || granted_with_capability.iter().any(|granted_fact| {
+                principal.is_none_or(|id| granted_fact.matches_gate_principal(id))
+                    && granted_fact
+                        .capability
+                        .as_ref()
+                        .is_some_and(|grant| capability_key_compatible(grant, required_capability))
+                    && (granted_fact.is_unknown_for_gate()
+                        || (validate_input
+                            && !granted_fact
+                                .validate_for_gate(
+                                    FactRole::Granted,
+                                    GateFactDomain::DeploymentGrant,
+                                )
+                                .is_empty()))
+            });
+
+        if matching_grants.is_empty() && has_unknown_coverage {
+            results.push(Reconciliation {
+                schema: "reir.reconciliation.v0.1".to_string(),
+                id: format!("recon.unknown.{}", required_fact.id),
+                kind: ReconciliationKind::UnknownCoverage,
+                status: ReconciliationStatus::Unknown,
+                target: target.clone(),
+                subject_chain: None,
+                required_fact: Some(required_fact.id.clone()),
+                granted_facts: granted_with_capability
+                    .iter()
+                    .filter(|fact| {
+                        fact.capability.as_ref().is_some_and(|grant| {
+                            capability_key_compatible(grant, required_capability)
+                        })
+                    })
+                    .map(|fact| fact.id.clone())
+                    .collect(),
+                observed_fact: None,
+                capability: Some(required_capability.clone()),
+                risk: Some(ReconciliationRisk {
+                    class: RiskClass::Modeling,
+                    severity: RiskSeverity::Unknown,
+                    reason: Some("gate_input_cannot_prove_capability_coverage".to_string()),
+                }),
+                evidence: required_fact.evidence.clone(),
+            });
+        } else if matching_grants.is_empty() {
             results.push(Reconciliation {
                 schema: "reir.reconciliation.v0.1".to_string(),
                 id: format!("recon.missing.{}", required_fact.id),
@@ -166,17 +267,28 @@ pub fn reconcile_capabilities_for_target(
     }
 
     for granted_fact in &granted_with_capability {
+        if granted_fact.value != FactValue::True
+            || principal.is_some_and(|id| !granted_fact.matches_gate_principal(id))
+            || granted_fact.is_unknown_for_gate()
+            || (validate_input
+                && !granted_fact
+                    .validate_for_gate(FactRole::Granted, GateFactDomain::DeploymentGrant)
+                    .is_empty())
+        {
+            continue;
+        }
         let granted_capability = granted_fact
             .capability
             .as_ref()
             .expect("filtered granted fact should have capability");
         let matches_any_required = required_with_capability.iter().any(|required_fact| {
-            required_fact
-                .capability
-                .as_ref()
-                .is_some_and(|required_capability| {
-                    capability_covers(granted_capability, required_capability)
-                })
+            required_fact.value == FactValue::True
+                && required_fact
+                    .capability
+                    .as_ref()
+                    .is_some_and(|required_capability| {
+                        capability_covers(granted_capability, required_capability)
+                    })
         });
 
         if !matches_any_required {
@@ -210,6 +322,26 @@ fn capability_covers(granted: &Capability, required: &Capability) -> bool {
         && optional_field_covers(granted.service.as_deref(), required.service.as_deref())
         && action_covers(granted.action.as_deref(), required.action.as_deref())
         && resource_covers(granted.resource.as_deref(), required.resource.as_deref())
+        && constraints_cover(&granted.constraints, &required.constraints)
+}
+
+fn capability_key_compatible(granted: &Capability, required: &Capability) -> bool {
+    granted.category == required.category
+        && optional_field_covers(granted.provider.as_deref(), required.provider.as_deref())
+        && optional_field_covers(granted.service.as_deref(), required.service.as_deref())
+        && action_covers(granted.action.as_deref(), required.action.as_deref())
+        && resource_covers(granted.resource.as_deref(), required.resource.as_deref())
+}
+
+fn constraints_cover(
+    granted: &std::collections::HashMap<String, String>,
+    required: &std::collections::HashMap<String, String>,
+) -> bool {
+    required.iter().all(|(key, required_value)| {
+        granted
+            .get(key)
+            .is_some_and(|value| value == "*" || value == required_value)
+    }) && granted.keys().all(|key| required.contains_key(key))
 }
 
 fn optional_field_covers(granted: Option<&str>, required: Option<&str>) -> bool {
@@ -248,8 +380,8 @@ fn resource_covers(granted: Option<&str>, required: Option<&str>) -> bool {
         // A grant with no resource is unknown, not a wildcard — it does not cover
         // a requirement that names a specific resource.
         (None, Some(_)) => false,
-        // A grant scoped to a specific resource covers an unconstrained requirement.
-        (Some(_), None) => true,
+        // A narrow grant cannot prove coverage of a broad requirement.
+        (Some(_), None) => false,
         (Some(granted), Some(required)) if granted == required => true,
         // Explicit prefix wildcard, e.g. `arn:aws:s3:::bucket/*`.
         (Some(granted), Some(required)) if granted.ends_with('*') => {
@@ -377,6 +509,13 @@ mod tests {
         }];
         let granted = vec![Fact {
             capability: Some(capability("s3")),
+            role: Some(FactRole::Granted),
+            subject: Subject {
+                kind: SubjectKind::CloudRole,
+                id: "role".to_string(),
+                name: None,
+                package: None,
+            },
             ..required[0].clone()
         }];
         let results = reconcile_capabilities(&required, &granted);
@@ -384,6 +523,123 @@ mod tests {
             results
                 .iter()
                 .any(|r| matches!(r.kind, ReconciliationKind::MissingCapability))
+        );
+    }
+
+    #[test]
+    fn specific_resource_does_not_cover_unconstrained_requirement() {
+        let grant = capability("s3");
+        let mut required = grant.clone();
+        required.resource = None;
+        assert!(!capability_covers(&grant, &required));
+    }
+
+    #[test]
+    fn constraints_must_be_at_least_as_permissive() {
+        let mut required = capability("s3");
+        required
+            .constraints
+            .insert("region".to_string(), "us-west-2".to_string());
+        let mut grant = required.clone();
+        assert!(capability_covers(&grant, &required));
+        grant.constraints.clear();
+        assert!(!capability_covers(&grant, &required));
+        grant
+            .constraints
+            .insert("region".to_string(), "*".to_string());
+        assert!(capability_covers(&grant, &required));
+    }
+
+    #[test]
+    fn explicit_deny_takes_precedence_over_matching_grant() {
+        let required = Fact {
+            schema: "reir.fact.v0.1".to_string(),
+            id: "required".to_string(),
+            kind: FactKind::Capability,
+            role: Some(FactRole::Required),
+            subject: Subject {
+                kind: SubjectKind::CodeFunction,
+                id: "code::run".to_string(),
+                name: None,
+                package: None,
+            },
+            capability: Some(capability("s3")),
+            value: FactValue::True,
+            confidence: Confidence {
+                level: ConfidenceLevel::Computed,
+                source: Some("test".to_string()),
+            },
+            acquisition_mode: AcquisitionMode::SourceScan,
+            precision: Precision::ResourceScoped,
+            evidence: Vec::new(),
+            unknown_reason: None,
+        };
+        let grant_subject = Subject {
+            kind: SubjectKind::CloudRole,
+            id: "role.prod".to_string(),
+            name: None,
+            package: None,
+        };
+        let grant = Fact {
+            id: "grant".to_string(),
+            role: Some(FactRole::Granted),
+            subject: grant_subject.clone(),
+            ..required.clone()
+        };
+        let deny = Fact {
+            id: "deny".to_string(),
+            role: Some(FactRole::Denied),
+            subject: grant_subject,
+            ..grant.clone()
+        };
+        let results = reconcile_capabilities(&[required], &[grant, deny]);
+        assert!(
+            results
+                .iter()
+                .any(|result| result.kind == ReconciliationKind::MissingCapability)
+        );
+        assert!(
+            !results
+                .iter()
+                .any(|result| result.kind == ReconciliationKind::Covered)
+        );
+    }
+
+    #[test]
+    fn code_function_cannot_act_as_deployment_grant_principal() {
+        let mut fact = Fact {
+            schema: "reir.fact.v0.1".to_string(),
+            id: "grant".to_string(),
+            kind: FactKind::Capability,
+            role: Some(FactRole::Granted),
+            subject: Subject {
+                kind: SubjectKind::CodeFunction,
+                id: "code::run".to_string(),
+                name: None,
+                package: None,
+            },
+            capability: Some(capability("s3")),
+            value: FactValue::True,
+            confidence: Confidence {
+                level: ConfidenceLevel::Authoritative,
+                source: Some("test".to_string()),
+            },
+            acquisition_mode: AcquisitionMode::CloudPolicy,
+            precision: Precision::ResourceScoped,
+            evidence: Vec::new(),
+            unknown_reason: None,
+        };
+        let errors = fact.validate_for_gate(FactRole::Granted, GateFactDomain::DeploymentGrant);
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.reason.contains("deployment identity"))
+        );
+        fact.subject.kind = SubjectKind::CloudRole;
+        assert!(
+            fact.validate_for_gate(FactRole::Granted, GateFactDomain::DeploymentGrant)
+                .iter()
+                .all(|error| !error.reason.contains("deployment identity"))
         );
     }
 }

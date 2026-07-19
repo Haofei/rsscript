@@ -2,7 +2,10 @@ use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de};
 
-use crate::{AcquisitionMode, Capability, Confidence, Evidence, Precision, Subject};
+use crate::{
+    AcquisitionMode, Capability, Confidence, ConfidenceLevel, Evidence, Precision, Subject,
+    SubjectKind,
+};
 
 /// A review-relevant assertion about a subject.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -22,6 +25,165 @@ pub struct Fact {
     pub evidence: Vec<Evidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unknown_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateFactDomain {
+    Requirement,
+    DeploymentGrant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GateInputError {
+    pub fact_id: String,
+    pub reason: String,
+}
+
+impl Fact {
+    /// Validate a capability assertion before it is allowed to affect a gate.
+    /// Unknown/partial values remain valid inputs, but cannot prove coverage.
+    pub fn validate_for_gate(&self, role: FactRole, domain: GateFactDomain) -> Vec<GateInputError> {
+        let mut errors = Vec::new();
+        let mut reject = |reason: &str| {
+            errors.push(GateInputError {
+                fact_id: self.id.clone(),
+                reason: reason.to_owned(),
+            });
+        };
+
+        if self.kind != FactKind::Capability {
+            reject("gate capability input must have kind `capability`");
+        }
+        if self.role != Some(role) {
+            reject("gate capability input has the wrong or missing role");
+        }
+        if self.capability.is_none() {
+            reject("gate capability input is missing `capability`");
+        }
+        if self.id.trim().is_empty() || self.subject.id.trim().is_empty() {
+            reject("gate capability input has an empty fact or subject id");
+        }
+        if !subject_in_gate_domain(&self.subject.kind, domain) {
+            reject(match domain {
+                GateFactDomain::Requirement => {
+                    "required capability subject is outside the requirement domain"
+                }
+                GateFactDomain::DeploymentGrant => {
+                    "granted capability subject is not a deployment identity or environment"
+                }
+            });
+        }
+
+        let unknown = self.value.is_unknown_for_gate()
+            || matches!(
+                self.confidence.level,
+                ConfidenceLevel::Unknown | ConfidenceLevel::NotRun | ConfidenceLevel::Partial
+            );
+        if unknown && self.unknown_reason.as_deref().is_none_or(str::is_empty) {
+            reject("unknown or partial gate capability is missing `unknown_reason`");
+        }
+        if !unknown {
+            if self.confidence.source.as_deref().is_none_or(str::is_empty) {
+                reject("asserted gate capability is missing confidence source provenance");
+            }
+            if self.evidence.is_empty() {
+                reject("asserted gate capability is missing evidence provenance");
+            }
+            if matches!(
+                self.acquisition_mode,
+                AcquisitionMode::Unknown | AcquisitionMode::NotRun | AcquisitionMode::Extension(_)
+            ) {
+                reject("asserted gate capability has an unusable acquisition mode");
+            }
+            if matches!(self.confidence.level, ConfidenceLevel::Extension(_)) {
+                reject("asserted gate capability has an unsupported confidence level");
+            }
+        }
+
+        errors
+    }
+
+    pub fn is_unknown_for_gate(&self) -> bool {
+        self.value.is_unknown_for_gate()
+            || self.unknown_reason.is_some()
+            || matches!(
+                self.confidence.level,
+                ConfidenceLevel::Unknown
+                    | ConfidenceLevel::NotRun
+                    | ConfidenceLevel::Partial
+                    | ConfidenceLevel::Extension(_)
+            )
+    }
+
+    pub fn matches_gate_principal(&self, principal: &str) -> bool {
+        self.subject.id == principal
+            || self
+                .evidence
+                .iter()
+                .any(|evidence| evidence.principal.as_deref() == Some(principal))
+    }
+}
+
+impl FactValue {
+    pub fn is_unknown_for_gate(&self) -> bool {
+        matches!(self, Self::Unknown | Self::NotRun | Self::Partial)
+    }
+}
+
+fn subject_in_gate_domain(kind: &SubjectKind, domain: GateFactDomain) -> bool {
+    match domain {
+        GateFactDomain::Requirement => matches!(
+            kind,
+            SubjectKind::Application
+                | SubjectKind::Service
+                | SubjectKind::Entrypoint
+                | SubjectKind::CodeFile
+                | SubjectKind::CodeRegion
+                | SubjectKind::CodeModule
+                | SubjectKind::CodeFunction
+                | SubjectKind::CodePublicApi
+                | SubjectKind::CodeInterfaceSymbol
+                | SubjectKind::CodeType
+                | SubjectKind::CodeProtocol
+                | SubjectKind::CodeProtocolMethod
+                | SubjectKind::CodeProtocolImpl
+                | SubjectKind::Package
+                | SubjectKind::PackageVersion
+                | SubjectKind::PackageFeature
+                | SubjectKind::Dependency
+                | SubjectKind::DependencyEdge
+                | SubjectKind::BuildArtifact
+                | SubjectKind::BuildStep
+                | SubjectKind::ContainerImage
+                | SubjectKind::K8sDeployment
+                | SubjectKind::RuntimeWorkload
+                | SubjectKind::NativeBoundary
+                | SubjectKind::NativeModule
+                | SubjectKind::UnsafeBoundary
+        ),
+        GateFactDomain::DeploymentGrant => matches!(
+            kind,
+            SubjectKind::Service
+                | SubjectKind::ContainerImage
+                | SubjectKind::K8sCluster
+                | SubjectKind::K8sNamespace
+                | SubjectKind::K8sResource
+                | SubjectKind::K8sDeployment
+                | SubjectKind::K8sPodTemplate
+                | SubjectKind::K8sService
+                | SubjectKind::K8sServiceAccount
+                | SubjectKind::TerraformWorkspace
+                | SubjectKind::TerraformResource
+                | SubjectKind::CloudAccount
+                | SubjectKind::CloudProject
+                | SubjectKind::CloudIdentity
+                | SubjectKind::CloudRole
+                | SubjectKind::CloudPolicy
+                | SubjectKind::CloudPermission
+                | SubjectKind::RuntimeProcess
+                | SubjectKind::RuntimeWorkload
+        ),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

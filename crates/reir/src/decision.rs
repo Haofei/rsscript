@@ -1,8 +1,8 @@
 use serde::Serialize;
 
 use crate::{
-    AcquisitionMode, ConfidenceLevel, Evidence, Fact, FactKind, FactRole, FactValue,
-    Reconciliation, ReconciliationKind,
+    AcquisitionMode, Evidence, Fact, FactKind, FactRole, GateFactDomain, Reconciliation,
+    ReconciliationKind,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -29,6 +29,17 @@ impl Default for GatePolicy {
             fail_on_unknown: false,
             fail_on_excess: false,
             require_verified_capabilities: false,
+        }
+    }
+}
+
+impl GatePolicy {
+    pub fn production() -> Self {
+        Self {
+            fail_on_missing: true,
+            fail_on_unknown: true,
+            fail_on_excess: true,
+            require_verified_capabilities: true,
         }
     }
 }
@@ -116,6 +127,31 @@ pub fn decide_gate(
     reconciliations: &[Reconciliation],
     policy: GatePolicy,
 ) -> GateDecision {
+    decide_gate_impl(
+        required_facts,
+        granted_facts,
+        reconciliations,
+        policy,
+        false,
+    )
+}
+
+pub fn decide_validated_gate(
+    required_facts: &[Fact],
+    granted_facts: &[Fact],
+    reconciliations: &[Reconciliation],
+    policy: GatePolicy,
+) -> GateDecision {
+    decide_gate_impl(required_facts, granted_facts, reconciliations, policy, true)
+}
+
+fn decide_gate_impl(
+    required_facts: &[Fact],
+    granted_facts: &[Fact],
+    reconciliations: &[Reconciliation],
+    policy: GatePolicy,
+    validate_input: bool,
+) -> GateDecision {
     let mut blockers = Vec::new();
     let mut warnings = Vec::new();
 
@@ -134,6 +170,45 @@ pub fn decide_gate(
         }
     }
 
+    for (facts, role, domain) in validate_input
+        .then_some([
+            (
+                required_facts,
+                FactRole::Required,
+                GateFactDomain::Requirement,
+            ),
+            (
+                granted_facts,
+                FactRole::Granted,
+                GateFactDomain::DeploymentGrant,
+            ),
+        ])
+        .into_iter()
+        .flatten()
+    {
+        for fact in facts
+            .iter()
+            .filter(|fact| fact.kind == FactKind::Capability)
+        {
+            let expected_role = if domain == GateFactDomain::DeploymentGrant
+                && fact.role == Some(FactRole::Denied)
+            {
+                FactRole::Denied
+            } else {
+                role.clone()
+            };
+            for error in fact.validate_for_gate(expected_role, domain) {
+                blockers.push(GateIssue {
+                    kind: GateIssueKind::InvalidEvidence,
+                    message: format!("Invalid gate input `{}`: {}.", error.fact_id, error.reason),
+                    fact_id: Some(error.fact_id),
+                    capability: fact.capability.as_ref().map(capability_label),
+                    evidence: fact.evidence.clone(),
+                });
+            }
+        }
+    }
+
     for reconciliation in reconciliations {
         let (kind, message) = match reconciliation.kind {
             ReconciliationKind::MissingCapability => (
@@ -143,6 +218,10 @@ pub fn decide_gate(
             ReconciliationKind::ExcessCapability => (
                 GateIssueKind::ExcessCapability,
                 "Deployment grant exceeds the capabilities required by the code.",
+            ),
+            ReconciliationKind::UnknownCoverage => (
+                GateIssueKind::UnknownCapability,
+                "Capability coverage cannot be proven from the gate input.",
             ),
             _ => continue,
         };
@@ -159,11 +238,15 @@ pub fn decide_gate(
         let fails = match kind {
             GateIssueKind::MissingCapability => policy.fail_on_missing,
             GateIssueKind::ExcessCapability => policy.fail_on_excess,
+            GateIssueKind::UnknownCapability => policy.fail_on_unknown,
             _ => false,
         };
         if fails {
             blockers.push(issue);
-        } else if kind == GateIssueKind::ExcessCapability {
+        } else if matches!(
+            kind,
+            GateIssueKind::ExcessCapability | GateIssueKind::UnknownCapability
+        ) {
             warnings.push(issue);
         }
     }
@@ -172,9 +255,7 @@ pub fn decide_gate(
         .iter()
         .filter(|fact| is_capability_fact(fact, FactRole::Required))
     {
-        let unknown = fact.value == FactValue::Unknown
-            || fact.unknown_reason.is_some()
-            || fact.confidence.level == ConfidenceLevel::Unknown;
+        let unknown = fact.is_unknown_for_gate();
         if unknown {
             let issue = GateIssue {
                 kind: GateIssueKind::UnknownCapability,

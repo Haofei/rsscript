@@ -1,10 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::diagnostic::{Diagnostic, code};
 
 use super::source_set::{
-    LoadedPackage, Manifest, ManifestReviewFeaturePolicy, PackageSource, load_package_manifest,
+    Manifest, ManifestReviewFeaturePolicy, PackageSource, load_package_manifest,
     load_package_with_features, resolve_package_features,
 };
 use super::{PackageReviewFileKind, canonical_path_label, toml_value_label};
@@ -21,18 +21,203 @@ pub(super) struct PackageDependencySpec {
     pub(super) platform_provided: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DependencyResolutionScope {
+    Production,
+    Development,
+}
+
+#[derive(Debug)]
+pub(super) struct ResolvedDependencyGraph {
+    pub(super) root: String,
+    pub(super) nodes: BTreeMap<String, ResolvedDependencyNode>,
+}
+
+#[derive(Debug)]
+pub(super) struct ResolvedDependencyNode {
+    pub(super) package_dir: PathBuf,
+    pub(super) manifest: Manifest,
+    pub(super) features: Vec<String>,
+    pub(super) dependencies: Vec<ResolvedDependencyEdge>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ResolvedDependencyEdge {
+    pub(super) spec: PackageDependencySpec,
+    pub(super) kind: super::PackageDependencyKind,
+    pub(super) target: Option<String>,
+}
+
+pub(super) fn resolve_dependency_graph(
+    package_dir: &Path,
+    scope: DependencyResolutionScope,
+) -> Result<ResolvedDependencyGraph, String> {
+    let root = canonical_path_label(package_dir);
+    let root_manifest = load_package_manifest(package_dir)?;
+    let root_features = super::source_set::selected_root_package_features(&root_manifest);
+    let mut graph = ResolvedDependencyGraph {
+        root: root.clone(),
+        nodes: BTreeMap::new(),
+    };
+    let mut expanded = BTreeSet::new();
+    let mut stack = Vec::new();
+    resolve_dependency_node(
+        package_dir,
+        &root_features,
+        true,
+        scope,
+        &mut graph,
+        &mut expanded,
+        &mut stack,
+    )?;
+    Ok(graph)
+}
+
+fn resolve_dependency_node(
+    package_dir: &Path,
+    requested_features: &[String],
+    is_root: bool,
+    scope: DependencyResolutionScope,
+    graph: &mut ResolvedDependencyGraph,
+    expanded: &mut BTreeSet<String>,
+    stack: &mut Vec<String>,
+) -> Result<String, String> {
+    let canonical = canonical_path_label(package_dir);
+    if let Some(cycle_start) = stack.iter().position(|entry| entry == &canonical) {
+        let mut cycle = stack[cycle_start..]
+            .iter()
+            .map(|key| resolved_node_label(graph, key))
+            .collect::<Vec<_>>();
+        cycle.push(resolved_node_label(graph, &canonical));
+        return Err(format!("dependency cycle detected: {}", cycle.join(" -> ")));
+    }
+
+    if !graph.nodes.contains_key(&canonical) {
+        let manifest = load_package_manifest(package_dir)?;
+        graph.nodes.insert(
+            canonical.clone(),
+            ResolvedDependencyNode {
+                package_dir: package_dir.to_path_buf(),
+                manifest,
+                features: Vec::new(),
+                dependencies: Vec::new(),
+            },
+        );
+    }
+    {
+        let node = graph
+            .nodes
+            .get_mut(&canonical)
+            .expect("resolved node exists");
+        let mut requested = node.features.clone();
+        requested.extend(requested_features.iter().cloned());
+        node.features = resolve_package_features(&node.manifest, &requested).selected;
+    }
+    if expanded.contains(&canonical) {
+        return Ok(canonical);
+    }
+
+    stack.push(canonical.clone());
+    let manifest = &graph.nodes[&canonical].manifest;
+    let mut declared = manifest
+        .dependencies
+        .iter()
+        .map(|(name, value)| {
+            (
+                package_dependency_spec(name, value),
+                super::PackageDependencyKind::Normal,
+            )
+        })
+        .collect::<Vec<_>>();
+    if is_root && scope == DependencyResolutionScope::Development {
+        declared.extend(manifest.dev_dependencies.iter().map(|(name, value)| {
+            (
+                package_dependency_spec(name, value),
+                super::PackageDependencyKind::Dev,
+            )
+        }));
+    }
+
+    let mut dependencies = Vec::with_capacity(declared.len());
+    for (spec, kind) in declared {
+        let target = match &spec.path {
+            Some(path) => {
+                let dependency_dir = package_dir.join(path);
+                if dependency_dir.join("rsspkg.toml").exists() {
+                    Some(resolve_dependency_node(
+                        &dependency_dir,
+                        &spec.features,
+                        false,
+                        scope,
+                        graph,
+                        expanded,
+                        stack,
+                    )?)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        };
+        dependencies.push(ResolvedDependencyEdge { spec, kind, target });
+    }
+    stack.pop();
+    graph
+        .nodes
+        .get_mut(&canonical)
+        .expect("resolved node exists")
+        .dependencies = dependencies;
+    expanded.insert(canonical.clone());
+    Ok(canonical)
+}
+
+fn resolved_node_label(graph: &ResolvedDependencyGraph, key: &str) -> String {
+    graph
+        .nodes
+        .get(key)
+        .map(|node| node.manifest.package.name.clone())
+        .unwrap_or_else(|| key.to_string())
+}
+
+impl ResolvedDependencyGraph {
+    pub(super) fn dependency_order(&self) -> Vec<&ResolvedDependencyNode> {
+        let mut seen = BTreeSet::new();
+        let mut ordered = Vec::new();
+        self.collect_dependency_order(&self.root, &mut seen, &mut ordered);
+        ordered
+    }
+
+    fn collect_dependency_order<'a>(
+        &'a self,
+        key: &str,
+        seen: &mut BTreeSet<String>,
+        ordered: &mut Vec<&'a ResolvedDependencyNode>,
+    ) {
+        if !seen.insert(key.to_string()) {
+            return;
+        }
+        let node = &self.nodes[key];
+        for edge in &node.dependencies {
+            if let Some(target) = &edge.target {
+                self.collect_dependency_order(target, seen, ordered);
+            }
+        }
+        if key != self.root {
+            ordered.push(node);
+        }
+    }
+}
+
 pub(super) fn collect_dependency_interface_sources(
     package_dir: &Path,
-    manifest: &Manifest,
+    _manifest: &Manifest,
 ) -> Result<Vec<PackageSource>, String> {
-    let mut visiting = BTreeSet::new();
-    let mut seen = BTreeSet::new();
+    let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Production)?;
     let mut sources = Vec::new();
-    collect_dependency_interface_sources_from_map(
-        package_dir,
-        &manifest.dependencies,
-        &mut visiting,
-        &mut seen,
+    collect_resolved_sources(
+        &graph,
+        PackageReviewFileKind::Interface,
+        false,
         &mut sources,
     )?;
     sources.sort_by(|left, right| left.path.cmp(&right.path));
@@ -41,23 +226,14 @@ pub(super) fn collect_dependency_interface_sources(
 
 pub(super) fn collect_dependency_interface_sources_for_tests(
     package_dir: &Path,
-    manifest: &Manifest,
+    _manifest: &Manifest,
 ) -> Result<Vec<PackageSource>, String> {
-    let mut visiting = BTreeSet::new();
-    let mut seen = BTreeSet::new();
+    let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
     let mut sources = Vec::new();
-    collect_dependency_interface_sources_from_map(
-        package_dir,
-        &manifest.dependencies,
-        &mut visiting,
-        &mut seen,
-        &mut sources,
-    )?;
-    collect_dependency_interface_sources_from_map(
-        package_dir,
-        &manifest.dev_dependencies,
-        &mut visiting,
-        &mut seen,
+    collect_resolved_sources(
+        &graph,
+        PackageReviewFileKind::Interface,
+        false,
         &mut sources,
     )?;
     sources.sort_by(|left, right| left.path.cmp(&right.path));
@@ -66,117 +242,123 @@ pub(super) fn collect_dependency_interface_sources_for_tests(
 
 pub(super) fn collect_dependency_lowering_sources(
     package_dir: &Path,
-    manifest: &Manifest,
+    _manifest: &Manifest,
 ) -> Result<Vec<PackageSource>, String> {
-    let mut visiting = BTreeSet::new();
-    let mut seen = BTreeSet::new();
+    let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Production)?;
     let mut sources = Vec::new();
-    collect_dependency_lowering_sources_from_map(
-        package_dir,
-        &manifest.dependencies,
-        &mut visiting,
-        &mut seen,
-        &mut sources,
-    )?;
+    collect_resolved_sources(&graph, PackageReviewFileKind::Source, true, &mut sources)?;
     sources.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(sources)
+}
+
+fn collect_resolved_sources(
+    graph: &ResolvedDependencyGraph,
+    kind: PackageReviewFileKind,
+    lowering: bool,
+    sources: &mut Vec<PackageSource>,
+) -> Result<(), String> {
+    let included = if lowering {
+        lowering_reachable_nodes(graph)
+    } else {
+        graph.nodes.keys().cloned().collect()
+    };
+    for node in graph.dependency_order() {
+        let canonical = canonical_path_label(&node.package_dir);
+        if !included.contains(&canonical) {
+            continue;
+        }
+        let package = load_package_with_features(&node.package_dir, Some(&node.features))?;
+        sources.extend(
+            package
+                .sources
+                .into_iter()
+                .filter(|source| source.kind == kind),
+        );
+    }
+    Ok(())
+}
+
+fn lowering_reachable_nodes(graph: &ResolvedDependencyGraph) -> BTreeSet<String> {
+    let mut reachable = BTreeSet::new();
+    let mut pending = vec![graph.root.clone()];
+    while let Some(key) = pending.pop() {
+        for edge in &graph.nodes[&key].dependencies {
+            if edge.spec.platform_provided || edge.spec.test_only {
+                continue;
+            }
+            if let Some(target) = &edge.target
+                && reachable.insert(target.clone())
+            {
+                pending.push(target.clone());
+            }
+        }
+    }
+    reachable
 }
 
 pub(super) fn package_feature_resolution_diagnostics(
     package_dir: &Path,
     manifest: &Manifest,
 ) -> Result<Vec<Diagnostic>, String> {
+    let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
     let mut diagnostics = Vec::new();
     let feature_policy = manifest
         .review
         .as_ref()
         .map(|review| &review.feature_policy);
-    collect_dependency_feature_resolution_diagnostics_from_map(
-        package_dir,
-        &manifest.dependencies,
-        feature_policy,
-        &mut BTreeSet::new(),
-        &mut diagnostics,
-    )?;
-    collect_dependency_feature_resolution_diagnostics_from_map(
-        package_dir,
-        &manifest.dev_dependencies,
-        feature_policy,
-        &mut BTreeSet::new(),
-        &mut diagnostics,
-    )?;
-    Ok(diagnostics)
-}
-
-fn collect_dependency_feature_resolution_diagnostics_from_map(
-    package_dir: &Path,
-    dependencies: &BTreeMap<String, toml::Value>,
-    feature_policy: Option<&ManifestReviewFeaturePolicy>,
-    visiting: &mut BTreeSet<String>,
-    diagnostics: &mut Vec<Diagnostic>,
-) -> Result<(), String> {
-    for (name, value) in dependencies {
-        diagnostics.extend(package_dependency_unknown_key_diagnostics(
-            package_dir,
-            name,
-            value,
-        ));
-        let spec = package_dependency_spec(name, value);
-        if spec.git.is_some() {
-            diagnostics.push(package_unsupported_dependency_source_diagnostic(
-                package_dir,
+    for node in graph.nodes.values() {
+        let declared = node
+            .manifest
+            .dependencies
+            .iter()
+            .chain(node.manifest.dev_dependencies.iter());
+        for (name, value) in declared {
+            let Some(edge) = node
+                .dependencies
+                .iter()
+                .find(|edge| edge.spec.name == *name)
+            else {
+                // Non-root dev dependencies are intentionally outside this resolution.
+                continue;
+            };
+            diagnostics.extend(package_dependency_unknown_key_diagnostics(
+                &node.package_dir,
                 name,
-                "git",
+                value,
             ));
-        }
-        let Some(path) = &spec.path else {
-            continue;
-        };
-        let dependency_dir = package_dir.join(path);
-        if !dependency_dir.join("rsspkg.toml").exists() {
-            continue;
-        }
-        let canonical = canonical_path_label(&dependency_dir);
-        if !visiting.insert(canonical.clone()) {
-            continue;
-        }
-        let dependency_manifest = load_package_manifest(&dependency_dir)?;
-        let resolved = resolve_package_features(&dependency_manifest, &spec.features);
-        for feature in resolved.unknown {
-            diagnostics.push(package_unknown_feature_diagnostic(
-                package_dir,
-                name,
-                &feature,
-            ));
-        }
-        if let Some(feature_policy) = feature_policy {
-            for feature in &resolved.selected {
-                if package_feature_denied(feature_policy, name, feature) {
-                    diagnostics.push(package_denied_feature_diagnostic(
-                        package_dir,
-                        name,
-                        feature,
-                    ));
+            if edge.spec.git.is_some() {
+                diagnostics.push(package_unsupported_dependency_source_diagnostic(
+                    &node.package_dir,
+                    name,
+                    "git",
+                ));
+            }
+            let Some(target) = &edge.target else {
+                continue;
+            };
+            let dependency = &graph.nodes[target];
+            let requested = resolve_package_features(&dependency.manifest, &edge.spec.features);
+            for feature in requested.unknown {
+                diagnostics.push(package_unknown_feature_diagnostic(
+                    &node.package_dir,
+                    name,
+                    &feature,
+                ));
+            }
+            if let Some(feature_policy) = feature_policy {
+                for feature in &dependency.features {
+                    if package_feature_denied(feature_policy, name, feature) {
+                        diagnostics.push(package_denied_feature_diagnostic(
+                            &node.package_dir,
+                            name,
+                            feature,
+                        ));
+                    }
                 }
             }
         }
-        collect_dependency_feature_resolution_diagnostics_from_map(
-            &dependency_dir,
-            &dependency_manifest.dependencies,
-            feature_policy,
-            visiting,
-            diagnostics,
-        )?;
-        collect_dependency_feature_resolution_diagnostics_from_map(
-            &dependency_dir,
-            &dependency_manifest.dev_dependencies,
-            feature_policy,
-            visiting,
-            diagnostics,
-        )?;
-        visiting.remove(&canonical);
     }
-    Ok(())
+    Ok(diagnostics)
 }
 
 fn package_dependency_unknown_key_diagnostics(
@@ -293,125 +475,6 @@ fn package_denied_feature_diagnostic(
     )
 }
 
-/// Resolves a single dependency-map entry to its loaded package for the
-/// `seen`/`visiting` graph walks shared by interface and lowering collection.
-///
-/// Returns `Ok(None)` when the entry should be skipped (no path dependency, no
-/// `rsspkg.toml`, already collected, or currently being visited). On `Ok(Some)`
-/// the returned canonical label has been recorded in both `seen` and `visiting`;
-/// the caller is responsible for the matching `visiting.remove`.
-struct DependencyWalkEntry {
-    dependency_dir: std::path::PathBuf,
-    canonical: String,
-    package: LoadedPackage,
-}
-
-fn resolve_dependency_walk_entry(
-    package_dir: &Path,
-    spec: &PackageDependencySpec,
-    visiting: &mut BTreeSet<String>,
-    seen: &mut BTreeSet<String>,
-) -> Result<Option<DependencyWalkEntry>, String> {
-    let Some(path) = &spec.path else {
-        return Ok(None);
-    };
-    let dependency_dir = package_dir.join(path);
-    if !dependency_dir.join("rsspkg.toml").exists() {
-        return Ok(None);
-    }
-    let canonical = canonical_path_label(&dependency_dir);
-    if seen.contains(&canonical) {
-        return Ok(None);
-    }
-    if !visiting.insert(canonical.clone()) {
-        return Ok(None);
-    }
-    seen.insert(canonical.clone());
-    let dependency_manifest = load_package_manifest(&dependency_dir)?;
-    let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
-    let package = load_package_with_features(&dependency_dir, Some(&selected_features.selected))?;
-    Ok(Some(DependencyWalkEntry {
-        dependency_dir,
-        canonical,
-        package,
-    }))
-}
-
-fn collect_dependency_interface_sources_from_map(
-    package_dir: &Path,
-    dependencies: &BTreeMap<String, toml::Value>,
-    visiting: &mut BTreeSet<String>,
-    seen: &mut BTreeSet<String>,
-    sources: &mut Vec<PackageSource>,
-) -> Result<(), String> {
-    for (name, value) in dependencies {
-        let spec = package_dependency_spec(name, value);
-        let Some(DependencyWalkEntry {
-            dependency_dir,
-            canonical,
-            package: dependency_package,
-        }) = resolve_dependency_walk_entry(package_dir, &spec, visiting, seen)?
-        else {
-            continue;
-        };
-        sources.extend(
-            dependency_package
-                .sources
-                .iter()
-                .filter(|source| source.kind == PackageReviewFileKind::Interface)
-                .cloned(),
-        );
-        collect_dependency_interface_sources_from_map(
-            &dependency_dir,
-            &dependency_package.manifest.dependencies,
-            visiting,
-            seen,
-            sources,
-        )?;
-        visiting.remove(&canonical);
-    }
-    Ok(())
-}
-
-fn collect_dependency_lowering_sources_from_map(
-    package_dir: &Path,
-    dependencies: &BTreeMap<String, toml::Value>,
-    visiting: &mut BTreeSet<String>,
-    seen: &mut BTreeSet<String>,
-    sources: &mut Vec<PackageSource>,
-) -> Result<(), String> {
-    for (name, value) in dependencies {
-        let spec = package_dependency_spec(name, value);
-        if spec.platform_provided || spec.test_only {
-            continue;
-        }
-        let Some(DependencyWalkEntry {
-            dependency_dir,
-            canonical,
-            package: dependency_package,
-        }) = resolve_dependency_walk_entry(package_dir, &spec, visiting, seen)?
-        else {
-            continue;
-        };
-        collect_dependency_lowering_sources_from_map(
-            &dependency_dir,
-            &dependency_package.manifest.dependencies,
-            visiting,
-            seen,
-            sources,
-        )?;
-        sources.extend(
-            dependency_package
-                .sources
-                .iter()
-                .filter(|source| source.kind == PackageReviewFileKind::Source)
-                .cloned(),
-        );
-        visiting.remove(&canonical);
-    }
-    Ok(())
-}
-
 pub(super) fn package_dependency_spec(name: &str, value: &toml::Value) -> PackageDependencySpec {
     if let Some(requirement) = value.as_str() {
         return PackageDependencySpec {
@@ -474,5 +537,121 @@ pub(super) fn package_dependency_spec(name: &str, value: &toml::Value) -> Packag
             .get("platform_provided")
             .and_then(toml::Value::as_bool)
             .unwrap_or(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::{DependencyResolutionScope, canonical_path_label, resolve_dependency_graph};
+
+    struct TestPackages(PathBuf);
+
+    impl TestPackages {
+        fn new(name: &str) -> Self {
+            let nonce = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos();
+            let root = std::env::temp_dir().join(format!(
+                "rsscript-package-resolution-{}-{name}-{nonce}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&root).expect("create test package root");
+            Self(root)
+        }
+
+        fn package(&self, relative: &str, manifest_body: &str) -> PathBuf {
+            let dir = self.0.join(relative);
+            fs::create_dir_all(&dir).expect("create test package");
+            let name = relative.replace('/', "-");
+            fs::write(
+                dir.join("rsspkg.toml"),
+                format!(
+                    "[package]\nname = \"{name}\"\nversion = \"1.0.0\"\nedition = \"2024\"\n\n{manifest_body}"
+                ),
+            )
+            .expect("write test manifest");
+            dir
+        }
+    }
+
+    impl Drop for TestPackages {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn node_features<'a>(graph: &'a super::ResolvedDependencyGraph, path: &Path) -> &'a [String] {
+        &graph.nodes[&canonical_path_label(path)].features
+    }
+
+    #[test]
+    fn resolver_unions_features_across_diamond_deterministically() {
+        let packages = TestPackages::new("feature-union");
+        let shared = packages.package("root/shared", "[features]\nalpha = []\nbeta = []\n");
+        packages.package(
+            "root/a",
+            "[dependencies]\nshared = { path = \"../shared\", features = [\"alpha\"] }\n",
+        );
+        packages.package(
+            "root/b",
+            "[dependencies]\nshared = { path = \"../shared\", features = [\"beta\"] }\n",
+        );
+        let root = packages.package(
+            "root",
+            "[dependencies]\na = { path = \"a\" }\nb = { path = \"b\" }\n",
+        );
+
+        let graph = resolve_dependency_graph(&root, DependencyResolutionScope::Production)
+            .expect("resolve diamond");
+
+        assert_eq!(node_features(&graph, &shared), &["alpha", "beta"]);
+        assert_eq!(graph.nodes.len(), 4);
+    }
+
+    #[test]
+    fn resolver_rejects_cycles_with_package_path() {
+        let packages = TestPackages::new("cycle");
+        packages.package("root/a", "[dependencies]\nroot = { path = \"..\" }\n");
+        let root = packages.package("root", "[dependencies]\na = { path = \"a\" }\n");
+
+        let error = resolve_dependency_graph(&root, DependencyResolutionScope::Production)
+            .expect_err("cycle must fail");
+
+        assert_eq!(error, "dependency cycle detected: root -> root-a -> root");
+    }
+
+    #[test]
+    fn development_scope_adds_only_root_dev_dependencies() {
+        let packages = TestPackages::new("dev-scope");
+        packages.package("root/prod/transitive", "");
+        packages.package("root/dev", "");
+        packages.package("root/prod/dev-only", "");
+        packages.package(
+            "root/prod",
+            "[dependencies]\ntransitive = { path = \"transitive\" }\n\n[dev-dependencies]\ndev-only = { path = \"dev-only\" }\n",
+        );
+        let root = packages.package(
+            "root",
+            "[dependencies]\nprod = { path = \"prod\" }\n\n[dev-dependencies]\ndev = { path = \"dev\" }\n",
+        );
+
+        let production = resolve_dependency_graph(&root, DependencyResolutionScope::Production)
+            .expect("resolve production");
+        let development = resolve_dependency_graph(&root, DependencyResolutionScope::Development)
+            .expect("resolve development");
+
+        assert_eq!(production.nodes.len(), 3);
+        assert_eq!(development.nodes.len(), 4);
+        assert!(
+            !development
+                .nodes
+                .values()
+                .any(|node| { node.manifest.package.name == "root-prod-dev-only" })
+        );
     }
 }

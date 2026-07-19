@@ -6,44 +6,35 @@ use sha2::{Digest, Sha256};
 
 use crate::formatter::format_source;
 
+use super::dependency::{DependencyResolutionScope, resolve_dependency_graph};
 use super::review::review_package_dir_with_features;
-use super::source_set::{
-    ManifestNativeRust, load_package, load_package_manifest, load_package_with_features,
-    resolve_package_features, selected_root_package_features,
-};
+use super::source_set::{ManifestNativeRust, load_package_with_features};
 use super::{
     LoadedPackage, PackageArchiveFile, PackageLock, PackageLockDiff, PackageLockFieldChange,
     PackageLockMetadata, PackageLockPackage, PackageLockPackageChange, PackageReview,
     PackageReviewAwaitBoundary, PackageReviewFileKind, PackageRisk, PackageSource,
-    collect_regular_files, ensure_package_path_within_root, package_dependency_spec,
+    collect_regular_files, ensure_package_path_within_root,
     package_feature_may_change_boundary_risk, package_path_metadata, package_risk_label,
     relative_path,
 };
 
 pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
-    let package = load_package(package_dir)?;
-    let root_features = selected_root_package_features(&package.manifest);
-    let mut packages = vec![lock_package_entry(package_dir, &package, root_features)?];
-    let mut visiting = BTreeSet::new();
-    let mut seen = BTreeSet::new();
-    let root_key = super::canonical_path_label(package_dir);
-    visiting.insert(root_key.clone());
-    seen.insert(root_key.clone());
-    collect_lock_dependency_packages(
-        package_dir,
-        &package.manifest.dependencies,
-        &mut visiting,
-        &mut seen,
-        &mut packages,
-    )?;
-    collect_lock_dependency_packages(
-        package_dir,
-        &package.manifest.dev_dependencies,
-        &mut visiting,
-        &mut seen,
-        &mut packages,
-    )?;
-    visiting.remove(&root_key);
+    let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
+    let root = &graph.nodes[&graph.root];
+    let package = load_package_with_features(&root.package_dir, Some(&root.features))?;
+    let mut packages = vec![lock_package_entry(
+        &root.package_dir,
+        &package,
+        root.features.clone(),
+    )?];
+    for node in graph.dependency_order() {
+        let package = load_package_with_features(&node.package_dir, Some(&node.features))?;
+        packages.push(lock_package_entry(
+            &node.package_dir,
+            &package,
+            node.features.clone(),
+        )?);
+    }
 
     Ok(PackageLock {
         version: 1,
@@ -78,58 +69,6 @@ pub(super) fn lock_package_entry(
         native_hash,
         features,
     })
-}
-
-fn collect_lock_dependency_packages(
-    package_dir: &Path,
-    dependencies: &BTreeMap<String, toml::Value>,
-    visiting: &mut BTreeSet<String>,
-    seen: &mut BTreeSet<String>,
-    packages: &mut Vec<PackageLockPackage>,
-) -> Result<(), String> {
-    for (name, value) in dependencies {
-        let spec = package_dependency_spec(name, value);
-        let Some(path) = &spec.path else {
-            continue;
-        };
-        let dependency_dir = package_dir.join(path);
-        if !dependency_dir.join("rsspkg.toml").exists() {
-            continue;
-        }
-        let canonical = super::canonical_path_label(&dependency_dir);
-        if seen.contains(&canonical) {
-            continue;
-        }
-        if !visiting.insert(canonical.clone()) {
-            continue;
-        }
-        seen.insert(canonical.clone());
-        let dependency_manifest = load_package_manifest(&dependency_dir)?;
-        let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
-        let dependency_package =
-            load_package_with_features(&dependency_dir, Some(&selected_features.selected))?;
-        packages.push(lock_package_entry(
-            &dependency_dir,
-            &dependency_package,
-            selected_features.selected,
-        )?);
-        collect_lock_dependency_packages(
-            &dependency_dir,
-            &dependency_package.manifest.dependencies,
-            visiting,
-            seen,
-            packages,
-        )?;
-        collect_lock_dependency_packages(
-            &dependency_dir,
-            &dependency_package.manifest.dev_dependencies,
-            visiting,
-            seen,
-            packages,
-        )?;
-        visiting.remove(&canonical);
-    }
-    Ok(())
 }
 
 pub fn diff_package_locks(old_path: &Path, new_path: &Path) -> Result<PackageLockDiff, String> {

@@ -1468,3 +1468,44 @@ fn reir_spec_lists_implemented_core_subject_kinds() {
         );
     }
 }
+
+#[test]
+fn gate_bundle_validation_rejects_schema_duplicates_and_extensions() {
+    let fact = required_capability_fact(
+        "fact.required",
+        subject(SubjectKind::CodeFunction, "code::run"),
+        capability(
+            CapabilityCategory::ObjectStorageWrite,
+            "aws",
+            "s3:PutObject",
+            "arn:aws:s3:::reports/*",
+        ),
+    );
+    let mut bundle = Bundle::new();
+    bundle.facts = vec![fact.clone(), fact.clone()];
+    assert!(
+        bundle
+            .validate_for_gate("required")
+            .unwrap_err()
+            .contains("duplicate fact id")
+    );
+
+    bundle.facts = vec![fact.clone()];
+    bundle.schema = "reir.bundle.v9".to_string();
+    assert!(
+        bundle
+            .validate_for_gate("required")
+            .unwrap_err()
+            .contains("unsupported required bundle schema")
+    );
+
+    bundle.schema = "reir.bundle.v0.2".to_string();
+    bundle.facts[0].capability.as_mut().unwrap().category =
+        CapabilityCategory::Extension("vendor.custom".to_string());
+    assert!(
+        bundle
+            .validate_for_gate("required")
+            .unwrap_err()
+            .contains("unsupported capability category")
+    );
+}

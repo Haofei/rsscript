@@ -192,6 +192,8 @@ string_enum! {
         BindingManifest => "binding_manifest",
         #[serde(rename = "rendered_manifest")]
         RenderedManifest => "rendered_manifest",
+        #[serde(rename = "deployment_manifest")]
+        DeploymentManifest => "deployment_manifest",
         #[serde(rename = "terraform_plan")]
         TerraformPlan => "terraform_plan",
         #[serde(rename = "terraform_state")]

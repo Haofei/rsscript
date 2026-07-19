@@ -231,13 +231,17 @@ fn policy_grant_facts(block: &TerraformResourceBlock, policy: &Value) -> Vec<Fac
     };
     let mut facts = Vec::new();
     for (statement_index, statement) in statements(policy).into_iter().enumerate() {
-        if statement
+        let effect = statement
             .get("Effect")
             .and_then(Value::as_str)
-            .is_some_and(|effect| !effect.eq_ignore_ascii_case("Allow"))
-        {
+            .unwrap_or("");
+        if !effect.eq_ignore_ascii_case("Allow") && !effect.eq_ignore_ascii_case("Deny") {
             continue;
         }
+        let principal = policy_principal(block, statement);
+        let condition = statement.get("Condition");
+        let attached = block.resource_type != "aws_iam_policy" && principal.is_some();
+        let conclusive = effect.eq_ignore_ascii_case("Deny") || (attached && condition.is_none());
         let actions = string_or_array(statement.get("Action"));
         let resources = string_or_array(statement.get("Resource"));
         for action in actions {
@@ -248,6 +252,10 @@ fn policy_grant_facts(block: &TerraformResourceBlock, policy: &Value) -> Vec<Fac
                     statement_index,
                     &action,
                     resource,
+                    effect,
+                    principal.as_deref(),
+                    condition,
+                    conclusive,
                 ));
             }
         }
@@ -281,7 +289,16 @@ fn capability_grant_fact(
     statement_index: usize,
     action: &str,
     resource: &str,
+    effect: &str,
+    principal: Option<&str>,
+    condition: Option<&Value>,
+    conclusive: bool,
 ) -> Fact {
+    let denied = effect.eq_ignore_ascii_case("Deny");
+    let mut constraints = HashMap::new();
+    if let Some(condition) = condition {
+        constraints.insert("iam.condition".to_owned(), condition.to_string());
+    }
     Fact {
         schema: FACT_SCHEMA.to_owned(),
         id: format!(
@@ -293,7 +310,11 @@ fn capability_grant_fact(
             sanitize_id(resource)
         ),
         kind: FactKind::Capability,
-        role: Some(FactRole::Granted),
+        role: Some(if denied {
+            FactRole::Denied
+        } else {
+            FactRole::Granted
+        }),
         subject,
         capability: Some(Capability {
             category: capability_category_for_action(action),
@@ -301,11 +322,19 @@ fn capability_grant_fact(
             service: Some(service_for_action(action).to_owned()),
             action: Some(action.to_owned()),
             resource: Some(resource.to_owned()),
-            constraints: HashMap::new(),
+            constraints,
         }),
-        value: FactValue::True,
+        value: if conclusive {
+            FactValue::True
+        } else {
+            FactValue::Unknown
+        },
         confidence: Confidence {
-            level: ConfidenceLevel::Scanned,
+            level: if conclusive {
+                ConfidenceLevel::Scanned
+            } else {
+                ConfidenceLevel::Unknown
+            },
             source: Some(PRODUCER_SOURCE.to_owned()),
         },
         acquisition_mode: AcquisitionMode::TerraformPlan,
@@ -318,7 +347,7 @@ fn capability_grant_fact(
             length: None,
             symbol: Some(format!("{}.{}", block.resource_type, block.name)),
             reason: Some(format!(
-                "Terraform/OpenTofu {}.{} grants {action} on {resource}",
+                "Terraform/OpenTofu {}.{} {effect} statement for {action} on {resource}",
                 block.resource_type, block.name
             )),
             json_pointer: Some(format!("/Statement/{statement_index}")),
@@ -329,14 +358,39 @@ fn capability_grant_fact(
             time: None,
             source: Some(PRODUCER_SOURCE.to_owned()),
             event_name: None,
-            principal: None,
+            principal: principal.map(str::to_owned),
             account: None,
             policy_arn: None,
             statement_index: Some(statement_index),
             action: Some(action.to_owned()),
         }],
-        unknown_reason: None,
+        unknown_reason: (!conclusive).then(|| {
+            if condition.is_some() {
+                "conditional IAM policy requires effective-permission evaluation".to_owned()
+            } else if block.resource_type == "aws_iam_policy" {
+                "standalone IAM policy is not proof of attachment to a principal".to_owned()
+            } else {
+                "IAM policy principal could not be resolved".to_owned()
+            }
+        }),
     }
+}
+
+fn policy_principal(block: &TerraformResourceBlock, statement: &Value) -> Option<String> {
+    let attribute = match block.resource_type.as_str() {
+        "aws_iam_role_policy" => "role",
+        "aws_iam_user_policy" => "user",
+        "aws_iam_group_policy" => "group",
+        "aws_s3_bucket_policy" => {
+            return statement.get("Principal").map(canonical_json_value);
+        }
+        _ => return None,
+    };
+    hcl_string_attr(&block.body, attribute)
+}
+
+fn canonical_json_value(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "<invalid>".to_owned())
 }
 
 fn postgresql_grant_facts(block: &TerraformResourceBlock) -> Vec<Fact> {
@@ -574,7 +628,7 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
                         file: "terraform-plan".to_owned(),
                         resource_type: resource_type.to_owned(),
                         name: name.to_owned(),
-                        body: String::new(),
+                        body: principal_body(resource_type, after),
                         line: 0,
                     };
                     facts.extend(policy_grant_facts_with_address(&block, &policy, address));
@@ -584,43 +638,42 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
     }
 
     // Also handle `terraform show -json` state format
-    if let Some(values) = plan.get("values") {
-        if let Some(resources) = values
-            .get("root_module")
-            .and_then(|m| m.get("resources"))
-            .and_then(|r| r.as_array())
-        {
-            for resource in resources {
-                let resource_type = resource.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                let name = resource.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let address = resource
-                    .get("address")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+    if let Some(root_module) = plan
+        .get("values")
+        .and_then(|values| values.get("root_module"))
+    {
+        let mut resources = Vec::new();
+        collect_state_resources(root_module, &mut resources);
+        for resource in resources {
+            let resource_type = resource.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            let name = resource.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let address = resource
+                .get("address")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
 
-                if !matches!(
-                    resource_type,
-                    "aws_iam_role_policy"
-                        | "aws_iam_policy"
-                        | "aws_s3_bucket_policy"
-                        | "aws_iam_user_policy"
-                        | "aws_iam_group_policy"
-                ) {
-                    continue;
-                }
+            if !matches!(
+                resource_type,
+                "aws_iam_role_policy"
+                    | "aws_iam_policy"
+                    | "aws_s3_bucket_policy"
+                    | "aws_iam_user_policy"
+                    | "aws_iam_group_policy"
+            ) {
+                continue;
+            }
 
-                let values_obj = resource.get("values").unwrap_or(&Value::Null);
-                if let Some(policy_str) = values_obj.get("policy").and_then(|v| v.as_str()) {
-                    if let Ok(policy) = serde_json::from_str::<Value>(policy_str) {
-                        let block = TerraformResourceBlock {
-                            file: "terraform-state".to_owned(),
-                            resource_type: resource_type.to_owned(),
-                            name: name.to_owned(),
-                            body: String::new(),
-                            line: 0,
-                        };
-                        facts.extend(policy_grant_facts_with_address(&block, &policy, address));
-                    }
+            let values_obj = resource.get("values").unwrap_or(&Value::Null);
+            if let Some(policy_str) = values_obj.get("policy").and_then(|v| v.as_str()) {
+                if let Ok(policy) = serde_json::from_str::<Value>(policy_str) {
+                    let block = TerraformResourceBlock {
+                        file: "terraform-state".to_owned(),
+                        resource_type: resource_type.to_owned(),
+                        name: name.to_owned(),
+                        body: principal_body(resource_type, values_obj),
+                        line: 0,
+                    };
+                    facts.extend(policy_grant_facts_with_address(&block, &policy, address));
                 }
             }
         }
@@ -656,9 +709,13 @@ fn policy_grant_facts_with_address(
             .get("Effect")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        if effect != "Allow" {
+        if !effect.eq_ignore_ascii_case("Allow") && !effect.eq_ignore_ascii_case("Deny") {
             continue;
         }
+        let principal = policy_principal(block, statement_value);
+        let condition = statement_value.get("Condition");
+        let attached = block.resource_type != "aws_iam_policy" && principal.is_some();
+        let conclusive = effect.eq_ignore_ascii_case("Deny") || (attached && condition.is_none());
         let actions = json_string_or_array(statement_value, "Action");
         let resources = json_string_or_array(statement_value, "Resource");
 
@@ -671,61 +728,61 @@ fn policy_grant_facts_with_address(
                     name: Some(format!("{}.{}", block.resource_type, block.name)),
                     package: Some("terraform".to_owned()),
                 };
-                facts.push(Fact {
-                    schema: FACT_SCHEMA.to_owned(),
-                    id: format!(
-                        "{}::{}::grant::{}::{}",
-                        subject_id,
-                        statement_index,
-                        sanitize_id(action),
-                        sanitize_id(resource)
-                    ),
-                    kind: FactKind::Capability,
-                    role: Some(FactRole::Granted),
+                let mut fact = capability_grant_fact(
+                    block,
                     subject,
-                    capability: Some(Capability {
-                        category: capability_category_for_action(action),
-                        provider: Some("aws".to_owned()),
-                        service: Some(service_for_action(action).to_owned()),
-                        action: Some(action.clone()),
-                        resource: Some(resource.clone()),
-                        constraints: HashMap::new(),
-                    }),
-                    value: FactValue::True,
-                    confidence: Confidence {
-                        level: ConfidenceLevel::Computed,
-                        source: Some("terraform_plan_json".to_owned()),
-                    },
-                    acquisition_mode: AcquisitionMode::CloudPolicy,
-                    precision: Precision::ResourceScoped,
-                    evidence: vec![Evidence {
-                        kind: EvidenceKind::Extension("terraform_plan_resource".to_owned()),
-                        file: Some(block.file.clone()),
-                        line: Some(block.line),
-                        column: None,
-                        length: None,
-                        symbol: Some(address.to_owned()),
-                        reason: Some(format!("{address} grants {action} on {resource}")),
-                        json_pointer: None,
-                        resource: Some(resource.clone()),
-                        provider: Some("aws".to_owned()),
-                        value: None,
-                        event_id: None,
-                        time: None,
-                        source: Some("terraform_plan".to_owned()),
-                        event_name: None,
-                        principal: None,
-                        account: None,
-                        policy_arn: None,
-                        statement_index: Some(statement_index),
-                        action: Some(action.clone()),
-                    }],
-                    unknown_reason: None,
-                });
+                    statement_index,
+                    action,
+                    resource,
+                    effect,
+                    principal.as_deref(),
+                    condition,
+                    conclusive,
+                );
+                fact.id = format!(
+                    "{}::{}::statement::{}::{}",
+                    subject_id,
+                    statement_index,
+                    sanitize_id(action),
+                    sanitize_id(resource)
+                );
+                fact.acquisition_mode = AcquisitionMode::TerraformPlan;
+                fact.confidence.source = Some("terraform_plan_json".to_owned());
+                if let Some(evidence) = fact.evidence.first_mut() {
+                    evidence.kind = EvidenceKind::Extension("terraform_plan_resource".to_owned());
+                    evidence.symbol = Some(address.to_owned());
+                    evidence.source = Some("terraform_plan_json".to_owned());
+                }
+                facts.push(fact);
             }
         }
     }
     facts
+}
+
+fn principal_body(resource_type: &str, values: &Value) -> String {
+    let key = match resource_type {
+        "aws_iam_role_policy" => "role",
+        "aws_iam_user_policy" => "user",
+        "aws_iam_group_policy" => "group",
+        _ => return String::new(),
+    };
+    values
+        .get(key)
+        .and_then(Value::as_str)
+        .map(|principal| format!("{key} = \"{principal}\""))
+        .unwrap_or_default()
+}
+
+fn collect_state_resources<'a>(module: &'a Value, resources: &mut Vec<&'a Value>) {
+    if let Some(items) = module.get("resources").and_then(Value::as_array) {
+        resources.extend(items);
+    }
+    if let Some(children) = module.get("child_modules").and_then(Value::as_array) {
+        for child in children {
+            collect_state_resources(child, resources);
+        }
+    }
 }
 
 fn json_string_or_array(obj: &Value, key: &str) -> Vec<String> {
@@ -819,6 +876,112 @@ POLICY
             .collect::<std::collections::BTreeSet<_>>();
         assert!(actions.contains("s3:PutObject"));
         assert!(actions.contains("s3:DeleteObject"));
+        assert!(bundle.facts.iter().all(|fact| {
+            fact.value == FactValue::Unknown
+                && fact
+                    .unknown_reason
+                    .as_deref()
+                    .is_some_and(|reason| reason.contains("principal"))
+        }));
+    }
+
+    #[test]
+    fn conditional_iam_allow_is_not_reported_as_effective_grant() {
+        let block = TerraformResourceBlock {
+            file: "main.tf".to_owned(),
+            resource_type: "aws_iam_role_policy".to_owned(),
+            name: "reader".to_owned(),
+            body: "role = \"prod-reader\"".to_owned(),
+            line: 1,
+        };
+        let policy = serde_json::json!({
+            "Statement": {
+                "Effect": "Allow",
+                "Action": "s3:GetObject",
+                "Resource": "*",
+                "Condition": {"IpAddress": {"aws:SourceIp": "10.0.0.0/8"}}
+            }
+        });
+
+        let facts = policy_grant_facts(&block, &policy);
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].value, FactValue::Unknown);
+        assert_eq!(facts[0].confidence.level, ConfidenceLevel::Unknown);
+        assert!(
+            facts[0]
+                .capability
+                .as_ref()
+                .unwrap()
+                .constraints
+                .contains_key("iam.condition")
+        );
+    }
+
+    #[test]
+    fn explicit_iam_deny_is_preserved() {
+        let block = TerraformResourceBlock {
+            file: "main.tf".to_owned(),
+            resource_type: "aws_iam_role_policy".to_owned(),
+            name: "reader".to_owned(),
+            body: "role = \"prod-reader\"".to_owned(),
+            line: 1,
+        };
+        let policy = serde_json::json!({
+            "Statement": {"Effect": "Deny", "Action": "s3:GetObject", "Resource": "*"}
+        });
+
+        let facts = policy_grant_facts(&block, &policy);
+        assert_eq!(facts[0].role, Some(FactRole::Denied));
+        assert_eq!(facts[0].value, FactValue::True);
+    }
+
+    #[test]
+    fn standalone_iam_policy_is_not_proof_of_attachment() {
+        let block = TerraformResourceBlock {
+            file: "main.tf".to_owned(),
+            resource_type: "aws_iam_policy".to_owned(),
+            name: "reader".to_owned(),
+            body: String::new(),
+            line: 1,
+        };
+        let policy = serde_json::json!({
+            "Statement": {"Effect": "Allow", "Action": "s3:GetObject", "Resource": "*"}
+        });
+
+        let facts = policy_grant_facts(&block, &policy);
+        assert_eq!(facts[0].value, FactValue::Unknown);
+        assert!(
+            facts[0]
+                .unknown_reason
+                .as_deref()
+                .unwrap()
+                .contains("attachment")
+        );
+    }
+
+    #[test]
+    fn terraform_state_walks_child_modules() {
+        let plan = serde_json::json!({
+            "values": {"root_module": {"child_modules": [{"resources": [{
+                "type": "aws_iam_role_policy",
+                "name": "reader",
+                "address": "module.app.aws_iam_role_policy.reader",
+                "values": {
+                    "role": "prod-reader",
+                    "policy": serde_json::json!({"Statement": {
+                        "Effect": "Allow", "Action": "s3:GetObject", "Resource": "*"
+                    }}).to_string()
+                }
+            }]}]}}
+        });
+
+        let bundle = terraform_plan_json_to_bundle(&plan.to_string()).unwrap();
+        assert_eq!(bundle.facts.len(), 1);
+        assert_eq!(bundle.facts[0].value, FactValue::True);
+        assert_eq!(
+            bundle.facts[0].evidence[0].principal.as_deref(),
+            Some("prod-reader")
+        );
     }
 
     #[test]

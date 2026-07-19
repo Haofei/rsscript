@@ -3524,9 +3524,6 @@ fn capability_fact(
     version: &str,
     summary: String,
 ) -> Fact {
-    let mut constraints = HashMap::new();
-    constraints.insert("count".to_owned(), count.to_string());
-
     Fact {
         schema: FACT_SCHEMA.to_owned(),
         id,
@@ -3538,8 +3535,8 @@ fn capability_fact(
             provider: Some("rsscript".to_owned()),
             service: None,
             action: None,
-            resource: None, // presence-level: scoped by subject, not a resource
-            constraints,
+            resource: Some(subject.id.clone()),
+            constraints: HashMap::new(),
         }),
         value: FactValue::True,
         confidence: confidence(ConfidenceLevel::Authoritative, PACKAGE_REVIEW_SOURCE),
@@ -3710,14 +3707,6 @@ fn package_capability_facts(input: &RsScriptPackageReviewInput, package_slug: &s
         .iter()
         .map(|capability| {
             let subject = package_function_subject(&input.package_name, &capability.function);
-            let mut constraints = HashMap::new();
-            constraints.insert(
-                "binding_symbol".to_owned(),
-                capability.binding_symbol.clone(),
-            );
-            if !capability.call_chain.is_empty() {
-                constraints.insert("call_chain".to_owned(), capability.call_chain.join(" -> "));
-            }
             Fact {
                 schema: FACT_SCHEMA.to_owned(),
                 id: format!(
@@ -3738,7 +3727,11 @@ fn package_capability_facts(input: &RsScriptPackageReviewInput, package_slug: &s
                     service: capability.service.clone(),
                     action: capability.action.clone(),
                     resource: capability.resource.clone(),
-                    constraints,
+                    // Binding symbol and call chain are provenance, not
+                    // authorization constraints. They remain in the evidence
+                    // reason below and must not prevent a deployment grant
+                    // from covering the capability.
+                    constraints: HashMap::new(),
                 }),
                 value: if capability.unknown_reason.is_some() {
                     FactValue::Unknown
@@ -4416,7 +4409,7 @@ fn native_scan_capability_fact(
             provider: Some("rsscript".to_owned()),
             service: Some("native_rust_source_scan".to_owned()),
             action: None,
-            resource: None, // presence-level: scoped by subject, not a resource
+            resource: Some(subject.id.clone()),
             constraints: HashMap::new(),
         }),
         value: FactValue::True,

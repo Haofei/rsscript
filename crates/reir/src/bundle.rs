@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 
 use crate::{Diff, Exception, PolicyResult, Profile, Reconciliation, Slice, Subject};
 
@@ -55,6 +56,62 @@ impl Bundle {
 
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(json)
+    }
+
+    pub fn validate_for_gate(&self, label: &str) -> Result<(), String> {
+        if self.schema != "reir.bundle.v0.2" {
+            return Err(format!(
+                "unsupported {label} bundle schema `{}`; expected `reir.bundle.v0.2`",
+                self.schema
+            ));
+        }
+        if self.ontology != "reir.capability_ontology.v0.2" {
+            return Err(format!(
+                "unsupported {label} bundle ontology `{}`; expected `reir.capability_ontology.v0.2`",
+                self.ontology
+            ));
+        }
+        let mut ids = HashSet::new();
+        for fact in &self.facts {
+            if !ids.insert(fact.id.as_str()) {
+                return Err(format!(
+                    "{label} bundle contains duplicate fact id `{}`",
+                    fact.id
+                ));
+            }
+            let gate_relevant = fact.capability.is_some()
+                || matches!(
+                    fact.role,
+                    Some(
+                        crate::FactRole::Required
+                            | crate::FactRole::Granted
+                            | crate::FactRole::Denied
+                    )
+                );
+            if gate_relevant && matches!(fact.kind, crate::FactKind::Extension(_)) {
+                return Err(format!(
+                    "{label} bundle fact `{}` uses an unsupported extension kind",
+                    fact.id
+                ));
+            }
+            if gate_relevant
+                && fact.capability.as_ref().is_some_and(|capability| {
+                    matches!(capability.category, crate::CapabilityCategory::Extension(_))
+                })
+            {
+                return Err(format!(
+                    "{label} bundle fact `{}` uses an unsupported capability category",
+                    fact.id
+                ));
+            }
+            if gate_relevant && matches!(fact.subject.kind, crate::SubjectKind::Extension(_)) {
+                return Err(format!(
+                    "{label} bundle fact `{}` uses an unsupported subject kind",
+                    fact.id
+                ));
+            }
+        }
+        Ok(())
     }
 }
 

@@ -20,7 +20,7 @@ const USAGE: &str = "Usage:
   reir collect --producer terraform-plan --from plan.json [--out bundle.json] [--json]
   reir reconcile --required required.json --granted granted.json [--target name] [--json]
   reir reconcile [--bundle bundle.json] [--target name] [--out reconciled.json] [--json]
-  reir report-pr --required required.json --granted granted.json [--target name] [--policy rss-policy.toml] [--ci-json | --sarif] [--fail-on-missing | --allow-missing] [--fail-on-unknown | --allow-unknown] [--fail-on-excess | --allow-excess] [--require-verified-capabilities | --allow-unverified-capabilities]
+  reir report-pr --required required.json --granted granted.json --principal id [--target name] [--policy rss-policy.toml] [--ci-json | --sarif] [--fail-on-missing | --allow-missing] [--fail-on-unknown | --allow-unknown] [--fail-on-excess | --allow-excess] [--require-verified-capabilities | --allow-unverified-capabilities]
   reir diff --baseline baseline.json --current current.json [--json] [--fail-on-change]
   reir slice --bundle bundle.json [--kind <slice-kind>] [--json]
   reir merge file1.json file2.json [...] --out merged.json
@@ -302,6 +302,7 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
     let mut required = None;
     let mut granted = None;
     let mut target = None;
+    let mut principal = None;
     let mut ci_json = false;
     let mut sarif = false;
     let mut policy_file = None;
@@ -314,6 +315,7 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
             "--required" => required = Some(take_value(args, &mut index, "--required")?),
             "--granted" => granted = Some(take_value(args, &mut index, "--granted")?),
             "--target" => target = Some(take_value(args, &mut index, "--target")?),
+            "--principal" => principal = Some(take_value(args, &mut index, "--principal")?),
             "--policy" => policy_file = Some(take_value(args, &mut index, "--policy")?),
             "--ci-json" => ci_json = true,
             "--sarif" => sarif = true,
@@ -355,29 +357,56 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
     }
 
     // Resolve the gate policy: optional policy file for the target, then CLI overrides.
-    let mut policy = match &policy_file {
+    let policy_config = match &policy_file {
         Some(path) => {
             let text = std::fs::read_to_string(path)
                 .map_err(|error| CliError::usage(format!("failed to read {path}: {error}")))?;
-            reir::GatePolicyFile::parse(&text)
-                .map_err(CliError::usage)?
-                .gate_policy_for(target.as_deref())
+            Some(reir::GatePolicyFile::parse(&text).map_err(CliError::usage)?)
         }
-        None => reir::CiGatePolicy::default(),
+        None => None,
+    };
+    let mut policy = match &policy_config {
+        Some(config) => config
+            .gate_policy_for(target.as_deref())
+            .map_err(CliError::usage)?,
+        None => reir::GatePolicy::production(),
     };
     cli.apply_to(&mut policy);
+
+    if principal.is_none()
+        && let (Some(config), Some(target)) = (&policy_config, target.as_deref())
+    {
+        principal = Some(
+            config
+                .principal_for(target)
+                .map_err(CliError::usage)?
+                .to_owned(),
+        );
+    }
+    if principal.is_none() {
+        return Err(CliError::usage(
+            "report-pr requires an explicit --principal or `[target.<name>].principal` binding",
+        ));
+    }
 
     let required_path = required.ok_or_else(|| CliError::usage("missing --required <file>"))?;
     let granted_path = granted.ok_or_else(|| CliError::usage("missing --granted <file>"))?;
     let required_bundle = read_bundle(&required_path)?;
     let granted_bundle = read_bundle(&granted_path)?;
-    let reconciliations = reconcile_capabilities_for_target(
+    required_bundle
+        .validate_for_gate("required")
+        .map_err(CliError::usage)?;
+    granted_bundle
+        .validate_for_gate("granted")
+        .map_err(CliError::usage)?;
+    let reconciliations = reir::reconcile_capabilities_for_gate(
         &required_bundle.facts,
         &granted_bundle.facts,
         target.as_deref(),
+        principal.as_deref(),
     );
 
-    let decision = reir::decide_gate(
+    let decision = reir::decide_validated_gate(
         &required_bundle.facts,
         &granted_bundle.facts,
         &reconciliations,
@@ -1324,8 +1353,9 @@ fn print_usage() {
 mod tests {
     use super::*;
     use reir::{
-        AcquisitionMode, CapabilityCategory, Confidence, ConfidenceLevel, Edge, EdgeKind, FactKind,
-        FactRole, FactValue, Precision, Profile, ProfileBudget, Subject, SubjectKind,
+        AcquisitionMode, CapabilityCategory, Confidence, ConfidenceLevel, Edge, EdgeKind,
+        EvidenceKind, FactKind, FactRole, FactValue, Precision, Profile, ProfileBudget, Subject,
+        SubjectKind,
     };
     use std::collections::HashMap;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -1380,6 +1410,8 @@ mod tests {
         category: CapabilityCategory,
         action: &str,
     ) -> Fact {
+        let principal =
+            matches!(role, FactRole::Granted | FactRole::Denied).then(|| subject.id.clone());
         Fact {
             schema: "reir.fact.v0.1".to_owned(),
             id: id.to_owned(),
@@ -1398,7 +1430,28 @@ mod tests {
             confidence: confidence(),
             acquisition_mode: AcquisitionMode::PackageMetadata,
             precision: Precision::ResourceScoped,
-            evidence: Vec::new(),
+            evidence: vec![Evidence {
+                kind: EvidenceKind::PackageMetadata,
+                file: Some("test-fixture".to_owned()),
+                line: None,
+                column: None,
+                length: None,
+                symbol: None,
+                reason: Some("test capability evidence".to_owned()),
+                json_pointer: None,
+                resource: None,
+                provider: None,
+                value: None,
+                event_id: None,
+                time: None,
+                source: Some("test".to_owned()),
+                event_name: None,
+                principal,
+                account: None,
+                policy_arn: None,
+                statement_index: None,
+                action: Some(action.to_owned()),
+            }],
             unknown_reason: None,
         }
     }
@@ -1776,6 +1829,8 @@ mod tests {
             granted_path.to_string_lossy().into_owned(),
             "--target".to_owned(),
             "prod".to_owned(),
+            "--principal".to_owned(),
+            "arn:aws:iam::123456789012:role/report-uploader".to_owned(),
         ];
         let (code, comment) = try_run_report_pr(&args).expect("report-pr should run");
         let _ = std::fs::remove_dir_all(&temp_dir);

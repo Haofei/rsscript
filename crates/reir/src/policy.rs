@@ -181,6 +181,7 @@ pub struct TargetGatePolicy {
     pub fail_on_unknown: Option<bool>,
     pub fail_on_excess: Option<bool>,
     pub require_verified_capabilities: Option<bool>,
+    pub principal: Option<String>,
 }
 
 impl GatePolicyFile {
@@ -190,15 +191,26 @@ impl GatePolicyFile {
 
     /// Resolve the effective gate policy for `target`: start from the built-in
     /// default, layer the `[default]` section, then the target-specific section.
-    pub fn gate_policy_for(&self, target: Option<&str>) -> crate::GatePolicy {
-        let mut policy = crate::GatePolicy::default();
+    pub fn gate_policy_for(&self, target: Option<&str>) -> Result<crate::GatePolicy, String> {
+        let mut policy = crate::GatePolicy::production();
         self.default.apply_to(&mut policy);
         if let Some(name) = target {
-            if let Some(target_policy) = self.target.get(name) {
-                target_policy.apply_to(&mut policy);
-            }
+            let target_policy = self.target.get(name).ok_or_else(|| {
+                format!("unknown gate policy target `{name}`; add a `[target.{name}]` section")
+            })?;
+            target_policy.apply_to(&mut policy);
         }
-        policy
+        Ok(policy)
+    }
+
+    pub fn principal_for(&self, target: &str) -> Result<&str, String> {
+        let target_policy = self.target.get(target).ok_or_else(|| {
+            format!("unknown gate policy target `{target}`; add a `[target.{target}]` section")
+        })?;
+        target_policy
+            .principal
+            .as_deref()
+            .ok_or_else(|| format!("gate policy target `{target}` is missing required `principal`"))
     }
 }
 
@@ -238,16 +250,24 @@ require_verified_capabilities = true
         )
         .expect("policy parses");
 
-        let prod = file.gate_policy_for(Some("prod"));
+        let prod = file.gate_policy_for(Some("prod")).expect("known target");
         assert!(prod.fail_on_missing); // built-in default
         assert!(prod.fail_on_unknown);
         assert!(prod.fail_on_excess);
         assert!(prod.require_verified_capabilities);
 
-        // A target without a section falls back to [default] + built-in.
-        let staging = file.gate_policy_for(Some("staging"));
-        assert!(staging.fail_on_missing);
-        assert!(!staging.fail_on_unknown);
-        assert!(!staging.fail_on_excess);
+        let error = file
+            .gate_policy_for(Some("staging"))
+            .expect_err("unknown target must be rejected");
+        assert!(error.contains("unknown gate policy target `staging`"));
+    }
+
+    #[test]
+    fn production_policy_is_fail_closed() {
+        let policy = crate::GatePolicy::production();
+        assert!(policy.fail_on_missing);
+        assert!(policy.fail_on_unknown);
+        assert!(policy.fail_on_excess);
+        assert!(policy.require_verified_capabilities);
     }
 }

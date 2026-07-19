@@ -30,31 +30,27 @@ jobs:
 
       - name: Run review action smoke
         id: smoke
-        uses: ./.github/actions/rsscript-review
+        # The review implementation comes from the protected branch, not the
+        # pull request checkout being reviewed.
+        uses: Haofei/rsscript/.github/actions/rsscript-review@main
         with:
           head: examples/packages/code-agent
           grants: examples/demos/s3-iam-reir/expected/prod-grants.reir.json
           target: prod
+          principal: prod/report-uploader
           post-comment: false
           fail-on-missing: false
-
-      - name: Create strict excess policy
-        shell: bash
-        run: |
-          cat > target/action-policy.toml <<'EOF'
-          [default]
-          fail_on_excess = true
-          EOF
 
       - name: Policy-only failure is not swallowed
         id: policy_failure
         continue-on-error: true
-        uses: ./.github/actions/rsscript-review
+        uses: Haofei/rsscript/.github/actions/rsscript-review@main
         with:
           head: packages/test-runner
           grants: examples/demos/s3-iam-reir/expected/prod-grants.reir.json
           target: prod
-          policy: target/action-policy.toml
+          principal: prod/report-uploader
+          policy: .github/fixtures/rsscript-review/strict-excess.toml
           post-comment: false
           fail-on-missing: false
           fail-on-unknown: false
@@ -72,11 +68,12 @@ jobs:
       - name: Unverified-capability failure is not swallowed
         id: unverified_failure
         continue-on-error: true
-        uses: ./.github/actions/rsscript-review
+        uses: Haofei/rsscript/.github/actions/rsscript-review@main
         with:
           head: packages/core/crypto
           grants: examples/demos/s3-iam-reir/expected/prod-grants.reir.json
           target: prod
+          principal: prod/report-uploader
           post-comment: false
           fail-on-missing: false
           fail-on-unknown: false

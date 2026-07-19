@@ -61,15 +61,12 @@ pub fn load_package_native_bindings(
             let (params, return_ty) = signatures.get(symbol).ok_or_else(|| {
                 format!("native binding `{symbol}` has no interface signature for the VM shim.")
             })?;
-            // Skip bindings the bridge can't represent (e.g. `mut` params, which
-            // can't propagate in-place mutation across the value bridge, or
-            // unsupported types). They simply aren't registered, so the program
-            // works unless it actually calls one — then the VM reports
-            // `no host binding for ...`.
-            if let Some(binding) = try_build_binding(symbol, rust_path, params, return_ty.as_ref())
-            {
-                bindings.push(binding);
-            }
+            bindings.push(build_binding(
+                symbol,
+                rust_path,
+                params,
+                return_ty.as_ref(),
+            )?);
         }
     }
     native_deps.sort();
@@ -80,69 +77,79 @@ pub fn load_package_native_bindings(
     rss_native_abi::load_registry(&library_path)
 }
 
-/// Build a shim binding spec, or `None` if the bridge can't represent a
-/// parameter or return type. `mut` parameters are supported: their positions are
+/// Build a shim binding spec. `mut` parameters are supported: their positions are
 /// recorded so the shim passes them by `&mut` and returns the mutated values for
 /// the host to write back.
-fn try_build_binding(
+fn build_binding(
     symbol: &str,
     rust_path: &str,
     params: &[Param],
     return_ty: Option<&TypeRef>,
-) -> Option<ShimBinding> {
+) -> Result<ShimBinding, String> {
     let mut param_types = Vec::with_capacity(params.len());
     let mut mut_indices = Vec::new();
     for (index, param) in params.iter().enumerate() {
         if param.effect == Some(DataEffect::Mut) {
             mut_indices.push(index);
         }
-        param_types.push(shim_type(&param.ty)?);
+        param_types.push(shim_type(&param.ty).map_err(|reason| {
+            format!(
+                "native binding `{symbol}` parameter `{}` has unsupported type `{}`: {reason}",
+                param.name, param.ty.name
+            )
+        })?);
     }
-    Some(ShimBinding {
+    Ok(ShimBinding {
         symbol: symbol.to_string(),
         rust_path: rust_path.to_string(),
         params: param_types,
-        ret: shim_return(return_ty)?,
+        ret: shim_return(return_ty).map_err(|reason| {
+            let name = return_ty.map_or("Unit", |ty| ty.name.as_str());
+            format!("native binding `{symbol}` has unsupported return type `{name}`: {reason}")
+        })?,
         mut_indices,
     })
 }
 
 /// Map an RSS interface type to a shim value shape, if supported. Container types
 /// recurse into their element type, so `List<Int>`, `Option<String>`, etc. work.
-fn shim_type(ty: &TypeRef) -> Option<ShimType> {
+fn shim_type(ty: &TypeRef) -> Result<ShimType, String> {
     match ty.name.as_str() {
-        "Unit" => Some(ShimType::Unit),
-        "String" => Some(ShimType::String),
-        "Int" => Some(ShimType::Int),
-        "Float" => Some(ShimType::Float),
-        "Bool" => Some(ShimType::Bool),
-        "Bytes" => Some(ShimType::Bytes),
-        "Path" => Some(ShimType::Path),
-        "List" => ty
-            .args
-            .first()
-            .and_then(shim_type)
-            .map(|inner| ShimType::List(Box::new(inner))),
-        "Option" => ty
-            .args
-            .first()
-            .and_then(shim_type)
-            .map(|inner| ShimType::Option(Box::new(inner))),
-        _ => None,
+        "Unit" => Ok(ShimType::Unit),
+        "String" => Ok(ShimType::String),
+        "Int" => Ok(ShimType::Int),
+        "Float" => Ok(ShimType::Float),
+        "Bool" => Ok(ShimType::Bool),
+        "Bytes" => Ok(ShimType::Bytes),
+        "Path" => Ok(ShimType::Path),
+        "List" | "Option" => {
+            if ty.args.len() != 1 {
+                return Err(format!("{} requires exactly one type argument", ty.name));
+            }
+            let inner = Box::new(shim_type(&ty.args[0])?);
+            if ty.name == "List" {
+                Ok(ShimType::List(inner))
+            } else {
+                Ok(ShimType::Option(inner))
+            }
+        }
+        _ => Err("the native value bridge supports only Unit, String, Int, Float, Bool, Bytes, Path, List<T>, and Option<T>".to_string()),
     }
 }
 
 /// Map a binding's return type. `Result<T, String>` becomes [`ShimReturn::Result`];
 /// anything else is a plain value. `None` if the (Ok) type is unsupported.
-fn shim_return(return_ty: Option<&TypeRef>) -> Option<ShimReturn> {
+fn shim_return(return_ty: Option<&TypeRef>) -> Result<ShimReturn, String> {
     let Some(ty) = return_ty else {
-        return Some(ShimReturn::Plain(ShimType::Unit));
+        return Ok(ShimReturn::Plain(ShimType::Unit));
     };
     if ty.name == "Result" {
-        let ok = shim_type(ty.args.first()?)?;
-        return Some(ShimReturn::Result(ok));
+        if ty.args.len() != 2 || ty.args[1].name != "String" || !ty.args[1].args.is_empty() {
+            return Err("Result returns must have the shape Result<T, String>".to_string());
+        }
+        return Ok(ShimReturn::Result(shim_type(&ty.args[0])?));
     }
-    Some(ShimReturn::Plain(shim_type(ty)?))
+    Ok(ShimReturn::Plain(shim_type(ty)?))
 }
 
 /// Generate (if needed) and cargo-build the shim cdylib, returning its path.
@@ -172,13 +179,7 @@ fn build_shim_library(
     create_private_dir(&cache_root.join("staging"))?;
 
     let lock_path = cache_root.join("locks").join(format!("{cache_key}.lock"));
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&lock_path)
-        .map_err(|error| format!("failed to open shim cache lock: {error}"))?;
+    let lock = open_private_lock(&lock_path)?;
     lock.lock_exclusive()
         .map_err(|error| format!("failed to lock shim cache entry: {error}"))?;
 
@@ -186,7 +187,7 @@ fn build_shim_library(
     if let Some(library) = verified_cached_library(&published, &crate_name)? {
         return Ok(library);
     }
-    if published.exists() {
+    if fs::symlink_metadata(&published).is_ok() {
         fs::remove_dir_all(&published)
             .map_err(|error| format!("failed to remove invalid shim cache entry: {error}"))?;
     }
@@ -196,6 +197,7 @@ fn build_shim_library(
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
+    create_private_dir(&staging)?;
     create_private_dir(&staging.join("src"))?;
     fs::write(staging.join("Cargo.toml"), &shim.cargo_toml)
         .map_err(|error| format!("failed to write shim manifest: {error}"))?;
@@ -207,6 +209,7 @@ fn build_shim_library(
         .arg("generate-lockfile")
         .arg("--manifest-path")
         .arg(&manifest)
+        .env_remove("CARGO_TARGET_DIR")
         .output()
         .map_err(|error| format!("failed to generate native shim lockfile: {error}"))?;
     if !lock_output.status.success() {
@@ -222,6 +225,7 @@ fn build_shim_library(
         .arg("--release")
         .arg("--manifest-path")
         .arg(&manifest)
+        .env_remove("CARGO_TARGET_DIR")
         .output()
         .map_err(|error| format!("failed to run cargo to build native shim: {error}"))?;
     if !output.status.success() {
@@ -329,14 +333,37 @@ fn collect_cache_inputs(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), Str
 }
 
 fn verified_cached_library(entry: &Path, crate_name: &str) -> Result<Option<PathBuf>, String> {
+    match fs::symlink_metadata(entry) {
+        Ok(_) => validate_private_dir(entry)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect native shim cache entry {}: {error}",
+                entry.display()
+            ));
+        }
+    }
+    validate_owned_dir(&entry.join("target"))?;
+    validate_owned_dir(&entry.join("target/release"))?;
     let library = entry
         .join("target/release")
         .join(library_file_name(crate_name));
-    let expected = match fs::read_to_string(entry.join("artifact.sha256")) {
-        Ok(value) => value.trim().to_string(),
-        Err(_) => return Ok(None),
-    };
-    if !library.is_file() || file_sha256(&library)? != expected {
+    let digest_path = entry.join("artifact.sha256");
+    match fs::symlink_metadata(&digest_path) {
+        Ok(_) => validate_private_file(&digest_path)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect native shim cache digest: {error}"
+            ));
+        }
+    }
+    let expected = fs::read_to_string(&digest_path)
+        .map_err(|error| format!("failed to read native shim cache digest: {error}"))?
+        .trim()
+        .to_string();
+    validate_private_file(&library)?;
+    if file_sha256(&library)? != expected {
         return Ok(None);
     }
     Ok(Some(library))
@@ -349,15 +376,169 @@ fn file_sha256(path: &Path) -> Result<String, String> {
 }
 
 fn create_private_dir(path: &Path) -> Result<(), String> {
-    fs::create_dir_all(path)
-        .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            return Err(format!(
+                "native shim cache path must be a real directory, not a symlink: {}",
+                path.display()
+            ));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(path)
+                .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
+        }
+        Err(error) => {
+            return Err(format!(
+                "failed to inspect cache directory {}: {error}",
+                path.display()
+            ));
+        }
+    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(path, fs::Permissions::from_mode(0o700))
             .map_err(|error| format!("failed to secure {}: {error}", path.display()))?;
     }
+    validate_private_dir(path)
+}
+
+fn validate_private_dir(path: &Path) -> Result<(), String> {
+    let metadata = validate_owned_dir(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(format!(
+                "native shim cache directory is accessible by other users: {}",
+                path.display()
+            ));
+        }
+    }
     Ok(())
+}
+
+fn validate_owned_dir(path: &Path) -> Result<fs::Metadata, String> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        format!(
+            "failed to inspect cache directory {}: {error}",
+            path.display()
+        )
+    })?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(format!(
+            "native shim cache path must be a real directory, not a symlink: {}",
+            path.display()
+        ));
+    }
+    validate_cache_owner(path, &metadata)?;
+    Ok(metadata)
+}
+
+fn validate_private_file(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect cache file {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "native shim cache artifact must be a regular file, not a symlink: {}",
+            path.display()
+        ));
+    }
+    validate_cache_owner(path, &metadata)
+}
+
+#[cfg(unix)]
+fn validate_cache_owner(path: &Path, metadata: &fs::Metadata) -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+    let effective_uid = current_process_uid()?;
+    if metadata.uid() != effective_uid {
+        return Err(format!(
+            "native shim cache path is not owned by the current user: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn current_process_uid() -> Result<u32, String> {
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    use std::sync::OnceLock;
+
+    static UID: OnceLock<Result<u32, String>> = OnceLock::new();
+    UID.get_or_init(|| {
+        let probe = std::env::temp_dir().join(format!(
+            ".rss-native-owner-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let mut options = OpenOptions::new();
+        options
+            .create_new(true)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW);
+        let file = options
+            .open(&probe)
+            .map_err(|error| format!("failed to create cache owner probe: {error}"))?;
+        let uid = file
+            .metadata()
+            .map_err(|error| format!("failed to inspect cache owner probe: {error}"))?
+            .uid();
+        drop(file);
+        fs::remove_file(&probe)
+            .map_err(|error| format!("failed to remove cache owner probe: {error}"))?;
+        Ok(uid)
+    })
+    .clone()
+}
+
+#[cfg(not(unix))]
+fn validate_cache_owner(_path: &Path, _metadata: &fs::Metadata) -> Result<(), String> {
+    Ok(())
+}
+
+fn open_private_lock(path: &Path) -> Result<fs::File, String> {
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && (metadata.file_type().is_symlink() || !metadata.is_file())
+    {
+        return Err(format!(
+            "native shim cache lock must be a regular file, not a symlink: {}",
+            path.display()
+        ));
+    }
+    let mut options = OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| format!("failed to open shim cache lock {}: {error}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect shim cache lock: {error}"))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "native shim cache lock is not a regular file: {}",
+            path.display()
+        ));
+    }
+    validate_cache_owner(path, &metadata)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(format!(
+                "native shim cache lock is accessible by other users: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(file)
 }
 
 fn library_file_name(crate_name: &str) -> String {
@@ -400,7 +581,7 @@ mod tests {
     fn builds_plain_scalar_binding() {
         let (params, ret) =
             sig("native fn Adder.add(a: Int, b: Int) -> Int\n    effects(native)\n");
-        let binding = try_build_binding("Adder.add", "adder::add", &params, ret.as_ref())
+        let binding = build_binding("Adder.add", "adder::add", &params, ret.as_ref())
             .expect("scalar binding should build");
         assert_eq!(binding.symbol, "Adder.add");
         assert_eq!(binding.rust_path, "adder::add");
@@ -413,7 +594,7 @@ mod tests {
     fn records_mut_param_positions() {
         let (params, ret) =
             sig("native fn Buf.fill(buffer: mut Bytes, value: Int) -> Unit\n    effects(native)\n");
-        let binding = try_build_binding("Buf.fill", "buf::fill", &params, ret.as_ref())
+        let binding = build_binding("Buf.fill", "buf::fill", &params, ret.as_ref())
             .expect("mut binding should build");
         assert_eq!(binding.mut_indices, vec![0]);
         assert_eq!(binding.params, vec![ShimType::Bytes, ShimType::Int]);
@@ -424,7 +605,7 @@ mod tests {
         let (params, ret) = sig(
             "native fn P.run(items: read List<String>) -> Result<Option<Int>, String>\n    effects(native)\n",
         );
-        let binding = try_build_binding("P.run", "p::run", &params, ret.as_ref())
+        let binding = build_binding("P.run", "p::run", &params, ret.as_ref())
             .expect("container binding should build");
         assert_eq!(
             binding.params,
@@ -439,23 +620,77 @@ mod tests {
     #[test]
     fn missing_return_type_is_plain_unit() {
         let (params, ret) = sig("native fn X.g(a: Int)\n    effects(native)\n");
-        let binding = try_build_binding("X.g", "x::g", &params, ret.as_ref())
+        let binding = build_binding("X.g", "x::g", &params, ret.as_ref())
             .expect("unit-return binding should build");
         assert_eq!(binding.ret, ShimReturn::Plain(ShimType::Unit));
     }
 
     #[test]
     fn rejects_unsupported_param_type() {
-        // A user type the value bridge can't represent → the binding is skipped
-        // (the VM reports "no host binding" only if the program actually calls it).
         let (params, ret) = sig("native fn X.f(cfg: read Config) -> Unit\n    effects(native)\n");
-        assert!(try_build_binding("X.f", "x::f", &params, ret.as_ref()).is_none());
+        let error = build_binding("X.f", "x::f", &params, ret.as_ref())
+            .expect_err("unsupported parameter must fail shim construction");
+        assert!(error.contains("parameter `cfg` has unsupported type `Config`"));
     }
 
     #[test]
     fn rejects_unsupported_return_type() {
         let (params, ret) = sig("native fn X.h(a: Int) -> Config\n    effects(native)\n");
-        assert!(try_build_binding("X.h", "x::h", &params, ret.as_ref()).is_none());
+        let error = build_binding("X.h", "x::h", &params, ret.as_ref())
+            .expect_err("unsupported return must fail shim construction");
+        assert!(error.contains("unsupported return type `Config`"));
+    }
+
+    #[test]
+    fn rejects_result_with_non_string_error_type() {
+        let (params, ret) =
+            sig("native fn X.h(a: Int) -> Result<Int, Config>\n    effects(native)\n");
+        let error = build_binding("X.h", "x::h", &params, ret.as_ref())
+            .expect_err("unsupported Result error must fail shim construction");
+        assert!(error.contains("Result<T, String>"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_cache_directory_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "rss-native-cache-symlink-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let real = root.join("real");
+        fs::create_dir_all(&real).expect("real directory should create");
+        let linked = root.join("linked");
+        symlink(&real, &linked).expect("cache symlink should create");
+
+        let error = create_private_dir(&linked).expect_err("symlinked cache must be rejected");
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(error.contains("not a symlink"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_cache_lock_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = std::env::temp_dir().join(format!(
+            "rss-native-cache-lock-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        create_private_dir(&root).expect("cache directory should create");
+        let target = root.join("target");
+        fs::write(&target, "do not lock").expect("target should write");
+        let linked = root.join("entry.lock");
+        symlink(&target, &linked).expect("lock symlink should create");
+
+        let error = open_private_lock(&linked).expect_err("symlinked lock must be rejected");
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(error.contains("regular file, not a symlink"));
     }
 
     #[test]

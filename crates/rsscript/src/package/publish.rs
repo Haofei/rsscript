@@ -111,10 +111,13 @@ pub fn publish_package_dry_run_with_registry(
             ),
         ),
         publish_check(
-            "package archive reproducible",
+            "package archive manifest deterministic",
             true,
             PackageRisk::Low,
-            format!("{} files; {archive_hash}", archive_files.len()),
+            format!(
+                "{} files sorted into canonical rss.package.archive.v1 manifest; {archive_hash}",
+                archive_files.len()
+            ),
         ),
     ];
 

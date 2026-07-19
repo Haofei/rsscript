@@ -1,27 +1,26 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use super::dependency::{
+    DependencyResolutionScope, ResolvedDependencyEdge, ResolvedDependencyGraph,
+    resolve_dependency_graph,
+};
 use super::lock::effective_interface_hash;
 use super::review::review_package_dir_with_features;
 use super::source_set::{
     ManifestDependencyBudget, ManifestProviderChoice, load_package_manifest,
-    load_package_with_features, resolve_package_features, selected_root_package_features,
+    load_package_with_features,
 };
 use super::{
     PackageDependencyKind, PackageDependencySpec, PackageGraphCheck, PackageRisk, PackageTree,
-    PackageTreeNode, PackageTreeSummary, package_dependency_spec, package_identity,
+    PackageTreeNode, PackageTreeSummary, package_identity,
 };
 
 pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
-    let mut visiting = BTreeSet::new();
-    let root = package_tree_node(
-        package_dir,
-        PackageDependencyKind::Root,
-        None,
-        &mut visiting,
-    )?;
+    let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
+    let root = package_tree_node(&graph, &graph.root, PackageDependencyKind::Root, None)?;
     let mut summary = PackageTreeSummary::default();
-    collect_package_tree_summary(&root, &mut summary);
+    collect_package_tree_summary(&root, &mut summary, &mut BTreeSet::new());
     Ok(PackageTree { root, summary })
 }
 
@@ -55,7 +54,7 @@ pub(super) fn check_package_graph(package_dir: &Path) -> Result<PackageGraphChec
     if let Some(dependency_policy) = root_manifest.dependency.as_ref() {
         collect_graph_budget_reasons(
             &tree.summary,
-            root_manifest.dependencies.len() + root_manifest.dev_dependencies.len(),
+            tree.root.dependencies.len(),
             &dependency_policy.budget,
             &mut reasons,
         );
@@ -264,69 +263,48 @@ fn canonical_graph_source(source: &str) -> String {
 }
 
 fn package_tree_node(
-    package_dir: &Path,
+    graph: &ResolvedDependencyGraph,
+    key: &str,
     dependency_kind: PackageDependencyKind,
-    selected_features: Option<&[String]>,
-    visiting: &mut BTreeSet<String>,
+    incoming: Option<&ResolvedDependencyEdge>,
 ) -> Result<PackageTreeNode, String> {
-    let package = load_package_with_features(package_dir, selected_features)?;
-    let features = selected_features
-        .map(|features| features.to_vec())
-        .unwrap_or_else(|| selected_root_package_features(&package.manifest));
+    let resolved = &graph.nodes[key];
+    let package_dir = &resolved.package_dir;
+    let features = resolved.features.clone();
+    let package = load_package_with_features(package_dir, Some(&features))?;
     let review = review_package_dir_with_features(package_dir, Some(&features))?;
     let interface_effective_hash = effective_interface_hash(&package.sources, &features);
     let identity = package_identity(&package.manifest);
-    let visit_key = super::canonical_path_label(package_dir);
-    if !visiting.insert(visit_key.clone()) {
-        return Ok(PackageTreeNode {
-            name: identity.name,
-            version: Some(identity.version),
-            requirement: None,
-            source: super::package_path_source(package_dir),
-            risk: PackageRisk::Elevated,
-            features,
-            native: review.native_rust.is_some(),
-            virtual_package: package_virtual(&package.manifest),
-            interface_only: package_is_interface_only(&package.sources),
-            compile_only: false,
-            test_only: false,
-            platform_provided: false,
-            interface_effective_hash,
-            implements: package_provider_implementations(&package.manifest),
-            dependency_kind,
-            reasons: vec!["dependency cycle truncated".to_string()],
-            dependencies: Vec::new(),
+    let mut dependencies = Vec::new();
+    for edge in &resolved.dependencies {
+        let child_kind = if dependency_kind == PackageDependencyKind::Dev {
+            PackageDependencyKind::Dev
+        } else {
+            edge.kind
+        };
+        dependencies.push(match &edge.target {
+            Some(target) => package_tree_node(graph, target, child_kind, Some(edge))?,
+            None => {
+                unresolved_dependency_node(edge.spec.clone(), child_kind, unresolved_reasons(edge))
+            }
         });
     }
 
-    let mut dependencies = Vec::new();
-    dependencies.extend(package_tree_dependencies(
-        package_dir,
-        &package.manifest.dependencies,
-        PackageDependencyKind::Normal,
-        visiting,
-    )?);
-    dependencies.extend(package_tree_dependencies(
-        package_dir,
-        &package.manifest.dev_dependencies,
-        PackageDependencyKind::Dev,
-        visiting,
-    )?);
-    visiting.remove(&visit_key);
+    let spec = incoming.map(|edge| &edge.spec);
 
     Ok(PackageTreeNode {
         name: identity.name,
         version: Some(identity.version),
-        requirement: None,
+        requirement: spec.and_then(|spec| spec.requirement.clone()),
         source: super::package_path_source(package_dir),
         risk: review.risk,
         features,
         native: review.native_rust.is_some(),
         virtual_package: package_virtual(&package.manifest),
         interface_only: package_is_interface_only(&package.sources),
-        compile_only: false,
-        test_only: false,
-        platform_provided: false,
+        compile_only: spec.is_some_and(|spec| spec.compile_only),
+        test_only: spec.is_some_and(|spec| spec.test_only),
+        platform_provided: spec.is_some_and(|spec| spec.platform_provided),
         interface_effective_hash,
         implements: package_provider_implementations(&package.manifest),
         dependency_kind,
@@ -335,50 +313,12 @@ fn package_tree_node(
     })
 }
 
-fn package_tree_dependencies(
-    package_dir: &Path,
-    dependencies: &BTreeMap<String, toml::Value>,
-    dependency_kind: PackageDependencyKind,
-    visiting: &mut BTreeSet<String>,
-) -> Result<Vec<PackageTreeNode>, String> {
-    let mut nodes = Vec::new();
-    for (name, value) in dependencies {
-        let spec = package_dependency_spec(name, value);
-        if let Some(path) = &spec.path {
-            let dependency_dir = package_dir.join(path);
-            if dependency_dir.join("rsspkg.toml").exists() {
-                let dependency_manifest = load_package_manifest(&dependency_dir)?;
-                let selected_features =
-                    resolve_package_features(&dependency_manifest, &spec.features);
-                let mut node = package_tree_node(
-                    &dependency_dir,
-                    dependency_kind,
-                    Some(&selected_features.selected),
-                    visiting,
-                )?;
-                node.requirement = spec.requirement.clone();
-                node.features = selected_features.selected;
-                node.source = super::package_path_source(&dependency_dir);
-                node.compile_only = spec.compile_only;
-                node.test_only = spec.test_only;
-                node.platform_provided = spec.platform_provided;
-                nodes.push(node);
-            } else {
-                nodes.push(unresolved_dependency_node(
-                    spec,
-                    dependency_kind,
-                    vec!["path dependency manifest missing".to_string()],
-                ));
-            }
-        } else {
-            nodes.push(unresolved_dependency_node(
-                spec,
-                dependency_kind,
-                vec!["dependency resolver not implemented for this source".to_string()],
-            ));
-        }
+fn unresolved_reasons(edge: &ResolvedDependencyEdge) -> Vec<String> {
+    if edge.spec.path.is_some() {
+        vec!["path dependency manifest missing".to_string()]
+    } else {
+        vec!["dependency resolver not implemented for this source".to_string()]
     }
-    Ok(nodes)
 }
 
 fn unresolved_dependency_node(
@@ -451,7 +391,20 @@ fn package_is_interface_only(sources: &[super::PackageSource]) -> bool {
     has_interface && !has_source
 }
 
-fn collect_package_tree_summary(node: &PackageTreeNode, summary: &mut PackageTreeSummary) {
+fn collect_package_tree_summary(
+    node: &PackageTreeNode,
+    summary: &mut PackageTreeSummary,
+    seen: &mut BTreeSet<String>,
+) {
+    let identity = format!(
+        "{}\0{}\0{}",
+        node.name,
+        node.version.as_deref().unwrap_or("<unresolved>"),
+        canonical_graph_source(&node.source)
+    );
+    if !seen.insert(identity) {
+        return;
+    }
     summary.packages += 1;
     if node.source.starts_with("path+") && node.dependency_kind != PackageDependencyKind::Root {
         summary.path_dependencies += 1;
@@ -472,7 +425,7 @@ fn collect_package_tree_summary(node: &PackageTreeNode, summary: &mut PackageTre
         summary.build_execution_packages += 1;
     }
     for dependency in &node.dependencies {
-        collect_package_tree_summary(dependency, summary);
+        collect_package_tree_summary(dependency, summary, seen);
     }
 }
 

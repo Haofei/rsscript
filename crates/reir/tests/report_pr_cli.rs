@@ -92,8 +92,11 @@ fn report_pr_cli_matches_s3_demo_golden_comment() {
             head_reir.to_str().expect("temporary path should be utf-8"),
             "--granted",
             "examples/demos/s3-iam-reir/expected/prod-grants.reir.json",
-            "--target",
-            "prod",
+            "--principal",
+            "prod/report-uploader",
+            "--allow-unknown",
+            "--allow-excess",
+            "--allow-unverified-capabilities",
         ])
         .output()
         .expect("reir report-pr command should run");
@@ -113,5 +116,35 @@ fn report_pr_cli_matches_s3_demo_golden_comment() {
         String::from_utf8_lossy(&report_pr.stderr)
     );
 
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[test]
+fn report_pr_rejects_unbound_and_unknown_targets() {
+    let unbound = Command::new(env!("CARGO_BIN_EXE_reir"))
+        .args(["report-pr", "--target", "prod"])
+        .output()
+        .expect("report-pr should run");
+    assert!(!unbound.status.success());
+    assert!(String::from_utf8_lossy(&unbound.stderr).contains("requires an explicit --principal"));
+
+    let temp_dir = unique_temp_dir("rsscript-reir-target-policy");
+    fs::create_dir_all(&temp_dir).expect("temporary directory should be created");
+    let policy = temp_dir.join("policy.toml");
+    fs::write(&policy, "[target.prod]\nprincipal = \"role.prod\"\n").unwrap();
+    let unknown = Command::new(env!("CARGO_BIN_EXE_reir"))
+        .args([
+            "report-pr",
+            "--target",
+            "staging",
+            "--policy",
+            policy.to_str().unwrap(),
+        ])
+        .output()
+        .expect("report-pr should run");
+    assert!(!unknown.status.success());
+    assert!(
+        String::from_utf8_lossy(&unknown.stderr).contains("unknown gate policy target `staging`")
+    );
     let _ = fs::remove_dir_all(&temp_dir);
 }

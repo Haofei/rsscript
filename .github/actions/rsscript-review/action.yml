@@ -11,6 +11,9 @@ inputs:
     description: 'Deployment target name (e.g., prod, staging)'
     required: false
     default: 'prod'
+  principal:
+    description: 'Deployment principal or workload subject ID whose grants may cover requirements'
+    required: true
   post-comment:
     description: 'Whether to post a PR comment (requires GITHUB_TOKEN)'
     required: false
@@ -75,11 +78,13 @@ runs:
         INPUT_HEAD: ${{ inputs.head }}
         INPUT_GRANTS: ${{ inputs.grants }}
         INPUT_TARGET: ${{ inputs.target }}
+        INPUT_PRINCIPAL: ${{ inputs.principal }}
         INPUT_FAIL_ON_MISSING: ${{ inputs.fail-on-missing }}
         INPUT_FAIL_ON_UNKNOWN: ${{ inputs.fail-on-unknown }}
         INPUT_FAIL_ON_EXCESS: ${{ inputs.fail-on-excess }}
         INPUT_REQUIRE_VERIFIED: ${{ inputs.require-verified-capabilities }}
         INPUT_POLICY: ${{ inputs.policy }}
+        PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
       run: |
         TEMP_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rsscript-review.XXXXXX")"
         PACKAGE_REVIEW_JSON="$TEMP_DIR/package-review.json"
@@ -88,6 +93,39 @@ runs:
         REVIEW_OUTPUT_FILE="$TEMP_DIR/review.md"
         CI_JSON_FILE="$TEMP_DIR/ci-gate.json"
         COMMENT_FILE="$TEMP_DIR/pr-comment.md"
+
+        TRUSTED_GRANTS="$INPUT_GRANTS"
+        TRUSTED_POLICY="$INPUT_POLICY"
+        if [ -n "$PR_BASE_SHA" ]; then
+          TRUSTED_REF="$PR_BASE_SHA"
+          case "$INPUT_GRANTS" in
+            /*|*..*) echo "::error::grants must be a repository-relative path when using a trusted ref"; exit 2 ;;
+          esac
+          if ! git -C "$GITHUB_WORKSPACE" cat-file -e "$TRUSTED_REF^{commit}" 2>/dev/null; then
+            git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1 origin "$TRUSTED_REF"
+          fi
+          BASELINE_PATHS=("$INPUT_GRANTS")
+          [ -n "$INPUT_POLICY" ] && BASELINE_PATHS+=("$INPUT_POLICY")
+          if ! git -C "$GITHUB_WORKSPACE" diff --quiet "$TRUSTED_REF" -- "${BASELINE_PATHS[@]}"; then
+            echo "::error::this pull request modifies its grants or gate-policy baseline; review that change through a protected approval path"
+            exit 2
+          fi
+          TRUSTED_GRANTS="$TEMP_DIR/trusted-grants.json"
+          git -C "$GITHUB_WORKSPACE" show "$TRUSTED_REF:$INPUT_GRANTS" > "$TRUSTED_GRANTS" || {
+            echo "::error::grants were not found in trusted ref $TRUSTED_REF"
+            exit 2
+          }
+          if [ -n "$INPUT_POLICY" ]; then
+            case "$INPUT_POLICY" in
+              /*|*..*) echo "::error::policy must be a repository-relative path when using a trusted ref"; exit 2 ;;
+            esac
+            TRUSTED_POLICY="$TEMP_DIR/trusted-policy.toml"
+            git -C "$GITHUB_WORKSPACE" show "$TRUSTED_REF:$INPUT_POLICY" > "$TRUSTED_POLICY" || {
+              echo "::error::policy was not found in trusted ref $TRUSTED_REF"
+              exit 2
+            }
+          fi
+        fi
 
         set +e
         "$RSS_BIN" pkg review --json "$INPUT_HEAD" > "$PACKAGE_REVIEW_JSON"
@@ -112,7 +150,7 @@ runs:
         # Empty input means use policy/default; an explicit true or false is a
         # symmetric command-line override.
         REPORT_FLAGS=()
-        [ -n "$INPUT_POLICY" ] && REPORT_FLAGS+=(--policy "$INPUT_POLICY")
+        [ -n "$TRUSTED_POLICY" ] && REPORT_FLAGS+=(--policy "$TRUSTED_POLICY")
         case "$INPUT_FAIL_ON_MISSING" in
           true) REPORT_FLAGS+=(--fail-on-missing) ;; false) REPORT_FLAGS+=(--allow-missing) ;; "") ;; *) echo "::error::fail-on-missing must be true, false, or empty"; exit 2 ;; esac
         case "$INPUT_FAIL_ON_UNKNOWN" in
@@ -125,8 +163,9 @@ runs:
         set +e
         "$REIR_BIN" report-pr \
           --required "$REQUIRED_REIR_JSON" \
-          --granted "$INPUT_GRANTS" \
+          --granted "$TRUSTED_GRANTS" \
           --target "$INPUT_TARGET" \
+          --principal "$INPUT_PRINCIPAL" \
           "${REPORT_FLAGS[@]}" > "$REVIEW_OUTPUT_FILE"
         EXIT_CODE=$?
         set -e
@@ -148,8 +187,9 @@ runs:
         set +e
         "$REIR_BIN" report-pr \
           --required "$REQUIRED_REIR_JSON" \
-          --granted "$INPUT_GRANTS" \
+          --granted "$TRUSTED_GRANTS" \
           --target "$INPUT_TARGET" \
+          --principal "$INPUT_PRINCIPAL" \
           "${REPORT_FLAGS[@]}" \
           --ci-json > "$CI_JSON_FILE"
         CI_JSON_EXIT_CODE=$?
@@ -164,8 +204,9 @@ runs:
         SARIF_FILE="$TEMP_DIR/rsscript-review.sarif"
         "$REIR_BIN" report-pr \
           --required "$REQUIRED_REIR_JSON" \
-          --granted "$INPUT_GRANTS" \
+          --granted "$TRUSTED_GRANTS" \
           --target "$INPUT_TARGET" \
+          --principal "$INPUT_PRINCIPAL" \
           "${REPORT_FLAGS[@]}" \
           --sarif > "$SARIF_FILE" 2>/dev/null || true
         if [ -s "$SARIF_FILE" ]; then

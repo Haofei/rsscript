@@ -10,7 +10,9 @@ use serde::Deserialize;
 use crate::diagnostic::{Diagnostic, code};
 use crate::formatter::format_program;
 use crate::rust_lower::NativeRustDependency;
-use crate::syntax::ast::{EffectDecl, FileFeature, FileFeatureScope, Item, Program};
+use crate::syntax::ast::{
+    EffectDecl, FileFeature, FileFeatureScope, FunctionDecl, Item, Program, TypeRef,
+};
 use crate::syntax::parse_source;
 
 use super::contract::collect_package_function_contracts;
@@ -343,6 +345,15 @@ pub(super) fn package_native_binding_diagnostics(
     }
     let interface_function_contracts =
         collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
+    let interface_functions = sources
+        .iter()
+        .filter(|source| source.kind == PackageReviewFileKind::Interface)
+        .flat_map(|source| parse_source(&source.path, &source.contents).items)
+        .filter_map(|item| match item {
+            Item::Function(function) => Some((function.name.clone(), function)),
+            _ => None,
+        })
+        .collect::<BTreeMap<_, _>>();
     let crate_name = native
         .and_then(|native| native.crate_name.as_deref())
         .map(str::trim)
@@ -437,6 +448,25 @@ pub(super) fn package_native_binding_diagnostics(
             );
         }
 
+        if let Some(function) = interface_functions.get(symbol)
+            && let Some(reason) = unsupported_native_binding_signature(function)
+        {
+            diagnostics.push(
+                Diagnostic::error(
+                    code::PACKAGE_NATIVE_BINDING,
+                    format!("native binding `{symbol}` uses a type unsupported by the native value bridge: {reason}."),
+                    span.clone(),
+                    "unsupported native binding type",
+                )
+                .with_cause("Unsupported native signatures cannot be represented by the generated VM shim and must fail during package checking instead of disappearing at runtime.")
+                .with_fix(
+                    "use_supported_native_binding_type",
+                    "Use Unit, String, Int, Float, Bool, Bytes, Path, List<T>, Option<T>, or Result<T, String> with supported nested T types.",
+                    "manual",
+                ),
+            );
+        }
+
         if let Some(crate_name) = crate_name
             && !target.starts_with(&format!("{crate_name}::"))
         {
@@ -460,6 +490,39 @@ pub(super) fn package_native_binding_diagnostics(
     }
 
     diagnostics
+}
+
+fn unsupported_native_binding_signature(function: &FunctionDecl) -> Option<String> {
+    for param in &function.params {
+        if let Some(reason) = unsupported_native_value_type(&param.ty) {
+            return Some(format!("parameter `{}` ({reason})", param.name));
+        }
+    }
+    let Some(return_ty) = function.return_ty.as_ref() else {
+        return None;
+    };
+    if return_ty.name == "Result" {
+        if return_ty.args.len() != 2
+            || return_ty.args[1].name != "String"
+            || !return_ty.args[1].args.is_empty()
+        {
+            return Some("return type must have the shape Result<T, String>".to_string());
+        }
+        return unsupported_native_value_type(&return_ty.args[0])
+            .map(|reason| format!("Result success type ({reason})"));
+    }
+    unsupported_native_value_type(return_ty).map(|reason| format!("return type ({reason})"))
+}
+
+fn unsupported_native_value_type(ty: &TypeRef) -> Option<String> {
+    match ty.name.as_str() {
+        "Unit" | "String" | "Int" | "Float" | "Bool" | "Bytes" | "Path" if ty.args.is_empty() => {
+            None
+        }
+        "List" | "Option" if ty.args.len() == 1 => unsupported_native_value_type(&ty.args[0]),
+        "List" | "Option" => Some(format!("{} requires exactly one type argument", ty.name)),
+        _ => Some(format!("type `{}` is not supported", ty.name)),
+    }
 }
 
 fn native_binding_span(package_dir: &Path, symbol: &str) -> crate::diagnostic::Span {

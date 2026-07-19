@@ -15,7 +15,8 @@ rss pkg ci my-service --json > package-check.json
 
 # REIR performs system-level capability checks.
 reir collect --producer rsscript --package-check package-check.json --out required.reir.json
-reir report-pr --required required.reir.json --granted prod-iam.reir.json --target prod
+reir report-pr --required required.reir.json --granted prod-iam.reir.json \
+  --target prod --principal prod/report-uploader
 ```
 
 Output:
@@ -73,6 +74,7 @@ raw artifact.
     head: my-service/
     grants: infra/prod-grants.reir.json
     target: prod
+    principal: arn:aws:iam::123456789012:role/my-service-prod
     # Protected-branch policy: missing, unknown (absence of evidence), and
     # excess (over-privilege) all block.
     fail-on-missing: 'true'
@@ -82,6 +84,11 @@ raw artifact.
 
 The action posts a PR comment with the review decision and exits non-zero when
 capability reconciliation fails under the policy above.
+
+On pull requests, `grants` and `policy` are always read from the protected base
+commit. A pull request that modifies either baseline is rejected and must use a
+separate protected approval path. `head` continues to refer to the pull-request
+workspace because that is the code being reviewed.
 
 Policy inputs are three-state: omit one to use `rss-policy.toml` (or REIR's
 built-in default), and set it to `'true'` or `'false'` for an explicit override.
