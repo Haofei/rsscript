@@ -30,7 +30,7 @@ impl RegVm {
                     .filter(|(key, _)| !right.contains_key(key))
                     .map(|(key, value)| (key.clone(), value.clone()))
                     .collect::<ValueMap>();
-                Ok(VmValue::Map(Rc::new(RefCell::new(result))))
+                self.fresh_map(result)
             }
             RegIntrinsic::SetIntersection => {
                 let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -42,7 +42,7 @@ impl RegVm {
                     .filter(|(key, _)| right.contains_key(key))
                     .map(|(key, value)| (key.clone(), value.clone()))
                     .collect::<ValueMap>();
-                Ok(VmValue::Map(Rc::new(RefCell::new(result))))
+                self.fresh_map(result)
             }
             RegIntrinsic::SetIsEmpty => {
                 let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -60,7 +60,7 @@ impl RegVm {
                 let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Int(set.borrow().len() as i64))
             }
-            RegIntrinsic::SetNew => Ok(VmValue::Map(Rc::new(RefCell::new(ValueMap::default())))),
+            RegIntrinsic::SetNew => self.fresh_map(ValueMap::default()),
             RegIntrinsic::SetToList => {
                 let set = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let values = set
@@ -68,9 +68,7 @@ impl RegVm {
                     .keys()
                     .map(vm_value_from_map_key)
                     .collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    values,
-                )))))
+                self.fresh_list(TypedVec::from_values(values))
             }
             RegIntrinsic::SetUnion => {
                 let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -79,7 +77,7 @@ impl RegVm {
                 for (key, value) in right.borrow().iter() {
                     result.entry(key.clone()).or_insert_with(|| value.clone());
                 }
-                Ok(VmValue::Map(Rc::new(RefCell::new(result))))
+                self.fresh_map(result)
             }
             RegIntrinsic::SortedSetContains => {
                 let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -94,10 +92,11 @@ impl RegVm {
                 let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Int(set.borrow().len() as i64))
             }
-            RegIntrinsic::SortedSetNew => Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::new())))),
+            RegIntrinsic::SortedSetNew => self.fresh_list(TypedVec::new()),
             RegIntrinsic::SortedSetToList => {
                 let set = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::List(Rc::new(RefCell::new(set.borrow().clone()))))
+                let values = set.borrow().clone();
+                self.fresh_list(values)
             }
             RegIntrinsic::SortedMapContainsKey => {
                 let map = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -122,9 +121,7 @@ impl RegVm {
                 let entries =
                     expect_sorted_map_entries(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let keys = entries.into_iter().map(|(key, _)| key).collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    keys,
-                )))))
+                self.fresh_list(TypedVec::from_values(keys))
             }
             RegIntrinsic::SortedMapLen => {
                 let entries =
@@ -139,9 +136,7 @@ impl RegVm {
                     .into_iter()
                     .map(|(_, value)| value)
                     .collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    values,
-                )))))
+                self.fresh_list(TypedVec::from_values(values))
             }
             other => unreachable!("exec_set_intrinsics called with non-set intrinsic: {other:?}"),
         }

@@ -21,7 +21,7 @@ impl RegVm {
                 let mut bytes = Vec::with_capacity(left.len() + right.len());
                 bytes.extend_from_slice(left);
                 bytes.extend_from_slice(right);
-                Ok(VmValue::Bytes(Rc::new(bytes)))
+                self.fresh_bytes(bytes)
             }
             RegIntrinsic::BytesConsume => {
                 expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -29,7 +29,8 @@ impl RegVm {
             }
             RegIntrinsic::BytesFromString => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bytes(Rc::new(value.as_bytes().to_vec())))
+                let bytes = value.as_bytes().to_vec();
+                self.fresh_bytes(bytes)
             }
             RegIntrinsic::BytesFromUints => {
                 let values = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -38,7 +39,7 @@ impl RegVm {
                     .iter()
                     .map(|value| expect_int_ref(&value).map(|v| v as u8))
                     .collect::<Result<Vec<_>, _>>()?;
-                Ok(VmValue::Bytes(Rc::new(bytes)))
+                self.fresh_bytes(bytes)
             }
             RegIntrinsic::BytesIsEmpty => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -52,20 +53,21 @@ impl RegVm {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let start = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let len = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                Ok(VmValue::Bytes(Rc::new(bytes_slice(value, start, len))))
+                let bytes = bytes_slice(value, start, len);
+                self.fresh_bytes(bytes)
             }
             RegIntrinsic::BytesToString => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(String::from_utf8_lossy(value)))
+                let string = String::from_utf8_lossy(value).into_owned();
+                self.fresh_string(string)
             }
             RegIntrinsic::BytesToUints => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::List(Rc::new(RefCell::new(
-                    value
-                        .iter()
-                        .map(|byte| VmValue::Int(i64::from(*byte)))
-                        .collect(),
-                ))))
+                let values = value
+                    .iter()
+                    .map(|byte| VmValue::Int(i64::from(*byte)))
+                    .collect();
+                self.fresh_list(values)
             }
             RegIntrinsic::BytesViewStartsWith => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -74,7 +76,8 @@ impl RegVm {
             }
             RegIntrinsic::BytesViewToBytes => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bytes(Rc::new(value.to_vec())))
+                let bytes = value.to_vec();
+                self.fresh_bytes(bytes)
             }
             other => {
                 unreachable!("exec_bytes_intrinsics called with non-bytes intrinsic: {other:?}")

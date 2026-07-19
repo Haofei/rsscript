@@ -147,7 +147,7 @@ impl RegVm {
 
         // No `mut` params: the binding returns its result directly.
         if mut_args.is_empty() {
-            return Ok(vm_value_from_native_value(raw));
+            return vm_value_from_native_value(raw);
         }
 
         // With `mut` params the shim returns an envelope `List[result, mutated...]`
@@ -166,10 +166,14 @@ impl RegVm {
             )));
         }
         let mutated: Vec<NativeValue> = envelope.split_off(1);
-        let result = vm_value_from_native_value(envelope.pop().unwrap_or(NativeValue::Unit));
+        let result = vm_value_from_native_value(envelope.pop().unwrap_or(NativeValue::Unit))?;
+        let mutated = mutated
+            .into_iter()
+            .map(vm_value_from_native_value)
+            .collect::<Result<Vec<_>, _>>()?;
         for (position, value) in mut_args.iter().zip(mutated) {
             let reg = base + args[*position];
-            self.set_reg(reg, vm_value_from_native_value(value));
+            self.set_reg(reg, value);
         }
         Ok(result)
     }

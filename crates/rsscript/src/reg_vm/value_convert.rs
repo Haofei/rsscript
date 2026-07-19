@@ -543,7 +543,7 @@ fn native_value_from_vm_value_inner(
             .iter()
             .map(|(key, value)| {
                 Ok((
-                    key.native_value(),
+                    native_value_from_vm_value_inner(key.value(), active)?,
                     native_value_from_vm_value_inner(value, active)?,
                 ))
             })
@@ -619,8 +619,8 @@ fn native_value_from_vm_value_inner(
     converted
 }
 
-pub(super) fn vm_value_from_native_value(value: NativeValue) -> VmValue {
-    match value {
+pub(super) fn vm_value_from_native_value(value: NativeValue) -> Result<VmValue, EvalError> {
+    Ok(match value {
         NativeValue::Unit => VmValue::Unit,
         NativeValue::Int(value) => VmValue::Int(value),
         NativeValue::Float(value) => VmValue::Float(value),
@@ -629,25 +629,29 @@ pub(super) fn vm_value_from_native_value(value: NativeValue) -> VmValue {
         NativeValue::Char(value) => VmValue::Char(value),
         NativeValue::Bytes(value) => VmValue::Bytes(Rc::new(value)),
         NativeValue::List(items) => VmValue::List(Rc::new(RefCell::new(
-            items.into_iter().map(vm_value_from_native_value).collect(),
+            items
+                .into_iter()
+                .map(vm_value_from_native_value)
+                .collect::<Result<_, _>>()?,
         ))),
         NativeValue::Map(entries) => VmValue::Map(Rc::new(RefCell::new(
             entries
                 .into_iter()
                 .map(|(key, value)| {
-                    (
-                        vm_map_key_from_native_value(key),
-                        vm_value_from_native_value(value),
-                    )
+                    Ok((
+                        vm_map_key_from_native_value(key)?,
+                        vm_value_from_native_value(value)?,
+                    ))
                 })
-                .collect(),
+                .collect::<Result<_, EvalError>>()?,
         ))),
         NativeValue::Json(value) => VmValue::Json(Rc::new(value)),
         NativeValue::Struct { name, fields } => VmValue::Struct(Rc::new(VmStruct::from_named(
             name.as_str(),
             fields
                 .into_iter()
-                .map(|(field, value)| (field, vm_value_from_native_value(value))),
+                .map(|(field, value)| Ok((field, vm_value_from_native_value(value)?)))
+                .collect::<Result<Vec<_>, EvalError>>()?,
         ))),
         // `Option` is a dedicated VM value, not a generic variant, so a native
         // binding returning `Some(_)`/`None` must round-trip to `OptionSome`/
@@ -656,6 +660,7 @@ pub(super) fn vm_value_from_native_value(value: NativeValue) -> VmValue {
             let value = fields
                 .remove("value")
                 .map(vm_value_from_native_value)
+                .transpose()?
                 .unwrap_or(VmValue::Unit);
             VmValue::some(value)
         }
@@ -664,29 +669,33 @@ pub(super) fn vm_value_from_native_value(value: NativeValue) -> VmValue {
             name.as_str(),
             fields
                 .into_iter()
-                .map(|(field, value)| (field, vm_value_from_native_value(value))),
+                .map(|(field, value)| Ok((field, vm_value_from_native_value(value)?)))
+                .collect::<Result<Vec<_>, EvalError>>()?,
         ))),
         NativeValue::Native { type_name, id } => VmValue::Native(Rc::new(VmNative {
             type_name: Rc::from(type_name.as_str()),
             id,
         })),
-    }
+    })
 }
 
-pub(super) fn vm_map_key_from_native_value(value: NativeValue) -> VmMapKey {
-    match value {
-        NativeValue::Bool(value) => VmMapKey::new(VmValue::Bool(value)),
-        NativeValue::Int(value) => VmMapKey::new(VmValue::Int(value)),
-        NativeValue::String(value) => VmMapKey::from_string(value),
-        other => VmMapKey::from_string(format!("{other:?}")),
-    }
+pub(super) fn vm_map_key_from_native_value(value: NativeValue) -> Result<VmMapKey, EvalError> {
+    let value = vm_value_from_native_value(value)?;
+    map_key_from_value(&value)
+        .map(|(key, _work)| key)
+        .map_err(|error| match error {
+            EvalError::Runtime(message) => {
+                EvalError::Runtime(format!("invalid native Map key: {message}"))
+            }
+            other => other,
+        })
 }
 
 #[cfg(test)]
 mod tests {
     //! VM <-> native value marshalling: every variant in both directions, the
-    //! `Option` bridge, managed-unwrap, the closure rejection, and the map-key
-    //! fallback. This is the host boundary, so a missed arm here is a silently
+    //! `Option` bridge, managed-unwrap, the closure rejection, and strict map-key
+    //! validation. This is the host boundary, so a missed arm here is a silently
     //! wrong value at a native call.
     use super::*;
 
@@ -875,8 +884,10 @@ mod tests {
             },
         ]);
 
-        let back = native_value_from_vm_value(vm_value_from_native_value(native.clone()))
-            .expect("round trip should succeed");
+        let back = native_value_from_vm_value(
+            vm_value_from_native_value(native.clone()).expect("native value should be valid"),
+        )
+        .expect("round trip should succeed");
         assert_eq!(native, back);
     }
 
@@ -889,35 +900,57 @@ mod tests {
                 name: "Some".to_string(),
                 fields: some_fields,
             }),
-            VmValue::OptionSomeScalar(_)
+            Ok(VmValue::OptionSomeScalar(_))
         ));
         assert!(matches!(
             vm_value_from_native_value(NativeValue::Variant {
                 name: "None".to_string(),
                 fields: BTreeMap::new(),
             }),
-            VmValue::OptionNone
+            Ok(VmValue::OptionNone)
         ));
     }
 
     #[test]
-    fn map_key_from_native_falls_back_to_string() {
+    fn map_key_from_native_preserves_hashable_types_and_rejects_float() {
         assert_eq!(
-            vm_map_key_from_native_value(NativeValue::Bool(true)),
+            vm_map_key_from_native_value(NativeValue::Bool(true)).unwrap(),
             VmMapKey::new(VmValue::Bool(true))
         );
         assert_eq!(
-            vm_map_key_from_native_value(NativeValue::Int(2)),
+            vm_map_key_from_native_value(NativeValue::Int(2)).unwrap(),
             VmMapKey::new(VmValue::Int(2))
         );
         assert_eq!(
-            vm_map_key_from_native_value(NativeValue::String("k".to_string())),
+            vm_map_key_from_native_value(NativeValue::String("k".to_string())).unwrap(),
             VmMapKey::from_string("k")
         );
-        // A non-scalar key has no VM key form, so it falls back to its debug string.
-        match vm_map_key_from_native_value(NativeValue::Float(1.0)).as_str() {
-            Some(s) => assert!(s.contains("Float"), "{s}"),
-            None => panic!("expected string fallback"),
-        }
+        assert_eq!(
+            vm_map_key_from_native_value(NativeValue::Char('k')).unwrap(),
+            VmMapKey::new(VmValue::Char('k'))
+        );
+        let mut fields = BTreeMap::new();
+        fields.insert("id".to_string(), NativeValue::Int(7));
+        assert!(matches!(
+            vm_map_key_from_native_value(NativeValue::Struct {
+                name: "Key".to_string(),
+                fields,
+            })
+            .unwrap()
+            .value(),
+            VmValue::Struct(data) if data.name().as_ref() == "Key"
+        ));
+        let mut variant_fields = BTreeMap::new();
+        variant_fields.insert("id".to_string(), NativeValue::Int(8));
+        assert!(matches!(
+            vm_map_key_from_native_value(NativeValue::Variant {
+                name: "KeyTag".to_string(),
+                fields: variant_fields,
+            })
+            .unwrap()
+            .value(),
+            VmValue::Variant(data) if data.name().as_ref() == "KeyTag"
+        ));
+        assert!(vm_map_key_from_native_value(NativeValue::Float(1.0)).is_err());
     }
 }

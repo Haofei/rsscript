@@ -17,22 +17,22 @@ impl RegVm {
         match intrinsic {
             RegIntrinsic::UrlDecodeComponent => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
+                let result = json_result(
                     percent_decode_str(value)
                         .decode_utf8()
                         .map(|value| VmValue::string(value.to_string()))
                         .map_err(|error| decode_error_value(error.to_string())),
-                ))
+                );
+                self.account_fresh_value_storage(&result)?;
+                Ok(result)
             }
             RegIntrinsic::UrlEncodeComponent => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(
-                    utf8_percent_encode(value, URL_COMPONENT_SET).to_string(),
-                ))
+                self.fresh_string(utf8_percent_encode(value, URL_COMPONENT_SET).to_string())
             }
             RegIntrinsic::UrlFromString | RegIntrinsic::UrlToString => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(value))
+                self.fresh_string(value.to_string())
             }
             other => unreachable!("exec_url_intrinsics called with non-url intrinsic: {other:?}"),
         }

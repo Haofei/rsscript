@@ -709,14 +709,14 @@ impl<'a> RustLowerer<'a> {
                     }
                 }
                 if matches!(op, BinaryOp::ShiftLeft | BinaryOp::ShiftRight) {
-                    let method = if *op == BinaryOp::ShiftLeft {
-                        "wrapping_shl"
+                    let helper = if *op == BinaryOp::ShiftLeft {
+                        "int_shift_left"
                     } else {
-                        "wrapping_shr"
+                        "int_shift_right"
                     };
                     let left = self.lower_expr(left);
                     let right = self.lower_expr(right);
-                    return format!("({left} as i64).{method}(({right} as i64).max(0) as u32)");
+                    return format!("rsscript_runtime::{helper}({left} as i64, {right} as i64)");
                 }
                 let op = match op {
                     BinaryOp::Add => "+",

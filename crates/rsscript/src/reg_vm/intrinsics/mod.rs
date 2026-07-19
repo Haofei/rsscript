@@ -1849,7 +1849,7 @@ impl RegVm {
                 for value in values.iter() {
                     let _ = self.call_closure_one(unit, &action, value, next_base)?;
                 }
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+                self.fresh_list(values)
             }
             RegIntrinsic::PipelineTryMap => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -1865,9 +1865,8 @@ impl RegVm {
                         Err(error) => return Ok(value_err(error)),
                     }
                 }
-                Ok(value_ok(VmValue::List(Rc::new(RefCell::new(
-                    TypedVec::from_values(mapped),
-                )))))
+                let mapped = self.fresh_list(TypedVec::from_values(mapped))?;
+                Ok(value_ok(mapped))
             }
             RegIntrinsic::LogError => {
                 let line =

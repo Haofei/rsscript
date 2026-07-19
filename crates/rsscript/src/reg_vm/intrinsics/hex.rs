@@ -18,19 +18,21 @@ impl RegVm {
         match intrinsic {
             RegIntrinsic::HexDecode => {
                 let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
+                let result = json_result(
                     hex::decode(text)
                         .map(|bytes| VmValue::Bytes(Rc::new(bytes)))
                         .map_err(|error| decode_error_value(error.to_string())),
-                ))
+                );
+                self.account_fresh_value_storage(&result)?;
+                Ok(result)
             }
             RegIntrinsic::HexEncode => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(hex::encode(value)))
+                self.fresh_string(hex::encode(value))
             }
             RegIntrinsic::HexEncodeString => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(hex::encode(value.as_bytes())))
+                self.fresh_string(hex::encode(value.as_bytes()))
             }
             other => unreachable!("exec_hex_intrinsics called with non-hex intrinsic: {other:?}"),
         }

@@ -128,6 +128,18 @@ pub(super) fn eval_numeric_binary(
     }
 }
 
+pub(super) fn checked_shift_count(bits: i64) -> Result<u32, EvalError> {
+    u32::try_from(bits)
+        .ok()
+        .filter(|bits| *bits < i64::BITS)
+        .ok_or_else(|| {
+            EvalError::Runtime(format!(
+                "shift count must be between 0 and {}, got {bits}",
+                i64::BITS - 1
+            ))
+        })
+}
+
 pub(super) fn eval_numeric_compare(
     op: RegIntCompare,
     lhs: &VmValue,

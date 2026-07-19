@@ -41,7 +41,7 @@ impl RegVm {
                         filtered.insert(key, value);
                     }
                 }
-                Ok(VmValue::Map(Rc::new(RefCell::new(filtered))))
+                self.fresh_map(filtered)
             }
             RegIntrinsic::MapFold => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -101,9 +101,7 @@ impl RegVm {
                     .keys()
                     .map(vm_value_from_map_key)
                     .collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    keys,
-                )))))
+                self.fresh_list(TypedVec::from_values(keys))
             }
             RegIntrinsic::MapLen => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -121,7 +119,7 @@ impl RegVm {
                     };
                     mapped.insert(key, self.call_closure_one(unit, &mapper, value, next_base)?);
                 }
-                Ok(VmValue::Map(Rc::new(RefCell::new(mapped))))
+                self.fresh_map(mapped)
             }
             RegIntrinsic::MapMerge => {
                 let left = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -147,9 +145,9 @@ impl RegVm {
                         merged.insert(key, right_value);
                     }
                 }
-                Ok(VmValue::Map(Rc::new(RefCell::new(merged))))
+                self.fresh_map(merged)
             }
-            RegIntrinsic::MapNew => Ok(VmValue::Map(Rc::new(RefCell::new(ValueMap::default())))),
+            RegIntrinsic::MapNew => self.fresh_map(ValueMap::default()),
             RegIntrinsic::MapTryFold => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mut state = intrinsic_arg(&self.stack, base, args, 1)?.clone();
@@ -178,9 +176,7 @@ impl RegVm {
             RegIntrinsic::MapValues => {
                 let map = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let values = map.borrow().values().cloned().collect::<Vec<_>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    values,
-                )))))
+                self.fresh_list(TypedVec::from_values(values))
             }
             other => unreachable!("exec_map_intrinsics called with non-map intrinsic: {other:?}"),
         }

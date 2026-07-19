@@ -1989,6 +1989,10 @@ pub enum NativeOutcome {
         safepoint_id: SafepointId,
         live: Vec<DeoptReg>,
         child: Option<Box<DeoptFrame>>,
+        /// Final logical call depth at an OSR exit. Embedders must commit this only
+        /// after validating the designated `OsrExit`; ordinary guard bails replay
+        /// the interpreter and therefore discard it.
+        logical_depth: Option<usize>,
     },
 }
 
@@ -1997,6 +2001,7 @@ fn anonymous_deopt() -> NativeOutcome {
         safepoint_id: SafepointId::ANONYMOUS,
         live: Vec::new(),
         child: None,
+        logical_depth: None,
     }
 }
 
@@ -2853,6 +2858,7 @@ impl NativeModule {
                 safepoint_id: SafepointId::ANONYMOUS,
                 live: Vec::new(),
                 child: None,
+                logical_depth: None,
             };
         }
         let func = match self.funcs.get(id.index) {
@@ -2862,6 +2868,7 @@ impl NativeModule {
                     safepoint_id: SafepointId::ANONYMOUS,
                     live: Vec::new(),
                     child: None,
+                    logical_depth: None,
                 };
             }
         };
@@ -2885,6 +2892,7 @@ impl NativeModule {
                 safepoint_id: SafepointId::ANONYMOUS,
                 live: Vec::new(),
                 child: None,
+                logical_depth: None,
             };
         }
         let Some(_call_guard) = TopLevelCallGuard::enter() else {
@@ -2892,6 +2900,7 @@ impl NativeModule {
                 safepoint_id: SafepointId::ANONYMOUS,
                 live: Vec::new(),
                 child: None,
+                logical_depth: None,
             };
         };
         let f = func.f;
@@ -2980,6 +2989,7 @@ impl NativeModule {
                                 .as_ref()
                                 .map_or_else(Vec::new, |frame| frame.live.clone()),
                             child: frame.and_then(|frame| frame.child),
+                            logical_depth: func.osr.then_some(out.max(0) as usize),
                         }
                     }
                 })
@@ -5878,6 +5888,11 @@ fn build_function(
                 // `DeoptSite` (resume_ip = this ip, live = entry-assigned regs), and
                 // emits the id-store + live-capture on the (unconditionally taken)
                 // bail edge — the exact same machinery a guard bail uses.
+                let final_logical_depth = tail_depth_var
+                    .map(|tail_depth_var| bcx.use_var(tail_depth_var))
+                    .unwrap_or(logical_call_depth);
+                bcx.ins()
+                    .store(MemFlags::trusted(), final_logical_depth, out_ptr, 0);
                 let always = bcx.ins().iconst(types::I8, 1);
                 let cont = bail_if(
                     &mut bcx,
@@ -6614,6 +6629,7 @@ mod tests {
             safepoint_id: SafepointId(0),
             live: Vec::new(),
             child: None,
+            logical_depth: None,
         };
         assert_eq!(deopt.clone().completed(), None);
         assert_eq!(deopt.clone().completed_handle(), None);
@@ -8027,6 +8043,7 @@ mod tests {
                 safepoint_id,
                 live,
                 child: Some(child),
+                ..
             } => {
                 assert_eq!(safepoint_id, SafepointId(1));
                 assert_eq!(child.function, callee);
@@ -9954,6 +9971,44 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn osr_exit_returns_updated_logical_tail_depth() {
+        let mut module = module();
+        let function = ft(
+            0,
+            vec![JitValueType::Int],
+            vec![
+                JitInstr::TailCallGuard { max_depth: 10_000 },
+                JitInstr::LoadInt { dst: 0, value: 7 },
+                JitInstr::OsrExit,
+            ],
+        );
+        let id = module
+            .compile_osr(&function, 0, false, false)
+            .expect("compile OSR function");
+        let outcome = module.call_with_host_ctx_at_depth(
+            id,
+            &[0],
+            &[0],
+            0,
+            &mut [],
+            LogicalCallDepth {
+                current: 501,
+                limit: 1_000,
+            },
+        );
+        assert!(
+            matches!(
+                &outcome,
+                NativeOutcome::Deopt {
+                    logical_depth: Some(502),
+                    ..
+                }
+            ),
+            "{outcome:?}"
+        );
     }
 
     #[test]

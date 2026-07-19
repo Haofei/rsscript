@@ -98,9 +98,7 @@ impl RegVm {
                     let mapped = expect_list_ref(&mapped)?;
                     flattened.extend(mapped.borrow().iter());
                 }
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    flattened,
-                )))))
+                self.fresh_list(TypedVec::from_values(flattened))
             }
             RegIntrinsic::ListFlatten => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -109,9 +107,7 @@ impl RegVm {
                     let nested = expect_list_ref(&value)?;
                     flattened.extend(nested.borrow().iter());
                 }
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    flattened,
-                )))))
+                self.fresh_list(TypedVec::from_values(flattened))
             }
             RegIntrinsic::ListGroupBy => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -144,7 +140,12 @@ impl RegVm {
                         }
                     }
                 }
-                Ok(VmValue::Map(Rc::new(RefCell::new(groups))))
+                for value in groups.values() {
+                    if let VmValue::List(items) = value {
+                        self.account_list_storage(&items.borrow())?;
+                    }
+                }
+                self.fresh_map(groups)
             }
             RegIntrinsic::ListIsEmpty => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -154,10 +155,8 @@ impl RegVm {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let separator =
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_string();
-                Ok(VmValue::string(join_string_values(
-                    &list.borrow(),
-                    &separator,
-                )?))
+                let joined = join_string_values(&list.borrow(), &separator)?;
+                self.fresh_string(joined)
             }
             RegIntrinsic::ListLast => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -175,24 +174,18 @@ impl RegVm {
                         values.push(value);
                     }
                 }
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    values,
-                )))))
+                self.fresh_list(TypedVec::from_values(values))
             }
             RegIntrinsic::ListEnumerate => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mut values = Vec::new();
                 for (index, value) in list.borrow().iter().enumerate() {
-                    values.push(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                        vec![
-                            VmValue::Int(index as i64),
-                            VmValue::Int(expect_int_ref(&value)?),
-                        ],
-                    )))));
+                    values.push(self.fresh_list(TypedVec::from_values(vec![
+                        VmValue::Int(index as i64),
+                        VmValue::Int(expect_int_ref(&value)?),
+                    ]))?);
                 }
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    values,
-                )))))
+                self.fresh_list(TypedVec::from_values(values))
             }
             RegIntrinsic::ListMax => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -220,7 +213,7 @@ impl RegVm {
                     .map(|value| VmValue::some(VmValue::Int(value)))
                     .unwrap_or(VmValue::OptionNone))
             }
-            RegIntrinsic::ListNew => Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::new())))),
+            RegIntrinsic::ListNew => self.fresh_list(TypedVec::new()),
             RegIntrinsic::ListPartition => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let predicate = expect_closure_rc(intrinsic_arg(&self.stack, base, args, 1)?)?;
@@ -236,26 +229,21 @@ impl RegVm {
                         unmatched.push(value);
                     }
                 }
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    vec![
-                        VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(matched)))),
-                        VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(unmatched)))),
-                    ],
-                )))))
+                let matched = self.fresh_list(TypedVec::from_values(matched))?;
+                let unmatched = self.fresh_list(TypedVec::from_values(unmatched))?;
+                self.fresh_list(TypedVec::from_values(vec![matched, unmatched]))
             }
             RegIntrinsic::ListReverse => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let mut values = list.borrow().clone();
                 values.reverse();
-                Ok(VmValue::List(Rc::new(RefCell::new(values))))
+                self.fresh_list(values)
             }
             RegIntrinsic::ListSkip => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let count = nonnegative_count(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let values = list.borrow().iter().skip(count).collect();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    values,
-                )))))
+                self.fresh_list(TypedVec::from_values(values))
             }
             RegIntrinsic::ListSlice => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -263,20 +251,27 @@ impl RegVm {
                 let len = nonnegative_count(intrinsic_arg(&self.stack, base, args, 2)?)?;
                 let borrowed = list.borrow();
                 if start >= borrowed.len() {
-                    return Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::new()))));
+                    return self.fresh_list(TypedVec::new());
                 }
                 let end = start.saturating_add(len).min(borrowed.len());
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    borrowed.slice_to_vec(start, end),
-                )))))
+                let values = borrowed.slice_to_vec(start, end);
+                drop(borrowed);
+                self.fresh_list(TypedVec::from_values(values))
             }
             RegIntrinsic::ListSum => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let total = list
-                    .borrow()
-                    .iter()
-                    .map(|v| expect_int_ref(&v))
-                    .try_fold(0_i64, |total, value| value.map(|value| total + value))?;
+                let total = list.borrow().iter().map(|v| expect_int_ref(&v)).try_fold(
+                    0_i64,
+                    |total, value| {
+                        value.and_then(|value| {
+                            total.checked_add(value).ok_or_else(|| {
+                                EvalError::Runtime(
+                                    "List.sum overflow exceeds the Int range".to_string(),
+                                )
+                            })
+                        })
+                    },
+                )?;
                 Ok(VmValue::Int(total))
             }
             RegIntrinsic::ListZip => {
@@ -287,16 +282,15 @@ impl RegVm {
                 let values = left
                     .iter()
                     .zip(right.iter())
-                    .map(|(left, right)| {
-                        VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(vec![
-                            left.clone(),
-                            right.clone(),
-                        ]))))
-                    })
-                    .collect();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    values,
-                )))))
+                    .map(|(left, right)| TypedVec::from_values(vec![left.clone(), right.clone()]))
+                    .collect::<Vec<_>>();
+                drop(left);
+                drop(right);
+                let mut pairs = Vec::with_capacity(values.len());
+                for pair in values {
+                    pairs.push(self.fresh_list(pair)?);
+                }
+                self.fresh_list(TypedVec::from_values(pairs))
             }
             RegIntrinsic::ListTryFold => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -317,9 +311,7 @@ impl RegVm {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let count = nonnegative_count(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let values = list.borrow().iter().take(count).collect();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    values,
-                )))))
+                self.fresh_list(TypedVec::from_values(values))
             }
             RegIntrinsic::ListToJsonStrings => {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

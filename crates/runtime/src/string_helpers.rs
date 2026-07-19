@@ -55,11 +55,25 @@ pub fn int_bit_not(value: i64) -> i64 {
 }
 
 pub fn int_shift_left(value: i64, bits: i64) -> i64 {
-    value.wrapping_shl(bits.max(0) as u32)
+    let bits = checked_shift_count(bits);
+    value << bits
 }
 
 pub fn int_shift_right(value: i64, bits: i64) -> i64 {
-    value.wrapping_shr(bits.max(0) as u32)
+    let bits = checked_shift_count(bits);
+    value >> bits
+}
+
+fn checked_shift_count(bits: i64) -> u32 {
+    u32::try_from(bits)
+        .ok()
+        .filter(|bits| *bits < i64::BITS)
+        .unwrap_or_else(|| {
+            crate::error::panic_runtime_error(crate::error::invalid_argument_error(format!(
+                "shift count must be between 0 and {}, got {bits}",
+                i64::BITS - 1
+            )))
+        })
 }
 
 pub fn string_len(value: &str) -> i64 {
@@ -359,6 +373,22 @@ mod tests {
         assert_eq!(string_view(value, 0, 3), "aé");
         assert_eq!(string_view(value, 2, 2), "é");
         assert_eq!(string_view_slice(value, 100, 5), "");
+    }
+
+    #[test]
+    fn string_index_units_are_explicit_and_composable() {
+        let value = "éx😀";
+        assert_eq!(string_len(value), 7);
+        assert_eq!(string_index_of(value, "x"), Some(2));
+        assert_eq!(string_slice(value, 2, 1), "x");
+        assert_eq!(string_char_at(value, 0), Some('é'));
+        assert_eq!(string_char_at(value, 1), Some('x'));
+        assert_eq!(string_char_at(value, 2), Some('😀'));
+
+        let combining = "e\u{301}";
+        assert_eq!(string_len(combining), 3);
+        assert_eq!(string_char_at(combining, 0), Some('e'));
+        assert_eq!(string_char_at(combining, 1), Some('\u{301}'));
     }
 
     #[test]

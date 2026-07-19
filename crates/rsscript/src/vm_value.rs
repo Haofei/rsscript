@@ -272,6 +272,14 @@ impl TypedVec {
         }
     }
 
+    pub(crate) fn capacity(&self) -> usize {
+        match self {
+            TypedVec::Boxed(values) => values.capacity(),
+            TypedVec::Ints(values) => values.capacity(),
+            TypedVec::Floats(values) => values.capacity(),
+        }
+    }
+
     /// TV2: the raw flat `i64` buffer of an `Ints` list as `(ptr, len)`, for the
     /// native tier to index directly. `None` for any other kind. The pointer is
     /// only valid while the backing `Vec` is borrowed and not mutated (the caller's
@@ -925,13 +933,8 @@ impl VmMapKey {
         self.0.display()
     }
 
-    pub(crate) fn native_value(&self) -> NativeValue {
-        // Every hashable key has a native form; the string fallback only covers
-        // shapes the host ABI lacks a slot for (e.g. an `Option` key), keeping
-        // this total rather than panicking on the boundary.
-        self.0
-            .native_value()
-            .unwrap_or_else(|| NativeValue::String(self.0.display()))
+    pub(crate) fn native_value(&self) -> Option<NativeValue> {
+        self.0.native_value()
     }
 }
 
@@ -1330,7 +1333,7 @@ impl VmValue {
             Self::Map(entries) => entries
                 .borrow()
                 .iter()
-                .map(|(key, value)| Some((key.native_value(), value.native_value_inner(active)?)))
+                .map(|(key, value)| Some((key.native_value()?, value.native_value_inner(active)?)))
                 .collect::<Option<Vec<_>>>()
                 .map(NativeValue::Map),
             Self::Struct(data) => native_fields(data, active).map(|fields| NativeValue::Struct {
@@ -1346,10 +1349,30 @@ impl VmValue {
                 id: data.id,
             }),
             Self::Managed(value) => value.borrow().native_value_inner(active),
-            Self::OptionSomeHeap(_)
-            | Self::OptionSomeScalar(_)
-            | Self::OptionNone
-            | Self::Closure(_) => None,
+            Self::OptionSomeHeap(value) => {
+                let mut fields = BTreeMap::new();
+                fields.insert("value".to_string(), value.native_value_inner(active)?);
+                Some(NativeValue::Variant {
+                    name: "Some".to_string(),
+                    fields,
+                })
+            }
+            Self::OptionSomeScalar(value) => {
+                let mut fields = BTreeMap::new();
+                fields.insert(
+                    "value".to_string(),
+                    value.to_value().native_value_inner(active)?,
+                );
+                Some(NativeValue::Variant {
+                    name: "Some".to_string(),
+                    fields,
+                })
+            }
+            Self::OptionNone => Some(NativeValue::Variant {
+                name: "None".to_string(),
+                fields: BTreeMap::new(),
+            }),
+            Self::Closure(_) => None,
         };
         if let Some(node) = node {
             active.remove(&node);

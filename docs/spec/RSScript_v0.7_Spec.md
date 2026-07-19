@@ -4813,6 +4813,14 @@ pub fn StringBuilder.push(builder: mut StringBuilder, value: read String) -> Uni
 pub fn StringBuilder.finish(builder: take StringBuilder) -> fresh String
 ```
 
+String indexing uses two explicit units. `String.len`, `String.index_of`, and
+`String.slice` use UTF-8 byte offsets and lengths; `String.slice` clamps an
+offset down to a valid UTF-8 scalar boundary and never returns invalid UTF-8.
+`String.char_at` instead uses a zero-based Unicode scalar-value index. A byte
+offset returned by `String.index_of` is therefore directly composable with
+`String.slice`, but not with `String.char_at`. Grapheme-cluster indexing is not
+part of this API.
+
 The minimum `Json` core surface includes field access, array access, and a
 noescape predicate helper used by review tooling and self-hosted package validation:
 
@@ -4939,7 +4947,7 @@ pub fn Math.round(value: Float) -> Int
 `Math.abs(Int::MIN)` and an overflowing `Math.pow` produce the language's integer
 overflow error. `Math.pow` accepts only exponents in `0..=u32::MAX`; negative or
 larger exponents are invalid arguments. `Math.clamp`/`Math.clamp_float` require
-`min <= max`. These failures use the same structured runtime diagnostic in the VM,
+non-NaN bounds satisfying `min <= max`. These failures use the same structured runtime diagnostic in the VM,
 JIT fallback, and generated Rust backend; they are never raw Rust arithmetic panics.
 
 Size-parameterized byte intrinsics are bounded. In particular,

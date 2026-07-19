@@ -18,18 +18,24 @@ impl RegVm {
             RegIntrinsic::StringAfter => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let delimiter = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(value
+                let right = value
                     .split_once(delimiter)
-                    .map(|(_, right)| VmValue::some(VmValue::string(right)))
-                    .unwrap_or(VmValue::OptionNone))
+                    .map(|(_, right)| right.to_string());
+                match right {
+                    Some(right) => Ok(VmValue::some(self.fresh_string(right)?)),
+                    None => Ok(VmValue::OptionNone),
+                }
             }
             RegIntrinsic::StringBefore => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let delimiter = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(value
+                let left = value
                     .find(delimiter)
-                    .map(|index| VmValue::some(VmValue::string(&value[..index])))
-                    .unwrap_or(VmValue::OptionNone))
+                    .map(|index| value[..index].to_string());
+                match left {
+                    Some(left) => Ok(VmValue::some(self.fresh_string(left)?)),
+                    None => Ok(VmValue::OptionNone),
+                }
             }
             RegIntrinsic::StringBuilderNew => {
                 Ok(VmValue::Managed(Rc::new(RefCell::new(VmValue::string("")))))
@@ -45,9 +51,8 @@ impl RegVm {
             }
             RegIntrinsic::StringChars => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::List(Rc::new(RefCell::new(
-                    value.chars().map(VmValue::Char).collect(),
-                ))))
+                let chars = value.chars().map(VmValue::Char).collect();
+                self.fresh_list(chars)
             }
             RegIntrinsic::StringContains => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -61,7 +66,8 @@ impl RegVm {
             }
             RegIntrinsic::StringCopy => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(value))
+                let value = value.to_string();
+                self.fresh_string(value)
             }
             RegIntrinsic::StringEndsWith => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -71,18 +77,19 @@ impl RegVm {
             RegIntrinsic::StringFormat => {
                 let template = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let args = expect_string_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::string(string_format(template, &args)))
+                let formatted = string_format(template, &args);
+                self.fresh_string(formatted)
             }
             RegIntrinsic::StringFromBool => {
                 let value = expect_bool_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(value.to_string()))
+                self.fresh_string(value.to_string())
             }
-            RegIntrinsic::StringFromFloat => Ok(VmValue::string(
+            RegIntrinsic::StringFromFloat => self.fresh_string(
                 expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
-            )),
-            RegIntrinsic::StringFromInt => Ok(VmValue::string(
+            ),
+            RegIntrinsic::StringFromInt => self.fresh_string(
                 expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
-            )),
+            ),
             RegIntrinsic::StringIndexOf => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let needle = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
@@ -99,17 +106,16 @@ impl RegVm {
                 let list = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let separator =
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_string();
-                Ok(VmValue::string(join_string_values(
-                    &list.borrow(),
-                    &separator,
-                )?))
+                let joined = join_string_values(&list.borrow(), &separator)?;
+                self.fresh_string(joined)
             }
             RegIntrinsic::StringLines => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let lines = value.lines().map(VmValue::string).collect::<Vec<VmValue>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    lines,
-                )))))
+                let lines = value.lines().map(str::to_string).collect::<Vec<_>>();
+                self.account_bytes(lines.iter().map(String::len).sum())?;
+                self.fresh_list(TypedVec::from_values(
+                    lines.into_iter().map(VmValue::string).collect(),
+                ))
             }
             RegIntrinsic::StringLen => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -164,34 +170,39 @@ impl RegVm {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let from = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let to = expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                Ok(VmValue::string(value.replace(from, to)))
+                let replaced = value.replace(from, to);
+                self.fresh_string(replaced)
             }
             RegIntrinsic::StringReplaceFirst => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let from = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let to = expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                Ok(VmValue::string(value.replacen(from, to, 1)))
+                let replaced = value.replacen(from, to, 1);
+                self.fresh_string(replaced)
             }
             RegIntrinsic::StringReverse => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(value.chars().rev().collect::<String>()))
+                let reversed = value.chars().rev().collect::<String>();
+                self.fresh_string(reversed)
             }
             RegIntrinsic::StringSlice => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let start = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let len = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                Ok(VmValue::string(string_slice_range(value, start, len)))
+                let sliced = string_slice_range(value, start, len).to_string();
+                self.fresh_string(sliced)
             }
             RegIntrinsic::StringSplit => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let delimiter = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let parts = value
                     .split(delimiter)
-                    .map(VmValue::string)
-                    .collect::<Vec<VmValue>>();
-                Ok(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                    parts,
-                )))))
+                    .map(str::to_string)
+                    .collect::<Vec<_>>();
+                self.account_bytes(parts.iter().map(String::len).sum())?;
+                self.fresh_list(TypedVec::from_values(
+                    parts.into_iter().map(VmValue::string).collect(),
+                ))
             }
             RegIntrinsic::StringStartsWith => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -201,30 +212,36 @@ impl RegVm {
             RegIntrinsic::StringStripPrefix => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let prefix = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(value
-                    .strip_prefix(prefix)
-                    .map(|rest| VmValue::some(VmValue::string(rest)))
-                    .unwrap_or(VmValue::OptionNone))
+                let rest = value.strip_prefix(prefix).map(str::to_string);
+                match rest {
+                    Some(rest) => Ok(VmValue::some(self.fresh_string(rest)?)),
+                    None => Ok(VmValue::OptionNone),
+                }
             }
             RegIntrinsic::StringToLowercase => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(value.to_lowercase()))
+                let value = value.to_lowercase();
+                self.fresh_string(value)
             }
             RegIntrinsic::StringToUppercase => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(value.to_uppercase()))
+                let value = value.to_uppercase();
+                self.fresh_string(value)
             }
             RegIntrinsic::StringTrim => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(value.trim()))
+                let value = value.trim().to_string();
+                self.fresh_string(value)
             }
             RegIntrinsic::StringTrimEnd => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(value.trim_end()))
+                let value = value.trim_end().to_string();
+                self.fresh_string(value)
             }
             RegIntrinsic::StringTrimStart => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(value.trim_start()))
+                let value = value.trim_start().to_string();
+                self.fresh_string(value)
             }
             other => {
                 unreachable!("exec_string_intrinsics called with non-string intrinsic: {other:?}")

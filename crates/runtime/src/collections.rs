@@ -294,7 +294,14 @@ pub fn list_is_empty<T>(list: &[T]) -> bool {
 }
 
 pub fn list_sum(list: &[i64]) -> i64 {
-    list.iter().sum()
+    list.iter()
+        .copied()
+        .try_fold(0_i64, i64::checked_add)
+        .unwrap_or_else(|| {
+            crate::error::panic_runtime_error(crate::error::integer_overflow_error(
+                "List.sum overflow exceeds the Int range".to_string(),
+            ))
+        })
 }
 
 pub fn list_min(list: &[i64]) -> Option<i64> {
@@ -1076,5 +1083,19 @@ mod view_tests {
         assert_eq!(persistent_map_get(&removed, &"one".to_string()), None);
         assert_eq!(persistent_map_get(&two, &"one".to_string()), Some(1));
         assert!(persistent_map_is_empty(&cleared));
+    }
+
+    #[test]
+    fn list_sum_uses_structured_checked_overflow() {
+        assert_eq!(list_sum(&[]), 0);
+        assert_eq!(list_sum(&[i64::MAX, i64::MIN]), -1);
+        let panic =
+            std::panic::catch_unwind(|| list_sum(&[i64::MAX, 1])).expect_err("overflow must trap");
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        assert!(message.contains("integer_overflow"), "{message}");
     }
 }

@@ -1,6 +1,16 @@
 use super::*;
 
 #[cfg(feature = "native-jit")]
+fn osr_initial_logical_depth(physical_depth: usize, prior_tail_calls: usize) -> usize {
+    physical_depth.saturating_add(prior_tail_calls)
+}
+
+#[cfg(feature = "native-jit")]
+fn osr_committed_tail_calls(final_logical_depth: usize, physical_depth: usize) -> usize {
+    final_logical_depth.saturating_sub(physical_depth)
+}
+
+#[cfg(feature = "native-jit")]
 fn osr_loop_region_is_native_subset(code: &[RegInstr], lp: OsrLoop, n_params: usize) -> bool {
     code.get(lp.header..lp.exit).is_some_and(|region| {
         let region_defs = native_osr_region_defined_regs(region);
@@ -1509,6 +1519,7 @@ impl RegVm {
                 safepoint_id,
                 live,
                 child,
+                ..
             } => {
                 let child_deopt = child.is_some();
                 let can_precise_deopt_resume = heap_tx.can_precise_deopt_resume();
@@ -2688,7 +2699,9 @@ impl RegVm {
         let started = collect_stats.then(std::time::Instant::now);
         let _literal_guard = jit_install_string_literals(&string_literals);
         debug_assert!(!armed, "armed OSR is rejected before compilation/dispatch");
-        let initial_depth = self.frames.len();
+        let physical_depth = self.frames.len();
+        let prior_tail_calls = self.frames.last().map_or(0, |frame| frame.tail_calls);
+        let initial_depth = osr_initial_logical_depth(physical_depth, prior_tail_calls);
         let result = native_ref.module.call_with_host_ctx_at_depth(
             id,
             &scratch.window,
@@ -2721,7 +2734,10 @@ impl RegVm {
         // live-out window — the precise-deopt resume, reused verbatim.
         match result {
             vm_jit::NativeOutcome::Deopt {
-                safepoint_id, live, ..
+                safepoint_id,
+                live,
+                logical_depth: Some(final_logical_depth),
+                ..
             } if safepoint_id.0 >= 1 => {
                 let resume_ip = self
                     .native
@@ -2947,7 +2963,9 @@ impl RegVm {
                     self.set_reg(base + reg as usize, vm_value);
                 }
                 // Resume in the ORIGINAL `func.code`, at the ip-mapped post-loop ip.
-                self.frames.last_mut().expect("active frame").ip = orig_exit;
+                let frame = self.frames.last_mut().expect("active frame");
+                frame.tail_calls = osr_committed_tail_calls(final_logical_depth, physical_depth);
+                frame.ip = orig_exit;
                 if let Some(native) = self.native.as_mut() {
                     if native.collect_stats {
                         native.stats.osr_entries += 1;
@@ -3953,4 +3971,16 @@ fn scalar_reachable_instructions(code: &[RegInstr]) -> Vec<bool> {
         }
     }
     reachable
+}
+
+#[cfg(all(test, feature = "native-jit"))]
+mod tests {
+    use super::{osr_committed_tail_calls, osr_initial_logical_depth};
+
+    #[test]
+    fn osr_logical_depth_round_trips_accumulated_tail_calls() {
+        let initial = osr_initial_logical_depth(3, 500);
+        assert_eq!(initial, 503);
+        assert_eq!(osr_committed_tail_calls(initial + 17, 3), 517);
+    }
 }

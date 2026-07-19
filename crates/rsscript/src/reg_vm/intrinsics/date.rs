@@ -45,15 +45,13 @@ impl RegVm {
             }
             RegIntrinsic::DateFormatIso => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(
+                self.fresh_string(
                     utc_datetime(unix_ms).to_rfc3339_opts(SecondsFormat::Millis, true),
-                ))
+                )
             }
             RegIntrinsic::DateFormatYmd => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(
-                    utc_datetime(unix_ms).format("%Y-%m-%d").to_string(),
-                ))
+                self.fresh_string(utc_datetime(unix_ms).format("%Y-%m-%d").to_string())
             }
             RegIntrinsic::DateHour => {
                 let unix_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

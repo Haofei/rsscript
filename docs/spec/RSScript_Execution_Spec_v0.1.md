@@ -336,6 +336,9 @@ tier on which the count can diverge).
 Tail-call optimization may reuse a physical frame, but it does not erase logical
 calls from `max_depth`. The interpreter carries a per-frame tail-call counter; the
 native tier receives the current logical depth and guards each optimized tail edge.
+An accepted OSR exit writes the resulting logical depth back into that frame's
+tail-call counter; a guard bailout that will be replayed discards the speculative
+native count.
 An exceeded native guard falls back anonymously so interpreter replay emits the
 canonical depth-limit error rather than resuming with a partially counted frame.
 
@@ -343,7 +346,9 @@ Structural Map/Set key validation and hashing consume step budget proportional t
 the traversed nodes/bytes, with bounded key depth and size. Hash tables use a
 per-process randomized hasher; deterministic iteration is not a language contract.
 Container capacity growth and size-parameterized intrinsic outputs are charged to
-`mem_budget` when armed.
+`mem_budget` when armed. Fresh List/Map/Set/String/Bytes results are charged
+cumulatively, including list/map transforms such as `reverse`, `flat_map`,
+`group_by`, `keys`, `filter`, `merge`, `split`, `replace`, and `concat`.
 
 ### 6.2 Limits bind every tier, including native code (normative)
 

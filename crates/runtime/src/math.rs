@@ -78,9 +78,9 @@ pub fn math_max_float(left: f64, right: f64) -> f64 {
 }
 
 pub fn math_clamp_float(value: f64, min: f64, max: f64) -> f64 {
-    if min > max {
+    if min.is_nan() || max.is_nan() || min > max {
         crate::error::panic_runtime_error(crate::error::invalid_argument_error(format!(
-            "Math.clamp_float requires min <= max, got min {min} and max {max}"
+            "Math.clamp_float requires non-NaN bounds with min <= max, got min {min} and max {max}"
         )));
     }
     value.clamp(min, max)
@@ -159,5 +159,23 @@ mod tests {
                 .unwrap_or_default();
             assert!(message.starts_with(crate::diagnostics::RUNTIME_DIAGNOSTIC_PREFIX));
         }
+    }
+
+    #[test]
+    fn clamp_float_rejects_nan_bounds_but_preserves_nan_values() {
+        for call in [
+            || math_clamp_float(0.0, f64::NAN, 1.0),
+            || math_clamp_float(0.0, 0.0, f64::NAN),
+            || math_clamp_float(0.0, f64::NAN, f64::NAN),
+        ] {
+            let panic = std::panic::catch_unwind(call).expect_err("NaN bound must trap");
+            let message = panic
+                .downcast_ref::<String>()
+                .map(String::as_str)
+                .or_else(|| panic.downcast_ref::<&str>().copied())
+                .unwrap_or_default();
+            assert!(message.starts_with(crate::diagnostics::RUNTIME_DIAGNOSTIC_PREFIX));
+        }
+        assert!(math_clamp_float(f64::NAN, 0.0, 1.0).is_nan());
     }
 }

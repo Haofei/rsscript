@@ -35,24 +35,24 @@ impl RegVm {
             RegIntrinsic::IntShiftLeft => {
                 let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let bits = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::Int(value.wrapping_shl(bits.max(0) as u32)))
+                Ok(VmValue::Int(value << checked_shift_count(bits)?))
             }
             RegIntrinsic::IntShiftRight => {
                 let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let bits = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::Int(value.wrapping_shr(bits.max(0) as u32)))
+                Ok(VmValue::Int(value >> checked_shift_count(bits)?))
             }
-            RegIntrinsic::IntToString => Ok(VmValue::string(
+            RegIntrinsic::IntToString => self.fresh_string(
                 expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
-            )),
+            ),
             RegIntrinsic::IntToFloat => {
                 Ok(VmValue::Float(
                     expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)? as f64,
                 ))
             }
-            RegIntrinsic::FloatToString => Ok(VmValue::string(
+            RegIntrinsic::FloatToString => self.fresh_string(
                 expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string(),
-            )),
+            ),
             RegIntrinsic::FloatIsFinite => Ok(VmValue::Bool(
                 expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.is_finite(),
             )),

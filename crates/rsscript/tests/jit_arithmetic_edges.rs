@@ -169,28 +169,51 @@ fn main() -> Unit {{
 // --- Value edges: every backend must agree -------------------------------
 
 #[test]
-fn jit_edge_shift_amount_wraps_consistently() {
-    // `wrapping_shl`/`wrapping_shr` mask the count to 0..63, so a shift of 64 is
-    // a shift of 0. Every backend must agree on this defined wrap rather than
-    // panic (debug `<<`) or produce a target-dependent value.
+fn jit_edge_invalid_shift_amounts_trap_consistently() {
+    for (name, bits) in [("negative", -1), ("width", 64), ("large", 65)] {
+        let source = format!(
+            "fn main() -> Unit {{\n    Log.write(message: String.from_int(value: 1 << {bits}))\n    return Unit\n}}\n"
+        );
+        assert_backends_all_fail(&format!("jit-edge-shift-{name}.rss"), &source, &[]);
+    }
+}
+
+#[test]
+fn list_sum_overflow_traps_consistently() {
     let source = "\
-fn shl(value: Int, bits: Int) -> Int {
-    return Int.shift_left(value: read value, bits: read bits)
-}
-
-fn shr(value: Int, bits: Int) -> Int {
-    return Int.shift_right(value: read value, bits: read bits)
-}
-
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: shl(value: read 1, bits: read 64)))
-    Log.write(message: read String.from_int(value: shl(value: read 1, bits: read 63)))
-    Log.write(message: read String.from_int(value: shr(value: read 256, bits: read 64)))
-    Log.write(message: read String.from_int(value: shr(value: read 256, bits: read 4)))
+    let values = [9223372036854775807, 1]
+    Log.write(message: String.from_int(value: List.sum(list: values)))
     return Unit
 }
 ";
-    assert_backends_agree("jit-edge-shift-wrap.rss", source, &[]);
+    assert_backends_all_fail("list-sum-overflow.rss", source, &[]);
+}
+
+#[test]
+fn clamp_float_nan_bounds_trap_consistently() {
+    for (name, min, max) in [
+        ("nan-min", "0.0 / 0.0", "1.0"),
+        ("nan-max", "0.0", "0.0 / 0.0"),
+        ("nan-both", "0.0 / 0.0", "0.0 / 0.0"),
+    ] {
+        let source = format!(
+            "fn main() -> Unit {{\n    Log.write(message: String.from_float(value: Math.clamp_float(value: 0.0, min: {min}, max: {max})))\n    return Unit\n}}\n"
+        );
+        assert_backends_all_fail(&format!("clamp-float-{name}.rss"), &source, &[]);
+    }
+}
+
+#[test]
+fn clamp_float_accepts_nan_value_with_finite_bounds() {
+    let source = "\
+fn main() -> Unit {
+    let value = 0.0 / 0.0
+    Log.write(message: String.from_float(value: Math.clamp_float(value: value, min: 0.0, max: 1.0)))
+    return Unit
+}
+";
+    assert_backends_agree("clamp-float-nan-value.rss", source, &[]);
 }
 
 #[test]

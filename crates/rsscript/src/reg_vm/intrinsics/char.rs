@@ -67,7 +67,7 @@ impl RegVm {
             }
             RegIntrinsic::CharToString => {
                 let value = expect_char_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::string(value.to_string()))
+                self.fresh_string(value.to_string())
             }
             RegIntrinsic::CharToUpper => {
                 let value = expect_char_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

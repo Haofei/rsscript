@@ -192,6 +192,95 @@ impl RegVm {
         Ok(())
     }
 
+    pub(super) fn ensure_memory_available(&self, bytes: usize) -> Result<(), EvalError> {
+        if let Some(limit) = self.limits.mem_budget
+            && self.live_bytes.saturating_add(bytes) > limit
+        {
+            return Err(EvalError::Runtime(format!(
+                "memory limit exceeded ({limit} bytes)"
+            )));
+        }
+        Ok(())
+    }
+
+    pub(super) fn account_list_storage(&mut self, values: &TypedVec) -> Result<(), EvalError> {
+        self.account_bytes(values.capacity().saturating_mul(values.elem_bytes()))
+    }
+
+    pub(super) fn fresh_list(&mut self, values: TypedVec) -> Result<VmValue, EvalError> {
+        self.account_list_storage(&values)?;
+        Ok(VmValue::List(Rc::new(RefCell::new(values))))
+    }
+
+    #[allow(clippy::mutable_key_type)]
+    pub(super) fn fresh_map(&mut self, values: ValueMap) -> Result<VmValue, EvalError> {
+        self.account_bytes(values.capacity().saturating_mul(MAP_ENTRY_BYTES))?;
+        Ok(VmValue::Map(Rc::new(RefCell::new(values))))
+    }
+
+    #[allow(clippy::mutable_key_type)]
+    fn reserve_map_entry_accounted(&mut self, map: &mut ValueMap) -> Result<(), EvalError> {
+        if map.len() < map.capacity() {
+            return Ok(());
+        }
+
+        // HashMap growth is implementation-defined. Pre-charge a conservative
+        // doubling before reserve so the host allocation cannot cross mem_budget.
+        let old_capacity = map.capacity();
+        let projected_capacity = old_capacity.saturating_mul(2).saturating_add(3).max(3);
+        let projected_bytes = projected_capacity
+            .saturating_sub(old_capacity)
+            .saturating_mul(MAP_ENTRY_BYTES);
+        self.account_bytes(projected_bytes)?;
+
+        if let Err(error) = map.try_reserve(1) {
+            self.live_bytes = self.live_bytes.saturating_sub(projected_bytes);
+            return Err(EvalError::Runtime(format!(
+                "Map/Set insertion allocation failed: {error}"
+            )));
+        }
+
+        let actual_bytes = map
+            .capacity()
+            .saturating_sub(old_capacity)
+            .saturating_mul(MAP_ENTRY_BYTES);
+        debug_assert!(actual_bytes <= projected_bytes);
+        self.live_bytes = self
+            .live_bytes
+            .saturating_sub(projected_bytes.saturating_sub(actual_bytes));
+        Ok(())
+    }
+
+    pub(super) fn fresh_string(&mut self, value: String) -> Result<VmValue, EvalError> {
+        self.account_bytes(value.len())?;
+        Ok(VmValue::string(value))
+    }
+
+    pub(super) fn fresh_bytes(&mut self, value: Vec<u8>) -> Result<VmValue, EvalError> {
+        self.account_bytes(value.capacity())?;
+        Ok(VmValue::Bytes(Rc::new(value)))
+    }
+
+    pub(super) fn account_fresh_value_storage(&mut self, value: &VmValue) -> Result<(), EvalError> {
+        match value {
+            VmValue::List(values) => self.account_list_storage(&values.borrow()),
+            VmValue::Map(values) => {
+                self.account_bytes(values.borrow().capacity().saturating_mul(MAP_ENTRY_BYTES))
+            }
+            VmValue::String(value) => self.account_bytes(value.len()),
+            VmValue::Bytes(value) => self.account_bytes(value.capacity()),
+            VmValue::OptionSomeHeap(value) => self.account_fresh_value_storage(value),
+            VmValue::OptionSomeScalar(_) | VmValue::OptionNone => Ok(()),
+            VmValue::Variant(value) => {
+                for (_, field) in value.iter() {
+                    self.account_fresh_value_storage(field)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Charge one stdlib/runtime intrinsic dispatch against `host_call_budget`.
     /// Always increments the counter (the single unconditional add is the whole
     /// cost when the budget is off), and — only when `limits.host_call_budget` is
@@ -434,6 +523,12 @@ impl RegVm {
                 );
             }
             RegInstr::MakeMap { dst, entries } => {
+                let projected_entries = if entries.is_empty() {
+                    0
+                } else {
+                    entries.len().saturating_mul(2).saturating_add(3)
+                };
+                self.ensure_memory_available(projected_entries.saturating_mul(MAP_ENTRY_BYTES))?;
                 let mut map = ValueMap::with_capacity_and_hasher(entries.len(), Default::default());
                 self.account_bytes(map.capacity() * MAP_ENTRY_BYTES)?;
                 for (key, value) in entries {
@@ -501,12 +596,14 @@ impl RegVm {
             RegInstr::ShiftLeftInt { dst, lhs, rhs } => {
                 let l = expect_int_ref(self.reg(base + *lhs))?;
                 let r = expect_int_ref(self.reg(base + *rhs))?;
-                self.set_reg(base + *dst, VmValue::Int(l.wrapping_shl(r.max(0) as u32)));
+                let bits = checked_shift_count(r)?;
+                self.set_reg(base + *dst, VmValue::Int(l << bits));
             }
             RegInstr::ShiftRightInt { dst, lhs, rhs } => {
                 let l = expect_int_ref(self.reg(base + *lhs))?;
                 let r = expect_int_ref(self.reg(base + *rhs))?;
-                self.set_reg(base + *dst, VmValue::Int(l.wrapping_shr(r.max(0) as u32)));
+                let bits = checked_shift_count(r)?;
+                self.set_reg(base + *dst, VmValue::Int(l >> bits));
             }
             RegInstr::LessInt { dst, lhs, rhs } => {
                 let value = eval_numeric_compare(
@@ -775,13 +872,7 @@ impl RegVm {
                 let value = self.reg(base + *value).clone();
                 let mut map = map.borrow_mut();
                 if !map.contains_key(&key) {
-                    let old_capacity = map.capacity();
-                    map.try_reserve(1).map_err(|error| {
-                        EvalError::Runtime(format!("Map.insert allocation failed: {error}"))
-                    })?;
-                    self.account_bytes(
-                        map.capacity().saturating_sub(old_capacity) * MAP_ENTRY_BYTES,
-                    )?;
+                    self.reserve_map_entry_accounted(&mut map)?;
                 }
                 map.insert(key, value);
                 self.set_reg(base + *dst, VmValue::Unit);
@@ -798,13 +889,7 @@ impl RegVm {
                 let value = self.reg(base + *value).clone();
                 let mut map = map.borrow_mut();
                 if !map.contains_key(&key) {
-                    let old_capacity = map.capacity();
-                    map.try_reserve(1).map_err(|error| {
-                        EvalError::Runtime(format!("Map.insert allocation failed: {error}"))
-                    })?;
-                    self.account_bytes(
-                        map.capacity().saturating_sub(old_capacity) * MAP_ENTRY_BYTES,
-                    )?;
+                    self.reserve_map_entry_accounted(&mut map)?;
                 }
                 let old = map.insert(key, value);
                 self.set_reg(
@@ -1662,6 +1747,7 @@ impl RegVm {
                             let list = expect_list_ref(self.reg(base + *list))?;
                             let predicate = expect_closure_rc(self.reg(base + *predicate))?;
                             let result = self.filter_list(unit, list, &predicate, next_base)?;
+                            self.account_fresh_value_storage(&result)?;
                             self.set_reg(base + *dst, result);
                         }
                         RegInstr::ListFold {
@@ -1686,6 +1772,7 @@ impl RegVm {
                             let list = expect_list_ref(self.reg(base + *list))?;
                             let mapper = expect_closure_rc(self.reg(base + *mapper))?;
                             let result = self.map_list(unit, list, &mapper, next_base)?;
+                            self.account_fresh_value_storage(&result)?;
                             self.set_reg(base + *dst, result);
                         }
                         RegInstr::ListSort { dst, list } => {
@@ -1713,10 +1800,10 @@ impl RegVm {
                             let compare = expect_closure_rc(self.reg(base + *compare))?;
                             let sorted =
                                 self.sort_list_by_closure(unit, values, &key, &compare, next_base)?;
-                            self.set_reg(
-                                base + *dst,
-                                VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(sorted)))),
-                            );
+                            let sorted =
+                                VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(sorted))));
+                            self.account_fresh_value_storage(&sorted)?;
+                            self.set_reg(base + *dst, sorted);
                         }
                         RegInstr::ListSortWith { dst, list, compare } => {
                             // Sort a detached copy first so the comparator closure can read
@@ -1789,15 +1876,7 @@ impl RegVm {
                             let map = expect_map_ref(self.reg(base + *set))?;
                             let mut map = map.borrow_mut();
                             if !map.contains_key(&key) {
-                                let old_capacity = map.capacity();
-                                map.try_reserve(1).map_err(|error| {
-                                    EvalError::Runtime(format!(
-                                        "Set.insert allocation failed: {error}"
-                                    ))
-                                })?;
-                                self.account_bytes(
-                                    map.capacity().saturating_sub(old_capacity) * MAP_ENTRY_BYTES,
-                                )?;
+                                self.reserve_map_entry_accounted(&mut map)?;
                             }
                             let inserted = map.insert(key, VmValue::Unit).is_none();
                             self.set_reg(base + *dst, VmValue::Bool(inserted));

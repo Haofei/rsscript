@@ -133,6 +133,73 @@ fn main() -> Int {
 }
 
 #[test]
+fn fresh_collection_intrinsics_are_charged_to_memory_budget() {
+    let cases = [
+        (
+            "list-reverse",
+            r#"features: local
+fn main() -> Int {
+    local values = List<Int>.new()
+    let mut i = 0
+    while i < 64 {
+        List.push<Int>(list: mut values, value: i)
+        i = i + 1
+    }
+    return List.len(list: List.reverse<Int>(list: values))
+}"#,
+            700,
+        ),
+        (
+            "map-keys",
+            r#"fn main() -> Int {
+    let map = Map.new<Int, Int>()
+    let mut i = 0
+    while i < 32 {
+        Map.insert<Int, Int>(map: mut map, key: i, value: i)
+        i = i + 1
+    }
+    return List.len(list: Map.keys<Int, Int>(map: map))
+}"#,
+            1900,
+        ),
+        (
+            "string-split",
+            r#"fn main() -> Int {
+    return List.len(list: String.split(value: "alpha,beta,gamma", delimiter: ","))
+}"#,
+            16,
+        ),
+        (
+            "bytes-concat",
+            r#"features: local
+fn main() -> Int {
+    local left = Bytes.from_string(value: "abcd")
+    local right = Bytes.from_string(value: "efgh")
+    local joined = Bytes.concat(left: left, right: right)
+    return Bytes.len(value: joined)
+}"#,
+            12,
+        ),
+    ];
+
+    for (name, source, mem_budget) in cases {
+        let error = eval_limited(
+            source,
+            VmLimits {
+                mem_budget: Some(mem_budget),
+                step_budget: Some(1_000_000),
+                ..VmLimits::default()
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, EvalError::Runtime(ref message) if message.contains("memory limit")),
+            "{name}: expected memory-limit error, got {error:?}"
+        );
+    }
+}
+
+#[test]
 fn shake_output_respects_memory_budget_and_hard_cap() {
     let source = r#"
 fn main() -> Int {

@@ -43,9 +43,9 @@ impl RegVm {
                 let value = expect_float_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let min = expect_float_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let max = expect_float_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                if min > max {
+                if min.is_nan() || max.is_nan() || min > max {
                     return Err(EvalError::Runtime(format!(
-                        "Math.clamp_float requires min <= max, got min {min} and max {max}"
+                        "Math.clamp_float requires non-NaN bounds with min <= max, got min {min} and max {max}"
                     )));
                 }
                 Ok(VmValue::Float(value.clamp(min, max)))
