@@ -290,6 +290,41 @@ fn caller(text: String, count: Int) -> Unit { text.inspect(count) }
 }
 
 #[test]
+fn call_arguments_record_parameter_slots_without_losing_evaluation_order() {
+    let source = r#"
+fn digits(a: Int = 1, b: Int, c: Int = 3) -> Int { return a * 100 + b * 10 + c }
+fn caller() -> Int { return digits(c: 9, b: 2) }
+"#;
+    let hir = Hir::from_syntax(&parse_source("bound-call.rss", source));
+    let body = hir.function_body("caller").expect("caller body exists");
+    let Some(HirStmt::Return {
+        value: Some(HirExpr::Call { args, .. }),
+        ..
+    }) = body
+        .block
+        .as_ref()
+        .and_then(|block| block.statements.first())
+    else {
+        panic!("caller should return a call");
+    };
+
+    assert_eq!(
+        args.iter()
+            .map(|arg| (
+                arg.name.as_deref(),
+                arg.parameter_index,
+                arg.evaluation_index
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (Some("c"), Some(2), 0),
+            (Some("b"), Some(1), 1),
+            (Some("a"), Some(0), 2),
+        ]
+    );
+}
+
+#[test]
 fn qualified_protocol_call_preserves_the_concrete_receiver_type() {
     let source = r#"
 protocol Formatter {

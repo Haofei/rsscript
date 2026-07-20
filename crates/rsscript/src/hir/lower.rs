@@ -1456,9 +1456,12 @@ fn lower_hir_call_expr(
     let type_name = infer_hir_expr_type(hir, expr, value_types);
     let mut hir_args: Vec<HirCallArg> = args
         .iter()
-        .map(|arg| HirCallArg {
+        .enumerate()
+        .map(|(index, arg)| HirCallArg {
             name: arg.name.clone(),
             value: lower_hir_expr(hir, function_name, &arg.value, value_types),
+            parameter_index: None,
+            evaluation_index: index,
             span: arg.span.clone(),
         })
         .collect();
@@ -1491,6 +1494,10 @@ fn lower_hir_call_expr(
             let Some(param) = expected else {
                 continue;
             };
+            arg.parameter_index = signature
+                .params
+                .iter()
+                .position(|candidate| candidate.name == param.name);
             if param.effect == Some(ParamEffect::Read) && !hir_expr_already_read(&arg.value) {
                 let value = std::mem::replace(&mut arg.value, HirExpr::Unknown(arg.span.clone()));
                 arg.value = HirExpr::Effect {
@@ -1506,13 +1513,18 @@ fn lower_hir_call_expr(
     // Fill omitted parameters that declare a default value, so every
     // backend sees a complete call (defaults are desugared once, here).
     if let CallResolution::Resolved { signature, .. } = &resolution {
-        let provided: std::collections::HashSet<String> =
-            hir_args.iter().filter_map(|arg| arg.name.clone()).collect();
-        for param in &signature.params {
+        let provided: std::collections::HashSet<usize> = hir_args
+            .iter()
+            .filter_map(|arg| arg.parameter_index)
+            .collect();
+        for (parameter_index, param) in signature.params.iter().enumerate() {
             if let Some(default) = &param.default
-                && !provided.contains(&param.name)
+                && !provided.contains(&parameter_index)
             {
-                let mut value = lower_hir_expr(hir, function_name, default, value_types);
+                // Defaults execute at the call site, but their names are bound in
+                // the declaration environment. Caller locals must not shadow a
+                // top-level constant referenced by a default.
+                let mut value = lower_hir_expr(hir, function_name, default, &HashMap::new());
                 // A non-Copy default is materialized at the call site and
                 // bound under the parameter's declared effect. Carry that
                 // effect on the synthesized argument so the call-site
@@ -1531,6 +1543,8 @@ fn lower_hir_call_expr(
                 hir_args.push(HirCallArg {
                     name: Some(param.name.clone()),
                     value,
+                    parameter_index: Some(parameter_index),
+                    evaluation_index: hir_args.len(),
                     span: span.clone(),
                 });
             }

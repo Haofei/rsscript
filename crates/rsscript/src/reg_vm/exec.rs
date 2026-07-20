@@ -1577,6 +1577,27 @@ impl RegVm {
             #[cfg(feature = "native-jit")]
             if ip == 0
                 && self.native.is_some()
+                // Whole-function completion returns only the function result. Heap
+                // and flat parameters are synchronized through the native call
+                // transaction, but reassigned scalar `mut` parameters have no
+                // result channel for caller writeback yet.
+                && self
+                    .frames
+                    .last()
+                    .is_some_and(|frame| {
+                        frame.mut_writeback.iter().all(|&(_, callee_reg)| {
+                            !matches!(
+                                self.reg(callee_reg),
+                                VmValue::Unit
+                                    | VmValue::Int(_)
+                                    | VmValue::Float(_)
+                                    | VmValue::Bool(_)
+                                    | VmValue::Char(_)
+                                    | VmValue::OptionNone
+                                    | VmValue::OptionSomeScalar(_)
+                            )
+                        })
+                    })
                 // Inline negative check: skip the `try_native` call entirely for
                 // functions already known not native-eligible (just a `Cell` read).
                 && func.native_status.get() != NATIVE_STATUS_NOT_ELIGIBLE

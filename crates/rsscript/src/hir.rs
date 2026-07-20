@@ -458,6 +458,12 @@ pub struct HirMapLiteralEntry {
 pub struct HirCallArg {
     pub name: Option<String>,
     pub value: HirExpr,
+    /// Declared parameter slot selected by call binding. `None` is retained only
+    /// for unresolved/malformed calls so diagnostics can continue.
+    pub parameter_index: Option<usize>,
+    /// Source-language evaluation order. Explicit arguments come first in their
+    /// written order; synthesized defaults follow in declaration order.
+    pub evaluation_index: usize,
     pub span: Span,
 }
 

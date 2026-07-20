@@ -21,6 +21,8 @@ pub(super) struct RustLowerer<'a> {
     pub(super) function_type_params: BTreeMap<String, Vec<String>>,
     pub(super) function_param_types: BTreeMap<String, Vec<(String, TypeRef)>>,
     pub(super) function_param_defaults: BTreeMap<String, Vec<Option<Expr>>>,
+    pub(super) function_param_default_helpers: BTreeMap<String, Vec<Option<String>>>,
+    pub(super) const_names: BTreeSet<String>,
     pub(super) function_param_effects: BTreeMap<String, Vec<(String, Option<DataEffect>)>>,
     pub(super) retained_params_by_callee: BTreeMap<String, BTreeSet<String>>,
     pub(super) param_effects: BTreeMap<String, DataEffect>,
@@ -38,6 +40,8 @@ pub(super) struct RustLowerer<'a> {
     pub(super) source_map: Vec<RustSourceMapEntry>,
     /// Maps generic type param name -> protocol bound name for receiver-call resolution
     pub(super) generic_protocol_bounds: BTreeMap<String, String>,
+    pub(super) call_temp_counter: usize,
+    pub(super) lowering_default: bool,
 }
 
 pub(super) struct AsyncTaskGroupBoundary {
@@ -94,6 +98,32 @@ impl<'a> RustLowerer<'a> {
         let function_type_params = collect_function_type_params(program, interface_programs);
         let function_param_types = collect_function_param_types(program, interface_programs);
         let function_param_defaults = collect_function_param_defaults(program, interface_programs);
+        let function_param_default_helpers = function_param_defaults
+            .iter()
+            .map(|(function, defaults)| {
+                let base = rust_function_ident(function);
+                (
+                    function.clone(),
+                    defaults
+                        .iter()
+                        .enumerate()
+                        .map(|(index, default)| {
+                            default
+                                .as_ref()
+                                .map(|_| format!("__rss_default_{base}_{index}"))
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        let const_names = program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::Const(decl) => Some(decl.name.clone()),
+                _ => None,
+            })
+            .collect();
         let function_param_effects = collect_function_param_effects(program, interface_programs);
         let retained_params_by_callee =
             collect_function_retained_params(program, interface_programs);
@@ -109,6 +139,8 @@ impl<'a> RustLowerer<'a> {
             function_type_params,
             function_param_types,
             function_param_defaults,
+            function_param_default_helpers,
+            const_names,
             function_param_effects,
             retained_params_by_callee,
             param_effects: BTreeMap::new(),
@@ -123,6 +155,8 @@ impl<'a> RustLowerer<'a> {
             current_task_group_token: None,
             source_map: Vec::new(),
             generic_protocol_bounds: BTreeMap::new(),
+            call_temp_counter: 0,
+            lowering_default: false,
         }
     }
 
@@ -178,6 +212,7 @@ impl<'a> RustLowerer<'a> {
                 out.push('\n');
             }
         }
+        self.lower_default_parameter_helpers(&mut out);
         self.lower_protocol_traits(&mut out);
         self.lower_capability_enums(&mut out);
         for item in &self.program.items {
@@ -612,7 +647,9 @@ impl<'a> RustLowerer<'a> {
     pub(super) fn lower_expr(&mut self, expr: &Expr) -> String {
         match expr {
             Expr::Ident(name, _) => {
-                if self.is_mut_copy_scalar_param(name) {
+                if self.lowering_default && self.const_names.contains(name) {
+                    rust_ident(name).to_uppercase()
+                } else if self.is_mut_copy_scalar_param(name) {
                     // A `mut` Copy-scalar parameter lowers to `&mut T`; a bare read
                     // dereferences it so the value (and assignment through it) works
                     // against the `&mut i64`/`&mut bool`/… binding. As an assignment
@@ -825,10 +862,10 @@ impl<'a> RustLowerer<'a> {
                 if let Some(lowered) = self.lower_call_named_constructor(callee, args, span) {
                     return lowered;
                 }
-                if let Some(lowered) = self.lower_call_receiver(callee, args) {
+                if let Some(lowered) = self.lower_bound_call(callee, args, span) {
                     return lowered;
                 }
-                self.lower_call_dispatch(callee, args, span)
+                self.lower_call_after_binding(callee, args, span)
             }
             Expr::Effect {
                 effect,
@@ -939,6 +976,34 @@ impl<'a> RustLowerer<'a> {
             }
             Expr::Unknown(span) => unreachable_lowering("expression", span),
         }
+    }
+
+    fn lower_default_parameter_helpers(&mut self, out: &mut String) {
+        let defaults = self.function_param_defaults.clone();
+        self.lowering_default = true;
+        for (function, values) in defaults {
+            let Some(types) = self.function_param_types.get(&function).cloned() else {
+                continue;
+            };
+            let helpers = self
+                .function_param_default_helpers
+                .get(&function)
+                .cloned()
+                .unwrap_or_default();
+            for (index, default) in values.into_iter().enumerate() {
+                let (Some(default), Some(Some(helper)), Some((_, ty))) =
+                    (default, helpers.get(index), types.get(index))
+                else {
+                    continue;
+                };
+                let return_type = self.lower_type_ref(ty, ManagedPosition::Bare);
+                let value = self.lower_expr_for_expected_type(&default, ty);
+                out.push_str(&format!(
+                    "#[inline]\nfn {helper}() -> {return_type} {{ {value} }}\n\n"
+                ));
+            }
+        }
+        self.lowering_default = false;
     }
 
     /// `json_decode`/`json_encode` codec calls.
@@ -1155,6 +1220,193 @@ impl<'a> RustLowerer<'a> {
         }
 
         None
+    }
+
+    fn lower_call_after_binding(
+        &mut self,
+        callee: &Callee,
+        args: &[CallArg],
+        span: &Span,
+    ) -> String {
+        if let Some(lowered) = self.lower_call_receiver(callee, args) {
+            lowered
+        } else {
+            self.lower_call_dispatch(callee, args, span)
+        }
+    }
+
+    /// Canonicalize named arguments without changing source evaluation order.
+    /// The generated temporaries contain the exact Rust ABI values (`T`, `&T`, or
+    /// `&mut T`), while the final call is laid out by declared parameter slot.
+    fn lower_bound_call(
+        &mut self,
+        callee: &Callee,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<String> {
+        let (key, receiver_offset, stage_callee) = match callee {
+            Callee::ReceiverCall {
+                receiver, method, ..
+            } => {
+                let receiver_type = self.infer_expr_type(receiver)?;
+                let namespace = self.receiver_call_namespace(&receiver_type, method);
+                let key = native_boundary_function_key(&format!("{namespace}.{method}"));
+                (
+                    key,
+                    1,
+                    Callee::Qualified {
+                        namespace,
+                        name: method.clone(),
+                    },
+                )
+            }
+            _ => (native_boundary_callee_key(callee), 0, callee.clone()),
+        };
+        let params = self.function_param_types.get(&key)?.clone();
+        let effects = self
+            .function_param_effects
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| {
+                params
+                    .iter()
+                    .map(|(name, _)| (name.clone(), None))
+                    .collect()
+            });
+        let defaults = self
+            .function_param_defaults
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| vec![None; params.len()]);
+        let helpers = self
+            .function_param_default_helpers
+            .get(&key)
+            .cloned()
+            .unwrap_or_else(|| vec![None; params.len()]);
+
+        let mut slots = vec![None::<(CallArg, usize)>; params.len()];
+        let mut explicit_slots = Vec::with_capacity(args.len());
+        for (source_index, arg) in args.iter().enumerate() {
+            let parameter_index = if let Some(name) = arg.name.as_deref() {
+                params.iter().position(|(param, _)| param == name)?
+            } else {
+                source_index + receiver_offset
+            };
+            if parameter_index >= params.len() || slots[parameter_index].is_some() {
+                return None;
+            }
+            explicit_slots.push(parameter_index);
+            slots[parameter_index] = Some((arg.clone(), source_index));
+        }
+
+        let mut next_evaluation = args.len();
+        let mut inserted_default = false;
+        for parameter_index in receiver_offset..params.len() {
+            if slots[parameter_index].is_some() {
+                continue;
+            }
+            let Some(Some(helper)) = helpers.get(parameter_index) else {
+                if defaults.get(parameter_index).is_some_and(Option::is_some) {
+                    return None;
+                }
+                return None;
+            };
+            let parameter_name = params[parameter_index].0.clone();
+            let default_value = Expr::Call {
+                callee: Callee::Name(helper.clone()),
+                args: Vec::new(),
+                span: span.clone(),
+            };
+            let effect = effects.get(parameter_index).and_then(|(_, effect)| *effect);
+            let value = effect.map_or(default_value.clone(), |effect| Expr::Effect {
+                effect,
+                value: Box::new(default_value),
+                span: span.clone(),
+            });
+            slots[parameter_index] = Some((
+                CallArg {
+                    name: Some(parameter_name),
+                    value,
+                    malformed: false,
+                    span: span.clone(),
+                },
+                next_evaluation,
+            ));
+            next_evaluation += 1;
+            inserted_default = true;
+        }
+
+        let canonical_explicit = explicit_slots
+            .iter()
+            .copied()
+            .eq(receiver_offset..receiver_offset + explicit_slots.len());
+        if canonical_explicit && !inserted_default {
+            return None;
+        }
+
+        let mut evaluations = slots
+            .iter()
+            .enumerate()
+            .filter_map(|(parameter_index, slot)| {
+                slot.clone()
+                    .map(|(arg, evaluation)| (evaluation, parameter_index, arg))
+            })
+            .collect::<Vec<_>>();
+        evaluations.sort_by_key(|(evaluation, _, _)| *evaluation);
+
+        // Defaults alone are already in the required evaluation and ABI order.
+        // Avoid temporary blocks for the common trailing-default case.
+        if canonical_explicit {
+            let canonical = slots
+                .into_iter()
+                .skip(receiver_offset)
+                .map(|slot| slot.expect("bound call slot should be complete").0)
+                .collect::<Vec<_>>();
+            return Some(self.lower_call_after_binding(callee, &canonical, span));
+        }
+
+        let call_id = self.call_temp_counter;
+        self.call_temp_counter += 1;
+        let mut prelude = String::new();
+        let mut canonical = vec![None::<CallArg>; params.len()];
+        let mut temporary_names = Vec::new();
+        for (_, parameter_index, arg) in evaluations {
+            let temp = format!("__rss_call_{call_id}_arg_{parameter_index}");
+            let lowered = self.lower_call_arg_for_callee(&stage_callee, &arg, parameter_index);
+            prelude.push_str(&format!("let {temp} = {lowered}; "));
+
+            let (_, ty) = &params[parameter_index];
+            self.value_types.insert(temp.clone(), ty.clone());
+            let effect = effects.get(parameter_index).and_then(|(_, effect)| *effect);
+            if let Some(effect) = effect {
+                self.param_effects.insert(temp.clone(), effect);
+            }
+            let ident = Expr::Ident(temp.clone(), arg.span.clone());
+            let value = effect.map_or(ident.clone(), |effect| Expr::Effect {
+                effect,
+                value: Box::new(ident),
+                span: arg.span.clone(),
+            });
+            canonical[parameter_index] = Some(CallArg {
+                name: Some(params[parameter_index].0.clone()),
+                value,
+                malformed: false,
+                span: arg.span,
+            });
+            temporary_names.push(temp);
+        }
+
+        let canonical = canonical
+            .into_iter()
+            .skip(receiver_offset)
+            .map(|arg| arg.expect("bound call slot should be complete"))
+            .collect::<Vec<_>>();
+        let call = self.lower_call_after_binding(callee, &canonical, span);
+        for name in temporary_names {
+            self.value_types.remove(&name);
+            self.param_effects.remove(&name);
+        }
+        Some(format!("{{ {prelude}{call} }}"))
     }
 
     /// Receiver-call shorthand (`receiver.method(..)`): resolve the receiver's

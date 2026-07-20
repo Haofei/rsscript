@@ -1131,16 +1131,38 @@ impl RegLowerer<'_> {
             synthetic_args.push(HirCallArg {
                 name: None,
                 value: (*receiver.value).clone(),
+                parameter_index: Some(0),
+                evaluation_index: 0,
                 span: crate::diagnostic::Span::default(),
             });
-            synthetic_args.extend(args.iter().cloned());
+            synthetic_args.extend(args.iter().cloned().map(|mut arg| {
+                arg.evaluation_index += 1;
+                arg
+            }));
             return self.call(&synthetic_callee, None, &synthetic_args);
         }
 
-        let arg_regs = args
+        // Evaluate in source order, then lay out operands in declared parameter
+        // order. Named-call semantics require both orders simultaneously.
+        let evaluated_regs = args
             .iter()
             .map(|arg| self.expr(&arg.value))
             .collect::<Result<Vec<_>, _>>()?;
+        let mut order = (0..args.len()).collect::<Vec<_>>();
+        order.sort_by_key(|&index| {
+            args[index]
+                .parameter_index
+                .unwrap_or(usize::MAX.saturating_sub(args.len()) + index)
+        });
+        let ordered_args = order
+            .iter()
+            .map(|&index| args[index].clone())
+            .collect::<Vec<_>>();
+        let arg_regs = order
+            .iter()
+            .map(|&index| evaluated_regs[index])
+            .collect::<Vec<_>>();
+        let args = ordered_args.as_slice();
         let dst = self.temp();
         match callee {
             Callee::Name(name) => {

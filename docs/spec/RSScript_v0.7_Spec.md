@@ -2242,13 +2242,20 @@ This is not optional for constructors or variants. `Ok(x)`, `Some(x)`, `Point(x:
 
 ### 9.2 Named arguments
 
-All ordinary function arguments and struct/class constructor fields are named,
-except for **same-name punning**. A bare identifier may omit its label when it
+Public, core, native, constructor, and protocol-call arguments are named, except
+for **same-name punning**. A bare identifier may omit its label when it
 resolves to an ordinary function parameter with the same name and default `read`
 effect, or to a constructor field with the same name. Constructor field effects
 still apply after the field is resolved: a handle field, for example, still has
 `read` semantics even when the optional token is omitted. This is not positional calling: literals,
 expressions, `mut`, `take`, and unknown calls remain explicitly named.
+
+Private helper calls and the non-receiver arguments of receiver-call shorthand
+may use positional arguments as a bounded local ergonomic exception. Positional
+arguments bind in declaration order and may not change the semantics of named
+arguments in the same call. Visibility changes therefore require adding labels
+before a helper can become public. This exception does not apply to constructors,
+protocol-qualified calls, native boundaries, or unknown callees.
 
 ```rust
 Image.resize(image: mut image, width: 800, height: 600)
@@ -3095,6 +3102,11 @@ Rules:
   default does not weaken effect or freshness checking of the supplied form.
 - The default is filled per call site (each call materializes the default
   expression), and is always filled by name — there is no positional defaulting.
+- A default expression is name-resolved in the function declaration environment,
+  even though it is evaluated for each call. A caller-local binding cannot shadow
+  a constant or function referenced by the default.
+- Explicit arguments are evaluated first in written source order. Omitted defaults
+  are then evaluated in parameter declaration order before the call begins.
 - Defaults compose with named arguments: a defaulted parameter may still be
   passed explicitly by name in any order.
 ```
@@ -3638,13 +3650,15 @@ A **receiver-call expression** is a syntactic shorthand for a qualified function
 or protocol method call. It has the form:
 
 ```text
-<effect> <receiver>.<method>(<named args>)
+<effect> <receiver>.<method>(<args>)
 ```
 
 where `<effect>` is `read`, `mut`, or `take`. The effect keyword is optional only
 for `read`: bare `receiver.method(...)` means `read receiver.method(...)`.
 `mut` and `take` remain mandatory because a bare receiver never gains either
 capability.
+The non-receiver arguments follow §9.2: named form is canonical, while the bounded
+private receiver-shorthand positional exception is permitted.
 
 Examples:
 

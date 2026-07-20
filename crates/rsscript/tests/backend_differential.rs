@@ -287,6 +287,65 @@ fn main() -> Unit {
     common::differential::assert_backends_agree_full("compiled-smoke.rss", source, &[]);
 }
 
+#[test]
+fn named_call_binding_matches_the_language_oracle_on_every_backend() {
+    let source = r#"
+const fallback: Int = 7
+
+struct Box { value: Int }
+struct Cell { n: Int }
+
+fn pair(first: Int, second: Int) -> Int { return first * 10 + second }
+fn digits(a: Int = 1, b: Int, c: Int = 3) -> Int { return a * 100 + b * 10 + c }
+fn pick(value: Int = fallback) -> Int { return value }
+fn add_into(read_value: Int, target: mut Int) -> Unit { target = target + read_value }
+fn Box.add(self: read Box, amount: Int = 1) -> Int { return self.value + amount }
+fn Cell.combine(self: mut Cell, source: read Cell, target: mut Cell) -> Unit {
+    target.n = target.n + source.n + self.n
+}
+fn record(order: mut Int, value: Int) -> Int {
+    order = order * 10 + value
+    Log.write(message: String.from_int(value: value))
+    return value
+}
+
+pub fn main() -> Unit {
+    let mut x: Int = 1
+    let mut y: Int = 10
+    add_into(target: mut y, read_value: x)
+
+    let b = Box(value: 4)
+    let mut base = Cell(n: 1)
+    let source = Cell(n: 2)
+    let mut target = Cell(n: 10)
+    mut base.combine(target: mut target, source: read source)
+
+    let fallback: Int = 99
+    let mut order: Int = 0
+    let encoded = pair(
+        second: record(order: mut order, value: 2),
+        first: record(order: mut order, value: 1)
+    )
+
+    Log.write(message: String.from_int(value: encoded))
+    Log.write(message: String.from_int(value: order))
+    Log.write(message: String.from_int(value: digits(c: 9, b: 2)))
+    Log.write(message: String.from_int(value: x * 100 + y))
+    Log.write(message: String.from_int(value: b.add()))
+    Log.write(message: String.from_int(value: target.n))
+    Log.write(message: String.from_int(value: pick()))
+    return Unit
+}
+"#;
+    let expected = "2\n1\n12\n21\n129\n111\n5\n13\n7\n";
+    for backend in common::differential::full_backends() {
+        let actual = backend
+            .run_stdout("named-call-binding.rss", source, &[])
+            .unwrap_or_else(|error| panic!("backend `{}` failed: {error}", backend.name()));
+        assert_eq!(actual, expected, "backend `{}`", backend.name());
+    }
+}
+
 /// Eligible function with parameters (exercises DeepCopy + integer arithmetic in
 /// the JIT) — interp == jit by default, plus compiled when
 /// `RSSCRIPT_FULL_BACKEND_PARITY=1`.

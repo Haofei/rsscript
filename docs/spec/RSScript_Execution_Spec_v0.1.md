@@ -78,7 +78,7 @@ throughput.
 | **HIR interpreter** | Tree-walking evaluator over the high-level IR | Reference semantics for early bring-up and parity oracle |
 | **reg-VM** | Register virtual machine over a prepared executable | Default development-tier execution |
 | **tier-0 JIT** | In-`rsscript` specializing executor reusing the reg-VM's exact value/register operations | Accelerates the numeric/control core with zero new semantics |
-| **native JIT** | Cranelift machine-code baseline in the separate `vm-jit` crate | Accelerates the pure scalar / read-heap subset of hot functions |
+| **native JIT** | Cranelift machine-code baseline in the separate `vm-jit` crate | Accelerates eligible scalar, heap-read, and transactionally journaled heap-write regions |
 | **AOT** | RSScript → Rust source → `rustc` | The shipped execution target and primary conformance target (§0.0) |
 
 Rules:
@@ -416,20 +416,21 @@ future optimization; until then preemptible runs simply forgo the native tier.
 
 ## 7. JIT Eligibility and the Pure Subset
 
-The native tier's reach is an **effect classification**. Today it is computed
-implicitly (`compute_jit_eligibility` = non-suspending + non-recursive,
-`native_subset_instruction` = the pure scalar / read-heap core); stated as tiers:
+The native tier's reach is an **effect classification**. Today it is computed by
+eligibility, instruction descriptors, alias checks, and transaction requirements;
+stated as tiers:
 
 | Tier | Meaning | Engine treatment |
 |------|---------|------------------|
 | `PureScalar` | int/bool/float + control flow, no heap | native machine code |
-| `PureReadHeap` | + reads of struct fields / list elements (no mutation) | native + checked host helpers (§7.1) |
-| `LocalMut` | mutates only locally-owned heap | interpreter (needs alias rules) |
+| `PureReadHeap` | + reads of struct fields / list elements | native + checked host helpers (§7.1) |
+| `TransactionalHeapMut` | declared existing-heap or mutable-flat writes with complete alias proof and undo/snapshot coverage | native transaction; commit on success, restore on bail (§7.1–§7.2) |
+| `UnjournaledMut` | mutation without a complete rollback strategy | interpreter |
 | `RuntimeEffect` | log/file/native/process/net/time/random | interpreter (effect boundary) |
 | `Suspending` | async/channel/await/select/sleep | interpreter (no native frame/deopt) |
 | `Resourceful` | owns cleanup/drop obligations | interpreter (no cleanup metadata) |
 
-The first two tiers are what native compiles; the rest are the fallback boundary.
+The first three tiers are what native may compile; the rest are the fallback boundary.
 This taxonomy is a **documented model**, not yet a single enum; it MUST be
 promoted to an explicit classification only when `LocalMut`/`Resourceful` native
 support is actually attempted (demand-driven — no speculative machinery).
@@ -585,8 +586,10 @@ parity bug, because budget consumption can change success-vs-failure.
 
 **Deopt is tested by always deopting.** A `force-deopt` backend (native bails at
 every guard) is a permanent member of the N-way differential, so
-`{interp, tier-0, native, force-deopt, compiled}` must all agree — the bail path
-is exercised on the entire corpus, not just on rare edges.
+`{interp, tier-0, native, force-deopt, compiled}` must agree on every program in
+the configured differential corpus. Force-deopt exercises every native guard that
+the selected program reaches; coverage is expanded per feature and is not a claim
+that every possible source/state combination is already generated.
 
 ---
 
@@ -761,8 +764,9 @@ Built verification-first; the governing invariants are §2 (parity) and §7
   parameter's runtime value to match its declared register class;
   `vm-jit::validate` independently re-checks the IR before codegen.
 - **Phase 3 — tiering / deopt / fuzz. Done (baseline).** Per-function hot-call
-  counter (`tier_up_threshold`) defers native compilation until hot; OSR-entry is
-  specified-but-staged (§7). Native bails at every arithmetic guard and the interpreter
+  counter (`tier_up_threshold`) defers native compilation until hot; experimental
+  OSR-entry is implemented for eligible natural loops (§7), while unsupported state
+  shapes remain staged. Native bails at every arithmetic guard and the interpreter
   re-runs from the original args; a permanent `force-deopt` backend exercises the
   bail path across the whole corpus. A total `seed(bytes) -> program` decoder
   (`program_from_seed`) drives the differential via proptest seeds and shrinking;
