@@ -110,9 +110,7 @@ fn run() -> Int {
 
     assert!(rust.contains("let mut account = Account { balance: 0i64 };"));
     assert!(rust.contains("account.balance = 10i64;"));
-    // The index is parenthesized so `as usize` binds to the whole index
-    // expression, not just a trailing literal (matches the read path).
-    assert!(rust.contains("items[(0i64) as usize] = account.balance;"));
+    assert!(rust.contains("items[rsscript_runtime::checked_list_index(0i64)] = account.balance;"));
 }
 
 #[test]

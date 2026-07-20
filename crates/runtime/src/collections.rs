@@ -67,8 +67,16 @@ pub fn list_push<T: Clone>(list: &mut Vec<T>, value: &T) {
     list.push(value.clone());
 }
 
+pub fn checked_list_index(index: i64) -> usize {
+    usize::try_from(index).unwrap_or_else(|_| {
+        crate::error::panic_runtime_error(crate::error::invalid_argument_error(format!(
+            "list index {index} cannot be represented on this target"
+        )))
+    })
+}
+
 pub fn list_set<T: Clone>(list: &mut [T], index: i64, value: &T) {
-    list[index as usize] = value.clone();
+    list[checked_list_index(index)] = value.clone();
 }
 
 pub fn list_pop<T>(list: &mut Vec<T>) -> Option<T> {
@@ -88,7 +96,7 @@ pub fn list_len<T>(list: &[T]) -> i64 {
 }
 
 pub fn list_get<T: Clone>(list: &[T], index: i64) -> T {
-    list[index as usize].clone()
+    list[checked_list_index(index)].clone()
 }
 
 pub fn list_count_where<T: Clone>(list: &[T], mut predicate: impl FnMut(T) -> bool) -> i64 {
@@ -1011,6 +1019,15 @@ mod view_tests {
 
         list_clear(&mut items);
         assert!(items.is_empty());
+    }
+
+    #[test]
+    fn list_indices_use_checked_target_width_conversion() {
+        assert_eq!(checked_list_index(0), 0);
+        assert!(std::panic::catch_unwind(|| checked_list_index(-1)).is_err());
+
+        #[cfg(target_pointer_width = "32")]
+        assert!(std::panic::catch_unwind(|| checked_list_index(1_i64 << 32)).is_err());
     }
 
     #[test]

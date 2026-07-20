@@ -181,13 +181,9 @@ impl RegVm {
     /// returns the memory-limit error. Best-effort: see [`RegVm::live_bytes`].
     #[inline]
     pub(super) fn account_bytes(&mut self, bytes: usize) -> Result<(), EvalError> {
-        if let Some(limit) = self.limits.mem_budget {
+        if self.limits.mem_budget.is_some() {
+            self.ensure_memory_available(bytes)?;
             self.live_bytes = self.live_bytes.saturating_add(bytes);
-            if self.live_bytes > limit {
-                return Err(EvalError::Runtime(format!(
-                    "memory limit exceeded ({limit} bytes)"
-                )));
-            }
         }
         Ok(())
     }
@@ -259,11 +255,24 @@ impl RegVm {
             return Ok(());
         }
         let old_capacity = deque.capacity();
+        if self.limits.mem_budget.is_some() {
+            let mut replacement = VecDeque::with_capacity(old_capacity);
+            replacement.extend(deque.iter().cloned());
+            replacement.try_reserve(1).map_err(|error| {
+                EvalError::Runtime(format!("Deque insertion allocation failed: {error}"))
+            })?;
+            let actual_bytes = replacement
+                .capacity()
+                .saturating_sub(old_capacity)
+                .saturating_mul(std::mem::size_of::<VmValue>());
+            self.account_bytes(actual_bytes)?;
+            *deque = replacement;
+            return Ok(());
+        }
         let projected_capacity = old_capacity.saturating_mul(2).saturating_add(1).max(1);
         let projected_bytes = projected_capacity
             .saturating_sub(old_capacity)
             .saturating_mul(std::mem::size_of::<VmValue>());
-        self.ensure_memory_available(projected_bytes)?;
         deque.try_reserve(1).map_err(|error| {
             EvalError::Runtime(format!("Deque insertion allocation failed: {error}"))
         })?;
@@ -271,11 +280,12 @@ impl RegVm {
             .capacity()
             .saturating_sub(old_capacity)
             .saturating_mul(std::mem::size_of::<VmValue>());
-        self.account_bytes(actual_bytes)
+        debug_assert!(actual_bytes <= projected_bytes || self.limits.mem_budget.is_none());
+        Ok(())
     }
 
     pub(super) fn fresh_string(&mut self, value: String) -> Result<VmValue, EvalError> {
-        self.account_bytes(value.len())?;
+        self.account_bytes(value.capacity())?;
         Ok(VmValue::string(value))
     }
 
@@ -290,7 +300,7 @@ impl RegVm {
             VmValue::Map(values) => {
                 self.account_bytes(values.borrow().capacity().saturating_mul(MAP_ENTRY_BYTES))
             }
-            VmValue::String(value) => self.account_bytes(value.len()),
+            VmValue::String(value) => self.account_bytes(value.capacity()),
             VmValue::Bytes(value) => self.account_bytes(value.capacity()),
             VmValue::OptionSomeHeap(value) => self.account_fresh_value_storage(value),
             VmValue::OptionSomeScalar(_) | VmValue::OptionNone => Ok(()),
@@ -302,6 +312,222 @@ impl RegVm {
             }
             _ => Ok(()),
         }
+    }
+
+    fn storage_node_id(value: &VmValue) -> Option<usize> {
+        match value {
+            VmValue::Bytes(value) => Some(Rc::as_ptr(value) as usize),
+            VmValue::String(value) => Some(Rc::as_ptr(value) as usize),
+            VmValue::Json(value) => Some(Rc::as_ptr(value) as usize),
+            VmValue::List(value) => Some(Rc::as_ptr(value) as usize),
+            VmValue::Deque(value) => Some(Rc::as_ptr(value) as usize),
+            VmValue::Map(value) => Some(Rc::as_ptr(value) as usize),
+            VmValue::Struct(value) | VmValue::Variant(value) => Some(Rc::as_ptr(value) as usize),
+            VmValue::Native(value) => Some(Rc::as_ptr(value) as usize),
+            VmValue::Managed(value) => Some(Rc::as_ptr(value) as usize),
+            VmValue::Closure(value) => Some(Rc::as_ptr(value) as usize),
+            VmValue::Unit
+            | VmValue::Int(_)
+            | VmValue::Float(_)
+            | VmValue::Bool(_)
+            | VmValue::Char(_)
+            | VmValue::OptionSomeHeap(_)
+            | VmValue::OptionNone
+            | VmValue::OptionSomeScalar(_) => None,
+        }
+    }
+
+    fn collect_storage_nodes(value: &VmValue, nodes: &mut HashSet<usize>) {
+        if let Some(node) = Self::storage_node_id(value)
+            && !nodes.insert(node)
+        {
+            return;
+        }
+        match value {
+            VmValue::List(values) => {
+                for value in values.borrow().iter() {
+                    Self::collect_storage_nodes(&value, nodes);
+                }
+            }
+            VmValue::Deque(values) => {
+                for value in values.borrow().iter() {
+                    Self::collect_storage_nodes(value, nodes);
+                }
+            }
+            VmValue::Map(values) => {
+                for (key, value) in values.borrow().iter() {
+                    Self::collect_storage_nodes(key.value(), nodes);
+                    Self::collect_storage_nodes(value, nodes);
+                }
+            }
+            VmValue::OptionSomeHeap(value) => Self::collect_storage_nodes(value, nodes),
+            VmValue::Struct(value) | VmValue::Variant(value) => {
+                for (_, field) in value.iter() {
+                    Self::collect_storage_nodes(field, nodes);
+                }
+            }
+            VmValue::Managed(value) => Self::collect_storage_nodes(&value.borrow(), nodes),
+            VmValue::Closure(value) => {
+                for capture in &value.captures {
+                    Self::collect_storage_nodes(capture, nodes);
+                }
+            }
+            VmValue::Unit
+            | VmValue::Int(_)
+            | VmValue::Float(_)
+            | VmValue::Bool(_)
+            | VmValue::Char(_)
+            | VmValue::Bytes(_)
+            | VmValue::String(_)
+            | VmValue::Json(_)
+            | VmValue::OptionNone
+            | VmValue::Native(_)
+            | VmValue::OptionSomeScalar(_) => {}
+        }
+    }
+
+    fn json_retained_bytes(value: &serde_json::Value) -> usize {
+        match value {
+            serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+                0
+            }
+            serde_json::Value::String(value) => value.capacity(),
+            serde_json::Value::Array(values) => values
+                .capacity()
+                .saturating_mul(std::mem::size_of::<serde_json::Value>())
+                .saturating_add(
+                    values
+                        .iter()
+                        .map(Self::json_retained_bytes)
+                        .fold(0usize, usize::saturating_add),
+                ),
+            serde_json::Value::Object(values) => {
+                values.len().saturating_mul(MAP_ENTRY_BYTES).saturating_add(
+                    values
+                        .iter()
+                        .map(|(key, value)| {
+                            key.capacity()
+                                .saturating_add(Self::json_retained_bytes(value))
+                        })
+                        .fold(0usize, usize::saturating_add),
+                )
+            }
+        }
+    }
+
+    pub(super) fn retained_storage_bytes_inner(
+        value: &VmValue,
+        excluded: &HashSet<usize>,
+        visited: &mut HashSet<usize>,
+    ) -> usize {
+        if let Some(node) = Self::storage_node_id(value) {
+            if excluded.contains(&node) || !visited.insert(node) {
+                return 0;
+            }
+        }
+        match value {
+            VmValue::Unit
+            | VmValue::Int(_)
+            | VmValue::Float(_)
+            | VmValue::Bool(_)
+            | VmValue::Char(_)
+            | VmValue::OptionNone
+            | VmValue::OptionSomeScalar(_) => 0,
+            VmValue::Bytes(value) => value.capacity(),
+            VmValue::String(value) => value.capacity(),
+            VmValue::Json(value) => Self::json_retained_bytes(value),
+            VmValue::List(values) => {
+                let values = values.borrow();
+                values.allocated_bytes().saturating_add(
+                    values
+                        .iter()
+                        .map(|value| Self::retained_storage_bytes_inner(&value, excluded, visited))
+                        .fold(0usize, usize::saturating_add),
+                )
+            }
+            VmValue::Deque(values) => {
+                let values = values.borrow();
+                values
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<VmValue>())
+                    .saturating_add(
+                        values
+                            .iter()
+                            .map(|value| {
+                                Self::retained_storage_bytes_inner(value, excluded, visited)
+                            })
+                            .fold(0usize, usize::saturating_add),
+                    )
+            }
+            VmValue::Map(values) => {
+                let values = values.borrow();
+                let nested = values
+                    .iter()
+                    .map(|(key, value)| {
+                        Self::retained_storage_bytes_inner(key.value(), excluded, visited)
+                            .saturating_add(Self::retained_storage_bytes_inner(
+                                value, excluded, visited,
+                            ))
+                    })
+                    .fold(0usize, usize::saturating_add);
+                values
+                    .capacity()
+                    .saturating_mul(MAP_ENTRY_BYTES)
+                    .saturating_add(nested)
+            }
+            VmValue::OptionSomeHeap(value) => std::mem::size_of::<VmValue>()
+                .saturating_add(Self::retained_storage_bytes_inner(value, excluded, visited)),
+            VmValue::Struct(value) | VmValue::Variant(value) => value
+                .fields
+                .capacity()
+                .saturating_mul(std::mem::size_of::<VmValue>())
+                .saturating_add(
+                    value
+                        .fields
+                        .iter()
+                        .map(|field| Self::retained_storage_bytes_inner(field, excluded, visited))
+                        .fold(0usize, usize::saturating_add),
+                ),
+            VmValue::Native(value) => value.type_name.len(),
+            VmValue::Managed(value) => std::mem::size_of::<VmValue>().saturating_add(
+                Self::retained_storage_bytes_inner(&value.borrow(), excluded, visited),
+            ),
+            VmValue::Closure(value) => value
+                .captures
+                .capacity()
+                .saturating_mul(std::mem::size_of::<VmValue>())
+                .saturating_add(
+                    value
+                        .captures
+                        .iter()
+                        .map(|capture| {
+                            Self::retained_storage_bytes_inner(capture, excluded, visited)
+                        })
+                        .fold(0usize, usize::saturating_add),
+                ),
+        }
+    }
+
+    fn storage_roots_from_regs(&self, regs: &[Reg], base: usize) -> HashSet<usize> {
+        let mut roots = HashSet::new();
+        for reg in regs {
+            Self::collect_storage_nodes(self.reg(base + *reg), &mut roots);
+        }
+        roots
+    }
+
+    fn account_result_storage_delta(
+        &mut self,
+        value: &VmValue,
+        excluded: &HashSet<usize>,
+        live_bytes_before: usize,
+    ) -> Result<(), EvalError> {
+        if self.limits.mem_budget.is_none() {
+            return Ok(());
+        }
+        let retained = Self::retained_storage_bytes_inner(value, excluded, &mut HashSet::new());
+        let already_charged = self.live_bytes.saturating_sub(live_bytes_before);
+        self.account_bytes(retained.saturating_sub(already_charged))
     }
 
     /// Charge one stdlib/runtime intrinsic dispatch against `host_call_budget`.
@@ -504,10 +730,18 @@ impl RegVm {
                 for (_field, reg) in fields {
                     values.push(self.reg(base + *reg).clone());
                 }
-                self.set_reg(
-                    base + *dst,
-                    VmValue::Struct(Rc::new(VmStruct::with_layout(Rc::clone(layout), values))),
-                );
+                let roots = self.limits.mem_budget.map(|_| {
+                    self.storage_roots_from_regs(
+                        &fields.iter().map(|(_, r)| *r).collect::<Vec<_>>(),
+                        base,
+                    )
+                });
+                let value =
+                    VmValue::Struct(Rc::new(VmStruct::with_layout(Rc::clone(layout), values)));
+                if let Some(roots) = &roots {
+                    self.account_result_storage_delta(&value, roots, self.live_bytes)?;
+                }
+                self.set_reg(base + *dst, value);
             }
             RegInstr::MakeVariant {
                 dst,
@@ -518,34 +752,65 @@ impl RegVm {
                 for (_field, reg) in fields {
                     values.push(self.reg(base + *reg).clone());
                 }
-                self.set_reg(
-                    base + *dst,
-                    VmValue::Variant(Rc::new(VmStruct::with_layout(Rc::clone(layout), values))),
-                );
+                let roots = self.limits.mem_budget.map(|_| {
+                    self.storage_roots_from_regs(
+                        &fields.iter().map(|(_, r)| *r).collect::<Vec<_>>(),
+                        base,
+                    )
+                });
+                let value =
+                    VmValue::Variant(Rc::new(VmStruct::with_layout(Rc::clone(layout), values)));
+                if let Some(roots) = &roots {
+                    self.account_result_storage_delta(&value, roots, self.live_bytes)?;
+                }
+                self.set_reg(base + *dst, value);
             }
             RegInstr::MakeList { dst, items } => {
+                let roots = self
+                    .limits
+                    .mem_budget
+                    .map(|_| self.storage_roots_from_regs(items, base));
+                let live_bytes_before = self.live_bytes;
                 let mut list = Vec::with_capacity(items.len());
                 for reg in items {
                     list.push(self.reg(base + *reg).clone());
                 }
                 let typed = TypedVec::from_values(list);
-                // Per-kind accounting (TV1): charge the flat buffer cost of the kind
-                // the literal specialized to (8 B/elem for a scalar list).
-                self.account_bytes(typed.len() * typed.elem_bytes())?;
-                self.set_reg(base + *dst, VmValue::List(Rc::new(RefCell::new(typed))));
+                let value = VmValue::List(Rc::new(RefCell::new(typed)));
+                if let Some(roots) = &roots {
+                    self.account_result_storage_delta(&value, roots, live_bytes_before)?;
+                }
+                self.set_reg(base + *dst, value);
             }
             RegInstr::MakeObject { dst, fields } => {
+                let roots = self.limits.mem_budget.map(|_| {
+                    self.storage_roots_from_regs(
+                        &fields.iter().map(|(_, r)| *r).collect::<Vec<_>>(),
+                        base,
+                    )
+                });
+                let live_bytes_before = self.live_bytes;
                 let mut object = serde_json::Map::new();
                 for (field, reg) in fields {
                     let value = vm_value_to_json_literal(self.reg(base + *reg))?;
                     object.insert(field.clone(), value);
                 }
-                self.set_reg(
-                    base + *dst,
-                    VmValue::Json(Rc::new(serde_json::Value::Object(object))),
-                );
+                let value = VmValue::Json(Rc::new(serde_json::Value::Object(object)));
+                if let Some(roots) = &roots {
+                    self.account_result_storage_delta(&value, roots, live_bytes_before)?;
+                }
+                self.set_reg(base + *dst, value);
             }
             RegInstr::MakeMap { dst, entries } => {
+                let entry_regs = entries
+                    .iter()
+                    .flat_map(|(key, value)| [*key, *value])
+                    .collect::<Vec<_>>();
+                let roots = self
+                    .limits
+                    .mem_budget
+                    .map(|_| self.storage_roots_from_regs(&entry_regs, base));
+                let live_bytes_before = self.live_bytes;
                 let projected_entries = if entries.is_empty() {
                     0
                 } else {
@@ -559,7 +824,11 @@ impl RegVm {
                     self.charge_work(work)?;
                     map.insert(key, self.reg(base + *value).clone());
                 }
-                self.set_reg(base + *dst, VmValue::Map(Rc::new(RefCell::new(map))));
+                let value = VmValue::Map(Rc::new(RefCell::new(map)));
+                if let Some(roots) = &roots {
+                    self.account_result_storage_delta(&value, roots, live_bytes_before)?;
+                }
+                self.set_reg(base + *dst, value);
             }
             RegInstr::AddInt { dst, lhs, rhs } => {
                 let value = eval_numeric_binary(
@@ -1039,17 +1308,26 @@ impl RegVm {
         // growth is charged, so the bound is conservative.
         let list = expect_list_ref(self.reg(base + list))?;
         let value = self.reg(base + value).clone();
-        let grew = list
-            .borrow_mut()
-            .checked_push_accounted(value)
-            .map_err(|v| {
+        if self.limits.mem_budget.is_some() {
+            let before = list.borrow().allocated_bytes();
+            let mut replacement = list.borrow().clone_preserving_capacity();
+            replacement.checked_push_accounted(value).map_err(|v| {
                 EvalError::Runtime(format!(
                     "reg VM List.push element kind mismatch (got `{}`).",
                     v.display()
                 ))
             })?;
-        if grew != 0 {
-            self.account_bytes(grew)?;
+            self.account_bytes(replacement.allocated_bytes().saturating_sub(before))?;
+            *list.borrow_mut() = replacement;
+        } else {
+            list.borrow_mut()
+                .checked_push_accounted(value)
+                .map_err(|v| {
+                    EvalError::Runtime(format!(
+                        "reg VM List.push element kind mismatch (got `{}`).",
+                        v.display()
+                    ))
+                })?;
         }
         self.set_reg(base + dst, VmValue::Unit);
         Ok(())
@@ -1071,11 +1349,15 @@ impl RegVm {
         // `Ints`/`Floats` source extended into a `Boxed` receiver stores 16 B
         // `VmValue` slots, which `extend_accounted` bills correctly (the old
         // source-`elem_bytes` charge under-counted that mixed-layout case).
-        let grew = expect_list_ref(self.reg(base + list))?
-            .borrow_mut()
-            .extend_accounted(append_values);
-        if grew != 0 {
-            self.account_bytes(grew)?;
+        let list = expect_list_ref(self.reg(base + list))?;
+        if self.limits.mem_budget.is_some() {
+            let before = list.borrow().allocated_bytes();
+            let mut replacement = list.borrow().clone_preserving_capacity();
+            replacement.extend_accounted(append_values);
+            self.account_bytes(replacement.allocated_bytes().saturating_sub(before))?;
+            *list.borrow_mut() = replacement;
+        } else {
+            list.borrow_mut().extend_accounted(append_values);
         }
         self.set_reg(base + dst, VmValue::Unit);
         Ok(())
@@ -1941,22 +2223,19 @@ impl RegVm {
                             let list = expect_list_ref(self.reg(base + *set))?.clone();
                             let inserted = if sorted_contains_vm(&list.borrow(), &value)? {
                                 false
+                            } else if self.limits.mem_budget.is_some() {
+                                let before = list.borrow().allocated_bytes();
+                                let mut replacement = list.borrow().clone_preserving_capacity();
+                                let inserted = sorted_insert_vm(replacement.as_boxed_mut(), value)?;
+                                let growth = replacement.allocated_bytes().saturating_sub(before);
+                                self.account_bytes(growth)?;
+                                *list.borrow_mut() = replacement;
+                                inserted
                             } else {
                                 let before = list.borrow().allocated_bytes();
-                                let projected_total = list
-                                    .borrow()
-                                    .len()
-                                    .saturating_add(1)
-                                    .checked_next_power_of_two()
-                                    .unwrap_or(usize::MAX)
-                                    .saturating_mul(std::mem::size_of::<VmValue>());
-                                self.ensure_memory_available(
-                                    projected_total.saturating_sub(before),
-                                )?;
                                 let inserted =
                                     sorted_insert_vm(list.borrow_mut().as_boxed_mut(), value)?;
-                                let growth = list.borrow().allocated_bytes().saturating_sub(before);
-                                self.account_bytes(growth)?;
+                                debug_assert!(list.borrow().allocated_bytes() >= before);
                                 inserted
                             };
                             self.set_reg(base + *dst, VmValue::Bool(inserted));
@@ -1984,32 +2263,38 @@ impl RegVm {
                             let updates_existing =
                                 sorted_map_get_in_place(&list.borrow(), &key)?.is_some();
                             let before = list.borrow().allocated_bytes();
-                            let projected_total = list
-                                .borrow()
-                                .len()
-                                .saturating_add(1)
-                                .checked_next_power_of_two()
-                                .unwrap_or(usize::MAX)
-                                .saturating_mul(std::mem::size_of::<VmValue>());
                             let pair_bytes = 2 * std::mem::size_of::<VmValue>();
-                            if !updates_existing {
-                                self.ensure_memory_available(
-                                    projected_total
-                                        .saturating_sub(before)
-                                        .saturating_add(pair_bytes),
+                            if self.limits.mem_budget.is_some() {
+                                let mut replacement = list.borrow().clone_preserving_capacity();
+                                if updates_existing {
+                                    for entry in replacement.as_boxed_mut().iter_mut() {
+                                        if let VmValue::List(pair) = entry {
+                                            let detached =
+                                                pair.borrow().clone_preserving_capacity();
+                                            *entry = VmValue::List(Rc::new(RefCell::new(detached)));
+                                        }
+                                    }
+                                }
+                                let inserted = sorted_map_insert_in_place(
+                                    replacement.as_boxed_mut(),
+                                    key,
+                                    value,
+                                )?;
+                                let growth = replacement
+                                    .allocated_bytes()
+                                    .saturating_sub(before)
+                                    .saturating_add(
+                                        usize::from(inserted).saturating_mul(pair_bytes),
+                                    );
+                                self.account_bytes(growth)?;
+                                *list.borrow_mut() = replacement;
+                            } else {
+                                sorted_map_insert_in_place(
+                                    list.borrow_mut().as_boxed_mut(),
+                                    key,
+                                    value,
                                 )?;
                             }
-                            let inserted = sorted_map_insert_in_place(
-                                list.borrow_mut().as_boxed_mut(),
-                                key,
-                                value,
-                            )?;
-                            let growth = list.borrow().allocated_bytes().saturating_sub(before);
-                            self.account_bytes(
-                                growth.saturating_add(
-                                    usize::from(inserted).saturating_mul(pair_bytes),
-                                ),
-                            )?;
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::SortedMapRemove { dst, map, key } => {
@@ -2083,17 +2368,23 @@ impl RegVm {
                                 ));
                             };
                             let was_shared = Rc::strong_count(text) > 1;
-                            let projected = text.len().saturating_add(value.len());
-                            let projected_charge = if was_shared { projected } else { value.len() };
-                            self.ensure_memory_available(projected_charge)?;
-                            let text = Rc::make_mut(text);
-                            text.try_reserve(value.len()).map_err(|error| {
-                                EvalError::Runtime(format!(
-                                    "StringBuilder allocation failed: {error}"
-                                ))
-                            })?;
-                            text.push_str(value.as_str());
-                            self.account_bytes(projected_charge)?;
+                            if self.limits.mem_budget.is_some() {
+                                let old_capacity = text.capacity();
+                                let mut replacement = String::with_capacity(
+                                    old_capacity.max(text.len().saturating_add(value.len())),
+                                );
+                                replacement.push_str(text);
+                                replacement.push_str(value.as_str());
+                                let charge = if was_shared {
+                                    replacement.capacity()
+                                } else {
+                                    replacement.capacity().saturating_sub(old_capacity)
+                                };
+                                self.account_bytes(charge)?;
+                                *text = Rc::new(replacement);
+                            } else {
+                                Rc::make_mut(text).push_str(value.as_str());
+                            }
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
                         RegInstr::StringBuilderFinish { dst, builder } => {
@@ -2113,7 +2404,6 @@ impl RegVm {
                                         .to_string(),
                                 ));
                             };
-                            self.ensure_memory_available(text.len())?;
                             let value = self.fresh_string(text.as_str().to_string())?;
                             self.set_reg(base + *dst, value);
                         }
@@ -2140,6 +2430,11 @@ impl RegVm {
                             intrinsic,
                             args,
                         } => {
+                            let storage_roots = self
+                                .limits
+                                .mem_budget
+                                .map(|_| self.storage_roots_from_regs(args, base));
+                            let live_bytes_before = self.live_bytes;
                             let value =
                                 self.call_intrinsic(unit, *intrinsic, args, base, next_base)?;
                             // A blocking intrinsic (channel/sleep) parked the task and left
@@ -2148,6 +2443,13 @@ impl RegVm {
                             if let Some(suspension) = self.suspension.as_mut() {
                                 suspension.resume_dst = base + *dst;
                             } else {
+                                if let Some(storage_roots) = &storage_roots {
+                                    self.account_result_storage_delta(
+                                        &value,
+                                        storage_roots,
+                                        live_bytes_before,
+                                    )?;
+                                }
                                 self.set_reg(base + *dst, value);
                             }
                         }
@@ -2157,8 +2459,20 @@ impl RegVm {
                             type_arg,
                             args,
                         } => {
+                            let storage_roots = self
+                                .limits
+                                .mem_budget
+                                .map(|_| self.storage_roots_from_regs(args, base));
+                            let live_bytes_before = self.live_bytes;
                             let value =
                                 self.call_typed_intrinsic(unit, *intrinsic, type_arg, args, base)?;
+                            if let Some(storage_roots) = &storage_roots {
+                                self.account_result_storage_delta(
+                                    &value,
+                                    storage_roots,
+                                    live_bytes_before,
+                                )?;
+                            }
                             self.set_reg(base + *dst, value);
                         }
                         RegInstr::TryResult { dst, src, cleanup } => {

@@ -806,11 +806,8 @@ impl<'a> RustLowerer<'a> {
                 }
             }
             Expr::Index { base, index, .. } => {
-                // RSScript indices are `Int` (i64), but Rust slice indices are
-                // `usize`; cast explicitly (parenthesized so `as` binds to the
-                // whole index expression, not just its trailing literal).
                 format!(
-                    "{}[({}) as usize]",
+                    "{}[rsscript_runtime::checked_list_index({})]",
                     self.lower_expr(base),
                     self.lower_expr(index)
                 )
@@ -1822,12 +1819,8 @@ impl<'a> RustLowerer<'a> {
                 }
             }
             Expr::Index { base, index, .. } => {
-                // Parenthesize the index so `as` binds to the whole expression,
-                // not just its trailing literal (mirrors the read path in
-                // `lower_expr`): `xs[i + 1] = v` must emit `xs[(i + 1) as usize]`,
-                // not the unbuildable `xs[i + 1i64 as usize]`.
                 format!(
-                    "{}[({}) as usize]",
+                    "{}[rsscript_runtime::checked_list_index({})]",
                     self.lower_assignment_target(base),
                     self.lower_expr(index)
                 )

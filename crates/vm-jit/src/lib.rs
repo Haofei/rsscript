@@ -4021,8 +4021,9 @@ fn successors(program: &JitFunction, i: usize) -> Vec<usize> {
 /// path from the function entry to `i`.
 ///
 /// Lattice: forward must-analysis. The entry-to-instruction-0 set is the parameter
-/// registers `0..n_params`. `assigned_out[i] = assigned_in[i] ∪ defs(i)`, and for a
-/// non-entry instruction `assigned_in[j] = ⋂ assigned_out[p]` over predecessors `p`
+/// registers `0..n_params`. Ordinary instructions add `defs(i)` to every outgoing
+/// edge; fused map matches add `value_dst` only to their `Some` edge. For a
+/// non-entry instruction `assigned_in[j] = ⋂ assigned_out[p -> j]` over predecessors `p`
 /// (intersection — a register is live on entry only if every incoming path assigns
 /// it). Non-entry `assigned_in` starts at the full set and the intersection shrinks
 /// it to the fixpoint; instruction 0's entry set is the params and is never
@@ -4068,12 +4069,46 @@ fn definite_assignment(program: &JitFunction, osr_entry: bool) -> Vec<Vec<bool>>
         })
         .collect();
 
-    let out_of = |in_set: &[bool], i: usize| -> Vec<bool> {
+    let out_for_edge = |in_set: &[bool], i: usize, successor: usize| -> Vec<bool> {
         let mut out = in_set.to_vec();
-        if let Some(d) = instr_def(&program.code[i])
-            && (d as usize) < n_regs
-        {
-            out[d as usize] = true;
+        match &program.code[i] {
+            JitInstr::MatchMapGetInt {
+                value_dst,
+                some_ip,
+                none_ip,
+                ..
+            }
+            | JitInstr::MatchMapGetFloat {
+                value_dst,
+                some_ip,
+                none_ip,
+                ..
+            }
+            | JitInstr::MatchSortedMapGetInt {
+                value_dst,
+                some_ip,
+                none_ip,
+                ..
+            }
+            | JitInstr::MatchSortedMapGetFloat {
+                value_dst,
+                some_ip,
+                none_ip,
+                ..
+            } if successor == *some_ip as usize && some_ip != none_ip => {
+                out[*value_dst as usize] = true;
+            }
+            JitInstr::MatchMapGetInt { .. }
+            | JitInstr::MatchMapGetFloat { .. }
+            | JitInstr::MatchSortedMapGetInt { .. }
+            | JitInstr::MatchSortedMapGetFloat { .. } => {}
+            _ => {
+                if let Some(d) = instr_def(&program.code[i])
+                    && (d as usize) < n_regs
+                {
+                    out[d as usize] = true;
+                }
+            }
         }
         out
     };
@@ -4091,7 +4126,7 @@ fn definite_assignment(program: &JitFunction, osr_entry: bool) -> Vec<Vec<bool>>
             }
             let mut new_in = vec![true; n_regs];
             for &p in &preds[j] {
-                let out = out_of(&assigned_in[p], p);
+                let out = out_for_edge(&assigned_in[p], p, j);
                 for r in 0..n_regs {
                     new_in[r] = new_in[r] && out[r];
                 }
@@ -10189,6 +10224,91 @@ mod tests {
             "{}",
             err.0
         );
+    }
+
+    #[test]
+    fn rejects_map_match_payload_read_on_none_edge() {
+        use JitValueType::{Float, Handle, Int};
+        let cases = [
+            (
+                "map-int",
+                Int,
+                JitInstr::MatchMapGetInt {
+                    map: 0,
+                    key: 1,
+                    value_dst: 2,
+                    some_ip: 1,
+                    none_ip: 2,
+                },
+            ),
+            (
+                "map-float",
+                Float,
+                JitInstr::MatchMapGetFloat {
+                    map: 0,
+                    key: 1,
+                    value_dst: 2,
+                    some_ip: 1,
+                    none_ip: 2,
+                },
+            ),
+            (
+                "sorted-map-int",
+                Int,
+                JitInstr::MatchSortedMapGetInt {
+                    map: 0,
+                    key: 1,
+                    value_dst: 2,
+                    some_ip: 1,
+                    none_ip: 2,
+                },
+            ),
+            (
+                "sorted-map-float",
+                Float,
+                JitInstr::MatchSortedMapGetFloat {
+                    map: 0,
+                    key: 1,
+                    value_dst: 2,
+                    some_ip: 1,
+                    none_ip: 2,
+                },
+            ),
+        ];
+        for (name, payload_type, match_instr) in cases {
+            let error = validate(&ft(
+                2,
+                vec![Handle, Int, payload_type],
+                vec![
+                    match_instr,
+                    JitInstr::Return { src: 2 },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .expect_err("None edge must not define the fused match payload");
+            assert!(
+                error.0.contains("before it is definitely assigned"),
+                "{name}: {}",
+                error.0
+            );
+        }
+
+        let error = validate(&ft(
+            2,
+            vec![Handle, Int, Int],
+            vec![
+                JitInstr::MatchMapGetInt {
+                    map: 0,
+                    key: 1,
+                    value_dst: 2,
+                    some_ip: 1,
+                    none_ip: 1,
+                },
+                JitInstr::Return { src: 2 },
+            ],
+        ))
+        .expect_err("a shared Some/None successor cannot assume a payload");
+        assert!(error.0.contains("before it is definitely assigned"));
     }
 
     #[test]

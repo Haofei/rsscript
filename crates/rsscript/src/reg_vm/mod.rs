@@ -2137,9 +2137,9 @@ pub struct VmLimits {
     /// `limit` instructions fails with a "step budget exceeded" error — this is
     /// what stops `while true {}`.
     pub step_budget: Option<u64>,
-    /// Best-effort ceiling on bytes held in VM-managed containers (register
-    /// stacks + list/map growth). `None` (default) = no accounting (near-zero
-    /// overhead). See [`RegVm::live_bytes`] for the accounting approximation.
+    /// Best-effort cumulative quota for VM-owned allocation and container
+    /// capacity growth. `None` (default) = no accounting (near-zero overhead).
+    /// This is not a live-memory measurement or an operating-system sandbox.
     pub mem_budget: Option<usize>,
     /// Host-level preemption hook. `None` (default) = no polling (the off path is
     /// near-free: `tick()` never touches the atomic). When `Some`, the host can
@@ -2255,10 +2255,9 @@ struct RegVm {
     /// Only consulted when `limits.step_budget` is `Some`; the unconditional
     /// increment is the entire overhead when the budget is off.
     steps: u64,
-    /// Best-effort running estimate of bytes held in VM-managed containers.
-    /// Approximation: we add the estimated size of *growth* (register-stack
-    /// resizes and list/map element/entry additions) and do NOT subtract frees,
-    /// so this is a cumulative high-water-ish figure, not a precise live-set. It
+    /// Best-effort cumulative count of VM-owned allocation and capacity growth.
+    /// We add estimated growth and do not subtract frees, so this is an
+    /// allocation quota rather than a precise live set. It
     /// exists only to trip `limits.mem_budget`; when that is `None` we skip all
     /// accounting so the overhead is zero. Accounted sites include register-stack
     /// growth, collection construction and capacity growth, and bounded intrinsic

@@ -200,6 +200,54 @@ fn main() -> Int {
 }
 
 #[test]
+fn intrinsic_and_constructor_results_are_charged_before_publication() {
+    let cases = [
+        (
+            "buffer-new",
+            r#"features: local
+fn main() -> Int {
+    local buffer = Buffer.new(size: 1048576)
+    return Buffer.len(buffer: buffer)
+}"#
+            .to_string(),
+            1024,
+        ),
+        (
+            "base64-encode",
+            format!(
+                "features: native\nfn main() -> Int {{\n    let encoded = Base64.encode(value: \"{}\")\n    return String.len(value: encoded)\n}}",
+                "x".repeat(8192)
+            ),
+            4096,
+        ),
+        (
+            "json-parse",
+            format!(
+                "fn main() -> Int {{\n    let parsed = Json.parse(text: \"[{}]\")\n    return 0\n}}",
+                std::iter::repeat_n("0", 2048).collect::<Vec<_>>().join(",")
+            ),
+            8192,
+        ),
+    ];
+
+    for (name, source, mem_budget) in cases {
+        let error = eval_limited(
+            &source,
+            VmLimits {
+                mem_budget: Some(mem_budget),
+                step_budget: Some(1_000_000),
+                ..VmLimits::default()
+            },
+        )
+        .expect_err("fresh intrinsic result must exceed the tight memory budget");
+        assert!(
+            matches!(error, EvalError::Runtime(ref message) if message.contains("memory limit")),
+            "{name}: expected memory-limit error, got {error:?}"
+        );
+    }
+}
+
+#[test]
 fn ordinary_vm_growth_paths_respect_memory_budget() {
     let cases = [
         (

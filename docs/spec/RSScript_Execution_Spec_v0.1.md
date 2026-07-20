@@ -334,7 +334,7 @@ the compared execution modes accept the same configured policy.
 |-------|---------|---------|
 | `max_depth` | Max logical call depth. Checked before every frame push and every optimized self-tail-call. | Generous, default-on |
 | `step_budget` | Max executed instructions over the whole run; stops `while true {}`. | `None` (unlimited) |
-| `mem_budget` | Best-effort ceiling on bytes held in VM-managed containers. | `None` (no accounting) |
+| `mem_budget` | Best-effort cumulative quota for VM-owned allocation and container-capacity growth. It is not a live-RSS measurement. | `None` (no accounting) |
 | `cancel` | Host preemption flag (e.g. watchdog/timeout); checked at a throttled step tick, even inside a tight non-awaiting loop. Preempts the whole eval with a "cancelled" runtime error. | `None` (near-free off path) |
 | `stdout_budget` | Max total bytes a program may write to captured stdout (all `Log.write`/trace paths funnel through one append point); the write that would exceed it fails cleanly *before* appending. Stops an output flood that `step_budget` (silent loops) does not. | `None` (unlimited) |
 | `host_call_budget` | Max stdlib/runtime intrinsic dispatches — the `Type.method` boundary out of pure VM bytecode into host library code, where all file/process/network/clock/logging effects enter. Caps the *volume* of host calls independently of instruction count (one intrinsic can do unbounded I/O). | `None` (uncounted) |
@@ -361,9 +361,12 @@ Structural Map/Set key validation and hashing consume step budget proportional t
 the traversed nodes/bytes, with bounded key depth and size. Hash tables use a
 per-process randomized hasher; deterministic iteration is not a language contract.
 Container capacity growth and size-parameterized intrinsic outputs are charged to
-`mem_budget` when armed. Fresh List/Map/Set/String/Bytes results are charged
-cumulatively, including list/map transforms such as `reverse`, `flat_map`,
-`group_by`, `keys`, `filter`, `merge`, `split`, `replace`, and `concat`.
+`mem_budget` before they become reachable when armed. The counter is cumulative:
+dropping or replacing a value does not refund prior allocation. Fresh VM-owned
+List/Map/Set/String/Bytes/JSON/object results are charged, including values returned
+by intrinsics and native bindings. Native bindings may allocate host memory while
+running; `mem_budget` governs only values accepted into VM ownership, so hostile
+execution still requires an OS process/container memory limit.
 
 ### 6.2 Limits bind every VM tier, including native code (normative)
 
@@ -449,7 +452,7 @@ where a translation bug should be a hard failure rather than a silent fallback.
 **Tiering.** A per-function hot-call counter (`tier_up_threshold`) defers native
 compilation until a function is hot.
 
-**OSR (on-stack replacement) — specified, staged.** The method-at-a-time model
+**OSR (on-stack replacement) — implemented experimentally.** The method-at-a-time model
 leaves one class unserved: a function called once (or rarely) whose *inner loop*
 is hot never crosses a per-call threshold, so the hot loop stays interpreted (a
 measured cliff in the VM/JIT benchmark suite). OSR-entry addresses it: when a
@@ -476,9 +479,9 @@ nondeterminism, see the seeding note in §2. Programs needing a deterministic or
 across backends MUST use `SortedMap`/`SortedSet` or sort explicitly; the
 differential harness does not compare raw `Map`/`Set` iteration order.)
 The hot-loop backedge counter guides only *whether/when* to OSR, never the values
-computed (determinism, per §2). This section fixes the OSR-entry contract; its
-implementation is staged (`vm-optimizing-jit-plan.md` J5.2) and the
-method-at-a-time entry remains the default until it lands.
+computed (determinism, per §2). Automatic OSR is enabled for eligible hot loops;
+forced entry points exercise it deterministically in tests. Unsupported state or
+armed limits make a region ineligible and keep execution in the interpreter.
 
 ### 7.1 The host-helper ABI (the heap-read boundary)
 
@@ -639,10 +642,9 @@ Normative conventions (part of this contract):
 
 Within the engine (distinct from the language §21 list):
 
-- **OSR / mid-loop on-stack replacement** — **specified, staged** (§7): the
-  OSR-entry contract (dual of deopt) is normative; implementation is staged
-  (`vm-optimizing-jit-plan.md` J5.2), method-at-a-time entry is the default until
-  it lands.
+- **Unrestricted OSR coverage** — OSR is implemented for eligible natural loops,
+  but unsupported state, effects, or armed limits deliberately keep execution in
+  the interpreter (§7). Multi-entry/irreducible-region OSR remains a non-goal.
 - **Un-journaled native side effects before a bail** — forbidden; breaks the §7.2
   fallback proof. Heap *writes* are permitted only through the §7.1 rule 9
   commit-on-success transaction, which restores them on bail; I/O, observable
