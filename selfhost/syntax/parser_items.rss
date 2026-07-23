@@ -89,8 +89,8 @@ fn push_feature_item(program: mut Program, toks: List<Tok>, start: Int, end: Int
 }
 
 // Data declarations use the same Item record as functions. These helpers own
-// only syntax shape; type resolution and field-default expressions remain in
-// the semantic and expression layers.
+// syntax shape and preserve field-default expression roots; name/type binding
+// remains in the semantic layer.
 fn data_decl_name_end(toks: List<Tok>, start: Int) -> Int {
     let nameStart = item_name_index(toks, i: start)
     return take_function_name(toks: toks, i: nameStart)
@@ -153,7 +153,7 @@ fn field_name_text(toks: List<Tok>, start: Int) -> String {
     return ""
 }
 
-fn push_data_field(toks: List<Tok>, start: Int, end: Int, fields: mut List<Field>) -> Unit {
+fn push_data_field(program: mut Program, toks: List<Tok>, start: Int, end: Int, fields: mut List<Field>) -> Unit {
     if start >= end || is_ident_tok(toks: toks, i: start) == false { return Unit }
     let nameTok = List.get<Tok>(list: toks, index: start)
     let mut typeStart = start
@@ -170,21 +170,33 @@ fn push_data_field(toks: List<Tok>, start: Int, end: Int, fields: mut List<Field
     let typeTok = List.get<Tok>(list: toks, index: typeStart)
     local typeText = canonical_type_text(toks: toks, start: typeStart, end: typeEnd)
     local typeSyntax = parse_type_syntax(toks, start: typeStart, end: typeEnd)
-    let field = Field.from(name: take name, typeText: take typeText, typeSyntax: take typeSyntax, isHandle: isHandle, isWeak: isWeak, line: nameTok.line, column: nameTok.col, length: nameTok.len, typeLine: typeTok.line, typeColumn: typeTok.col, typeLength: typeTok.len)
+    let hasDefault = typeEnd < end && at_symbol(toks: toks, i: typeEnd, code: SYM_EQ) && (typeEnd + 1) < end
+    let mut defaultLine = 0
+    let mut defaultColumn = 0
+    let mut defaultLength = 0
+    let mut defaultExpression = -1
+    if hasDefault {
+        let defaultTok = List.get<Tok>(list: toks, index: (typeEnd + 1))
+        defaultLine = defaultTok.line
+        defaultColumn = defaultTok.col
+        defaultLength = defaultTok.len
+        defaultExpression = parse_expression(program: mut program, toks, start: (typeEnd + 1), end: end)
+    }
+    let field = Field.from(name: take name, typeText: take typeText, typeSyntax: take typeSyntax, isHandle: isHandle, isWeak: isWeak, hasDefault: hasDefault, defaultLine: defaultLine, defaultColumn: defaultColumn, defaultLength: defaultLength, defaultExpression: defaultExpression, line: nameTok.line, column: nameTok.col, length: nameTok.len, typeLine: typeTok.line, typeColumn: typeTok.col, typeLength: typeTok.len)
     List.push<Field>(list: mut fields, value: field)
 }
 
-fn collect_data_fields(toks: List<Tok>, open: Int, close: Int, fields: mut List<Field>) -> Unit {
+fn collect_data_fields(program: mut Program, toks: List<Tok>, open: Int, close: Int, fields: mut List<Field>) -> Unit {
     let mut i = open + 1
     while i < close {
         let lineEnd = next_line_or_block_end(toks: toks, start: i, end: close)
-        push_data_field(toks, start: i, end: lineEnd, fields: mut fields)
+        push_data_field(program: mut program, toks, start: i, end: lineEnd, fields: mut fields)
         if lineEnd > i { i = lineEnd } else { i = i + 1 }
     }
     return Unit
 }
 
-fn collect_sum_variants(toks: List<Tok>, open: Int, close: Int, variants: mut List<Variant>) -> Unit {
+fn collect_sum_variants(program: mut Program, toks: List<Tok>, open: Int, close: Int, variants: mut List<Variant>) -> Unit {
     let mut i = open + 1
     while i < close {
         let lineEnd = next_line_or_block_end(toks: toks, start: i, end: close)
@@ -199,7 +211,7 @@ fn collect_sum_variants(toks: List<Tok>, open: Int, close: Int, variants: mut Li
                         let comma = split_top_level_comma(toks: toks, start: fieldStart, end: fieldsClose)
                         let mut fieldEnd = fieldsClose
                         if comma >= 0 { fieldEnd = comma }
-                        push_data_field(toks, start: fieldStart, end: fieldEnd, fields: mut fields)
+                        push_data_field(program: mut program, toks, start: fieldStart, end: fieldEnd, fields: mut fields)
                         if comma < 0 { fieldStart = fieldsClose } else { fieldStart = comma + 1 }
                     }
                 }
@@ -228,8 +240,8 @@ fn push_data_item(program: mut Program, toks: List<Tok>, start: Int, end: Int, k
             let close = find_matching(toks: toks, open: afterDerives, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
             if close >= 0 {
                 item.hasBody = true
-                if kind == ITEM_SUM { collect_sum_variants(toks, open: afterDerives, close, variants: mut item.variants) }
-                else { collect_data_fields(toks, open: afterDerives, close, fields: mut item.fields) }
+                if kind == ITEM_SUM { collect_sum_variants(program: mut program, toks, open: afterDerives, close, variants: mut item.variants) }
+                else { collect_data_fields(program: mut program, toks, open: afterDerives, close, fields: mut item.fields) }
             }
         }
     }

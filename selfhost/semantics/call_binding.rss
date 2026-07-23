@@ -1,0 +1,201 @@
+// Canonical source-argument to declaration-parameter binding.
+//
+// This mirrors crates/rsscript/src/call_binding.rs. Explicit arguments retain
+// source evaluation order; `byParameter` is the declaration-order ABI view.
+
+features: local
+
+module selfhost.semantics.call_binding
+
+use selfhost.syntax.ast.*
+
+const BOUND_SOURCE_NONE: Int = 0
+const BOUND_SOURCE_RECEIVER: Int = 1
+const BOUND_SOURCE_EXPLICIT: Int = 2
+const BOUND_SOURCE_DEFAULT: Int = 3
+
+const BINDING_UNKNOWN_NAMED_ARGUMENT: Int = 1
+const BINDING_DUPLICATE_PARAMETER: Int = 2
+const BINDING_POSITIONAL_ARGUMENT_OUT_OF_RANGE: Int = 3
+const BINDING_MISSING_PARAMETER: Int = 4
+
+struct BoundArgument {
+    parameterIndex: Int
+    evaluationIndex: Int
+    sourceKind: Int
+    sourceIndex: Int
+}
+
+struct BindingParameter {
+    name: String
+    hasDefault: Bool
+    allowsShorthand: Bool
+}
+
+struct CallBindingIssue {
+    kind: Int
+    sourceIndex: Int
+    parameterIndex: Int
+}
+
+struct CallBinding {
+    byParameter: List<BoundArgument>
+    evaluationOrder: List<BoundArgument>
+    issues: List<CallBindingIssue>
+}
+
+fn BoundArgument.from(parameterIndex: Int, evaluationIndex: Int, sourceKind: Int, sourceIndex: Int) -> fresh BoundArgument {
+    return BoundArgument(parameterIndex: parameterIndex, evaluationIndex: evaluationIndex, sourceKind: sourceKind, sourceIndex: sourceIndex)
+}
+
+fn BoundArgument.unbound(parameterIndex: Int) -> fresh BoundArgument {
+    return BoundArgument.from(parameterIndex: parameterIndex, evaluationIndex: -1, sourceKind: BOUND_SOURCE_NONE, sourceIndex: -1)
+}
+
+fn BindingParameter.from(name: take String, hasDefault: Bool, allowsShorthand: Bool) -> fresh BindingParameter {
+    return BindingParameter(name: take name, hasDefault: hasDefault, allowsShorthand: allowsShorthand)
+}
+
+fn CallBindingIssue.from(kind: Int, sourceIndex: Int, parameterIndex: Int) -> fresh CallBindingIssue {
+    return CallBindingIssue(kind: kind, sourceIndex: sourceIndex, parameterIndex: parameterIndex)
+}
+
+fn parameter_index(params: List<BindingParameter>, name: String) -> Int {
+    let mut index = 0
+    while index < List.len(list: params) {
+        let parameter = List.get<BindingParameter>(list: params, index: index)
+        if parameter.name == name { return index }
+        index = index + 1
+    }
+    return -1
+}
+
+fn shorthand_parameter_index(program: Program, params: List<BindingParameter>, argument: CallArg) -> Int {
+    if argument.value < 0 || argument.value >= List.len(list: program.expressions) { return -1 }
+    let value = List.get<Expr>(list: program.expressions, index: argument.value)
+    if value.kind != EXPR_NAME { return -1 }
+    let index = parameter_index(params: params, name: value.text)
+    if index < 0 { return -1 }
+    let parameter = List.get<BindingParameter>(list: params, index: index)
+    if parameter.allowsShorthand { return index }
+    return -1
+}
+
+fn parameter_is_bound(byParameter: List<BoundArgument>, index: Int) -> Bool {
+    if index < 0 || index >= List.len(list: byParameter) { return false }
+    return List.get<BoundArgument>(list: byParameter, index: index).sourceKind != BOUND_SOURCE_NONE
+}
+
+fn bind_parameters(program: Program, params: List<BindingParameter>, args: List<CallArg>, receiverOffset: Int, allowPositional: Bool) -> fresh CallBinding {
+    local byParameter = List<BoundArgument>.new()
+    local evaluationOrder = List<BoundArgument>.new()
+    local issues = List<CallBindingIssue>.new()
+
+    let mut parameterIndex = 0
+    while parameterIndex < List.len(list: params) {
+        List.push<BoundArgument>(list: mut byParameter, value: BoundArgument.unbound(parameterIndex: parameterIndex))
+        parameterIndex = parameterIndex + 1
+    }
+
+    if receiverOffset == 1 && List.len(list: params) > 0 {
+        let receiver = BoundArgument.from(parameterIndex: 0, evaluationIndex: 0, sourceKind: BOUND_SOURCE_RECEIVER, sourceIndex: -1)
+        List.set<BoundArgument>(list: mut byParameter, index: 0, value: receiver)
+        List.push<BoundArgument>(list: mut evaluationOrder, value: receiver)
+    }
+
+    let mut sourceIndex = 0
+    while sourceIndex < List.len(list: args) {
+        let argument = List.get<CallArg>(list: args, index: sourceIndex)
+        let mut target = -1
+        if String.len(value: argument.label) > 0 {
+            target = parameter_index(params: params, name: argument.label)
+            if target < 0 {
+                List.push<CallBindingIssue>(list: mut issues, value: CallBindingIssue.from(kind: BINDING_UNKNOWN_NAMED_ARGUMENT, sourceIndex: sourceIndex, parameterIndex: -1))
+            }
+        } else {
+            target = shorthand_parameter_index(program: program, params: params, argument: argument)
+            if target < 0 && allowPositional { target = sourceIndex + receiverOffset }
+            if target < 0 || target >= List.len(list: params) {
+                List.push<CallBindingIssue>(list: mut issues, value: CallBindingIssue.from(kind: BINDING_POSITIONAL_ARGUMENT_OUT_OF_RANGE, sourceIndex: sourceIndex, parameterIndex: target))
+                target = -1
+            }
+        }
+
+        if target >= 0 {
+            if parameter_is_bound(byParameter: byParameter, index: target) {
+                List.push<CallBindingIssue>(list: mut issues, value: CallBindingIssue.from(kind: BINDING_DUPLICATE_PARAMETER, sourceIndex: sourceIndex, parameterIndex: target))
+            } else {
+                let bound = BoundArgument.from(parameterIndex: target, evaluationIndex: (sourceIndex + receiverOffset), sourceKind: BOUND_SOURCE_EXPLICIT, sourceIndex: sourceIndex)
+                List.set<BoundArgument>(list: mut byParameter, index: target, value: bound)
+                List.push<BoundArgument>(list: mut evaluationOrder, value: bound)
+            }
+        }
+        sourceIndex = sourceIndex + 1
+    }
+
+    let mut nextEvaluation = List.len(list: args) + receiverOffset
+    parameterIndex = receiverOffset
+    while parameterIndex < List.len(list: params) {
+        if parameter_is_bound(byParameter: byParameter, index: parameterIndex) == false {
+            let parameter = List.get<BindingParameter>(list: params, index: parameterIndex)
+            if parameter.hasDefault {
+                let bound = BoundArgument.from(parameterIndex: parameterIndex, evaluationIndex: nextEvaluation, sourceKind: BOUND_SOURCE_DEFAULT, sourceIndex: -1)
+                nextEvaluation = nextEvaluation + 1
+                List.set<BoundArgument>(list: mut byParameter, index: parameterIndex, value: bound)
+                List.push<BoundArgument>(list: mut evaluationOrder, value: bound)
+            } else {
+                List.push<CallBindingIssue>(list: mut issues, value: CallBindingIssue.from(kind: BINDING_MISSING_PARAMETER, sourceIndex: -1, parameterIndex: parameterIndex))
+            }
+        }
+        parameterIndex = parameterIndex + 1
+    }
+
+    return CallBinding(byParameter: take byParameter, evaluationOrder: take evaluationOrder, issues: take issues)
+}
+
+fn CallBinding.bind(program: Program, params: List<Param>, args: List<CallArg>, receiverOffset: Int, allowPositional: Bool) -> fresh CallBinding {
+    local parameters = List<BindingParameter>.new()
+    let mut index = 0
+    while index < List.len(list: params) {
+        let parameter = List.get<Param>(list: params, index: index)
+        let allowsShorthand = parameter.effect == "" || parameter.effect == "read"
+        local name = String.copy(value: parameter.name)
+        List.push<BindingParameter>(list: mut parameters, value: BindingParameter.from(name: take name, hasDefault: parameter.hasDefault, allowsShorthand: allowsShorthand))
+        index = index + 1
+    }
+    return bind_parameters(program: program, params: parameters, args: args, receiverOffset: receiverOffset, allowPositional: allowPositional)
+}
+
+fn CallBinding.bind_fields(program: Program, fields: List<Field>, args: List<CallArg>) -> fresh CallBinding {
+    local parameters = List<BindingParameter>.new()
+    let mut index = 0
+    while index < List.len(list: fields) {
+        let field = List.get<Field>(list: fields, index: index)
+        local name = String.copy(value: field.name)
+        List.push<BindingParameter>(list: mut parameters, value: BindingParameter.from(name: take name, hasDefault: field.hasDefault, allowsShorthand: true))
+        index = index + 1
+    }
+    return bind_parameters(program: program, params: parameters, args: args, receiverOffset: 0, allowPositional: false)
+}
+
+fn CallBinding.is_complete(self: CallBinding) -> Bool {
+    if List.len(list: self.issues) > 0 { return false }
+    let mut index = 0
+    while index < List.len(list: self.byParameter) {
+        if List.get<BoundArgument>(list: self.byParameter, index: index).sourceKind == BOUND_SOURCE_NONE { return false }
+        index = index + 1
+    }
+    return true
+}
+
+fn CallBinding.explicit_parameter(self: CallBinding, sourceIndex: Int) -> Int {
+    let mut index = 0
+    while index < List.len(list: self.evaluationOrder) {
+        let argument = List.get<BoundArgument>(list: self.evaluationOrder, index: index)
+        if argument.sourceKind == BOUND_SOURCE_EXPLICIT && argument.sourceIndex == sourceIndex {
+            return argument.parameterIndex
+        }
+        index = index + 1
+    }
+    return -1
+}

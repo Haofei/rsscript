@@ -495,6 +495,22 @@ the context can infer the current body-AST subset. It is not yet the checker's
 general type model: control-flow joins, nominal/generic types, effects,
 overloads, and nested expression forms remain outside this slice.
 
+`selfhost.semantics.call_binding` now mirrors the Rust canonical call binder.
+It preserves explicit source evaluation order separately from
+declaration-order parameter slots and materializes omitted defaults after all
+explicit arguments. The same model covers direct functions, receiver offset,
+same-name shorthand, data constructors, and multi-field sum variants.
+Field declarations now preserve default-expression roots in the shared AST, so
+constructor defaults no longer require reopening token ranges. A deterministic
+binding outline pins reordered arguments, non-trailing defaults, receiver
+defaults, constructor defaults, and variant shorthand against a Rust test
+oracle. The main checker deliberately keeps RS0205 on its lightweight shared-AST
+label scan for now: importing and constructing the full binder independently at
+each call caused every parity worker to recompile it and added a declaration
+scan per call. Before call/type rules consume bindings, the checker must build
+one prepared declaration/binding index and reuse it across rules. Later rules
+must extend this module through that index rather than infer slots again.
+
 `selfhost.semantics.check_types` is the first AST-backed rule group. It checks
 the current `if`/`while` subset for known non-Bool conditions and `for`
 subjects for known non-iterable types, recurses into nested control blocks with

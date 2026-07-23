@@ -231,6 +231,11 @@ struct Field {
     typeSyntax: TypeSyntax
     isHandle: Bool
     isWeak: Bool
+    hasDefault: Bool
+    defaultLine: Int
+    defaultColumn: Int
+    defaultLength: Int
+    defaultExpression: Int
     line: Int
     column: Int
     length: Int
@@ -403,8 +408,8 @@ fn FeatureName.from(name: take String, line: Int, column: Int, length: Int) -> f
     return FeatureName(name: take name, line: line, column: column, length: length)
 }
 
-fn Field.from(name: take String, typeText: take String, typeSyntax: take TypeSyntax, isHandle: Bool, isWeak: Bool, line: Int, column: Int, length: Int, typeLine: Int, typeColumn: Int, typeLength: Int) -> fresh Field {
-    return Field(name: take name, typeText: take typeText, typeSyntax: take typeSyntax, isHandle: isHandle, isWeak: isWeak, line: line, column: column, length: length, typeLine: typeLine, typeColumn: typeColumn, typeLength: typeLength)
+fn Field.from(name: take String, typeText: take String, typeSyntax: take TypeSyntax, isHandle: Bool, isWeak: Bool, hasDefault: Bool, defaultLine: Int, defaultColumn: Int, defaultLength: Int, defaultExpression: Int, line: Int, column: Int, length: Int, typeLine: Int, typeColumn: Int, typeLength: Int) -> fresh Field {
+    return Field(name: take name, typeText: take typeText, typeSyntax: take typeSyntax, isHandle: isHandle, isWeak: isWeak, hasDefault: hasDefault, defaultLine: defaultLine, defaultColumn: defaultColumn, defaultLength: defaultLength, defaultExpression: defaultExpression, line: line, column: column, length: length, typeLine: typeLine, typeColumn: typeColumn, typeLength: typeLength)
 }
 
 fn Variant.from(name: take String, line: Int, column: Int, length: Int, fields: take List<Field>) -> fresh Variant {

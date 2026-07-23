@@ -2916,6 +2916,78 @@ fn selfhost_checker_accepts_mutable_handle_parameter_kernel() {
     );
 }
 
+#[test]
+fn selfhost_call_binding_preserves_evaluation_and_parameter_order() {
+    let source = r#"fn digits(a: Int = 1, b: Int, c: Int = 3) -> Int {
+    return a * 100 + b * 10 + c
+}
+
+fn pair(first: Int, second: Int) -> Int {
+    return first * 10 + second
+}
+
+class Box {
+    value: Int
+}
+
+struct Defaults {
+    first: Int = 1
+    second: Int
+}
+
+sum Duo {
+    Values(first: Int, second: Int)
+}
+
+fn Box.add(self: read Box, amount: Int = 1) -> Int {
+    return self.value + amount
+}
+
+fn main() -> Unit {
+    let first: Int = 1
+    let second: Int = 2
+    let box = Box(value: 4)
+    let defaults = Defaults(second)
+    let duo = Values(second, first)
+    digits(c: 9, b: 2)
+    pair(second, first)
+    box.add()
+    return Unit
+}
+"#;
+    let exe = compile_selfhost_tool(
+        "serialize/call_binding_outline.rss",
+        "canonical call-binding outline",
+    )
+    .expect("canonical call-binding outline should compile");
+    let output = exe
+        .eval_main_with_args([source.to_string()])
+        .expect("canonical call-binding outline should run");
+    assert_eq!(
+        output.stdout,
+        concat!(
+            "Box\tvalue\targ0\teval=0\n",
+            "Box\tstatus\tcomplete\n",
+            "Defaults\tfirst\tdefault\teval=1\n",
+            "Defaults\tsecond\targ0\teval=0\n",
+            "Defaults\tstatus\tcomplete\n",
+            "Values\tfirst\targ1\teval=1\n",
+            "Values\tsecond\targ0\teval=0\n",
+            "Values\tstatus\tcomplete\n",
+            "digits\ta\tdefault\teval=2\n",
+            "digits\tb\targ1\teval=1\n",
+            "digits\tc\targ0\teval=0\n",
+            "digits\tstatus\tcomplete\n",
+            "pair\tfirst\targ1\teval=1\n",
+            "pair\tsecond\targ0\teval=0\n",
+            "pair\tstatus\tcomplete\n",
+            "add\tself\treceiver\teval=0\n",
+            "add\tamount\tdefault\teval=1\n",
+            "add\tstatus\tcomplete\n",
+        )
+    );
+}
+
 /// Phase-2 NEGATIVE smoke (non-ignored): the rss parser must REJECT malformed
 /// source, matching the Rust oracle. The accept-only tiny sample above would
 /// still pass if the rss parser degenerated to always printing `OK`; this closes
@@ -4187,19 +4259,30 @@ fn checker_rs0034_structured_multiset_parity() {
 
 #[test]
 fn checker_rs0205_structured_multiset_parity() {
-    let source = r#"fn target(a: Int, b: Int) -> Unit
+    let source = r#"struct Pair {
+    first: Int
+    second: Int
+}
+
+sum Duo {
+    Values(first: Int, second: Int)
+}
+
+fn target(a: Int, b: Int) -> Unit
 
 fn exercise() -> Unit {
     target(a: 1, a: 2, a: 3, b: 4)
     target(a: 1, b: 2, b: 3)
     target(a: 1, b: 2)
+    Pair(first: 1, first: 2, second: 3)
+    Values(first: 1, second: 2, second: 3)
 }
 "#;
     let oracle = checker_oracle_records("structured-rs0205.rss", source, "RS0205");
     assert_eq!(
         oracle.len(),
-        3,
-        "fixture must preserve every duplicate after the first argument"
+        5,
+        "fixture must preserve function, constructor, and variant duplicates"
     );
     let actual = diagnostic_records_for_code(
         run_cached_checker_records(source).expect("rss checker should emit records"),
