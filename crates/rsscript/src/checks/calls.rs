@@ -1149,14 +1149,27 @@ fn check_call_args(
         .iter()
         .enumerate()
         .map(|(index, arg)| {
-            resolved_arg_param_name(
-                arg,
-                index,
+            let shorthand = constructor_field_shorthand_name(
                 allow_constructor_field_shorthand,
-                allow_positional_args,
+                arg,
                 &param_names,
-                &signature_params,
-            )
+            );
+            let binding_is_applicable =
+                arg.name.is_some() || allow_positional_args || shorthand.is_some();
+            arg.parameter_index
+                .filter(|_| binding_is_applicable)
+                .and_then(|parameter_index| signature.params.get(parameter_index))
+                .map(|parameter| parameter.name.as_str())
+                .or_else(|| {
+                    resolved_arg_param_name(
+                        arg,
+                        index,
+                        allow_constructor_field_shorthand,
+                        allow_positional_args,
+                        &param_names,
+                        &signature_params,
+                    )
+                })
         })
         .collect();
 

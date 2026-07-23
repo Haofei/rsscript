@@ -291,13 +291,33 @@ fn main() -> Unit {
 fn named_call_binding_matches_the_language_oracle_on_every_backend() {
     let source = r#"
 const fallback: Int = 7
+const field_fallback: Int = 8
 
 struct Box { value: Int }
 struct Cell { n: Int }
+struct PairValue {
+    first: Int
+    second: Int
+}
+struct DefaultBox {
+    value: Int = field_fallback
+}
+sum Duo {
+    Values(first: Int, second: Int)
+}
 
 fn pair(first: Int, second: Int) -> Int { return first * 10 + second }
+fn encode(a: Int, b: Int, c: Int) -> Int { return a * 100 + b * 10 + c }
 fn digits(a: Int = 1, b: Int, c: Int = 3) -> Int { return a * 100 + b * 10 + c }
 fn pick(value: Int = fallback) -> Int { return value }
+fn typed(text: read String, count: Int) -> String {
+    return String.concat(left: text, right: String.from_int(value: count))
+}
+fn duo_value(value: read Duo) -> Int {
+    match value {
+        Values(first, second) => { return first * 10 + second }
+    }
+}
 fn add_into(read_value: Int, target: mut Int) -> Unit { target = target + read_value }
 fn Box.add(self: read Box, amount: Int = 1) -> Int { return self.value + amount }
 fn Cell.combine(self: mut Cell, source: read Cell, target: mut Cell) -> Unit {
@@ -321,6 +341,12 @@ pub fn main() -> Unit {
     mut base.combine(target: mut target, source: read source)
 
     let fallback: Int = 99
+    let field_fallback: Int = 98
+    let first: Int = 1
+    let second: Int = 2
+    let pair_value = PairValue(second, first)
+    let duo = Values(second, first)
+    let default_box = DefaultBox()
     let mut order: Int = 0
     let encoded = pair(
         second: record(order: mut order, value: 2),
@@ -329,7 +355,18 @@ pub fn main() -> Unit {
 
     Log.write(message: String.from_int(value: encoded))
     Log.write(message: String.from_int(value: order))
+    Log.write(message: String.from_int(value: pair(second, first)))
+    Log.write(message: String.from_int(value: pair_value.first * 10 + pair_value.second))
+    Log.write(message: String.from_int(value: duo_value(value: duo)))
+    Log.write(message: String.from_int(value: default_box.value))
+    Log.write(message: String.from_int(value: encode(a: 1, b: 2, c: 3)))
+    Log.write(message: String.from_int(value: encode(a: 1, c: 3, b: 2)))
+    Log.write(message: String.from_int(value: encode(b: 2, a: 1, c: 3)))
+    Log.write(message: String.from_int(value: encode(b: 2, c: 3, a: 1)))
+    Log.write(message: String.from_int(value: encode(c: 3, a: 1, b: 2)))
+    Log.write(message: String.from_int(value: encode(c: 3, b: 2, a: 1)))
     Log.write(message: String.from_int(value: digits(c: 9, b: 2)))
+    Log.write(message: typed(count: 4, text: read "value="))
     Log.write(message: String.from_int(value: x * 100 + y))
     Log.write(message: String.from_int(value: b.add()))
     Log.write(message: String.from_int(value: target.n))
@@ -337,7 +374,8 @@ pub fn main() -> Unit {
     return Unit
 }
 "#;
-    let expected = "2\n1\n12\n21\n129\n111\n5\n13\n7\n";
+    let expected =
+        "2\n1\n12\n21\n12\n12\n12\n8\n123\n123\n123\n123\n123\n123\n129\nvalue=4\n111\n5\n13\n7\n";
     for backend in common::differential::full_backends() {
         let actual = backend
             .run_stdout("named-call-binding.rss", source, &[])

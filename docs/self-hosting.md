@@ -124,6 +124,10 @@ tests:
   inconsistently (`SH-016`-`SH-018`, `SH-024`).
 - Freshness was lost at a control-flow merge, and VM/AOT disagreed on the exit
   behavior of `main` returning `Err` (`SH-019`, `SH-005`).
+- Named arguments, non-trailing defaults, receiver defaults, same-name shorthand,
+  constructor/variant fields, and `mut` writeback once had separate positional
+  interpretations in HIR/reg-VM and AOT. They now share one canonical call-binding
+  model with source-order evaluation and declaration-order ABI slots.
 - Redundant eager `DeepCopy` of `read List<Char>` values made the self-hosted
   lexer quadratic; the classifier fix changed that workload from about 79.5 s
   to 0.73 s in the recorded release measurement (`SH-022`).

@@ -1465,39 +1465,105 @@ fn lower_hir_call_expr(
             span: arg.span.clone(),
         })
         .collect();
+    let user_variant_fields = match callee {
+        Callee::Name(name) => hir.sum_variant_fields(type_root_name(name)),
+        _ => None,
+    };
+    let call_binding = match &resolution {
+        CallResolution::Resolved { signature, kind } => {
+            let parameter_names = signature
+                .params
+                .iter()
+                .map(|parameter| parameter.name.as_str())
+                .collect::<Vec<_>>();
+            let parameter_has_default = signature
+                .params
+                .iter()
+                .map(|parameter| parameter.default.is_some())
+                .collect::<Vec<_>>();
+            let parameter_allows_shorthand = signature
+                .params
+                .iter()
+                .map(|parameter| {
+                    parameter.effect == Some(ParamEffect::Read)
+                        || matches!(kind, ResolvedCalleeKind::Constructor { .. })
+                })
+                .collect::<Vec<_>>();
+            let argument_names = hir_args
+                .iter()
+                .map(|argument| argument.name.as_deref())
+                .collect::<Vec<_>>();
+            let argument_shorthand_names = hir_args
+                .iter()
+                .map(|argument| match &argument.value {
+                    HirExpr::Ident { name, .. } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            Some(crate::call_binding::CallBinding::bind(
+                &parameter_names,
+                &parameter_has_default,
+                &parameter_allows_shorthand,
+                &argument_names,
+                &argument_shorthand_names,
+                usize::from(matches!(callee, Callee::ReceiverCall { .. })),
+            ))
+        }
+        CallResolution::EnumVariant => user_variant_fields.map(|fields| {
+            let parameter_names = fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>();
+            let parameter_has_default = fields
+                .iter()
+                .map(|field| field.default.is_some())
+                .collect::<Vec<_>>();
+            let parameter_allows_shorthand = vec![true; fields.len()];
+            let argument_names = hir_args
+                .iter()
+                .map(|argument| argument.name.as_deref())
+                .collect::<Vec<_>>();
+            let argument_shorthand_names = hir_args
+                .iter()
+                .map(|argument| match &argument.value {
+                    HirExpr::Ident { name, .. } => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            crate::call_binding::CallBinding::bind(
+                &parameter_names,
+                &parameter_has_default,
+                &parameter_allows_shorthand,
+                &argument_names,
+                &argument_shorthand_names,
+                0,
+            )
+        }),
+        _ => None,
+    };
+
     // Syntax preserves whether a caller wrote `read`, but the semantic form has
     // exactly one representation: a bare argument for a read parameter is the
-    // same read effect as an explicitly wrapped argument. This happens after
-    // resolution so a bare argument can never be upgraded to mut/take.
-    if let CallResolution::Resolved { signature, .. } = &resolution {
-        let positional_offset = usize::from(matches!(callee, Callee::ReceiverCall { .. }));
+    // same read effect as an explicitly wrapped argument. Parameter selection is
+    // read only from the shared binding result.
+    if let (CallResolution::Resolved { signature, .. }, Some(binding)) =
+        (&resolution, &call_binding)
+    {
         for (index, arg) in hir_args.iter_mut().enumerate() {
+            let Some(bound) = binding.explicit(index) else {
+                continue;
+            };
+            arg.parameter_index = Some(bound.parameter_index);
+            arg.evaluation_index = bound.evaluation_index;
+            let param = &signature.params[bound.parameter_index];
+            if arg.name.is_none()
+                && matches!(&arg.value, HirExpr::Ident { name, .. } if *name == param.name)
+            {
+                arg.name = Some(param.name.clone());
+            }
             let actual_type = args
                 .get(index)
                 .and_then(|source_arg| infer_hir_expr_type(hir, &source_arg.value, value_types));
-            let positional_param = signature.params.get(index + positional_offset);
-            // Same-name punning is deliberately narrower than positional calls:
-            // only an identifier identical to a resolved default-read parameter
-            // may omit its label. Other unnamed arguments remain diagnostics.
-            if arg.name.is_none()
-                && let (Some(param), HirExpr::Ident { name, .. }) = (positional_param, &arg.value)
-                && param.name == *name
-                && param.effect == Some(ParamEffect::Read)
-            {
-                arg.name = Some(name.clone());
-            }
-            let expected = arg
-                .name
-                .as_deref()
-                .and_then(|name| signature.params.iter().find(|param| param.name == name))
-                .or(positional_param);
-            let Some(param) = expected else {
-                continue;
-            };
-            arg.parameter_index = signature
-                .params
-                .iter()
-                .position(|candidate| candidate.name == param.name);
             if param.effect == Some(ParamEffect::Read) && !hir_expr_already_read(&arg.value) {
                 let value = std::mem::replace(&mut arg.value, HirExpr::Unknown(arg.span.clone()));
                 arg.value = HirExpr::Effect {
@@ -1510,17 +1576,31 @@ fn lower_hir_call_expr(
             }
         }
     }
+    if matches!(resolution, CallResolution::EnumVariant)
+        && let (Some(fields), Some(binding)) = (user_variant_fields, &call_binding)
+    {
+        for (index, arg) in hir_args.iter_mut().enumerate() {
+            let Some(bound) = binding.explicit(index) else {
+                continue;
+            };
+            arg.parameter_index = Some(bound.parameter_index);
+            arg.evaluation_index = bound.evaluation_index;
+            let field = &fields[bound.parameter_index];
+            if arg.name.is_none()
+                && matches!(&arg.value, HirExpr::Ident { name, .. } if *name == field.name)
+            {
+                arg.name = Some(field.name.clone());
+            }
+        }
+    }
     // Fill omitted parameters that declare a default value, so every
     // backend sees a complete call (defaults are desugared once, here).
-    if let CallResolution::Resolved { signature, .. } = &resolution {
-        let provided: std::collections::HashSet<usize> = hir_args
-            .iter()
-            .filter_map(|arg| arg.parameter_index)
-            .collect();
-        for (parameter_index, param) in signature.params.iter().enumerate() {
-            if let Some(default) = &param.default
-                && !provided.contains(&parameter_index)
-            {
+    if let (CallResolution::Resolved { signature, .. }, Some(binding)) =
+        (&resolution, &call_binding)
+    {
+        for bound in binding.defaults() {
+            let param = &signature.params[bound.parameter_index];
+            if let Some(default) = &param.default {
                 // Defaults execute at the call site, but their names are bound in
                 // the declaration environment. Caller locals must not shadow a
                 // top-level constant referenced by a default.
@@ -1543,8 +1623,24 @@ fn lower_hir_call_expr(
                 hir_args.push(HirCallArg {
                     name: Some(param.name.clone()),
                     value,
-                    parameter_index: Some(parameter_index),
-                    evaluation_index: hir_args.len(),
+                    parameter_index: Some(bound.parameter_index),
+                    evaluation_index: bound.evaluation_index,
+                    span: span.clone(),
+                });
+            }
+        }
+    }
+    if matches!(resolution, CallResolution::EnumVariant)
+        && let (Some(fields), Some(binding)) = (user_variant_fields, &call_binding)
+    {
+        for bound in binding.defaults() {
+            let field = &fields[bound.parameter_index];
+            if let Some(default) = &field.default {
+                hir_args.push(HirCallArg {
+                    name: Some(field.name.clone()),
+                    value: lower_hir_expr(hir, function_name, default, &HashMap::new()),
+                    parameter_index: Some(bound.parameter_index),
+                    evaluation_index: bound.evaluation_index,
                     span: span.clone(),
                 });
             }

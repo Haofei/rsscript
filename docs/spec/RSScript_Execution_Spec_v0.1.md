@@ -151,6 +151,13 @@ Consequences (all normative):
    the language contract for handwritten programs that use those features; such
    programs remain constrained to the permitted traces described above. See §5
    on float parity by construction.)
+6. **Call binding precedes backend lowering.** A call has one canonical binding
+   from source arguments to declaration-order parameter slots. The binding records
+   source evaluation order, parameter order, defaults, receiver position, and
+   same-name shorthand. Checker, HIR/reg-VM, JIT input, and AOT lowering MUST
+   consume that binding contract; a backend MUST NOT infer omitted defaults from
+   argument count or independently reinterpret argument labels. Constructors and
+   multi-field sum variants obey the same rule.
 
 ### 2.1 Failure equivalence (what "same failure" means)
 
@@ -768,7 +775,8 @@ Built verification-first; the governing invariants are §2 (parity) and §7
   OSR-entry is implemented for eligible natural loops (§7), while unsupported state
   shapes remain staged. Native bails at every arithmetic guard and the interpreter
   re-runs from the original args; a permanent `force-deopt` backend exercises the
-  bail path across the whole corpus. A total `seed(bytes) -> program` decoder
+  bail path across the configured differential corpus. This is not a claim that
+  every source/state combination is generated. A total `seed(bytes) -> program` decoder
   (`program_from_seed`) drives the differential via proptest seeds and shrinking;
   wiring it to a coverage-guided engine (cargo-fuzz/libFuzzer) is the remaining
   deployment step (the decoder is already total, as such engines require).

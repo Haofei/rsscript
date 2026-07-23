@@ -1284,21 +1284,6 @@ pub(super) fn lower_callee(callee: &Callee) -> String {
     }
 }
 
-/// The source-qualified function name a callee refers to (`greet`,
-/// `Type.method`), keyed the same way as the function signature maps. `None` for
-/// receiver-style calls (which resolve dynamically by receiver type).
-pub(super) fn callee_source_name(callee: &Callee) -> Option<String> {
-    match callee {
-        Callee::Name(name) => Some(type_root_name(name).to_string()),
-        Callee::Qualified { namespace, name } => Some(format!(
-            "{}.{}",
-            type_root_name(namespace),
-            type_root_name(name)
-        )),
-        Callee::ReceiverCall { .. } => None,
-    }
-}
-
 pub(super) fn lower_protocol_callee(callee: &Callee) -> String {
     match callee {
         Callee::Qualified { namespace, name } => {

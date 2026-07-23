@@ -13,6 +13,7 @@ use super::types::{LoweredRust, RustSourceMapEntry};
 pub(super) struct RustLowerer<'a> {
     pub(super) program: &'a Program,
     pub(super) type_kinds: BTreeMap<String, TypeKind>,
+    pub(super) type_fields: BTreeMap<String, Vec<FieldDecl>>,
     pub(super) protocol_names: BTreeSet<String>,
     pub(super) native_boundary_callees: BTreeSet<String>,
     pub(super) async_native_boundary_callees: BTreeSet<String>,
@@ -68,7 +69,7 @@ impl<'a> RustLowerer<'a> {
         // `rsscript_runtime::` qualification. So only *non-builtin* (dependency)
         // interface types are ingested; the current program wins on any conflict.
         let builtin_type_names = builtin_interface_type_names();
-        let type_kinds = interface_programs
+        let type_declarations = interface_programs
             .iter()
             .flat_map(|interface| interface.items.iter())
             .filter(|item| match item {
@@ -77,14 +78,22 @@ impl<'a> RustLowerer<'a> {
             })
             .chain(program.items.iter())
             .filter_map(|item| match item {
-                Item::Type(ty) => Some((ty.name.clone(), ty.kind)),
-                Item::SumType(_) => None, // sum types don't contribute to type_kinds map
+                Item::Type(ty) => Some((ty.name.clone(), ty.kind, ty.fields.clone())),
+                Item::SumType(_) => None,
                 Item::Function(_)
                 | Item::TypeAlias(_)
                 | Item::Const(_)
                 | Item::Module(_)
                 | Item::Use(_) => None,
             })
+            .collect::<Vec<_>>();
+        let type_kinds = type_declarations
+            .iter()
+            .map(|(name, kind, _)| (name.clone(), *kind))
+            .collect();
+        let type_fields = type_declarations
+            .into_iter()
+            .map(|(name, _, fields)| (name, fields))
             .collect();
         let native_boundary_callees = collect_native_boundary_callees(program, interface_programs);
         let async_native_boundary_callees =
@@ -131,6 +140,7 @@ impl<'a> RustLowerer<'a> {
         Self {
             program,
             type_kinds,
+            type_fields,
             protocol_names,
             native_boundary_callees,
             async_native_boundary_callees,
@@ -1062,75 +1072,82 @@ impl<'a> RustLowerer<'a> {
         // instead of falling through to a positional tuple-struct call.
         let ctor_name = type_root_name(name);
         if let Some(type_kind) = self.type_kinds.get(ctor_name).copied() {
+            let declared_fields = self.type_fields.get(ctor_name).cloned().unwrap_or_default();
+            let field_names = declared_fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>();
+            let field_has_default = declared_fields
+                .iter()
+                .map(|field| field.default.is_some())
+                .collect::<Vec<_>>();
+            let field_allows_shorthand = vec![true; declared_fields.len()];
+            let argument_names = args
+                .iter()
+                .map(|argument| argument.name.as_deref())
+                .collect::<Vec<_>>();
+            let argument_shorthand_names = args
+                .iter()
+                .map(|argument| match &argument.value {
+                    Expr::Ident(name, _) => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let binding = crate::call_binding::CallBinding::bind(
+                &field_names,
+                &field_has_default,
+                &field_allows_shorthand,
+                &argument_names,
+                &argument_shorthand_names,
+                0,
+            );
+            if !binding.is_complete() {
+                unreachable_lowering("constructor call binding", span);
+            }
+
             let mut fields = Vec::new();
-            for arg in args {
-                let field_name = self.constructor_field_arg_name(ctor_name, arg);
-                let field = field_name
-                    .as_deref()
-                    .map(rust_ident)
-                    .unwrap_or_else(|| "/* unnamed */".to_string());
-                let is_weak_field = arg
-                    .name
-                    .as_deref()
-                    .or(field_name.as_deref())
-                    .is_some_and(|field_name| self.is_weak_field(ctor_name, field_name));
+            for bound in binding.evaluation_order() {
+                let field_decl = &declared_fields[bound.parameter_index];
+                let (value, value_span, is_default) = match bound.source {
+                    crate::call_binding::BoundArgumentSource::Receiver => unreachable!(),
+                    crate::call_binding::BoundArgumentSource::Explicit(source_index) => {
+                        let argument = &args[source_index];
+                        (&argument.value, &argument.span, false)
+                    }
+                    crate::call_binding::BoundArgumentSource::Default => (
+                        field_decl
+                            .default
+                            .as_ref()
+                            .expect("bound constructor default should exist"),
+                        span,
+                        true,
+                    ),
+                };
+                let field_name = field_decl.name.as_str();
+                let field = rust_ident(field_name);
+                let is_weak_field = self.is_weak_field(ctor_name, field_name);
+                let previous_lowering_default = self.lowering_default;
+                self.lowering_default |= is_default;
                 if is_weak_field {
                     fields.push(format!(
                         "{field}: {}",
-                        self.lower_explicit_weak_field_value(&arg.value)
+                        self.lower_explicit_weak_field_value(value)
                     ));
-                } else if field_name
-                    .as_deref()
-                    .is_some_and(|field_name| self.is_runtime_handle_field(ctor_name, field_name))
-                {
-                    let field_name = field_name.unwrap_or_default();
+                } else if self.is_runtime_handle_field(ctor_name, field_name) {
                     fields.push(format!(
                         "{field}: {}",
                         self.lower_runtime_handle_field_value(
-                            ctor_name,
-                            &field_name,
-                            &arg.value,
-                            &arg.span
+                            ctor_name, field_name, value, value_span
                         )
                     ));
                 } else {
-                    let value = field_name
-                        .as_deref()
-                        .and_then(|field_name| self.field_type(ctor_name, field_name))
-                        .map(|expected| self.lower_expr_for_expected_type(&arg.value, &expected))
-                        .unwrap_or_else(|| self.lower_owned_expr(&arg.value));
+                    let value = self
+                        .field_type(ctor_name, field_name)
+                        .map(|expected| self.lower_expr_for_expected_type(value, &expected))
+                        .unwrap_or_else(|| self.lower_owned_expr(value));
                     fields.push(format!("{field}: {value}"));
                 }
-            }
-            // Fill omitted fields that declare a default value
-            // (`name: T = expr`) so the Rust struct literal is complete.
-            let provided: std::collections::HashSet<String> = args
-                .iter()
-                .filter_map(|arg| self.constructor_field_arg_name(ctor_name, arg))
-                .collect();
-            let defaulted: Vec<(String, Expr)> = self
-                .program
-                .items
-                .iter()
-                .find_map(|item| match item {
-                    Item::Type(decl) if type_root_name(&decl.name) == ctor_name => Some(
-                        decl.fields
-                            .iter()
-                            .filter_map(|f| f.default.clone().map(|d| (f.name.clone(), d)))
-                            .collect::<Vec<_>>(),
-                    ),
-                    _ => None,
-                })
-                .unwrap_or_default();
-            for (field_name, default) in defaulted {
-                if provided.contains(&field_name) {
-                    continue;
-                }
-                let value = self
-                    .field_type(ctor_name, &field_name)
-                    .map(|expected| self.lower_expr_for_expected_type(&default, &expected))
-                    .unwrap_or_else(|| self.lower_owned_expr(&default));
-                fields.push(format!("{}: {value}", rust_ident(&field_name)));
+                self.lowering_default = previous_lowering_default;
             }
             let fields = fields.join(", ");
             let constructed = format!("{} {{ {fields} }}", rust_ident(ctor_name));
@@ -1147,45 +1164,82 @@ impl<'a> RustLowerer<'a> {
         // form `Enum::Variant { field: value, ... }` to match the lowered enum (whose
         // payload variants use named fields). Nullary variants emit `Enum::Variant`.
         if let Some(sum_name) = self.find_sum_type_for_variant(ctor_name) {
-            // declared (name, type) of each field of this variant
-            let decl_fields: Vec<(String, TypeRef)> = self
+            let declared_fields = self
                 .program
                 .items
                 .iter()
                 .find_map(|item| {
                     if let Item::SumType(sum) = item {
-                        sum.variants.iter().find(|v| v.name == ctor_name).map(|v| {
-                            v.fields
-                                .iter()
-                                .map(|f| (f.name.clone(), f.ty.clone()))
-                                .collect()
-                        })
+                        sum.variants
+                            .iter()
+                            .find(|variant| variant.name == ctor_name)
+                            .map(|variant| variant.fields.clone())
                     } else {
                         None
                     }
                 })
                 .unwrap_or_default();
-            if decl_fields.is_empty() {
+            if declared_fields.is_empty() {
                 return Some(format!(
                     "{}::{}",
                     rust_ident(&sum_name),
                     rust_ident(ctor_name)
                 ));
             }
+
+            let field_names = declared_fields
+                .iter()
+                .map(|field| field.name.as_str())
+                .collect::<Vec<_>>();
+            let field_has_default = declared_fields
+                .iter()
+                .map(|field| field.default.is_some())
+                .collect::<Vec<_>>();
+            let field_allows_shorthand = vec![true; declared_fields.len()];
+            let argument_names = args
+                .iter()
+                .map(|argument| argument.name.as_deref())
+                .collect::<Vec<_>>();
+            let argument_shorthand_names = args
+                .iter()
+                .map(|argument| match &argument.value {
+                    Expr::Ident(name, _) => Some(name.as_str()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            let binding = crate::call_binding::CallBinding::bind(
+                &field_names,
+                &field_has_default,
+                &field_allows_shorthand,
+                &argument_names,
+                &argument_shorthand_names,
+                0,
+            );
+            if !binding.is_complete() {
+                unreachable_lowering("sum variant call binding", span);
+            }
+
             let mut fields = Vec::new();
-            for (index, arg) in args.iter().enumerate() {
-                // Resolve the target field by name if given, else positionally. Arity and
-                // field names are validated in the checker; here we stay bounds-safe and
-                // lower each value against its declared field type (like struct ctors).
-                let field = match &arg.name {
-                    Some(name) => decl_fields.iter().find(|(fname, _)| fname == name),
-                    None => decl_fields.get(index),
+            for bound in binding.evaluation_order() {
+                let field = &declared_fields[bound.parameter_index];
+                let (value, is_default) = match bound.source {
+                    crate::call_binding::BoundArgumentSource::Receiver => unreachable!(),
+                    crate::call_binding::BoundArgumentSource::Explicit(source_index) => {
+                        (&args[source_index].value, false)
+                    }
+                    crate::call_binding::BoundArgumentSource::Default => (
+                        field
+                            .default
+                            .as_ref()
+                            .expect("bound variant default should exist"),
+                        true,
+                    ),
                 };
-                let Some((field_name, field_ty)) = field else {
-                    continue;
-                };
-                let value = self.lower_expr_for_expected_type(&arg.value, field_ty);
-                fields.push(format!("{}: {value}", rust_ident(field_name)));
+                let previous_lowering_default = self.lowering_default;
+                self.lowering_default |= is_default;
+                let value = self.lower_expr_for_expected_type(value, &field.ty);
+                self.lowering_default = previous_lowering_default;
+                fields.push(format!("{}: {value}", rust_ident(&field.name)));
             }
             return Some(format!(
                 "{}::{} {{ {} }}",
@@ -1284,57 +1338,46 @@ impl<'a> RustLowerer<'a> {
             .cloned()
             .unwrap_or_else(|| vec![None; params.len()]);
 
-        let mut slots = vec![None::<(CallArg, usize)>; params.len()];
-        let mut explicit_slots = Vec::with_capacity(args.len());
-        for (source_index, arg) in args.iter().enumerate() {
-            let parameter_index = if let Some(name) = arg.name.as_deref() {
-                params.iter().position(|(param, _)| param == name)?
-            } else {
-                source_index + receiver_offset
-            };
-            if parameter_index >= params.len() || slots[parameter_index].is_some() {
-                return None;
-            }
-            explicit_slots.push(parameter_index);
-            slots[parameter_index] = Some((arg.clone(), source_index));
+        let parameter_names = params
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>();
+        let parameter_has_default = defaults.iter().map(Option::is_some).collect::<Vec<_>>();
+        let parameter_allows_shorthand = effects
+            .iter()
+            .map(|(_, effect)| *effect == Some(DataEffect::Read))
+            .collect::<Vec<_>>();
+        let argument_names = args
+            .iter()
+            .map(|argument| argument.name.as_deref())
+            .collect::<Vec<_>>();
+        let argument_shorthand_names = args
+            .iter()
+            .map(|argument| match &argument.value {
+                Expr::Ident(name, _) => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let binding = crate::call_binding::CallBinding::bind(
+            &parameter_names,
+            &parameter_has_default,
+            &parameter_allows_shorthand,
+            &argument_names,
+            &argument_shorthand_names,
+            receiver_offset,
+        );
+        if !binding.is_complete() {
+            return None;
         }
 
-        let mut next_evaluation = args.len();
-        let mut inserted_default = false;
-        for parameter_index in receiver_offset..params.len() {
-            if slots[parameter_index].is_some() {
-                continue;
-            }
-            let Some(Some(helper)) = helpers.get(parameter_index) else {
-                if defaults.get(parameter_index).is_some_and(Option::is_some) {
-                    return None;
-                }
-                return None;
-            };
-            let parameter_name = params[parameter_index].0.clone();
-            let default_value = Expr::Call {
-                callee: Callee::Name(helper.clone()),
-                args: Vec::new(),
-                span: span.clone(),
-            };
-            let effect = effects.get(parameter_index).and_then(|(_, effect)| *effect);
-            let value = effect.map_or(default_value.clone(), |effect| Expr::Effect {
-                effect,
-                value: Box::new(default_value),
-                span: span.clone(),
-            });
-            slots[parameter_index] = Some((
-                CallArg {
-                    name: Some(parameter_name),
-                    value,
-                    malformed: false,
-                    span: span.clone(),
-                },
-                next_evaluation,
-            ));
-            next_evaluation += 1;
-            inserted_default = true;
-        }
+        let explicit_slots = (0..args.len())
+            .map(|source_index| {
+                binding
+                    .explicit(source_index)
+                    .map(|arg| arg.parameter_index)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        let inserted_default = binding.defaults().next().is_some();
 
         let canonical_explicit = explicit_slots
             .iter()
@@ -1344,15 +1387,51 @@ impl<'a> RustLowerer<'a> {
             return None;
         }
 
-        let mut evaluations = slots
-            .iter()
-            .enumerate()
-            .filter_map(|(parameter_index, slot)| {
-                slot.clone()
-                    .map(|(arg, evaluation)| (evaluation, parameter_index, arg))
-            })
-            .collect::<Vec<_>>();
-        evaluations.sort_by_key(|(evaluation, _, _)| *evaluation);
+        let mut slots = vec![None::<CallArg>; params.len()];
+        let mut evaluations = Vec::with_capacity(params.len());
+        for bound in binding.evaluation_order() {
+            let argument = match bound.source {
+                crate::call_binding::BoundArgumentSource::Receiver => continue,
+                crate::call_binding::BoundArgumentSource::Explicit(source_index) => {
+                    let mut argument = args[source_index].clone();
+                    if argument.name.is_none()
+                        && matches!(
+                            &argument.value,
+                            Expr::Ident(name, _) if *name == params[bound.parameter_index].0
+                        )
+                    {
+                        argument.name = Some(params[bound.parameter_index].0.clone());
+                    }
+                    argument
+                }
+                crate::call_binding::BoundArgumentSource::Default => {
+                    let helper = helpers
+                        .get(bound.parameter_index)
+                        .and_then(Option::as_ref)?;
+                    let default_value = Expr::Call {
+                        callee: Callee::Name(helper.clone()),
+                        args: Vec::new(),
+                        span: span.clone(),
+                    };
+                    let effect = effects
+                        .get(bound.parameter_index)
+                        .and_then(|(_, effect)| *effect);
+                    let value = effect.map_or(default_value.clone(), |effect| Expr::Effect {
+                        effect,
+                        value: Box::new(default_value),
+                        span: span.clone(),
+                    });
+                    CallArg {
+                        name: Some(params[bound.parameter_index].0.clone()),
+                        value,
+                        malformed: false,
+                        span: span.clone(),
+                    }
+                }
+            };
+            slots[bound.parameter_index] = Some(argument.clone());
+            evaluations.push((bound.parameter_index, argument));
+        }
 
         // Defaults alone are already in the required evaluation and ABI order.
         // Avoid temporary blocks for the common trailing-default case.
@@ -1360,7 +1439,7 @@ impl<'a> RustLowerer<'a> {
             let canonical = slots
                 .into_iter()
                 .skip(receiver_offset)
-                .map(|slot| slot.expect("bound call slot should be complete").0)
+                .map(|slot| slot.expect("bound call slot should be complete"))
                 .collect::<Vec<_>>();
             return Some(self.lower_call_after_binding(callee, &canonical, span));
         }
@@ -1370,7 +1449,7 @@ impl<'a> RustLowerer<'a> {
         let mut prelude = String::new();
         let mut canonical = vec![None::<CallArg>; params.len()];
         let mut temporary_names = Vec::new();
-        for (_, parameter_index, arg) in evaluations {
+        for (parameter_index, arg) in evaluations {
             let temp = format!("__rss_call_{call_id}_arg_{parameter_index}");
             let lowered = self.lower_call_arg_for_callee(&stage_callee, &arg, parameter_index);
             prelude.push_str(&format!("let {temp} = {lowered}; "));
@@ -1683,60 +1762,11 @@ impl<'a> RustLowerer<'a> {
         } else {
             lower_callee(callee)
         };
-        let provided = args.len();
         let mut args = args
             .iter()
             .enumerate()
             .map(|(index, arg)| self.lower_call_arg_for_callee(callee, arg, index))
             .collect::<Vec<_>>();
-        // Fill omitted trailing parameters that declare a default value
-        // (Rust has no default params, so each call site supplies them).
-        // Calls lower positionally, so omitted args are always the trailing
-        // defaulted ones.
-        if let Some(name) = callee_source_name(callee)
-            && let Some(defaults) = self.function_param_defaults.get(&name).cloned()
-            && defaults.len() > provided
-        {
-            let param_types = self.function_param_types.get(&name).cloned();
-            let param_effects = self
-                .function_param_effects
-                .get(&native_boundary_callee_key(callee))
-                .cloned();
-            for (index, default) in defaults.iter().enumerate().skip(provided) {
-                if let Some(default) = default {
-                    let effect = param_effects
-                        .as_ref()
-                        .and_then(|params| params.get(index))
-                        .and_then(|(_, effect)| *effect);
-                    let lowered = if let Some(effect) = effect {
-                        // A non-Copy default is materialized at the call and
-                        // passed under the parameter's declared effect;
-                        // route it through the normal argument path so the
-                        // borrow/managed-handle ABI matches the signature.
-                        let synthetic = CallArg {
-                            name: param_types
-                                .as_ref()
-                                .and_then(|params| params.get(index))
-                                .map(|(param_name, _)| param_name.clone()),
-                            value: Expr::Effect {
-                                effect,
-                                value: Box::new(default.clone()),
-                                span: span.clone(),
-                            },
-                            malformed: false,
-                            span: span.clone(),
-                        };
-                        self.lower_call_arg_for_callee(callee, &synthetic, index)
-                    } else {
-                        match param_types.as_ref().and_then(|params| params.get(index)) {
-                            Some((_, ty)) => self.lower_expr_for_expected_type(default, ty),
-                            None => self.lower_owned_expr(default),
-                        }
-                    };
-                    args.push(lowered);
-                }
-            }
-        }
         if is_resource_pool_borrow {
             args.push(lower_source_span(span));
         }
@@ -2862,29 +2892,12 @@ impl<'a> RustLowerer<'a> {
         }
     }
 
-    pub(super) fn constructor_field_arg_name(
-        &self,
-        type_name: &str,
-        arg: &CallArg,
-    ) -> Option<String> {
-        if let Some(name) = arg.name.as_deref() {
-            return Some(name.to_string());
-        }
-        let Expr::Ident(name, _) = &arg.value else {
-            return None;
-        };
-        self.field_type(type_name, name).map(|_| name.clone())
-    }
-
     pub(super) fn field_type(&self, type_name: &str, field_name: &str) -> Option<TypeRef> {
-        self.program.items.iter().find_map(|item| match item {
-            Item::Type(ty) if ty.name == type_name => ty
-                .fields
-                .iter()
-                .find(|field| field.name == field_name)
-                .map(|field| field.ty.clone()),
-            _ => None,
-        })
+        self.type_fields
+            .get(type_root_name(type_name))?
+            .iter()
+            .find(|field| field.name == field_name)
+            .map(|field| field.ty.clone())
     }
 
     pub(super) fn is_resource_type(&self, ty: &TypeRef) -> bool {

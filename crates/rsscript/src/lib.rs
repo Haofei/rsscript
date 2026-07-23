@@ -11,6 +11,7 @@ mod analyzer;
 pub mod bbom;
 pub mod bbom_policy;
 pub mod bbom_reir;
+mod call_binding;
 mod capability;
 mod checks;
 mod core_index;
