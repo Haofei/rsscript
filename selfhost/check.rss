@@ -8825,7 +8825,7 @@ fn positional_arg_bad(toks: List<Tok>, s: Int, e: Int, idx: Int, cpt: String, po
 // enclosing fn (e.g. `return callback("x")` with `callback: noescape Fn(Int) -> Int`).
 // Types each positional argument against the Fn parameter's declared arg types. Only a
 // Fn-typed param triggers this (param_type_string => strip => `Fn(`), so it is FP-safe.
-fn fn_param_call_bad(toks: List<Tok>, callee: String, open: Int, close: Int, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>) -> Bool {
+fn collect_fn_param_call_bad_tokens(toks: List<Tok>, callee: String, open: Int, close: Int, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>, out: mut List<Int>) -> Bool {
     let cpt = strip_type_prefixes(s: param_type_string(toks, open: popen, close: pclose, name: callee))
     if String.starts_with(value: cpt, prefix: "Fn(") == false { return false }
     let mut i = open + 1
@@ -8844,23 +8844,42 @@ fn fn_param_call_bad(toks: List<Tok>, callee: String, open: Int, close: Int, pop
         } else if at_symbol(toks: toks, i: i, code: SYM_RANGLE) {
             if angle > 0 { angle = angle - 1 }
         } else if depth == 0 && angle == 0 && at_symbol(toks: toks, i: i, code: SYM_COMMA) {
-            if positional_arg_bad(toks, s: segStart, e: i, idx: argno, cpt, popen, pclose, bodyOpen, fnIdx, locals) { bad = true }
+            if positional_arg_bad(toks, s: segStart, e: i, idx: argno, cpt, popen, pclose, bodyOpen, fnIdx, locals) {
+                List.push<Int>(list: mut out, value: segStart)
+                bad = true
+            }
             argno = argno + 1
             segStart = i + 1
         }
         i = i + 1
     }
     if segStart < close {
-        if positional_arg_bad(toks, s: segStart, e: close, idx: argno, cpt, popen, pclose, bodyOpen, fnIdx, locals) { bad = true }
+        if positional_arg_bad(toks, s: segStart, e: close, idx: argno, cpt, popen, pclose, bodyOpen, fnIdx, locals) {
+            List.push<Int>(list: mut out, value: segStart)
+            bad = true
+        }
     }
     return bad
 }
 
-// RS0207 Slice 2: check each labeled argument of one call `callee(label: expr, ...)`
-// against the declared parameter type of `callee` (resolve_param_type via the O(1) fn
-// index). Fires when both the parameter type (alias-expanded) and the argument type
-// (return_actual_type, now index-backed) are concrete and incompatible. UNKNOWN callee /
-// param / arg => no fire (matches the oracle's skip-bias).
+fn fn_param_call_bad(toks: List<Tok>, callee: String, open: Int, close: Int, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>) -> Bool {
+    let mut ignored = List<Int>.new()
+    return collect_fn_param_call_bad_tokens(
+        toks,
+        callee,
+        open,
+        close,
+        popen,
+        pclose,
+        bodyOpen,
+        fnIdx,
+        locals,
+        out: mut ignored
+    )
+}
+
+// Presence fallback for RS0207 cases that still require token-local generic,
+// callback, interpolation, alias, or moved-value state.
 fn call_arg_type_bad(toks: List<Tok>, ns: String, callee: String, open: Int, close: Int, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>, aliasIdx: Map<String, String>, recvGeneric: String) -> Bool {
     let mut depth = 0
     let mut atArgStart = true
@@ -8870,29 +8889,26 @@ fn call_arg_type_bad(toks: List<Tok>, ns: String, callee: String, open: Int, clo
     while k < close {
         if depth == 0 && atArgStart && is_ident_tok(toks: toks, i: k) && at_symbol(toks: toks, i: (k + 1), code: SYM_COLON) {
             let label = tk_text(toks, i: k)
-            let mut pt0 = resolve_param_type(toks, ns, name: callee, label, fnIdx)
-            if String.len(value: pt0) == 0 && ns == "ResourcePool" && callee == "new" && label == "create" && String.len(value: recvGeneric) > 0 {
-                // ResourcePool<T>.new's factory param is `create: Fn() -> T` (T = the pool's
-                // resource type from the receiver generic). Curated like stdlib_param_type,
-                // but generic-substituted from the call site.
-                pt0 = String.concat(left: "Fn() -> ", right: recvGeneric)
+            let mut parameterType = resolve_param_type(toks, ns, name: callee, label, fnIdx)
+            if String.len(value: parameterType) == 0 && ns == "ResourcePool" && callee == "new" && label == "create" && String.len(value: recvGeneric) > 0 {
+                parameterType = String.concat(left: "Fn() -> ", right: recvGeneric)
             }
-            if String.len(value: pt0) > 0 {
-                let pt = expand_type_alias(aliasIdx, ty: pt0)
-                if str_is_unresolved_generic(s: pt) == false {
-                    let cm = find_top_sym(toks, start: (k + 2), end: close, code: SYM_COMMA)
-                    let mut ae = close
-                    if cm >= 0 { ae = cm }
-                    if (k + 2) < ae {
-                        if callback_arg_bad(toks, as0: (k + 2), ae, pt, popen, pclose, bodyOpen, fnIdx, locals) { bad = true }
-                        let at = return_actual_type(toks, s0: (k + 2), e: ae, popen, pclose, bodyOpen, fnIdx, locals)
-                        if String.len(value: at) > 0 && str_is_unresolved_generic(s: at) == false {
-                            if arg_type_matches(expected: pt, actual: at) == false { bad = true }
-                        } else if String.len(value: at) == 0 {
-                            let mut ai = k + 2
-                            if is_effect_kw(toks, i: ai) { ai = ai + 1 }
-                            if (ai + 1) == ae && is_ident_tok(toks: toks, i: ai) {
-                                if is_untyped_param(toks, popen, pclose, name: tk_text(toks, i: ai)) { bad = true }
+            if String.len(value: parameterType) > 0 {
+                let expected = expand_type_alias(aliasIdx, ty: parameterType)
+                if str_is_unresolved_generic(s: expected) == false {
+                    let comma = find_top_sym(toks, start: (k + 2), end: close, code: SYM_COMMA)
+                    let mut argEnd = close
+                    if comma >= 0 { argEnd = comma }
+                    if (k + 2) < argEnd {
+                        if callback_arg_bad(toks, as0: (k + 2), ae: argEnd, expected, popen, pclose, bodyOpen, fnIdx, locals) { bad = true }
+                        let actual = return_actual_type(toks, s0: (k + 2), e: argEnd, popen, pclose, bodyOpen, fnIdx, locals)
+                        if String.len(value: actual) > 0 && str_is_unresolved_generic(s: actual) == false {
+                            if arg_type_matches(expected: expected, actual: actual) == false { bad = true }
+                        } else if String.len(value: actual) == 0 {
+                            let mut argument = k + 2
+                            if is_effect_kw(toks, i: argument) { argument = argument + 1 }
+                            if (argument + 1) == argEnd && is_ident_tok(toks: toks, i: argument) {
+                                if is_untyped_param(toks, popen, pclose, name: tk_text(toks, i: argument)) { bad = true }
                             }
                         }
                     }
@@ -8919,6 +8935,21 @@ fn collect_call_arg_type_bad_tokens(toks: List<Tok>, ns: String, callee: String,
     let mut depth = 0
     let mut atArgStart = true
     let mut hit = false
+    if String.len(value: ns) == 0
+        && collect_fn_param_call_bad_tokens(
+            toks,
+            callee,
+            open,
+            close,
+            popen,
+            pclose,
+            bodyOpen,
+            fnIdx,
+            locals,
+            out: mut out
+        ) {
+        hit = true
+    }
     let mut k = open + 1
     while k < close {
         if depth == 0 && atArgStart && is_ident_tok(toks: toks, i: k) && at_symbol(toks: toks, i: (k + 1), code: SYM_COLON) {
@@ -9305,167 +9336,158 @@ fn interp_nonstring_item(toks: List<Tok>, itemText: String, tokIdx: Int, popen: 
     return true
 }
 
-// True if the interpolation token at tokIdx has an embedded expression of concrete
-// non-String type (RS0207). Parses `{expr}` markers from the token text (mirrors
-// emit_interp): `\`-escapes and `{{`/`}}` are literal; each `{expr}` is checked.
 fn interp_has_nonstring(toks: List<Tok>, tokIdx: Int, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>) -> Bool {
     let text = tk_text(toks, i: tokIdx)
-    let cs = String.chars(value: text)
-    let n = List.len<Char>(list: cs)
-    let mut i = 0
-    while i < n {
-        let c = code_at(chars: cs, n: n, i: i)
-        if c == 92 {
-            i = i + 2
-        } else if c == 123 && code_at(chars: cs, n: n, i: (i + 1)) == 123 {
-            i = i + 2
-        } else if c == 125 && code_at(chars: cs, n: n, i: (i + 1)) == 125 {
-            i = i + 2
-        } else if c == 123 {
-            let close = interp_end(cs, n, start: (i + 1))
+    let chars = String.chars(value: text)
+    let count = List.len<Char>(list: chars)
+    let mut index = 0
+    while index < count {
+        let code = code_at(chars: chars, n: count, i: index)
+        if code == 92 {
+            index = index + 2
+        } else if code == 123 && code_at(chars: chars, n: count, i: (index + 1)) == 123 {
+            index = index + 2
+        } else if code == 125 && code_at(chars: chars, n: count, i: (index + 1)) == 125 {
+            index = index + 2
+        } else if code == 123 {
+            let close = interp_end(chars, count, start: (index + 1))
             if close < 0 {
-                i = i + 1
+                index = index + 1
             } else {
-                let item = slice(chars: cs, from: (i + 1), to: close)
+                let item = slice(chars: chars, from: (index + 1), to: close)
                 if interp_nonstring_item(toks, itemText: item, tokIdx, popen, pclose, bodyOpen, fnIdx, locals) { return true }
-                i = close + 1
+                index = close + 1
             }
         } else {
-            i = i + 1
+            index = index + 1
         }
     }
     return false
 }
 
-fn fn_has_binding_type_mismatch(toks: List<Tok>, start: Int, model: FileTypeModel) -> Bool {
+fn fn_has_legacy_binding_type_mismatch(toks: List<Tok>, start: Int, model: FileTypeModel) -> Bool {
     let body = build_body_type_model(toks, fnStart: start)
     if body_type_model_ok(body) == false { return false }
-    let mut i = body.bodyOpen + 1
+    let mut index = body.bodyOpen + 1
     let mut hit = false
-    while i < body.bodyClose {
-        if at_symbol(toks: toks, i: i, code: SYM_LBRACE) && is_closure_brace(toks, b: i) && closure_paramless(toks, b: i) == false {
-            let cc = find_matching(toks: toks, open: i, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
-            if cc < 0 { i = body.bodyClose } else { i = cc + 1 }
-        } else if tk_kind(toks: toks, i: i) == TOK_INTERP {
-            if interp_has_nonstring(toks, tokIdx: i, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals) { hit = true }
-            i = i + 1
-        } else if is_kw_text(toks, i, word: "let") || is_kw_text(toks, i, word: "local") {
-            let mut j = i + 1
-            if is_kw_text(toks, i: j, word: "mut") { j = j + 1 }
-            if is_ident_tok(toks: toks, i: j) && at_symbol(toks: toks, i: (j + 1), code: SYM_COLON) {
-                let stmtEnd = next_line_or_block_end(toks: toks, start: i, end: body.bodyClose)
-                let eq = find_top_sym(toks, start: (j + 2), end: stmtEnd, code: SYM_EQ)
-                if eq >= 0 {
-                    let annotated = qualified_type_string(toks, ts: (j + 2), te: eq, prefix: model.prefix, declared: model.declared)
+    while index < body.bodyClose {
+        if at_symbol(toks: toks, i: index, code: SYM_LBRACE) && is_closure_brace(toks, b: index) && closure_paramless(toks, b: index) == false {
+            let close = find_matching(toks: toks, open: index, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+            if close < 0 { index = body.bodyClose } else { index = close + 1 }
+        } else if tk_kind(toks: toks, i: index) == TOK_INTERP {
+            if interp_has_nonstring(toks, tokIdx: index, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals) { hit = true }
+            index = index + 1
+        } else if is_kw_text(toks, index, word: "let") || is_kw_text(toks, index, word: "local") {
+            let mut name = index + 1
+            if is_kw_text(toks, i: name, word: "mut") { name = name + 1 }
+            if is_ident_tok(toks: toks, i: name) && at_symbol(toks: toks, i: (name + 1), code: SYM_COLON) {
+                let statementEnd = next_line_or_block_end(toks: toks, start: index, end: body.bodyClose)
+                let equal = find_top_sym(toks, start: (name + 2), end: statementEnd, code: SYM_EQ)
+                if equal >= 0 {
+                    let annotated = qualified_type_string(toks, ts: (name + 2), te: equal, prefix: model.prefix, declared: model.declared)
                     let expected = expand_type_alias(aliasIdx: model.aliasIdx, ty: annotated)
                     if str_is_unresolved_generic(s: expected) == false && String.len(value: expected) > 0 {
-                        let ee = stmt_expr_end(toks, start: (eq + 1), end: body.bodyClose)
-                        if (eq + 1) < ee {
-                            if return_expr_mismatch(toks, s: (eq + 1), e: ee, expected, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals) { hit = true }
+                        let expressionEnd = stmt_expr_end(toks, start: (equal + 1), end: body.bodyClose)
+                        if (equal + 1) < expressionEnd
+                            && return_expr_mismatch(toks, s: (equal + 1), e: expressionEnd, expected, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals) {
+                            hit = true
                         }
                     }
                 }
             }
-            i = i + 1
-        } else if is_ident_tok(toks: toks, i: i) && at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) && at_symbol(toks: toks, i: (i - 1), code: SYM_DOT) && is_ident_tok(toks: toks, i: (i - 2)) {
-            let callNs = tk_text(toks, i: (i - 2))
-            let method = tk_text(toks, i)
-            let cclose = find_matching(toks: toks, open: (i + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-            if cclose >= 0 {
-                if call_arg_type_bad(toks, ns: callNs, callee: method, open: (i + 1), close: cclose, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, aliasIdx: model.aliasIdx, recvGeneric: "") { hit = true }
+            index = index + 1
+        } else if is_ident_tok(toks: toks, i: index)
+            && at_symbol(toks: toks, i: (index + 1), code: SYM_LPAREN)
+            && at_symbol(toks: toks, i: (index - 1), code: SYM_DOT)
+            && is_ident_tok(toks: toks, i: (index - 2)) {
+            let namespace = tk_text(toks, i: (index - 2))
+            let method = tk_text(toks, i: index)
+            let close = find_matching(toks: toks, open: (index + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+            if close >= 0
+                && call_arg_type_bad(toks, ns: namespace, callee: method, open: (index + 1), close, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, aliasIdx: model.aliasIdx, recvGeneric: "") {
+                hit = true
             }
-            i = i + 1
-        } else if is_ident_tok(toks: toks, i: i) && at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) && at_symbol(toks: toks, i: (i - 1), code: SYM_DOT) && at_symbol(toks: toks, i: (i - 2), code: SYM_RANGLE) {
-            // Generic-receiver qualified call: `Ns<Args>.method(`. Walk back over the
-            // matching `<..>` to the receiver ident; pass the generic args to the arg
-            // checker (used to substitute the ResourcePool<T>.new factory type).
-            let method = tk_text(toks, i)
-            let mut a = i - 2
-            let mut ad = 0
-            let mut ga = 0 - 1
-            let mut sc = true
-            while sc {
-                if a < 0 {
-                    sc = false
-                } else if at_symbol(toks: toks, i: a, code: SYM_RANGLE) {
-                    ad = ad + 1
-                    a = a - 1
-                } else if at_symbol(toks: toks, i: a, code: SYM_LANGLE) {
-                    ad = ad - 1
-                    if ad == 0 {
-                        ga = a
-                        sc = false
+            index = index + 1
+        } else if is_ident_tok(toks: toks, i: index)
+            && at_symbol(toks: toks, i: (index + 1), code: SYM_LPAREN)
+            && at_symbol(toks: toks, i: (index - 1), code: SYM_DOT)
+            && at_symbol(toks: toks, i: (index - 2), code: SYM_RANGLE) {
+            let method = tk_text(toks, i: index)
+            let mut cursor = index - 2
+            let mut depth = 0
+            let mut genericOpen = -1
+            let mut scanning = true
+            while scanning {
+                if cursor < 0 {
+                    scanning = false
+                } else if at_symbol(toks: toks, i: cursor, code: SYM_RANGLE) {
+                    depth = depth + 1
+                    cursor = cursor - 1
+                } else if at_symbol(toks: toks, i: cursor, code: SYM_LANGLE) {
+                    depth = depth - 1
+                    if depth == 0 {
+                        genericOpen = cursor
+                        scanning = false
                     } else {
-                        a = a - 1
+                        cursor = cursor - 1
                     }
                 } else {
-                    a = a - 1
+                    cursor = cursor - 1
                 }
             }
-            if ga > 0 && is_ident_tok(toks: toks, i: (ga - 1)) {
-                let callNs = tk_text(toks, i: (ga - 1))
-                let gen = type_token_string(toks, ts: (ga + 1), te: (i - 2))
-                let cclose = find_matching(toks: toks, open: (i + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-                if cclose >= 0 {
-                    if call_arg_type_bad(toks, ns: callNs, callee: method, open: (i + 1), close: cclose, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, aliasIdx: model.aliasIdx, recvGeneric: gen) { hit = true }
+            if genericOpen > 0 && is_ident_tok(toks: toks, i: (genericOpen - 1)) {
+                let namespace = tk_text(toks, i: (genericOpen - 1))
+                let generic = type_token_string(toks, ts: (genericOpen + 1), te: (index - 2))
+                let close = find_matching(toks: toks, open: (index + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+                if close >= 0
+                    && call_arg_type_bad(toks, ns: namespace, callee: method, open: (index + 1), close, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, aliasIdx: model.aliasIdx, recvGeneric: generic) {
+                    hit = true
                 }
             }
-            i = i + 1
-        } else if is_ident_tok(toks: toks, i: i) && at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) && at_symbol(toks: toks, i: (i - 1), code: SYM_DOT) == false && is_kw_text(toks, i: (i - 1), word: "fn") == false {
-            let callee = tk_text(toks, i)
-            let cclose = find_matching(toks: toks, open: (i + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-            if cclose >= 0 {
-                if call_arg_type_bad(toks, ns: "", callee, open: (i + 1), close: cclose, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, aliasIdx: model.aliasIdx, recvGeneric: "") { hit = true }
+            index = index + 1
+        } else if is_ident_tok(toks: toks, i: index)
+            && at_symbol(toks: toks, i: (index + 1), code: SYM_LPAREN)
+            && at_symbol(toks: toks, i: (index - 1), code: SYM_DOT) == false
+            && is_kw_text(toks, i: (index - 1), word: "fn") == false {
+            let callee = tk_text(toks, i: index)
+            let close = find_matching(toks: toks, open: (index + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+            if close >= 0
+                && call_arg_type_bad(toks, ns: "", callee, open: (index + 1), close, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, aliasIdx: model.aliasIdx, recvGeneric: "") {
+                hit = true
             }
-            i = i + 1
+            index = index + 1
         } else {
-            i = i + 1
+            index = index + 1
         }
     }
     return hit
 }
 
-// Walk all top-level fns and report any RS0207 binding-type mismatch (Slice 1).
-fn has_binding_type_mismatch(toks: List<Tok>) -> Bool {
-    let ntok = List.len(list: toks)
+fn has_legacy_binding_type_mismatch(toks: List<Tok>) -> Bool {
     let model = build_file_type_model(toks)
-    let mut i = 0
-    let mut running = true
-    let mut hit = false
-    while running {
-        if i >= ntok {
-            running = false
-        } else if tk_kind(toks: toks, i: i) == TOK_EOF {
-            running = false
+    let mut index = 0
+    while index < List.len(list: toks) && tk_kind(toks: toks, i: index) != TOK_EOF {
+        let classified = classify_top(toks: toks, i: index)
+        if starts_fn_like(toks: toks, i: index, isPub: classified.isPub) {
+            let end = parse_function_decl(toks: toks, i: index)
+            if end < 0 { return false }
+            if fn_has_legacy_binding_type_mismatch(toks, start: index, model) { return true }
+            index = end
+        } else if classified.isFeatures || classified.isProfile {
+            index = declaration_line_end(toks: toks, start: index)
+        } else if starts_type_decl(toks: toks, i: index, isPub: classified.isPub) {
+            let end = parse_type_decl(toks: toks, i: index)
+            if end < 0 { return false }
+            index = end
         } else {
-            let cls = classify_top(toks: toks, i: i)
-            let isPub = cls.isPub
-            if cls.isFeatures {
-                i = declaration_line_end(toks: toks, start: i)
-            } else if cls.isProfile {
-                i = declaration_line_end(toks: toks, start: i)
-            } else if starts_type_decl(toks: toks, i: i, isPub: isPub) {
-                let r = parse_type_decl(toks: toks, i: i)
-                if r < 0 { running = false } else { i = r }
-            } else if starts_fn_like(toks: toks, i: i, isPub: isPub) {
-                let r = parse_function_decl(toks: toks, i: i)
-                if r < 0 {
-                    running = false
-                } else {
-                    if fn_has_binding_type_mismatch(toks, start: i, model) { hit = true }
-                    i = r
-                }
-            } else {
-                i = i + 1
-            }
+            index = index + 1
         }
     }
-    return hit
+    return false
 }
 
 // Structured RS0207 collector for the same binding and call paths as the
-// presence checker. Complex callback-body diagnostics still enter through the
-// shared argument checker, so this collector never invents a type mismatch.
+// remaining binding, generic, and callback paths not yet owned by SemanticIndex.
 fn collect_fn_binding_type_mismatch_tokens(toks: List<Tok>, start: Int, model: FileTypeModel, out: mut List<Int>) -> Bool {
     let body = build_body_type_model(toks, fnStart: start)
     if body_type_model_ok(body) == false { return false }
@@ -9834,6 +9856,37 @@ fn collect_match_bad_tokens(toks: List<Tok>, scrutStart: Int, braceOpen: Int, br
 // RS0209 per-fn walker: `if`/`while` conditions that are non-Bool.
 fn condition_site_key(line: Int, column: Int, length: Int) -> String {
     return String.concat(left: String.concat(left: String.concat(left: String.from_int(value: line), right: ":"), right: String.from_int(value: column)), right: String.concat(left: ":", right: String.from_int(value: length)))
+}
+
+fn filter_owned_token_sites(toks: List<Tok>, tokenIndices: List<Int>, ownedSites: Set<String>) -> List<Int> {
+    let mut filtered = List<Int>.new()
+    let mut index = 0
+    while index < List.len(list: tokenIndices) {
+        let tokenIndex = List.get<Int>(list: tokenIndices, index: index)
+        if tokenIndex >= 0 && tokenIndex < List.len(list: toks) {
+            let token = List.get<Tok>(list: toks, index: tokenIndex)
+            let key = condition_site_key(line: token.line, column: token.col, length: token.len)
+            if Set.contains<String>(set: ownedSites, value: key) == false {
+                List.push<Int>(list: mut filtered, value: tokenIndex)
+            }
+        }
+        index = index + 1
+    }
+    return filtered
+}
+
+fn filter_owned_diagnostic_sites(sites: List<DiagnosticSite>, ownedSites: Set<String>) -> List<DiagnosticSite> {
+    let mut filtered = List<DiagnosticSite>.new()
+    let mut index = 0
+    while index < List.len(list: sites) {
+        let site = List.get<DiagnosticSite>(list: sites, index: index)
+        let key = condition_site_key(line: site.line, column: site.column, length: site.length)
+        if Set.contains<String>(set: ownedSites, value: key) == false {
+            List.push<DiagnosticSite>(list: mut filtered, value: site)
+        }
+        index = index + 1
+    }
+    return filtered
 }
 
 fn collect_fn_control_flow_mismatch_tokens(toks: List<Tok>, start: Int, model: FileTypeModel, astControlSites: Set<String>, astMatchExpressionSites: Set<String>, out: mut List<Int>) -> Bool {
@@ -10487,39 +10540,6 @@ fn function_decl_param_open(toks: List<Tok>, name: String) -> Int {
     return result
 }
 
-// True iff any NAMED argument in the arg list [op+1,close) supplies an effect that
-// differs from its callee param's expected effect. `mode` selects the expected
-// source: 0 = stdlib map (ns/method), 1 = same-file signature params [sopen,sclose].
-fn arg_effect_bad(toks: List<Tok>, op: Int, close: Int, mode: Int, ns: String, method: String, sopen: Int, sclose: Int) -> Bool {
-    let mut k = op + 1
-    let mut depth = 0
-    let mut angle = 0
-    let mut inPipe = false
-    let mut segStart = op + 1
-    let mut hit = false
-    while k < close {
-        let opener = at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) || at_symbol(toks: toks, i: k, code: SYM_LBRACE)
-        let closer = at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) || at_symbol(toks: toks, i: k, code: SYM_RBRACE)
-        if opener {
-            depth = depth + 1
-        } else if closer {
-            if depth > 0 { depth = depth - 1 }
-        } else if at_symbol(toks: toks, i: k, code: SYM_LANGLE) {
-            angle = angle + 1
-        } else if at_symbol(toks: toks, i: k, code: SYM_RANGLE) {
-            if angle > 0 { angle = angle - 1 }
-        } else if depth == 0 && angle == 0 && at_symbol(toks: toks, i: k, code: SYM_PIPE) {
-            inPipe = !inPipe
-        } else if depth == 0 && angle == 0 && !inPipe  && at_symbol(toks: toks, i: k, code: SYM_COMMA) {
-            if arg_seg_effect_bad(toks, s: segStart, e: k, mode, ns, method, sopen, sclose) { hit = true }
-            segStart = k + 1
-        }
-        k = k + 1
-    }
-    if arg_seg_effect_bad(toks, s: segStart, e: close, mode, ns, method, sopen, sclose) { hit = true }
-    return hit
-}
-
 // One arg segment [s,e): RS0202 iff it is a named arg `pname: value` whose callee
 // param demands an effect and whose supplied effect differs. Positional args and
 // params with no declared effect are skipped (conservative — no false positive).
@@ -10632,39 +10652,6 @@ fn value_is_managed(toks: List<Tok>, vs: Int, managed: Set<String>) -> Bool {
     if is_effect_kw(toks, i: s) { s = s + 1 }
     if is_ident_tok(toks: toks, i: s) == false { return false }
     return Set.contains<String>(set: managed, value: tk_text(toks, i: s))
-}
-
-// Sub-case 3 over a constructor arg list [op+1,close) for `typeName`: RS0202 iff any
-// named field arg names an inline, non-Copy, known-type-kind field initialized from a
-// managed binding.
-fn ctor_managed_bad(toks: List<Tok>, op: Int, close: Int, ob: Int, obClose: Int, declared: Set<String>, managed: Set<String>) -> Bool {
-    let mut k = op + 1
-    let mut depth = 0
-    let mut angle = 0
-    let mut inPipe = false
-    let mut segStart = op + 1
-    let mut hit = false
-    while k < close {
-        let opener = at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) || at_symbol(toks: toks, i: k, code: SYM_LBRACE)
-        let closer = at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) || at_symbol(toks: toks, i: k, code: SYM_RBRACE)
-        if opener {
-            depth = depth + 1
-        } else if closer {
-            if depth > 0 { depth = depth - 1 }
-        } else if at_symbol(toks: toks, i: k, code: SYM_LANGLE) {
-            angle = angle + 1
-        } else if at_symbol(toks: toks, i: k, code: SYM_RANGLE) {
-            if angle > 0 { angle = angle - 1 }
-        } else if depth == 0 && angle == 0 && at_symbol(toks: toks, i: k, code: SYM_PIPE) {
-            inPipe = !inPipe
-        } else if depth == 0 && angle == 0 && !inPipe  && at_symbol(toks: toks, i: k, code: SYM_COMMA) {
-            if ctor_field_seg_bad(toks, s: segStart, e: k, ob, obClose, declared, managed) { hit = true }
-            segStart = k + 1
-        }
-        k = k + 1
-    }
-    if ctor_field_seg_bad(toks, s: segStart, e: close, ob, obClose, declared, managed) { hit = true }
-    return hit
 }
 
 // One constructor field arg [s,e): RS0202 iff it is `field: value` where `field` is an
@@ -10977,95 +10964,6 @@ fn collect_variant_arity_mismatch_tokens(toks: List<Tok>, out: mut List<Int>) ->
     return hit
 }
 
-// RS0202 over a single fn body: any of the four sub-cases fires. Walks each call
-// `(` for arg-effect + receiver self-effect + constructor-managed, and each `match`
-// for the structured-pattern-without-scrutinee-effect rule.
-fn fn_data_effect_bad(toks: List<Tok>, start: Int, declared: Set<String>, methodNames: Set<String>) -> Bool {
-    let ns = fn_name_start(toks, i: start)
-    let sigEnd = function_signature_end(toks: toks, start: (ns - 1))
-    if at_symbol(toks: toks, i: sigEnd, code: SYM_LBRACE) == false { return false }
-    let bodyClose = find_matching(toks: toks, open: sigEnd, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
-    if bodyClose < 0 { return false }
-    let managed = collect_managed_names(toks, bodyOpen: sigEnd, bodyClose)
-    let mut k = sigEnd + 1
-    let mut hit = false
-    while k < bodyClose {
-        if at_symbol(toks: toks, i: k, code: SYM_LPAREN) {
-            if call_site_effect_bad(toks, op: k, bodyClose, declared, managed, methodNames) { hit = true }
-        } else if is_kw_text(toks, i: k, word: "match") && at_symbol(toks: toks, i: (k - 1), code: SYM_DOT) == false {
-            if is_effect_kw(toks, i: (k + 1)) == false {
-                let braceOpen = find_match_arms_open(toks, start: (k + 1), end: bodyClose)
-                if braceOpen >= 0 {
-                    let braceClose = find_matching(toks: toks, open: braceOpen, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
-                    if braceClose >= 0 {
-                        if match_has_structured_arm(toks, braceOpen, braceClose) { hit = true }
-                    }
-                }
-            }
-        }
-        k = k + 1
-    }
-    return hit
-}
-
-// One call site whose arg-list `(` is at `op`: dispatch by callee shape and check
-// arg-effects (sub-case 1), receiver self-effect (sub-case 2), and constructor
-// managed-inline fields (sub-case 3).
-fn call_site_effect_bad(toks: List<Tok>, op: Int, bodyClose: Int, declared: Set<String>, managed: Set<String>, methodNames: Set<String>) -> Bool {
-    let nameLast = callee_name_last(toks, op)
-    if nameLast < 0 { return false }
-    let method = tk_text(toks, i: nameLast)
-    // Classify the callee shape from cheap token checks BEFORE the (costly)
-    // matching-paren scan, so the common bare/qualified calls short-circuit.
-    if at_symbol(toks: toks, i: (nameLast - 1), code: SYM_DOT) == false {
-        let close = find_matching(toks: toks, open: op, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-        if close < 0 || close > bodyClose { return false }
-        let fOpen = function_decl_param_open(toks, name: method)
-        if fOpen >= 0 {
-            let fClose = find_matching(toks: toks, open: fOpen, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-            if fClose < 0 { return false }
-            return arg_effect_bad(toks, op, close, mode: 1, ns: "", method, sopen: fOpen, sclose: fClose)
-        }
-        // Otherwise a bare `Name(...)` can only be a same-file constructor.
-        if Set.contains<String>(set: declared, value: method) == false { return false }
-        let ob = type_body_open(toks, typeName: method)
-        if ob < 0 { return false }
-        let obClose = find_matching(toks: toks, open: ob, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
-        if obClose < 0 { return false }
-        return ctor_managed_bad(toks, op, close, ob, obClose, declared, managed)
-    }
-    // The receiver/namespace ends just before the `.`; skip a `Type<...>` generic
-    // clause (e.g. `ResourcePool<DbConnection>.borrow`) back to the head ident.
-    let mut head = nameLast - 2
-    if at_symbol(toks: toks, i: head, code: SYM_RANGLE) {
-        let openAngle = back_match_angle(toks, closePos: head)
-        if openAngle < 0 { return false }
-        head = openAngle - 1
-    }
-    if is_ident_tok(toks: toks, i: head) == false { return false }
-    let headText = tk_text(toks, i: head)
-    let headChained = at_symbol(toks: toks, i: (head - 1), code: SYM_DOT)
-    if !headChained  && is_upper_head(name: headText) {
-        // Qualified call `Namespace.method(...)` — only curated stdlib namespaces.
-        if is_effect_stdlib_ns(ns: headText) == false { return false }
-        let close = find_matching(toks: toks, open: op, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-        if close < 0 || close > bodyClose { return false }
-        return arg_effect_bad(toks, op, close, mode: 0, ns: headText, method, sopen: 0, sclose: 0)
-    }
-    // Receiver call `recv.method(...)` — resolve to a same-file method signature.
-    if Set.contains<String>(set: methodNames, value: method) == false { return false }
-    let popen = method_decl_param_open(toks, method)
-    if popen < 0 { return false }
-    let pclose = find_matching(toks: toks, open: popen, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-    if pclose < 0 { return false }
-    let close = find_matching(toks: toks, open: op, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-    if close < 0 || close > bodyClose { return false }
-    let mut hit = false
-    if arg_effect_bad(toks, op, close, mode: 1, ns: "", method, sopen: popen, sclose: pclose) { hit = true }
-    if receiver_self_effect_bad(toks, head, popen, pclose) { hit = true }
-    return hit
-}
-
 // Sub-case 2: the receiver whose head ident is at `head`, resolving to a method whose
 // self param list is [popen,pclose]. RS0202 iff the method's `self` effect exists and
 // differs from the visible receiver effect (the leading `read`/`mut`/`take`, default
@@ -11266,6 +11164,16 @@ fn main() -> Unit {
     let mut typeDiagnostics = DiagnosticBag.empty()
     collect_program_type_diagnostics(program: program, semantics: semanticIndex, diagnostics: mut typeDiagnostics)
     collect_program_binding_diagnostics(program: program, diagnostics: mut typeDiagnostics)
+    let mut callDiagnostics = DiagnosticBag.empty()
+    let mut callEffectOwnedSites = Set<String>.new()
+    let mut callTypeOwnedSites = Set<String>.new()
+    collect_program_call_contract_diagnostics(
+        program: program,
+        semantics: semanticIndex,
+        diagnostics: mut callDiagnostics,
+        effectOwnedSites: mut callEffectOwnedSites,
+        typeOwnedSites: mut callTypeOwnedSites
+    )
     let astMatchExpressionSites = collect_match_expression_sites(program: program)
     let mut astControlSites = Set<String>.new()
     let mut astNonExhaustiveSites = Set<String>.new()
@@ -11414,9 +11322,16 @@ fn main() -> Unit {
     let mut retTypeMismatchTokens = List<Int>.new()
     let retTypeMismatch = collect_return_type_mismatch_tokens(toks, out: mut retTypeMismatchTokens)
     // RS0207: argument/binding-type mismatch.
-    let bindTypeMismatch = has_binding_type_mismatch(toks)
     let mut bindTypeMismatchTokens = List<Int>.new()
-    if structured { collect_binding_type_mismatch_tokens(toks, out: mut bindTypeMismatchTokens) }
+    collect_binding_type_mismatch_tokens(toks, out: mut bindTypeMismatchTokens)
+    bindTypeMismatchTokens = filter_owned_token_sites(
+        toks: toks,
+        tokenIndices: bindTypeMismatchTokens,
+        ownedSites: callTypeOwnedSites
+    )
+    let bindTypeMismatch = List.len(list: bindTypeMismatchTokens) > 0
+        || DiagnosticBag.has_code(self: callDiagnostics, code: "RS0207")
+        || has_legacy_binding_type_mismatch(toks)
     // RS0210: operator-type mismatch.
     let mut opTypeMismatchTokens = List<Int>.new()
     let opTypeMismatch = collect_operator_type_mismatch_tokens(toks, out: mut opTypeMismatchTokens)
@@ -11628,8 +11543,7 @@ fn main() -> Unit {
                     if collect_fn_bad_await_tokens(toks, start: i, astAwaitSites, out: mut badAwaitTokens) { badAwait = true }
                     if collect_fn_invalid_try_tokens(toks, start: i, declared, allFns, out: mut invalidTryTokens) { invalidTry = true }
                     if collect_fn_unnamed_arg_tokens(toks, start: i, pubFns, dottedFns, out: mut unnamedArgTokens) { unnamedArg = true }
-                    if fn_data_effect_bad(toks, start: i, declared, methodNames) { missingDataEffect = true }
-                    if structured && collect_fn_data_effect_sites(source, toks, start: i, declared, methodNames, out: mut missingDataEffectSites) { missingDataEffect = true }
+                    if collect_fn_data_effect_sites(source, toks, start: i, declared, methodNames, out: mut missingDataEffectSites) { missingDataEffect = true }
                     if collect_fn_manage_take_bad_tokens(toks, start: i, keyword: "manage", out: mut manageNonLocalTokens) { manageNonLocal = true }
                     if collect_fn_manage_take_bad_tokens(toks, start: i, keyword: "take", out: mut takeNonLocalTokens) { takeNonLocal = true }
                     if collect_fn_managed_to_local_tokens(toks, start: i, handleFields: handleFieldNames, out: mut managedToLocalTokens) { managedToLocal = true }
@@ -11709,6 +11623,12 @@ fn main() -> Unit {
     collect_program_call_diagnostics(program, semantics: semanticIndex, diagnostics: mut signatureDiagnostics)
     collect_program_removed_profile_diagnostics(program, diagnostics: mut signatureDiagnostics)
     collect_program_feature_diagnostics(program, diagnostics: mut signatureDiagnostics)
+    missingDataEffectSites = filter_owned_diagnostic_sites(
+        sites: missingDataEffectSites,
+        ownedSites: callEffectOwnedSites
+    )
+    missingDataEffect = List.len(list: missingDataEffectSites) > 0
+        || DiagnosticBag.has_code(self: callDiagnostics, code: "RS0202")
     missingReturn = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0002")
     untypedParam = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0003")
     unknownEffect = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0004")
@@ -11749,12 +11669,14 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: "RS0033", toks, tokenIndices: outOfRangeIntTokens)
         emitted = emitted + emit_bag_code(diagnostics: typeDiagnostics, code: "RS0034")
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0205")
+        emitted = emitted + emit_bag_code(diagnostics: callDiagnostics, code: "RS0207")
         emitted = emitted + emit_diagnostic_records(code: "RS0207", toks, tokenIndices: bindTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS0208", toks, tokenIndices: retTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS0210", toks, tokenIndices: opTypeMismatchTokens)
         emitted = emitted + emit_bag_code(diagnostics: typeDiagnostics, code: "RS0209")
         emitted = emitted + emit_diagnostic_records(code: "RS0209", toks, tokenIndices: cfTypeMismatchTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS0201", toks, tokenIndices: unnamedArgTokens)
+        emitted = emitted + emit_bag_code(diagnostics: callDiagnostics, code: "RS0202")
         emitted = emitted + emit_diagnostic_sites(code: "RS0202", sites: missingDataEffectSites)
         emitted = emitted + emit_diagnostic_sites(code: "RS0014", sites: noallocAllocSites)
         emitted = emitted + emit_diagnostic_sites(code: "RS0018", sites: noBlockCallSites)

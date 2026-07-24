@@ -26,6 +26,23 @@ fn FunctionContext.from_item(item: Item, semantics: SemanticIndex) -> fresh Func
     return FunctionContext(bindings: take bindings, semantics: read semantics)
 }
 
+fn FunctionContext.copy(self: FunctionContext) -> fresh FunctionContext {
+    local bindings = Map<String, String>.new()
+    let keys = Map.keys<String, String>(map: self.bindings)
+    let mut i = 0
+    while i < List.len(list: keys) {
+        let key = List.get<String>(list: keys, index: i)
+        let value = Map.get_or_default<String, String>(map: self.bindings, key: key, default: "")
+        Map.insert<String, String>(
+            map: mut bindings,
+            key: String.copy(value: key),
+            value: String.copy(value: value)
+        )
+        i = i + 1
+    }
+    return FunctionContext(bindings: take bindings, semantics: read self.semantics)
+}
+
 // Resolve a direct field from a file-local data declaration. This intentionally
 // does not substitute generic arguments yet; it is the smallest reusable
 // nominal-field slice needed by AST-backed receiver checks.
@@ -52,6 +69,22 @@ fn is_comparison_operator(operator: String) -> Bool {
     return operator == "==" || operator == "!=" || operator == "<" || operator == "<=" || operator == ">" || operator == ">="
 }
 
+fn numeric_literal_type(text: String) -> String {
+    match String.index_of(value: text, needle: ".") {
+        Some(_) => { return "Float" }
+        None => {}
+    }
+    match String.index_of(value: text, needle: "e") {
+        Some(_) => { return "Float" }
+        None => {}
+    }
+    match String.index_of(value: text, needle: "E") {
+        Some(_) => { return "Float" }
+        None => {}
+    }
+    return "Int"
+}
+
 fn call_constructed_type(expression: Expr) -> String {
     if expression.text != "Map.new" && expression.text != "Set.new" && expression.text != "List.new" && expression.text != "Deque.new" { return "" }
     let count = List.len(list: expression.typeArgs)
@@ -75,7 +108,7 @@ fn infer_expression_type(program: Program, context: FunctionContext, index: Int)
         return Map.get_or_default<String, String>(map: context.bindings, key: expression.text, default: "")
     }
     if expression.kind == EXPR_LITERAL {
-        if expression.tokenKind == TOK_NUMBER { return "Int" }
+        if expression.tokenKind == TOK_NUMBER { return numeric_literal_type(text: expression.text) }
         if expression.tokenKind == TOK_STRING { return "String" }
         if expression.tokenKind == TOK_CHAR { return "Char" }
         if expression.text == "true" || expression.text == "false" { return "Bool" }
@@ -89,6 +122,14 @@ fn infer_expression_type(program: Program, context: FunctionContext, index: Int)
             self: context.semantics,
             program: program,
             expressionIndex: index
+        )
+    }
+    if (expression.kind == EXPR_EFFECT || expression.kind == EXPR_MANAGE)
+        && List.len(list: expression.children) == 1 {
+        return infer_expression_type(
+            program: program,
+            context: context,
+            index: List.get<Int>(list: expression.children, index: 0)
         )
     }
     if expression.kind == EXPR_FIELD && List.len(list: expression.children) == 1 {

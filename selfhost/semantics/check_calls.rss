@@ -5,9 +5,163 @@
 module selfhost.semantics.check_calls
 
 use selfhost.semantics.call_binding.*
+use selfhost.semantics.context.*
 use selfhost.semantics.diagnostics.*
 use selfhost.semantics.semantic_index.*
 use selfhost.syntax.ast.*
+use selfhost.types.*
+
+fn call_site_key(line: Int, column: Int, length: Int) -> String {
+    let linePart = String.concat(left: String.from_int(value: line), right: ":")
+    let columnPart = String.concat(left: linePart, right: String.from_int(value: column))
+    return String.concat(
+        left: columnPart,
+        right: String.concat(left: ":", right: String.from_int(value: length))
+    )
+}
+
+fn supplied_effect(program: Program, expressionIndex: Int) -> String {
+    if expressionIndex < 0 || expressionIndex >= List.len(list: program.expressions) { return "" }
+    let expression = List.get<Expr>(list: program.expressions, index: expressionIndex)
+    if expression.kind == EXPR_EFFECT { return expression.text }
+    return ""
+}
+
+fn effect_matches(expected: String, supplied: String) -> Bool {
+    if expected == "read" && (String.len(value: supplied) == 0 || supplied == "read") { return true }
+    return expected == supplied
+}
+
+// The generated interface registry is broader than the currently materialized
+// self-host type model. Own RS0207 only for signatures whose concrete argument
+// behavior is already covered by the differential corpus.
+fn prepared_external_type_is_owned(expression: Expr, parameterName: String) -> Bool {
+    if expression.calleeKind != CALLEE_QUALIFIED { return true }
+    if expression.text == "Log.write" && parameterName == "message" { return true }
+    if expression.text == "String.concat" && (parameterName == "left" || parameterName == "right") { return true }
+    if expression.text == "String.len" && parameterName == "value" { return true }
+    if expression.text == "File.write" && parameterName == "data" { return true }
+    if expression.text == "Image.inspect" && parameterName == "image" { return true }
+    if expression.text == "Image.normalize" && parameterName == "image" { return true }
+    if expression.text == "Image.resize" && (parameterName == "image" || parameterName == "width" || parameterName == "height") { return true }
+    if expression.text == "Image.save" && (parameterName == "image" || parameterName == "path") { return true }
+    if expression.text == "Image.load" && parameterName == "path" { return true }
+    if expression.text == "Request.path" && parameterName == "request" { return true }
+    return false
+}
+
+fn stable_scalar_call_type(ty: String) -> Bool {
+    let root = str_type_root(s: ty)
+    return root == "Int"
+        || root == "Float"
+        || root == "Bool"
+        || root == "String"
+        || root == "Char"
+        || root == "Unit"
+}
+
+fn stable_call_type_mismatch(expected: String, actual: String) -> Bool {
+    if arg_type_matches(expected: expected, actual: actual) { return false }
+    return stable_scalar_call_type(ty: expected) && stable_scalar_call_type(ty: actual)
+}
+
+fn collect_prepared_argument_contracts(
+    program: Program,
+    context: FunctionContext,
+    expressionIndex: Int,
+    prepared: PreparedCall,
+    diagnostics: mut DiagnosticBag,
+    effectOwnedSites: mut Set<String>,
+    typeOwnedSites: mut Set<String>
+) -> Unit {
+    let expression = List.get<Expr>(list: program.expressions, index: expressionIndex)
+    let mut boundIndex = 0
+    while boundIndex < List.len(list: prepared.binding.evaluationOrder) {
+        let bound = List.get<BoundArgument>(list: prepared.binding.evaluationOrder, index: boundIndex)
+        if bound.sourceKind == BOUND_SOURCE_EXPLICIT
+            && bound.sourceIndex >= 0
+            && bound.sourceIndex < List.len(list: expression.args)
+            && bound.parameterIndex >= 0
+            && bound.parameterIndex < List.len(list: prepared.parameterNames) {
+            let argument = List.get<CallArg>(list: expression.args, index: bound.sourceIndex)
+            if argument.value >= 0 && argument.value < List.len(list: program.expressions) {
+                let value = List.get<Expr>(list: program.expressions, index: argument.value)
+                let expectedEffect = List.get<String>(list: prepared.parameterEffects, index: bound.parameterIndex)
+                if String.len(value: expectedEffect) > 0 {
+                    let key = call_site_key(line: value.line, column: value.column, length: value.length)
+                    Set.insert<String>(set: mut effectOwnedSites, value: key)
+                    let actualEffect = supplied_effect(program: program, expressionIndex: argument.value)
+                    if effect_matches(expected: expectedEffect, supplied: actualEffect) == false {
+                        DiagnosticBag.add(
+                            self: mut diagnostics,
+                            code: "RS0202",
+                            line: value.line,
+                            column: value.column,
+                            length: value.length
+                        )
+                    }
+                }
+
+                let parameterName = List.get<String>(list: prepared.parameterNames, index: bound.parameterIndex)
+                let expectedType = List.get<String>(list: prepared.parameterTypes, index: bound.parameterIndex)
+                let actualType = infer_expression_type(program: program, context: context, index: argument.value)
+                let ownsType = prepared_external_type_is_owned(
+                    expression: expression,
+                    parameterName: parameterName
+                )
+                let mismatch = stable_call_type_mismatch(expected: expectedType, actual: actualType)
+                if ownsType
+                    && mismatch
+                    && String.len(value: expectedType) > 0
+                    && String.len(value: actualType) > 0
+                    && str_is_unresolved_generic(s: expectedType) == false
+                    && str_is_unresolved_generic(s: actualType) == false {
+                    let key = call_site_key(line: value.line, column: value.column, length: value.length)
+                    Set.insert<String>(set: mut typeOwnedSites, value: key)
+                    DiagnosticBag.add(
+                        self: mut diagnostics,
+                        code: "RS0207",
+                        line: value.line,
+                        column: value.column,
+                        length: value.length
+                    )
+                }
+            }
+        }
+        boundIndex = boundIndex + 1
+    }
+    return Unit
+}
+
+fn collect_receiver_effect_contract(
+    program: Program,
+    expression: Expr,
+    prepared: PreparedCall,
+    visibleEffect: String,
+    diagnostics: mut DiagnosticBag,
+    effectOwnedSites: mut Set<String>
+) -> Unit {
+    if expression.calleeKind != CALLEE_RECEIVER || prepared.callableIndex < 0 { return Unit }
+    if List.len(list: prepared.parameterEffects) == 0 { return Unit }
+    let expected = List.get<String>(list: prepared.parameterEffects, index: 0)
+    if String.len(value: expected) == 0 { return Unit }
+    if expression.calleeReceiver < 0 || expression.calleeReceiver >= List.len(list: program.expressions) { return Unit }
+    let receiver = List.get<Expr>(list: program.expressions, index: expression.calleeReceiver)
+    let key = call_site_key(line: receiver.line, column: receiver.column, length: receiver.length)
+    Set.insert<String>(set: mut effectOwnedSites, value: key)
+    let mut supplied = visibleEffect
+    if String.len(value: supplied) == 0 { supplied = "read" }
+    if supplied != expected {
+        DiagnosticBag.add(
+            self: mut diagnostics,
+            code: "RS0202",
+            line: receiver.line,
+            column: receiver.column,
+            length: receiver.length
+        )
+    }
+    return Unit
+}
 
 fn collect_unresolved_duplicate_arguments(expression: Expr, diagnostics: mut DiagnosticBag) -> Unit {
     let mut seen = Set<String>.new()
@@ -167,6 +321,209 @@ fn collect_program_call_diagnostics(program: Program, semantics: SemanticIndex, 
                 )
                 statementIndex = statementIndex + 1
             }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+fn collect_call_contract_expression(
+    program: Program,
+    context: FunctionContext,
+    expressionIndex: Int,
+    visibleEffect: String,
+    diagnostics: mut DiagnosticBag,
+    effectOwnedSites: mut Set<String>,
+    typeOwnedSites: mut Set<String>,
+    visitedCalls: mut Set<Int>
+) -> Unit {
+    if expressionIndex < 0 || expressionIndex >= List.len(list: program.expressions) { return Unit }
+    let expression = List.get<Expr>(list: program.expressions, index: expressionIndex)
+    if expression.kind == EXPR_EFFECT && List.len(list: expression.children) == 1 {
+        collect_call_contract_expression(
+            program: program,
+            context: context,
+            expressionIndex: List.get<Int>(list: expression.children, index: 0),
+            visibleEffect: expression.text,
+            diagnostics: mut diagnostics,
+            effectOwnedSites: mut effectOwnedSites,
+            typeOwnedSites: mut typeOwnedSites,
+            visitedCalls: mut visitedCalls
+        )
+        return Unit
+    }
+    if expression.kind == EXPR_CALL && Set.contains<Int>(set: visitedCalls, value: expressionIndex) == false {
+        Set.insert<Int>(set: mut visitedCalls, value: expressionIndex)
+        let preparedIndex = SemanticIndex.call_index(self: context.semantics, expressionIndex: expressionIndex)
+        if preparedIndex >= 0 {
+            let prepared = List.get<PreparedCall>(list: context.semantics.calls, index: preparedIndex)
+            collect_prepared_argument_contracts(
+                program: program,
+                context: context,
+                expressionIndex: expressionIndex,
+                prepared: prepared,
+                diagnostics: mut diagnostics,
+                effectOwnedSites: mut effectOwnedSites,
+                typeOwnedSites: mut typeOwnedSites
+            )
+            collect_receiver_effect_contract(
+                program: program,
+                expression: expression,
+                prepared: prepared,
+                visibleEffect: visibleEffect,
+                diagnostics: mut diagnostics,
+                effectOwnedSites: mut effectOwnedSites
+            )
+        }
+    }
+    if expression.calleeReceiver >= 0 {
+        collect_call_contract_expression(
+            program: program,
+            context: context,
+            expressionIndex: expression.calleeReceiver,
+            visibleEffect: "",
+            diagnostics: mut diagnostics,
+            effectOwnedSites: mut effectOwnedSites,
+            typeOwnedSites: mut typeOwnedSites,
+            visitedCalls: mut visitedCalls
+        )
+    }
+    let mut childIndex = 0
+    while childIndex < List.len(list: expression.children) {
+        collect_call_contract_expression(
+            program: program,
+            context: context,
+            expressionIndex: List.get<Int>(list: expression.children, index: childIndex),
+            visibleEffect: "",
+            diagnostics: mut diagnostics,
+            effectOwnedSites: mut effectOwnedSites,
+            typeOwnedSites: mut typeOwnedSites,
+            visitedCalls: mut visitedCalls
+        )
+        childIndex = childIndex + 1
+    }
+    let mut armIndex = 0
+    while armIndex < List.len(list: expression.arms) {
+        let arm = List.get<MatchArm>(list: expression.arms, index: armIndex)
+        let mut armContext = FunctionContext.copy(self: context)
+        collect_call_contract_statements(
+            program: program,
+            statements: arm.body,
+            context: mut armContext,
+            diagnostics: mut diagnostics,
+            effectOwnedSites: mut effectOwnedSites,
+            typeOwnedSites: mut typeOwnedSites,
+            visitedCalls: mut visitedCalls
+        )
+        armIndex = armIndex + 1
+    }
+    if List.len(list: expression.closureStatements) > 0 {
+        let mut closureContext = FunctionContext.copy(self: context)
+        collect_call_contract_statements(
+            program: program,
+            statements: expression.closureStatements,
+            context: mut closureContext,
+            diagnostics: mut diagnostics,
+            effectOwnedSites: mut effectOwnedSites,
+            typeOwnedSites: mut typeOwnedSites,
+            visitedCalls: mut visitedCalls
+        )
+    }
+    return Unit
+}
+
+fn collect_call_contract_statements(
+    program: Program,
+    statements: List<Int>,
+    context: mut FunctionContext,
+    diagnostics: mut DiagnosticBag,
+    effectOwnedSites: mut Set<String>,
+    typeOwnedSites: mut Set<String>,
+    visitedCalls: mut Set<Int>
+) -> Unit {
+    let mut index = 0
+    while index < List.len(list: statements) {
+        let statementIndex = List.get<Int>(list: statements, index: index)
+        if statementIndex >= 0 && statementIndex < List.len(list: program.statements) {
+            let statement = List.get<Stmt>(list: program.statements, index: statementIndex)
+            collect_call_contract_expression(
+                program: program,
+                context: context,
+                expressionIndex: statement.expression,
+                visibleEffect: "",
+                diagnostics: mut diagnostics,
+                effectOwnedSites: mut effectOwnedSites,
+                typeOwnedSites: mut typeOwnedSites,
+                visitedCalls: mut visitedCalls
+            )
+            infer_statement_type(program: program, context: mut context, index: statementIndex)
+            if List.len(list: statement.children) > 0 {
+                let mut childContext = FunctionContext.copy(self: context)
+                collect_call_contract_statements(
+                    program: program,
+                    statements: statement.children,
+                    context: mut childContext,
+                    diagnostics: mut diagnostics,
+                    effectOwnedSites: mut effectOwnedSites,
+                    typeOwnedSites: mut typeOwnedSites,
+                    visitedCalls: mut visitedCalls
+                )
+            }
+            if List.len(list: statement.elseChildren) > 0 {
+                let mut elseContext = FunctionContext.copy(self: context)
+                collect_call_contract_statements(
+                    program: program,
+                    statements: statement.elseChildren,
+                    context: mut elseContext,
+                    diagnostics: mut diagnostics,
+                    effectOwnedSites: mut effectOwnedSites,
+                    typeOwnedSites: mut typeOwnedSites,
+                    visitedCalls: mut visitedCalls
+                )
+            }
+            let mut armIndex = 0
+            while armIndex < List.len(list: statement.arms) {
+                let arm = List.get<MatchArm>(list: statement.arms, index: armIndex)
+                let mut armContext = FunctionContext.copy(self: context)
+                collect_call_contract_statements(
+                    program: program,
+                    statements: arm.body,
+                    context: mut armContext,
+                    diagnostics: mut diagnostics,
+                    effectOwnedSites: mut effectOwnedSites,
+                    typeOwnedSites: mut typeOwnedSites,
+                    visitedCalls: mut visitedCalls
+                )
+                armIndex = armIndex + 1
+            }
+        }
+        index = index + 1
+    }
+    return Unit
+}
+
+fn collect_program_call_contract_diagnostics(
+    program: Program,
+    semantics: SemanticIndex,
+    diagnostics: mut DiagnosticBag,
+    effectOwnedSites: mut Set<String>,
+    typeOwnedSites: mut Set<String>
+) -> Unit {
+    let mut visitedCalls = Set<Int>.new()
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            let mut context = FunctionContext.from_item(item: item, semantics: semantics)
+            collect_call_contract_statements(
+                program: program,
+                statements: item.statements,
+                context: mut context,
+                diagnostics: mut diagnostics,
+                effectOwnedSites: mut effectOwnedSites,
+                typeOwnedSites: mut typeOwnedSites,
+                visitedCalls: mut visitedCalls
+            )
         }
         itemIndex = itemIndex + 1
     }

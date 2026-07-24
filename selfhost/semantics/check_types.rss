@@ -12,18 +12,7 @@ use selfhost.syntax.ast.*
 use selfhost.types.*
 
 fn copy_function_context(context: FunctionContext) -> fresh FunctionContext {
-    local bindings = Map<String, String>.new()
-    let keys = Map.keys<String, String>(map: context.bindings)
-    let mut i = 0
-    while i < List.len(list: keys) {
-        let key = List.get<String>(list: keys, index: i)
-        let value = Map.get_or_default<String, String>(map: context.bindings, key, default: "")
-        let ownedKey = String.copy(value: key)
-        let ownedValue = String.copy(value)
-        Map.insert<String, String>(map: mut bindings, key: ownedKey, value: ownedValue)
-        i = i + 1
-    }
-    return FunctionContext(bindings: take bindings, semantics: read context.semantics)
+    return FunctionContext.copy(self: context)
 }
 
 fn ast_site_key(line: Int, column: Int, length: Int) -> String {

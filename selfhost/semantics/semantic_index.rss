@@ -8,6 +8,7 @@ features: local
 
 module selfhost.semantics.semantic_index
 
+use selfhost.interfaces.*
 use selfhost.semantics.call_binding.*
 use selfhost.syntax.ast.*
 
@@ -26,6 +27,10 @@ struct PreparedCall {
     expressionIndex: Int
     callableIndex: Int
     binding: CallBinding
+    parameterNames: List<String>
+    parameterTypes: List<String>
+    parameterEffects: List<String>
+    resultType: String
 }
 
 struct SemanticIndex {
@@ -40,8 +45,24 @@ fn CallableDecl.from(kind: Int, itemIndex: Int, variantIndex: Int) -> fresh Call
     return CallableDecl(kind: kind, itemIndex: itemIndex, variantIndex: variantIndex)
 }
 
-fn PreparedCall.from(expressionIndex: Int, callableIndex: Int, binding: take CallBinding) -> fresh PreparedCall {
-    return PreparedCall(expressionIndex: expressionIndex, callableIndex: callableIndex, binding: take binding)
+fn PreparedCall.from(
+    expressionIndex: Int,
+    callableIndex: Int,
+    binding: take CallBinding,
+    parameterNames: take List<String>,
+    parameterTypes: take List<String>,
+    parameterEffects: take List<String>,
+    resultType: take String
+) -> fresh PreparedCall {
+    return PreparedCall(
+        expressionIndex: expressionIndex,
+        callableIndex: callableIndex,
+        binding: take binding,
+        parameterNames: take parameterNames,
+        parameterTypes: take parameterTypes,
+        parameterEffects: take parameterEffects,
+        resultType: take resultType
+    )
 }
 
 fn SemanticIndex.empty() -> fresh SemanticIndex {
@@ -164,6 +185,110 @@ fn bind_resolved_call(program: Program, callable: CallableDecl, expression: Expr
     return CallBinding.bind_fields(program: program, fields: variant.fields, args: expression.args)
 }
 
+fn effective_parameter_effect(parameter: Param) -> String {
+    if String.len(value: parameter.effect) > 0 { return parameter.effect }
+    if parameter.typeSyntax.isNoescape || parameter.typeSyntax.isOwned { return "" }
+    if parameter.typeSyntax.base == "share" || parameter.typeSyntax.base == "Closure" || parameter.typeSyntax.base == "Fd" { return "" }
+    return "read"
+}
+
+fn append_function_metadata(item: Item, names: mut List<String>, types: mut List<String>, effects: mut List<String>) -> Unit {
+    let mut index = 0
+    while index < List.len(list: item.params) {
+        let parameter = List.get<Param>(list: item.params, index: index)
+        List.push<String>(list: mut names, value: String.copy(value: parameter.name))
+        List.push<String>(list: mut types, value: String.copy(value: parameter.typeText))
+        List.push<String>(list: mut effects, value: effective_parameter_effect(parameter: parameter))
+        index = index + 1
+    }
+    return Unit
+}
+
+fn append_field_metadata(fields: List<Field>, names: mut List<String>, types: mut List<String>, effects: mut List<String>) -> Unit {
+    let mut index = 0
+    while index < List.len(list: fields) {
+        let field = List.get<Field>(list: fields, index: index)
+        List.push<String>(list: mut names, value: String.copy(value: field.name))
+        List.push<String>(list: mut types, value: String.copy(value: field.typeText))
+        List.push<String>(list: mut effects, value: "")
+        index = index + 1
+    }
+    return Unit
+}
+
+fn local_call_metadata(
+    program: Program,
+    callable: CallableDecl,
+    names: mut List<String>,
+    types: mut List<String>,
+    effects: mut List<String>
+) -> String {
+    let item = List.get<Item>(list: program.items, index: callable.itemIndex)
+    if callable.kind == CALLABLE_FUNCTION {
+        append_function_metadata(item: item, names: mut names, types: mut types, effects: mut effects)
+        return String.copy(value: item.returnType)
+    }
+    if callable.kind == CALLABLE_CONSTRUCTOR {
+        append_field_metadata(fields: item.fields, names: mut names, types: mut types, effects: mut effects)
+        return String.copy(value: item.name)
+    }
+    let variant = List.get<Variant>(list: item.variants, index: callable.variantIndex)
+    append_field_metadata(fields: variant.fields, names: mut names, types: mut types, effects: mut effects)
+    return String.copy(value: item.name)
+}
+
+fn qualified_call_parts(name: String) -> List<String> {
+    return String.split(value: name, delimiter: ".")
+}
+
+fn prepare_qualified_call(program: Program, expressionIndex: Int, expression: Expr, index: mut SemanticIndex) -> Bool {
+    if expression.calleeKind != CALLEE_QUALIFIED { return false }
+    let parts = qualified_call_parts(name: expression.text)
+    if List.len(list: parts) != 2 { return false }
+    let namespace = List.get<String>(list: parts, index: 0)
+    let method = List.get<String>(list: parts, index: 1)
+    local resultType = generated_stdlib_return_type(ns: namespace, method: method)
+    local names = List<String>.new()
+    local types = List<String>.new()
+    local effects = List<String>.new()
+    let mut parameterIndex = 0
+    let mut scanning = true
+    while scanning {
+        let name = generated_stdlib_param_name_at(ns: namespace, method: method, index: parameterIndex)
+        if String.len(value: name) == 0 {
+            scanning = false
+        } else {
+            let parameterType = generated_stdlib_param_type(ns: namespace, method: method, pname: name)
+            let parameterEffect = generated_stdlib_param_effect(ns: namespace, method: method, pname: name)
+            List.push<String>(list: mut names, value: name)
+            List.push<String>(list: mut types, value: parameterType)
+            List.push<String>(list: mut effects, value: parameterEffect)
+            parameterIndex = parameterIndex + 1
+        }
+    }
+    if List.len(list: names) == 0 && String.len(value: resultType) == 0 { return false }
+    local binding = CallBinding.bind_metadata(
+        program: program,
+        names: names,
+        args: expression.args,
+        receiverOffset: 0,
+        allowPositional: false
+    )
+    let preparedIndex = List.len(list: index.calls)
+    local prepared = PreparedCall.from(
+        expressionIndex: expressionIndex,
+        callableIndex: -1,
+        binding: take binding,
+        parameterNames: take names,
+        parameterTypes: take types,
+        parameterEffects: take effects,
+        resultType: take resultType
+    )
+    List.push<PreparedCall>(list: mut index.calls, value: manage prepared)
+    Map.insert<Int, Int>(map: mut index.callByExpression, key: expressionIndex, value: preparedIndex)
+    return true
+}
+
 fn prepare_program_calls(program: Program, index: mut SemanticIndex) -> Unit {
     let mut expressionIndex = 0
     while expressionIndex < List.len(list: program.expressions) {
@@ -173,17 +298,38 @@ fn prepare_program_calls(program: Program, index: mut SemanticIndex) -> Unit {
             if callableIndex >= 0 {
                 let callable = List.get<CallableDecl>(list: index.callables, index: callableIndex)
                 local binding = bind_resolved_call(program: program, callable: callable, expression: expression)
+                local names = List<String>.new()
+                local types = List<String>.new()
+                local effects = List<String>.new()
+                local resultType = local_call_metadata(
+                    program: program,
+                    callable: callable,
+                    names: mut names,
+                    types: mut types,
+                    effects: mut effects
+                )
                 let preparedIndex = List.len(list: index.calls)
                 local prepared = PreparedCall.from(
                     expressionIndex: expressionIndex,
                     callableIndex: callableIndex,
-                    binding: take binding
+                    binding: take binding,
+                    parameterNames: take names,
+                    parameterTypes: take types,
+                    parameterEffects: take effects,
+                    resultType: take resultType
                 )
                 List.push<PreparedCall>(list: mut index.calls, value: manage prepared)
                 Map.insert<Int, Int>(
                     map: mut index.callByExpression,
                     key: expressionIndex,
                     value: preparedIndex
+                )
+            } else {
+                prepare_qualified_call(
+                    program: program,
+                    expressionIndex: expressionIndex,
+                    expression: expression,
+                    index: mut index
                 )
             }
         }
@@ -211,8 +357,9 @@ fn SemanticIndex.call_result_type(self: SemanticIndex, program: Program, express
     let preparedIndex = SemanticIndex.call_index(self: self, expressionIndex: expressionIndex)
     if preparedIndex < 0 { return "" }
     let prepared = List.get<PreparedCall>(list: self.calls, index: preparedIndex)
-    let callable = List.get<CallableDecl>(list: self.callables, index: prepared.callableIndex)
-    let item = List.get<Item>(list: program.items, index: callable.itemIndex)
-    if callable.kind == CALLABLE_FUNCTION { return item.returnType }
-    return item.name
+    // Generated interfaces prepare argument contracts, but their return types
+    // do not enter the shared body type model until generic substitution and
+    // error/result normalization are centralized here too.
+    if prepared.callableIndex < 0 { return "" }
+    return prepared.resultType
 }

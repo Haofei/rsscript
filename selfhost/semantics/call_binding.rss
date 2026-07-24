@@ -178,6 +178,26 @@ fn CallBinding.bind_fields(program: Program, fields: List<Field>, args: List<Cal
     return bind_parameters(program: program, params: parameters, args: args, receiverOffset: 0, allowPositional: false)
 }
 
+fn CallBinding.bind_metadata(program: Program, names: List<String>, args: List<CallArg>, receiverOffset: Int, allowPositional: Bool) -> fresh CallBinding {
+    local parameters = List<BindingParameter>.new()
+    let mut index = 0
+    while index < List.len(list: names) {
+        local name = String.copy(value: List.get<String>(list: names, index: index))
+        List.push<BindingParameter>(
+            list: mut parameters,
+            value: BindingParameter.from(name: take name, hasDefault: false, allowsShorthand: true)
+        )
+        index = index + 1
+    }
+    return bind_parameters(
+        program: program,
+        params: parameters,
+        args: args,
+        receiverOffset: receiverOffset,
+        allowPositional: allowPositional
+    )
+}
+
 fn CallBinding.is_complete(self: CallBinding) -> Bool {
     if List.len(list: self.issues) > 0 { return false }
     let mut index = 0

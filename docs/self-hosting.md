@@ -794,6 +794,40 @@ quickly self-hosting tests execute, but it is not a correctness prerequisite for
 bootstrap. Likewise, a direct native machine-code backend is deliberately not
 required for the first independent compiler.
 
+### Current Stage 2 call-contract ownership
+
+As of 2026-07-23, `SemanticIndex` owns the prepared-call contract for file-local
+functions, receiver methods, constructors, sum variants, and generated standard
+library signatures. A `PreparedCall` contains:
+
+- the canonical source-argument to declaration-parameter `CallBinding`;
+- declaration-order parameter names, types, and effective data effects;
+- the resolved result type.
+
+`selfhost/semantics/check_calls.rss` consumes that record once for the
+AST-materialized subset. It owns `RS0202` argument effects and receiver
+self-effects, plus concrete `RS0207` local/curated-standard-library argument
+types. Source evaluation order remains in `CallBinding.evaluationOrder`; ABI and
+diagnostic lookup use `parameterIndex`, so reordered named arguments cannot
+silently change the checked parameter.
+
+The token fallback remains intentionally narrower:
+
+- `RS0202`: constructor inline-managed fields and structured match scrutinee
+  effects;
+- `RS0207`: annotated bindings, generic substitution, interpolation, and
+  callback-body cases outside the current AST type model.
+
+AST-owned source spans are removed from fallback output before diagnostics are
+emitted. The old `fn_data_effect_bad` and `call_site_effect_bad` passes have
+been deleted. `RS0207` retains a presence-only legacy fallback for generic
+receivers, callback bodies, interpolation, aliases, and moved-value state until
+those models migrate; its structured collector is filtered against AST
+ownership. The focused gate
+`checker_semantic_index_call_contract_parity` covers reordered named arguments,
+default `read`, mixed `read`/`mut`, receiver effects, and concrete type
+mismatches.
+
 ## Reading and Review Guide
 
 A contributor should not start with `selfhost/check.rss`. Until Stage 2 replaces
@@ -805,8 +839,10 @@ the current layout, use this reading order:
 4. `selfhost/astdump.rss` for the canonical AST contract, while remembering that
    it currently reparses and streams output rather than materializing an AST.
 5. `selfhost/types.rss` and generated interface metadata for shared type facts.
-6. One small diagnostic collector in `selfhost/check.rss` together with its
-   structured parity test in `selfhost_parity.rs`.
+6. `selfhost/semantics/semantic_index.rss`,
+   `selfhost/semantics/call_binding.rss`, and one small collector such as
+   `selfhost/semantics/check_calls.rss`, together with its structured parity
+   test in `selfhost_parity.rs`.
 7. Ownership, closure, and resource rule groups only after the simpler
    declaration and signature families are understood.
 8. `selfhost/package_contract.rss` last, because its input is a resolved

@@ -4476,6 +4476,76 @@ fn bad() -> Unit {
 }
 
 #[test]
+fn checker_semantic_index_call_contract_parity() {
+    let source = r#"struct Item {
+    name: String
+}
+
+fn apply(left: mut Item, right: read Item, label: read String) -> Unit {
+    return Unit
+}
+
+fn inspect(value: Item) -> Unit {
+    return Unit
+}
+
+fn inspect_float(value: Float) -> Unit {
+    return Unit
+}
+
+fn Item.touch(self: mut Item, value: read Item) -> Unit {
+    return Unit
+}
+
+fn check(a: read Item, b: read Item) -> Unit {
+    inspect(value: a)
+    inspect_float(value: 1.5)
+    apply(label: read 7, right: mut b, left: read a)
+    read a.touch(value: mut b)
+    return Unit
+}
+"#;
+    for (code, expected_count) in [("RS0202", 4), ("RS0207", 1)] {
+        let oracle = checker_oracle_records("semantic-index-call-contracts.rss", source, code);
+        assert_eq!(
+            oracle.len(),
+            expected_count,
+            "fixture no longer exercises the intended {code} contract cases"
+        );
+        let actual = diagnostic_records_for_code(
+            run_cached_checker_records(source).expect("rss checker should emit records"),
+            code,
+        );
+        assert_eq!(
+            oracle, actual,
+            "{code} SemanticIndex call-contract diagnostics diverged"
+        );
+    }
+}
+
+#[test]
+fn checker_rs0207_token_fallback_survives_semantic_migration() {
+    let source = r#"fn invoke(callback: noescape Fn(Int) -> Int) -> Int {
+    return callback("wrong")
+}
+"#;
+    let oracle = checker_oracle_records("rs0207-token-fallback.rss", source, "RS0207");
+    assert_eq!(
+        oracle.len(),
+        1,
+        "fixture must exercise the positional callback fallback path"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0207",
+    );
+    assert_eq!(
+        oracle, actual,
+        "RS0207 token fallback diverged after migration"
+    );
+}
+
+#[test]
 fn checker_rs0035_structured_multiset_parity() {
     let source = r#"#lower_name("dup_symbol")
 fn first() -> Unit {
