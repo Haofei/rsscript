@@ -796,37 +796,55 @@ required for the first independent compiler.
 
 ### Current Stage 2 call-contract ownership
 
-As of 2026-07-23, `SemanticIndex` owns the prepared-call contract for file-local
+As of 2026-07-24, `SemanticIndex` owns the prepared-call contract for file-local
 functions, receiver methods, constructors, sum variants, and generated standard
 library signatures. A `PreparedCall` contains:
 
 - the canonical source-argument to declaration-parameter `CallBinding`;
 - declaration-order parameter names, types, and effective data effects;
+- ordered callable type parameters;
 - the resolved result type.
 
 `selfhost/semantics/check_calls.rss` consumes that record once for the
 AST-materialized subset. It owns `RS0202` argument effects and receiver
 self-effects, plus concrete `RS0207` local/curated-standard-library argument
-types. Source evaluation order remains in `CallBinding.evaluationOrder`; ABI and
-diagnostic lookup use `parameterIndex`, so reordered named arguments cannot
-silently change the checked parameter.
+types. The shared type context now applies explicit and inferred generic
+substitutions recursively through nominal and `Fn` types, expands file-local
+generic aliases, substitutes generic receiver fields, resolves instantiated
+call result types, and checks direct calls through `Fn(...)`-typed bindings.
+Generated interface signatures derive their generic parameter set from the
+signature shape rather than from checker-specific tables. Source evaluation
+order remains in `CallBinding.evaluationOrder`; ABI and diagnostic lookup use
+`parameterIndex`, so reordered named arguments cannot silently change the
+checked parameter. Type ownership remains fail-closed: structural mismatches are
+emitted only for bound-name values when both sides have the same resolved
+nominal root and complete generic arguments. Nested call results and incomplete
+AST inference stay on fallback rather than turning parser uncertainty into a
+false positive.
 
 The token fallback remains intentionally narrower:
 
 - `RS0202`: constructor inline-managed fields and structured match scrutinee
   effects;
-- `RS0207`: annotated bindings, generic substitution, interpolation, and
-  callback-body cases outside the current AST type model.
+- `RS0207`: annotated bindings, contextual closure bodies, interpolation,
+  variant-payload details, and moved-value state outside the current AST type
+  model.
 
 AST-owned source spans are removed from fallback output before diagnostics are
 emitted. The old `fn_data_effect_bad` and `call_site_effect_bad` passes have
-been deleted. `RS0207` retains a presence-only legacy fallback for generic
-receivers, callback bodies, interpolation, aliases, and moved-value state until
-those models migrate; its structured collector is filtered against AST
-ownership. The focused gate
+been deleted, as has the direct `Fn`-parameter token probe superseded by the
+shared function-value call check. `RS0207` retains a presence-only legacy
+fallback for contextual callback bodies, interpolation, annotated bindings,
+variant payloads, and moved-value state until those models migrate; its
+structured collector is filtered against AST ownership. The focused gate
 `checker_semantic_index_call_contract_parity` covers reordered named arguments,
 default `read`, mixed `read`/`mut`, receiver effects, and concrete type
-mismatches.
+mismatches. `checker_semantic_index_generic_call_type_parity` covers explicit
+and inferred generic calls, generic aliases, nested generic returns, generic
+receiver fields, and direct `Fn` value calls. Generated standard-library generic
+signatures have a separate presence gate because the Rust single-file oracle
+uses a built-in-signature diagnostic anchor while normal package checking loads
+the generated interface.
 
 ## Reading and Review Guide
 

@@ -40,6 +40,7 @@ fn prepared_external_type_is_owned(expression: Expr, parameterName: String) -> B
     if expression.text == "Log.write" && parameterName == "message" { return true }
     if expression.text == "String.concat" && (parameterName == "left" || parameterName == "right") { return true }
     if expression.text == "String.len" && parameterName == "value" { return true }
+    if expression.text == "List.push" && (parameterName == "list" || parameterName == "value") { return true }
     if expression.text == "File.write" && parameterName == "data" { return true }
     if expression.text == "Image.inspect" && parameterName == "image" { return true }
     if expression.text == "Image.normalize" && parameterName == "image" { return true }
@@ -47,6 +48,110 @@ fn prepared_external_type_is_owned(expression: Expr, parameterName: String) -> B
     if expression.text == "Image.save" && (parameterName == "image" || parameterName == "path") { return true }
     if expression.text == "Image.load" && parameterName == "path" { return true }
     if expression.text == "Request.path" && parameterName == "request" { return true }
+    return false
+}
+
+fn collect_function_value_call_contracts(
+    program: Program,
+    context: FunctionContext,
+    expression: Expr,
+    diagnostics: mut DiagnosticBag,
+    typeOwnedSites: mut Set<String>
+) -> Unit {
+    if expression.calleeKind != CALLEE_NAME { return Unit }
+    let callableType = Map.get_or_default<String, String>(
+        map: context.bindings,
+        key: expression.text,
+        default: ""
+    )
+    let body = strip_type_prefixes(s: callableType)
+    let arity = fn_type_arity(body: body)
+    if arity < 0 { return Unit }
+    let count = List.len(list: expression.args)
+    let mut index = 0
+    while index < count && index < arity {
+        let argument = List.get<CallArg>(list: expression.args, index: index)
+        if argument.value >= 0
+            && argument.value < List.len(list: program.expressions)
+            && expression_type_is_owned(
+                program: program,
+                context: context,
+                expressionIndex: argument.value
+            ) {
+            let value = List.get<Expr>(list: program.expressions, index: argument.value)
+            let expectedType = SemanticIndex.expand_type_alias(
+                self: context.semantics,
+                typeName: fn_type_arg_at(body: body, which: index)
+            )
+            let actualType = SemanticIndex.expand_type_alias(
+                self: context.semantics,
+                typeName: infer_expression_type(
+                    program: program,
+                    context: context,
+                    index: argument.value
+                )
+            )
+            if resolved_call_type_mismatch(expected: expectedType, actual: actualType) {
+                let key = call_site_key(line: value.line, column: value.column, length: value.length)
+                Set.insert<String>(set: mut typeOwnedSites, value: key)
+                DiagnosticBag.add(
+                    self: mut diagnostics,
+                    code: "RS0207",
+                    line: value.line,
+                    column: value.column,
+                    length: value.length
+                )
+            }
+        }
+        index = index + 1
+    }
+    return Unit
+}
+
+fn expression_type_is_owned(program: Program, context: FunctionContext, expressionIndex: Int) -> Bool {
+    if expressionIndex < 0 || expressionIndex >= List.len(list: program.expressions) { return false }
+    let expression = List.get<Expr>(list: program.expressions, index: expressionIndex)
+    if expression.kind == EXPR_LITERAL { return true }
+    if expression.kind == EXPR_NAME {
+        return Map.contains_key<String, String>(map: context.bindings, key: expression.text)
+    }
+    if expression.kind == EXPR_CALL {
+        let preparedIndex = SemanticIndex.call_index(
+            self: context.semantics,
+            expressionIndex: expressionIndex
+        )
+        return preparedIndex >= 0
+    }
+    if (expression.kind == EXPR_EFFECT || expression.kind == EXPR_MANAGE)
+        && List.len(list: expression.children) == 1 {
+        return expression_type_is_owned(
+            program: program,
+            context: context,
+            expressionIndex: List.get<Int>(list: expression.children, index: 0)
+        )
+    }
+    if expression.kind == EXPR_FIELD || expression.kind == EXPR_BINARY || expression.kind == EXPR_UNARY {
+        let inferred = infer_expression_type(
+            program: program,
+            context: context,
+            index: expressionIndex
+        )
+        return String.len(value: inferred) > 0
+    }
+    return false
+}
+
+fn expression_is_bound_name(program: Program, expressionIndex: Int) -> Bool {
+    if expressionIndex < 0 || expressionIndex >= List.len(list: program.expressions) { return false }
+    let expression = List.get<Expr>(list: program.expressions, index: expressionIndex)
+    if expression.kind == EXPR_NAME { return true }
+    if (expression.kind == EXPR_EFFECT || expression.kind == EXPR_MANAGE)
+        && List.len(list: expression.children) == 1 {
+        return expression_is_bound_name(
+            program: program,
+            expressionIndex: List.get<Int>(list: expression.children, index: 0)
+        )
+    }
     return false
 }
 
@@ -60,9 +165,22 @@ fn stable_scalar_call_type(ty: String) -> Bool {
         || root == "Unit"
 }
 
-fn stable_call_type_mismatch(expected: String, actual: String) -> Bool {
+fn resolved_call_type_mismatch(expected: String, actual: String) -> Bool {
     if arg_type_matches(expected: expected, actual: actual) { return false }
-    return stable_scalar_call_type(ty: expected) && stable_scalar_call_type(ty: actual)
+    if String.len(value: expected) == 0
+        || String.len(value: actual) == 0
+        || str_is_unresolved_generic(s: expected)
+        || str_is_unresolved_generic(s: actual) {
+        return false
+    }
+    if stable_scalar_call_type(ty: expected) && stable_scalar_call_type(ty: actual) {
+        return true
+    }
+    let expectedArgs = str_type_arg_count(s: expected)
+    let actualArgs = str_type_arg_count(s: actual)
+    return expectedArgs > 0
+        && expectedArgs == actualArgs
+        && str_type_root(s: expected) == str_type_root(s: actual)
 }
 
 fn collect_prepared_argument_contracts(
@@ -75,6 +193,12 @@ fn collect_prepared_argument_contracts(
     typeOwnedSites: mut Set<String>
 ) -> Unit {
     let expression = List.get<Expr>(list: program.expressions, index: expressionIndex)
+    let substitutions = prepared_call_substitutions(
+        program: program,
+        context: context,
+        expressionIndex: expressionIndex,
+        prepared: prepared
+    )
     let mut boundIndex = 0
     while boundIndex < List.len(list: prepared.binding.evaluationOrder) {
         let bound = List.get<BoundArgument>(list: prepared.binding.evaluationOrder, index: boundIndex)
@@ -103,19 +227,38 @@ fn collect_prepared_argument_contracts(
                 }
 
                 let parameterName = List.get<String>(list: prepared.parameterNames, index: bound.parameterIndex)
-                let expectedType = List.get<String>(list: prepared.parameterTypes, index: bound.parameterIndex)
-                let actualType = infer_expression_type(program: program, context: context, index: argument.value)
+                let expectedType = resolved_prepared_parameter_type(
+                    context: context,
+                    prepared: prepared,
+                    substitutions: substitutions,
+                    parameterIndex: bound.parameterIndex
+                )
+                let inferredActualType = infer_expression_type(
+                    program: program,
+                    context: context,
+                    index: argument.value
+                )
+                let actualType = SemanticIndex.expand_type_alias(
+                    self: context.semantics,
+                    typeName: inferredActualType
+                )
+                let scalarPair = stable_scalar_call_type(ty: expectedType)
+                    && stable_scalar_call_type(ty: actualType)
                 let ownsType = prepared_external_type_is_owned(
                     expression: expression,
                     parameterName: parameterName
-                )
-                let mismatch = stable_call_type_mismatch(expected: expectedType, actual: actualType)
+                ) && expression_type_is_owned(
+                    program: program,
+                    context: context,
+                    expressionIndex: argument.value
+                ) && (scalarPair || expression_is_bound_name(
+                    program: program,
+                    expressionIndex: argument.value
+                ))
+                let mismatch = resolved_call_type_mismatch(expected: expectedType, actual: actualType)
                 if ownsType
                     && mismatch
-                    && String.len(value: expectedType) > 0
-                    && String.len(value: actualType) > 0
-                    && str_is_unresolved_generic(s: expectedType) == false
-                    && str_is_unresolved_generic(s: actualType) == false {
+                    && String.len(value: inferredActualType) > 0 {
                     let key = call_site_key(line: value.line, column: value.column, length: value.length)
                     Set.insert<String>(set: mut typeOwnedSites, value: key)
                     DiagnosticBag.add(
@@ -373,6 +516,14 @@ fn collect_call_contract_expression(
                 visibleEffect: visibleEffect,
                 diagnostics: mut diagnostics,
                 effectOwnedSites: mut effectOwnedSites
+            )
+        } else {
+            collect_function_value_call_contracts(
+                program: program,
+                context: context,
+                expression: expression,
+                diagnostics: mut diagnostics,
+                typeOwnedSites: mut typeOwnedSites
             )
         }
     }

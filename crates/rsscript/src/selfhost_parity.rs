@@ -4524,24 +4524,208 @@ fn check(a: read Item, b: read Item) -> Unit {
 }
 
 #[test]
-fn checker_rs0207_token_fallback_survives_semantic_migration() {
-    let source = r#"fn invoke(callback: noescape Fn(Int) -> Int) -> Int {
+fn checker_semantic_index_generic_call_type_parity() {
+    let cases = [
+        (
+            "generic-list-argument.rss",
+            r#"fn accept(values: read List<String>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    let values = List.new<Int>()
+    accept(values: read values)
+    return Unit
+}
+"#,
+        ),
+        (
+            "inferred-generic-argument.rss",
+            r#"fn same<T>(left: read T, right: read T) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    same(left: read "first", right: read 2)
+    return Unit
+}
+"#,
+        ),
+        (
+            "explicit-generic-argument.rss",
+            r#"fn accept<T>(value: read T) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    accept<Int>(value: read "wrong")
+    return Unit
+}
+"#,
+        ),
+        (
+            "alias-call-argument.rss",
+            r#"type Identifier = Int
+
+fn accept(value: read Identifier) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    accept(value: read "wrong")
+    return Unit
+}
+"#,
+        ),
+        (
+            "generic-alias-call-argument.rss",
+            r#"type Values<T> = List<T>
+
+fn accept(values: read Values<String>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    let values = List.new<Int>()
+    accept(values: read values)
+    return Unit
+}
+"#,
+        ),
+        (
+            "nested-generic-return-argument.rss",
+            r#"fn identity<T>(value: read T) -> T {
+    return value
+}
+
+fn accept(value: read Int) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    accept(value: read identity(value: read "wrong"))
+    return Unit
+}
+"#,
+        ),
+        (
+            "generic-receiver-argument.rss",
+            r#"struct Box<T> {
+    value: T
+}
+
+fn Box.set<T>(self: mut Box<T>, value: read T) -> Unit {
+    self.value = value
+    return Unit
+}
+
+fn main() -> Unit {
+    local box = Box<Int>(value: 1)
+    mut box.set(value: read "wrong")
+    return Unit
+}
+"#,
+        ),
+        (
+            "function-value-argument.rss",
+            r#"fn invoke(callback: noescape Fn(Int) -> Int) -> Int {
     return callback("wrong")
 }
+"#,
+        ),
+    ];
+
+    for (file, source) in cases {
+        let oracle = checker_oracle_records(file, source, "RS0207");
+        assert_eq!(
+            oracle.len(),
+            1,
+            "{file} must exercise one generic-aware call mismatch"
+        );
+        let actual = diagnostic_records_for_code(
+            run_cached_checker_records(source).expect("rss checker should emit records"),
+            "RS0207",
+        );
+        assert_eq!(oracle, actual, "{file} generic call parity diverged");
+    }
+}
+
+#[test]
+fn checker_semantic_index_generated_generic_call_presence_parity() {
+    let source = r#"fn main() -> Unit {
+    local values = List.new<Int>()
+    List.push(list: mut values, value: read "wrong")
+    return Unit
+}
 "#;
-    let oracle = checker_oracle_records("rs0207-token-fallback.rss", source, "RS0207");
+    let oracle = checker_oracle_records("generated-generic-argument.rss", source, "RS0207");
     assert_eq!(
         oracle.len(),
         1,
-        "fixture must exercise the positional callback fallback path"
+        "fixture must exercise one generated generic signature mismatch"
     );
     let actual = diagnostic_records_for_code(
         run_cached_checker_records(source).expect("rss checker should emit records"),
         "RS0207",
     );
     assert_eq!(
-        oracle, actual,
-        "RS0207 token fallback diverged after migration"
+        actual.len(),
+        oracle.len(),
+        "generated generic call presence parity diverged"
+    );
+}
+
+#[test]
+fn checker_semantic_index_generic_ownership_is_fail_closed() {
+    let path = workspace_root().join("benchmarks/vm-jit/kernels/deepcopy_read_param.rss");
+    let source = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("cannot read {}: {error}", path.display()));
+    let oracle = checker_oracle_records(
+        "benchmarks/vm-jit/kernels/deepcopy_read_param.rss",
+        &source,
+        "RS0207",
+    );
+    assert!(
+        oracle.is_empty(),
+        "fail-closed fixture must remain valid in the Rust checker"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(&source).expect("rss checker should emit records"),
+        "RS0207",
+    );
+    assert!(
+        actual.is_empty(),
+        "incomplete field inference must not become an RS0207 false positive: {actual:?}"
+    );
+}
+
+#[test]
+fn checker_rs0207_callback_fallback_survives_semantic_migration() {
+    let source = r#"fn need(value: read String) -> Int {
+    return 0
+}
+
+fn apply(callback: noescape Fn(Int) -> Int) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    apply(callback: |value| need(value: read value))
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("rs0207-callback-fallback.rss", source, "RS0207");
+    assert!(
+        oracle.is_empty() == false,
+        "fixture must exercise contextual callback-body checking"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0207",
+    );
+    assert!(
+        actual.is_empty() == false,
+        "RS0207 contextual callback fallback disappeared during migration"
     );
 }
 
@@ -6150,6 +6334,28 @@ fn main() -> Unit {
     if str_is_unresolved_generic(s: read "Triple<Int, Int, T>") {
         Log.write(message: read "third")
     }
+    let mut substitutions = Map<String, String>.new()
+    Map.insert(map: mut substitutions, key: "T", value: "String")
+    if substitute_type_parameters(
+        ty: "Result<List<T>, Int>",
+        substitutions: substitutions,
+        depth: 0
+    ) == "Result<List<String>, Int>" {
+        Log.write(message: read "substitute")
+    }
+    let mut genericNames = Set<String>.new()
+    Set.insert(set: mut genericNames, value: "T")
+    let mut inferred = Map<String, String>.new()
+    collect_type_substitutions(
+        pattern: "List<T>",
+        actual: "List<Int>",
+        genericNames: genericNames,
+        substitutions: mut inferred,
+        depth: 0
+    )
+    if Map.get_or_default(map: inferred, key: "T", default: "") == "Int" {
+        Log.write(message: read "infer")
+    }
 }
 "#
         .to_string(),
@@ -6162,7 +6368,7 @@ fn main() -> Unit {
     let output = exe
         .eval_main_with_args(std::iter::empty::<String>())
         .expect("type helper test should run");
-    assert_eq!(output.stdout.trim(), "owned\nthird");
+    assert_eq!(output.stdout.trim(), "owned\nthird\nsubstitute\ninfer");
 }
 
 /// Phase-3 proof: the rss checker agrees with the analyzer on a tiny sample

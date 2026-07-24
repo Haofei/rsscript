@@ -278,3 +278,223 @@ fn str_is_unresolved_generic(s: String) -> Bool {
     }
     return false
 }
+
+const TYPE_SUBSTITUTION_DEPTH_LIMIT: Int = 100
+
+fn str_type_arg_count(s: String) -> Int {
+    let mut count = 0
+    let mut scanning = true
+    while scanning {
+        let argument = str_top_arg(s: s, which: count)
+        if String.len(value: argument) == 0 {
+            scanning = false
+        } else {
+            count = count + 1
+        }
+    }
+    return count
+}
+
+fn collect_type_parameter_names(ty: String, names: mut List<String>, seen: mut Set<String>, depth: Int) -> Unit {
+    if depth >= TYPE_SUBSTITUTION_DEPTH_LIMIT { return Unit }
+    let body = strip_type_prefixes(s: str_trim(s: ty))
+    let root = str_type_root(s: body)
+    if String.len(value: root) == 1 {
+        let chars = String.chars(value: root)
+        if List.len(list: chars) == 1 && Char.is_upper(value: List.get<Char>(list: chars, index: 0)) {
+            if Set.contains<String>(set: seen, value: root) == false {
+                Set.insert<String>(set: mut seen, value: root)
+                List.push<String>(list: mut names, value: root)
+            }
+            return Unit
+        }
+    }
+    if String.starts_with(value: body, prefix: "Fn(") {
+        let arity = fn_type_arity(body: body)
+        let mut index = 0
+        while index < arity {
+            collect_type_parameter_names(
+                ty: fn_type_arg_at(body: body, which: index),
+                names: mut names,
+                seen: mut seen,
+                depth: depth + 1
+            )
+            index = index + 1
+        }
+        collect_type_parameter_names(
+            ty: fn_type_return(body: body),
+            names: mut names,
+            seen: mut seen,
+            depth: depth + 1
+        )
+        return Unit
+    }
+    let count = str_type_arg_count(s: body)
+    let mut index = 0
+    while index < count {
+        collect_type_parameter_names(
+            ty: str_top_arg(s: body, which: index),
+            names: mut names,
+            seen: mut seen,
+            depth: depth + 1
+        )
+        index = index + 1
+    }
+    return Unit
+}
+
+fn substitute_type_parameters(ty: String, substitutions: Map<String, String>, depth: Int) -> String {
+    if depth >= TYPE_SUBSTITUTION_DEPTH_LIMIT { return ty }
+    let trimmed = str_trim(s: ty)
+    if Map.contains_key<String, String>(map: substitutions, key: trimmed) {
+        return Map.get_or_default<String, String>(
+            map: substitutions,
+            key: trimmed,
+            default: trimmed
+        )
+    }
+    if String.starts_with(value: trimmed, prefix: "fresh ") {
+        let target = String.slice(value: trimmed, start: 6, len: (String.len(value: trimmed) - 6))
+        return String.concat(
+            left: "fresh ",
+            right: substitute_type_parameters(
+                ty: target,
+                substitutions: substitutions,
+                depth: depth + 1
+            )
+        )
+    }
+    if String.starts_with(value: trimmed, prefix: "noescape ") {
+        let target = String.slice(value: trimmed, start: 9, len: (String.len(value: trimmed) - 9))
+        return String.concat(
+            left: "noescape ",
+            right: substitute_type_parameters(
+                ty: target,
+                substitutions: substitutions,
+                depth: depth + 1
+            )
+        )
+    }
+    if String.starts_with(value: trimmed, prefix: "owned ") {
+        let target = String.slice(value: trimmed, start: 6, len: (String.len(value: trimmed) - 6))
+        return String.concat(
+            left: "owned ",
+            right: substitute_type_parameters(
+                ty: target,
+                substitutions: substitutions,
+                depth: depth + 1
+            )
+        )
+    }
+    if String.starts_with(value: trimmed, prefix: "Fn(") {
+        let arity = fn_type_arity(body: trimmed)
+        if arity < 0 { return trimmed }
+        let mut out = "Fn("
+        let mut index = 0
+        while index < arity {
+            if index > 0 { out = String.concat(left: out, right: ", ") }
+            out = String.concat(
+                left: out,
+                right: substitute_type_parameters(
+                    ty: fn_type_arg_at(body: trimmed, which: index),
+                    substitutions: substitutions,
+                    depth: depth + 1
+                )
+            )
+            index = index + 1
+        }
+        out = String.concat(left: out, right: ") -> ")
+        return String.concat(
+            left: out,
+            right: substitute_type_parameters(
+                ty: fn_type_return(body: trimmed),
+                substitutions: substitutions,
+                depth: depth + 1
+            )
+        )
+    }
+    let count = str_type_arg_count(s: trimmed)
+    if count == 0 { return trimmed }
+    let mut out = String.concat(left: str_type_root(s: trimmed), right: "<")
+    let mut index = 0
+    while index < count {
+        if index > 0 { out = String.concat(left: out, right: ", ") }
+        out = String.concat(
+            left: out,
+            right: substitute_type_parameters(
+                ty: str_top_arg(s: trimmed, which: index),
+                substitutions: substitutions,
+                depth: depth + 1
+            )
+        )
+        index = index + 1
+    }
+    return String.concat(left: out, right: ">")
+}
+
+fn collect_type_substitutions(
+    pattern: String,
+    actual: String,
+    genericNames: Set<String>,
+    substitutions: mut Map<String, String>,
+    depth: Int
+) -> Unit {
+    if depth >= TYPE_SUBSTITUTION_DEPTH_LIMIT { return Unit }
+    let patternBody = strip_type_prefixes(s: str_trim(s: pattern))
+    let actualBody = strip_type_prefixes(s: str_trim(s: actual))
+    if actualBody == "?" || String.len(value: actualBody) == 0 { return Unit }
+    if Set.contains<String>(set: genericNames, value: patternBody) {
+        if Map.contains_key<String, String>(map: substitutions, key: patternBody) == false {
+            Map.insert<String, String>(
+                map: mut substitutions,
+                key: patternBody,
+                value: actualBody
+            )
+        }
+        return Unit
+    }
+    if String.starts_with(value: patternBody, prefix: "Fn(")
+        && String.starts_with(value: actualBody, prefix: "Fn(") {
+        let patternArity = fn_type_arity(body: patternBody)
+        let actualArity = fn_type_arity(body: actualBody)
+        if patternArity != actualArity { return Unit }
+        let mut index = 0
+        while index < patternArity {
+            collect_type_substitutions(
+                pattern: fn_type_arg_at(body: patternBody, which: index),
+                actual: fn_type_arg_at(body: actualBody, which: index),
+                genericNames: genericNames,
+                substitutions: mut substitutions,
+                depth: depth + 1
+            )
+            index = index + 1
+        }
+        collect_type_substitutions(
+            pattern: fn_type_return(body: patternBody),
+            actual: fn_type_return(body: actualBody),
+            genericNames: genericNames,
+            substitutions: mut substitutions,
+            depth: depth + 1
+        )
+        return Unit
+    }
+    let patternCount = str_type_arg_count(s: patternBody)
+    let actualCount = str_type_arg_count(s: actualBody)
+    if patternCount == 0
+        || patternCount != actualCount
+        || str_type_root(s: patternBody) != str_type_root(s: actualBody) {
+        return Unit
+    }
+    let mut index = 0
+    while index < patternCount {
+        collect_type_substitutions(
+            pattern: str_top_arg(s: patternBody, which: index),
+            actual: str_top_arg(s: actualBody, which: index),
+            genericNames: genericNames,
+            substitutions: mut substitutions,
+            depth: depth + 1
+        )
+        index = index + 1
+    }
+    return Unit
+}

@@ -6,6 +6,7 @@ features: local
 module selfhost.semantics.context
 
 use selfhost.scan.*
+use selfhost.semantics.call_binding.*
 use selfhost.semantics.semantic_index.*
 use selfhost.syntax.ast.*
 use selfhost.types.*
@@ -43,19 +44,39 @@ fn FunctionContext.copy(self: FunctionContext) -> fresh FunctionContext {
     return FunctionContext(bindings: take bindings, semantics: read self.semantics)
 }
 
-// Resolve a direct field from a file-local data declaration. This intentionally
-// does not substitute generic arguments yet; it is the smallest reusable
-// nominal-field slice needed by AST-backed receiver checks.
-fn program_field_type(program: Program, ownerType: String, fieldName: String) -> String {
-    let root = str_type_root(s: ownerType)
+// Resolve a direct field from a file-local data declaration after expanding the
+// owner alias and substituting its nominal generic arguments.
+fn program_field_type(program: Program, semantics: SemanticIndex, ownerType: String, fieldName: String) -> String {
+    let expandedOwner = SemanticIndex.expand_type_alias(self: semantics, typeName: ownerType)
+    let root = str_type_root(s: expandedOwner)
     let mut itemIndex = 0
     while itemIndex < Program.len(self: program) {
         let item = List.get<Item>(list: program.items, index: itemIndex)
         if item.kind == ITEM_TYPE && item.name == root {
+            let mut substitutions = Map<String, String>.new()
+            let mut genericIndex = 0
+            while genericIndex < List.len(list: item.generics) {
+                let generic = List.get<GenericParam>(list: item.generics, index: genericIndex)
+                let argument = str_top_arg(s: expandedOwner, which: genericIndex)
+                if String.len(value: argument) > 0 {
+                    Map.insert<String, String>(
+                        map: mut substitutions,
+                        key: generic.name,
+                        value: argument
+                    )
+                }
+                genericIndex = genericIndex + 1
+            }
             let mut fieldIndex = 0
             while fieldIndex < List.len(list: item.fields) {
                 let field = List.get<Field>(list: item.fields, index: fieldIndex)
-                if field.name == fieldName { return field.typeText }
+                if field.name == fieldName {
+                    return substitute_type_parameters(
+                        ty: field.typeText,
+                        substitutions: substitutions,
+                        depth: 0
+                    )
+                }
                 fieldIndex = fieldIndex + 1
             }
             return ""
@@ -63,6 +84,120 @@ fn program_field_type(program: Program, ownerType: String, fieldName: String) ->
         itemIndex = itemIndex + 1
     }
     return ""
+}
+
+fn prepared_call_substitutions(
+    program: Program,
+    context: FunctionContext,
+    expressionIndex: Int,
+    prepared: PreparedCall
+) -> Map<String, String> {
+    let mut substitutions = Map<String, String>.new()
+    let mut genericNames = Set<String>.new()
+    let mut index = 0
+    while index < List.len(list: prepared.typeParameters) {
+        let name = List.get<String>(list: prepared.typeParameters, index: index)
+        Set.insert<String>(set: mut genericNames, value: name)
+        index = index + 1
+    }
+    if expressionIndex < 0 || expressionIndex >= List.len(list: program.expressions) {
+        return substitutions
+    }
+    let expression = List.get<Expr>(list: program.expressions, index: expressionIndex)
+    index = 0
+    while index < List.len(list: prepared.typeParameters)
+        && index < List.len(list: expression.typeArgs) {
+        Map.insert<String, String>(
+            map: mut substitutions,
+            key: List.get<String>(list: prepared.typeParameters, index: index),
+            value: List.get<String>(list: expression.typeArgs, index: index)
+        )
+        index = index + 1
+    }
+    if expression.calleeKind == CALLEE_RECEIVER
+        && expression.calleeReceiver >= 0
+        && List.len(list: prepared.parameterTypes) > 0 {
+        let actualReceiver = infer_expression_type(
+            program: program,
+            context: context,
+            index: expression.calleeReceiver
+        )
+        collect_type_substitutions(
+            pattern: List.get<String>(list: prepared.parameterTypes, index: 0),
+            actual: actualReceiver,
+            genericNames: genericNames,
+            substitutions: mut substitutions,
+            depth: 0
+        )
+    }
+    index = 0
+    while index < List.len(list: prepared.binding.evaluationOrder) {
+        let bound = List.get<BoundArgument>(list: prepared.binding.evaluationOrder, index: index)
+        if bound.sourceKind == BOUND_SOURCE_EXPLICIT
+            && bound.sourceIndex >= 0
+            && bound.sourceIndex < List.len(list: expression.args)
+            && bound.parameterIndex >= 0
+            && bound.parameterIndex < List.len(list: prepared.parameterTypes) {
+            let argument = List.get<CallArg>(list: expression.args, index: bound.sourceIndex)
+            let actual = infer_expression_type(
+                program: program,
+                context: context,
+                index: argument.value
+            )
+            collect_type_substitutions(
+                pattern: List.get<String>(list: prepared.parameterTypes, index: bound.parameterIndex),
+                actual: actual,
+                genericNames: genericNames,
+                substitutions: mut substitutions,
+                depth: 0
+            )
+        }
+        index = index + 1
+    }
+    return substitutions
+}
+
+fn resolved_prepared_parameter_type(
+    context: FunctionContext,
+    prepared: PreparedCall,
+    substitutions: Map<String, String>,
+    parameterIndex: Int
+) -> String {
+    if parameterIndex < 0 || parameterIndex >= List.len(list: prepared.parameterTypes) {
+        return ""
+    }
+    let substituted = substitute_type_parameters(
+        ty: List.get<String>(list: prepared.parameterTypes, index: parameterIndex),
+        substitutions: substitutions,
+        depth: 0
+    )
+    return SemanticIndex.expand_type_alias(
+        self: context.semantics,
+        typeName: substituted
+    )
+}
+
+fn resolved_prepared_result_type(
+    program: Program,
+    context: FunctionContext,
+    expressionIndex: Int,
+    prepared: PreparedCall
+) -> String {
+    let substitutions = prepared_call_substitutions(
+        program: program,
+        context: context,
+        expressionIndex: expressionIndex,
+        prepared: prepared
+    )
+    let substituted = substitute_type_parameters(
+        ty: prepared.resultType,
+        substitutions: substitutions,
+        depth: 0
+    )
+    return SemanticIndex.expand_type_alias(
+        self: context.semantics,
+        typeName: substituted
+    )
 }
 
 fn is_comparison_operator(operator: String) -> Bool {
@@ -118,10 +253,17 @@ fn infer_expression_type(program: Program, context: FunctionContext, index: Int)
     if expression.kind == EXPR_CALL {
         let constructed = call_constructed_type(expression: expression)
         if String.len(value: constructed) > 0 { return constructed }
-        return SemanticIndex.call_result_type(
+        let preparedIndex = SemanticIndex.call_index(
             self: context.semantics,
-            program: program,
             expressionIndex: index
+        )
+        if preparedIndex < 0 { return "" }
+        let prepared = List.get<PreparedCall>(list: context.semantics.calls, index: preparedIndex)
+        return resolved_prepared_result_type(
+            program: program,
+            context: context,
+            expressionIndex: index,
+            prepared: prepared
         )
     }
     if (expression.kind == EXPR_EFFECT || expression.kind == EXPR_MANAGE)
@@ -135,7 +277,12 @@ fn infer_expression_type(program: Program, context: FunctionContext, index: Int)
     if expression.kind == EXPR_FIELD && List.len(list: expression.children) == 1 {
         let base = List.get<Int>(list: expression.children, index: 0)
         let baseType = infer_expression_type(program: program, context: context, index: base)
-        return program_field_type(program: program, ownerType: baseType, fieldName: expression.text)
+        return program_field_type(
+            program: program,
+            semantics: context.semantics,
+            ownerType: baseType,
+            fieldName: expression.text
+        )
     }
     if expression.kind == EXPR_UNARY && expression.text == "!" { return "Bool" }
     if expression.kind == EXPR_BINARY {
