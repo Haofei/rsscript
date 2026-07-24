@@ -123,8 +123,14 @@ fn prepared_call_substitutions(
             index: expression.calleeReceiver
         )
         collect_type_substitutions(
-            pattern: List.get<String>(list: prepared.parameterTypes, index: 0),
-            actual: actualReceiver,
+            pattern: SemanticIndex.expand_type_alias(
+                self: context.semantics,
+                typeName: List.get<String>(list: prepared.parameterTypes, index: 0)
+            ),
+            actual: SemanticIndex.expand_type_alias(
+                self: context.semantics,
+                typeName: actualReceiver
+            ),
             genericNames: genericNames,
             substitutions: mut substitutions,
             depth: 0
@@ -145,8 +151,14 @@ fn prepared_call_substitutions(
                 index: argument.value
             )
             collect_type_substitutions(
-                pattern: List.get<String>(list: prepared.parameterTypes, index: bound.parameterIndex),
-                actual: actual,
+                pattern: SemanticIndex.expand_type_alias(
+                    self: context.semantics,
+                    typeName: List.get<String>(list: prepared.parameterTypes, index: bound.parameterIndex)
+                ),
+                actual: SemanticIndex.expand_type_alias(
+                    self: context.semantics,
+                    typeName: actual
+                ),
                 genericNames: genericNames,
                 substitutions: mut substitutions,
                 depth: 0

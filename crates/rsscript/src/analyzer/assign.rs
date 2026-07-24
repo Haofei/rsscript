@@ -23,14 +23,18 @@ struct AssignScopeEntry {
 /// inner shadow does not pollute the type of an outer same-named binding.
 pub(super) struct AssignChecker<'a> {
     hir: &'a Hir,
+    declared_types: HashSet<String>,
+    generic_types: HashSet<String>,
     scopes: Vec<HashMap<String, AssignScopeEntry>>,
     pub(super) diagnostics: Vec<Diagnostic>,
 }
 
 impl<'a> AssignChecker<'a> {
-    pub(super) fn new(hir: &'a Hir) -> Self {
+    pub(super) fn new(hir: &'a Hir, declared_types: HashSet<String>) -> Self {
         Self {
             hir,
+            declared_types,
+            generic_types: HashSet::new(),
             scopes: Vec::new(),
             diagnostics: Vec::new(),
         }
@@ -38,6 +42,11 @@ impl<'a> AssignChecker<'a> {
 
     pub(super) fn check_function(&mut self, function: &FunctionDecl) {
         self.scopes.clear();
+        self.generic_types = function
+            .type_params
+            .iter()
+            .map(|parameter| parameter.name.clone())
+            .collect();
         self.push_scope();
         for param in &function.params {
             let binding = if param.effect == Some(DataEffect::Mut) {
@@ -422,9 +431,7 @@ impl<'a> AssignChecker<'a> {
         let Some(value_type) = self.infer_type(value) else {
             return;
         };
-        if crate::checks::calls::unresolved_generic_type(&target_type)
-            || crate::checks::calls::unresolved_generic_type(&value_type)
-        {
+        if self.unresolved_generic_type(&target_type) || self.unresolved_generic_type(&value_type) {
             return;
         }
         if !crate::checks::calls::argument_type_matches(&target_type, &value_type) {
@@ -532,9 +539,7 @@ impl<'a> AssignChecker<'a> {
         let Some(value_type) = self.infer_type(value) else {
             return;
         };
-        if crate::checks::calls::unresolved_generic_type(&target_type)
-            || crate::checks::calls::unresolved_generic_type(&value_type)
-        {
+        if self.unresolved_generic_type(&target_type) || self.unresolved_generic_type(&value_type) {
             return;
         }
         if !crate::checks::calls::argument_type_matches(&target_type, &value_type) {
@@ -555,6 +560,24 @@ impl<'a> AssignChecker<'a> {
                 ),
             );
         }
+    }
+
+    fn unresolved_generic_type(&self, type_name: &str) -> bool {
+        let root = type_root_name(type_name);
+        if self.generic_types.contains(root) {
+            return true;
+        }
+        if self.declared_types.contains(root) {
+            return false;
+        }
+        if root.len() == 1 && root.chars().all(|character| character.is_ascii_uppercase()) {
+            return true;
+        }
+        type_arg_names(type_name).is_some_and(|arguments| {
+            arguments
+                .iter()
+                .any(|argument| self.unresolved_generic_type(argument))
+        })
     }
 }
 

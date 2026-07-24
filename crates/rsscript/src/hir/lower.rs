@@ -197,7 +197,20 @@ impl Hir {
                         );
                     }
                 }
-                Item::TypeAlias(_) | Item::Const(_) | Item::Module(_) | Item::Use(_) => {}
+                Item::TypeAlias(alias) => {
+                    self.type_aliases.insert(
+                        alias.name.clone(),
+                        (
+                            alias
+                                .type_params
+                                .iter()
+                                .map(|parameter| parameter.name.clone())
+                                .collect(),
+                            type_ref_name(&alias.target),
+                        ),
+                    );
+                }
+                Item::Const(_) | Item::Module(_) | Item::Use(_) => {}
             }
         }
     }
@@ -380,13 +393,14 @@ impl Hir {
         method: &str,
         value_types: &HashMap<String, String>,
     ) -> (CallResolution, Option<String>) {
-        let candidates = self.receiver_call_candidates(receiver_type, method, value_types);
+        let receiver_type = self.expand_type_alias(receiver_type);
+        let candidates = self.receiver_call_candidates(&receiver_type, method, value_types);
         if candidates.is_empty() {
             // A declared (user) type only gets the synthesized `.clone()` if it derives `Clone`;
             // otherwise leave the call unresolved (RS0206) instead of emitting an `.clone()` that
             // Rust would reject (E0599). Non-user receivers keep their existing resolution.
             let clone_allowed = {
-                let root = type_root_name(receiver_type);
+                let root = type_root_name(&receiver_type);
                 !self.types.contains_key(root) || self.clone_types.contains(root)
             };
             if method == "clone" && clone_allowed {
@@ -396,7 +410,7 @@ impl Hir {
                 return (
                     CallResolution::Resolved {
                         signature: FunctionSig {
-                            namespace: Some(type_root_name(receiver_type).to_string()),
+                            namespace: Some(type_root_name(&receiver_type).to_string()),
                             name: "clone".to_string(),
                             is_public: true,
                             is_async: false,
@@ -406,10 +420,10 @@ impl Hir {
                             params: vec![ParamSig {
                                 name: "self".to_string(),
                                 effect: Some(ParamEffect::Read),
-                                type_name: receiver_type.to_string(),
+                                type_name: receiver_type.clone(),
                                 default: None,
                             }],
-                            return_type: Some(receiver_type.to_string()),
+                            return_type: Some(receiver_type.clone()),
                             returns_fresh: true,
                             effects: Vec::new(),
                             retained_params: HashSet::new(),
@@ -417,7 +431,7 @@ impl Hir {
                         },
                         kind: ResolvedCalleeKind::BuiltinFunction,
                     },
-                    Some(type_root_name(receiver_type).to_string()),
+                    Some(type_root_name(&receiver_type).to_string()),
                 );
             }
             return (CallResolution::Unknown, None);
@@ -441,6 +455,58 @@ impl Hir {
             },
             Some(namespace.clone()),
         )
+    }
+
+    fn expand_type_alias(&self, type_name: &str) -> String {
+        self.expand_type_alias_bounded(type_name, 0)
+    }
+
+    fn expand_type_alias_bounded(&self, type_name: &str, depth: usize) -> String {
+        let trimmed = type_name.trim();
+        if depth >= 32 {
+            return trimmed.to_string();
+        }
+        for prefix in ["fresh ", "noescape ", "owned "] {
+            if let Some(target) = trimmed.strip_prefix(prefix) {
+                return format!(
+                    "{prefix}{}",
+                    self.expand_type_alias_bounded(target, depth + 1)
+                );
+            }
+        }
+        let root = type_root_name(trimmed);
+        if let Some((params, target)) = self.type_aliases.get(root) {
+            let expanded = if params.is_empty() {
+                Some(target.clone())
+            } else {
+                type_arg_names(trimmed).and_then(|args| {
+                    if args.len() != params.len() {
+                        return None;
+                    }
+                    let substitutions = params
+                        .iter()
+                        .cloned()
+                        .zip(args.into_iter().map(str::to_string))
+                        .collect::<HashMap<_, _>>();
+                    Some(crate::text_util::substitute_type_args(
+                        target,
+                        &substitutions,
+                    ))
+                })
+            };
+            if let Some(expanded) = expanded {
+                return self.expand_type_alias_bounded(&expanded, depth + 1);
+            }
+        }
+        let Some(args) = type_arg_names(trimmed) else {
+            return trimmed.to_string();
+        };
+        let args = args
+            .into_iter()
+            .map(|argument| self.expand_type_alias_bounded(argument, depth + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{root}<{args}>")
     }
 
     fn receiver_call_candidates(

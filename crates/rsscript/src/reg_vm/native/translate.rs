@@ -2261,7 +2261,17 @@ fn native_memoize_loop_invariant_host_calls(
     native_reg_types: &mut Vec<NativeTy>,
 ) {
     let original_n_regs = native_reg_types.len();
-    for lp in detect_natural_loops(code) {
+    let loops = detect_natural_loops(code);
+    for lp in &loops {
+        // The lazy cache lives for the whole native invocation. An inner loop can
+        // be re-entered with new outer-loop values, so its invariance proof does
+        // not justify a function-lifetime cache.
+        if loops
+            .iter()
+            .any(|outer| outer.header < lp.header && lp.exit <= outer.exit)
+        {
+            continue;
+        }
         if native_loop_has_external_header_branch(code, lp.header, lp.exit) {
             continue;
         }
@@ -2303,10 +2313,7 @@ fn native_memoize_loop_invariant_host_calls(
             };
             if !native_memoizable_result_type(helper, result_ty)
                 && !(field_load_eligible
-                    && matches!(
-                        result_ty,
-                        NativeTy::Int | NativeTy::Bool | NativeTy::Float | NativeTy::Handle
-                    ))
+                    && matches!(result_ty, NativeTy::Int | NativeTy::Bool | NativeTy::Float))
             {
                 continue;
             }
@@ -2350,14 +2357,11 @@ fn native_memoizable_helper(helper: vm_jit::HostHelper) -> bool {
         return false;
     }
     native_memoizable_scalar_result_helper(helper)
-        || native_memoizable_immutable_handle_result_helper(helper)
 }
 
 #[cfg(feature = "native-jit")]
-fn native_memoizable_result_type(helper: vm_jit::HostHelper, result_ty: NativeTy) -> bool {
+fn native_memoizable_result_type(_helper: vm_jit::HostHelper, result_ty: NativeTy) -> bool {
     matches!(result_ty, NativeTy::Int | NativeTy::Bool | NativeTy::Float)
-        || (result_ty == NativeTy::Handle
-            && native_memoizable_immutable_handle_result_helper(helper))
 }
 
 #[cfg(feature = "native-jit")]
@@ -2374,27 +2378,10 @@ fn native_memoizable_scalar_result_helper(helper: vm_jit::HostHelper) -> bool {
 }
 
 #[cfg(feature = "native-jit")]
-fn native_memoizable_immutable_handle_result_helper(helper: vm_jit::HostHelper) -> bool {
-    matches!(
-        helper,
-        vm_jit::HostHelper::StringLiteral
-            | vm_jit::HostHelper::StringFromInt
-            | vm_jit::HostHelper::StringConcat
-            | vm_jit::HostHelper::StringSlice
-            | vm_jit::HostHelper::StringPadLeft
-            | vm_jit::HostHelper::BytesSlice
-            | vm_jit::HostHelper::JsonParse
-            | vm_jit::HostHelper::JsonField
-    )
-}
-
-#[cfg(feature = "native-jit")]
 fn native_memoizable_field_load_helper(helper: vm_jit::HostHelper) -> bool {
     matches!(
         helper,
-        vm_jit::HostHelper::FieldInt
-            | vm_jit::HostHelper::FieldFloat
-            | vm_jit::HostHelper::FieldHandle
+        vm_jit::HostHelper::FieldInt | vm_jit::HostHelper::FieldFloat
     )
 }
 

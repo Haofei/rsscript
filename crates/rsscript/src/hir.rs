@@ -482,6 +482,7 @@ pub struct HirFunctionBody {
 pub struct Hir {
     signatures: HashMap<String, FunctionSig>,
     types: HashMap<String, TypeInfo>,
+    type_aliases: HashMap<String, (Vec<String>, String)>,
     // user-declared types whose derive list includes `Clone` (gates the synthesized `.clone()`)
     clone_types: HashSet<String>,
     fields_by_name: HashMap<String, Vec<FieldInfo>>,

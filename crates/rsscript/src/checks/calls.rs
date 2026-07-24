@@ -347,7 +347,7 @@ fn check_binding_type(
     let Some(expected) = expected.as_deref() else {
         return;
     };
-    if unresolved_generic_type(expected) {
+    if unresolved_generic_type(analyzer, expected) {
         return;
     }
     if check_variant_payload_type(
@@ -361,7 +361,7 @@ fn check_binding_type(
     let Some(actual) = actual.as_deref() else {
         return;
     };
-    if unresolved_generic_type(actual) {
+    if unresolved_generic_type(analyzer, actual) {
         return;
     }
     let resolved_expected = analyzer.expand_type_alias(expected);
@@ -540,7 +540,7 @@ fn check_payload_type(
     let Some(actual) = hir_expr_type_name(payload) else {
         return;
     };
-    if unresolved_generic_type(actual) {
+    if unresolved_generic_type(analyzer, actual) {
         return;
     }
     if !argument_type_matches(expected, actual) {
@@ -740,7 +740,7 @@ fn check_return_expr_type(
     let Some(actual) = hir_expr_type_name(value) else {
         return;
     };
-    if unresolved_generic_type(actual) {
+    if unresolved_generic_type(analyzer, actual) {
         return;
     }
     if json_value_accepts_literal(&expected, value) {
@@ -790,7 +790,7 @@ fn check_result_return_expr_type(
             let Some(actual) = hir_expr_type_name(value) else {
                 return;
             };
-            if unresolved_generic_type(actual) {
+            if unresolved_generic_type(analyzer, actual) {
                 return;
             }
             let expected_result = type_ref_name(return_ty);
@@ -833,7 +833,7 @@ fn check_option_return_expr_type(
             let Some(actual) = hir_expr_type_name(value) else {
                 return;
             };
-            if unresolved_generic_type(actual) {
+            if unresolved_generic_type(analyzer, actual) {
                 return;
             }
             let expected_option = type_ref_name(return_ty);
@@ -902,7 +902,7 @@ fn check_return_payload_type(
     let Some(actual) = hir_expr_type_name(payload) else {
         return;
     };
-    if unresolved_generic_type(actual) {
+    if unresolved_generic_type(analyzer, actual) {
         return;
     }
     if !argument_type_matches(expected, actual) {
@@ -1441,7 +1441,7 @@ fn check_argument_types(
         let Some(actual_type) = hir_expr_type_name(&arg.value) else {
             continue;
         };
-        if unresolved_generic_type(actual_type) {
+        if unresolved_generic_type(analyzer, actual_type) {
             continue;
         }
         if json_value_accepts_literal(&expected_type, &arg.value) {
@@ -2000,7 +2000,7 @@ fn check_enum_variant_form(
                 continue;
             }
             if let Some(actual) = hir_expr_type_name(&arg.value)
-                && !unresolved_generic_type(actual)
+                && !unresolved_generic_type(analyzer, actual)
                 && !argument_type_matches(expected, actual)
             {
                 analyzer.diagnostics.push(Diagnostic::error(
@@ -2259,14 +2259,22 @@ fn call_type_param_substitutions(
         && let Some(receiver_param) = signature.params.first()
         && let Some(actual_type) = infer_receiver_expr_type(analyzer, function, receiver)
     {
+        let pattern_type = analyzer.expand_type_alias(&receiver_param.type_name);
+        let actual_type = analyzer.expand_type_alias(&actual_type);
         collect_type_param_substitutions(
-            &receiver_param.type_name,
+            &pattern_type,
             &actual_type,
             &generic_params,
             &mut substitutions,
         );
     }
-    collect_call_arg_type_param_substitutions(args, signature, &generic_params, &mut substitutions);
+    collect_call_arg_type_param_substitutions(
+        analyzer,
+        args,
+        signature,
+        &generic_params,
+        &mut substitutions,
+    );
     substitutions
 }
 
@@ -2278,6 +2286,7 @@ fn explicit_callee_type_args(callee: &Callee) -> Option<Vec<&str>> {
 }
 
 fn collect_call_arg_type_param_substitutions(
+    analyzer: &Analyzer<'_>,
     args: &[HirCallArg],
     signature: &FunctionSig,
     generic_params: &HashSet<&str>,
@@ -2299,9 +2308,11 @@ fn collect_call_arg_type_param_substitutions(
         let Some(actual_type) = hir_expr_type_name(&arg.value) else {
             continue;
         };
+        let pattern_type = analyzer.expand_type_alias(&param.type_name);
+        let actual_type = analyzer.expand_type_alias(actual_type);
         collect_type_param_substitutions(
-            &param.type_name,
-            actual_type,
+            &pattern_type,
+            &actual_type,
             generic_params,
             substitutions,
         );
@@ -2605,7 +2616,7 @@ fn check_callback_call_args(
         let Some(actual) = hir_expr_type_name(&arg.value) else {
             continue;
         };
-        if unresolved_generic_type(actual) {
+        if unresolved_generic_type(analyzer, actual) {
             continue;
         }
         if !argument_type_matches(expected, actual) {
@@ -3250,7 +3261,7 @@ fn check_callback_resolved_call_argument_types(
         else {
             continue;
         };
-        if unresolved_generic_type(&actual_type) {
+        if unresolved_generic_type(analyzer, &actual_type) {
             continue;
         }
         if !argument_type_matches(&expected_type, &actual_type) {
@@ -4732,7 +4743,7 @@ fn check_map_literal_entry_expr(
     role: &str,
     context: &str,
 ) {
-    if unresolved_generic_type(expected) {
+    if unresolved_generic_type(analyzer, expected) {
         return;
     }
     if json_value_accepts_literal(expected, value) {
@@ -4744,7 +4755,7 @@ fn check_map_literal_entry_expr(
     let Some(actual) = hir_expr_type_name(value) else {
         return;
     };
-    if unresolved_generic_type(actual) || argument_type_matches(expected, actual) {
+    if unresolved_generic_type(analyzer, actual) || argument_type_matches(expected, actual) {
         return;
     }
     analyzer.diagnostics.push(error_cause_manual_fix(
@@ -4795,7 +4806,7 @@ fn check_list_literal_item_expr(
     value: &HirExpr,
     context: &str,
 ) {
-    if unresolved_generic_type(expected) {
+    if unresolved_generic_type(analyzer, expected) {
         return;
     }
     if json_value_accepts_literal(expected, value) {
@@ -4810,7 +4821,7 @@ fn check_list_literal_item_expr(
     let Some(actual) = hir_expr_type_name(value) else {
         return;
     };
-    if unresolved_generic_type(actual) || argument_type_matches(expected, actual) {
+    if unresolved_generic_type(analyzer, actual) || argument_type_matches(expected, actual) {
         return;
     }
     analyzer.diagnostics.push(error_cause_manual_fix(
@@ -4892,16 +4903,36 @@ fn type_contains_unresolved_generic(type_name: &str, generics: &[String]) -> boo
     })
 }
 
-pub(crate) fn unresolved_generic_type(type_name: &str) -> bool {
+pub(crate) fn unresolved_generic_type(analyzer: &Analyzer<'_>, type_name: &str) -> bool {
     let root = type_root_name(type_name);
-    (root.len() == 1 && root.chars().all(|ch| ch.is_ascii_uppercase()))
-        || fresh_type_target(type_name).is_some_and(unresolved_generic_type)
-        || type_arg_names(type_name)
-            .is_some_and(|args| args.iter().any(|arg| unresolved_generic_type(arg)))
-        || noescape_return_type(type_name).is_some_and(unresolved_generic_type)
+    let declared_type = analyzer
+        .syntax_program
+        .items
+        .iter()
+        .chain(
+            analyzer
+                .interface_programs
+                .iter()
+                .flat_map(|program| program.items.iter()),
+        )
+        .any(|item| match item {
+            Item::Type(decl) => decl.name == root,
+            Item::SumType(decl) => decl.name == root,
+            Item::TypeAlias(decl) => decl.name == root,
+            _ => false,
+        });
+    (root.len() == 1 && root.chars().all(|ch| ch.is_ascii_uppercase()) && !declared_type)
+        || fresh_type_target(type_name)
+            .is_some_and(|target| unresolved_generic_type(analyzer, target))
+        || type_arg_names(type_name).is_some_and(|args| {
+            args.iter()
+                .any(|arg| unresolved_generic_type(analyzer, arg))
+        })
+        || noescape_return_type(type_name)
+            .is_some_and(|return_type| unresolved_generic_type(analyzer, return_type))
         || noescape_param_types(type_name)
             .iter()
-            .any(|param_type| unresolved_generic_type(param_type))
+            .any(|param_type| unresolved_generic_type(analyzer, param_type))
 }
 
 use crate::text_util::builtin_generic_type_params;

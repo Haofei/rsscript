@@ -4651,6 +4651,92 @@ fn main() -> Unit {
 }
 
 #[test]
+fn checker_semantic_index_concrete_single_letter_type_parity() {
+    let source = r#"struct T {
+    value: Int
+}
+
+fn accept(value: read T) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    accept(value: read "wrong")
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("concrete-single-letter-type.rss", source, "RS0207");
+    assert_eq!(
+        oracle.len(),
+        1,
+        "concrete `T` must not be treated as generic"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0207",
+    );
+    assert_eq!(
+        oracle, actual,
+        "concrete single-letter type parity diverged"
+    );
+}
+
+#[test]
+fn checker_semantic_index_nested_and_receiver_alias_parity() {
+    let valid_nested_alias = r#"type Identifier = Int
+
+fn accept(values: read List<Identifier>) -> Unit {
+    return Unit
+}
+
+fn main() -> Unit {
+    let values = List.new<Int>()
+    accept(values: read values)
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("nested-alias-valid.rss", valid_nested_alias, "RS0207");
+    assert!(oracle.is_empty(), "nested aliases must be transparent");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(valid_nested_alias).expect("rss checker should run"),
+        "RS0207",
+    );
+    assert_eq!(oracle, actual, "nested alias parity diverged");
+
+    let receiver_alias = r#"struct Box<T> {
+    value: T
+}
+
+type IntBox = Box<Int>
+
+fn Box.set<T>(self: mut Box<T>, value: read T) -> Unit {
+    self.value = value
+    return Unit
+}
+
+fn check(box: mut IntBox) -> Unit {
+    mut box.set(value: read "wrong")
+    return Unit
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("receiver-alias-generic.rss", receiver_alias, "RS0207");
+    assert_eq!(
+        oracle.len(),
+        1,
+        "receiver alias must constrain the method generic"
+    );
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(receiver_alias).expect("rss checker should emit records"),
+        "RS0207",
+    );
+    assert_eq!(oracle, actual, "receiver alias generic parity diverged");
+}
+
+#[test]
 fn checker_semantic_index_generated_generic_call_presence_parity() {
     let source = r#"fn main() -> Unit {
     local values = List.new<Int>()

@@ -320,6 +320,9 @@ fn duo_value(value: read Duo) -> Int {
 }
 fn add_into(read_value: Int, target: mut Int) -> Unit { target = target + read_value }
 fn Box.add(self: read Box, amount: Int = 1) -> Int { return self.value + amount }
+fn Box.encode(self: read Box, first: Int, second: Int) -> Int {
+    return self.value * 100 + first * 10 + second
+}
 fn Cell.combine(self: mut Cell, source: read Cell, target: mut Cell) -> Unit {
     target.n = target.n + source.n + self.n
 }
@@ -352,9 +355,18 @@ pub fn main() -> Unit {
         second: record(order: mut order, value: 2),
         first: record(order: mut order, value: 1)
     )
+    let mut receiver_order: Int = 0
+    let receiver_encoded = Box(
+        value: record(order: mut receiver_order, value: 1)
+    ).encode(
+        second: record(order: mut receiver_order, value: 3),
+        first: record(order: mut receiver_order, value: 2)
+    )
 
     Log.write(message: String.from_int(value: encoded))
     Log.write(message: String.from_int(value: order))
+    Log.write(message: String.from_int(value: receiver_encoded))
+    Log.write(message: String.from_int(value: receiver_order))
     Log.write(message: String.from_int(value: pair(second, first)))
     Log.write(message: String.from_int(value: pair_value.first * 10 + pair_value.second))
     Log.write(message: String.from_int(value: duo_value(value: duo)))
@@ -374,8 +386,7 @@ pub fn main() -> Unit {
     return Unit
 }
 "#;
-    let expected =
-        "2\n1\n12\n21\n12\n12\n12\n8\n123\n123\n123\n123\n123\n123\n129\nvalue=4\n111\n5\n13\n7\n";
+    let expected = "2\n1\n1\n3\n2\n12\n21\n123\n132\n12\n12\n12\n8\n123\n123\n123\n123\n123\n123\n129\nvalue=4\n111\n5\n13\n7\n";
     for backend in common::differential::full_backends() {
         let actual = backend
             .run_stdout("named-call-binding.rss", source, &[])

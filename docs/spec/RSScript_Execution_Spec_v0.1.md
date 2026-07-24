@@ -316,14 +316,20 @@ leak tests, and any future `Resourceful` value would observe ghost retention.
 
 The reg-VM is a sandbox for untrusted/AI-generated programs. Two invariants hold.
 
-**Invariant 1 — program faults are values, never panics.** A program-level fault
+**Invariant 1 — embedded VM/JIT program faults are values, never panics.** In the
+interpreter, tier-0, native JIT helpers, and embedding APIs, a program-level fault
 (overflow trap, divide-by-zero, out-of-bounds, step/memory-budget exhaustion,
 cancellation) MUST be returned as an `EvalError` value, never a Rust panic.
+Standalone generated-Rust AOT executables may use a controlled Rust panic/abort
+as the backend mechanism described by §2.1, because v0.1 exposes no catchable
+language-level fault value there. Such a panic is equivalent only when it has the
+same fault class and semantic point and no additional observable effect precedes
+it.
 
-**Invariant 2 — a Rust panic means an engine bug, not a program fault.** The
-release profile sets `panic = "abort"` (workspace `Cargo.toml`, `[profile.release]`),
-so a panic can never unwind across the C ABI at the JIT / FFI / native-helper
-seams (that would be undefined behavior). The `rsscript` crate is
+**Invariant 2 — a Rust panic inside an embedded VM/JIT boundary means an engine
+bug, not a program fault.** The release profile sets `panic = "abort"` (workspace
+`Cargo.toml`, `[profile.release]`), so a panic can never unwind across the C ABI
+at the JIT / FFI / native-helper seams (that would be undefined behavior). The `rsscript` crate is
 `#![forbid(unsafe_code)]` (`lib.rs` and `main.rs`); all `unsafe` (machine-code
 execution, indirect calls, symbol registration) is confined to the `vm-jit`
 crate behind a safe API (§7.1).

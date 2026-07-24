@@ -1222,40 +1222,63 @@ impl Analyzer<'_> {
 
     /// Expand a type-alias reference, including generic aliases, to its target
     /// type. `IntList` -> `List<Int>`; `Pair<Int>` -> `Result<Int, String>` for
-    /// `type Pair<T> = Result<T, String>`. Non-aliases pass through unchanged.
+    /// `type Pair<T> = Result<T, String>`. Expansion is recursive, so aliases are
+    /// transparent below nominal type arguments as well as at the root.
     pub(crate) fn expand_type_alias(&self, type_name: &str) -> String {
+        self.expand_type_alias_inner(type_name, 0)
+    }
+
+    fn expand_type_alias_inner(&self, type_name: &str, depth: usize) -> String {
         use crate::text_util::{substitute_type_args, type_arg_names, type_root_name};
-        let mut current = type_name.trim().to_string();
-        for _ in 0..16 {
-            let root = type_root_name(&current);
-            let Some(target) = self.type_aliases.get(root) else {
-                break;
-            };
+
+        let trimmed = type_name.trim();
+        if depth >= 32 {
+            return trimmed.to_string();
+        }
+        for prefix in ["fresh ", "noescape ", "owned "] {
+            if let Some(target) = trimmed.strip_prefix(prefix) {
+                return format!(
+                    "{prefix}{}",
+                    self.expand_type_alias_inner(target, depth + 1)
+                );
+            }
+        }
+
+        let root = type_root_name(trimmed);
+        if let Some(target) = self.type_aliases.get(root) {
             let params = self
                 .type_alias_params
                 .get(root)
                 .cloned()
                 .unwrap_or_default();
-            if params.is_empty() {
-                current = target.clone();
+            let expanded = if params.is_empty() {
+                Some(target.clone())
             } else {
-                // Generic alias: substitute the reference's arguments for the
-                // alias's parameters. On arity mismatch, leave it for the normal
-                // type checks to report.
-                let Some(args) = type_arg_names(&current) else {
-                    break;
-                };
-                if args.len() != params.len() {
-                    break;
-                }
-                let subs: std::collections::HashMap<String, String> = params
-                    .into_iter()
-                    .zip(args.into_iter().map(str::to_string))
-                    .collect();
-                current = substitute_type_args(target, &subs);
+                type_arg_names(trimmed).and_then(|args| {
+                    if args.len() != params.len() {
+                        return None;
+                    }
+                    let substitutions = params
+                        .into_iter()
+                        .zip(args.into_iter().map(str::to_string))
+                        .collect::<std::collections::HashMap<_, _>>();
+                    Some(substitute_type_args(target, &substitutions))
+                })
+            };
+            if let Some(expanded) = expanded {
+                return self.expand_type_alias_inner(&expanded, depth + 1);
             }
         }
-        current
+
+        let Some(args) = type_arg_names(trimmed) else {
+            return trimmed.to_string();
+        };
+        let args = args
+            .into_iter()
+            .map(|arg| self.expand_type_alias_inner(arg, depth + 1))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("{root}<{args}>")
     }
 
     fn run(&mut self) {
@@ -1407,7 +1430,23 @@ impl Analyzer<'_> {
     fn check_assignments(&mut self) {
         use crate::syntax::ast::Item;
         let diagnostics = {
-            let mut checker = AssignChecker::new(&self.hir);
+            let declared_types = self
+                .syntax_program
+                .items
+                .iter()
+                .chain(
+                    self.interface_programs
+                        .iter()
+                        .flat_map(|program| program.items.iter()),
+                )
+                .filter_map(|item| match item {
+                    Item::Type(decl) => Some(decl.name.clone()),
+                    Item::SumType(decl) => Some(decl.name.clone()),
+                    Item::TypeAlias(decl) => Some(decl.name.clone()),
+                    _ => None,
+                })
+                .collect();
+            let mut checker = AssignChecker::new(&self.hir, declared_types);
             for item in &self.syntax_program.items {
                 if let Item::Function(function) = item {
                     checker.check_function(function);

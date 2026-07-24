@@ -2393,6 +2393,51 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
+    fn native_translation_does_not_memoize_nested_loop_activation_values() {
+        let source = r#"
+fn hot(outer_limit: Int, inner_limit: Int) -> Int {
+    let mut outer = 0
+    let mut total = 0
+    while outer < outer_limit {
+        let line = String.from_int(value: outer)
+        let mut inner = 0
+        while inner < inner_limit {
+            total = total + String.len(value: read line)
+            inner = inner + 1
+        }
+        outer = outer + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: String.from_int(value: hot(outer_limit: 20, inner_limit: 2)))
+    return Unit
+}
+"#;
+        let mut program = parse_source("test.rss", source);
+        crate::syntax::isolate_module_namespaces(&mut program);
+        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let hot = unit.function_ids["hot"];
+        let (jit, _, _, _, _) = translate_to_native_jit(&unit, unit.functions[hot].as_ref())
+            .expect("nested loop should translate");
+
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::StringLen,
+                    ..
+                }
+            )),
+            "an inner-loop cache must not survive outer-loop re-entry: {:#?}",
+            jit.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
     fn native_translation_lowers_checked_json_field_int_payload() {
         let function = native_test_function(
             "json_field_int_hot",
@@ -3173,21 +3218,21 @@ fn main() -> Result<Unit, JsonError> {
             jit.code,
         );
         assert!(
-            jit.code.iter().any(|instr| matches!(
+            !jit.code.iter().any(|instr| matches!(
                 instr,
                 vm_jit::JitInstr::MemoizedHostCall {
                     helper: vm_jit::HostHelper::StringLiteral,
                     ..
                 }
             )),
-            "OSR JSON field loop should memoize loop-local string literals feeding invariant helpers; jit code: {:#?}",
+            "allocating StringLiteral helpers must not be memoized; jit code: {:#?}",
             jit.code,
         );
     }
 
     #[cfg(feature = "native-jit")]
     #[test]
-    fn native_region_memoizes_invariant_json_parse_handle() {
+    fn native_region_does_not_memoize_invariant_json_parse_handle() {
         let source = r#"
 fn hot(limit: Int) -> Result<Int, JsonError> {
     let text = "{\"id\":41}"
@@ -3235,25 +3280,25 @@ fn main() -> Result<Unit, JsonError> {
             translate_osr_loop(&code, n_regs, func.params, func.captures, lp)
                 .expect("rewritten JSON parse loop should translate to OSR native IR");
         assert!(
-            jit.code.iter().any(|instr| matches!(
+            !jit.code.iter().any(|instr| matches!(
                 instr,
                 vm_jit::JitInstr::MemoizedHostCall {
                     helper: vm_jit::HostHelper::JsonParse,
                     ..
                 }
             )),
-            "OSR JSON parse loop should memoize invariant JsonParse; jit code: {:#?}",
+            "allocating JsonParse helpers must not be memoized; jit code: {:#?}",
             jit.code,
         );
         assert!(
-            jit.code.iter().any(|instr| matches!(
+            !jit.code.iter().any(|instr| matches!(
                 instr,
                 vm_jit::JitInstr::MemoizedHostCall {
                     helper: vm_jit::HostHelper::JsonFieldInt,
                     ..
                 }
             )),
-            "a memoized JsonParse handle should become invariant for dependent JsonFieldInt; jit code: {:#?}",
+            "JsonFieldInt cannot be invariant when its JsonParse input is recomputed; jit code: {:#?}",
             jit.code,
         );
     }
@@ -3335,7 +3380,7 @@ fn main() -> Result<Unit, JsonError> {
 
     #[cfg(feature = "native-jit")]
     #[test]
-    fn native_region_memoizes_read_only_field_loads() {
+    fn native_region_does_not_memoize_handle_field_loads() {
         let source = r#"
 struct Boxed {
     capacity: Int
@@ -3395,14 +3440,14 @@ fn main() -> Unit {
             jit.code,
         );
         assert!(
-            jit.code.iter().any(|instr| matches!(
+            !jit.code.iter().any(|instr| matches!(
                 instr,
                 vm_jit::JitInstr::MemoizedHostCall {
                     helper: vm_jit::HostHelper::FieldHandle,
                     ..
                 }
             )),
-            "read-only handle field load should memoize when no in-loop store targets that slot; jit code: {:#?}",
+            "handle-returning FieldHandle helpers must not be memoized; jit code: {:#?}",
             jit.code,
         );
     }

@@ -91,7 +91,12 @@ fn collect_function_value_call_contracts(
                     index: argument.value
                 )
             )
-            if resolved_call_type_mismatch(expected: expectedType, actual: actualType) {
+            if resolved_call_type_mismatch(
+                expected: expectedType,
+                actual: actualType,
+                genericNames: List<String>.new(),
+                semantics: context.semantics
+            ) {
                 let key = call_site_key(line: value.line, column: value.column, length: value.length)
                 Set.insert<String>(set: mut typeOwnedSites, value: key)
                 DiagnosticBag.add(
@@ -165,15 +170,77 @@ fn stable_scalar_call_type(ty: String) -> Bool {
         || root == "Unit"
 }
 
-fn resolved_call_type_mismatch(expected: String, actual: String) -> Bool {
+fn type_contains_unresolved_generic(
+    ty: String,
+    genericNames: List<String>,
+    semantics: SemanticIndex,
+    depth: Int
+) -> Bool {
+    if depth >= TYPE_SUBSTITUTION_DEPTH_LIMIT { return false }
+    let body = strip_type_prefixes(s: str_trim(s: ty))
+    let root = str_type_root(s: body)
+    let mut index = 0
+    while index < List.len(list: genericNames) {
+        if root == List.get<String>(list: genericNames, index: index) { return true }
+        index = index + 1
+    }
+    if String.len(value: root) == 1
+        && Char.is_upper(value: List.get<Char>(list: String.chars(value: root), index: 0))
+        && SemanticIndex.is_declared_type(self: semantics, typeName: root) == false {
+        return true
+    }
+    let count = str_type_arg_count(s: body)
+    index = 0
+    while index < count {
+        if type_contains_unresolved_generic(
+            ty: str_top_arg(s: body, which: index),
+            genericNames: genericNames,
+            semantics: semantics,
+            depth: depth + 1
+        ) {
+            return true
+        }
+        index = index + 1
+    }
+    return false
+}
+
+fn resolved_call_type_mismatch(
+    expected: String,
+    actual: String,
+    genericNames: List<String>,
+    semantics: SemanticIndex
+) -> Bool {
     if arg_type_matches(expected: expected, actual: actual) { return false }
     if String.len(value: expected) == 0
         || String.len(value: actual) == 0
-        || str_is_unresolved_generic(s: expected)
-        || str_is_unresolved_generic(s: actual) {
+        || type_contains_unresolved_generic(
+            ty: expected,
+            genericNames: genericNames,
+            semantics: semantics,
+            depth: 0
+        )
+        || type_contains_unresolved_generic(
+            ty: actual,
+            genericNames: genericNames,
+            semantics: semantics,
+            depth: 0
+        ) {
         return false
     }
-    if stable_scalar_call_type(ty: expected) && stable_scalar_call_type(ty: actual) {
+    let expectedScalar = stable_scalar_call_type(ty: expected)
+    let actualScalar = stable_scalar_call_type(ty: actual)
+    if expectedScalar && actualScalar {
+        return true
+    }
+    if expectedScalar
+        && String.len(value: str_type_root(s: actual)) == 1
+        && SemanticIndex.is_declared_type(self: semantics, typeName: actual) {
+        return true
+    }
+    if actualScalar
+        && String.len(value: str_type_root(s: expected)) == 1
+        && SemanticIndex.is_declared_type(self: semantics, typeName: expected) {
         return true
     }
     let expectedArgs = str_type_arg_count(s: expected)
@@ -244,6 +311,25 @@ fn collect_prepared_argument_contracts(
                 )
                 let scalarPair = stable_scalar_call_type(ty: expectedType)
                     && stable_scalar_call_type(ty: actualType)
+                let mismatch = resolved_call_type_mismatch(
+                    expected: expectedType,
+                    actual: actualType,
+                    genericNames: prepared.typeParameters,
+                    semantics: context.semantics
+                )
+                let singleLetterNominalMismatch = (
+                    String.len(value: str_type_root(s: expectedType)) == 1
+                    && SemanticIndex.is_declared_type(
+                        self: context.semantics,
+                        typeName: expectedType
+                    )
+                ) || (
+                    String.len(value: str_type_root(s: actualType)) == 1
+                    && SemanticIndex.is_declared_type(
+                        self: context.semantics,
+                        typeName: actualType
+                    )
+                )
                 let ownsType = prepared_external_type_is_owned(
                     expression: expression,
                     parameterName: parameterName
@@ -251,11 +337,10 @@ fn collect_prepared_argument_contracts(
                     program: program,
                     context: context,
                     expressionIndex: argument.value
-                ) && (scalarPair || expression_is_bound_name(
+                ) && (scalarPair || singleLetterNominalMismatch || expression_is_bound_name(
                     program: program,
                     expressionIndex: argument.value
                 ))
-                let mismatch = resolved_call_type_mismatch(expected: expectedType, actual: actualType)
                 if ownsType
                     && mismatch
                     && String.len(value: inferredActualType) > 0 {

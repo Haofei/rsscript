@@ -3215,9 +3215,16 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
         }
         Ok(())
     };
+    let numeric_pair = |lhs: u32, rhs: u32, op: &str| -> Result<(), JitError> {
+        scalar_pair(lhs, rhs, op)?;
+        if !matches!(class(lhs), JitValueType::Int | JitValueType::Float) {
+            return Err(JitError(format!("{op}: operands must be Int or Float")));
+        }
+        Ok(())
+    };
     // Arithmetic: result register has the operands' class.
     let arith = |dst: u32, lhs: u32, rhs: u32, op: &str| -> Result<(), JitError> {
-        scalar_pair(lhs, rhs, op)?;
+        numeric_pair(lhs, rhs, op)?;
         check_reg(dst)?;
         if class(dst) != class(lhs) {
             return Err(JitError(format!(
@@ -3242,7 +3249,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
     };
     // Comparison: operands share a scalar class, result is a logical Bool.
     let compare = |dst: u32, lhs: u32, rhs: u32, op: &str| -> Result<(), JitError> {
-        scalar_pair(lhs, rhs, op)?;
+        numeric_pair(lhs, rhs, op)?;
         check_reg(dst)?;
         if class(dst) != JitValueType::Bool {
             return Err(JitError(format!("{op}: boolean result must be Bool")));
@@ -3293,6 +3300,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
     };
 
     let mut returns = Vec::new();
+    let mut memo_scratch_regs = std::collections::HashSet::new();
     for (i, instr) in program.code.iter().enumerate() {
         // Conditional branches fall through to `i + 1` (`build_function` indexes
         // `block_for[i + 1]`), so the instruction must not be the last one.
@@ -3404,6 +3412,32 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                         "MemoizedHostCall {helper:?}: heap-writing helpers cannot be memoized"
                     )));
                 }
+                if *dst == *cache || *dst == *flag || *cache == *flag {
+                    return Err(JitError(format!(
+                        "MemoizedHostCall {helper:?}: dst, cache, and flag registers must be distinct"
+                    )));
+                }
+                for (name, reg) in [("cache", *cache), ("flag", *flag)] {
+                    check_reg(reg)?;
+                    if reg < program.n_params {
+                        return Err(JitError(format!(
+                            "MemoizedHostCall {helper:?}: {name} register {reg} cannot be a parameter"
+                        )));
+                    }
+                    if !memo_scratch_regs.insert(reg) {
+                        return Err(JitError(format!(
+                            "MemoizedHostCall {helper:?}: scratch register {reg} is shared by multiple memoization sites"
+                        )));
+                    }
+                    if args
+                        .iter()
+                        .any(|arg| matches!(arg, HostArg::Reg(arg_reg) if *arg_reg == reg))
+                    {
+                        return Err(JitError(format!(
+                            "MemoizedHostCall {helper:?}: {name} register {reg} aliases an argument"
+                        )));
+                    }
+                }
                 if args.len() != sig.args.len() {
                     return Err(JitError(format!(
                         "MemoizedHostCall {helper:?}: got {} args, expected {}",
@@ -3430,6 +3464,14 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 require_class(*flag, JitValueType::Int, "MemoizedHostCall flag")?;
                 match sig.result {
                     HostResult::Exact(result) => {
+                        if !matches!(
+                            result,
+                            JitValueType::Int | JitValueType::Bool | JitValueType::Float
+                        ) {
+                            return Err(JitError(format!(
+                                "MemoizedHostCall {helper:?}: result must be a scalar"
+                            )));
+                        }
                         require_class(
                             *dst,
                             result,
@@ -3575,8 +3617,14 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             JitInstr::Shl { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "Shl")?,
             JitInstr::Shr { dst, lhs, rhs } => int_op(*dst, *lhs, *rhs, "Shr")?,
             JitInstr::Compare { dst, lhs, rhs, .. } => compare(*dst, *lhs, *rhs, "Compare")?,
-            JitInstr::Equal { dst, lhs, rhs } => compare(*dst, *lhs, *rhs, "Equal")?,
-            JitInstr::NotEqual { dst, lhs, rhs } => compare(*dst, *lhs, *rhs, "NotEqual")?,
+            JitInstr::Equal { dst, lhs, rhs } => {
+                scalar_pair(*lhs, *rhs, "Equal")?;
+                require_class(*dst, JitValueType::Bool, "Equal result")?;
+            }
+            JitInstr::NotEqual { dst, lhs, rhs } => {
+                scalar_pair(*lhs, *rhs, "NotEqual")?;
+                require_class(*dst, JitValueType::Bool, "NotEqual result")?;
+            }
             JitInstr::Jump { target } => check_target(*target)?,
             JitInstr::JumpIfBool { cond, target, .. } => {
                 require_class(*cond, JitValueType::Bool, "JumpIfBool")?;
@@ -3591,14 +3639,16 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             JitInstr::JumpIfIntCompare {
                 lhs, rhs, target, ..
             } => {
-                scalar_pair(*lhs, *rhs, "JumpIfIntCompare")?;
+                require_class(*lhs, JitValueType::Int, "JumpIfIntCompare lhs")?;
+                require_class(*rhs, JitValueType::Int, "JumpIfIntCompare rhs")?;
                 check_target(*target)?;
                 check_fallthrough()?;
             }
             JitInstr::ProfiledJumpIfIntCompare {
                 lhs, rhs, target, ..
             } => {
-                scalar_pair(*lhs, *rhs, "ProfiledJumpIfIntCompare")?;
+                require_class(*lhs, JitValueType::Int, "ProfiledJumpIfIntCompare lhs")?;
+                require_class(*rhs, JitValueType::Int, "ProfiledJumpIfIntCompare rhs")?;
                 check_target(*target)?;
                 check_fallthrough()?;
             }
@@ -10328,6 +10378,108 @@ mod tests {
         program.zero_init_regs.push(0);
         let err = validate(&program).expect_err("a zero word is not a valid heap handle");
         assert!(err.0.contains("scalar type"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_overlapping_or_shared_memoization_scratch() {
+        use JitValueType::{Handle, Int};
+        let overlap = ft(
+            1,
+            vec![Handle, Int, Int],
+            vec![
+                JitInstr::MemoizedHostCall {
+                    helper: HostHelper::StringLen,
+                    dst: 1,
+                    args: vec![HostArg::Reg(0)],
+                    cache: 2,
+                    flag: 1,
+                },
+                JitInstr::Return { src: 1 },
+            ],
+        );
+        let err = validate(&overlap).expect_err("flag must not alias the result");
+        assert!(err.0.contains("must be distinct"), "{}", err.0);
+
+        let shared = ft(
+            1,
+            vec![Handle, Int, Int, Int, Int],
+            vec![
+                JitInstr::MemoizedHostCall {
+                    helper: HostHelper::StringLen,
+                    dst: 1,
+                    args: vec![HostArg::Reg(0)],
+                    cache: 3,
+                    flag: 4,
+                },
+                JitInstr::MemoizedHostCall {
+                    helper: HostHelper::StringLen,
+                    dst: 2,
+                    args: vec![HostArg::Reg(0)],
+                    cache: 3,
+                    flag: 4,
+                },
+                JitInstr::Return { src: 2 },
+            ],
+        );
+        let err = validate(&shared).expect_err("memoization sites need dedicated scratch");
+        assert!(err.0.contains("shared by multiple"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_handle_returning_memoized_helper() {
+        use JitValueType::{Handle, Int};
+        let err = validate(&ft(
+            1,
+            vec![Int, Handle, Handle, Int],
+            vec![
+                JitInstr::MemoizedHostCall {
+                    helper: HostHelper::StringFromInt,
+                    dst: 1,
+                    args: vec![HostArg::Reg(0)],
+                    cache: 2,
+                    flag: 3,
+                },
+                JitInstr::Return { src: 1 },
+            ],
+        ))
+        .expect_err("memoization is restricted to non-allocating scalar results");
+        assert!(err.0.contains("result must be a scalar"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_bool_arithmetic_and_non_int_compare_branch() {
+        use JitValueType::{Bool, Float};
+        let err = validate(&ft(
+            2,
+            vec![Bool, Bool, Bool],
+            vec![
+                JitInstr::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                JitInstr::Return { src: 2 },
+            ],
+        ))
+        .expect_err("Bool arithmetic is not numeric");
+        assert!(err.0.contains("Int or Float"), "{}", err.0);
+
+        let err = validate(&ft(
+            2,
+            vec![Float, Float],
+            vec![
+                JitInstr::JumpIfIntCompare {
+                    op: JitCompare::Lt,
+                    lhs: 0,
+                    rhs: 1,
+                    expected: true,
+                    target: 1,
+                },
+                JitInstr::Return { src: 0 },
+            ],
+        ))
+        .expect_err("integer compare branches require Int operands");
+        assert!(err.0.contains("expected Int"), "{}", err.0);
     }
 
     #[test]

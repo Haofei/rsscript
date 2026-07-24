@@ -45,6 +45,7 @@ struct SemanticIndex {
     callables: List<CallableDecl>
     directCallables: Map<String, Int>
     receiverCallables: Map<String, Int>
+    declaredTypes: Set<String>
     aliases: List<TypeAliasDecl>
     aliasByName: Map<String, Int>
     calls: List<PreparedCall>
@@ -90,6 +91,7 @@ fn SemanticIndex.empty() -> fresh SemanticIndex {
         callables: List<CallableDecl>.new(),
         directCallables: Map<String, Int>.new(),
         receiverCallables: Map<String, Int>.new(),
+        declaredTypes: Set<String>.new(),
         aliases: List<TypeAliasDecl>.new(),
         aliasByName: Map<String, Int>.new(),
         calls: List<PreparedCall>.new(),
@@ -150,6 +152,7 @@ fn index_program_declarations(program: Program, index: mut SemanticIndex) -> Uni
                 register_name(table: mut index.receiverCallables, name: receiverName, callableIndex: callableIndex)
             }
         } else if item.kind == ITEM_TYPE {
+            Set.insert<String>(set: mut index.declaredTypes, value: item.name)
             local callable = CallableDecl.from(
                 kind: CALLABLE_CONSTRUCTOR,
                 itemIndex: itemIndex,
@@ -161,6 +164,7 @@ fn index_program_declarations(program: Program, index: mut SemanticIndex) -> Uni
             )
             register_name(table: mut index.directCallables, name: item.name, callableIndex: callableIndex)
         } else if item.kind == ITEM_SUM {
+            Set.insert<String>(set: mut index.declaredTypes, value: item.name)
             let mut variantIndex = 0
             while variantIndex < List.len(list: item.variants) {
                 let variant = List.get<Variant>(list: item.variants, index: variantIndex)
@@ -177,6 +181,7 @@ fn index_program_declarations(program: Program, index: mut SemanticIndex) -> Uni
                 variantIndex = variantIndex + 1
             }
         } else if item.kind == ITEM_TYPE_ALIAS {
+            Set.insert<String>(set: mut index.declaredTypes, value: item.name)
             let aliasIndex = List.len(list: index.aliases)
             local aliasName = String.copy(value: item.name)
             local aliasParameters = generic_parameter_names(generics: item.generics)
@@ -447,11 +452,31 @@ fn SemanticIndex.call_index(self: SemanticIndex, expressionIndex: Int) -> Int {
     )
 }
 
+fn SemanticIndex.is_declared_type(self: SemanticIndex, typeName: String) -> Bool {
+    return Set.contains<String>(
+        set: self.declaredTypes,
+        value: str_type_root(s: typeName)
+    )
+}
+
 fn SemanticIndex.expand_type_alias(self: SemanticIndex, typeName: String) -> String {
+    return SemanticIndex.expand_type_alias_inner(
+        self: self,
+        typeName: typeName,
+        depth: 0
+    )
+}
+
+fn SemanticIndex.expand_type_alias_inner(
+    self: SemanticIndex,
+    typeName: String,
+    depth: Int
+) -> String {
+    if depth >= 32 { return str_trim(s: typeName) }
     let mut current = str_trim(s: typeName)
-    let mut depth = 0
     let mut expanding = true
-    while expanding && depth < 16 {
+    let mut aliasDepth = depth
+    while expanding && aliasDepth < 32 {
         let root = str_type_root(s: current)
         let aliasIndex = Map.get_or_default<String, Int>(
             map: self.aliasByName,
@@ -478,13 +503,31 @@ fn SemanticIndex.expand_type_alias(self: SemanticIndex, typeName: String) -> Str
                 current = substitute_type_parameters(
                     ty: alias.target,
                     substitutions: substitutions,
-                    depth: 0
+                    depth: aliasDepth + 1
                 )
             } else {
                 expanding = false
             }
         }
-        depth = depth + 1
+        aliasDepth = aliasDepth + 1
     }
-    return current
+    let count = str_type_arg_count(s: current)
+    if count == 0 { return current }
+    let mut normalized = String.concat(left: str_type_root(s: current), right: "<")
+    let mut index = 0
+    while index < count {
+        if index > 0 {
+            normalized = String.concat(left: normalized, right: ", ")
+        }
+        normalized = String.concat(
+            left: normalized,
+            right: SemanticIndex.expand_type_alias_inner(
+                self: self,
+                typeName: str_top_arg(s: current, which: index),
+                depth: aliasDepth + 1
+            )
+        )
+        index = index + 1
+    }
+    return String.concat(left: normalized, right: ">")
 }

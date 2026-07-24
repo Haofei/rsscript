@@ -1447,8 +1447,65 @@ impl<'a> RustLowerer<'a> {
         let call_id = self.call_temp_counter;
         self.call_temp_counter += 1;
         let mut prelude = String::new();
+        let mut call_callee = callee.clone();
         let mut canonical = vec![None::<CallArg>; params.len()];
         let mut temporary_names = Vec::new();
+
+        // CallBinding places the receiver first in source evaluation order.
+        // Stage its final Rust ABI value before reordered explicit arguments;
+        // the synthetic receiver identifier is marked with the same effect so
+        // `lower_call_receiver` consumes it without adding another borrow.
+        if let Callee::ReceiverCall {
+            receiver,
+            method,
+            effect,
+        } = callee
+        {
+            let receiver_type = self.infer_expr_type(receiver)?;
+            let temp = format!("__rss_call_{call_id}_receiver");
+            let lowered = match effect.unwrap_or(DataEffect::Read) {
+                DataEffect::Mut
+                    if let Expr::Ident(receiver_name, _) = receiver.as_ref()
+                        && self.param_effects.get(receiver_name) == Some(&DataEffect::Mut) =>
+                {
+                    rust_ident(receiver_name)
+                }
+                DataEffect::Mut
+                    if matches!(
+                        receiver.as_ref(),
+                        Expr::Ident(..) | Expr::Field { .. } | Expr::Index { .. }
+                    ) =>
+                {
+                    format!("&mut {}", self.lower_assignment_target(receiver))
+                }
+                DataEffect::Mut => format!("&mut {}", self.lower_expr(receiver)),
+                DataEffect::Read if is_copy_type_ref(&receiver_type) => self.lower_expr(receiver),
+                DataEffect::Read
+                    if (receiver_type.name == "List"
+                        && matches!(receiver.as_ref(), Expr::ArrayLiteral { .. }))
+                        || (receiver_type.name == "Map"
+                            && matches!(receiver.as_ref(), Expr::MapLiteral { .. })) =>
+                {
+                    format!(
+                        "&{}",
+                        self.lower_expr_for_expected_type(receiver, &receiver_type)
+                    )
+                }
+                DataEffect::Read => format!("&{}", self.lower_expr(receiver)),
+                DataEffect::Take => self.lower_expr(receiver),
+            };
+            prelude.push_str(&format!("let {temp} = {lowered}; "));
+            self.value_types.insert(temp.clone(), receiver_type);
+            self.param_effects
+                .insert(temp.clone(), effect.unwrap_or(DataEffect::Read));
+            call_callee = Callee::ReceiverCall {
+                receiver: Box::new(Expr::Ident(temp.clone(), span.clone())),
+                method: method.clone(),
+                effect: *effect,
+            };
+            temporary_names.push(temp);
+        }
+
         for (parameter_index, arg) in evaluations {
             let temp = format!("__rss_call_{call_id}_arg_{parameter_index}");
             let lowered = self.lower_call_arg_for_callee(&stage_callee, &arg, parameter_index);
@@ -1480,7 +1537,7 @@ impl<'a> RustLowerer<'a> {
             .skip(receiver_offset)
             .map(|arg| arg.expect("bound call slot should be complete"))
             .collect::<Vec<_>>();
-        let call = self.lower_call_after_binding(callee, &canonical, span);
+        let call = self.lower_call_after_binding(&call_callee, &canonical, span);
         for name in temporary_names {
             self.value_types.remove(&name);
             self.param_effects.remove(&name);
@@ -1559,6 +1616,12 @@ impl<'a> RustLowerer<'a> {
                     format!("&mut {}", self.lower_assignment_target(receiver))
                 }
                 DataEffect::Mut => format!("&mut {}", self.lower_expr(receiver)),
+                DataEffect::Read
+                    if let Expr::Ident(receiver_name, _) = receiver.as_ref()
+                        && self.param_effects.get(receiver_name) == Some(&DataEffect::Read) =>
+                {
+                    rust_ident(receiver_name)
+                }
                 DataEffect::Read if receiver_type.as_ref().is_some_and(is_copy_type_ref) => {
                     self.lower_expr(receiver)
                 }
