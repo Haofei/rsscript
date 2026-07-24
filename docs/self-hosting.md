@@ -504,12 +504,27 @@ Field declarations now preserve default-expression roots in the shared AST, so
 constructor defaults no longer require reopening token ranges. A deterministic
 binding outline pins reordered arguments, non-trailing defaults, receiver
 defaults, constructor defaults, and variant shorthand against a Rust test
-oracle. The main checker deliberately keeps RS0205 on its lightweight shared-AST
-label scan for now: importing and constructing the full binder independently at
-each call caused every parity worker to recompile it and added a declaration
-scan per call. Before call/type rules consume bindings, the checker must build
-one prepared declaration/binding index and reuse it across rules. Later rules
-must extend this module through that index rather than infer slots again.
+oracle.
+
+`selfhost.semantics.semantic_index` is the prepared semantic boundary around
+that binder. It indexes local functions, unique receiver methods, data
+constructors, and sum variants in one declaration pass, then binds every
+locally resolvable call in one expression-arena pass. Calls are addressed by
+their stable expression index, so later rules reuse `PreparedCall` records
+instead of scanning declarations or rebuilding parameter slots. Ambiguous
+declarations remain unresolved; qualified and ambiguous calls retain a
+fail-closed duplicate-label fallback, while an unknown direct function does not
+invent RS0205.
+
+The main checker constructs this index once. RS0205 consumes cached binding
+issues, and the shared type context consumes the cached callable to infer call
+result types. The deterministic outline uses the same prepared records rather
+than a test-only resolver. The structured RS0205 fixture covers resolved
+functions, constructors, variants, an ambiguous receiver method, and an unknown
+direct call. These consumers keep the focused checker runtime at roughly its
+previous six-second local baseline. Later call/type rules must extend
+`SemanticIndex` rather than introduce another declaration scan or parameter
+binding implementation.
 
 `selfhost.semantics.check_types` is the first AST-backed rule group. It checks
 the current `if`/`while` subset for known non-Bool conditions and `for`

@@ -32,6 +32,7 @@ use selfhost.semantics.check_calls.*
 use selfhost.semantics.declarations.*
 use selfhost.semantics.diagnostics.*
 use selfhost.semantics.features.*
+use selfhost.semantics.semantic_index.*
 use selfhost.syntax.ast.*
 use selfhost.syntax.parser_items.*
 use selfhost.syntax.token_ranges.*
@@ -11261,8 +11262,9 @@ fn main() -> Unit {
     let structured = Args.get_or_default(index: 1, default: "") == "records"
     let toks = tokenize(source: source)
     let program = parse_program(toks: toks)
+    let semanticIndex = SemanticIndex.prepare(program: program)
     let mut typeDiagnostics = DiagnosticBag.empty()
-    collect_program_type_diagnostics(program: program, diagnostics: mut typeDiagnostics)
+    collect_program_type_diagnostics(program: program, semantics: semanticIndex, diagnostics: mut typeDiagnostics)
     collect_program_binding_diagnostics(program: program, diagnostics: mut typeDiagnostics)
     let astMatchExpressionSites = collect_match_expression_sites(program: program)
     let mut astControlSites = Set<String>.new()
@@ -11704,7 +11706,7 @@ fn main() -> Unit {
     collect_program_declaration_diagnostics(program, diagnostics: mut signatureDiagnostics)
     lowerConflict = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0035")
     collect_program_variant_arity_diagnostics(program, diagnostics: mut signatureDiagnostics)
-    collect_program_duplicate_named_args_diagnostics(program, diagnostics: mut signatureDiagnostics)
+    collect_program_call_diagnostics(program, semantics: semanticIndex, diagnostics: mut signatureDiagnostics)
     collect_program_removed_profile_diagnostics(program, diagnostics: mut signatureDiagnostics)
     collect_program_feature_diagnostics(program, diagnostics: mut signatureDiagnostics)
     missingReturn = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0002")

@@ -144,6 +144,20 @@ fn condition_expression(value: String) -> String {
     return scalar_expression(value: value)
 }
 
+// Statement syntax supplies the one required pair of control parentheses.
+// Binary expressions are already parenthesized for value contexts, so strip
+// that pair before rendering `if (...)` or `while (...)`.
+fn statement_condition(value: String) -> String {
+    let condition = condition_expression(value: value)
+    let length = String.len(value: condition)
+    if length >= 2
+        && String.slice(value: condition, start: 0, len: 1) == "("
+        && String.slice(value: condition, start: (length - 1), len: 1) == ")" {
+        return String.slice(value: condition, start: 1, len: (length - 2))
+    }
+    return condition
+}
+
 fn expression_uses_declared_names(value: String, declared: Set<String>) -> Bool {
     if String.starts_with(value: value, prefix: "literal ") {
         return String.len(value: scalar_literal(value: String.slice(value: value, start: 8, len: (String.len(value: value) - 8)))) > 0
@@ -513,8 +527,9 @@ fn main() -> Unit {
                 local condition = while_expression(line: line)
                 if String.len(value: condition) > 0 {
                     if leading_spaces(line: line) != (irDepth * 2) || condition_uses_declared_names(value: condition, declared: declared) == false { return Unit }
-                    local cLine = String.concat(left: indentation(depth: cDepth), right: String.concat(left: "while (", right: String.concat(left: condition_expression(value: condition), right: ") {")))
-                    if String.len(value: condition_expression(value: condition)) == 0 { return Unit }
+                    local cCondition = statement_condition(value: condition)
+                    if String.len(value: cCondition) == 0 { return Unit }
+                    local cLine = String.concat(left: indentation(depth: cDepth), right: String.concat(left: "while (", right: String.concat(left: cCondition, right: ") {")))
                     List.push<String>(list: mut cStatements, value: (manage cLine))
                     if List.len(list: blockKinds) < irDepth { List.push<Int>(list: mut blockKinds, value: 1) }
                     else { List.set<Int>(list: mut blockKinds, index: (irDepth - 1), value: 1) }
@@ -524,8 +539,9 @@ fn main() -> Unit {
                     local ifCondition = if_expression(line: line)
                     if String.len(value: ifCondition) > 0 {
                         if leading_spaces(line: line) != (irDepth * 2) || condition_uses_declared_names(value: ifCondition, declared: declared) == false { return Unit }
-                        local cLine = String.concat(left: indentation(depth: cDepth), right: String.concat(left: "if (", right: String.concat(left: condition_expression(value: ifCondition), right: ") {")))
-                        if String.len(value: condition_expression(value: ifCondition)) == 0 { return Unit }
+                        local cCondition = statement_condition(value: ifCondition)
+                        if String.len(value: cCondition) == 0 { return Unit }
+                        local cLine = String.concat(left: indentation(depth: cDepth), right: String.concat(left: "if (", right: String.concat(left: cCondition, right: ") {")))
                         List.push<String>(list: mut cStatements, value: (manage cLine))
                         if List.len(list: blockKinds) < irDepth { List.push<Int>(list: mut blockKinds, value: 2) }
                         else { List.set<Int>(list: mut blockKinds, index: (irDepth - 1), value: 2) }

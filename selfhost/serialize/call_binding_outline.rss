@@ -4,31 +4,9 @@ module selfhost.serialize.call_binding_outline
 
 use selfhost.scan.*
 use selfhost.semantics.call_binding.*
+use selfhost.semantics.semantic_index.*
 use selfhost.syntax.ast.*
 use selfhost.syntax.parser_items.*
-
-fn receiver_method_name(name: String) -> String {
-    let parts = String.split(value: name, delimiter: ".")
-    if List.len(list: parts) < 2 { return "" }
-    return List.get<String>(list: parts, index: (List.len(list: parts) - 1))
-}
-
-fn find_function(program: Program, expression: Expr) -> Int {
-    let mut index = 0
-    let mut found = -1
-    while index < Program.len(self: program) {
-        let item = List.get<Item>(list: program.items, index: index)
-        if item.kind == ITEM_FUNCTION {
-            if expression.calleeKind == CALLEE_NAME && item.name == expression.text { return index }
-            if expression.calleeKind == CALLEE_RECEIVER && receiver_method_name(name: item.name) == expression.text {
-                if found >= 0 { return -1 }
-                found = index
-            }
-        }
-        index = index + 1
-    }
-    return found
-}
 
 fn source_name(argument: BoundArgument) -> String {
     if argument.sourceKind == BOUND_SOURCE_RECEIVER { return "receiver" }
@@ -53,75 +31,55 @@ fn emit_binding_status(callee: String, binding: CallBinding) -> Unit {
     return Unit
 }
 
-fn emit_field_binding(program: Program, expression: Expr) -> Bool {
-    let mut itemIndex = 0
-    while itemIndex < Program.len(self: program) {
-        let item = List.get<Item>(list: program.items, index: itemIndex)
-        if item.kind == ITEM_TYPE && item.name == expression.text {
-            let binding = CallBinding.bind_fields(program: program, fields: item.fields, args: expression.args)
-            let mut fieldIndex = 0
-            while fieldIndex < List.len(list: item.fields) {
-                let field = List.get<Field>(list: item.fields, index: fieldIndex)
-                let argument = List.get<BoundArgument>(list: binding.byParameter, index: fieldIndex)
-                emit_bound_slot(callee: expression.text, parameter: field.name, argument: argument)
-                fieldIndex = fieldIndex + 1
-            }
-            emit_binding_status(callee: expression.text, binding: binding)
-            return true
-        }
-        if item.kind == ITEM_SUM {
-            let mut variantIndex = 0
-            while variantIndex < List.len(list: item.variants) {
-                let variant = List.get<Variant>(list: item.variants, index: variantIndex)
-                if variant.name == expression.text {
-                    let binding = CallBinding.bind_fields(program: program, fields: variant.fields, args: expression.args)
-                    let mut fieldIndex = 0
-                    while fieldIndex < List.len(list: variant.fields) {
-                        let field = List.get<Field>(list: variant.fields, index: fieldIndex)
-                        let argument = List.get<BoundArgument>(list: binding.byParameter, index: fieldIndex)
-                        emit_bound_slot(callee: expression.text, parameter: field.name, argument: argument)
-                        fieldIndex = fieldIndex + 1
-                    }
-                    emit_binding_status(callee: expression.text, binding: binding)
-                    return true
-                }
-                variantIndex = variantIndex + 1
-            }
-        }
-        itemIndex = itemIndex + 1
+fn emit_field_slots(callee: String, fields: List<Field>, binding: CallBinding) -> Unit {
+    let mut fieldIndex = 0
+    while fieldIndex < List.len(list: fields) {
+        let field = List.get<Field>(list: fields, index: fieldIndex)
+        let argument = List.get<BoundArgument>(list: binding.byParameter, index: fieldIndex)
+        emit_bound_slot(callee: callee, parameter: field.name, argument: argument)
+        fieldIndex = fieldIndex + 1
     }
-    return false
-}
-
-fn emit_call_binding(program: Program, expression: Expr) -> Unit {
-    if expression.kind != EXPR_CALL { return Unit }
-    let itemIndex = find_function(program: program, expression: expression)
-    if itemIndex < 0 {
-        emit_field_binding(program: program, expression: expression)
-        return Unit
-    }
-    let item = List.get<Item>(list: program.items, index: itemIndex)
-    let mut receiverOffset = 0
-    if expression.calleeKind == CALLEE_RECEIVER { receiverOffset = 1 }
-    let binding = CallBinding.bind(program: program, params: item.params, args: expression.args, receiverOffset: receiverOffset, allowPositional: item.isPublic == false || receiverOffset == 1)
-    let mut parameterIndex = 0
-    while parameterIndex < List.len(list: binding.byParameter) {
-        let parameter = List.get<Param>(list: item.params, index: parameterIndex)
-        let argument = List.get<BoundArgument>(list: binding.byParameter, index: parameterIndex)
-        emit_bound_slot(callee: expression.text, parameter: parameter.name, argument: argument)
-        parameterIndex = parameterIndex + 1
-    }
-    emit_binding_status(callee: expression.text, binding: binding)
     return Unit
 }
 
-fn walk_expression(program: Program, index: Int) -> Unit {
+fn emit_call_binding(program: Program, semantics: SemanticIndex, expressionIndex: Int) -> Unit {
+    if expressionIndex < 0 || expressionIndex >= List.len(list: program.expressions) { return Unit }
+    let expression = List.get<Expr>(list: program.expressions, index: expressionIndex)
+    if expression.kind != EXPR_CALL { return Unit }
+    let preparedIndex = SemanticIndex.call_index(self: semantics, expressionIndex: expressionIndex)
+    if preparedIndex < 0 { return Unit }
+    let prepared = List.get<PreparedCall>(list: semantics.calls, index: preparedIndex)
+    let callable = List.get<CallableDecl>(list: semantics.callables, index: prepared.callableIndex)
+    let item = List.get<Item>(list: program.items, index: callable.itemIndex)
+    if callable.kind == CALLABLE_FUNCTION {
+        let mut parameterIndex = 0
+        while parameterIndex < List.len(list: item.params) {
+            let parameter = List.get<Param>(list: item.params, index: parameterIndex)
+            let argument = List.get<BoundArgument>(list: prepared.binding.byParameter, index: parameterIndex)
+            emit_bound_slot(callee: expression.text, parameter: parameter.name, argument: argument)
+            parameterIndex = parameterIndex + 1
+        }
+    } else if callable.kind == CALLABLE_CONSTRUCTOR {
+        emit_field_slots(callee: expression.text, fields: item.fields, binding: prepared.binding)
+    } else {
+        let variant = List.get<Variant>(list: item.variants, index: callable.variantIndex)
+        emit_field_slots(callee: expression.text, fields: variant.fields, binding: prepared.binding)
+    }
+    emit_binding_status(callee: expression.text, binding: prepared.binding)
+    return Unit
+}
+
+fn walk_expression(program: Program, semantics: SemanticIndex, index: Int) -> Unit {
     if index < 0 || index >= List.len(list: program.expressions) { return Unit }
     let expression = List.get<Expr>(list: program.expressions, index: index)
-    emit_call_binding(program: program, expression: expression)
+    emit_call_binding(program: program, semantics: semantics, expressionIndex: index)
     let mut childIndex = 0
     while childIndex < List.len(list: expression.children) {
-        walk_expression(program: program, index: List.get<Int>(list: expression.children, index: childIndex))
+        walk_expression(
+            program: program,
+            semantics: semantics,
+            index: List.get<Int>(list: expression.children, index: childIndex)
+        )
         childIndex = childIndex + 1
     }
     return Unit
@@ -131,6 +89,7 @@ fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: "")
     let toks = tokenize(source: source)
     let program = parse_program(toks: toks)
+    let semanticIndex = SemanticIndex.prepare(program: program)
     let mut itemIndex = 0
     while itemIndex < Program.len(self: program) {
         let item = List.get<Item>(list: program.items, index: itemIndex)
@@ -138,7 +97,7 @@ fn main() -> Unit {
             let mut statementIndex = 0
             while statementIndex < List.len(list: item.statements) {
                 let statement = List.get<Stmt>(list: program.statements, index: List.get<Int>(list: item.statements, index: statementIndex))
-                walk_expression(program: program, index: statement.expression)
+                walk_expression(program: program, semantics: semanticIndex, index: statement.expression)
                 statementIndex = statementIndex + 1
             }
         }

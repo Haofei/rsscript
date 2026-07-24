@@ -1,0 +1,218 @@
+// Prepared semantic lookup and call-binding cache.
+//
+// Declarations are indexed once, then every locally resolvable call expression
+// is bound once. Semantic rules consume expression-indexed PreparedCall records
+// instead of rescanning Program.items or rebuilding argument slots.
+
+features: local
+
+module selfhost.semantics.semantic_index
+
+use selfhost.semantics.call_binding.*
+use selfhost.syntax.ast.*
+
+const CALLABLE_FUNCTION: Int = 1
+const CALLABLE_CONSTRUCTOR: Int = 2
+const CALLABLE_VARIANT: Int = 3
+const AMBIGUOUS_CALLABLE: Int = -2
+
+struct CallableDecl {
+    kind: Int
+    itemIndex: Int
+    variantIndex: Int
+}
+
+struct PreparedCall {
+    expressionIndex: Int
+    callableIndex: Int
+    binding: CallBinding
+}
+
+struct SemanticIndex {
+    callables: List<CallableDecl>
+    directCallables: Map<String, Int>
+    receiverCallables: Map<String, Int>
+    calls: List<PreparedCall>
+    callByExpression: Map<Int, Int>
+}
+
+fn CallableDecl.from(kind: Int, itemIndex: Int, variantIndex: Int) -> fresh CallableDecl {
+    return CallableDecl(kind: kind, itemIndex: itemIndex, variantIndex: variantIndex)
+}
+
+fn PreparedCall.from(expressionIndex: Int, callableIndex: Int, binding: take CallBinding) -> fresh PreparedCall {
+    return PreparedCall(expressionIndex: expressionIndex, callableIndex: callableIndex, binding: take binding)
+}
+
+fn SemanticIndex.empty() -> fresh SemanticIndex {
+    return SemanticIndex(
+        callables: List<CallableDecl>.new(),
+        directCallables: Map<String, Int>.new(),
+        receiverCallables: Map<String, Int>.new(),
+        calls: List<PreparedCall>.new(),
+        callByExpression: Map<Int, Int>.new()
+    )
+}
+
+fn receiver_method_name(name: String) -> String {
+    let parts = String.split(value: name, delimiter: ".")
+    if List.len(list: parts) < 2 { return "" }
+    return List.get<String>(list: parts, index: (List.len(list: parts) - 1))
+}
+
+fn register_name(table: mut Map<String, Int>, name: String, callableIndex: Int) -> Unit {
+    if String.len(value: name) == 0 { return Unit }
+    if Map.contains_key<String, Int>(map: table, key: name) {
+        Map.insert<String, Int>(map: mut table, key: name, value: AMBIGUOUS_CALLABLE)
+    } else {
+        Map.insert<String, Int>(map: mut table, key: name, value: callableIndex)
+    }
+    return Unit
+}
+
+fn SemanticIndex.push_callable(self: mut SemanticIndex, callable: take CallableDecl) -> Int {
+    let index = List.len(list: self.callables)
+    List.push<CallableDecl>(list: mut self.callables, value: manage callable)
+    return index
+}
+
+fn index_program_declarations(program: Program, index: mut SemanticIndex) -> Unit {
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_FUNCTION {
+            local callable = CallableDecl.from(
+                kind: CALLABLE_FUNCTION,
+                itemIndex: itemIndex,
+                variantIndex: -1
+            )
+            let callableIndex = SemanticIndex.push_callable(
+                self: mut index,
+                callable: take callable
+            )
+            register_name(table: mut index.directCallables, name: item.name, callableIndex: callableIndex)
+            let receiverName = receiver_method_name(name: item.name)
+            if String.len(value: receiverName) > 0 {
+                register_name(table: mut index.receiverCallables, name: receiverName, callableIndex: callableIndex)
+            }
+        } else if item.kind == ITEM_TYPE {
+            local callable = CallableDecl.from(
+                kind: CALLABLE_CONSTRUCTOR,
+                itemIndex: itemIndex,
+                variantIndex: -1
+            )
+            let callableIndex = SemanticIndex.push_callable(
+                self: mut index,
+                callable: take callable
+            )
+            register_name(table: mut index.directCallables, name: item.name, callableIndex: callableIndex)
+        } else if item.kind == ITEM_SUM {
+            let mut variantIndex = 0
+            while variantIndex < List.len(list: item.variants) {
+                let variant = List.get<Variant>(list: item.variants, index: variantIndex)
+                local callable = CallableDecl.from(
+                    kind: CALLABLE_VARIANT,
+                    itemIndex: itemIndex,
+                    variantIndex: variantIndex
+                )
+                let callableIndex = SemanticIndex.push_callable(
+                    self: mut index,
+                    callable: take callable
+                )
+                register_name(table: mut index.directCallables, name: variant.name, callableIndex: callableIndex)
+                variantIndex = variantIndex + 1
+            }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return Unit
+}
+
+fn SemanticIndex.resolve_call(self: SemanticIndex, expression: Expr) -> Int {
+    if expression.kind != EXPR_CALL { return -1 }
+    if expression.calleeKind == CALLEE_RECEIVER {
+        return Map.get_or_default<String, Int>(
+            map: self.receiverCallables,
+            key: expression.text,
+            default: -1
+        )
+    }
+    return Map.get_or_default<String, Int>(
+        map: self.directCallables,
+        key: expression.text,
+        default: -1
+    )
+}
+
+fn bind_resolved_call(program: Program, callable: CallableDecl, expression: Expr) -> fresh CallBinding {
+    let item = List.get<Item>(list: program.items, index: callable.itemIndex)
+    if callable.kind == CALLABLE_FUNCTION {
+        let mut receiverOffset = 0
+        if expression.calleeKind == CALLEE_RECEIVER { receiverOffset = 1 }
+        return CallBinding.bind(
+            program: program,
+            params: item.params,
+            args: expression.args,
+            receiverOffset: receiverOffset,
+            allowPositional: item.isPublic == false || receiverOffset == 1
+        )
+    }
+    if callable.kind == CALLABLE_CONSTRUCTOR {
+        return CallBinding.bind_fields(program: program, fields: item.fields, args: expression.args)
+    }
+    let variant = List.get<Variant>(list: item.variants, index: callable.variantIndex)
+    return CallBinding.bind_fields(program: program, fields: variant.fields, args: expression.args)
+}
+
+fn prepare_program_calls(program: Program, index: mut SemanticIndex) -> Unit {
+    let mut expressionIndex = 0
+    while expressionIndex < List.len(list: program.expressions) {
+        let expression = List.get<Expr>(list: program.expressions, index: expressionIndex)
+        if expression.kind == EXPR_CALL {
+            let callableIndex = SemanticIndex.resolve_call(self: index, expression: expression)
+            if callableIndex >= 0 {
+                let callable = List.get<CallableDecl>(list: index.callables, index: callableIndex)
+                local binding = bind_resolved_call(program: program, callable: callable, expression: expression)
+                let preparedIndex = List.len(list: index.calls)
+                local prepared = PreparedCall.from(
+                    expressionIndex: expressionIndex,
+                    callableIndex: callableIndex,
+                    binding: take binding
+                )
+                List.push<PreparedCall>(list: mut index.calls, value: manage prepared)
+                Map.insert<Int, Int>(
+                    map: mut index.callByExpression,
+                    key: expressionIndex,
+                    value: preparedIndex
+                )
+            }
+        }
+        expressionIndex = expressionIndex + 1
+    }
+    return Unit
+}
+
+fn SemanticIndex.prepare(program: Program) -> fresh SemanticIndex {
+    local index = SemanticIndex.empty()
+    index_program_declarations(program: program, index: mut index)
+    prepare_program_calls(program: program, index: mut index)
+    return index
+}
+
+fn SemanticIndex.call_index(self: SemanticIndex, expressionIndex: Int) -> Int {
+    return Map.get_or_default<Int, Int>(
+        map: self.callByExpression,
+        key: expressionIndex,
+        default: -1
+    )
+}
+
+fn SemanticIndex.call_result_type(self: SemanticIndex, program: Program, expressionIndex: Int) -> String {
+    let preparedIndex = SemanticIndex.call_index(self: self, expressionIndex: expressionIndex)
+    if preparedIndex < 0 { return "" }
+    let prepared = List.get<PreparedCall>(list: self.calls, index: preparedIndex)
+    let callable = List.get<CallableDecl>(list: self.callables, index: prepared.callableIndex)
+    let item = List.get<Item>(list: program.items, index: callable.itemIndex)
+    if callable.kind == CALLABLE_FUNCTION { return item.returnType }
+    return item.name
+}

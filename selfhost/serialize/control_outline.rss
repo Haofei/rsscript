@@ -6,14 +6,20 @@ module selfhost.serialize.control_outline
 use selfhost.scan.*
 use selfhost.semantics.check_types.*
 use selfhost.semantics.diagnostics.*
+use selfhost.semantics.semantic_index.*
 use selfhost.syntax.parser_items.*
 
 fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: "")
     let toks = tokenize(source: source)
     let program = parse_program(toks: toks)
+    let semanticIndex = SemanticIndex.prepare(program: program)
     local diagnostics = DiagnosticBag.empty()
-    collect_program_type_diagnostics(program: program, diagnostics: mut diagnostics)
+    collect_program_type_diagnostics(
+        program: program,
+        semantics: semanticIndex,
+        diagnostics: mut diagnostics
+    )
     let mut i = 0
     while i < List.len(list: diagnostics.items) {
         let diagnostic = List.get<Diagnostic>(list: diagnostics.items, index: i)

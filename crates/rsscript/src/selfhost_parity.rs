@@ -4268,21 +4268,28 @@ sum Duo {
     Values(first: Int, second: Int)
 }
 
-fn target(a: Int, b: Int) -> Unit
+class Left {}
+class Right {}
 
-fn exercise() -> Unit {
+fn target(a: Int, b: Int) -> Unit
+fn Left.run(self: read Left, value: Int) -> Unit
+fn Right.run(self: read Right, value: Int) -> Unit
+
+fn exercise(left: read Left) -> Unit {
     target(a: 1, a: 2, a: 3, b: 4)
     target(a: 1, b: 2, b: 3)
     target(a: 1, b: 2)
     Pair(first: 1, first: 2, second: 3)
     Values(first: 1, second: 2, second: 3)
+    left.run(value: 1, value: 2)
+    missing(value: 1, value: 2)
 }
 "#;
     let oracle = checker_oracle_records("structured-rs0205.rss", source, "RS0205");
     assert_eq!(
         oracle.len(),
-        5,
-        "fixture must preserve function, constructor, and variant duplicates"
+        6,
+        "fixture must preserve resolved, ambiguous receiver, and unresolved-call duplicates"
     );
     let actual = diagnostic_records_for_code(
         run_cached_checker_records(source).expect("rss checker should emit records"),

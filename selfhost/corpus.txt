@@ -551,7 +551,9 @@ packages/test-runner/examples/async-smoke.rss
 packages/test-runner/examples/expected-failure.rss
 packages/test-runner/src/main.rss
 selfhost/astdump.rss
+selfhost/backend/c_emit.rss
 selfhost/check.rss
+selfhost/ir/canonical.rss
 selfhost/lexer.rss
 selfhost/package_contract.rss
 selfhost/parser.rss
@@ -624,6 +626,7 @@ selfhost/samples/ir/match.rss
 selfhost/samples/ir/scalar.rss
 selfhost/samples/tiny.rss
 selfhost/scan.rss
+selfhost/semantics/call_binding.rss
 selfhost/semantics/check_bindings.rss
 selfhost/semantics/check_calls.rss
 selfhost/semantics/check_types.rss
@@ -631,8 +634,8 @@ selfhost/semantics/context.rss
 selfhost/semantics/declarations.rss
 selfhost/semantics/diagnostics.rss
 selfhost/semantics/features.rss
-selfhost/backend/c_emit.rss
-selfhost/ir/canonical.rss
+selfhost/semantics/semantic_index.rss
+selfhost/serialize/call_binding_outline.rss
 selfhost/serialize/control_outline.rss
 selfhost/serialize/outline.rss
 selfhost/serialize/type_outline.rss

@@ -4,6 +4,7 @@ module selfhost.serialize.type_outline
 
 use selfhost.scan.*
 use selfhost.semantics.context.*
+use selfhost.semantics.semantic_index.*
 use selfhost.syntax.ast.*
 use selfhost.syntax.parser_items.*
 
@@ -23,11 +24,12 @@ fn main() -> Unit {
     let source = Args.get_or_default(index: 0, default: "")
     let toks = tokenize(source: source)
     let program = parse_program(toks: toks)
+    let semanticIndex = SemanticIndex.prepare(program: program)
     let mut itemIndex = 0
     while itemIndex < Program.len(self: program) {
         let item = List.get<Item>(list: program.items, index: itemIndex)
         if item.kind == ITEM_FUNCTION {
-            let mut context = FunctionContext.from_item(item: item)
+            let mut context = FunctionContext.from_item(item: item, semantics: semanticIndex)
             let mut statementIndex = 0
             while statementIndex < List.len(list: item.statements) {
                 let index = List.get<Int>(list: item.statements, index: statementIndex)

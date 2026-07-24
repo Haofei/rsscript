@@ -7,6 +7,7 @@ module selfhost.semantics.check_types
 use selfhost.scan.*
 use selfhost.semantics.context.*
 use selfhost.semantics.diagnostics.*
+use selfhost.semantics.semantic_index.*
 use selfhost.syntax.ast.*
 use selfhost.types.*
 
@@ -22,7 +23,7 @@ fn copy_function_context(context: FunctionContext) -> fresh FunctionContext {
         Map.insert<String, String>(map: mut bindings, key: ownedKey, value: ownedValue)
         i = i + 1
     }
-    return FunctionContext(bindings: take bindings)
+    return FunctionContext(bindings: take bindings, semantics: read context.semantics)
 }
 
 fn ast_site_key(line: Int, column: Int, length: Int) -> String {
@@ -564,12 +565,12 @@ fn collect_statement_type_diagnostics(program: Program, item: Item, statements: 
     return Unit
 }
 
-fn collect_program_type_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
+fn collect_program_type_diagnostics(program: Program, semantics: SemanticIndex, diagnostics: mut DiagnosticBag) -> Unit {
     let mut i = 0
     while i < Program.len(self: program) {
         let item = List.get<Item>(list: program.items, index: i)
         if item.kind == ITEM_FUNCTION {
-            let mut context = FunctionContext.from_item(item: item)
+            let mut context = FunctionContext.from_item(item: item, semantics: semantics)
             collect_statement_type_diagnostics(program, item: item, statements: item.statements, context: mut context, diagnostics: mut diagnostics)
         }
         i = i + 1

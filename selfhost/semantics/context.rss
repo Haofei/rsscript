@@ -6,14 +6,16 @@ features: local
 module selfhost.semantics.context
 
 use selfhost.scan.*
+use selfhost.semantics.semantic_index.*
 use selfhost.syntax.ast.*
 use selfhost.types.*
 
 struct FunctionContext {
     bindings: Map<String, String>
+    semantics: handle SemanticIndex
 }
 
-fn FunctionContext.from_item(item: Item) -> fresh FunctionContext {
+fn FunctionContext.from_item(item: Item, semantics: SemanticIndex) -> fresh FunctionContext {
     local bindings = Map<String, String>.new()
     let mut i = 0
     while i < List.len(list: item.params) {
@@ -21,17 +23,7 @@ fn FunctionContext.from_item(item: Item) -> fresh FunctionContext {
         Map.insert<String, String>(map: mut bindings, key: param.name, value: param.typeText)
         i = i + 1
     }
-    return FunctionContext(bindings: take bindings)
-}
-
-fn program_function_return_type(program: Program, name: String) -> String {
-    let mut i = 0
-    while i < Program.len(self: program) {
-        let item = List.get<Item>(list: program.items, index: i)
-        if item.kind == ITEM_FUNCTION && item.name == name { return item.returnType }
-        i = i + 1
-    }
-    return ""
+    return FunctionContext(bindings: take bindings, semantics: read semantics)
 }
 
 // Resolve a direct field from a file-local data declaration. This intentionally
@@ -93,7 +85,11 @@ fn infer_expression_type(program: Program, context: FunctionContext, index: Int)
     if expression.kind == EXPR_CALL {
         let constructed = call_constructed_type(expression: expression)
         if String.len(value: constructed) > 0 { return constructed }
-        return program_function_return_type(program, name: expression.text)
+        return SemanticIndex.call_result_type(
+            self: context.semantics,
+            program: program,
+            expressionIndex: index
+        )
     }
     if expression.kind == EXPR_FIELD && List.len(list: expression.children) == 1 {
         let base = List.get<Int>(list: expression.children, index: 0)
