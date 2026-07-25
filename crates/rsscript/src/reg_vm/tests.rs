@@ -2801,6 +2801,64 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
+    fn native_float_comparison_branch_compiles_without_fallback() {
+        let source = "\
+fn choose(left: Float, right: Float) -> Int {
+    if left < right {
+        return 1
+    }
+    return 0
+}
+
+fn main() -> Unit {
+    return Unit
+}
+";
+        let executable = reg_vm_compile_source("native-float-compare-branch.rss", source)
+            .expect("source compiles");
+        let choose = executable.unit.function_ids["choose"];
+        let func = Rc::clone(&executable.unit.functions[choose]);
+        let mut vm = RegVm::new(
+            Rc::clone(&executable.unit),
+            Vec::<String>::new(),
+            HashMap::new(),
+        );
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::Float(1.5));
+        vm.set_reg(1, VmValue::Float(2.5));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        match vm.try_native(&func, 0) {
+            NativeAttempt::Completed(VmValue::Int(1)) => {}
+            NativeAttempt::Completed(value) => {
+                panic!("choose completed with wrong value: {value:?}")
+            }
+            NativeAttempt::Resumed => {
+                panic!(
+                    "choose unexpectedly resumed, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+            NativeAttempt::Fallback => {
+                panic!(
+                    "choose unexpectedly fell back, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
     fn native_direct_dispatch_passes_bool_args_and_return() {
         let source = "\
 fn matches(flag: Bool, value: Int) -> Bool {

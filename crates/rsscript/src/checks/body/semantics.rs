@@ -443,7 +443,7 @@ pub(super) fn check_for_iterable_type(
         if is_async {
             "RSScript `await for` iterates `Stream<T>` values by repeatedly awaiting `Stream.next`."
         } else {
-            "RSScript v0.6 `for` iteration is limited to `List<T>` so loop ownership and review metadata stay explicit."
+            "RSScript v0.7 `for` iteration is limited to `List<T>` so loop ownership and review metadata stay explicit."
         },
         if is_async { "iterate_stream" } else { "iterate_list" },
         if is_async {
@@ -476,7 +476,7 @@ pub(super) fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &Hir
         format!("match scrutinee has type `{type_name}`, expected `Option<T>`, `Result<T, E>`, `List<T>`, a declared sum/struct/class type, or an `Int`/`String`/`Char`/`Bool` literal match."),
         hir_expr_span(expr).clone(),
         "control-flow type mismatch",
-        "RSScript v0.6 `match` is limited to review-visible `Option`, `Result`, declared sum/struct/class patterns, and simple scalar literal dispatch.",
+        "RSScript v0.7 `match` is limited to review-visible `Option`, `Result`, declared sum/struct/class patterns, and simple scalar literal dispatch.",
         "match_option_or_result",
         "Match an `Option<T>`, `Result<T, E>`, declared sum value, or scalar literal value; otherwise rewrite this branch as `if`.",
     ));

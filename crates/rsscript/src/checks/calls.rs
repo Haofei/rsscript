@@ -1933,7 +1933,7 @@ fn check_enum_variant_form(
             .map(|f| (f.name.clone(), f.type_name.clone()))
             .collect::<Vec<(String, String)>>()
     }) {
-        // Variants use the same named-field construction form as structs (per the v0.6 spec);
+        // Variants use the same named-field construction form as structs (per the v0.7 spec);
         // positional/unnamed payload args are not allowed.
         if let Some(unnamed) = args.iter().find(|arg| arg.name.is_none()) {
             analyzer.diagnostics.push(Diagnostic::error(

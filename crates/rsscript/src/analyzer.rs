@@ -76,8 +76,13 @@ struct PreparedAnalysis {
     syntax_program: crate::syntax::ast::Program,
     interface_programs: Vec<crate::syntax::ast::Program>,
     hir: Hir,
-    type_aliases: BTreeMap<String, String>,
-    type_alias_params: BTreeMap<String, Vec<String>>,
+    type_aliases: BTreeMap<String, AliasDefinition>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AliasDefinition {
+    pub(crate) parameters: Vec<String>,
+    pub(crate) target: TypeRef,
 }
 
 /// Own the analyzer front-end protocol in one place. Public entrypoints select
@@ -108,7 +113,6 @@ fn prepare_analysis(input: AnalysisInput<'_>) -> PreparedAnalysis {
             interface_programs: Vec::new(),
             hir,
             type_aliases: BTreeMap::new(),
-            type_alias_params: BTreeMap::new(),
         };
     }
 
@@ -140,7 +144,7 @@ fn prepare_analysis(input: AnalysisInput<'_>) -> PreparedAnalysis {
         ),
         AnalysisFlavor::SyntaxOnly => unreachable!("syntax-only analysis returned above"),
     };
-    let (type_aliases, type_alias_params) = match input.flavor {
+    let type_aliases = match input.flavor {
         AnalysisFlavor::FullWithStandardPackages => collect_type_alias_metadata(
             default_interface_programs
                 .iter()
@@ -167,7 +171,6 @@ fn prepare_analysis(input: AnalysisInput<'_>) -> PreparedAnalysis {
         interface_programs,
         hir,
         type_aliases,
-        type_alias_params,
     }
 }
 
@@ -270,12 +273,13 @@ mod entrypoint_tests {
         AnalysisFlavor, AnalysisInput, AnalysisSources, PreparedAnalysis,
         analyze_source_with_interfaces, analyze_source_with_interfaces_without_core,
         analyze_sources_with_interfaces, analyze_sources_with_interfaces_without_core,
-        prepare_analysis,
+        prepare_analysis, render_type_ref,
     };
 
     const SOURCE: &str = "fn helper(value: read Int) -> Int { return value }\n\
         fn main() -> Int { return helper(value: 1) }\n";
     const ALIAS_SOURCE: &str = "type SourceAlias = CallerAlias<Int>\n\
+        type Callback = owned Fn(Int) -> String\n\
         fn main() -> Unit { return Unit }\n";
     const CALLER_INTERFACE: &str = "type CallerAlias<T> = Result<T, String>\n\
         pub fn Caller.make<T>(value: T) -> CallerAlias<T>\n";
@@ -367,7 +371,6 @@ mod entrypoint_tests {
         let syntax_only = prepare(AnalysisFlavor::SyntaxOnly, SOURCE, &[]);
         assert!(syntax_only.interface_programs.is_empty());
         assert!(syntax_only.type_aliases.is_empty());
-        assert!(syntax_only.type_alias_params.is_empty());
     }
 
     #[test]
@@ -379,10 +382,23 @@ mod entrypoint_tests {
             CALLER_INTERFACES,
         );
 
-        assert_eq!(prepared.type_aliases["WorkspacePath"], "Path");
-        assert_eq!(prepared.type_aliases["CallerAlias"], "Result<T, String>");
-        assert_eq!(prepared.type_alias_params["CallerAlias"], vec!["T"]);
-        assert_eq!(prepared.type_aliases["SourceAlias"], "CallerAlias<Int>");
+        assert_eq!(
+            render_type_ref(&prepared.type_aliases["WorkspacePath"].target),
+            "Path"
+        );
+        assert_eq!(
+            render_type_ref(&prepared.type_aliases["CallerAlias"].target),
+            "Result<T, String>"
+        );
+        assert_eq!(prepared.type_aliases["CallerAlias"].parameters, vec!["T"]);
+        assert_eq!(
+            render_type_ref(&prepared.type_aliases["SourceAlias"].target),
+            "CallerAlias<Int>"
+        );
+        assert_eq!(
+            render_type_ref(&prepared.type_aliases["Callback"].target),
+            "owned Fn(Int) -> String"
+        );
     }
 }
 
@@ -393,7 +409,6 @@ fn analyze_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
         interface_programs,
         hir,
         type_aliases,
-        type_alias_params,
     } = prepared;
     let mut analyzer = Analyzer {
         tokens: &tokens,
@@ -402,7 +417,6 @@ fn analyze_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
         hir,
         diagnostics: Vec::new(),
         type_aliases,
-        type_alias_params,
         in_task_group: false,
         async_let_names: Vec::new(),
     };
@@ -423,26 +437,27 @@ fn is_reserved_generated_name(leaf: &str) -> bool {
 
 fn collect_type_alias_metadata<'a>(
     programs: impl IntoIterator<Item = &'a crate::syntax::ast::Program>,
-) -> (BTreeMap<String, String>, BTreeMap<String, Vec<String>>) {
+) -> BTreeMap<String, AliasDefinition> {
     let mut type_aliases = BTreeMap::new();
-    let mut type_alias_params = BTreeMap::new();
     for program in programs {
         for item in &program.items {
             let Item::TypeAlias(alias) = item else {
                 continue;
             };
-            type_aliases.insert(alias.name.clone(), type_ref_display_name(&alias.target));
-            type_alias_params.insert(
+            type_aliases.insert(
                 alias.name.clone(),
-                alias
-                    .type_params
-                    .iter()
-                    .map(|param| param.name.clone())
-                    .collect(),
+                AliasDefinition {
+                    parameters: alias
+                        .type_params
+                        .iter()
+                        .map(|param| param.name.clone())
+                        .collect(),
+                    target: alias.target.clone(),
+                },
             );
         }
     }
-    (type_aliases, type_alias_params)
+    type_aliases
 }
 
 fn analyze_syntax_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
@@ -452,7 +467,6 @@ fn analyze_syntax_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
         interface_programs,
         hir,
         type_aliases,
-        type_alias_params,
     } = prepared;
     let mut analyzer = Analyzer {
         tokens: &tokens,
@@ -461,7 +475,6 @@ fn analyze_syntax_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
         hir,
         diagnostics: Vec::new(),
         type_aliases,
-        type_alias_params,
         in_task_group: false,
         async_let_names: Vec::new(),
     };
@@ -471,8 +484,39 @@ fn analyze_syntax_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
     diagnostics
 }
 
-fn type_ref_display_name(ty: &crate::syntax::ast::TypeRef) -> String {
-    if ty.args.is_empty() {
+pub(crate) struct Analyzer<'a> {
+    pub(crate) tokens: &'a [Token],
+    pub(crate) syntax_program: crate::syntax::ast::Program,
+    pub(crate) interface_programs: Vec<crate::syntax::ast::Program>,
+    pub(crate) hir: Hir,
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) type_aliases: std::collections::BTreeMap<String, AliasDefinition>,
+    in_task_group: bool,
+    pub(crate) async_let_names: Vec<String>,
+}
+
+fn render_type_ref(ty: &TypeRef) -> String {
+    let mut rendered = if ty.name == "Fn" {
+        let params = ty
+            .fn_params
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| {
+                let parameter = render_type_ref(parameter);
+                match ty.fn_param_effects.get(index).copied().flatten() {
+                    Some(effect) => format!("{} {parameter}", effect.as_str()),
+                    None => parameter,
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let return_type = ty
+            .fn_return
+            .as_deref()
+            .map(render_type_ref)
+            .unwrap_or_else(|| "Unit".to_string());
+        format!("Fn({params}) -> {return_type}")
+    } else if ty.args.is_empty() {
         ty.name.clone()
     } else {
         format!(
@@ -480,25 +524,51 @@ fn type_ref_display_name(ty: &crate::syntax::ast::TypeRef) -> String {
             ty.name,
             ty.args
                 .iter()
-                .map(type_ref_display_name)
+                .map(render_type_ref)
                 .collect::<Vec<_>>()
                 .join(", ")
         )
+    };
+    if ty.is_owned {
+        rendered = format!("owned {rendered}");
     }
+    if ty.is_noescape {
+        rendered = format!("noescape {rendered}");
+    }
+    if ty.is_fresh {
+        rendered = format!("fresh {rendered}");
+    }
+    rendered
 }
 
-pub(crate) struct Analyzer<'a> {
-    pub(crate) tokens: &'a [Token],
-    pub(crate) syntax_program: crate::syntax::ast::Program,
-    pub(crate) interface_programs: Vec<crate::syntax::ast::Program>,
-    pub(crate) hir: Hir,
-    pub(crate) diagnostics: Vec<Diagnostic>,
-    pub(crate) type_aliases: std::collections::BTreeMap<String, String>,
-    /// Type-alias name -> its generic parameter names (empty for non-generic
-    /// aliases), used to expand generic aliases like `Pair<Int>`.
-    pub(crate) type_alias_params: std::collections::BTreeMap<String, Vec<String>>,
-    in_task_group: bool,
-    pub(crate) async_let_names: Vec<String>,
+fn substitute_alias_type_ref(ty: &TypeRef, substitutions: &BTreeMap<String, TypeRef>) -> TypeRef {
+    if ty.args.is_empty()
+        && ty.fn_params.is_empty()
+        && ty.fn_return.is_none()
+        && let Some(replacement) = substitutions.get(&ty.name)
+    {
+        let mut replacement = replacement.clone();
+        replacement.is_fresh |= ty.is_fresh;
+        replacement.is_noescape |= ty.is_noescape;
+        replacement.is_owned |= ty.is_owned;
+        return replacement;
+    }
+    let mut substituted = ty.clone();
+    substituted.args = substituted
+        .args
+        .iter()
+        .map(|argument| substitute_alias_type_ref(argument, substitutions))
+        .collect();
+    substituted.fn_params = substituted
+        .fn_params
+        .iter()
+        .map(|parameter| substitute_alias_type_ref(parameter, substitutions))
+        .collect();
+    substituted.fn_return = substituted
+        .fn_return
+        .as_deref()
+        .map(|return_type| Box::new(substitute_alias_type_ref(return_type, substitutions)));
+    substituted
 }
 
 fn collect_task_group_async_lets(
@@ -1208,16 +1278,13 @@ impl RuntimeGuarantee {
 }
 
 impl Analyzer<'_> {
-    pub(crate) fn resolve_type_alias<'b>(&'b self, type_name: &'b str) -> &'b str {
-        let mut current = type_name;
-        let mut visited = std::collections::BTreeSet::new();
-        while visited.insert(current) {
-            match self.type_aliases.get(current) {
-                Some(resolved) => current = resolved.as_str(),
-                None => break,
-            }
+    pub(crate) fn resolve_type_alias(&self, type_name: &str) -> String {
+        if let Some(definition) = self.type_aliases.get(type_name)
+            && definition.parameters.is_empty()
+        {
+            return render_type_ref(&self.canonical_type_ref(&definition.target));
         }
-        current
+        type_name.to_string()
     }
 
     /// Expand a type-alias reference, including generic aliases, to its target
@@ -1246,14 +1313,11 @@ impl Analyzer<'_> {
             format!("{prefix}{}", self.expand_type_alias_inner(target, visiting))
         } else {
             let root = type_root_name(trimmed);
-            if let Some(target) = self.type_aliases.get(root) {
-                let params = self
-                    .type_alias_params
-                    .get(root)
-                    .cloned()
-                    .unwrap_or_default();
+            if let Some(definition) = self.type_aliases.get(root) {
+                let target = render_type_ref(&definition.target);
+                let params = definition.parameters.clone();
                 let alias_target = if params.is_empty() {
-                    Some(target.clone())
+                    Some(target)
                 } else {
                     type_arg_names(trimmed).and_then(|args| {
                         if args.len() != params.len() {
@@ -1263,7 +1327,7 @@ impl Analyzer<'_> {
                             .into_iter()
                             .zip(args.into_iter().map(str::to_string))
                             .collect::<std::collections::HashMap<_, _>>();
-                        Some(substitute_type_args(target, &substitutions))
+                        Some(substitute_type_args(&target, &substitutions))
                     })
                 };
                 if let Some(alias_target) = alias_target {
@@ -1285,6 +1349,56 @@ impl Analyzer<'_> {
         };
         visiting.remove(trimmed);
         expanded
+    }
+
+    pub(crate) fn canonical_type_ref(&self, ty: &TypeRef) -> TypeRef {
+        self.canonical_type_ref_inner(ty, &mut std::collections::BTreeSet::new())
+    }
+
+    fn canonical_type_ref_inner(
+        &self,
+        ty: &TypeRef,
+        visiting: &mut std::collections::BTreeSet<String>,
+    ) -> TypeRef {
+        let key = render_type_ref(ty);
+        if !visiting.insert(key.clone()) {
+            return ty.clone();
+        }
+        if let Some(definition) = self.type_aliases.get(&ty.name)
+            && definition.parameters.len() == ty.args.len()
+        {
+            let substitutions = definition
+                .parameters
+                .iter()
+                .cloned()
+                .zip(ty.args.iter().cloned())
+                .collect::<BTreeMap<_, _>>();
+            let substituted = substitute_alias_type_ref(&definition.target, &substitutions);
+            let mut canonical = self.canonical_type_ref_inner(&substituted, visiting);
+            canonical.is_fresh |= ty.is_fresh;
+            canonical.is_noescape |= ty.is_noescape;
+            canonical.is_owned |= ty.is_owned;
+            canonical.span = ty.span.clone();
+            visiting.remove(&key);
+            return canonical;
+        }
+        let mut canonical = ty.clone();
+        canonical.args = canonical
+            .args
+            .iter()
+            .map(|argument| self.canonical_type_ref_inner(argument, visiting))
+            .collect();
+        canonical.fn_params = canonical
+            .fn_params
+            .iter()
+            .map(|parameter| self.canonical_type_ref_inner(parameter, visiting))
+            .collect();
+        canonical.fn_return = canonical
+            .fn_return
+            .as_deref()
+            .map(|return_type| Box::new(self.canonical_type_ref_inner(return_type, visiting)));
+        visiting.remove(&key);
+        canonical
     }
 
     fn run(&mut self) {
@@ -1383,11 +1497,11 @@ impl Analyzer<'_> {
             self.diagnostics.push(
                 Diagnostic::error(
                     code::REMOVED_PROFILE_DECLARATION,
-                    "`profile:` declarations are not part of RSScript v0.6.",
+                    "`profile:` declarations are not part of RSScript v0.7.",
                     span.clone(),
                     "removed profile declaration",
                 )
-                .with_cause("v0.6 uses `features:` for file-level advanced capabilities; omitted features means managed-only.")
+                .with_cause("v0.7 uses `features:` for file-level advanced capabilities; omitted features means managed-only.")
                 .with_fix(
                     "remove_profile",
                     "Remove `profile:` and add `features: local` only if the file uses local ownership features.",

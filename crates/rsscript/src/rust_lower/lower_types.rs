@@ -523,7 +523,11 @@ impl RustLowerer<'_> {
                     .zip(ty.args.iter().cloned())
                     .collect::<std::collections::BTreeMap<_, _>>();
                 let substituted = substitute_type_ref(target, &substitutions);
-                let canonical = self.canonical_type_ref_inner(&substituted, visiting);
+                let mut canonical = self.canonical_type_ref_inner(&substituted, visiting);
+                canonical.is_fresh |= ty.is_fresh;
+                canonical.is_noescape |= ty.is_noescape;
+                canonical.is_owned |= ty.is_owned;
+                canonical.span = ty.span.clone();
                 visiting.remove(&key);
                 return canonical;
             }
@@ -557,7 +561,11 @@ fn substitute_type_ref(
         && ty.fn_return.is_none()
         && let Some(replacement) = substitutions.get(&ty.name)
     {
-        return replacement.clone();
+        let mut replacement = replacement.clone();
+        replacement.is_fresh |= ty.is_fresh;
+        replacement.is_noescape |= ty.is_noescape;
+        replacement.is_owned |= ty.is_owned;
+        return replacement;
     }
     let mut substituted = ty.clone();
     substituted.args = ty

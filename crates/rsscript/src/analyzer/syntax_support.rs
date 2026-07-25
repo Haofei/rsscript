@@ -154,7 +154,7 @@ impl Analyzer<'_> {
                     self.unsupported_syntax(
                         function.span.clone(),
                         "unsupported native function body",
-                        "`native fn` declares an external/native boundary in v0.6. Provide a bodyless declaration and bind the implementation through the native wrapper path.",
+                        "`native fn` declares an external/native boundary in v0.7. Provide a bodyless declaration and bind the implementation through the native wrapper path.",
                     );
                 }
                 for span in &function.malformed_effect_spans {
@@ -172,12 +172,24 @@ impl Analyzer<'_> {
                     );
                 }
                 for param in &function.params {
-                    self.check_unsupported_syntax_type_ref(&param.ty, true, true);
+                    let canonical = self.canonical_type_ref(&param.ty);
+                    if param.effect == Some(DataEffect::Take)
+                        && canonical.name == "Fn"
+                        && !canonical.is_owned
+                    {
+                        self.unsupported_syntax(
+                            param.span.clone(),
+                            "unsupported by-value callback parameter",
+                            "A callback passed with `take` must use `owned Fn(...)` so the Rust representation is sized. Use `read Fn(...)`, `mut Fn(...)`, or `take owned Fn(...)`.",
+                        );
+                    }
+                    self.check_unsupported_syntax_type_ref(&canonical, true, true);
                 }
                 if let Some(return_ty) = &function.return_ty {
                     // Return type is a storable position: `owned Fn(...)` may be
                     // returned (first-class), but `noescape` may not escape.
-                    self.check_unsupported_syntax_type_ref(return_ty, false, true);
+                    let canonical = self.canonical_type_ref(return_ty);
+                    self.check_unsupported_syntax_type_ref(&canonical, false, true);
                 }
                 self.check_unsupported_syntax_block(&function.body);
             }
@@ -217,7 +229,8 @@ impl Analyzer<'_> {
                 for field in &type_decl.fields {
                     // Struct/class fields are storable positions: an `owned Fn`
                     // field is first-class; `noescape` fields are rejected.
-                    self.check_unsupported_syntax_type_ref(&field.ty, false, true);
+                    let canonical = self.canonical_type_ref(&field.ty);
+                    self.check_unsupported_syntax_type_ref(&canonical, false, true);
                 }
                 if type_decl.kind != TypeKind::Resource
                     && let Some(drop_body) = &type_decl.drop_body
@@ -225,15 +238,19 @@ impl Analyzer<'_> {
                     self.unsupported_syntax(
                         drop_body.span.clone(),
                         "unsupported managed drop",
-                        "Managed class and struct values do not have user-observable destructors in v0.6. Use `resource` with `with` or `ResourcePool` for deterministic cleanup.",
+                        "Managed class and struct values do not have user-observable destructors in v0.7. Use `resource` with `with` or `ResourcePool` for deterministic cleanup.",
                     );
                 }
             }
             Item::SumType(sum) => {
                 self.check_supported_derives(&sum.derives, &sum.span);
+                for field in sum.variants.iter().flat_map(|variant| &variant.fields) {
+                    let canonical = self.canonical_type_ref(&field.ty);
+                    self.check_unsupported_syntax_type_ref(&canonical, false, true);
+                }
             }
             Item::Const(decl) => {
-                // v0.6 `const` initializers must be literals (mirroring
+                // v0.7 `const` initializers must be literals (mirroring
                 // `lower_const_value`). Reject anything else with a stable
                 // diagnostic instead of lowering it to a `()` placeholder, which
                 // produced an unmappable backend type error (RS1102/E0308).
@@ -245,7 +262,7 @@ impl Analyzer<'_> {
                     self.unsupported_syntax(
                         decl.span.clone(),
                         "unsupported const initializer",
-                        "A v0.6 `const` initializer must be a literal (number, string, or `true`/`false`). Compute the value and write it as a literal; expressions and calls in `const` position are not supported yet.",
+                        "A v0.7 `const` initializer must be a literal (number, string, or `true`/`false`). Compute the value and write it as a literal; expressions and calls in `const` position are not supported yet.",
                     );
                 }
             }
@@ -332,6 +349,10 @@ impl Analyzer<'_> {
                        "`async let` outside task_group",
                        "`async let` can only be used inside a `task_group { ... }` block.",
                    );
+               }
+               if let Some(ty) = &stmt.type_annotation {
+                   let canonical = self.canonical_type_ref(ty);
+                   self.check_unsupported_syntax_type_ref(&canonical, false, true);
                }
                if let Some(value) = &stmt.value {
                    self.check_unsupported_syntax_expr(value);
@@ -471,7 +492,7 @@ impl Analyzer<'_> {
                 self.unsupported_syntax(
                     span.clone(),
                     "unsupported spawn expression",
-                    "`spawn` is not a v0.6 source-level task feature. Use `task_group { async let ... }` for structured isolate-local async work.",
+                    "`spawn` is not a v0.7 source-level task feature. Use `task_group { async let ... }` for structured isolate-local async work.",
                 );
                 self.check_unsupported_syntax_expr(value);
             }
@@ -580,7 +601,7 @@ impl Analyzer<'_> {
                 self.unsupported_syntax(
                     span,
                     "nested async let await",
-                    "`await` of a task_group async-let handle must be a direct task_group statement in the v0.6 executable MVP.",
+                    "`await` of a task_group async-let handle must be a direct task_group statement in the v0.7 executable MVP.",
                 );
             }
         }

@@ -321,6 +321,14 @@ fn parse_positive(value: Int) -> Result<fresh Int, String> {
     return Ok(value)
 }
 
+type Handler = owned Fn(Int) -> Int
+
+fn make_handler() -> Handler {
+    return |value| {
+        return value + 1
+    }
+}
+
 fn main() -> Result<Unit, String> {
     let xs: List<Int> = [1, 2, 3]
     let ys = xs.pipeline().filter(|item| {

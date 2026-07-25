@@ -3,11 +3,16 @@
 //! Kept as a named phase so the self-hosted checker can mirror this boundary
 //! without coupling its partial AST to Rust implementation details.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::analyzer::Analyzer;
 use crate::diagnostic::{Diagnostic, code};
 use crate::syntax::ast::{Item, TypeRef};
+
+struct AliasCycleDefinition {
+    parameters: BTreeSet<String>,
+    target: TypeRef,
+}
 
 pub(crate) fn check_names(analyzer: &mut Analyzer<'_>) {
     check_alias_cycles(analyzer);
@@ -24,7 +29,17 @@ fn check_alias_cycles(analyzer: &mut Analyzer<'_>) {
         .flat_map(|program| program.items.iter())
         .chain(analyzer.syntax_program.items.iter())
         .filter_map(|item| match item {
-            Item::TypeAlias(alias) => Some((alias.name.clone(), alias.target.clone())),
+            Item::TypeAlias(alias) => Some((
+                alias.name.clone(),
+                AliasCycleDefinition {
+                    parameters: alias
+                        .type_params
+                        .iter()
+                        .map(|parameter| parameter.name.clone())
+                        .collect(),
+                    target: alias.target.clone(),
+                },
+            )),
             _ => None,
         })
         .collect::<BTreeMap<_, _>>();
@@ -65,7 +80,7 @@ fn check_alias_cycles(analyzer: &mut Analyzer<'_>) {
 
 fn alias_cycle(
     name: &str,
-    aliases: &BTreeMap<String, TypeRef>,
+    aliases: &BTreeMap<String, AliasCycleDefinition>,
     stack: &mut Vec<String>,
 ) -> Option<Vec<String>> {
     if let Some(index) = stack.iter().position(|candidate| candidate == name) {
@@ -73,9 +88,9 @@ fn alias_cycle(
         cycle.push(name.to_string());
         return Some(cycle);
     }
-    let target = aliases.get(name)?;
+    let definition = aliases.get(name)?;
     stack.push(name.to_string());
-    for dependency in alias_dependencies(target, aliases) {
+    for dependency in alias_dependencies(&definition.target, aliases, &definition.parameters) {
         if let Some(cycle) = alias_cycle(&dependency, aliases, stack) {
             return Some(cycle);
         }
@@ -84,19 +99,23 @@ fn alias_cycle(
     None
 }
 
-fn alias_dependencies(ty: &TypeRef, aliases: &BTreeMap<String, TypeRef>) -> Vec<String> {
+fn alias_dependencies(
+    ty: &TypeRef,
+    aliases: &BTreeMap<String, AliasCycleDefinition>,
+    bound_parameters: &BTreeSet<String>,
+) -> Vec<String> {
     let mut dependencies = Vec::new();
-    if aliases.contains_key(&ty.name) {
+    if !bound_parameters.contains(&ty.name) && aliases.contains_key(&ty.name) {
         dependencies.push(ty.name.clone());
     }
     for argument in &ty.args {
-        dependencies.extend(alias_dependencies(argument, aliases));
+        dependencies.extend(alias_dependencies(argument, aliases, bound_parameters));
     }
     for parameter in &ty.fn_params {
-        dependencies.extend(alias_dependencies(parameter, aliases));
+        dependencies.extend(alias_dependencies(parameter, aliases, bound_parameters));
     }
     if let Some(return_type) = &ty.fn_return {
-        dependencies.extend(alias_dependencies(return_type, aliases));
+        dependencies.extend(alias_dependencies(return_type, aliases, bound_parameters));
     }
     dependencies
 }

@@ -719,6 +719,26 @@ type B = List<A>
 }
 
 #[test]
+fn generic_alias_parameters_do_not_resolve_to_global_aliases() {
+    let source = r#"
+type Boxed<T> = List<T>
+type T = Boxed<Int>
+
+fn identity(value: T) -> T {
+    return value
+}
+"#;
+
+    let diagnostics = analyze_source("generic-alias-shadow.rss", source);
+    assert!(
+        diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.code != "RS0039"),
+        "a bound alias parameter must not create a false alias cycle: {diagnostics:?}"
+    );
+}
+
+#[test]
 fn generic_protocol_declarations_are_rejected_precisely() {
     let source = r#"
 protocol Convert<T> {
@@ -792,6 +812,68 @@ fn run() -> Unit {
             .iter()
             .any(|d| d.code == "RS0015" && d.label == "unsupported noescape position"),
         "noescape Fn must stay parameter-only: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_noescape_fn_hidden_behind_alias() {
+    let source = r#"
+features: local
+
+type HiddenCallback = noescape Fn(Int) -> Int
+
+struct Holder {
+    callback: HiddenCallback
+}
+"#;
+    let diagnostics = analyze_source("aliased-noescape-stored.rss", source);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.code == "RS0015" && d.label == "unsupported noescape position"),
+        "aliases must not conceal a noescape callback in a stored position: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_rejects_unsized_take_callbacks_after_alias_expansion() {
+    let source = r#"
+features: local
+
+type Handler = Fn(Int) -> Int
+type OwnedHandler = owned Fn(Int) -> Int
+
+fn apply_read(callback: read Fn(Int) -> Int) -> Unit {
+    return Unit
+}
+
+fn apply_mut(callback: mut Handler) -> Unit {
+    return Unit
+}
+
+fn apply_take(callback: take Fn(Int) -> Int) -> Unit {
+    return Unit
+}
+
+fn apply_aliased_take(callback: take Handler) -> Unit {
+    return Unit
+}
+
+fn apply_owned_take(callback: take OwnedHandler) -> Unit {
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("callback-outer-effects.rss", source);
+    let effect_diagnostics = diagnostics
+        .iter()
+        .filter(|diagnostic| {
+            diagnostic.code == "RS0015"
+                && diagnostic.label == "unsupported by-value callback parameter"
+        })
+        .count();
+    assert_eq!(
+        effect_diagnostics, 2,
+        "only unsized direct and aliased `take Fn` parameters are invalid: {diagnostics:?}"
     );
 }
 

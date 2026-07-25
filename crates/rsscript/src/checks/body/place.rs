@@ -574,7 +574,7 @@ pub(super) fn indexed_place_conflict_diagnostic(
         ),
         right.span.clone(),
         "indexed local access conflict",
-        "RSScript v0.6 treats indexed access as access to the whole local container for alias checking.",
+        "RSScript v0.7 treats indexed access as access to the whole local container for alias checking.",
         "use_split_api",
         "Use an explicit container split API that proves or checks disjoint element access.",
     ));

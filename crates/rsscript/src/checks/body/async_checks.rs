@@ -307,7 +307,7 @@ pub(super) fn check_async_call_consumed(
             "async call must be awaited",
         )
         .with_cause(
-            "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.6.",
+            "Async calls introduce suspension boundaries that must be visible in source; `spawn` is reserved but not executable in v0.7.",
         )
         .with_fix(
             "await_async_call",

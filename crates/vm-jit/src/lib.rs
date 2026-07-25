@@ -3639,16 +3639,14 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             JitInstr::JumpIfIntCompare {
                 lhs, rhs, target, ..
             } => {
-                require_class(*lhs, JitValueType::Int, "JumpIfIntCompare lhs")?;
-                require_class(*rhs, JitValueType::Int, "JumpIfIntCompare rhs")?;
+                numeric_pair(*lhs, *rhs, "JumpIfIntCompare")?;
                 check_target(*target)?;
                 check_fallthrough()?;
             }
             JitInstr::ProfiledJumpIfIntCompare {
                 lhs, rhs, target, ..
             } => {
-                require_class(*lhs, JitValueType::Int, "ProfiledJumpIfIntCompare lhs")?;
-                require_class(*rhs, JitValueType::Int, "ProfiledJumpIfIntCompare rhs")?;
+                numeric_pair(*lhs, *rhs, "ProfiledJumpIfIntCompare")?;
                 check_target(*target)?;
                 check_fallthrough()?;
             }
@@ -10447,8 +10445,8 @@ mod tests {
     }
 
     #[test]
-    fn rejects_bool_arithmetic_and_non_int_compare_branch() {
-        use JitValueType::{Bool, Float};
+    fn rejects_bool_arithmetic_and_accepts_float_compare_branches() {
+        use JitValueType::{Bool, Float, Int};
         let err = validate(&ft(
             2,
             vec![Bool, Bool, Bool],
@@ -10464,7 +10462,7 @@ mod tests {
         .expect_err("Bool arithmetic is not numeric");
         assert!(err.0.contains("Int or Float"), "{}", err.0);
 
-        let err = validate(&ft(
+        validate(&ft(
             2,
             vec![Float, Float],
             vec![
@@ -10478,8 +10476,41 @@ mod tests {
                 JitInstr::Return { src: 0 },
             ],
         ))
-        .expect_err("integer compare branches require Int operands");
-        assert!(err.0.contains("expected Int"), "{}", err.0);
+        .expect("comparison branches accept same-class Float operands");
+
+        validate(&ft(
+            2,
+            vec![Float, Float],
+            vec![
+                JitInstr::ProfiledJumpIfIntCompare {
+                    op: JitCompare::Lt,
+                    lhs: 0,
+                    rhs: 1,
+                    expected: true,
+                    target: 1,
+                    hot_target: true,
+                },
+                JitInstr::Return { src: 0 },
+            ],
+        ))
+        .expect("profiled comparison branches accept same-class Float operands");
+
+        let err = validate(&ft(
+            2,
+            vec![Float, Int],
+            vec![
+                JitInstr::JumpIfIntCompare {
+                    op: JitCompare::Lt,
+                    lhs: 0,
+                    rhs: 1,
+                    expected: true,
+                    target: 1,
+                },
+                JitInstr::Return { src: 0 },
+            ],
+        ))
+        .expect_err("comparison branches reject mixed numeric classes");
+        assert!(err.0.contains("classes differ"), "{}", err.0);
     }
 
     #[test]

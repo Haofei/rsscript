@@ -444,7 +444,7 @@ fn tuple_arity(name: &str) -> Option<usize> {
 }
 
 /// The type-parameter name for tuple element `i`. The checker recognises a
-/// generic type variable only as a single uppercase letter (the v0.6
+/// generic type variable only as a single uppercase letter (the v0.7
 /// convention), so tuple parameters are `A`, `B`, `C`, … — capping practical
 /// tuple arity at 26, far above any reasonable use.
 fn tuple_type_param(index: usize) -> String {

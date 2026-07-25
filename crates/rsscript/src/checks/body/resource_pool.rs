@@ -1795,7 +1795,7 @@ pub(super) fn resource_pool_fallible_factory_diagnostic(
         .with_cause(format!(
             "The factory expression has type `{type_name}`, but `ResourcePool.new` expects a resource value."
         ))
-        .with_cause("v0.6 `ResourcePool.new` eagerly constructs the pool and does not hide `Result` handling inside the pool constructor.")
+        .with_cause("v0.7 `ResourcePool.new` eagerly constructs the pool and does not hide `Result` handling inside the pool constructor.")
         .with_fix(
             "use_matching_pool_constructor",
             "Handle failure before constructing the pool, or use `ResourcePool.try_new` with a fallible factory.",
@@ -1913,7 +1913,7 @@ pub(super) fn resource_pool_invalid_max_size_diagnostic(
             span,
             "invalid ResourcePool max_size",
         )
-        .with_cause("v0.6 `ResourcePool.new` eagerly constructs exactly `max_size` resources and returns no `Result`.")
+        .with_cause("v0.7 `ResourcePool.new` eagerly constructs exactly `max_size` resources and returns no `Result`.")
         .with_cause("Use a positive `Int` literal so empty or dynamically sized pools cannot hide construction failure or exhaustion behavior.")
         .with_fix(
             "use_positive_literal_max_size",
@@ -1933,7 +1933,7 @@ pub(super) fn resource_pool_factory_resource_capture_diagnostic(
         format!("ResourcePool factory cannot capture resource `{binding}`."),
         span,
         "resource captured by ResourcePool factory",
-        "ResourcePool factories are eager and noescape in v0.6, but they still must not close over with-bound resources.",
+        "ResourcePool factories are eager and noescape in v0.7, but they still must not close over with-bound resources.",
         "avoid_resource_capture",
         "Create the pooled resource directly inside the factory, or pass ordinary managed configuration into the factory.",
     ));

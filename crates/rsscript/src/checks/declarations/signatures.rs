@@ -98,7 +98,7 @@ impl Analyzer<'_> {
                         param.ty.span.clone(),
                         "removed share data effect",
                     )
-                    .with_cause("RSScript v0.6 has exactly three data effects: `read`, `mut`, and `take`.")
+                    .with_cause("RSScript v0.7 has exactly three data effects: `read`, `mut`, and `take`.")
                     .with_fix(
                         "replace_share_effect",
                         format!(
@@ -183,13 +183,13 @@ impl Analyzer<'_> {
                     Diagnostic::error(
                         code::REMOVED_RUNTIME_EFFECT,
                         format!(
-                            "`{effect_name}` is not a valid RSScript v0.6 effect in `{}`.",
+                            "`{effect_name}` is not a valid RSScript v0.7 effect in `{}`.",
                             function.name
                         ),
                         function.span.clone(),
                         "removed runtime effect",
                     )
-                    .with_cause("v0.6 uses reductive guarantees such as `no_panic`, `noalloc`, `no_block`, and `pure`.")
+                    .with_cause("v0.7 uses reductive guarantees such as `no_panic`, `noalloc`, `no_block`, and `pure`.")
                     .with_fix(
                         "replace_removed_effect",
                         replacement,
@@ -239,7 +239,7 @@ impl Analyzer<'_> {
                     "native boundary missing effect",
                 )
                 .with_cause(
-                    "`native fn` is an implementation boundary, and v0.6 requires that boundary to appear in the effect list for review maps and semantic diffs.",
+                    "`native fn` is an implementation boundary, and v0.7 requires that boundary to appear in the effect list for review maps and semantic diffs.",
                 )
                 .with_fix(
                     "add_native_effect",
@@ -500,7 +500,7 @@ impl Analyzer<'_> {
                         self.unsupported_syntax(
                             function.span.clone(),
                             "unsupported protocol method body",
-                            "Protocols are effect-carrying capability contracts in v0.6. Protocol methods are bodyless signatures; default method bodies are not part of the RSScript protocol model.",
+                            "Protocols are effect-carrying capability contracts in v0.7. Protocol methods are bodyless signatures; default method bodies are not part of the RSScript protocol model.",
                         );
                     }
                     if function.default_impl_marker

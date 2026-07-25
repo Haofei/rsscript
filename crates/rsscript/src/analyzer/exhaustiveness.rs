@@ -248,7 +248,7 @@ impl Analyzer<'_> {
                     .is_some_and(|inner| self.patterns_cover_type(&err_patterns, inner));
             return ok_covered && err_covered;
         }
-        if let Some(variants) = self.sum_variants_for_type(root) {
+        if let Some(variants) = self.sum_variants_for_type(&root) {
             return variants.iter().all(|(variant_name, fields)| {
                 let matching = patterns
                     .iter()
@@ -259,12 +259,12 @@ impl Analyzer<'_> {
             });
         }
         if matches!(
-            self.hir.type_kind(root),
+            self.hir.type_kind(&root),
             Some(HirTypeKind::Struct | HirTypeKind::Class)
         ) {
             let fields = self
                 .hir
-                .type_info(root)
+                .type_info(&root)
                 .map(|info| info.fields.values().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
             return self.patterns_cover_constructor_fields(patterns, &fields);
@@ -383,7 +383,7 @@ impl Analyzer<'_> {
             );
             return Some(witnesses);
         }
-        if let Some(variants) = self.sum_variants_for_type(root) {
+        if let Some(variants) = self.sum_variants_for_type(&root) {
             let mut witnesses = Vec::new();
             for (variant_name, fields) in variants {
                 let field_rows = self.field_witness_product(&fields)?;
@@ -397,12 +397,12 @@ impl Analyzer<'_> {
             return Some(witnesses);
         }
         if matches!(
-            self.hir.type_kind(root),
+            self.hir.type_kind(&root),
             Some(HirTypeKind::Struct | HirTypeKind::Class)
         ) {
             let fields = self
                 .hir
-                .type_info(root)
+                .type_info(&root)
                 .map(|info| info.fields.values().cloned().collect::<Vec<_>>())
                 .unwrap_or_default();
             return self.field_witness_product(&fields).map(|rows| {

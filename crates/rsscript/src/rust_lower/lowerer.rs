@@ -1695,6 +1695,7 @@ impl<'a> RustLowerer<'a> {
                         arg.name.as_deref(),
                         index,
                     ) {
+                        let expected = self.canonical_type_ref(&expected);
                         if let Some(effect) =
                             self.receiver_call_expected_arg_effect(&namespace, method, index)
                         {
@@ -1918,6 +1919,8 @@ impl<'a> RustLowerer<'a> {
         expr: &Expr,
         expected: &TypeRef,
     ) -> String {
+        let expected = self.canonical_type_ref(expected);
+        let expected = &expected;
         if expected.name == "Fn"
             && let Expr::Closure { params, body, .. } = expr
         {
@@ -2016,6 +2019,8 @@ impl<'a> RustLowerer<'a> {
         expected: &TypeRef,
         storable: bool,
     ) -> String {
+        let expected = self.canonical_type_ref(expected);
+        let expected = &expected;
         // A storable `owned Fn` slot is `Rc<dyn Fn(..)>`; wrap the closure value
         // in `Rc::new(..)` so it matches that type and stays `Clone`/shareable.
         // The closure itself always `move`s its captures (owned/Copy only, per
@@ -2327,6 +2332,8 @@ impl<'a> RustLowerer<'a> {
         value: &Expr,
         expected: &TypeRef,
     ) -> String {
+        let expected = self.canonical_type_ref(expected);
+        let expected = &expected;
         if is_copy_type_ref(expected)
             && let Expr::Ident(name, _) = value
             && self.read_view_bindings.contains(name)
@@ -2834,6 +2841,8 @@ impl<'a> RustLowerer<'a> {
         value: &Expr,
         expected: &TypeRef,
     ) -> String {
+        let expected = self.canonical_type_ref(expected);
+        let expected = &expected;
         if expected.name == "String"
             && expected.args.is_empty()
             && let Expr::Ident(name, _) = value
@@ -2929,6 +2938,8 @@ impl<'a> RustLowerer<'a> {
         expr: &Expr,
         expected: &TypeRef,
     ) -> String {
+        let expected = self.canonical_type_ref(expected);
+        let expected = &expected;
         match expr {
             Expr::Ident(name, _) if !is_copy_type_ref(expected) => {
                 format!("{}.clone()", rust_value_ident(name))
@@ -2947,6 +2958,8 @@ impl<'a> RustLowerer<'a> {
         expr: &Expr,
         expected: &TypeRef,
     ) -> String {
+        let expected = self.canonical_type_ref(expected);
+        let expected = &expected;
         match expr {
             Expr::Ident(name, _)
                 if !is_copy_type_ref(expected)

@@ -593,19 +593,31 @@ impl RustLowerer<'_> {
         // the `&Managed<T>` ABI never type-checked (unbuildable Rust; the feature
         // only ever survived in check-only fixtures). A normal `read` `&T` param
         // plus clone-at-store matches the VM.
-        let ty = self.lower_type_ref(&param.ty, ManagedPosition::Param);
-        let rust_ty = match param.effective_effect() {
+        let canonical = self.canonical_type_ref(&param.ty);
+        let ty = self.lower_type_ref(&canonical, ManagedPosition::Param);
+        // The checker rejects an outer data effect on callback parameters. Keep
+        // malformed/unchecked AST lowering fail-closed as a borrowed callback
+        // instead of ever emitting an unsized by-value `dyn Fn` parameter.
+        let effect = if canonical.name == "Fn"
+            && param.effect == Some(DataEffect::Take)
+            && !canonical.is_owned
+        {
+            Some(DataEffect::Read)
+        } else {
+            param.effective_effect()
+        };
+        let rust_ty = match effect {
             // Copy primitives are passed `read` by value (call sites already lower
             // `read <int>` by value via `read_effect_lowers_by_value`); the param
             // type must match so the value is owned inside the body.
-            Some(DataEffect::Read) if Self::read_effect_lowers_by_value(&param.ty) => ty,
+            Some(DataEffect::Read) if Self::read_effect_lowers_by_value(&canonical) => ty,
             Some(DataEffect::Read) => format!("&{ty}"),
-            Some(DataEffect::Mut) if self.is_class_type(&param.ty) => format!("&{ty}"),
+            Some(DataEffect::Mut) if self.is_class_type(&canonical) => format!("&{ty}"),
             Some(DataEffect::Mut) => format!("&mut {ty}"),
             Some(DataEffect::Take) | None => ty,
         };
         let name = rust_value_ident(&param.name);
-        if (param.ty.is_noescape || param.ty.is_owned) && param.ty.name == "Fn" {
+        if (canonical.is_noescape || canonical.is_owned) && canonical.name == "Fn" {
             format!("mut {name}: {rust_ty}")
         } else {
             format!("{name}: {rust_ty}")
