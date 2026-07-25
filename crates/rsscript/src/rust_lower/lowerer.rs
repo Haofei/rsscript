@@ -14,6 +14,7 @@ pub(super) struct RustLowerer<'a> {
     pub(super) program: &'a Program,
     pub(super) type_kinds: BTreeMap<String, TypeKind>,
     pub(super) type_fields: BTreeMap<String, Vec<FieldDecl>>,
+    pub(super) type_aliases: BTreeMap<String, (Vec<String>, TypeRef)>,
     pub(super) protocol_names: BTreeSet<String>,
     pub(super) native_boundary_callees: BTreeSet<String>,
     pub(super) async_native_boundary_callees: BTreeSet<String>,
@@ -95,6 +96,25 @@ impl<'a> RustLowerer<'a> {
             .into_iter()
             .map(|(name, _, fields)| (name, fields))
             .collect();
+        let type_aliases = interface_programs
+            .iter()
+            .flat_map(|interface| interface.items.iter())
+            .chain(program.items.iter())
+            .filter_map(|item| match item {
+                Item::TypeAlias(alias) => Some((
+                    alias.name.clone(),
+                    (
+                        alias
+                            .type_params
+                            .iter()
+                            .map(|parameter| parameter.name.clone())
+                            .collect(),
+                        alias.target.clone(),
+                    ),
+                )),
+                _ => None,
+            })
+            .collect();
         let native_boundary_callees = collect_native_boundary_callees(program, interface_programs);
         let async_native_boundary_callees =
             collect_async_native_boundary_callees(program, interface_programs);
@@ -141,6 +161,7 @@ impl<'a> RustLowerer<'a> {
             program,
             type_kinds,
             type_fields,
+            type_aliases,
             protocol_names,
             native_boundary_callees,
             async_native_boundary_callees,
@@ -2462,6 +2483,7 @@ impl<'a> RustLowerer<'a> {
             return format!("{}::/* missing value */", capability_enum_name(protocol));
         };
         let value_type = self.infer_expr_type(&value_arg.value);
+        let value_type = value_type.map(|ty| self.canonical_type_ref(&ty));
         let value_type_name = value_type
             .as_ref()
             .map(type_ref_display_name)
@@ -2823,7 +2845,8 @@ impl<'a> RustLowerer<'a> {
     }
 
     pub(super) fn receiver_call_namespace(&self, receiver_type: &TypeRef, method: &str) -> String {
-        let receiver_type_name = type_ref_display_name(receiver_type);
+        let receiver_type = self.canonical_type_ref(receiver_type);
+        let receiver_type_name = type_ref_display_name(&receiver_type);
         let receiver_type_root = type_root_name(&receiver_type_name).to_string();
         self.generic_protocol_bounds
             .get(&receiver_type_name)
@@ -2956,14 +2979,22 @@ impl<'a> RustLowerer<'a> {
     }
 
     pub(super) fn field_type(&self, type_name: &str, field_name: &str) -> Option<TypeRef> {
+        let span = Span {
+            file: "<inferred>".to_string(),
+            line: 1,
+            column: 1,
+            length: 1,
+        };
+        let ty = self.canonical_type_ref(&type_ref_from_display(type_name, &span));
         self.type_fields
-            .get(type_root_name(type_name))?
+            .get(type_root_name(&ty.name))?
             .iter()
             .find(|field| field.name == field_name)
             .map(|field| field.ty.clone())
     }
 
     pub(super) fn is_resource_type(&self, ty: &TypeRef) -> bool {
+        let ty = self.canonical_type_ref(ty);
         matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Resource))
     }
 }
@@ -3662,5 +3693,32 @@ mod tests {
         assert_eq!(builtin_generic_type_params("List"), Some(vec!["T"]));
         assert_eq!(builtin_generic_type_params("Option"), Some(vec!["T"]));
         assert_eq!(builtin_generic_type_params("NotAGeneric"), None);
+    }
+
+    #[test]
+    fn float_arithmetic_is_not_reclassified_as_int_during_lowering() {
+        let source = r#"
+protocol Numeric {
+    fn value(self: read Self) -> Float
+}
+
+fn Float.value(self: read Float) -> Float {
+    return self
+}
+
+impl Numeric for Float {
+    value = Float.value
+}
+
+fn make() -> Capability<Numeric> {
+    let number = 1.0 + 2.0
+    return Capability<Numeric>.from(value: take number)
+}
+"#;
+        let program = crate::syntax::parse_source("float-arithmetic-type.rss", source);
+        let rust = crate::rust_lower::lower_program_to_rust(&program);
+
+        assert!(rust.contains("CapabilityNumeric::Float(number)"), "{rust}");
+        assert!(!rust.contains("CapabilityNumeric::Int("), "{rust}");
     }
 }

@@ -7779,17 +7779,16 @@ fn collect_type_alias_index(toks: List<Tok>) -> Map<String, String> {
     return m
 }
 
-// Expand a bare type-alias root up to a small depth (alias-of-alias chains) via the O(1)
-// alias index. A type that is not a bare declared alias is returned unchanged. Byte-for-byte
-// equal to the former O(n)-scan expand_type_alias (same first-match RHS, same guard depth).
+// Expand a bare type-alias root through the O(1) alias index. Cycles stop at the
+// repeated alias; finite chains are never truncated.
 fn expand_type_alias(aliasIdx: Map<String, String>, ty: String) -> String {
     let mut cur = ty
-    let mut guard = 0
-    while guard < 4 {
+    let mut seen = Set<String>.new()
+    while Set.contains<String>(set: seen, value: cur) == false {
+        Set.insert<String>(set: mut seen, value: cur)
         let rhs = Map.get_or_default<String, String>(map: aliasIdx, key: cur, default: "")
         if String.len(value: rhs) == 0 { return cur }
         cur = rhs
-        guard = guard + 1
     }
     return cur
 }

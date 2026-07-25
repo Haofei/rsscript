@@ -692,21 +692,24 @@ fn read_name(text: read String) -> Result<String, JsonError> {
     assert!(rust.contains("let raw_message = rsscript_runtime::json_to_string_at_or"));
     assert!(rust.contains("let age_at = rsscript_runtime::json_int_at_or"));
     assert!(rust.contains("let active_at = rsscript_runtime::json_bool_at_or"));
-    assert!(rust.contains("let parsed_from_method = rsscript_runtime::json_parse(&text)?;"));
+    assert!(
+        rust.contains("let parsed_from_method = rsscript_runtime::json_parse(text)?;"),
+        "{rust}"
+    );
     assert!(
         rust.contains(
-            "let raw_message_from_method = rsscript_runtime::json_string_at_or(&text, &(\"profile\".to_string()), &(\"{}\".to_string()));"
+            "let raw_message_from_method = rsscript_runtime::json_string_at_or(text, &(\"profile\".to_string()), &(\"{}\".to_string()));"
         ),
         "{rust}"
     );
     assert!(
         rust.contains(
-            "let age_from_method = rsscript_runtime::json_int_at_or(&text, &(\"profile.age\".to_string()), 0i64);"
+            "let age_from_method = rsscript_runtime::json_int_at_or(text, &(\"profile.age\".to_string()), 0i64);"
         ),
         "{rust}"
     );
     assert!(rust.contains(
-        "let active_from_method = rsscript_runtime::json_bool_at_or(&text, &(\"profile.active\".to_string()), false);"
+        "let active_from_method = rsscript_runtime::json_bool_at_or(text, &(\"profile.active\".to_string()), false);"
     ));
     assert!(rust.contains(
         "let profile_or_root = rsscript_runtime::json_at_or(&value, &(\"profile\".to_string()), &(value));"

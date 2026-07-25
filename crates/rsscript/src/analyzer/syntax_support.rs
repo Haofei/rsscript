@@ -18,9 +18,26 @@ impl Analyzer<'_> {
         }
         self.check_module_use_layout();
         self.check_reserved_declaration_names();
+        self.check_reserved_protocol_generics();
         let items = self.syntax_program.items.clone();
         for item in &items {
             self.check_unsupported_syntax_item(item);
+        }
+    }
+
+    fn check_reserved_protocol_generics(&mut self) {
+        for index in 0..self.tokens.len().saturating_sub(2) {
+            if !(self.tokens[index].is_ident_text("protocol")
+                || self.tokens[index].is_ident_text("impl"))
+                || !self.tokens[index + 2].symbol("<")
+            {
+                continue;
+            }
+            self.unsupported_syntax(
+                self.tokens[index + 2].span.clone(),
+                "generic protocol declaration",
+                "Generic protocol and protocol-implementation declarations are reserved for a later language version; use function generics with a protocol bound instead.",
+            );
         }
     }
 

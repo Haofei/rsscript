@@ -145,6 +145,64 @@ fn main() -> Unit {
 }
 
 #[test]
+fn reg_vm_runs_class_alias_capability_like_compiled_backend() {
+    let source = r#"
+protocol Readable {
+    fn get(self: read Self) -> Int
+}
+
+class Gauge {
+    value: Int
+}
+
+type G = Gauge
+
+fn Gauge.get(self: read Gauge) -> Int {
+    return self.value
+}
+
+impl Readable for Gauge {
+    get = Gauge.get
+}
+
+fn read_alias(value: read G) -> Int {
+    return value.value
+}
+
+fn main() -> Unit {
+    let gauge: G = Gauge(value: 7)
+    Log.write(message: String.from_int(
+        value: read_alias(value: read gauge)
+    ))
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-class-capability.rss", source, []);
+}
+
+#[test]
+fn reg_vm_runs_generic_sum_with_class_payload_like_compiled_backend() {
+    let source = r#"
+class Node {
+    value: Int
+}
+
+sum Envelope<T> {
+    Value(value: T)
+    NodeValue(node: Node)
+}
+
+fn main() -> Unit {
+    Log.write(message: "generic sum compiled")
+    return Unit
+}
+"#;
+
+    assert_reg_vm_matches_compiled_backend("reg-vm-generic-class-sum.rss", source, []);
+}
+
+#[test]
 fn reg_vm_runs_index_assignment_like_interpreter() {
     let source = r#"
 fn main() -> Unit {

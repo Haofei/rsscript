@@ -311,12 +311,9 @@ fn native_ty_is_callable_return_abi(ty: NativeTy) -> bool {
 #[cfg(feature = "native-jit")]
 fn native_call_mut_args_supported(mut_args: &[usize], param_tys: &[NativeTy]) -> bool {
     mut_args.iter().all(|&pos| {
-        param_tys.get(pos).is_some_and(|ty| {
-            matches!(
-                ty,
-                NativeTy::Handle | NativeTy::FlatIntMut | NativeTy::FlatFloatMut
-            )
-        })
+        param_tys
+            .get(pos)
+            .is_some_and(|ty| matches!(ty, NativeTy::FlatIntMut | NativeTy::FlatFloatMut))
     })
 }
 

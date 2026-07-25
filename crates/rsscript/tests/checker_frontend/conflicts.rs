@@ -683,6 +683,58 @@ fn greet(name: read Alias) -> Alias {
     );
 }
 
+#[test]
+fn long_finite_type_alias_chain_is_not_truncated() {
+    let mut source = String::new();
+    for index in 0..40 {
+        source.push_str(&format!("type A{index:02} = A{:02}\n", index + 1));
+    }
+    source.push_str("type A40 = Int\n\nfn identity(value: A00) -> Int { return value }\n");
+
+    let diagnostics = analyze_source("long-alias-chain.rss", &source);
+    assert!(
+        diagnostics.iter().all(|diagnostic| {
+            diagnostic.code != "RS0024"
+                && diagnostic.code != "RS0208"
+                && diagnostic.code != "RS0039"
+        }),
+        "finite aliases must expand to completion: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn cyclic_type_aliases_are_rejected_explicitly() {
+    let source = r#"
+type A = B
+type B = List<A>
+"#;
+
+    let diagnostics = analyze_source("cyclic-alias.rss", source);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0039"),
+        "cyclic aliases need a dedicated diagnostic: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn generic_protocol_declarations_are_rejected_precisely() {
+    let source = r#"
+protocol Convert<T> {
+    fn convert(self: read Self) -> T
+}
+"#;
+
+    let diagnostics = analyze_source("generic-protocol.rss", source);
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0015" && diagnostic.label == "generic protocol declaration"
+        }),
+        "reserved protocol generics need a precise diagnostic: {diagnostics:?}"
+    );
+}
+
 // ---- First-class `owned Fn` values: acceptance + soundness boundary ----
 
 #[test]

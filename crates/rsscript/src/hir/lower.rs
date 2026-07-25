@@ -458,55 +458,63 @@ impl Hir {
     }
 
     fn expand_type_alias(&self, type_name: &str) -> String {
-        self.expand_type_alias_bounded(type_name, 0)
+        self.expand_type_alias_inner(type_name, &mut std::collections::BTreeSet::new())
     }
 
-    fn expand_type_alias_bounded(&self, type_name: &str, depth: usize) -> String {
+    fn expand_type_alias_inner(
+        &self,
+        type_name: &str,
+        visiting: &mut std::collections::BTreeSet<String>,
+    ) -> String {
         let trimmed = type_name.trim();
-        if depth >= 32 {
+        if !visiting.insert(trimmed.to_string()) {
             return trimmed.to_string();
         }
-        for prefix in ["fresh ", "noescape ", "owned "] {
-            if let Some(target) = trimmed.strip_prefix(prefix) {
-                return format!(
-                    "{prefix}{}",
-                    self.expand_type_alias_bounded(target, depth + 1)
-                );
-            }
-        }
-        let root = type_root_name(trimmed);
-        if let Some((params, target)) = self.type_aliases.get(root) {
-            let expanded = if params.is_empty() {
-                Some(target.clone())
-            } else {
-                type_arg_names(trimmed).and_then(|args| {
-                    if args.len() != params.len() {
-                        return None;
-                    }
-                    let substitutions = params
-                        .iter()
-                        .cloned()
-                        .zip(args.into_iter().map(str::to_string))
-                        .collect::<HashMap<_, _>>();
-                    Some(crate::text_util::substitute_type_args(
-                        target,
-                        &substitutions,
-                    ))
-                })
-            };
-            if let Some(expanded) = expanded {
-                return self.expand_type_alias_bounded(&expanded, depth + 1);
-            }
-        }
-        let Some(args) = type_arg_names(trimmed) else {
-            return trimmed.to_string();
-        };
-        let args = args
+        let prefixed = ["fresh ", "noescape ", "owned "]
             .into_iter()
-            .map(|argument| self.expand_type_alias_bounded(argument, depth + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("{root}<{args}>")
+            .find_map(|prefix| trimmed.strip_prefix(prefix).map(|target| (prefix, target)));
+        let expanded = if let Some((prefix, target)) = prefixed {
+            format!("{prefix}{}", self.expand_type_alias_inner(target, visiting))
+        } else {
+            let root = type_root_name(trimmed);
+            if let Some((params, target)) = self.type_aliases.get(root) {
+                let alias_target = if params.is_empty() {
+                    Some(target.clone())
+                } else {
+                    type_arg_names(trimmed).and_then(|args| {
+                        if args.len() != params.len() {
+                            return None;
+                        }
+                        let substitutions = params
+                            .iter()
+                            .cloned()
+                            .zip(args.into_iter().map(str::to_string))
+                            .collect::<HashMap<_, _>>();
+                        Some(crate::text_util::substitute_type_args(
+                            target,
+                            &substitutions,
+                        ))
+                    })
+                };
+                if let Some(alias_target) = alias_target {
+                    let expanded = self.expand_type_alias_inner(&alias_target, visiting);
+                    visiting.remove(trimmed);
+                    return expanded;
+                }
+            }
+            if let Some(args) = type_arg_names(trimmed) {
+                let args = args
+                    .into_iter()
+                    .map(|argument| self.expand_type_alias_inner(argument, visiting))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{root}<{args}>")
+            } else {
+                trimmed.to_string()
+            }
+        };
+        visiting.remove(trimmed);
+        expanded
     }
 
     fn receiver_call_candidates(

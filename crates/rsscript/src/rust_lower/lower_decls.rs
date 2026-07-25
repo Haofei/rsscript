@@ -53,7 +53,7 @@ impl RustLowerer<'_> {
             out.push_str(&format!(
                 "impl {} for {} {{\n",
                 rust_ident(&protocol_impl.protocol),
-                rust_ident(&protocol_impl.type_name)
+                self.lower_protocol_impl_target(protocol_impl)
             ));
             for mapping in &protocol_impl.mappings {
                 let Some(method) =
@@ -106,11 +106,9 @@ impl RustLowerer<'_> {
                 capability_enum_name(&protocol.name)
             ));
             for protocol_impl in impls {
-                out.push_str(&format!(
-                    "    {}({}),\n",
-                    rust_ident(&protocol_impl.type_name),
-                    rust_ident(&protocol_impl.type_name)
-                ));
+                let variant = self.protocol_impl_variant(protocol_impl);
+                let payload = self.lower_protocol_impl_target(protocol_impl);
+                out.push_str(&format!("    {}({}),\n", variant, payload));
             }
             out.push_str("}\n\n");
         }
@@ -157,7 +155,7 @@ impl RustLowerer<'_> {
                     out.push_str(&format!(
                         "            {}::{}(inner) => {}({}),\n",
                         capability_enum_name(&protocol.name),
-                        rust_ident(&protocol_impl.type_name),
+                        self.protocol_impl_variant(protocol_impl),
                         rust_function_ident(&mapping.target),
                         method
                             .params
@@ -186,6 +184,19 @@ impl RustLowerer<'_> {
             .iter()
             .filter(|protocol_impl| protocol_impl.protocol == protocol)
             .collect()
+    }
+
+    fn lower_protocol_impl_target(
+        &self,
+        protocol_impl: &crate::syntax::ast::ProtocolImpl,
+    ) -> String {
+        let ty = type_ref_from_display(&protocol_impl.type_name, &protocol_impl.span);
+        self.lower_type_ref(&ty, ManagedPosition::Nested)
+    }
+
+    fn protocol_impl_variant(&self, protocol_impl: &crate::syntax::ast::ProtocolImpl) -> String {
+        let ty = type_ref_from_display(&protocol_impl.type_name, &protocol_impl.span);
+        rust_ident(&self.canonical_type_ref(&ty).name)
     }
 
     pub(super) fn protocol_impl_namespace(
@@ -281,7 +292,7 @@ impl RustLowerer<'_> {
     }
 
     pub(super) fn lower_field_decl(&mut self, field: &FieldDecl, out: &mut String) {
-        let rust_ty = self.lower_type_ref(&field.ty, ManagedPosition::Bare);
+        let bare_rust_ty = self.lower_type_ref(&field.ty, ManagedPosition::Bare);
         self.source_map.push(RustSourceMapEntry {
             kind: "field".to_string(),
             source: field.span.clone(),
@@ -292,17 +303,10 @@ impl RustLowerer<'_> {
             out.push_str(&format!(
                 "    pub {}: rsscript_runtime::WeakManaged<{}>,\n",
                 rust_ident(&field.name),
-                rust_ty
-            ));
-        } else if field.is_handle
-            || matches!(self.type_kinds.get(&field.ty.name), Some(TypeKind::Class))
-        {
-            out.push_str(&format!(
-                "    pub {}: rsscript_runtime::Managed<{}>,\n",
-                rust_ident(&field.name),
-                rust_ty
+                bare_rust_ty
             ));
         } else {
+            let rust_ty = self.lower_stored_type(&field.ty, field.is_handle);
             out.push_str(&format!(
                 "    pub {}: {},\n",
                 rust_ident(&field.name),
@@ -319,9 +323,10 @@ impl RustLowerer<'_> {
         let derive_str = self.compute_derive_attr(&sum.derives, false, has_closure_field);
         out.push_str(&derive_str);
         out.push_str(&format!(
-            "{}enum {} {{\n",
+            "{}enum {}{} {{\n",
             visibility(sum.is_public),
-            rust_ident(&sum.name)
+            rust_ident(&sum.name),
+            lower_generic_params(&sum.type_params)
         ));
         for variant in &sum.variants {
             if variant.fields.is_empty() {
@@ -329,7 +334,7 @@ impl RustLowerer<'_> {
             } else {
                 out.push_str(&format!("    {} {{\n", rust_ident(&variant.name)));
                 for field in &variant.fields {
-                    let rust_ty = self.lower_type_ref(&field.ty, ManagedPosition::Bare);
+                    let rust_ty = self.lower_stored_type(&field.ty, field.is_handle);
                     out.push_str(&format!(
                         "        {}: {},\n",
                         rust_ident(&field.name),
@@ -398,7 +403,12 @@ impl RustLowerer<'_> {
     pub(super) fn lower_type_alias(&mut self, alias: &TypeAliasDecl, out: &mut String) {
         let vis = visibility(alias.is_public);
         let generics = lower_generic_params(&alias.type_params);
-        let target = self.lower_type_ref(&alias.target, ManagedPosition::Bare);
+        let position = if self.is_class_type(&alias.target) {
+            ManagedPosition::Nested
+        } else {
+            ManagedPosition::Bare
+        };
+        let target = self.lower_type_ref(&alias.target, position);
         out.push_str(&format!(
             "{}type {}{} = {};\n",
             vis,
@@ -406,6 +416,18 @@ impl RustLowerer<'_> {
             generics,
             target
         ));
+    }
+
+    fn lower_stored_type(&self, ty: &TypeRef, explicit_handle: bool) -> String {
+        if explicit_handle {
+            let bare = self.lower_type_ref(ty, ManagedPosition::Bare);
+            return format!("rsscript_runtime::Managed<{bare}>");
+        }
+        if self.is_class_type(ty) {
+            self.lower_type_ref(ty, ManagedPosition::Nested)
+        } else {
+            self.lower_type_ref(ty, ManagedPosition::Bare)
+        }
     }
 
     pub(super) fn lower_const_decl(&mut self, decl: &ConstDecl, out: &mut String) {

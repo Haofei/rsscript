@@ -20,12 +20,9 @@ pub(in crate::reg_vm) struct NativeCompiledCallee {
 #[cfg(feature = "native-jit")]
 fn native_call_mut_args_supported(mut_args: &[usize], param_tys: &[NativeTy]) -> bool {
     mut_args.iter().all(|&pos| {
-        param_tys.get(pos).is_some_and(|ty| {
-            matches!(
-                ty,
-                NativeTy::Handle | NativeTy::FlatIntMut | NativeTy::FlatFloatMut
-            )
-        })
+        param_tys
+            .get(pos)
+            .is_some_and(|ty| matches!(ty, NativeTy::FlatIntMut | NativeTy::FlatFloatMut))
     })
 }
 
@@ -2386,7 +2383,7 @@ fn native_memoizable_field_load_helper(helper: vm_jit::HostHelper) -> bool {
 }
 
 #[cfg(feature = "native-jit")]
-fn native_field_load_slot_not_stored_in_loop(
+pub(crate) fn native_field_load_slot_not_stored_in_loop(
     args: &[vm_jit::HostArg],
     jit_code: &[vm_jit::JitInstr],
     header: usize,
@@ -2399,6 +2396,9 @@ fn native_field_load_slot_not_stored_in_loop(
         return false;
     };
     for instr in &jit_code[header..exit] {
+        if matches!(instr, vm_jit::JitInstr::CallNative { .. }) {
+            return false;
+        }
         let vm_jit::JitInstr::HostCall {
             helper,
             args: store_args,
@@ -2426,103 +2426,15 @@ fn native_field_load_args_loop_stable(
     header: usize,
     exit: usize,
     helper_ip: usize,
-    n_regs: usize,
+    _n_regs: usize,
 ) -> bool {
     let Some(vm_jit::HostArg::Reg(base)) = args.first().copied() else {
-        return false;
-    };
-    let Some(read_slot) = native_field_load_slot(args) else {
         return false;
     };
     if !native_field_load_slot_not_stored_in_loop(args, jit_code, header, exit) {
         return false;
     }
     native_reg_loop_invariant_at(base as usize, invariants, helper_ip)
-        || native_field_base_root_stable_at(
-            base as usize,
-            read_slot,
-            invariants,
-            jit_code,
-            header,
-            exit,
-            helper_ip,
-            n_regs,
-        )
-}
-
-#[cfg(feature = "native-jit")]
-fn native_field_load_slot(args: &[vm_jit::HostArg]) -> Option<i64> {
-    match args.get(1).copied()? {
-        vm_jit::HostArg::ImmI64(slot) => Some(slot),
-        _ => None,
-    }
-}
-
-#[cfg(feature = "native-jit")]
-fn native_field_base_root_stable_at(
-    base: usize,
-    read_slot: i64,
-    invariants: &NativeLoopInvariants,
-    jit_code: &[vm_jit::JitInstr],
-    header: usize,
-    exit: usize,
-    helper_ip: usize,
-    n_regs: usize,
-) -> bool {
-    let written_before_use = invariants
-        .first_write_ip
-        .get(base)
-        .and_then(|ip| *ip)
-        .is_none_or(|ip| ip < helper_ip);
-    if !written_before_use {
-        return false;
-    }
-    let stable = native_field_base_root_stable_regs(jit_code, header, exit, read_slot, n_regs);
-    stable.get(base).copied().unwrap_or(false)
-}
-
-#[cfg(feature = "native-jit")]
-fn native_field_base_root_stable_regs(
-    jit_code: &[vm_jit::JitInstr],
-    header: usize,
-    exit: usize,
-    read_slot: i64,
-    n_regs: usize,
-) -> Vec<bool> {
-    let mut written = vec![false; n_regs];
-    for instr in &jit_code[header..exit] {
-        if let Some(dst) = native_jit_written_reg(instr) {
-            let dst = dst as usize;
-            if dst < n_regs && !native_jit_is_self_move(instr) {
-                written[dst] = true;
-            }
-        }
-    }
-
-    let mut stable: Vec<bool> = written.iter().map(|is_written| !*is_written).collect();
-    for reg in 0..n_regs {
-        if written[reg] {
-            stable[reg] = true;
-        }
-    }
-
-    let mut changed = true;
-    while changed {
-        changed = false;
-        for reg in 0..n_regs {
-            if !written[reg] {
-                continue;
-            }
-            let next = native_all_writes_preserve_field_root(
-                reg, &stable, jit_code, header, exit, read_slot,
-            );
-            if stable[reg] != next {
-                stable[reg] = next;
-                changed = true;
-            }
-        }
-    }
-    stable
 }
 
 /// Whether a host helper is a copy-on-write struct/variant field store
@@ -2536,58 +2448,6 @@ fn is_native_field_set_helper(helper: vm_jit::HostHelper) -> bool {
         helper,
         vm_jit::HostHelper::FieldSetInt | vm_jit::HostHelper::FieldSetFloat
     )
-}
-
-#[cfg(feature = "native-jit")]
-fn native_all_writes_preserve_field_root(
-    reg: usize,
-    stable: &[bool],
-    jit_code: &[vm_jit::JitInstr],
-    header: usize,
-    exit: usize,
-    read_slot: i64,
-) -> bool {
-    let mut saw_write = false;
-    for instr in &jit_code[header..exit] {
-        let Some(dst) = native_jit_written_reg(instr) else {
-            continue;
-        };
-        if dst as usize != reg {
-            continue;
-        }
-        if native_jit_is_self_move(instr) {
-            continue;
-        }
-        saw_write = true;
-        if !native_write_preserves_field_root(instr, stable, read_slot) {
-            return false;
-        }
-    }
-    saw_write
-}
-
-#[cfg(feature = "native-jit")]
-fn native_write_preserves_field_root(
-    instr: &vm_jit::JitInstr,
-    stable: &[bool],
-    read_slot: i64,
-) -> bool {
-    match instr {
-        vm_jit::JitInstr::Move { src, .. } => stable.get(*src as usize).copied().unwrap_or(false),
-        vm_jit::JitInstr::MemoizedHostCall { helper, args, .. }
-        | vm_jit::JitInstr::HostCall { helper, args, .. }
-            if is_native_field_set_helper(*helper) =>
-        {
-            let Some(vm_jit::HostArg::Reg(base)) = args.first().copied() else {
-                return false;
-            };
-            let Some(vm_jit::HostArg::ImmI64(store_slot)) = args.get(1).copied() else {
-                return false;
-            };
-            store_slot != read_slot && stable.get(base as usize).copied().unwrap_or(false)
-        }
-        _ => false,
-    }
 }
 
 #[cfg(feature = "native-jit")]
@@ -2628,11 +2488,6 @@ fn native_jit_written_reg(instr: &vm_jit::JitInstr) -> Option<u32> {
         | vm_jit::JitInstr::CallSelf { dst, .. } => Some(*dst),
         _ => None,
     }
-}
-
-#[cfg(feature = "native-jit")]
-fn native_jit_is_self_move(instr: &vm_jit::JitInstr) -> bool {
-    matches!(instr, vm_jit::JitInstr::Move { dst, src } if dst == src)
 }
 
 #[cfg(feature = "native-jit")]

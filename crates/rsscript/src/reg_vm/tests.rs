@@ -2393,6 +2393,85 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
+    fn native_translation_does_not_memoize_field_of_changing_root() {
+        let source = r#"
+struct Box {
+    value: Int
+}
+
+fn hot(first: read Box, second: read Box, limit: Int) -> Int {
+    let mut current = first
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        if index % 2 == 0 {
+            current = first
+        } else {
+            current = second
+        }
+        total = total + current.value
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+        let mut program = parse_source("changing-field-root.rss", source);
+        crate::syntax::isolate_module_namespaces(&mut program);
+        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let hot = unit.function_ids["hot"];
+        let (jit, _, _, _, _) = translate_to_native_jit(&unit, unit.functions[hot].as_ref())
+            .expect("changing-root field loop should still translate");
+
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::FieldInt,
+                    ..
+                }
+            )),
+            "a field load whose base changes roots must not be memoized: {:#?}",
+            jit.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_call_invalidates_field_memoization() {
+        let mut module = vm_jit::NativeModule::new(jit_host_helpers()).expect("native module");
+        let callee = module
+            .compile(&vm_jit::JitFunction {
+                n_params: 0,
+                n_regs: 1,
+                reg_types: vec![vm_jit::JitValueType::Int],
+                zero_init_regs: Vec::new(),
+                code: vec![
+                    vm_jit::JitInstr::LoadInt { dst: 0, value: 0 },
+                    vm_jit::JitInstr::Return { src: 0 },
+                ],
+                cold_blocks: Vec::new(),
+            })
+            .expect("compile test callee");
+        let args = vec![vm_jit::HostArg::Reg(0), vm_jit::HostArg::ImmI64(0)];
+        let code = vec![vm_jit::JitInstr::CallNative {
+            callee,
+            dst: 1,
+            args: Vec::new(),
+        }];
+
+        assert!(
+            !crate::reg_vm::native_field_load_slot_not_stored_in_loop(&args, &code, 0, code.len()),
+            "an unsummarized native call must kill field-load memoization"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
     fn native_translation_does_not_memoize_nested_loop_activation_values() {
         let source = r#"
 fn hot(outer_limit: Int, inner_limit: Int) -> Int {
@@ -3080,7 +3159,7 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
-    fn native_direct_dispatch_invokes_mut_handle_compiled_call() {
+    fn native_direct_dispatch_rejects_mut_handle_compiled_call() {
         let source = "\
 struct Box {
     value: Int
@@ -3128,32 +3207,23 @@ fn main() -> Unit {
         })
         .expect("push frame");
 
-        match vm.try_native(&func, 0) {
-            NativeAttempt::Completed(VmValue::Int(99)) => {}
+        let completed = match vm.try_native(&func, 0) {
+            NativeAttempt::Completed(VmValue::Int(99)) => true,
             NativeAttempt::Completed(value) => {
                 panic!("parent completed with wrong value: {value:?}")
             }
-            NativeAttempt::Resumed => {
-                panic!(
-                    "parent unexpectedly resumed, stats={:?}",
-                    vm.native.as_ref().expect("native").stats
-                )
-            }
-            NativeAttempt::Fallback => {
-                panic!(
-                    "parent unexpectedly fell back, stats={:?}",
-                    vm.native.as_ref().expect("native").stats
-                )
-            }
-        }
-        let VmValue::Struct(updated) = vm.reg(0) else {
-            panic!("expected updated Box in reg 0, got {:?}", vm.reg(0));
+            NativeAttempt::Resumed | NativeAttempt::Fallback => false,
         };
-        assert_eq!(updated.fields.first(), Some(&VmValue::Int(99)));
+        if completed {
+            let VmValue::Struct(updated) = vm.reg(0) else {
+                panic!("expected updated Box in reg 0, got {:?}", vm.reg(0));
+            };
+            assert_eq!(updated.fields.first(), Some(&VmValue::Int(99)));
+        }
         let stats = &vm.native.as_ref().expect("native").stats;
-        assert!(
-            stats.native_call_edges >= 1,
-            "parent should compile with a native-to-native mut-handle edge, stats={stats:?}",
+        assert_eq!(
+            stats.native_call_edges, 0,
+            "the rejected mut-handle edge must not be compiled, stats={stats:?}",
         );
     }
 

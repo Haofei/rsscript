@@ -1210,8 +1210,8 @@ impl RuntimeGuarantee {
 impl Analyzer<'_> {
     pub(crate) fn resolve_type_alias<'b>(&'b self, type_name: &'b str) -> &'b str {
         let mut current = type_name;
-        // Follow the alias chain with a depth limit to prevent infinite loops
-        for _ in 0..16 {
+        let mut visited = std::collections::BTreeSet::new();
+        while visited.insert(current) {
             match self.type_aliases.get(current) {
                 Some(resolved) => current = resolved.as_str(),
                 None => break,
@@ -1225,60 +1225,66 @@ impl Analyzer<'_> {
     /// `type Pair<T> = Result<T, String>`. Expansion is recursive, so aliases are
     /// transparent below nominal type arguments as well as at the root.
     pub(crate) fn expand_type_alias(&self, type_name: &str) -> String {
-        self.expand_type_alias_inner(type_name, 0)
+        self.expand_type_alias_inner(type_name, &mut std::collections::BTreeSet::new())
     }
 
-    fn expand_type_alias_inner(&self, type_name: &str, depth: usize) -> String {
+    fn expand_type_alias_inner(
+        &self,
+        type_name: &str,
+        visiting: &mut std::collections::BTreeSet<String>,
+    ) -> String {
         use crate::text_util::{substitute_type_args, type_arg_names, type_root_name};
 
         let trimmed = type_name.trim();
-        if depth >= 32 {
+        if !visiting.insert(trimmed.to_string()) {
             return trimmed.to_string();
         }
-        for prefix in ["fresh ", "noescape ", "owned "] {
-            if let Some(target) = trimmed.strip_prefix(prefix) {
-                return format!(
-                    "{prefix}{}",
-                    self.expand_type_alias_inner(target, depth + 1)
-                );
-            }
-        }
-
-        let root = type_root_name(trimmed);
-        if let Some(target) = self.type_aliases.get(root) {
-            let params = self
-                .type_alias_params
-                .get(root)
-                .cloned()
-                .unwrap_or_default();
-            let expanded = if params.is_empty() {
-                Some(target.clone())
-            } else {
-                type_arg_names(trimmed).and_then(|args| {
-                    if args.len() != params.len() {
-                        return None;
-                    }
-                    let substitutions = params
-                        .into_iter()
-                        .zip(args.into_iter().map(str::to_string))
-                        .collect::<std::collections::HashMap<_, _>>();
-                    Some(substitute_type_args(target, &substitutions))
-                })
-            };
-            if let Some(expanded) = expanded {
-                return self.expand_type_alias_inner(&expanded, depth + 1);
-            }
-        }
-
-        let Some(args) = type_arg_names(trimmed) else {
-            return trimmed.to_string();
-        };
-        let args = args
+        let prefixed = ["fresh ", "noescape ", "owned "]
             .into_iter()
-            .map(|arg| self.expand_type_alias_inner(arg, depth + 1))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("{root}<{args}>")
+            .find_map(|prefix| trimmed.strip_prefix(prefix).map(|target| (prefix, target)));
+        let expanded = if let Some((prefix, target)) = prefixed {
+            format!("{prefix}{}", self.expand_type_alias_inner(target, visiting))
+        } else {
+            let root = type_root_name(trimmed);
+            if let Some(target) = self.type_aliases.get(root) {
+                let params = self
+                    .type_alias_params
+                    .get(root)
+                    .cloned()
+                    .unwrap_or_default();
+                let alias_target = if params.is_empty() {
+                    Some(target.clone())
+                } else {
+                    type_arg_names(trimmed).and_then(|args| {
+                        if args.len() != params.len() {
+                            return None;
+                        }
+                        let substitutions = params
+                            .into_iter()
+                            .zip(args.into_iter().map(str::to_string))
+                            .collect::<std::collections::HashMap<_, _>>();
+                        Some(substitute_type_args(target, &substitutions))
+                    })
+                };
+                if let Some(alias_target) = alias_target {
+                    let expanded = self.expand_type_alias_inner(&alias_target, visiting);
+                    visiting.remove(trimmed);
+                    return expanded;
+                }
+            }
+            if let Some(args) = type_arg_names(trimmed) {
+                let args = args
+                    .into_iter()
+                    .map(|arg| self.expand_type_alias_inner(arg, visiting))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{root}<{args}>")
+            } else {
+                trimmed.to_string()
+            }
+        };
+        visiting.remove(trimmed);
+        expanded
     }
 
     fn run(&mut self) {

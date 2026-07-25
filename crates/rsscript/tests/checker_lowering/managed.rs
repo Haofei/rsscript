@@ -48,6 +48,82 @@ pub fn make_session(id: Int) -> Session {
 }
 
 #[test]
+fn rust_lowering_treats_class_aliases_as_managed_everywhere() {
+    let source = r#"
+class Node {
+    value: Int
+}
+
+type N = Node
+
+struct Holder {
+    node: N
+}
+
+fn make() -> N {
+    return Node(value: 1)
+}
+"#;
+    let rust = lower_source_to_rust("class-alias.rss", source).expect("source should lower");
+
+    assert!(rust.contains("type N = rsscript_runtime::Managed<Node>;"));
+    assert!(rust.contains("pub node: rsscript_runtime::Managed<Node>"));
+    assert!(rust.contains("fn make() -> rsscript_runtime::Managed<Node>"));
+    assert!(!rust.contains("Managed<rsscript_runtime::Managed<Node>>"));
+}
+
+#[test]
+fn rust_lowering_preserves_generic_sums_and_managed_payloads() {
+    let source = r#"
+class Node {
+    value: Int
+}
+
+pub sum Envelope<T> {
+    Value(value: T)
+    NodeValue(node: Node)
+    Empty
+}
+"#;
+    let rust = lower_source_to_rust("generic-sum.rss", source).expect("source should lower");
+
+    assert!(rust.contains("pub enum Envelope<T: Clone>"));
+    assert!(rust.contains("value: T"));
+    assert!(rust.contains("node: rsscript_runtime::Managed<Node>"));
+}
+
+#[test]
+fn rust_lowering_uses_managed_class_for_protocol_and_capability() {
+    let source = r#"
+protocol Readable {
+    fn get(self: read Self) -> Int
+}
+
+class Gauge {
+    value: Int
+}
+
+fn Gauge.get(self: read Gauge) -> Int {
+    return self.value
+}
+
+impl Readable for Gauge {
+    get = Gauge.get
+}
+"#;
+    let rust = lower_source_to_rust("class-protocol.rss", source).expect("source should lower");
+
+    assert!(
+        rust.contains("impl Readable for rsscript_runtime::Managed<Gauge>"),
+        "{rust}"
+    );
+    assert!(
+        rust.contains("Gauge(rsscript_runtime::Managed<Gauge>)"),
+        "{rust}"
+    );
+}
+
+#[test]
 fn rust_lowering_wraps_handle_fields_once() {
     let source = r#"
 class User {

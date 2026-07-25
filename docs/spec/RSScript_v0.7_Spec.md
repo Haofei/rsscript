@@ -3462,6 +3462,12 @@ form)" below and §20.2-2. Throughout this chapter, an unqualified "dynamic
 dispatch" refers to the disallowed implicit form unless it explicitly names the
 `Capability<Protocol>` value.
 
+Protocol declarations and `impl` declarations themselves are non-generic in
+v0.7. Generic functions may use a protocol as a bound (`T: Protocol`), and
+protocol methods may declare their own function type parameters, but forms such
+as `protocol Convert<T>` and `impl Convert<Int> for Wrapper<String>` are reserved
+for a later language version.
+
 #### Positive model (what a protocol is)
 
 A protocol must satisfy the feature admission rule (section 2.8): it is a
@@ -5991,10 +5997,10 @@ sum-decl    = "sum" name [ generics ] [ derives ] "{" { variant } "}" ;
 variant     = name [ "(" fields ")" ] ;
 derives     = "derives" "(" ident { "," ident } ")" ;
 const-decl  = "const" [ type-ns "." ] NAME [ ":" type ] "=" literal ;  (* type optional, §6.9 *)
-protocol-decl = "protocol" name [ generics ] "{" { fn-sig } "}" ;      (* §14.6 *)
+protocol-decl = "protocol" name "{" { fn-sig } "}" ;                   (* §14.6 *)
 fn-sig      = "fn" name [ generics ] "(" [ params ] ")" [ "->" type ]
               [ "effects" "(" effect-list ")" ] ;             (* bodyless contract *)
-impl-decl   = "impl" name [ generics ] "for" type "{" { fn-decl } "}" ;  (* protocol impl, §14.6 *)
+impl-decl   = "impl" name "for" name "{" { fn-decl } "}" ;             (* protocol impl, §14.6; generic impl targets are reserved *)
 inherent-impl-decl = "impl" name "{" { fn-decl } "}" ;  (* §14.6; parse-time sugar: each `fn m(<effect> self, …)` desugars to top-level `fn Name.m(self: <effect> Name, …)`. No `for`. *)
 
 block       = "{" { stmt } "}" ;

@@ -6,6 +6,10 @@ use super::lowerer::*;
 
 impl RustLowerer<'_> {
     pub(super) fn type_ref_is_concrete_for_annotation(&self, ty: &TypeRef) -> bool {
+        let canonical = self.canonical_type_ref(ty);
+        if canonical != *ty {
+            return self.type_ref_is_concrete_for_annotation(&canonical);
+        }
         let root_is_concrete = matches!(
             ty.name.as_str(),
             "Unit"
@@ -62,14 +66,33 @@ impl RustLowerer<'_> {
                 span,
             )),
             Expr::String(_, span) => Some(simple_type_ref("String", span)),
-            Expr::Binary { op, span, .. } => {
+            Expr::Binary {
+                op,
+                left,
+                right,
+                span,
+            } => {
                 let name = match op {
                     BinaryOp::Add
                     | BinaryOp::Subtract
                     | BinaryOp::Multiply
                     | BinaryOp::Divide
-                    | BinaryOp::Modulo
-                    | BinaryOp::BitAnd
+                    | BinaryOp::Modulo => {
+                        let left = self
+                            .infer_expr_type(left)
+                            .map(|ty| self.canonical_type_ref(&ty));
+                        let right = self
+                            .infer_expr_type(right)
+                            .map(|ty| self.canonical_type_ref(&ty));
+                        if left.as_ref().is_some_and(|ty| ty.name == "Float")
+                            || right.as_ref().is_some_and(|ty| ty.name == "Float")
+                        {
+                            "Float"
+                        } else {
+                            "Int"
+                        }
+                    }
+                    BinaryOp::BitAnd
                     | BinaryOp::BitOr
                     | BinaryOp::BitXor
                     | BinaryOp::ShiftLeft
@@ -86,7 +109,7 @@ impl RustLowerer<'_> {
                 Some(simple_type_ref(name, span))
             }
             Expr::Field { base, name, span } => {
-                let base_ty = self.infer_expr_type(base)?;
+                let base_ty = self.canonical_type_ref(&self.infer_expr_type(base)?);
                 self.field_type(&base_ty.name, name).map(|ty| TypeRef {
                     span: span.clone(),
                     ..ty
@@ -207,6 +230,10 @@ impl RustLowerer<'_> {
     }
 
     pub(super) fn lower_type_ref(&self, ty: &TypeRef, position: ManagedPosition) -> String {
+        let canonical = self.canonical_type_ref(ty);
+        if canonical != *ty {
+            return self.lower_type_ref(&canonical, position);
+        }
         if ty.name == "Fn" {
             // A `Fn`-type parameter's data effect determines how the parameter is
             // PASSED at the Rust call boundary: `read T` -> `&T` (shared borrow),
@@ -466,10 +493,86 @@ impl RustLowerer<'_> {
         ) {
             return false;
         }
+        let ty = self.canonical_type_ref(ty);
         matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Class))
     }
 
     pub(super) fn is_class_type(&self, ty: &TypeRef) -> bool {
+        let ty = self.canonical_type_ref(ty);
         matches!(self.type_kinds.get(&ty.name), Some(TypeKind::Class))
     }
+
+    pub(super) fn canonical_type_ref(&self, ty: &TypeRef) -> TypeRef {
+        self.canonical_type_ref_inner(ty, &mut std::collections::BTreeSet::new())
+    }
+
+    fn canonical_type_ref_inner(
+        &self,
+        ty: &TypeRef,
+        visiting: &mut std::collections::BTreeSet<String>,
+    ) -> TypeRef {
+        let key = type_ref_display_name(ty);
+        if !visiting.insert(key.clone()) {
+            return ty.clone();
+        }
+        if let Some((parameters, target)) = self.type_aliases.get(&ty.name) {
+            if parameters.len() == ty.args.len() {
+                let substitutions = parameters
+                    .iter()
+                    .cloned()
+                    .zip(ty.args.iter().cloned())
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                let substituted = substitute_type_ref(target, &substitutions);
+                let canonical = self.canonical_type_ref_inner(&substituted, visiting);
+                visiting.remove(&key);
+                return canonical;
+            }
+        }
+        let mut canonical = ty.clone();
+        canonical.args = canonical
+            .args
+            .iter()
+            .map(|argument| self.canonical_type_ref_inner(argument, visiting))
+            .collect();
+        canonical.fn_params = canonical
+            .fn_params
+            .iter()
+            .map(|parameter| self.canonical_type_ref_inner(parameter, visiting))
+            .collect();
+        canonical.fn_return = canonical
+            .fn_return
+            .as_deref()
+            .map(|return_type| Box::new(self.canonical_type_ref_inner(return_type, visiting)));
+        visiting.remove(&key);
+        canonical
+    }
+}
+
+fn substitute_type_ref(
+    ty: &TypeRef,
+    substitutions: &std::collections::BTreeMap<String, TypeRef>,
+) -> TypeRef {
+    if ty.args.is_empty()
+        && ty.fn_params.is_empty()
+        && ty.fn_return.is_none()
+        && let Some(replacement) = substitutions.get(&ty.name)
+    {
+        return replacement.clone();
+    }
+    let mut substituted = ty.clone();
+    substituted.args = ty
+        .args
+        .iter()
+        .map(|argument| substitute_type_ref(argument, substitutions))
+        .collect();
+    substituted.fn_params = ty
+        .fn_params
+        .iter()
+        .map(|parameter| substitute_type_ref(parameter, substitutions))
+        .collect();
+    substituted.fn_return = ty
+        .fn_return
+        .as_deref()
+        .map(|return_type| Box::new(substitute_type_ref(return_type, substitutions)));
+    substituted
 }

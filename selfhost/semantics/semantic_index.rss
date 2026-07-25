@@ -460,59 +460,67 @@ fn SemanticIndex.is_declared_type(self: SemanticIndex, typeName: String) -> Bool
 }
 
 fn SemanticIndex.expand_type_alias(self: SemanticIndex, typeName: String) -> String {
+    let mut visiting = Set<String>.new()
     return SemanticIndex.expand_type_alias_inner(
         self: self,
         typeName: typeName,
-        depth: 0
+        visiting: mut visiting
     )
 }
 
 fn SemanticIndex.expand_type_alias_inner(
     self: SemanticIndex,
     typeName: String,
-    depth: Int
+    visiting: mut Set<String>
 ) -> String {
-    if depth >= 32 { return str_trim(s: typeName) }
-    let mut current = str_trim(s: typeName)
-    let mut expanding = true
-    let mut aliasDepth = depth
-    while expanding && aliasDepth < 32 {
-        let root = str_type_root(s: current)
-        let aliasIndex = Map.get_or_default<String, Int>(
-            map: self.aliasByName,
-            key: root,
-            default: -1
-        )
-        if aliasIndex < 0 {
-            expanding = false
-        } else {
-            let alias = List.get<TypeAliasDecl>(list: self.aliases, index: aliasIndex)
-            if List.len(list: alias.typeParameters) == 0 {
-                current = String.copy(value: alias.target)
-            } else if str_type_arg_count(s: current) == List.len(list: alias.typeParameters) {
-                let mut substitutions = Map<String, String>.new()
-                let mut index = 0
-                while index < List.len(list: alias.typeParameters) {
-                    Map.insert<String, String>(
-                        map: mut substitutions,
-                        key: List.get<String>(list: alias.typeParameters, index: index),
-                        value: str_top_arg(s: current, which: index)
-                    )
-                    index = index + 1
-                }
-                current = substitute_type_parameters(
-                    ty: alias.target,
-                    substitutions: substitutions,
-                    depth: aliasDepth + 1
+    let current = str_trim(s: typeName)
+    if Set.contains<String>(set: visiting, value: current) { return current }
+    Set.insert<String>(set: mut visiting, value: current)
+
+    let root = str_type_root(s: current)
+    let aliasIndex = Map.get_or_default<String, Int>(
+        map: self.aliasByName,
+        key: root,
+        default: -1
+    )
+    if aliasIndex >= 0 {
+        let alias = List.get<TypeAliasDecl>(list: self.aliases, index: aliasIndex)
+        let mut target = ""
+        if List.len(list: alias.typeParameters) == 0 {
+            target = String.copy(value: alias.target)
+        } else if str_type_arg_count(s: current) == List.len(list: alias.typeParameters) {
+            let mut substitutions = Map<String, String>.new()
+            let mut index = 0
+            while index < List.len(list: alias.typeParameters) {
+                Map.insert<String, String>(
+                    map: mut substitutions,
+                    key: List.get<String>(list: alias.typeParameters, index: index),
+                    value: str_top_arg(s: current, which: index)
                 )
-            } else {
-                expanding = false
+                index = index + 1
             }
+            target = substitute_type_parameters(
+                ty: alias.target,
+                substitutions: substitutions,
+                depth: 0
+            )
         }
-        aliasDepth = aliasDepth + 1
+        if String.len(value: target) > 0 {
+            let expanded = SemanticIndex.expand_type_alias_inner(
+                self: self,
+                typeName: target,
+                visiting: mut visiting
+            )
+            Set.remove<String>(set: mut visiting, value: current)
+            return expanded
+        }
     }
+
     let count = str_type_arg_count(s: current)
-    if count == 0 { return current }
+    if count == 0 {
+        Set.remove<String>(set: mut visiting, value: current)
+        return current
+    }
     let mut normalized = String.concat(left: str_type_root(s: current), right: "<")
     let mut index = 0
     while index < count {
@@ -524,10 +532,11 @@ fn SemanticIndex.expand_type_alias_inner(
             right: SemanticIndex.expand_type_alias_inner(
                 self: self,
                 typeName: str_top_arg(s: current, which: index),
-                depth: aliasDepth + 1
+                visiting: mut visiting
             )
         )
         index = index + 1
     }
+    Set.remove<String>(set: mut visiting, value: current)
     return String.concat(left: normalized, right: ">")
 }

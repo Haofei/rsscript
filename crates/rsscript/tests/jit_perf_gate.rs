@@ -259,6 +259,18 @@ fn jit_perf_gate_against_baseline() {
                     ));
                 }
             }
+            if case.case == "native_call_mut_handle_param.rss" {
+                for counter in ["native_call_edges", "native_call_depth_max"] {
+                    let value = jit_counter(jit, counter);
+                    if value != Some(0) {
+                        verdict = "UNSAFE_NATIVE_CALL";
+                        failures.push(format!(
+                            "{}: expected {counter}=0 while mut Handle call writeback is unsupported, got {value:?}",
+                            case.case
+                        ));
+                    }
+                }
+            }
         }
 
         rows.push(GateRow {
@@ -547,12 +559,12 @@ fn expected_min_counters(case: &str) -> &'static [(&'static str, i64)] {
         | "native_call_flat_int_param.rss"
         | "native_call_flat_float_param.rss"
         | "native_call_flat_int_mut_param.rss"
-        | "native_call_handle_param.rss"
-        | "native_call_mut_handle_param.rss" => &[
+        | "native_call_handle_param.rss" => &[
             ("native_call_edges", 1),
             ("native_call_depth_max", 1),
             ("compiled_code_bytes", 1),
         ],
+        "native_call_mut_handle_param.rss" => &[("compiled_code_bytes", 1)],
         "profile_closure_pic.rss" => &[
             ("profile_closure_pic_sites", 1),
             ("profile_closure_pic_arms", 3),

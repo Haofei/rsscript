@@ -510,11 +510,13 @@ contract is normative:
    the sole exception and are confined to the transactional boundary defined there;
    together these keep the compiled subset **transactionally** side-effect-free —
    the premise of the fallback proof (§7.2).
-2. **Handles are opaque, call-scoped indices.** A `handle` is only ever an index
-   into the *current* call's heap-argument table, populated before the call and
-   cleared by a drop guard on every exit path. A handle MUST NOT outlive its call
-   or alias another call's table. Native code MUST NOT dereference a raw heap
-   pointer; it passes only `i64` indices the VM owns.
+2. **Handles are opaque, native-attempt-scoped references.** Input handles index
+   the attempt's heap-argument table; speculative output handles index the
+   transaction's output table. Both tables are owned by the VM and cleared by a
+   drop guard on every exit path. Nested native calls share this attempt context.
+   A handle MUST NOT outlive the attempt or alias another attempt's tables.
+   Native code MUST NOT dereference a raw heap pointer; it passes only `i64`
+   handles the VM owns.
 3. **Unsatisfiable read = bail, not UB.** Out-of-range, wrong-shape, or non-`Int`
    reads MUST be bounds-checked and type-matched and take the **bail** path
    (below), deterministically — never undefined behavior.
@@ -529,14 +531,11 @@ contract is normative:
    a bad helper address nor a dangling bail pointer. The only `unsafe`
    (symbol registration, the indirect call) is private to `vm-jit`.
 
-6. **Handle domain is the non-negative table range only.** A valid `handle` is a
-   non-negative index strictly less than the current call's table length. A
-   **negative** handle and an **out-of-range** non-negative handle MUST both bail
-   (the lookup is a bounds-checked `slice::get`-style access; there is no
-   "in-band" sentinel that means anything but "bail"). A **stale** handle (one
-   left over from a prior call) cannot, by rule 2, be valid for the current call;
-   if presented it MUST bail. Native code MUST NOT subtract, offset, or otherwise
-   compute new handles — it may only pass through handles the VM gave it.
+6. **The signed handle encoding is checked.** `h >= 0` denotes input-table index
+   `h`; `h < 0` denotes speculative output-table index `-(h + 1)`. Both lookups
+   MUST be bounds checked. An out-of-range value or a stale handle from a prior
+   attempt MUST bail. Native code MUST NOT perform arithmetic on handles; only VM
+   helpers may mint output handles.
 7. **Return value is defined only when the bail flag is clear.** A helper's `i64`
    result is meaningful **iff** the bail byte is clear after the call. On bail the
    return value is unspecified and MUST NOT be observed (rule 4 already requires the
@@ -544,12 +543,14 @@ contract is normative:
    `i64`; the conversion from the host length type MUST be exact, and a length that
    does not fit `i64` (not reachable under the VM's container limits) MUST bail
    rather than wrap or truncate.
-8. **No reentrancy into the helper/table context.** Helpers do not call back into
-   user code (rule 1), so a single flat per-call table and a single per-thread bail
-   byte suffice. Reentrant or nested native execution that would require a *second*
-   live table/bail context simultaneously is **forbidden** under this ABI; admitting
-   it later MUST replace the flat table with an explicitly stacked table/bail
-   context and re-establish rule 2's call-scoping for each level.
+8. **Nested compiled calls share one transaction context.** Helpers do not call
+   back into user code (rule 1). A generated `CallNative` may invoke another
+   compiled function using the same input/output tables, bail byte, and heap
+   transaction. Child bailout propagates to the outer attempt. A compiled call
+   with a mutable heap-handle parameter is currently ineligible because the call
+   ABI has no mutable-result slot with which to rewrite the caller's live handle;
+   such calls execute in the interpreter until that ABI is defined. Mutable flat
+   buffers use their separate pointer/length ABI and remain eligible.
 
 9. **Write helpers are transactional (journaled, commit-on-success).** A *write*
    helper may mutate heap state (a struct field, a list element/length, a
