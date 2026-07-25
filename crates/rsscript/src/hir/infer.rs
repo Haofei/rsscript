@@ -84,7 +84,7 @@ pub(crate) fn infer_hir_expr_type(
             }
         }
         Expr::Field { base, name, .. } => {
-            let base_type = infer_hir_expr_type(hir, base, value_types)?;
+            let base_type = hir.canonical_type_name(&infer_hir_expr_type(hir, base, value_types)?);
             let type_info = hir.type_info(&base_type)?;
             let field = type_info.fields.get(name)?;
             Some(substituted_field_type(type_info, &base_type, field))
@@ -560,6 +560,8 @@ pub(super) fn match_pattern_binding_types(
     pattern: &MatchPattern,
     value_type: Option<&str>,
 ) -> Vec<(String, String)> {
+    let canonical_value_type = value_type.map(|ty| hir.canonical_type_name(ty));
+    let value_type = canonical_value_type.as_deref();
     if let MatchPattern::Binding { name, .. } = pattern {
         return value_type
             .map(|ty| vec![(name.clone(), ty.to_string())])

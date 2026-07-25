@@ -954,6 +954,7 @@ The v0.7 statement forms are:
 
 ```text
 let binding
+let ... else binding
 local binding
 with binding
 expression statement
@@ -966,6 +967,19 @@ break
 continue
 match (statement form, over Option/Result variants)
 ```
+
+`let ... else` destructures a refutable `Option`, `Result`, or declared sum
+pattern and requires a diverging `else` block:
+
+```rust
+let Some(value) = maybe_value else {
+    return 0
+}
+```
+
+The initializer is evaluated once. Pattern typing, alias transparency, payload
+ownership, and managed-handle rules are identical to the corresponding
+single-arm `match`; the `else` block runs only when the pattern does not match.
 
 `if` and `while` conditions must have type `Bool`. RSScript has no truthy or
 falsey coercions for strings, numbers, handles, resources, or containers.

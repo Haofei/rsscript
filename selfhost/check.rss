@@ -7752,12 +7752,12 @@ fn qualified_type_string(toks: List<Tok>, ts: Int, te: Int, prefix: String, decl
     return sb
 }
 
-// Index every non-generic file alias `type NAME = RHS`: NAME -> the canonical RHS type
+// Index every file alias `type NAME<P...> = RHS`: NAME -> the canonical RHS type
 // string. Built ONCE per file so expand_type_alias is O(1) map lookups instead of an O(n)
 // token scan per lookup (which is O(calls * n) when typing every call argument for RS0207 —
 // the same perf wall as the fn/local indices). Keeps the FIRST decl of a name, exactly as
-// the former type_alias_rhs first-match scan did. Generic aliases (`type Pair<T> = ...`) map
-// their RHS too, but type_token_string of a generic-param RHS is harmless (never matched).
+// the former type_alias_rhs first-match scan did. A synthetic ` params:<NAME>` entry stores
+// the generic parameters as `Params<P...>` for structural substitution at lookup time.
 fn collect_type_alias_index(toks: List<Tok>) -> Map<String, String> {
     let n = List.len(list: toks)
     let mut m = Map<String, String>.new()
@@ -7765,12 +7765,22 @@ fn collect_type_alias_index(toks: List<Tok>) -> Map<String, String> {
     while i < n {
         if is_kw_text(toks, i, word: "type") {
             let a = i + 1
-            if is_ident_tok(toks: toks, i: a) && at_symbol(toks: toks, i: (a + 1), code: SYM_EQ) {
+            if is_ident_tok(toks: toks, i: a) {
                 let nm = tk_text(toks, i: a)
-                if Map.contains_key<String, String>(map: m, key: nm) == false {
-                    let ee = next_line_or_block_end(toks: toks, start: (a + 2), end: n)
-                    let rhs = type_token_string(toks, ts: (a + 2), te: ee)
+                let ee = next_line_or_block_end(toks: toks, start: (a + 1), end: n)
+                let eq = find_top_sym(toks, start: (a + 1), end: ee, code: SYM_EQ)
+                if eq >= 0 && Map.contains_key<String, String>(map: m, key: nm) == false {
+                    let rhs = type_token_string(toks, ts: (eq + 1), te: ee)
                     Map.insert<String, String>(map: mut m, key: nm, value: rhs)
+                    if at_symbol(toks: toks, i: (a + 1), code: SYM_LANGLE) {
+                        let close = find_matching(toks: toks, open: (a + 1), openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
+                        if close >= 0 && close < eq {
+                            let params = type_token_string(toks, ts: (a + 2), te: close)
+                            let paramSpec = String.concat(left: String.concat(left: "Params<", right: params), right: ">")
+                            let paramKey = String.concat(left: " params:", right: nm)
+                            Map.insert<String, String>(map: mut m, key: paramKey, value: paramSpec)
+                        }
+                    }
                 }
             }
         }
@@ -7779,15 +7789,143 @@ fn collect_type_alias_index(toks: List<Tok>) -> Map<String, String> {
     return m
 }
 
+fn alias_cycle_edge(from: String, to: String) -> String {
+    return String.concat(left: String.concat(left: from, right: "\n"), right: to)
+}
+
+// Build the declaration-level alias dependency graph. Generic arguments are
+// deliberately ignored for cycle identity: `A<T> = A<List<T>>` is a cycle in
+// alias `A`, even though every instantiated type string is different.
+fn collect_cyclic_type_alias_tokens(toks: List<Tok>, out: mut List<Int>) -> Bool {
+    let n = List.len(list: toks)
+    let mut names = Set<String>.new()
+    let mut nameTokens = Map<String, Int>.new()
+    let mut i = 0
+    while i < n {
+        if is_kw_text(toks, i, word: "type") && is_ident_tok(toks: toks, i: (i + 1)) {
+            let name = tk_text(toks, i: (i + 1))
+            Set.insert<String>(set: mut names, value: name)
+            if Map.contains_key<String, Int>(map: nameTokens, key: name) == false {
+                Map.insert<String, Int>(map: mut nameTokens, key: name, value: i)
+            }
+        }
+        i = i + 1
+    }
+
+    let mut edges = Set<String>.new()
+    i = 0
+    while i < n {
+        if is_kw_text(toks, i, word: "type") && is_ident_tok(toks: toks, i: (i + 1)) {
+            let name = tk_text(toks, i: (i + 1))
+            let lineEnd = next_line_or_block_end(toks: toks, start: (i + 2), end: n)
+            let eq = find_top_sym(toks, start: (i + 2), end: lineEnd, code: SYM_EQ)
+            if eq >= 0 {
+                let mut bound = Set<String>.new()
+                if at_symbol(toks: toks, i: (i + 2), code: SYM_LANGLE) {
+                    let close = find_matching(toks: toks, open: (i + 2), openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
+                    if close >= 0 && close < eq {
+                        let mut p = i + 3
+                        while p < close {
+                            if is_ident_tok(toks: toks, i: p) {
+                                Set.insert<String>(set: mut bound, value: tk_text(toks, i: p))
+                            }
+                            p = p + 1
+                        }
+                    }
+                }
+                let mut p = eq + 1
+                while p < lineEnd {
+                    if is_ident_tok(toks: toks, i: p) {
+                        let dependency = tk_text(toks, i: p)
+                        if Set.contains<String>(set: names, value: dependency)
+                            && Set.contains<String>(set: bound, value: dependency) == false {
+                            Set.insert<String>(
+                                set: mut edges,
+                                value: alias_cycle_edge(from: name, to: dependency)
+                            )
+                        }
+                    }
+                    p = p + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    let aliases = Map.keys<String, Int>(map: nameTokens)
+    let mut aliasIndex = 0
+    let mut hit = false
+    while aliasIndex < List.len(list: aliases) {
+        let start = List.get(list: aliases, index: aliasIndex)
+        let mut queue = List<String>.new()
+        let mut seen = Set<String>.new()
+        List.push<String>(list: mut queue, value: start)
+        Set.insert<String>(set: mut seen, value: start)
+        let mut q = 0
+        let mut cyclic = false
+        while q < List.len(list: queue) && cyclic == false {
+            let current = List.get(list: queue, index: q)
+            let mut candidateIndex = 0
+            while candidateIndex < List.len(list: aliases) && cyclic == false {
+                let candidate = List.get(list: aliases, index: candidateIndex)
+                if Set.contains<String>(
+                    set: edges,
+                    value: alias_cycle_edge(from: current, to: candidate)
+                ) {
+                    if candidate == start {
+                        cyclic = true
+                    } else if Set.contains<String>(set: seen, value: candidate) == false {
+                        Set.insert<String>(set: mut seen, value: candidate)
+                        List.push<String>(list: mut queue, value: candidate)
+                    }
+                }
+                candidateIndex = candidateIndex + 1
+            }
+            q = q + 1
+        }
+        if cyclic {
+            match Map.get<String, Int>(map: nameTokens, key: start) {
+                Some(tokenIndex) => {
+                    List.push<Int>(list: mut out, value: tokenIndex)
+                    hit = true
+                }
+                None => {}
+            }
+        }
+        aliasIndex = aliasIndex + 1
+    }
+    return hit
+}
+
 // Expand a bare type-alias root through the O(1) alias index. Cycles stop at the
 // repeated alias; finite chains are never truncated.
 fn expand_type_alias(aliasIdx: Map<String, String>, ty: String) -> String {
     let mut cur = ty
     let mut seen = Set<String>.new()
-    while Set.contains<String>(set: seen, value: cur) == false {
-        Set.insert<String>(set: mut seen, value: cur)
-        let rhs = Map.get_or_default<String, String>(map: aliasIdx, key: cur, default: "")
-        if String.len(value: rhs) == 0 { return cur }
+    let mut expanding = true
+    while expanding {
+        let root = str_type_root(s: cur)
+        if Set.contains<String>(set: seen, value: root) {
+            return cur
+        }
+        Set.insert<String>(set: mut seen, value: root)
+        let rhs0 = Map.get_or_default<String, String>(map: aliasIdx, key: root, default: "")
+        if String.len(value: rhs0) == 0 { return cur }
+        let paramKey = String.concat(left: " params:", right: root)
+        let params = Map.get_or_default<String, String>(map: aliasIdx, key: paramKey, default: "")
+        let mut rhs = rhs0
+        let mut paramIndex = 0
+        let mut substituting = String.len(value: params) > 0
+        while substituting {
+            let param = str_top_arg(s: params, which: paramIndex)
+            let argument = str_top_arg(s: cur, which: paramIndex)
+            if String.len(value: param) == 0 || String.len(value: argument) == 0 {
+                substituting = false
+            } else {
+                rhs = str_replace_type_ident(s: rhs, name: param, replacement: argument)
+                paramIndex = paramIndex + 1
+            }
+        }
         cur = rhs
     }
     return cur
@@ -11184,6 +11322,8 @@ fn main() -> Unit {
     // RS0033: any decimal integer literal in the file that overflows i64.
     let mut outOfRangeIntTokens = List<Int>.new()
     let outOfRangeInt = collect_out_of_range_int_tokens(toks, out: mut outOfRangeIntTokens)
+    let mut cyclicAliasTokens = List<Int>.new()
+    let cyclicAlias = collect_cyclic_type_alias_tokens(toks, out: mut cyclicAliasTokens)
     // RS0212: a value derive (Clone/Eq/Ord/Hash/JsonEncode/JsonDecode) on a resource.
     let mut resourceDeriveTokens = List<Int>.new()
     let resourceDerive = collect_bad_resource_derives(toks, out: mut resourceDeriveTokens)
@@ -11580,6 +11720,7 @@ fn main() -> Unit {
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0017")
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0028")
         emitted = emitted + emit_diagnostic_records(code: "RS0033", toks, tokenIndices: outOfRangeIntTokens)
+        emitted = emitted + emit_diagnostic_records(code: "RS0039", toks, tokenIndices: cyclicAliasTokens)
         emitted = emitted + emit_bag_code(diagnostics: typeDiagnostics, code: "RS0034")
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0205")
         emitted = emitted + emit_bag_code(diagnostics: callDiagnostics, code: "RS0207")
@@ -11749,6 +11890,9 @@ fn main() -> Unit {
         } else {
             Log.write(message: "RS0033")
         }
+    }
+    if cyclicAlias && !structured {
+        Log.write(message: "RS0039")
     }
     if hasUnknownFeat {
         Log.write(message: "RS0016")

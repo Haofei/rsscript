@@ -341,8 +341,8 @@ fn inferred_operand_types(
     left: &HirExpr,
     right: &HirExpr,
 ) -> Option<(String, String)> {
-    let left_type = inferred_operand_type(analyzer, left).map(str::to_string)?;
-    let right_type = inferred_operand_type(analyzer, right).map(str::to_string)?;
+    let left_type = inferred_operand_type(analyzer, left)?;
+    let right_type = inferred_operand_type(analyzer, right)?;
     Some((left_type, right_type))
 }
 
@@ -528,11 +528,11 @@ fn arithmetic_operator(op: BinaryOp) -> bool {
 }
 
 fn non_numeric_operand(analyzer: &Analyzer<'_>, expr: &HirExpr) -> bool {
-    inferred_operand_type(analyzer, expr).is_some_and(|type_name| !is_numeric_type(type_name))
+    inferred_operand_type(analyzer, expr).is_some_and(|type_name| !is_numeric_type(&type_name))
 }
 
-fn inferred_operand_type<'a>(analyzer: &'a Analyzer<'_>, expr: &'a HirExpr) -> Option<&'a str> {
-    match expr {
+fn inferred_operand_type(analyzer: &Analyzer<'_>, expr: &HirExpr) -> Option<String> {
+    let type_name = match expr {
         HirExpr::Ident {
             name, type_name, ..
         } => type_name
@@ -562,7 +562,8 @@ fn inferred_operand_type<'a>(analyzer: &'a Analyzer<'_>, expr: &'a HirExpr) -> O
         | HirExpr::ArrayLiteral { .. }
         | HirExpr::Closure { .. }
         | HirExpr::Unknown(_) => None,
-    }
+    }?;
+    Some(analyzer.expand_type_alias(type_name))
 }
 
 fn is_numeric_type(type_name: &str) -> bool {

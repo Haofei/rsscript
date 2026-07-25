@@ -93,6 +93,29 @@ pub sum Envelope<T> {
 }
 
 #[test]
+fn rust_lowering_matches_user_sum_through_alias() {
+    let source = r#"
+sum Token {
+    Number(value: Int)
+    End
+}
+
+type Alias = Token
+
+fn read_token(token: read Alias) -> Int {
+    match read token {
+        Number(value) => return value
+        End => return 0
+    }
+}
+"#;
+    let rust = lower_source_to_rust("sum-alias-match.rss", source).expect("source should lower");
+
+    assert!(rust.contains("Token::Number { value: value }"), "{rust}");
+    assert!(rust.contains("Token::End"), "{rust}");
+}
+
+#[test]
 fn rust_lowering_uses_managed_class_for_protocol_and_capability() {
     let source = r#"
 protocol Readable {

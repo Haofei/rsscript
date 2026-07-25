@@ -2720,9 +2720,12 @@ impl RegUnit {
                     params: signature
                         .params
                         .iter()
-                        .map(|param| param.type_name.clone())
+                        .map(|param| hir.canonical_type_name(&param.type_name))
                         .collect(),
-                    return_type: signature.return_type.clone(),
+                    return_type: signature
+                        .return_type
+                        .as_deref()
+                        .map(|ty| hir.canonical_type_name(ty)),
                 },
             );
             let mut lowerer = RegLowerer {

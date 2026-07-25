@@ -112,6 +112,46 @@ fn str_top_arg(s: String, which: Int) -> String {
     return str_trim(s: result)
 }
 
+// Replace one identifier in a canonical type string without touching longer
+// nominal names (`T` does not rewrite `Task`). Used by generic-alias
+// substitution in the self-hosted checker.
+fn str_replace_type_ident(s: String, name: String, replacement: String) -> String {
+    let chars = String.chars(value: s)
+    let n = List.len(list: chars)
+    let mut out = ""
+    let mut i = 0
+    while i < n {
+        let c = List.get(list: chars, index: i)
+        if Char.is_alpha(value: c) || c == '_' {
+            let start = i
+            i = i + 1
+            let mut scanning = true
+            while scanning {
+                if i >= n {
+                    scanning = false
+                } else {
+                    let next = List.get(list: chars, index: i)
+                    if Char.is_alphanumeric(value: next) || next == '_' {
+                        i = i + 1
+                    } else {
+                        scanning = false
+                    }
+                }
+            }
+            let ident = String.slice(value: s, start, len: (i - start))
+            if ident == name {
+                out = String.concat(left: out, right: replacement)
+            } else {
+                out = String.concat(left: out, right: ident)
+            }
+        } else {
+            out = String.concat(left: out, right: Char.to_string(value: c))
+            i = i + 1
+        }
+    }
+    return out
+}
+
 // Arity of a `Fn(a, b, ...) -> ret` type body (prefixes already stripped): the count of
 // top-level comma-separated arg types in the paren group (0 for `Fn()`), or -1 if `body`
 // is not a Fn type. Commas nested in ()/[]/<> are not separators.

@@ -2589,6 +2589,30 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
+    fn native_translation_classifies_scalar_alias_signatures() {
+        let source = r#"
+type Real = Float
+
+fn add(left: Real, right: Real) -> Real {
+    return left + right
+}
+"#;
+        let executable =
+            reg_vm_compile_source("native-scalar-alias.rss", source).expect("source compiles");
+        let signature = &executable.unit.native_signatures["add"];
+        assert_eq!(signature.params, vec!["Float", "Float"]);
+        assert_eq!(signature.return_type.as_deref(), Some("Float"));
+
+        let add = executable.unit.function_ids["add"];
+        let (_, ret, params, _, _) =
+            translate_to_native_jit(&executable.unit, executable.unit.functions[add].as_ref())
+                .expect("scalar alias function should translate");
+        assert_eq!(params, vec![NativeTy::Float, NativeTy::Float]);
+        assert_eq!(ret, NativeTy::Float);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
     fn native_translation_preserves_handle_return_compiled_call() {
         let source = "\
 fn make_text(value: Int) -> String {
@@ -2801,58 +2825,77 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
-    fn native_float_comparison_branch_compiles_without_fallback() {
-        let source = "\
-fn choose(left: Float, right: Float) -> Int {
-    if left < right {
-        return 1
-    }
-    return 0
-}
+    fn native_float_comparison_branches_cover_ieee_edges_without_fallback() {
+        let source = r#"
+fn lt(left: Float, right: Float) -> Int { if left < right { return 1 } return 0 }
+fn le(left: Float, right: Float) -> Int { if left <= right { return 1 } return 0 }
+fn gt(left: Float, right: Float) -> Int { if left > right { return 1 } return 0 }
+fn ge(left: Float, right: Float) -> Int { if left >= right { return 1 } return 0 }
+fn eq(left: Float, right: Float) -> Int { if left == right { return 1 } return 0 }
+fn ne(left: Float, right: Float) -> Int { if left != right { return 1 } return 0 }
 
-fn main() -> Unit {
-    return Unit
-}
-";
-        let executable = reg_vm_compile_source("native-float-compare-branch.rss", source)
+fn main() -> Unit { return Unit }
+"#;
+        let executable = reg_vm_compile_source("native-float-compare-branches.rss", source)
             .expect("source compiles");
-        let choose = executable.unit.function_ids["choose"];
-        let func = Rc::clone(&executable.unit.functions[choose]);
-        let mut vm = RegVm::new(
-            Rc::clone(&executable.unit),
-            Vec::<String>::new(),
-            HashMap::new(),
-        );
-        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
-        vm.prepare_frame(0, func.regs).expect("frame");
-        vm.set_reg(0, VmValue::Float(1.5));
-        vm.set_reg(1, VmValue::Float(2.5));
-        vm.push_frame(Frame {
-            func: Rc::clone(&func),
-            ip: 0,
-            base: 0,
-            ret_dst: usize::MAX,
-            mut_writeback: Vec::new(),
-            tail_calls: 0,
-        })
-        .expect("push frame");
-
-        match vm.try_native(&func, 0) {
-            NativeAttempt::Completed(VmValue::Int(1)) => {}
-            NativeAttempt::Completed(value) => {
-                panic!("choose completed with wrong value: {value:?}")
+        let run = |name: &str, left: f64, right: f64| {
+            let function_id = executable.unit.function_ids[name];
+            let func = Rc::clone(&executable.unit.functions[function_id]);
+            let mut vm = RegVm::new(
+                Rc::clone(&executable.unit),
+                Vec::<String>::new(),
+                HashMap::new(),
+            );
+            vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+            vm.prepare_frame(0, func.regs).expect("frame");
+            vm.set_reg(0, VmValue::Float(left));
+            vm.set_reg(1, VmValue::Float(right));
+            vm.push_frame(Frame {
+                func: Rc::clone(&func),
+                ip: 0,
+                base: 0,
+                ret_dst: usize::MAX,
+                mut_writeback: Vec::new(),
+                tail_calls: 0,
+            })
+            .expect("push frame");
+            match vm.try_native(&func, 0) {
+                NativeAttempt::Completed(VmValue::Int(value)) => value,
+                NativeAttempt::Completed(value) => {
+                    panic!("{name}({left:?}, {right:?}) returned {value:?}")
+                }
+                NativeAttempt::Resumed => {
+                    panic!("{name}({left:?}, {right:?}) resumed instead of completing")
+                }
+                NativeAttempt::Fallback => {
+                    panic!("{name}({left:?}, {right:?}) fell back from native execution")
+                }
             }
-            NativeAttempt::Resumed => {
-                panic!(
-                    "choose unexpectedly resumed, stats={:?}",
-                    vm.native.as_ref().expect("native").stats
-                )
-            }
-            NativeAttempt::Fallback => {
-                panic!(
-                    "choose unexpectedly fell back, stats={:?}",
-                    vm.native.as_ref().expect("native").stats
-                )
+        };
+        let values = [
+            (-1.0, 2.0),
+            (2.0, -1.0),
+            (3.0, 3.0),
+            (0.0, -0.0),
+            (f64::NEG_INFINITY, f64::INFINITY),
+            (f64::NAN, 1.0),
+            (1.0, f64::NAN),
+            (f64::NAN, f64::NAN),
+        ];
+        for (left, right) in values {
+            for (name, expected) in [
+                ("lt", left < right),
+                ("le", left <= right),
+                ("gt", left > right),
+                ("ge", left >= right),
+                ("eq", left == right),
+                ("ne", left != right),
+            ] {
+                assert_eq!(
+                    run(name, left, right),
+                    i64::from(expected),
+                    "{name}({left:?}, {right:?})"
+                );
             }
         }
     }

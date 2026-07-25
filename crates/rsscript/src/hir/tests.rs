@@ -55,6 +55,27 @@ struct Session {
 }
 
 #[test]
+fn class_alias_fields_keep_handle_metadata() {
+    let source = r#"
+class User {
+    name: String
+}
+
+type UserAlias = User
+
+struct Session {
+    user: UserAlias
+}
+"#;
+    let program = parse_source("test.rss", source);
+    let hir = Hir::from_syntax(&program);
+    let session = hir.type_info("Session").expect("session type exists");
+
+    assert!(session.fields["user"].is_handle);
+    assert_eq!(hir.canonical_type_name("UserAlias"), "User");
+}
+
+#[test]
 fn normalizes_omitted_function_type_effects() {
     let program = parse_source(
         "test.rss",

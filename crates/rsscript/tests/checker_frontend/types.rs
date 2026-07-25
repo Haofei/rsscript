@@ -1253,6 +1253,84 @@ fn pick() -> Int {
 }
 
 #[test]
+fn checker_checks_exhaustiveness_through_generic_option_aliases() {
+    let source = r#"
+type Maybe<T> = Option<T>
+
+fn classify(value: read Maybe<Bool>) -> Int {
+    match read value {
+        Some(true) => return 1
+        None => return 0
+    }
+}
+"#;
+    let diagnostics = analyze_source("aliased-option-match.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0021"
+                && diagnostic.label == "non-exhaustive match"),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_types_pattern_bindings_through_generic_aliases() {
+    let source = r#"
+type Maybe<T> = Option<T>
+
+fn need_string(value: read String) -> Unit {
+    return Unit
+}
+
+fn bad(input: read Maybe<Int>) -> Unit {
+    match read input {
+        Some(value) => need_string(value: read value)
+        None => {}
+    }
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("aliased-pattern-binding.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0207"),
+        "aliased payload must retain its Int type: {diagnostics:?}"
+    );
+}
+
+#[test]
+fn checker_types_fields_through_aliases() {
+    let source = r#"
+struct Boxed {
+    value: Int
+}
+
+type Alias = Boxed
+
+fn need_string(value: read String) -> Unit {
+    return Unit
+}
+
+fn bad(input: read Alias) -> Unit {
+    need_string(value: read input.value)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("aliased-field-type.rss", source);
+
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "RS0207"),
+        "aliased field must retain its Int type: {diagnostics:?}"
+    );
+}
+
+#[test]
 fn checker_accepts_wildcard_match_on_bare_none_literal() {
     // A bare `None` scrutinee resolves to `Option`, so a wildcard arm is
     // exhaustive. Regression: the analyzer's exhaustiveness helper formerly

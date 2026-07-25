@@ -6404,6 +6404,42 @@ fn second() -> &String {
 }
 
 #[test]
+fn checker_rs0039_structured_generic_alias_cycle_parity() {
+    let source = r#"type A<T> = B<List<T>>
+type B<T> = A<List<T>>
+"#;
+    let oracle = checker_oracle_records("structured-rs0039.rss", source, "RS0039");
+    assert_eq!(oracle.len(), 2, "both aliases participate in the cycle");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0039",
+    );
+    assert_eq!(oracle, actual, "RS0039 structured diagnostics diverged");
+}
+
+#[test]
+fn checker_rs0207_structured_generic_alias_substitution_parity() {
+    let source = r#"type Boxed<T> = List<T>
+
+fn consume(values: read Boxed<String>) -> Unit {
+    return Unit
+}
+
+fn bad(values: read List<Int>) -> Unit {
+    consume(values: read values)
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("structured-generic-alias-rs0207.rss", source, "RS0207");
+    assert_eq!(oracle.len(), 1, "fixture must mismatch the substituted T");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0207",
+    );
+    assert_eq!(oracle, actual, "generic alias RS0207 diagnostics diverged");
+}
+
+#[test]
 fn type_helpers_detect_prefixed_and_late_generic_args() {
     let mut sources = tool_sources("types.rss").expect("selfhost types deps should load");
     sources.push((

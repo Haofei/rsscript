@@ -145,7 +145,8 @@ impl Analyzer<'_> {
         }) {
             return true;
         }
-        let root = self.resolve_type_alias(type_root_name(type_name));
+        let type_name = self.expand_type_alias(type_name);
+        let root = type_root_name(&type_name).to_string();
         if root == "List" {
             // A rest pattern `[a.., ..rest, ..z]` covers every length `>= a+z`; a
             // fixed pattern covers exactly its element count. The match is
@@ -190,7 +191,7 @@ impl Analyzer<'_> {
             return bool_literals.contains(&true) && bool_literals.contains(&false);
         }
         if root == "Option" {
-            let args = type_arg_names(type_name).unwrap_or_default();
+            let args = type_arg_names(&type_name).unwrap_or_default();
             let some_has_irrefutable_payload = patterns.iter().any(|pattern| {
                 matches!(pattern, MatchPattern::Variant { name, bindings, .. } if name == "Some" && bindings.is_empty())
             });
@@ -213,7 +214,7 @@ impl Analyzer<'_> {
             return some_covered && none_covered;
         }
         if root == "Result" {
-            let args = type_arg_names(type_name).unwrap_or_default();
+            let args = type_arg_names(&type_name).unwrap_or_default();
             let ok_has_irrefutable_payload = patterns.iter().any(|pattern| {
                 matches!(pattern, MatchPattern::Variant { name, bindings, .. } if name == "Ok" && bindings.is_empty())
             });
@@ -327,7 +328,8 @@ impl Analyzer<'_> {
     }
 
     pub(super) fn finite_type_witnesses(&self, type_name: &str) -> Option<Vec<PatternWitness>> {
-        let root = self.resolve_type_alias(type_root_name(type_name));
+        let type_name = self.expand_type_alias(type_name);
+        let root = type_root_name(&type_name).to_string();
         if root == "Bool" {
             return Some(vec![
                 PatternWitness::Bool(true),
@@ -335,7 +337,7 @@ impl Analyzer<'_> {
             ]);
         }
         if root == "Option" {
-            let args = type_arg_names(type_name).unwrap_or_default();
+            let args = type_arg_names(&type_name).unwrap_or_default();
             let payload = args
                 .first()
                 .and_then(|inner| self.finite_type_witnesses(inner))
@@ -355,7 +357,7 @@ impl Analyzer<'_> {
             return Some(witnesses);
         }
         if root == "Result" {
-            let args = type_arg_names(type_name).unwrap_or_default();
+            let args = type_arg_names(&type_name).unwrap_or_default();
             let ok_payload = args
                 .first()
                 .and_then(|inner| self.finite_type_witnesses(inner))

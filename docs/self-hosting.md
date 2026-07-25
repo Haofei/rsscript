@@ -84,7 +84,7 @@ minimal compiler rebuild must not invoke Cargo.
 | Recognizer | `selfhost/parser.rss` | Top-level accept/reject parity | Does not produce the reusable AST |
 | AST producer | `selfhost/astdump.rss` | Canonical AST dump parity; top-level records, ordinary-function signatures, data fields/variants, and validated bodies with bindings, places, effects, control flow, `with`/`select`, `spawn`, implicit pipe closures, and scalar/positional-variant `match` patterns render from shared `Program` | Rich struct/list/tuple `match` rendering, explicit/capturing closures, receiver-call effects, type/default-expression children, `let-else`, and protocol method bodies still use the legacy renderer |
 | Type helpers | `selfhost/types.rss` | Shared canonical type-string operations | Not a complete symbol/type representation |
-| Single-file checker | `selfhost/check.rss` | Presence parity for 82 diagnostic families; occurrence+span parity for 80 families | Two remaining families still use independent file-level token probes |
+| Single-file checker | `selfhost/check.rss` | Presence and occurrence+span parity for 84 diagnostic families | Rust remains the semantic oracle |
 | Package checker | `selfhost/package_contract.rss` | `RS1301` parity for functions, data declarations, protocols/impls, native exemptions, and resolved multi-file bundles | Path-sensitive bundle records and semantic edge cases remain |
 | Canonical bootstrap IR | `selfhost/ir/canonical.rss` | Versioned RSS-to-IR parity for signatures, scalar/control-flow forms, calls, reads, and field/index places | Initial slice only; production lowering remains Rust |
 | Lowering and IR | Rust | Production compilation | RSS canonical IR does not yet cover ownership/effects, generics, closures, intrinsics, or package artifacts |
@@ -284,7 +284,7 @@ new baseline; the remaining cost is legacy body rendering.
 named-argument data effect now means `read`; explicit `read` remains accepted,
 while `mut` and `take` remain mandatory. RS0008 is consequently reserved and
 removed from the active self-host checker target. The checker target now covers
-82 active diagnostic families, and its RS0202 parity fixture proves that a bare
+84 active diagnostic families, and its RS0202 parity fixture proves that a bare
 argument satisfies only a read parameter.
 
 ## Delivery Stages
@@ -311,11 +311,11 @@ correct semantic level, including package contracts.
 
 Structured checker migration currently covers RS0002-RS0014, RS0018-RS0024,
 RS0016-RS0017, RS0022-RS0024, RS0027-RS0029, RS0032-RS0037, RS0101, RS0201, RS0205, RS0211-RS0212, RS0301, RS0306-RS0308,
-RS0302-RS0305, RS0309, RS0311-RS0313, RS0401, RS0501, RS0601, RS0603-RS0604, RS0701-RS0711, RS0801-RS0805, RS0901-RS0904, and RS1001-RS1004 (80 of 82
+RS0302-RS0305, RS0309, RS0311-RS0313, RS0039, RS0401, RS0501, RS0601, RS0603-RS0604, RS0701-RS0711, RS0801-RS0805, RS0901-RS0904, and RS1001-RS1004 (84 of 84
 presence-parity families).
 The canonical wire record is
 `code<TAB>line<TAB>column<TAB>length`; records are sorted and compared as
-multisets without deduplication. Code-presence mode remains the fast 82-family
+multisets without deduplication. Code-presence mode remains the fast 84-family
 corpus gate until every family has migrated. Family-level tests filter the
 checker's complete structured stream by target code before comparing that
 code's multiset, so fixtures may exercise overlapping diagnostics without
@@ -330,7 +330,7 @@ Stage 2 type-model migration item, not a span-normalization problem.
 arguments, including same-file and curated stdlib signatures. Callback bodies,
 interpolations, and generic receiver calls remain presence-only because their
 Rust diagnostics attach to typed subexpressions that the token-probe checker
-does not materialize. It therefore remains outside the 80-family structured
+does not materialize. It therefore remains outside that diagnostic's structured
 count until Stage 2 supplies that shared expression model.
 
 The inventory audit added the previously omitted reachable single-source
@@ -901,13 +901,13 @@ Each RSS-written layer runs against the same input as its production Rust oracle
 | Lexer | `selfhost/lexer.rss` | `crate::lexer::lex`; canonical token records |
 | Parser recognition | `selfhost/parser.rss` | `crate::syntax::parse_source_raw`; accept/reject and position tier |
 | AST dump | `selfhost/astdump.rss` | surface-preserving Rust AST dump; byte-exact text |
-| Checker | `selfhost/check.rss` | `crate::analyze_source`; target-code presence for 82 families and structured occurrence+span parity for 80 |
+| Checker | `selfhost/check.rss` | `crate::analyze_source`; target-code presence and structured occurrence+span parity for 84 families |
 | Package contract | `selfhost/package_contract.rss` | `crate::review_package_dir`; filtered `RS1301` results |
 | Future lowering | RSS lowering | normalized Rust IR; byte-exact canonical serialization |
 | Future backend | RSS C emitter | VM/existing AOT observable behavior and generated-artifact checks |
 
 The legacy checker corpus gate compares diagnostic-code presence only. The
-structured migration compares occurrence counts and stable spans for 80
+structured migration compares occurrence counts and stable spans for 84
 families, but does not yet compare messages, label classes, causes, or fixes.
 Stage 1 explicitly closes that limitation family by family.
 

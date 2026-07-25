@@ -3,6 +3,23 @@
 use super::*;
 
 #[test]
+fn rust_lowering_types_let_else_through_aliases() {
+    let source = r#"
+type Maybe<T> = Option<T>
+
+fn unwrap_or_zero(value: read Maybe<Int>) -> Int {
+    let Some(inner) = value else {
+        return 0
+    }
+    return inner
+}
+"#;
+    let rust = lower_source_to_rust("aliased-let-else.rss", source).expect("source should lower");
+
+    assert!(rust.contains("let Some(inner) = value else"), "{rust}");
+}
+
+#[test]
 fn rust_lowering_allows_positional_args_for_private_helpers() {
     let source = r#"
 fn join_pair(left: read String, right: read String) -> String {

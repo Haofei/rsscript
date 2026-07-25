@@ -719,6 +719,35 @@ type B = List<A>
 }
 
 #[test]
+fn growing_generic_alias_cycles_are_rejected_without_recursing() {
+    for source in [
+        r#"
+type A<T> = A<List<T>>
+
+fn sink(value: read A<Int>) -> Unit {
+    return Unit
+}
+"#,
+        r#"
+type A<T> = B<List<T>>
+type B<T> = A<List<T>>
+
+fn sink(value: read A<Int>) -> Unit {
+    return Unit
+}
+"#,
+    ] {
+        let diagnostics = analyze_source("growing-cyclic-alias.rss", source);
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "RS0039"),
+            "growing generic cycles need RS0039: {diagnostics:?}"
+        );
+    }
+}
+
+#[test]
 fn generic_alias_parameters_do_not_resolve_to_global_aliases() {
     let source = r#"
 type Boxed<T> = List<T>
@@ -736,6 +765,24 @@ fn identity(value: T) -> T {
             .all(|diagnostic| diagnostic.code != "RS0039"),
         "a bound alias parameter must not create a false alias cycle: {diagnostics:?}"
     );
+}
+
+#[test]
+fn nested_reuse_of_a_non_recursive_generic_alias_fully_expands() {
+    let source = r#"
+type Wrapped<T> = List<T>
+
+fn consume(values: read List<List<Int>>) -> Unit {
+    return Unit
+}
+
+fn main(values: read Wrapped<Wrapped<Int>>) -> Unit {
+    consume(values: read values)
+    return Unit
+}
+"#;
+    let diagnostics = analyze_source("nested-generic-alias.rss", source);
+    assert_eq!(diagnostics, Vec::new());
 }
 
 #[test]

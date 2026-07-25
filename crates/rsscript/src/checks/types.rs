@@ -44,9 +44,10 @@ fn check_alias_cycles(analyzer: &mut Analyzer<'_>) {
         })
         .collect::<BTreeMap<_, _>>();
     let declared = analyzer
-        .syntax_program
-        .items
+        .interface_programs
         .iter()
+        .flat_map(|program| program.items.iter())
+        .chain(analyzer.syntax_program.items.iter())
         .filter_map(|item| match item {
             Item::TypeAlias(alias) => Some((
                 alias.name.clone(),

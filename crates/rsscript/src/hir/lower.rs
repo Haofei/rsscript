@@ -91,11 +91,20 @@ impl Hir {
             .filter(|(_, info)| info.kind == HirTypeKind::Class)
             .map(|(name, _)| name.clone())
             .collect();
+        let aliased_class_fields = self
+            .types
+            .values()
+            .flat_map(|info| info.fields.values())
+            .filter(|field| {
+                class_types.contains(type_root_name(&self.expand_type_alias(&field.type_name)))
+            })
+            .map(|field| field.type_name.clone())
+            .collect::<HashSet<_>>();
         for info in self.types.values_mut() {
             for field in info.fields.values_mut() {
                 if !field.is_handle
                     && !field.is_weak
-                    && class_types.contains(type_root_name(&field.type_name))
+                    && aliased_class_fields.contains(&field.type_name)
                 {
                     field.is_handle = true;
                 }
@@ -103,7 +112,7 @@ impl Hir {
             for field in &mut info.fields_ordered {
                 if !field.is_handle
                     && !field.is_weak
-                    && class_types.contains(type_root_name(&field.type_name))
+                    && aliased_class_fields.contains(&field.type_name)
                 {
                     field.is_handle = true;
                 }
@@ -457,6 +466,10 @@ impl Hir {
         )
     }
 
+    pub(crate) fn canonical_type_name(&self, type_name: &str) -> String {
+        self.expand_type_alias(type_name)
+    }
+
     fn expand_type_alias(&self, type_name: &str) -> String {
         self.expand_type_alias_inner(type_name, &mut std::collections::BTreeSet::new())
     }
@@ -467,28 +480,34 @@ impl Hir {
         visiting: &mut std::collections::BTreeSet<String>,
     ) -> String {
         let trimmed = type_name.trim();
-        if !visiting.insert(trimmed.to_string()) {
-            return trimmed.to_string();
-        }
         let prefixed = ["fresh ", "noescape ", "owned "]
             .into_iter()
             .find_map(|prefix| trimmed.strip_prefix(prefix).map(|target| (prefix, target)));
-        let expanded = if let Some((prefix, target)) = prefixed {
+        if let Some((prefix, target)) = prefixed {
             format!("{prefix}{}", self.expand_type_alias_inner(target, visiting))
         } else {
             let root = type_root_name(trimmed);
+            let expanded_args = type_arg_names(trimmed).map(|args| {
+                args.into_iter()
+                    .map(|argument| self.expand_type_alias_inner(argument, visiting))
+                    .collect::<Vec<_>>()
+            });
+            let normalized = expanded_args.as_ref().map_or_else(
+                || trimmed.to_string(),
+                |args| format!("{root}<{}>", args.join(", ")),
+            );
             if let Some((params, target)) = self.type_aliases.get(root) {
                 let alias_target = if params.is_empty() {
                     Some(target.clone())
                 } else {
-                    type_arg_names(trimmed).and_then(|args| {
+                    expanded_args.as_ref().and_then(|args| {
                         if args.len() != params.len() {
                             return None;
                         }
                         let substitutions = params
                             .iter()
                             .cloned()
-                            .zip(args.into_iter().map(str::to_string))
+                            .zip(args.iter().cloned())
                             .collect::<HashMap<_, _>>();
                         Some(crate::text_util::substitute_type_args(
                             target,
@@ -497,24 +516,16 @@ impl Hir {
                     })
                 };
                 if let Some(alias_target) = alias_target {
+                    if !visiting.insert(root.to_string()) {
+                        return normalized;
+                    }
                     let expanded = self.expand_type_alias_inner(&alias_target, visiting);
-                    visiting.remove(trimmed);
+                    visiting.remove(root);
                     return expanded;
                 }
             }
-            if let Some(args) = type_arg_names(trimmed) {
-                let args = args
-                    .into_iter()
-                    .map(|argument| self.expand_type_alias_inner(argument, visiting))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{root}<{args}>")
-            } else {
-                trimmed.to_string()
-            }
-        };
-        visiting.remove(trimmed);
-        expanded
+            normalized
+        }
     }
 
     fn receiver_call_candidates(
@@ -836,8 +847,11 @@ fn lower_hir_stmts(
     match statement {
         Stmt::LetElse(stmt) => {
             let value_type_name = infer_hir_expr_type(hir, &stmt.value, value_types);
+            let canonical_value_type = value_type_name
+                .as_deref()
+                .map(|ty| hir.canonical_type_name(ty));
             let binding_type_name =
-                match_pattern_binding_type(&stmt.pattern, value_type_name.as_deref())
+                match_pattern_binding_type(&stmt.pattern, canonical_value_type.as_deref())
                     .map(|(_, type_name)| type_name);
             let mut statements = vec![HirStmt::Match {
                 value: lower_hir_expr(hir, function_name, &stmt.value, value_types),

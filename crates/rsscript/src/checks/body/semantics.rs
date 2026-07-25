@@ -458,15 +458,16 @@ pub(super) fn check_match_scrutinee_type(analyzer: &mut Analyzer<'_>, expr: &Hir
     let Some(type_name) = hir_expr_type_name(expr) else {
         return;
     };
-    if matches!(type_root_name(type_name), "Option" | "Result" | "List") {
+    let type_name = analyzer.expand_type_alias(type_name);
+    if matches!(type_root_name(&type_name), "Option" | "Result" | "List") {
         return;
     }
-    if matches!(type_name, "Int" | "String" | "Char" | "Bool") {
+    if matches!(type_name.as_str(), "Int" | "String" | "Char" | "Bool") {
         return;
     }
     // Allow matching on user-defined sum/struct/class types.
     if matches!(
-        analyzer.hir.type_kind(type_name),
+        analyzer.hir.type_kind(&type_name),
         Some(HirTypeKind::Sum | HirTypeKind::Struct | HirTypeKind::Class)
     ) {
         return;
@@ -500,7 +501,8 @@ pub(super) fn check_match_pattern_matches_type(
     pattern: &MatchPattern,
     type_name: &str,
 ) {
-    let root = type_root_name(type_name);
+    let type_name = analyzer.expand_type_alias(type_name);
+    let root = type_root_name(&type_name);
     match pattern {
         MatchPattern::Binding { .. } | MatchPattern::Wildcard(_) => {}
         MatchPattern::Literal { value, span } => {
@@ -550,7 +552,7 @@ pub(super) fn check_match_pattern_matches_type(
                 push_match_variant_type_mismatch(
                     analyzer,
                     name,
-                    type_name,
+                    &type_name,
                     &["Some".to_string(), "None".to_string()],
                     span,
                 );
@@ -565,7 +567,7 @@ pub(super) fn check_match_pattern_matches_type(
             if name == "Some"
                 && let Some(binding) = bindings.first()
                 && let Some(inner) =
-                    type_arg_names(type_name).and_then(|args| args.first().copied())
+                    type_arg_names(&type_name).and_then(|args| args.first().copied())
             {
                 check_match_pattern_matches_type(analyzer, binding, inner);
             }
@@ -580,7 +582,7 @@ pub(super) fn check_match_pattern_matches_type(
                 push_match_variant_type_mismatch(
                     analyzer,
                     name,
-                    type_name,
+                    &type_name,
                     &["Ok".to_string(), "Err".to_string()],
                     span,
                 );
@@ -591,7 +593,7 @@ pub(super) fn check_match_pattern_matches_type(
                 return;
             }
             if let Some(binding) = bindings.first()
-                && let Some(args) = type_arg_names(type_name)
+                && let Some(args) = type_arg_names(&type_name)
             {
                 let payload_type = if name == "Ok" {
                     args.first()
@@ -612,9 +614,9 @@ pub(super) fn check_match_pattern_matches_type(
             let Some((_, fields)) = pattern_sum_variant_fields(analyzer, root, name) else {
                 let allowed = allowed_sum_variant_names(analyzer, root);
                 if allowed.is_empty() {
-                    push_variant_or_struct_cannot_match(analyzer, name, type_name, span);
+                    push_variant_or_struct_cannot_match(analyzer, name, &type_name, span);
                 } else {
-                    push_match_variant_type_mismatch(analyzer, name, type_name, &allowed, span);
+                    push_match_variant_type_mismatch(analyzer, name, &type_name, &allowed, span);
                 }
                 return;
             };
@@ -652,7 +654,7 @@ pub(super) fn check_match_pattern_matches_type(
                 pattern_sum_variant_fields(analyzer, root, name).map(|(_, fields)| fields)
             };
             let Some(declared) = declared else {
-                push_variant_or_struct_cannot_match(analyzer, name, type_name, span);
+                push_variant_or_struct_cannot_match(analyzer, name, &type_name, span);
                 return;
             };
             // Map the type's declared parameters (`A`, `B`) to the scrutinee's
@@ -662,7 +664,7 @@ pub(super) fn check_match_pattern_matches_type(
                 .type_info(root)
                 .map(|info| info.type_params.to_vec())
                 .unwrap_or_default();
-            let substitutions = generic_substitutions(&type_params, type_name);
+            let substitutions = generic_substitutions(&type_params, &type_name);
             for field in fields {
                 if let Some(pattern) = &field.pattern
                     && let Some(field_info) = declared
@@ -681,13 +683,13 @@ pub(super) fn check_match_pattern_matches_type(
             ..
         } => {
             if root != "List" {
-                push_variant_or_struct_cannot_match(analyzer, "[..]", type_name, span);
+                push_variant_or_struct_cannot_match(analyzer, "[..]", &type_name, span);
                 return;
             }
             // Each element pattern is checked against the list's element type `T`
             // (`List<T>`); the rest binding (if any) is itself a `List<T>`.
             if let Some(element_type) =
-                type_arg_names(type_name).and_then(|args| args.first().copied())
+                type_arg_names(&type_name).and_then(|args| args.first().copied())
             {
                 for pattern in prefix.iter().chain(suffix) {
                     check_match_pattern_matches_type(analyzer, pattern, element_type);
@@ -820,8 +822,10 @@ pub(super) fn check_match_pattern_effects(
     scrutinee_effect: Option<DataEffect>,
     arms: &[HirMatchArm],
 ) {
-    let scrutinee_type = hir_expr_type_name(value).map(str::to_string);
+    let scrutinee_type = hir_expr_type_name(value).map(|ty| analyzer.expand_type_alias(ty));
     let managed_class_scrutinee = hir_expr_type_name(value)
+        .map(|ty| analyzer.expand_type_alias(ty))
+        .as_deref()
         .map(type_root_name)
         .is_some_and(|root| analyzer.hir.type_kind(root) == Some(HirTypeKind::Class));
     if scrutinee_effect == Some(DataEffect::Take)
@@ -1030,7 +1034,8 @@ pub(super) fn declared_pattern_fields(
     scrutinee_type: Option<&str>,
     pattern_name: &str,
 ) -> Option<Vec<String>> {
-    let scrutinee_root = scrutinee_type.map(type_root_name)?;
+    let canonical_scrutinee = scrutinee_type.map(|ty| analyzer.expand_type_alias(ty))?;
+    let scrutinee_root = type_root_name(&canonical_scrutinee);
     if analyzer
         .hir
         .sum_type_for_variant(pattern_name)

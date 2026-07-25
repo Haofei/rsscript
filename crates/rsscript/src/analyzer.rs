@@ -315,6 +315,25 @@ mod entrypoint_tests {
     }
 
     #[test]
+    fn cyclic_generic_aliases_in_interfaces_report_rs0039() {
+        let interfaces = [(
+            "cycle.rssi",
+            "type A<T> = B<List<T>>\ntype B<T> = A<List<T>>\n",
+        )];
+        let diagnostics =
+            analyze_source_with_interfaces_without_core("main.rss", SOURCE, &interfaces);
+
+        assert_eq!(
+            diagnostics
+                .iter()
+                .filter(|diagnostic| diagnostic.code == "RS0039")
+                .count(),
+            2,
+            "{diagnostics:?}"
+        );
+    }
+
+    #[test]
     fn preparation_preserves_analyzer_interface_program_policy() {
         static CALLER_INTERFACES: &[(&str, &str)] = &[("caller.rssi", CALLER_INTERFACE)];
 
@@ -1278,15 +1297,6 @@ impl RuntimeGuarantee {
 }
 
 impl Analyzer<'_> {
-    pub(crate) fn resolve_type_alias(&self, type_name: &str) -> String {
-        if let Some(definition) = self.type_aliases.get(type_name)
-            && definition.parameters.is_empty()
-        {
-            return render_type_ref(&self.canonical_type_ref(&definition.target));
-        }
-        type_name.to_string()
-    }
-
     /// Expand a type-alias reference, including generic aliases, to its target
     /// type. `IntList` -> `List<Int>`; `Pair<Int>` -> `Result<Int, String>` for
     /// `type Pair<T> = Result<T, String>`. Expansion is recursive, so aliases are
@@ -1303,52 +1313,50 @@ impl Analyzer<'_> {
         use crate::text_util::{substitute_type_args, type_arg_names, type_root_name};
 
         let trimmed = type_name.trim();
-        if !visiting.insert(trimmed.to_string()) {
-            return trimmed.to_string();
-        }
         let prefixed = ["fresh ", "noescape ", "owned "]
             .into_iter()
             .find_map(|prefix| trimmed.strip_prefix(prefix).map(|target| (prefix, target)));
-        let expanded = if let Some((prefix, target)) = prefixed {
+        if let Some((prefix, target)) = prefixed {
             format!("{prefix}{}", self.expand_type_alias_inner(target, visiting))
         } else {
             let root = type_root_name(trimmed);
+            let expanded_args = type_arg_names(trimmed).map(|args| {
+                args.into_iter()
+                    .map(|arg| self.expand_type_alias_inner(arg, visiting))
+                    .collect::<Vec<_>>()
+            });
+            let normalized = expanded_args.as_ref().map_or_else(
+                || trimmed.to_string(),
+                |args| format!("{root}<{}>", args.join(", ")),
+            );
             if let Some(definition) = self.type_aliases.get(root) {
                 let target = render_type_ref(&definition.target);
                 let params = definition.parameters.clone();
                 let alias_target = if params.is_empty() {
                     Some(target)
                 } else {
-                    type_arg_names(trimmed).and_then(|args| {
+                    expanded_args.as_ref().and_then(|args| {
                         if args.len() != params.len() {
                             return None;
                         }
                         let substitutions = params
                             .into_iter()
-                            .zip(args.into_iter().map(str::to_string))
+                            .zip(args.iter().cloned())
                             .collect::<std::collections::HashMap<_, _>>();
                         Some(substitute_type_args(&target, &substitutions))
                     })
                 };
                 if let Some(alias_target) = alias_target {
+                    if !visiting.insert(root.to_string()) {
+                        return normalized;
+                    }
                     let expanded = self.expand_type_alias_inner(&alias_target, visiting);
-                    visiting.remove(trimmed);
+                    visiting.remove(root);
                     return expanded;
                 }
             }
-            if let Some(args) = type_arg_names(trimmed) {
-                let args = args
-                    .into_iter()
-                    .map(|arg| self.expand_type_alias_inner(arg, visiting))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("{root}<{args}>")
-            } else {
-                trimmed.to_string()
-            }
-        };
-        visiting.remove(trimmed);
-        expanded
+            normalized
+        }
     }
 
     pub(crate) fn canonical_type_ref(&self, ty: &TypeRef) -> TypeRef {
@@ -1360,45 +1368,43 @@ impl Analyzer<'_> {
         ty: &TypeRef,
         visiting: &mut std::collections::BTreeSet<String>,
     ) -> TypeRef {
-        let key = render_type_ref(ty);
-        if !visiting.insert(key.clone()) {
-            return ty.clone();
-        }
-        if let Some(definition) = self.type_aliases.get(&ty.name)
-            && definition.parameters.len() == ty.args.len()
-        {
-            let substitutions = definition
-                .parameters
-                .iter()
-                .cloned()
-                .zip(ty.args.iter().cloned())
-                .collect::<BTreeMap<_, _>>();
-            let substituted = substitute_alias_type_ref(&definition.target, &substitutions);
-            let mut canonical = self.canonical_type_ref_inner(&substituted, visiting);
-            canonical.is_fresh |= ty.is_fresh;
-            canonical.is_noescape |= ty.is_noescape;
-            canonical.is_owned |= ty.is_owned;
-            canonical.span = ty.span.clone();
-            visiting.remove(&key);
-            return canonical;
-        }
-        let mut canonical = ty.clone();
-        canonical.args = canonical
+        let mut normalized = ty.clone();
+        normalized.args = normalized
             .args
             .iter()
             .map(|argument| self.canonical_type_ref_inner(argument, visiting))
             .collect();
-        canonical.fn_params = canonical
+        normalized.fn_params = normalized
             .fn_params
             .iter()
             .map(|parameter| self.canonical_type_ref_inner(parameter, visiting))
             .collect();
-        canonical.fn_return = canonical
+        normalized.fn_return = normalized
             .fn_return
             .as_deref()
             .map(|return_type| Box::new(self.canonical_type_ref_inner(return_type, visiting)));
-        visiting.remove(&key);
-        canonical
+        if let Some(definition) = self.type_aliases.get(&normalized.name)
+            && definition.parameters.len() == normalized.args.len()
+        {
+            if !visiting.insert(normalized.name.clone()) {
+                return normalized;
+            }
+            let substitutions = definition
+                .parameters
+                .iter()
+                .cloned()
+                .zip(normalized.args.iter().cloned())
+                .collect::<BTreeMap<_, _>>();
+            let substituted = substitute_alias_type_ref(&definition.target, &substitutions);
+            let mut canonical = self.canonical_type_ref_inner(&substituted, visiting);
+            canonical.is_fresh |= normalized.is_fresh;
+            canonical.is_noescape |= normalized.is_noescape;
+            canonical.is_owned |= normalized.is_owned;
+            canonical.span = normalized.span.clone();
+            visiting.remove(&normalized.name);
+            return canonical;
+        }
+        normalized
     }
 
     fn run(&mut self) {

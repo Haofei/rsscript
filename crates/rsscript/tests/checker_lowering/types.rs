@@ -622,6 +622,31 @@ fn typed_let_emits_deque_and_sorted_container_annotations() {
 }
 
 #[test]
+fn typed_let_emits_annotations_for_container_aliases() {
+    let source = r#"
+type Ints = List<Int>
+type Vector<T> = List<T>
+
+fn main() -> Unit {
+    let direct: Ints = []
+    let generic: Vector<Int> = []
+    return Unit
+}
+"#;
+    let lowered =
+        lower_source_to_rust("typed-container-alias.rss", source).expect("source should lower");
+
+    assert!(
+        lowered.contains("let direct: Vec<i64> = vec![];"),
+        "{lowered}"
+    );
+    assert!(
+        lowered.contains("let generic: Vec<i64> = vec![];"),
+        "{lowered}"
+    );
+}
+
+#[test]
 fn rust_lowering_classifies_dependency_interface_types() {
     // Review #8: a class declared in a *dependency* interface (not the current
     // source) must be classified so it lowers correctly. Previously it fell through

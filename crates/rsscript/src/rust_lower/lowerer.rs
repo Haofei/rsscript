@@ -376,16 +376,20 @@ impl<'a> RustLowerer<'a> {
             }
             Stmt::Match(stmt) => self.lower_match_stmt(stmt, out, &pad, indent),
             Stmt::LetElse(stmt) => {
-                let pattern = lower_match_pattern(&stmt.pattern);
+                let scrutinee_type = self
+                    .infer_expr_type(&stmt.value)
+                    .map(|ty| self.canonical_type_ref(&ty));
+                let by_ref = self.match_scrutinee_by_ref(&stmt.value);
+                let pattern =
+                    self.lower_match_pattern_typed(&stmt.pattern, scrutinee_type.as_ref(), by_ref);
                 let value = self.lower_expr(&stmt.value);
                 out.push_str(&format!("{pad}let {pattern} = {value} else {{\n"));
                 self.lower_block(&stmt.else_body, out, indent + 1);
                 out.push_str(&format!("{pad}}};\n"));
                 if !stmt.binding_name.is_empty() {
-                    let binding_type = self
-                        .infer_expr_type(&stmt.value)
-                        .and_then(|ty| match_binding_type_ref(&stmt.pattern, Some(&ty)))
-                        .map(|(_, ty)| ty);
+                    let binding_type =
+                        match_binding_type_ref(&stmt.pattern, scrutinee_type.as_ref())
+                            .map(|(_, ty)| ty);
                     if let Some(binding_type) = binding_type {
                         if self.is_class_type(&binding_type) {
                             self.managed_bindings.insert(stmt.binding_name.clone());
@@ -584,7 +588,9 @@ impl<'a> RustLowerer<'a> {
         pad: &str,
         indent: usize,
     ) {
-        let scrutinee_type = self.infer_expr_type(&stmt.value);
+        let scrutinee_type = self
+            .infer_expr_type(&stmt.value)
+            .map(|ty| self.canonical_type_ref(&ty));
         let mut scrutinee = self.lower_match_scrutinee_expr(&stmt.value, scrutinee_type.as_ref());
         let by_ref = self.match_scrutinee_by_ref(&stmt.value);
         // Native Rust slice patterns match a `[T]`, not a `Vec<T>`; view the
@@ -968,7 +974,9 @@ impl<'a> RustLowerer<'a> {
                 out
             }
             Expr::Match { value, arms, .. } => {
-                let scrutinee_type = self.infer_expr_type(value);
+                let scrutinee_type = self
+                    .infer_expr_type(value)
+                    .map(|ty| self.canonical_type_ref(&ty));
                 let mut scrutinee = self.lower_match_scrutinee_expr(value, scrutinee_type.as_ref());
                 let by_ref = self.match_scrutinee_by_ref(value);
                 if arms_have_list_pattern(arms) {
