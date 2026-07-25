@@ -24,7 +24,7 @@ jobs:
         uses: taiki-e/install-action@6d9ce389421e24f7b73aff5e841bbe5a6b4c974c # nextest
 
       - name: Check
-        run: cargo run --locked --quiet --bin rss -- test --all
+        run: cargo run --locked --quiet -p rsscript --bin rss -- test --all
 
   # The `test --all` manifest builds the default feature set; the native
   # (Cranelift) JIT tier is behind the off-by-default `native-jit` feature, so

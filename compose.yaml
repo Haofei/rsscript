@@ -2,7 +2,7 @@
 #
 # Quick start:
 #   docker compose build                                   # build the dev image
-#   docker compose run --rm dev cargo run --bin rss -- test --all
+#   docker compose run --rm dev cargo run -p rsscript --bin rss -- test --all
 #   docker compose run --rm dev bash                       # interactive shell
 #
 # The repo is bind-mounted at /work, so host edits are picked up immediately.

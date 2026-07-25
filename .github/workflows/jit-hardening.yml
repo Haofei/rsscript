@@ -40,7 +40,7 @@ jobs:
           docker compose run --rm dev cargo test -p rsscript --lib native_direct_dispatch_passes_flat_float_arg_to_compiled_call --features native-jit -- --test-threads=1
           docker compose run --rm dev cargo test -p rsscript --lib native_direct_dispatch_passes_flat_int_mut_arg_to_compiled_call --features native-jit -- --test-threads=1
           docker compose run --rm dev cargo test -p rsscript --lib native_direct_dispatch_passes_handle_arg_to_compiled_call --features native-jit -- --test-threads=1
-          docker compose run --rm dev cargo test -p rsscript --lib native_direct_dispatch_invokes_mut_handle_compiled_call --features native-jit -- --test-threads=1
+          docker compose run --rm dev cargo test -p rsscript --lib native_direct_dispatch_rejects_mut_handle_compiled_call --features native-jit -- --test-threads=1
           docker compose run --rm dev cargo test -p rsscript --lib precise_deopt_with_nested_child_native_frames_resumes_leaf_safepoint --features native-jit -- --test-threads=1
           docker compose run --rm dev cargo test -p rsscript --test runtime report_profile_guided_pic_shows_hottest_first_order --features native-jit -- --test-threads=1
           docker compose run --rm dev cargo test -p rsscript --test runtime report_shows_profile_guided_branch_feedback --features native-jit -- --test-threads=1

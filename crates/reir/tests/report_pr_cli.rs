@@ -29,28 +29,183 @@ fn report_pr_cli_matches_s3_demo_golden_comment() {
     let package_review_json = temp_dir.join("package-review.json");
     let head_reir = temp_dir.join("head.reir.json");
 
-    let package_review = Command::new("cargo")
-        .current_dir(workspace)
-        .args([
-            "run",
-            "--quiet",
-            "--bin",
-            "rss",
-            "--",
-            "pkg",
-            "review",
-            "--json",
-            "examples/demos/s3-iam-reir/scenarios/03-code-adds-delete",
-        ])
-        .output()
-        .expect("rss pkg review command should run");
-    assert!(
-        !package_review.stdout.is_empty(),
-        "rss pkg review should emit package-manager JSON\nstderr:\n{}",
-        String::from_utf8_lossy(&package_review.stderr)
-    );
-    fs::write(&package_review_json, &package_review.stdout)
-        .expect("package review JSON should be written");
+    // Package-review generation is covered in the rsscript package tests. Keep
+    // this REIR CLI test self-contained so it does not invoke a nested Cargo
+    // build with a different feature set during `cargo test --workspace`.
+    let package_review = serde_json::json!({
+        "package": {
+            "name": "rss-s3-uploader",
+            "version": "0.2.0"
+        },
+        "risk": "high",
+        "summary": {
+            "native_apis": 2
+        },
+        "exports": [
+            {
+                "name": "S3.delete_object",
+                "kind": "function",
+                "classification": "review_if_changed",
+                "reasons": ["async boundary", "native boundary", "public function"],
+                "function_kind": "async",
+                "normalized_effects": ["native", "suspends"]
+            },
+            {
+                "name": "S3.put_object",
+                "kind": "function",
+                "classification": "review_if_changed",
+                "reasons": ["async boundary", "native boundary", "public function"],
+                "function_kind": "async",
+                "normalized_effects": ["native", "suspends"]
+            }
+        ],
+        "capabilities": [
+            {
+                "function": "Reports.cleanup_old_reports",
+                "binding_symbol": "S3.delete_object",
+                "category": "object_storage.delete",
+                "provider": "aws",
+                "service": "s3",
+                "action": "s3:DeleteObject",
+                "resource": "arn:aws:s3:::reports-prod/*",
+                "call_chain": ["Reports.cleanup_old_reports", "S3.delete_object"],
+                "span": {
+                    "file": "src/upload.rss",
+                    "line": 28,
+                    "column": 11,
+                    "length": 2
+                }
+            },
+            {
+                "function": "S3.delete_object",
+                "binding_symbol": "S3.delete_object",
+                "category": "object_storage.delete",
+                "provider": "aws",
+                "service": "s3",
+                "action": "s3:DeleteObject",
+                "resource": "arn:aws:s3:::reports-prod/*",
+                "call_chain": ["S3.delete_object"],
+                "span": {
+                    "file": "interface/s3.rssi",
+                    "line": 10,
+                    "column": 1,
+                    "length": 3
+                }
+            },
+            {
+                "function": "Reports.upload_batch",
+                "binding_symbol": "S3.put_object",
+                "category": "object_storage.write",
+                "provider": "aws",
+                "service": "s3",
+                "action": "s3:PutObject",
+                "resource": "arn:aws:s3:::reports-prod/*",
+                "call_chain": ["Reports.upload_batch", "upload_report", "S3.put_object"],
+                "span": {
+                    "file": "src/upload.rss",
+                    "line": 16,
+                    "column": 11,
+                    "length": 13
+                }
+            },
+            {
+                "function": "S3.put_object",
+                "binding_symbol": "S3.put_object",
+                "category": "object_storage.write",
+                "provider": "aws",
+                "service": "s3",
+                "action": "s3:PutObject",
+                "resource": "arn:aws:s3:::reports-prod/*",
+                "call_chain": ["S3.put_object"],
+                "span": {
+                    "file": "interface/s3.rssi",
+                    "line": 3,
+                    "column": 1,
+                    "length": 3
+                }
+            },
+            {
+                "function": "upload_report",
+                "binding_symbol": "S3.put_object",
+                "category": "object_storage.write",
+                "provider": "aws",
+                "service": "s3",
+                "action": "s3:PutObject",
+                "resource": "arn:aws:s3:::reports-prod/*",
+                "call_chain": ["upload_report", "S3.put_object"],
+                "span": {
+                    "file": "src/upload.rss",
+                    "line": 8,
+                    "column": 11,
+                    "length": 2
+                }
+            }
+        ],
+        "native_rust": {
+            "cargo_features": [],
+            "semantic": {
+                "author_declaration": {
+                    "worker_thread_parallelism": false,
+                    "native_parallel_backend": null,
+                    "risk_reasons": ["native Rust wrapper path is outside the package root"]
+                },
+                "source_scan_best_effort": {
+                    "tool": "rss-native-source-scan",
+                    "selected_graph": "package-native-rust",
+                    "worker_thread_parallelism_detected": false,
+                    "native_parallel_backends": [],
+                    "unsafe_detected": false,
+                    "ffi_detected": false,
+                    "filesystem_detected": false,
+                    "network_detected": true,
+                    "build_script_present": false
+                }
+            }
+        },
+        "diagnostics": [
+            {
+                "code": "RS0206",
+                "severity": "error",
+                "summary": "call to `S3.put_object` does not resolve.",
+                "span": {"file": "src/upload.rss", "line": 8, "column": 11, "length": 2}
+            },
+            {
+                "code": "RS0206",
+                "severity": "error",
+                "summary": "call to `S3.delete_object` does not resolve.",
+                "span": {"file": "src/upload.rss", "line": 28, "column": 11, "length": 2}
+            },
+            {
+                "code": "RS0030",
+                "severity": "error",
+                "summary": "`await` must consume an async call.",
+                "span": {"file": "src/upload.rss", "line": 8, "column": 5, "length": 5}
+            },
+            {
+                "code": "RS0030",
+                "severity": "error",
+                "summary": "`await` must consume an async call.",
+                "span": {"file": "src/upload.rss", "line": 28, "column": 5, "length": 5}
+            },
+            {
+                "code": "RS1301",
+                "severity": "error",
+                "summary": "package interface function `S3.delete_object` has no public source implementation.",
+                "span": {"file": "interface/s3.rssi", "line": 10, "column": 1, "length": 3}
+            },
+            {
+                "code": "RS1301",
+                "severity": "error",
+                "summary": "package interface function `S3.put_object` has no public source implementation.",
+                "span": {"file": "interface/s3.rssi", "line": 3, "column": 1, "length": 3}
+            }
+        ]
+    });
+    fs::write(
+        &package_review_json,
+        serde_json::to_vec(&package_review).expect("package review fixture should serialize"),
+    )
+    .expect("package review JSON should be written");
 
     let collect = Command::new(env!("CARGO_BIN_EXE_reir"))
         .current_dir(workspace)

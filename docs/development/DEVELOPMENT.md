@@ -132,7 +132,7 @@ release-grade checks belong in the explicit soak commands above.
 For package-manager dogfood work, use the focused TDD gate first:
 
 ```sh
-cargo run --quiet --bin rss -- run packages/test-runner -- packages/test-runner/manifests/package-manager-tdd.rsstest.toml
+cargo run --quiet -p rsscript --bin rss -- run packages/test-runner -- packages/test-runner/manifests/package-manager-tdd.rsstest.toml
 ```
 
 This runs package-manager-focused static tests, the core JSON/lowering hooks
@@ -188,7 +188,7 @@ so the repository only consumes a mounted RAM disk path instead of trying to
 create one.
 
 ```sh
-cargo run --quiet --bin rss -- run packages/test-runner -- packages/test-runner/manifests/all.rsstest.toml
+cargo run --quiet -p rsscript --bin rss -- run packages/test-runner -- packages/test-runner/manifests/all.rsstest.toml
 ```
 
 Do not point these paths back at the SSD for normal development; if a test has

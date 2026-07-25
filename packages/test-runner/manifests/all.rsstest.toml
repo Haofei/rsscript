@@ -5,11 +5,37 @@ command = "cargo"
 args = ["fmt", "--check"]
 
 [[tests]]
-name = "clippy has no warnings"
+name = "compiler and adapter clippy has no warnings"
 kind = "command_success"
 command = "cargo"
 timeout_ms = 180000
-args = ["clippy", "--workspace", "--", "-D", "warnings"]
+args = [
+  "clippy",
+  "--workspace",
+  "--exclude",
+  "rsscript-runtime",
+  "--exclude",
+  "rss-metal-compute",
+  "--",
+  "-D",
+  "warnings",
+]
+
+[[tests]]
+name = "runtime clippy has no warnings"
+kind = "command_success"
+command = "cargo"
+timeout_ms = 180000
+args = [
+  "clippy",
+  "-p",
+  "rsscript-runtime",
+  "-p",
+  "rss-metal-compute",
+  "--",
+  "-D",
+  "warnings",
+]
 
 [[tests]]
 name = "generated Rust packages compile"
@@ -29,15 +55,18 @@ paths = [
 ]
 
 [[tests]]
-# Run every workspace crate's tests in one global parallel pool (all cores).
-# Includes the rsscript unit/integration tests, the fast in-process
-# differential/property suites, the runtime and native-abi crates, and the native
-# adapter crates. `selfhost_parity` deliberately runs below in one cargo-test
-# process: nextest otherwise creates a separate process for every case, which
-# prevents its per-thread compiled-tool cache from being reused.
+# Keep the complete runtime's default net/GPU features out of the compiler test
+# graph. Selecting every workspace member in one Cargo invocation unifies those
+# features into rsscript's core-only runtime dependency and creates a much larger
+# compiler/test artifact. The complementary runtime batch below still tests the
+# excluded workspace members with their full default features.
+#
+# `selfhost_parity` deliberately runs below in one cargo-test process: nextest
+# otherwise creates a separate process for every case, which prevents its
+# per-thread compiled-tool cache from being reused.
 # Run with RSSCRIPT_FULL_BACKEND_PARITY=1 when generated-Rust execution must
 # join every parity case.
-name = "workspace tests pass (nextest)"
+name = "compiler and adapter tests pass (nextest)"
 kind = "command_success"
 command = "cargo"
 timeout_ms = 600000
@@ -45,9 +74,28 @@ args = [
   "nextest",
   "run",
   "--workspace",
+  "--exclude",
+  "rsscript-runtime",
+  "--exclude",
+  "rss-metal-compute",
   "--no-fail-fast",
   "-E",
   "not test(/selfhost_parity::/)",
+]
+
+[[tests]]
+name = "runtime tests pass (nextest)"
+kind = "command_success"
+command = "cargo"
+timeout_ms = 600000
+args = [
+  "nextest",
+  "run",
+  "-p",
+  "rsscript-runtime",
+  "-p",
+  "rss-metal-compute",
+  "--no-fail-fast",
 ]
 
 [[tests]]

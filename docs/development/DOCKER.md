@@ -22,10 +22,10 @@ reproducible across platforms.
 docker compose build
 
 # Normal edit loop: runs the focused RSScript library suite.
-docker compose run --rm dev cargo run --quiet --bin rss -- test
+docker compose run --rm dev cargo run --quiet -p rsscript --bin rss -- test
 
 # Full workspace gate: lint, generated packages, every test target, and examples.
-docker compose run --rm dev cargo run --quiet --bin rss -- test --all
+docker compose run --rm dev cargo run --quiet -p rsscript --bin rss -- test --all
 
 # Pre-commit compile gate with the native-JIT feature set.
 docker compose run --rm dev cargo test -p rsscript --features native-jit --no-run
@@ -41,13 +41,13 @@ Inside the shell (or via `docker compose run --rm dev <cmd>`) every normal
 workflow is available:
 
 ```sh
-cargo run --quiet --bin rss -- test         # focused edit loop
-cargo run --quiet --bin rss -- test --all   # exhaustive workspace gate
+cargo run --quiet -p rsscript --bin rss -- test         # focused edit loop
+cargo run --quiet -p rsscript --bin rss -- test --all   # exhaustive workspace gate
 cargo test -p rsscript --no-run            # compile rsscript tests only
 cargo test -p rsscript --features native-jit --no-run
 cargo clippy --all-targets                 # lints
 cargo fmt --all                            # format
-cargo run --bin rss -- <args>              # drive the rss CLI
+cargo run -p rsscript --bin rss -- <args>              # drive the rss CLI
 ```
 
 ## Test feedback budgets
@@ -61,8 +61,11 @@ example/package checks.
 
 `rss test --json` emits a `duration_ms` field for every manifest item. When a
 full run slows down, use that output to identify the slow item before changing
-parallelism or profiles. The full suite limits only generated-Rust tests to two
-concurrent workers in `.config/nextest.toml`: nested Cargo builds otherwise
+parallelism or profiles. The full suite keeps compiler/adapter tests separate
+from the complete runtime's default net/GPU feature set; combining every
+workspace member in one Cargo invocation would unify those features into the
+compiler's core-only runtime dependency and build a much larger test artifact.
+Generated-Rust tests remain serialized because nested Cargo builds otherwise
 contend on one shared target directory and make the entire gate slower.
 
 The Docker target and Cargo registry volumes are part of the performance
