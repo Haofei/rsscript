@@ -7,7 +7,7 @@ use std::fmt::Write;
 pub fn format_reconciliations_human(reconciliations: &[Reconciliation]) -> String {
     let missing: Vec<_> = reconciliations
         .iter()
-        .filter(|reconciliation| reconciliation.kind == ReconciliationKind::MissingCapability)
+        .filter(|reconciliation| is_missing_coverage(reconciliation))
         .collect();
     let excess: Vec<_> = reconciliations
         .iter()
@@ -337,7 +337,7 @@ pub fn format_ci_gate_output_from_decision(
 ) -> CiGateOutput {
     let missing: Vec<_> = reconciliations
         .iter()
-        .filter(|r| r.kind == ReconciliationKind::MissingCapability)
+        .filter(|reconciliation| is_missing_coverage(reconciliation))
         .collect();
     let excess: Vec<_> = reconciliations
         .iter()
@@ -474,6 +474,13 @@ fn is_capability_fact(fact: &Fact, role: FactRole) -> bool {
     fact.kind == FactKind::Capability && fact.role == Some(role) && fact.capability.is_some()
 }
 
+fn is_missing_coverage(reconciliation: &Reconciliation) -> bool {
+    matches!(
+        reconciliation.kind,
+        ReconciliationKind::MissingCapability | ReconciliationKind::PartialCoverage
+    )
+}
+
 fn fact_to_ci_capability(fact: &Fact) -> CiCapabilityFact {
     let (category, provider, service, action, resource) =
         if let Some(cap) = fact.capability.as_ref() {
@@ -527,7 +534,7 @@ fn pr_missing_groups<'a>(
     let mut groups = Vec::new();
     for reconciliation in reconciliations
         .iter()
-        .filter(|reconciliation| reconciliation.kind == ReconciliationKind::MissingCapability)
+        .filter(|reconciliation| is_missing_coverage(reconciliation))
     {
         let Some(capability) = &reconciliation.capability else {
             continue;
@@ -709,7 +716,7 @@ pub fn format_reconciliation_report(
         .collect();
     let missing: Vec<_> = reconciliations
         .iter()
-        .filter(|reconciliation| reconciliation.kind == ReconciliationKind::MissingCapability)
+        .filter(|reconciliation| is_missing_coverage(reconciliation))
         .collect();
     let excess: Vec<_> = reconciliations
         .iter()

@@ -215,6 +215,10 @@ fn decide_gate_impl(
                 GateIssueKind::MissingCapability,
                 "Required capability is not granted by the deployment target.",
             ),
+            ReconciliationKind::PartialCoverage => (
+                GateIssueKind::MissingCapability,
+                "Required capability is only partially granted by the deployment target.",
+            ),
             ReconciliationKind::ExcessCapability => (
                 GateIssueKind::ExcessCapability,
                 "Deployment grant exceeds the capabilities required by the code.",

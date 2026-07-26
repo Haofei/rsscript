@@ -138,6 +138,13 @@ fn granted_capability_fact(id: &str, subject: Subject, capability: Capability) -
     }
 }
 
+fn denied_capability_fact(id: &str, subject: Subject, capability: Capability) -> Fact {
+    Fact {
+        role: Some(FactRole::Denied),
+        ..granted_capability_fact(id, subject, capability)
+    }
+}
+
 fn producer() -> Producer {
     Producer {
         name: "rsscript".to_owned(),
@@ -1001,6 +1008,167 @@ fn policy_fails_when_missing_capabilities_exceed_budget() {
             .as_deref()
             .unwrap()
             .contains("max_missing_capabilities exceeded")
+    );
+}
+
+#[test]
+fn policy_counts_partial_coverage_against_missing_capability_budget() {
+    let partial = Reconciliation {
+        schema: "reir.reconciliation.v0.1".to_owned(),
+        id: "recon.partial.put".to_owned(),
+        kind: ReconciliationKind::PartialCoverage,
+        status: ReconciliationStatus::Fail,
+        target: Some("prod".to_owned()),
+        subject_chain: None,
+        required_fact: Some("fact.required.put".to_owned()),
+        granted_facts: vec!["fact.granted.put".to_owned(), "fact.denied.put".to_owned()],
+        observed_fact: None,
+        capability: None,
+        risk: None,
+        evidence: vec![],
+    };
+
+    let results = evaluate_policy(&missing_profile(), &[partial]);
+    let missing_budget = find_policy_result(&results, "missing_capabilities");
+
+    assert_eq!(missing_budget.status, PolicyStatus::Fail);
+    assert_eq!(
+        missing_budget.reconciliation.as_deref(),
+        Some("recon.partial.put")
+    );
+    assert!(
+        missing_budget
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("1 > 0"))
+    );
+}
+
+#[test]
+fn validated_gate_blocks_narrow_deny_as_missing_coverage() {
+    let required = required_capability_fact(
+        "fact.required.put",
+        subject(SubjectKind::CodeFunction, "checkout::upload"),
+        capability(
+            CapabilityCategory::ObjectStorageWrite,
+            "aws",
+            "*",
+            "arn:aws:s3:::reports-prod/*",
+        ),
+    );
+    let principal = subject(SubjectKind::CloudRole, "role.prod");
+    let grant = granted_capability_fact(
+        "fact.granted.put",
+        principal.clone(),
+        capability(
+            CapabilityCategory::ObjectStorageWrite,
+            "aws",
+            "*",
+            "arn:aws:s3:::reports-prod/*",
+        ),
+    );
+    let deny = denied_capability_fact(
+        "fact.denied.private",
+        principal,
+        capability(
+            CapabilityCategory::ObjectStorageWrite,
+            "aws",
+            "s3:PutObject",
+            "arn:aws:s3:::reports-prod/private/*",
+        ),
+    );
+    let reconciliations = reconcile_capabilities_for_gate(
+        &[required.clone()],
+        &[grant.clone(), deny.clone()],
+        None,
+        None,
+    );
+
+    assert!(
+        reconciliations
+            .iter()
+            .any(|result| result.kind == ReconciliationKind::PartialCoverage)
+    );
+    let required_facts = vec![required];
+    let granted_facts = vec![grant, deny];
+    let decision = decide_validated_gate(
+        &required_facts,
+        &granted_facts,
+        &reconciliations,
+        GatePolicy::default(),
+    );
+
+    assert_eq!(decision.status, GateStatus::Fail);
+    assert!(decision.valid_for_gating);
+    assert!(decision.blockers.iter().any(|issue| {
+        issue.kind == GateIssueKind::MissingCapability
+            && issue.message.contains("only partially granted")
+    }));
+    let output = format_ci_gate_output_from_decision(
+        &decision,
+        &required_facts,
+        &granted_facts,
+        &reconciliations,
+    );
+    assert_eq!(output.summary.total_missing, 1);
+    assert_eq!(output.missing_capabilities.len(), 1);
+}
+
+#[test]
+fn validated_gate_validates_narrow_deny_with_denied_role() {
+    let required = required_capability_fact(
+        "fact.required.put",
+        subject(SubjectKind::CodeFunction, "checkout::upload"),
+        capability(
+            CapabilityCategory::ObjectStorageWrite,
+            "aws",
+            "*",
+            "arn:aws:s3:::reports-prod/*",
+        ),
+    );
+    let principal = subject(SubjectKind::CloudRole, "role.prod");
+    let grant = granted_capability_fact(
+        "fact.granted.put",
+        principal.clone(),
+        required.capability.clone().expect("required capability"),
+    );
+    let mut deny = denied_capability_fact(
+        "fact.denied.private",
+        principal,
+        capability(
+            CapabilityCategory::ObjectStorageWrite,
+            "aws",
+            "s3:PutObject",
+            "arn:aws:s3:::reports-prod/private/*",
+        ),
+    );
+    deny.confidence.source = None;
+    deny.evidence.clear();
+    let reconciliations = reconcile_capabilities_for_gate(
+        &[required.clone()],
+        &[grant.clone(), deny.clone()],
+        None,
+        None,
+    );
+    let decision = decide_validated_gate(
+        &[required],
+        &[grant, deny],
+        &reconciliations,
+        GatePolicy::default(),
+    );
+
+    assert_eq!(decision.status, GateStatus::Fail);
+    assert!(!decision.valid_for_gating);
+    assert!(decision.blockers.iter().any(|issue| {
+        issue.kind == GateIssueKind::InvalidEvidence
+            && issue.fact_id.as_deref() == Some("fact.denied.private")
+    }));
+    assert!(
+        decision
+            .blockers
+            .iter()
+            .filter(|issue| issue.fact_id.as_deref() == Some("fact.denied.private"))
+            .all(|issue| !issue.message.contains("wrong or missing role"))
     );
 }
 

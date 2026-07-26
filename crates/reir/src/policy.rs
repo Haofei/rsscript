@@ -83,7 +83,12 @@ pub fn evaluate_policy(profile: &Profile, reconciliations: &[Reconciliation]) ->
 
     let missing: Vec<&Reconciliation> = reconciliations
         .iter()
-        .filter(|reconciliation| reconciliation.kind == ReconciliationKind::MissingCapability)
+        .filter(|reconciliation| {
+            matches!(
+                reconciliation.kind,
+                ReconciliationKind::MissingCapability | ReconciliationKind::PartialCoverage
+            )
+        })
         .collect();
     let unknown: Vec<&Reconciliation> = reconciliations
         .iter()

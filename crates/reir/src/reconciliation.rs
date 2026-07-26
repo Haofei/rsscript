@@ -156,6 +156,14 @@ fn reconcile_capabilities_impl(
             .copied()
             .filter(|denied_fact| {
                 principal.is_none_or(|id| denied_fact.matches_gate_principal(id))
+                    && (!validate_input
+                        || (!denied_fact.is_unknown_for_gate()
+                            && denied_fact
+                                .validate_for_gate(
+                                    FactRole::Denied,
+                                    GateFactDomain::DeploymentGrant,
+                                )
+                                .is_empty()))
                     && denied_fact
                         .capability
                         .as_ref()
@@ -476,8 +484,8 @@ fn resource_covers(granted: Option<&str>, required: Option<&str>) -> bool {
 mod tests {
     use super::*;
     use crate::{
-        AcquisitionMode, CapabilityCategory, Confidence, ConfidenceLevel, Fact, FactKind, FactRole,
-        FactValue, Precision, Subject, SubjectKind,
+        AcquisitionMode, CapabilityCategory, Confidence, ConfidenceLevel, EvidenceKind, Fact,
+        FactKind, FactRole, FactValue, Precision, Subject, SubjectKind,
     };
     use std::collections::HashMap;
 
@@ -739,6 +747,100 @@ mod tests {
             !results
                 .iter()
                 .any(|result| result.kind == ReconciliationKind::Covered)
+        );
+    }
+
+    #[test]
+    fn validated_reconciliation_rejects_invalid_narrow_deny_as_coverage_input() {
+        let required = Fact {
+            schema: "reir.fact.v0.1".to_string(),
+            id: "required".to_string(),
+            kind: FactKind::Capability,
+            role: Some(FactRole::Required),
+            subject: Subject {
+                kind: SubjectKind::CodeFunction,
+                id: "code::run".to_string(),
+                name: None,
+                package: None,
+            },
+            capability: Some(wildcard(CapabilityCategory::ObjectStorageWrite, "aws")),
+            value: FactValue::True,
+            confidence: Confidence {
+                level: ConfidenceLevel::Computed,
+                source: Some("test".to_string()),
+            },
+            acquisition_mode: AcquisitionMode::SourceScan,
+            precision: Precision::ResourceScoped,
+            evidence: vec![Evidence {
+                kind: EvidenceKind::SourceSpan,
+                file: Some("src/lib.rs".to_string()),
+                line: Some(1),
+                column: None,
+                length: None,
+                symbol: None,
+                reason: None,
+                json_pointer: None,
+                resource: None,
+                provider: None,
+                value: None,
+                event_id: None,
+                time: None,
+                source: None,
+                event_name: None,
+                principal: None,
+                account: None,
+                policy_arn: None,
+                statement_index: None,
+                action: None,
+            }],
+            unknown_reason: None,
+        };
+        let principal = Subject {
+            kind: SubjectKind::CloudRole,
+            id: "role.prod".to_string(),
+            name: None,
+            package: None,
+        };
+        let grant = Fact {
+            id: "grant".to_string(),
+            role: Some(FactRole::Granted),
+            subject: principal.clone(),
+            acquisition_mode: AcquisitionMode::CloudPolicy,
+            evidence: vec![Evidence {
+                kind: EvidenceKind::ManifestPointer,
+                file: Some("policy.json".to_string()),
+                json_pointer: Some("/Statement/0".to_string()),
+                principal: Some("role.prod".to_string()),
+                ..required.evidence[0].clone()
+            }],
+            ..required.clone()
+        };
+        let deny = Fact {
+            id: "deny".to_string(),
+            role: Some(FactRole::Denied),
+            subject: principal,
+            capability: Some(capability("s3")),
+            confidence: Confidence {
+                level: ConfidenceLevel::Authoritative,
+                source: None,
+            },
+            acquisition_mode: AcquisitionMode::CloudPolicy,
+            evidence: Vec::new(),
+            ..required.clone()
+        };
+
+        let results =
+            reconcile_capabilities_for_gate(&[required], &[grant, deny], Some("prod"), None);
+
+        assert!(
+            results
+                .iter()
+                .any(|result| result.kind == ReconciliationKind::Covered)
+        );
+        assert!(
+            !results
+                .iter()
+                .any(|result| result.kind == ReconciliationKind::PartialCoverage)
         );
     }
 
