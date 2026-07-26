@@ -29,8 +29,20 @@ LSP, SQL adapter, release-gate, and test-speed findings reviewed through commit
 - Added separate baseline and optimized Cranelift modules with deterministic
   promotion. Recursive and native-call groups remain baseline-only.
 - Added bounded runtime shape multiversioning. Shape keys contain stable ABI
-  classes, closure function identities, and interned aggregate layout
-  identities. Each site/tier admits at most two versions.
+  classes and interned aggregate layout identities. Closure target identities
+  remain in the existing bounded PIC rather than consuming whole-function shape
+  versions. Common shape keys use inline, allocation-free storage. Each
+  site/tier admits at most two versions.
+- Preserved the eager/benchmark contract by compiling a single `speed` module
+  when the tier threshold is zero; non-eager execution retains the baseline to
+  optimized ladder.
+- Added function-level negative caching for cost-model declines and
+  no-amortization give-up. Closure-profile pending state now retries only after
+  its bounded sampling window freezes instead of probing translation on every
+  hot call.
+- Folded non-escaping `Bytes.slice(...); Bytes.len(...)` into overflow-free
+  scalar clamp arithmetic. Dynamic inputs retain validation at the original
+  slice site, while activation-local memoization removes repeated helpers.
 
 The implementation deliberately does not claim executable-code reclamation.
 Cranelift code rejected after emission remains owned until VM teardown. Logical
@@ -87,11 +99,25 @@ The batch was validated incrementally with:
 - `cargo test -p vm-jit`
 - `cargo test -p rsscript --features native-jit --lib`
 - focused OSR, memoization, shape, admission, deopt, and performance-gate tests
+- the complete release JIT performance gate (20 kernels)
 - `cargo test -p reir`
 - `cargo test -p rsscript-runtime`
 - `cargo test -p rss-lsp`
 - native SQLite and SQLx tests and VM smoke packages
 - the consolidated generated-fixture locked workspace check
+
+The final release performance gate passed with zero native bails. Against the
+committed baseline, the largest collection improvements were:
+
+| Kernel | Baseline | Final | Change |
+| --- | ---: | ---: | ---: |
+| Collection `is_empty` | 193.042 ms | 10.120 ms | -94.8% |
+| Map/Set `len` | 32.345 ms | 3.068 ms | -90.5% |
+| SortedSet `len` | 7.966 ms | 2.955 ms | -62.9% |
+| Bytes slice/length | 3.757 ms | 5.405 ms | within gate; down from the 139 ms regression |
+
+Scalar code remained within 2.7% of the committed baseline and the native call
+chain within 7.8%.
 
 Platform limitations remain explicit: PostgreSQL live smoke requires
 `RSS_SQLX_TEST_POSTGRES_URL`; non-Unix descendant-process cleanup still needs a
