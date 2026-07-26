@@ -104,6 +104,79 @@ fn osr_heap_input_regs(jit_fn: &vm_jit::JitFunction) -> Vec<usize> {
 }
 
 #[cfg(feature = "native-jit")]
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(super) struct NativeCompileTelemetry {
+    pub(super) direct_list_bounds_check_sites: u64,
+    pub(super) memoized_host_call_sites: u64,
+    pub(super) host_call_sites: u64,
+    pub(super) direct_list_store_load_forwarded_moves: u64,
+    native_call_edges: u64,
+    profile_closure_guard_sites: u64,
+    profile_closure_id_reads: u64,
+    profile_closure_pic_sites: u64,
+    profile_closure_pic_arms: u64,
+    profile_branch_side_exits: u64,
+}
+
+#[cfg(feature = "native-jit")]
+impl NativeCompileTelemetry {
+    pub(super) fn from_jit_function(jit_fn: &vm_jit::JitFunction) -> Self {
+        let mut telemetry = Self::default();
+        for (ip, instr) in jit_fn.code.iter().enumerate() {
+            match instr {
+                vm_jit::JitInstr::ListGetIntDirect { .. }
+                | vm_jit::JitInstr::ListSetIntDirect { .. }
+                | vm_jit::JitInstr::ListGetFloatDirect { .. }
+                | vm_jit::JitInstr::ListSetFloatDirect { .. } => {
+                    telemetry.direct_list_bounds_check_sites += 1;
+                }
+                vm_jit::JitInstr::MemoizedHostCall { .. } => {
+                    telemetry.memoized_host_call_sites += 1;
+                }
+                vm_jit::JitInstr::HostCall { helper, .. } => {
+                    telemetry.host_call_sites += 1;
+                    if *helper == vm_jit::HostHelper::ClosureId {
+                        telemetry.profile_closure_id_reads += 1;
+                        telemetry.profile_closure_pic_sites += 1;
+                        telemetry.profile_closure_pic_arms +=
+                            profile_closure_pic_arm_count(&jit_fn.code, ip);
+                    }
+                }
+                vm_jit::JitInstr::CallNative { .. }
+                | vm_jit::JitInstr::CallSelf { .. }
+                | vm_jit::JitInstr::CallGroup { .. } => telemetry.native_call_edges += 1,
+                vm_jit::JitInstr::GuardClosureId { .. } => {
+                    telemetry.profile_closure_guard_sites += 1;
+                }
+                vm_jit::JitInstr::ProfiledJumpIfBool { .. }
+                | vm_jit::JitInstr::ProfiledJumpIfIntCompare { .. } => {
+                    telemetry.profile_branch_side_exits += 1;
+                }
+                vm_jit::JitInstr::Move { src, .. } => {
+                    let forwarded = jit_fn.code.get(ip.wrapping_sub(1)).is_some_and(|previous| {
+                        matches!(
+                            previous,
+                            vm_jit::JitInstr::ListSetIntDirect {
+                                dst: set_dst,
+                                value,
+                                ..
+                            } | vm_jit::JitInstr::ListSetFloatDirect {
+                                dst: set_dst,
+                                value,
+                                ..
+                            } if set_dst != value && src == value
+                        )
+                    });
+                    telemetry.direct_list_store_load_forwarded_moves += u64::from(forwarded);
+                }
+                _ => {}
+            }
+        }
+        telemetry
+    }
+}
+
+#[cfg(feature = "native-jit")]
 fn record_native_compile_stats(
     native: &mut NativeState,
     id: vm_jit::CompiledId,
@@ -112,47 +185,26 @@ fn record_native_compile_stats(
     if !native.collect_stats {
         return;
     }
-    let mut native_call_edges = 0;
-    let mut profile_closure_guard_sites = 0;
-    let mut profile_closure_id_reads = 0;
-    let mut profile_closure_pic_sites = 0;
-    let mut profile_closure_pic_arms = 0;
-    let mut profile_branch_side_exits = 0;
-    for (ip, instr) in jit_fn.code.iter().enumerate() {
-        match instr {
-            vm_jit::JitInstr::CallNative { .. } | vm_jit::JitInstr::CallSelf { .. } => {
-                native_call_edges += 1
-            }
-            vm_jit::JitInstr::GuardClosureId { .. } => profile_closure_guard_sites += 1,
-            vm_jit::JitInstr::ProfiledJumpIfBool { .. }
-            | vm_jit::JitInstr::ProfiledJumpIfIntCompare { .. } => {
-                profile_branch_side_exits += 1;
-            }
-            vm_jit::JitInstr::HostCall {
-                helper: vm_jit::HostHelper::ClosureId,
-                ..
-            } => {
-                profile_closure_id_reads += 1;
-                profile_closure_pic_sites += 1;
-                profile_closure_pic_arms += profile_closure_pic_arm_count(&jit_fn.code, ip);
-            }
-            _ => {}
-        }
-    }
+    let telemetry = NativeCompileTelemetry::from_jit_function(jit_fn);
     native.stats.compiled += 1;
     native.stats.compiled_ir_instrs += jit_fn.code.len() as u64;
     native.stats.compiled_code_bytes += native.module.code_size_bytes(id).unwrap_or(0);
+    native.stats.direct_list_bounds_check_sites += telemetry.direct_list_bounds_check_sites;
+    native.stats.memoized_host_call_sites += telemetry.memoized_host_call_sites;
+    native.stats.host_call_sites += telemetry.host_call_sites;
+    native.stats.direct_list_store_load_forwarded_moves +=
+        telemetry.direct_list_store_load_forwarded_moves;
     native.stats.profile_branch_cold_blocks += jit_fn.cold_blocks.len() as u64;
-    native.stats.profile_branch_side_exits += profile_branch_side_exits;
-    native.stats.native_call_edges += native_call_edges;
+    native.stats.profile_branch_side_exits += telemetry.profile_branch_side_exits;
+    native.stats.native_call_edges += telemetry.native_call_edges;
     native.stats.native_call_depth_max = native
         .stats
         .native_call_depth_max
         .max(native.module.native_call_depth(id).map_or(0, u64::from));
-    native.stats.profile_closure_guard_sites += profile_closure_guard_sites;
-    native.stats.profile_closure_id_reads += profile_closure_id_reads;
-    native.stats.profile_closure_pic_sites += profile_closure_pic_sites;
-    native.stats.profile_closure_pic_arms += profile_closure_pic_arms;
+    native.stats.profile_closure_guard_sites += telemetry.profile_closure_guard_sites;
+    native.stats.profile_closure_id_reads += telemetry.profile_closure_id_reads;
+    native.stats.profile_closure_pic_sites += telemetry.profile_closure_pic_sites;
+    native.stats.profile_closure_pic_arms += telemetry.profile_closure_pic_arms;
     native.stats.deopt_sites += native
         .module
         .deopt_map(id)
@@ -3112,7 +3164,10 @@ impl RegVm {
                                 (is_scalar(&ret) && param_tys.iter().all(is_scalar))
                                     .then(|| native.module.compile(&jit_fn).ok())
                                     .flatten()
-                                    .map(|id| (id, param_tys, ret))
+                                    .map(|id| {
+                                        record_native_compile_stats(native, id, &jit_fn);
+                                        (id, param_tys, ret)
+                                    })
                             },
                         )
                     };
@@ -3256,6 +3311,9 @@ impl RegVm {
                         jit_funcs.push(jit_fn);
                     }
                     let ids = native.module.compile_recursive_group(&jit_funcs).ok()?;
+                    for (&id, jit_fn) in ids.iter().zip(&jit_funcs) {
+                        record_native_compile_stats(native, id, jit_fn);
+                    }
                     Some((ids, member_sigs))
                 });
                 match (group, compiled) {

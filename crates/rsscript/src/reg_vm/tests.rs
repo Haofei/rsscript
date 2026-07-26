@@ -1418,6 +1418,11 @@ fn main() -> Unit {
             "the stored value should be forwarded to the List.get destination; jit code: {:#?}",
             jit.code,
         );
+        let telemetry = tier::NativeCompileTelemetry::from_jit_function(&jit);
+        assert_eq!(telemetry.direct_list_bounds_check_sites, 1);
+        assert_eq!(telemetry.direct_list_store_load_forwarded_moves, 1);
+        assert_eq!(telemetry.memoized_host_call_sites, 0);
+        assert_eq!(telemetry.host_call_sites, 0);
     }
 
     #[cfg(feature = "native-jit")]
@@ -2453,6 +2458,41 @@ fn main() -> Unit {
                 )),
                 "{helper:?} should lower to a memoized loop-invariant helper; jit code: {:#?}",
                 jit.code,
+            );
+        }
+        let telemetry = tier::NativeCompileTelemetry::from_jit_function(&jit);
+        assert_eq!(telemetry.memoized_host_call_sites, 3);
+        assert_eq!(telemetry.host_call_sites, 0);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_compile_shape_telemetry_is_visible_in_summary_and_json() {
+        let stats = NativeStats {
+            direct_list_bounds_check_sites: 4,
+            memoized_host_call_sites: 3,
+            host_call_sites: 2,
+            direct_list_store_load_forwarded_moves: 1,
+            ..NativeStats::default()
+        };
+        let json = stats.to_json();
+        assert_eq!(json["direct_list_bounds_check_sites"].as_u64(), Some(4));
+        assert_eq!(json["memoized_host_call_sites"].as_u64(), Some(3));
+        assert_eq!(json["host_call_sites"].as_u64(), Some(2));
+        assert_eq!(
+            json["direct_list_store_load_forwarded_moves"].as_u64(),
+            Some(1),
+        );
+        let summary = stats.summary();
+        for field in [
+            "direct_list_bounds_check_sites=4",
+            "memoized_host_call_sites=3",
+            "host_call_sites=2",
+            "direct_list_store_load_forwarded_moves=1",
+        ] {
+            assert!(
+                summary.contains(field),
+                "text summary should expose {field}: {summary}",
             );
         }
     }

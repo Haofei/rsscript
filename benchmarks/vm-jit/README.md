@@ -34,10 +34,17 @@ variables when needed: `RSS_JIT_PERF_BASELINE`, `RSS_JIT_PERF_CASES`
 `RSS_JIT_PERF_SKIP_TELEMETRY=1`. Telemetry failures and native bails are not
 retried; those are mechanism failures, not timing noise. Benchmark subprocess
 failures, including RSScript compile/runtime errors, are reported as per-case
-gate failures with compact stdout/stderr context. The table includes the native
-telemetry fields `bails`, `native_call_edges`, `native_call_depth_max`, and
-`compiled_code_bytes`, so a performance result also shows whether the intended
-native path compiled and whether native call edges and chains were emitted.
+gate failures with compact stdout/stderr context. The table includes native
+telemetry for bails, retained direct-list bounds checks, memoized and ordinary
+host-call sites, direct-list store/load forwarding evidence, native call edges
+and depth, and compiled code bytes. This shows which intended native mechanisms
+were present in the machine-code input, not only whether native code compiled.
+
+The corresponding JSON keys are `direct_list_bounds_check_sites`,
+`memoized_host_call_sites`, `host_call_sites`, and
+`direct_list_store_load_forwarded_moves`. The forwarding counter recognizes the
+exact adjacent direct-store/`Move` shape left by the translation pass; the store
+still contributes one retained bounds-check site.
 
 The gate reads those counters from both the steady-state JIT stats block and the
 benchmark harness's `cold_start` block. That keeps compile/speculation telemetry

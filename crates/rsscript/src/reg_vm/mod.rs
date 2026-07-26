@@ -2471,6 +2471,15 @@ pub struct NativeStats {
     pub compiled_code_bytes: u64,
     /// Total deopt/guard sites emitted across compiled regions.
     pub deopt_sites: u64,
+    /// Bounds checks retained on direct flat-list loads and stores.
+    pub direct_list_bounds_check_sites: u64,
+    /// Loop-invariant scalar host calls emitted with lazy memoization.
+    pub memoized_host_call_sites: u64,
+    /// Ordinary, non-memoized host calls emitted across compiled regions.
+    pub host_call_sites: u64,
+    /// Direct flat-list stores followed by the matching `Move` shape produced when
+    /// an adjacent load is forwarded from the stored value.
+    pub direct_list_store_load_forwarded_moves: u64,
     /// Native-to-native call sites emitted across compiled regions.
     pub native_call_edges: u64,
     /// Deepest native-to-native call chain emitted across compiled regions.
@@ -2537,7 +2546,7 @@ pub struct NativeStats {
 impl NativeStats {
     fn summary(&self) -> String {
         format!(
-            "native-jit: considered={} translated={} compiled={} ir_instrs={} code_bytes={} deopt_sites={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
+            "native-jit: considered={} translated={} compiled={} ir_instrs={} code_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_host_call_sites={} host_call_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
 compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} tier_deferred={} \
 compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             self.considered,
@@ -2546,6 +2555,10 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             self.compiled_ir_instrs,
             self.compiled_code_bytes,
             self.deopt_sites,
+            self.direct_list_bounds_check_sites,
+            self.memoized_host_call_sites,
+            self.host_call_sites,
+            self.direct_list_store_load_forwarded_moves,
             self.native_call_edges,
             self.native_call_depth_max,
             self.profile_closure_guard_sites,
@@ -2622,6 +2635,10 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             "compiled_ir_instrs": self.compiled_ir_instrs,
             "compiled_code_bytes": self.compiled_code_bytes,
             "deopt_sites": self.deopt_sites,
+            "direct_list_bounds_check_sites": self.direct_list_bounds_check_sites,
+            "memoized_host_call_sites": self.memoized_host_call_sites,
+            "host_call_sites": self.host_call_sites,
+            "direct_list_store_load_forwarded_moves": self.direct_list_store_load_forwarded_moves,
             "native_call_edges": self.native_call_edges,
             "native_call_depth_max": self.native_call_depth_max,
             "profile_closure_guard_sites": self.profile_closure_guard_sites,
