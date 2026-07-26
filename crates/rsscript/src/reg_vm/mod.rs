@@ -2331,6 +2331,10 @@ type NativeCompiledEntry = (
 #[cfg(feature = "native-jit")]
 struct NativeState {
     module: vm_jit::NativeModule,
+    /// Process-local JIT work admission. This bounds code made available for
+    /// dispatch; rejected Cranelift output remains owned by `module` until the VM
+    /// is dropped and is not executable-memory reclamation.
+    admission: NativeAdmissionBudget,
     // `None` = known not native-eligible; `Some((id, ret, params, has_backedge, scalar_leaf_callable, literals, precise_resume_safe))`
     // = compiled handle, return type (to box the 64-bit result), parameter types
     // (to unbox each argument: `Int`/`Bool` from their VM value, `Float` as bits),
@@ -2453,6 +2457,21 @@ struct NativeState {
     osr_dynamic_bail: bool,
 }
 
+#[cfg(feature = "native-jit")]
+const DEFAULT_NATIVE_MAX_CODE_BYTES: u64 = 16 * 1024 * 1024;
+#[cfg(feature = "native-jit")]
+const DEFAULT_NATIVE_MAX_COMPILE_MILLIS: u64 = 2_000;
+
+#[cfg(feature = "native-jit")]
+#[derive(Debug)]
+struct NativeAdmissionBudget {
+    max_code_bytes: u64,
+    max_compile_nanos: u128,
+    admitted_code_bytes: u64,
+    compile_nanos: u128,
+    code_exhausted: bool,
+}
+
 /// Native-JIT telemetry. The VM is single-threaded, so plain counters suffice.
 #[cfg(feature = "native-jit")]
 #[derive(Debug, Default, Clone)]
@@ -2474,6 +2493,15 @@ pub struct NativeStats {
     pub compiled_ir_instrs: u64,
     /// Total machine-code bytes emitted by Cranelift across compiled regions.
     pub compiled_code_bytes: u64,
+    /// Compiled regions admitted to a dispatch cache by the hard JIT budgets.
+    pub admission_admitted: u64,
+    /// Machine-code bytes admitted to dispatch caches.
+    pub admission_admitted_bytes: u64,
+    /// Regions denied before compilation or rejected atomically after compilation.
+    pub admission_rejected: u64,
+    /// Machine-code bytes emitted for post-compile budget rejections. Pre-compile
+    /// rejections contribute zero because no machine code exists.
+    pub admission_rejected_bytes: u64,
     /// Total deopt/guard sites emitted across compiled regions.
     pub deopt_sites: u64,
     /// Bounds checks retained on direct flat-list loads and stores.
@@ -2551,7 +2579,7 @@ pub struct NativeStats {
 impl NativeStats {
     fn summary(&self) -> String {
         format!(
-            "native-jit: considered={} translated={} compiled={} ir_instrs={} code_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_host_call_sites={} host_call_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
+            "native-jit: considered={} translated={} compiled={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_host_call_sites={} host_call_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
 compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} tier_deferred={} \
 compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             self.considered,
@@ -2559,6 +2587,10 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             self.compiled,
             self.compiled_ir_instrs,
             self.compiled_code_bytes,
+            self.admission_admitted,
+            self.admission_admitted_bytes,
+            self.admission_rejected,
+            self.admission_rejected_bytes,
             self.deopt_sites,
             self.direct_list_bounds_check_sites,
             self.memoized_host_call_sites,
@@ -2639,6 +2671,10 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             "compiled": self.compiled,
             "compiled_ir_instrs": self.compiled_ir_instrs,
             "compiled_code_bytes": self.compiled_code_bytes,
+            "admission_admitted": self.admission_admitted,
+            "admission_admitted_bytes": self.admission_admitted_bytes,
+            "admission_rejected": self.admission_rejected,
+            "admission_rejected_bytes": self.admission_rejected_bytes,
             "deopt_sites": self.deopt_sites,
             "direct_list_bounds_check_sites": self.direct_list_bounds_check_sites,
             "memoized_host_call_sites": self.memoized_host_call_sites,
@@ -6795,6 +6831,13 @@ extern "C" fn rss_jit_list_get_handle(_ctx: vm_jit::HostCtx, handle: i64, index:
 
 #[cfg(feature = "native-jit")]
 impl NativeState {
+    fn admission_limit_from_env(name: &str, default: u64) -> u64 {
+        std::env::var(name)
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(default)
+    }
+
     // Used by the in-crate `#[cfg(test)]` unit tests; the optimizing/baseline
     // production paths go through `new_with_opt`, so the lib-only build sees no
     // caller. Keep the back-compat 3-arg constructor without a dead-code warning.
@@ -6854,9 +6897,22 @@ impl NativeState {
         forced_safepoint: Option<u32>,
         force_all_safepoints: bool,
     ) -> Result<Self, EvalError> {
+        let max_code_bytes =
+            Self::admission_limit_from_env("RSS_JIT_MAX_CODE_BYTES", DEFAULT_NATIVE_MAX_CODE_BYTES);
+        let max_compile_millis = Self::admission_limit_from_env(
+            "RSS_JIT_MAX_COMPILE_MS",
+            DEFAULT_NATIVE_MAX_COMPILE_MILLIS,
+        );
         Ok(Self {
             module: vm_jit::NativeModule::new_with_opt(jit_host_helpers(), baseline)
                 .map_err(|e| EvalError::Runtime(e.to_string()))?,
+            admission: NativeAdmissionBudget {
+                max_code_bytes,
+                max_compile_nanos: u128::from(max_compile_millis) * 1_000_000,
+                admitted_code_bytes: 0,
+                compile_nanos: 0,
+                code_exhausted: false,
+            },
             cache: HashMap::new(),
             counts: HashMap::new(),
             bail_counts: HashMap::new(),
@@ -6898,7 +6954,8 @@ impl NativeState {
     /// bail). At [`NATIVE_BAIL_GIVEUP_THRESHOLD`] consecutive bails the function is
     /// permanently demoted: `native_status` is set to `NOT_ELIGIBLE` (so the
     /// cheap-negative early-return in `try_native` short-circuits all future calls)
-    /// and its compiled entry is dropped from the cache to free the code. Reusing
+    /// and its compiled entry is dropped from the dispatch cache. The owning
+    /// `NativeModule` retains emitted code until VM drop. Reusing
     /// `NOT_ELIGIBLE` is correct here: its only meaning is "don't attempt native",
     /// which is exactly the give-up verdict.
     fn record_bail(&mut self, native_key: usize, func: &RegFunction) {

@@ -40,6 +40,17 @@ host-call sites, direct-list store/load forwarding evidence, native call edges
 and depth, and compiled code bytes. This shows which intended native mechanisms
 were present in the machine-code input, not only whether native code compiled.
 
+Native compilation admission is bounded by `RSS_JIT_MAX_CODE_BYTES` (default
+16 MiB of code admitted to dispatch caches) and `RSS_JIT_MAX_COMPILE_MS`
+(default 2000 ms of cumulative compilation). Set either to `0` to disable new
+compilation while preserving interpreter fallback. `NativeStats` exposes
+`admission_admitted`, `admission_admitted_bytes`, `admission_rejected`, and
+`admission_rejected_bytes` in both the text summary and JSON. Recursive groups
+are admitted or rejected as a unit. A post-compile rejection is intentionally
+not cached for dispatch and conservatively closes further code admission for
+that VM, but its emitted bytes remain owned by the JIT module until VM drop;
+these admission budgets do not claim executable-memory reclamation.
+
 The corresponding JSON keys are `direct_list_bounds_check_sites`,
 `memoized_host_call_sites`, `host_call_sites`, and
 `direct_list_store_load_forwarded_moves`. The forwarding counter recognizes the

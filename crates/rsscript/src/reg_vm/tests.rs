@@ -2469,6 +2469,10 @@ fn main() -> Unit {
     #[test]
     fn native_compile_shape_telemetry_is_visible_in_summary_and_json() {
         let stats = NativeStats {
+            admission_admitted: 5,
+            admission_admitted_bytes: 4096,
+            admission_rejected: 3,
+            admission_rejected_bytes: 512,
             direct_list_bounds_check_sites: 4,
             memoized_host_call_sites: 3,
             host_call_sites: 2,
@@ -2479,6 +2483,10 @@ fn main() -> Unit {
         assert_eq!(json["direct_list_bounds_check_sites"].as_u64(), Some(4));
         assert_eq!(json["memoized_host_call_sites"].as_u64(), Some(3));
         assert_eq!(json["host_call_sites"].as_u64(), Some(2));
+        assert_eq!(json["admission_admitted"].as_u64(), Some(5));
+        assert_eq!(json["admission_admitted_bytes"].as_u64(), Some(4096));
+        assert_eq!(json["admission_rejected"].as_u64(), Some(3));
+        assert_eq!(json["admission_rejected_bytes"].as_u64(), Some(512));
         assert_eq!(
             json["direct_list_store_load_forwarded_moves"].as_u64(),
             Some(1),
@@ -2489,12 +2497,123 @@ fn main() -> Unit {
             "memoized_host_call_sites=3",
             "host_call_sites=2",
             "direct_list_store_load_forwarded_moves=1",
+            "admission_admitted=5",
+            "admission_admitted_bytes=4096",
+            "admission_rejected=3",
+            "admission_rejected_bytes=512",
         ] {
             assert!(
                 summary.contains(field),
                 "text summary should expose {field}: {summary}",
             );
         }
+    }
+
+    #[cfg(feature = "native-jit")]
+    fn native_constant_func(name: &str, value: i64) -> RegFunction {
+        native_test_function(
+            name,
+            0,
+            1,
+            vec![
+                RegInstr::LoadInt { dst: 0, value },
+                RegInstr::Return { src: 0 },
+            ],
+        )
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_admission_budget_bounds_many_functions_and_keeps_existing_dispatch() {
+        let mut vm = empty_vm();
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.prepare_frame(0, 1).expect("frame");
+        let functions: Vec<_> = (0..32)
+            .map(|index| native_constant_func(&format!("constant_{index}"), index))
+            .collect();
+
+        assert!(matches!(
+            vm.try_native(&functions[0], 0),
+            NativeAttempt::Completed(VmValue::Int(0))
+        ));
+        let first_bytes = vm
+            .native
+            .as_ref()
+            .expect("native")
+            .admission
+            .admitted_code_bytes;
+        assert!(first_bytes > 0);
+        vm.native.as_mut().expect("native").admission.max_code_bytes = first_bytes;
+
+        for (index, func) in functions.iter().enumerate().skip(1) {
+            assert!(
+                matches!(vm.try_native(func, 0), NativeAttempt::Fallback),
+                "function {index} should fall back after admission is exhausted",
+            );
+        }
+        assert!(
+            matches!(
+                vm.try_native(&functions[0], 0),
+                NativeAttempt::Completed(VmValue::Int(0))
+            ),
+            "an entry admitted before exhaustion must remain dispatchable",
+        );
+
+        let native = vm.native.as_ref().expect("native");
+        assert_eq!(native.stats.compiled, 1);
+        assert_eq!(native.stats.admission_admitted, 1);
+        assert_eq!(native.stats.admission_admitted_bytes, first_bytes);
+        assert_eq!(native.stats.admission_rejected, 31);
+        assert_eq!(native.stats.admission_rejected_bytes, 0);
+        assert_eq!(native.admission.admitted_code_bytes, first_bytes);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_post_compile_budget_rejection_falls_back_without_admission() {
+        let mut vm = empty_vm();
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.native.as_mut().expect("native").admission.max_code_bytes = 1;
+        vm.prepare_frame(0, 1).expect("frame");
+        let func = native_constant_func("too_large", 7);
+
+        assert!(matches!(vm.try_native(&func, 0), NativeAttempt::Fallback));
+        let second = native_constant_func("blocked_after_oversize", 8);
+        assert!(matches!(vm.try_native(&second, 0), NativeAttempt::Fallback));
+        let native = vm.native.as_ref().expect("native");
+        assert_eq!(native.stats.compiled, 0);
+        assert_eq!(native.stats.admission_admitted, 0);
+        assert_eq!(native.stats.admission_admitted_bytes, 0);
+        assert_eq!(native.stats.admission_rejected, 2);
+        assert!(
+            native.stats.admission_rejected_bytes > 1,
+            "post-compile rejection should report the emitted bytes: {:?}",
+            native.stats,
+        );
+        assert_eq!(native.admission.admitted_code_bytes, 0);
+        assert!(native.admission.code_exhausted);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_zero_compile_time_budget_rejects_before_compilation() {
+        let mut vm = empty_vm();
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.native
+            .as_mut()
+            .expect("native")
+            .admission
+            .max_compile_nanos = 0;
+        vm.prepare_frame(0, 1).expect("frame");
+        let func = native_constant_func("no_compile_time", 9);
+
+        assert!(matches!(vm.try_native(&func, 0), NativeAttempt::Fallback));
+        let native = vm.native.as_ref().expect("native");
+        assert_eq!(native.stats.compiled, 0);
+        assert_eq!(native.stats.compile_nanos, 0);
+        assert_eq!(native.stats.admission_admitted, 0);
+        assert_eq!(native.stats.admission_rejected, 1);
+        assert_eq!(native.stats.admission_rejected_bytes, 0);
     }
 
     #[cfg(feature = "native-jit")]

@@ -211,6 +211,98 @@ fn record_native_compile_stats(
         .map_or(0, |map| map.sites.len() as u64);
 }
 
+#[cfg(feature = "native-jit")]
+struct NativeCompileAdmission {
+    started: std::time::Instant,
+    regions: u64,
+}
+
+#[cfg(feature = "native-jit")]
+fn begin_native_compile(
+    native: &mut NativeState,
+    regions: usize,
+) -> Option<NativeCompileAdmission> {
+    let exhausted = native.admission.code_exhausted
+        || native.admission.admitted_code_bytes >= native.admission.max_code_bytes
+        || native.admission.compile_nanos >= native.admission.max_compile_nanos;
+    if exhausted {
+        if native.collect_stats {
+            native.stats.admission_rejected = native
+                .stats
+                .admission_rejected
+                .saturating_add(regions as u64);
+        }
+        return None;
+    }
+    Some(NativeCompileAdmission {
+        started: std::time::Instant::now(),
+        regions: regions as u64,
+    })
+}
+
+#[cfg(feature = "native-jit")]
+fn finish_native_compile_failure(native: &mut NativeState, admission: NativeCompileAdmission) {
+    let elapsed = admission.started.elapsed().as_nanos();
+    native.admission.compile_nanos = native.admission.compile_nanos.saturating_add(elapsed);
+    if native.collect_stats {
+        native.stats.compile_nanos = native.stats.compile_nanos.saturating_add(elapsed);
+    }
+}
+
+/// Atomically admits all emitted ids or none. Cranelift has already allocated
+/// rejected output in `NativeModule`; omitting it from dispatch caches bounds
+/// admitted code but does not reclaim executable memory.
+#[cfg(feature = "native-jit")]
+fn finish_native_compile(
+    native: &mut NativeState,
+    admission: NativeCompileAdmission,
+    ids: &[vm_jit::CompiledId],
+) -> bool {
+    let elapsed = admission.started.elapsed().as_nanos();
+    native.admission.compile_nanos = native.admission.compile_nanos.saturating_add(elapsed);
+    if native.collect_stats {
+        native.stats.compile_nanos = native.stats.compile_nanos.saturating_add(elapsed);
+    }
+    let code_bytes = ids.iter().fold(0u64, |total, &id| {
+        total.saturating_add(native.module.code_size_bytes(id).unwrap_or(0))
+    });
+    let admitted_bytes = native
+        .admission
+        .admitted_code_bytes
+        .checked_add(code_bytes)
+        .filter(|&total| total <= native.admission.max_code_bytes);
+    let within_time = native.admission.compile_nanos <= native.admission.max_compile_nanos;
+    if let Some(total) = admitted_bytes.filter(|_| within_time) {
+        native.admission.admitted_code_bytes = total;
+        if native.collect_stats {
+            native.stats.admission_admitted = native
+                .stats
+                .admission_admitted
+                .saturating_add(admission.regions);
+            native.stats.admission_admitted_bytes = native
+                .stats
+                .admission_admitted_bytes
+                .saturating_add(code_bytes);
+        }
+        true
+    } else {
+        if admitted_bytes.is_none() {
+            native.admission.code_exhausted = true;
+        }
+        if native.collect_stats {
+            native.stats.admission_rejected = native
+                .stats
+                .admission_rejected
+                .saturating_add(admission.regions);
+            native.stats.admission_rejected_bytes = native
+                .stats
+                .admission_rejected_bytes
+                .saturating_add(code_bytes);
+        }
+        false
+    }
+}
+
 /// Step 1 cost model. Consult the profitability gate for a region that already
 /// translated (i.e. is ELIGIBLE native code). Returns `true` only when the gate is
 /// in `enforce` mode AND the region is unprofitable — the caller then keeps the
@@ -393,7 +485,10 @@ fn native_compile_direct_scalar_callee(
     if native.collect_stats {
         native.stats.translated += 1;
     }
-    let started = native.collect_stats.then(std::time::Instant::now);
+    let Some(admission) = begin_native_compile(native, 1) else {
+        stack.remove(&callee_key);
+        return None;
+    };
     let compiled = if native.force_all_safepoints {
         native.module.compile_forcing_all_bails(&jit_fn)
     } else {
@@ -402,12 +497,10 @@ fn native_compile_direct_scalar_callee(
             None => native.module.compile(&jit_fn),
         }
     };
-    if let Some(started) = started {
-        native.stats.compile_nanos += started.elapsed().as_nanos();
-    }
     let id = match compiled {
         Ok(id) => id,
         Err(err) => {
+            finish_native_compile_failure(native, admission);
             if native.report {
                 eprintln!("jit-report: native callee compile failed: {err}");
             }
@@ -418,6 +511,10 @@ fn native_compile_direct_scalar_callee(
             return None;
         }
     };
+    if !finish_native_compile(native, admission, &[id]) {
+        stack.remove(&callee_key);
+        return None;
+    }
     let verify_native = cfg!(debug_assertions) || jit_native_verify_is_strict();
     if verify_native {
         if let Err(err) =
@@ -1061,7 +1158,10 @@ impl RegVm {
                             ) {
                                 None
                             } else {
-                                let started = native.collect_stats.then(std::time::Instant::now);
+                                let Some(admission) = begin_native_compile(native, 1) else {
+                                    native.cache.insert(native_key, None);
+                                    return NativeAttempt::Fallback;
+                                };
                                 let compiled = if native.force_all_safepoints {
                                     native.module.compile_forcing_all_bails(&jit_fn)
                                 } else {
@@ -1072,11 +1172,12 @@ impl RegVm {
                                         None => native.module.compile(&jit_fn),
                                     }
                                 };
-                                if let Some(started) = started {
-                                    native.stats.compile_nanos += started.elapsed().as_nanos();
-                                }
                                 match compiled {
                                     Ok(id) => {
+                                        if !finish_native_compile(native, admission, &[id]) {
+                                            native.cache.insert(native_key, None);
+                                            return NativeAttempt::Fallback;
+                                        }
                                         let verify_native =
                                             cfg!(debug_assertions) || jit_native_verify_is_strict();
                                         if verify_native {
@@ -1113,6 +1214,7 @@ impl RegVm {
                                         ))
                                     }
                                     Err(err) => {
+                                        finish_native_compile_failure(native, admission);
                                         if native.report {
                                             eprintln!(
                                                 "jit-report: fn `{}` compile failed: {err}",
@@ -1879,6 +1981,7 @@ impl RegVm {
                                     return None;
                                 }
                                 let heap_input_regs = osr_heap_input_regs(&jit_fn);
+                                let admission = begin_native_compile(native, 1)?;
                                 match native.module.compile_osr(
                                     &jit_fn,
                                     lp.header as u32,
@@ -1886,6 +1989,9 @@ impl RegVm {
                                     emit_cancel,
                                 ) {
                                     Ok(id) => {
+                                        if !finish_native_compile(native, admission, &[id]) {
+                                            return None;
+                                        }
                                         let verify_native =
                                             cfg!(debug_assertions) || jit_native_verify_is_strict();
                                         if verify_native {
@@ -1924,7 +2030,10 @@ impl RegVm {
                                             some_option_reconstructs: Vec::new(),
                                         })
                                     }
-                                    Err(_) => None,
+                                    Err(_) => {
+                                        finish_native_compile_failure(native, admission);
+                                        None
+                                    }
                                 }
                             },
                         )
@@ -2263,8 +2372,12 @@ impl RegVm {
                                         return None;
                                     }
                                     let heap_input_regs = osr_heap_input_regs(&jit_fn);
+                                    let admission = begin_native_compile(native, 1)?;
                                     match native.module.compile_osr(&jit_fn, lp.header as u32, emit_step, emit_cancel) {
                                         Ok(id) => {
+                                            if !finish_native_compile(native, admission, &[id]) {
+                                                return None;
+                                            }
                                             let verify_native =
                                                 cfg!(debug_assertions) || jit_native_verify_is_strict();
                                             if verify_native {
@@ -2342,7 +2455,10 @@ impl RegVm {
                                                 some_option_reconstructs: option_recipes1,
                                             })
                                         }
-                                        Err(_) => None,
+                                        Err(_) => {
+                                            finish_native_compile_failure(native, admission);
+                                            None
+                                        },
                                     }
                                 })
                         })
@@ -3189,13 +3305,24 @@ impl RegVm {
                                 let is_scalar = |t: &NativeTy| {
                                     matches!(t, NativeTy::Int | NativeTy::Bool | NativeTy::Float)
                                 };
-                                (is_scalar(&ret) && param_tys.iter().all(is_scalar))
-                                    .then(|| native.module.compile(&jit_fn).ok())
-                                    .flatten()
-                                    .map(|id| {
-                                        record_native_compile_stats(native, id, &jit_fn);
-                                        (id, param_tys, ret)
-                                    })
+                                if !is_scalar(&ret) || !param_tys.iter().all(is_scalar) {
+                                    return None;
+                                }
+                                let admission = begin_native_compile(native, 1)?;
+                                match native.module.compile(&jit_fn) {
+                                    Ok(id) => {
+                                        if finish_native_compile(native, admission, &[id]) {
+                                            record_native_compile_stats(native, id, &jit_fn);
+                                            Some((id, param_tys, ret))
+                                        } else {
+                                            None
+                                        }
+                                    }
+                                    Err(_) => {
+                                        finish_native_compile_failure(native, admission);
+                                        None
+                                    }
+                                }
                             },
                         )
                     };
@@ -3338,7 +3465,17 @@ impl RegVm {
                         member_sigs.push((param_tys, ret));
                         jit_funcs.push(jit_fn);
                     }
-                    let ids = native.module.compile_recursive_group(&jit_funcs).ok()?;
+                    let admission = begin_native_compile(native, jit_funcs.len())?;
+                    let ids = match native.module.compile_recursive_group(&jit_funcs) {
+                        Ok(ids) => ids,
+                        Err(_) => {
+                            finish_native_compile_failure(native, admission);
+                            return None;
+                        }
+                    };
+                    if !finish_native_compile(native, admission, &ids) {
+                        return None;
+                    }
                     for (&id, jit_fn) in ids.iter().zip(&jit_funcs) {
                         record_native_compile_stats(native, id, jit_fn);
                     }
