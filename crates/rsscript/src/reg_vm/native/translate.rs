@@ -2051,6 +2051,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         &reachable,
         &mut jit_code,
         &native_reg_types,
+        func.params,
     );
     native_forward_direct_list_store_loads(&mut jit_code);
 
@@ -2439,10 +2440,13 @@ fn native_memoize_loop_invariant_host_calls(
     reachable: &[bool],
     jit_code: &mut [vm_jit::JitInstr],
     native_reg_types: &[NativeTy],
+    n_params: usize,
 ) -> Vec<vm_jit::MemoScope> {
     let original_n_regs = native_reg_types.len();
     let mut next_memo_slot = 0_u32;
     let mut memo_scopes = Vec::new();
+    let heap_provenance =
+        NativeHeapProvenanceFacts::compute(code, jit_code, n_params, native_reg_types);
     let loops = detect_natural_loops(code);
     for lp in &loops {
         // Scope lowering marks only unconditional jumps as backedges. This covers
@@ -2471,17 +2475,21 @@ fn native_memoize_loop_invariant_host_calls(
                     &args,
                     &invariants,
                     &jit_code,
+                    heap_provenance.as_ref(),
                     lp.header,
                     lp.exit,
                     ip,
                     original_n_regs,
                 );
             let collection_metadata_eligible = native_collection_metadata_helper(helper)
-                && native_loop_preserves_heap_projection(
+                && native_loop_preserves_heap_query(
+                    &args,
+                    NativeHeapDomain::Projection(vm_jit::HostHeapProjection::CollectionLen),
                     &jit_code,
+                    heap_provenance.as_ref(),
                     lp.header,
                     lp.exit,
-                    vm_jit::HostHeapProjection::CollectionLen,
+                    ip,
                 );
             let args_loop_stable = if field_load_eligible {
                 true
@@ -2584,6 +2592,129 @@ fn native_collection_metadata_helper(helper: vm_jit::HostHelper) -> bool {
 }
 
 #[cfg(feature = "native-jit")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NativeHeapDomain {
+    Projection(vm_jit::HostHeapProjection),
+    FieldSlot(i64),
+}
+
+#[cfg(feature = "native-jit")]
+fn native_heap_domains_may_overlap(lhs: NativeHeapDomain, rhs: NativeHeapDomain) -> bool {
+    use vm_jit::HostHeapProjection;
+
+    match (lhs, rhs) {
+        (NativeHeapDomain::Projection(HostHeapProjection::Unknown), _)
+        | (_, NativeHeapDomain::Projection(HostHeapProjection::Unknown)) => true,
+        (NativeHeapDomain::FieldSlot(lhs), NativeHeapDomain::FieldSlot(rhs)) => lhs == rhs,
+        (
+            NativeHeapDomain::FieldSlot(_),
+            NativeHeapDomain::Projection(HostHeapProjection::Fields),
+        )
+        | (
+            NativeHeapDomain::Projection(HostHeapProjection::Fields),
+            NativeHeapDomain::FieldSlot(_),
+        ) => true,
+        (NativeHeapDomain::Projection(lhs), NativeHeapDomain::Projection(rhs)) => lhs == rhs,
+        _ => false,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn native_heap_roots_may_alias(lhs: NativeHeapProvenance, rhs: NativeHeapProvenance) -> bool {
+    match (lhs, rhs) {
+        (NativeHeapProvenance::Fresh(lhs), NativeHeapProvenance::Fresh(rhs)) => lhs == rhs,
+        (NativeHeapProvenance::Fresh(_), NativeHeapProvenance::External)
+        | (NativeHeapProvenance::External, NativeHeapProvenance::Fresh(_)) => false,
+        _ => true,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn native_heap_receiver_arg(args: &[vm_jit::HostArg], index: usize) -> Option<u32> {
+    match args.get(index) {
+        Some(vm_jit::HostArg::Reg(reg)) => Some(*reg),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn native_host_write_domain(
+    helper: vm_jit::HostHelper,
+    args: &[vm_jit::HostArg],
+    projection: vm_jit::HostHeapProjection,
+) -> NativeHeapDomain {
+    if projection == vm_jit::HostHeapProjection::Fields
+        && is_native_field_set_helper(helper)
+        && let Some(vm_jit::HostArg::ImmI64(slot)) = args.get(1)
+    {
+        NativeHeapDomain::FieldSlot(*slot)
+    } else {
+        NativeHeapDomain::Projection(projection)
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn native_loop_preserves_heap_query(
+    query_args: &[vm_jit::HostArg],
+    query_domain: NativeHeapDomain,
+    jit_code: &[vm_jit::JitInstr],
+    provenance: Option<&NativeHeapProvenanceFacts>,
+    header: usize,
+    exit: usize,
+    query_ip: usize,
+) -> bool {
+    let Some(query_reg) = native_heap_receiver_arg(query_args, 0) else {
+        return false;
+    };
+    let query_root = provenance
+        .map(|facts| facts.before(query_reg, query_ip))
+        .unwrap_or(NativeHeapProvenance::Unknown);
+
+    for (ip, instr) in jit_code[header..exit].iter().enumerate() {
+        let ip = header + ip;
+        match instr {
+            vm_jit::JitInstr::HostCall { helper, args, .. }
+            | vm_jit::JitInstr::MemoizedHostCall { helper, args, .. } => {
+                for access in helper.heap_writes() {
+                    let write_domain = native_host_write_domain(*helper, args, access.projection);
+                    if !native_heap_domains_may_overlap(query_domain, write_domain) {
+                        continue;
+                    }
+                    let Some(write_reg) = native_heap_receiver_arg(args, access.arg as usize)
+                    else {
+                        return false;
+                    };
+                    let write_root = provenance
+                        .map(|facts| facts.before(write_reg, ip))
+                        .unwrap_or(NativeHeapProvenance::Unknown);
+                    if native_heap_roots_may_alias(query_root, write_root) {
+                        return false;
+                    }
+                }
+            }
+            vm_jit::JitInstr::CallNative { .. }
+            | vm_jit::JitInstr::CallSelf { .. }
+            | vm_jit::JitInstr::CallGroup { .. } => return false,
+            vm_jit::JitInstr::ListSetIntDirect { base, .. }
+            | vm_jit::JitInstr::ListSetFloatDirect { base, .. } => {
+                let write_domain =
+                    NativeHeapDomain::Projection(vm_jit::HostHeapProjection::Elements);
+                if native_heap_domains_may_overlap(query_domain, write_domain) {
+                    let write_root = provenance
+                        .map(|facts| facts.before(*base, ip))
+                        .unwrap_or(NativeHeapProvenance::Unknown);
+                    if native_heap_roots_may_alias(query_root, write_root) {
+                        return false;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    true
+}
+
+#[cfg(all(feature = "native-jit", test))]
 pub(crate) fn native_loop_preserves_heap_projection(
     jit_code: &[vm_jit::JitInstr],
     header: usize,
@@ -2617,7 +2748,7 @@ pub(crate) fn native_loop_preserves_heap_projection(
     true
 }
 
-#[cfg(feature = "native-jit")]
+#[cfg(all(feature = "native-jit", test))]
 pub(crate) fn native_field_load_slot_not_stored_in_loop(
     args: &[vm_jit::HostArg],
     jit_code: &[vm_jit::JitInstr],
@@ -2653,11 +2784,38 @@ pub(crate) fn native_field_load_slot_not_stored_in_loop(
     true
 }
 
+#[cfg(all(feature = "native-jit", test))]
+pub(crate) fn native_loop_preserves_field_slot_for_receiver(
+    code: &[RegInstr],
+    jit_code: &[vm_jit::JitInstr],
+    native_reg_types: &[NativeTy],
+    n_params: usize,
+    query_args: &[vm_jit::HostArg],
+    header: usize,
+    exit: usize,
+    query_ip: usize,
+) -> bool {
+    let Some(vm_jit::HostArg::ImmI64(slot)) = query_args.get(1).copied() else {
+        return false;
+    };
+    let provenance = NativeHeapProvenanceFacts::compute(code, jit_code, n_params, native_reg_types);
+    native_loop_preserves_heap_query(
+        query_args,
+        NativeHeapDomain::FieldSlot(slot),
+        jit_code,
+        provenance.as_ref(),
+        header,
+        exit,
+        query_ip,
+    )
+}
+
 #[cfg(feature = "native-jit")]
 fn native_field_load_args_loop_stable(
     args: &[vm_jit::HostArg],
     invariants: &NativeLoopInvariants,
     jit_code: &[vm_jit::JitInstr],
+    provenance: Option<&NativeHeapProvenanceFacts>,
     header: usize,
     exit: usize,
     helper_ip: usize,
@@ -2666,22 +2824,33 @@ fn native_field_load_args_loop_stable(
     let Some(vm_jit::HostArg::Reg(base)) = args.first().copied() else {
         return false;
     };
-    if !native_field_load_slot_not_stored_in_loop(args, jit_code, header, exit) {
+    let Some(vm_jit::HostArg::ImmI64(slot)) = args.get(1).copied() else {
+        return false;
+    };
+    if !native_loop_preserves_heap_query(
+        args,
+        NativeHeapDomain::FieldSlot(slot),
+        jit_code,
+        provenance,
+        header,
+        exit,
+        helper_ip,
+    ) {
         return false;
     }
     native_reg_loop_invariant_at(base as usize, invariants, helper_ip)
 }
 
 /// Whether a host helper is a copy-on-write struct/variant field store
-/// (`FieldSetInt` or its Float counterpart `FieldSetFloat`). The loop field-read
-/// stability analyses must treat BOTH as stores — otherwise a `FieldSetFloat` write
-/// in a loop would be invisible to a `FieldFloat` read's invalidation check, and the
-/// read would be wrongly hoisted as loop-invariant (reading a stale value).
+/// (`FieldSetInt` and its Float/Handle counterparts). Field-read stability must
+/// treat all three as stores or a differently typed write could leave a stale memo.
 #[cfg(feature = "native-jit")]
 fn is_native_field_set_helper(helper: vm_jit::HostHelper) -> bool {
     matches!(
         helper,
-        vm_jit::HostHelper::FieldSetInt | vm_jit::HostHelper::FieldSetFloat
+        vm_jit::HostHelper::FieldSetInt
+            | vm_jit::HostHelper::FieldSetFloat
+            | vm_jit::HostHelper::FieldSetHandle
     )
 }
 
@@ -5119,6 +5288,7 @@ fn translate_osr_loop_inner(
         &reachable,
         &mut jit_code,
         &native_reg_types,
+        n_params,
     );
     native_forward_direct_list_store_loads(&mut jit_code);
     let mut written_regs = vec![false; native_reg_types.len()];

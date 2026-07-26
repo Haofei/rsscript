@@ -417,6 +417,204 @@ impl<T: Copy + Eq> NativeFact<T> {
 
 #[cfg(feature = "native-jit")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::reg_vm) enum NativeHeapProvenance {
+    External,
+    Fresh(usize),
+    Unknown,
+}
+
+#[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) struct NativeHeapProvenanceFacts {
+    cfg: NativeRegionCfg,
+    before: Vec<Vec<NativeFact<NativeHeapProvenance>>>,
+}
+
+#[cfg(feature = "native-jit")]
+impl NativeHeapProvenanceFacts {
+    pub(in crate::reg_vm) fn compute(
+        code: &[RegInstr],
+        jit_code: &[vm_jit::JitInstr],
+        n_params: usize,
+        native_reg_types: &[NativeTy],
+    ) -> Option<Self> {
+        if code.len() != jit_code.len() || code.is_empty() {
+            return None;
+        }
+        let cfg = NativeRegionCfg::prefix(code, code.len())?;
+        let n_regs = native_reg_types.len();
+        let mut before =
+            vec![vec![NativeFact::Unreached; n_regs]; cfg.exit.saturating_sub(cfg.entry)];
+        before[0] = native_reg_types
+            .iter()
+            .enumerate()
+            .map(|(reg, ty)| {
+                if reg < n_params && native_ty_is_heap_receiver(*ty) {
+                    NativeFact::Known(NativeHeapProvenance::External)
+                } else {
+                    NativeFact::Unknown
+                }
+            })
+            .collect();
+
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for ip in cfg.entry..cfg.exit {
+                let slot = ip - cfg.entry;
+                if before[slot].iter().all(|fact| fact.is_unreached()) {
+                    continue;
+                }
+                let mut out = before[slot].clone();
+                native_heap_provenance_transfer(ip, &jit_code[ip], native_reg_types, &mut out);
+                for &successor in &cfg.successors[slot] {
+                    let successor_slot = successor - cfg.entry;
+                    for (dst, incoming) in
+                        before[successor_slot].iter_mut().zip(out.iter().copied())
+                    {
+                        let next = dst.merge(incoming);
+                        if *dst != next {
+                            *dst = next;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        Some(Self { cfg, before })
+    }
+
+    pub(in crate::reg_vm) fn before(&self, reg: u32, ip: usize) -> NativeHeapProvenance {
+        let Some(slot) = self.cfg.slot(ip) else {
+            return NativeHeapProvenance::Unknown;
+        };
+        match self
+            .before
+            .get(slot)
+            .and_then(|facts| facts.get(reg as usize))
+            .copied()
+        {
+            Some(NativeFact::Known(provenance)) => provenance,
+            Some(NativeFact::Unreached | NativeFact::Unknown) | None => {
+                NativeHeapProvenance::Unknown
+            }
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn native_ty_is_heap_receiver(ty: NativeTy) -> bool {
+    matches!(
+        ty,
+        NativeTy::Handle
+            | NativeTy::FlatInt
+            | NativeTy::FlatIntMut
+            | NativeTy::FlatFloat
+            | NativeTy::FlatFloatMut
+    )
+}
+
+#[cfg(feature = "native-jit")]
+fn native_heap_provenance_transfer(
+    ip: usize,
+    instr: &vm_jit::JitInstr,
+    native_reg_types: &[NativeTy],
+    facts: &mut [NativeFact<NativeHeapProvenance>],
+) {
+    let set = |facts: &mut [NativeFact<NativeHeapProvenance>],
+               dst: u32,
+               value: NativeFact<NativeHeapProvenance>| {
+        if native_reg_types
+            .get(dst as usize)
+            .copied()
+            .is_some_and(native_ty_is_heap_receiver)
+            && let Some(slot) = facts.get_mut(dst as usize)
+        {
+            *slot = value;
+        }
+    };
+
+    match instr {
+        vm_jit::JitInstr::Move { dst, src } => {
+            let value = facts
+                .get(*src as usize)
+                .copied()
+                .unwrap_or(NativeFact::Unknown);
+            set(facts, *dst, value);
+        }
+        vm_jit::JitInstr::HostCall {
+            helper, dst, args, ..
+        }
+        | vm_jit::JitInstr::MemoizedHostCall {
+            helper, dst, args, ..
+        } => {
+            let value = if helper.heap_effect().produces_heap_result() {
+                if matches!(helper.heap_effect(), vm_jit::HostHeapEffect::ReplacesInput) {
+                    match args.first() {
+                        Some(vm_jit::HostArg::Reg(reg)) => facts
+                            .get(*reg as usize)
+                            .copied()
+                            .unwrap_or(NativeFact::Unknown),
+                        _ => NativeFact::Unknown,
+                    }
+                } else {
+                    NativeFact::Known(NativeHeapProvenance::Fresh(ip))
+                }
+            } else {
+                NativeFact::Unknown
+            };
+            set(facts, *dst, value);
+        }
+        vm_jit::JitInstr::CallNative { dst, .. }
+        | vm_jit::JitInstr::CallSelf { dst, .. }
+        | vm_jit::JitInstr::CallGroup { dst, .. } => {
+            set(facts, *dst, NativeFact::Unknown);
+        }
+        _ => {
+            if let Some(dst) = native_jit_heap_fact_dst(instr) {
+                set(facts, dst, NativeFact::Unknown);
+            }
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn native_jit_heap_fact_dst(instr: &vm_jit::JitInstr) -> Option<u32> {
+    match instr {
+        vm_jit::JitInstr::LoadInt { dst, .. }
+        | vm_jit::JitInstr::LoadFloat { dst, .. }
+        | vm_jit::JitInstr::LoadBool { dst, .. }
+        | vm_jit::JitInstr::Add { dst, .. }
+        | vm_jit::JitInstr::Sub { dst, .. }
+        | vm_jit::JitInstr::Mul { dst, .. }
+        | vm_jit::JitInstr::Div { dst, .. }
+        | vm_jit::JitInstr::Mod { dst, .. }
+        | vm_jit::JitInstr::BitAnd { dst, .. }
+        | vm_jit::JitInstr::BitOr { dst, .. }
+        | vm_jit::JitInstr::BitXor { dst, .. }
+        | vm_jit::JitInstr::Shl { dst, .. }
+        | vm_jit::JitInstr::Shr { dst, .. }
+        | vm_jit::JitInstr::Compare { dst, .. }
+        | vm_jit::JitInstr::Equal { dst, .. }
+        | vm_jit::JitInstr::NotEqual { dst, .. }
+        | vm_jit::JitInstr::IntToFloat { dst, .. }
+        | vm_jit::JitInstr::FloatToInt { dst, .. }
+        | vm_jit::JitInstr::ListGetIntDirect { dst, .. }
+        | vm_jit::JitInstr::ListSetIntDirect { dst, .. }
+        | vm_jit::JitInstr::ListGetFloatDirect { dst, .. }
+        | vm_jit::JitInstr::ListSetFloatDirect { dst, .. }
+        | vm_jit::JitInstr::ListLenDirect { dst, .. }
+        | vm_jit::JitInstr::ListIsEmptyDirect { dst, .. }
+        | vm_jit::JitInstr::MatchMapGetInt { value_dst: dst, .. }
+        | vm_jit::JitInstr::MatchMapGetFloat { value_dst: dst, .. }
+        | vm_jit::JitInstr::MatchSortedMapGetInt { value_dst: dst, .. }
+        | vm_jit::JitInstr::MatchSortedMapGetFloat { value_dst: dst, .. } => Some(*dst),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NativeControlFlow {
     Fallthrough,
     Jump(usize),

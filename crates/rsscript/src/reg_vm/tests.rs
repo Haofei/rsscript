@@ -2709,6 +2709,231 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
+    fn native_translation_memoizes_length_across_unrelated_fresh_collection_write() {
+        let source = r#"
+features: local
+
+fn hot(values: read List<Int>, limit: Int) -> Int {
+    local scratch = List.new<Int>()
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        total = total + List.len<Int>(list: read values)
+        List.push<Int>(list: mut scratch, value: read index)
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("fresh-collection-alias.rss", source).expect("lowering");
+        let hot = executable.unit.function_ids["hot"];
+        let (jit, _, _, _, _) =
+            translate_to_native_jit(&executable.unit, executable.unit.functions[hot].as_ref())
+                .expect("fresh collection mutation loop should translate");
+
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::ListLen,
+                    ..
+                }
+            )),
+            "a write to a distinct fresh collection cannot invalidate values.len: {:#?}",
+            jit.code
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_external_collection_receivers_may_alias() {
+        let source = r#"
+features: local
+
+fn hot(values: mut List<Int>, other: mut List<Int>, limit: Int) -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        total = total + List.len<Int>(list: read values)
+        List.push<Int>(list: mut other, value: read index)
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("external-collection-alias.rss", source).expect("lowering");
+        let hot = executable.unit.function_ids["hot"];
+        let (jit, _, _, _, _) =
+            translate_to_native_jit(&executable.unit, executable.unit.functions[hot].as_ref())
+                .expect("external collection mutation loop should translate");
+
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::ListLen,
+                    ..
+                }
+            )),
+            "external ABI handles may alias even when they occupy different registers: {:#?}",
+            jit.code
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_list_set_preserves_len_but_push_invalidates_it() {
+        let translate = |name: &str, mutation: &str| {
+            let source = format!(
+                r#"
+features: local
+
+fn hot(values: mut List<Int>, limit: Int) -> Int {{
+    let mut index = 0
+    let mut total = 0
+    while index < limit {{
+        total = total + List.len<Int>(list: read values)
+        {mutation}
+        index = index + 1
+    }}
+    return total
+}}
+
+fn main() -> Unit {{
+    return Unit
+}}
+"#
+            );
+            let executable = reg_vm_compile_source(name, &source).expect("lowering");
+            let hot = executable.unit.function_ids["hot"];
+            translate_to_native_jit(&executable.unit, executable.unit.functions[hot].as_ref())
+                .expect("collection mutation loop should translate")
+                .0
+        };
+
+        let set = translate(
+            "list-set-preserves-len.rss",
+            "List.set<Int>(list: mut values, index: 0, value: read index)",
+        );
+        assert!(
+            set.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::ListLen,
+                    ..
+                } | vm_jit::JitInstr::ListLenDirect { .. }
+            )),
+            "List.set writes elements but preserves a memoized or direct Len: {:#?}",
+            set.code
+        );
+
+        let push = translate(
+            "list-push-invalidates-len.rss",
+            "List.push<Int>(list: mut values, value: read index)",
+        );
+        assert!(
+            !push.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::ListLen,
+                    ..
+                }
+            )),
+            "List.push can change Len: {:#?}",
+            push.code
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn field_slot_write_on_distinct_fresh_receiver_preserves_query() {
+        let code = vec![
+            RegInstr::CallTypedIntrinsic {
+                dst: 0,
+                intrinsic: RegIntrinsic::ListNew,
+                type_arg: "Int".to_string(),
+                args: Vec::new(),
+            },
+            RegInstr::CallTypedIntrinsic {
+                dst: 1,
+                intrinsic: RegIntrinsic::ListNew,
+                type_arg: "Int".to_string(),
+                args: Vec::new(),
+            },
+            RegInstr::GetFieldSlot {
+                dst: 2,
+                base: 0,
+                slot: 0,
+            },
+            RegInstr::SetFieldSlot {
+                dst: 3,
+                base: 1,
+                slot: 0,
+                value: 2,
+            },
+            RegInstr::Jump { target: 2 },
+        ];
+        let query_args = vec![vm_jit::HostArg::Reg(0), vm_jit::HostArg::ImmI64(0)];
+        let jit_code = vec![
+            vm_jit::JitInstr::HostCall {
+                helper: vm_jit::HostHelper::ListNewInt,
+                dst: 0,
+                args: Vec::new(),
+            },
+            vm_jit::JitInstr::HostCall {
+                helper: vm_jit::HostHelper::ListNewInt,
+                dst: 1,
+                args: Vec::new(),
+            },
+            vm_jit::JitInstr::HostCall {
+                helper: vm_jit::HostHelper::FieldInt,
+                dst: 2,
+                args: query_args.clone(),
+            },
+            vm_jit::JitInstr::HostCall {
+                helper: vm_jit::HostHelper::FieldSetInt,
+                dst: 1,
+                args: vec![
+                    vm_jit::HostArg::Reg(1),
+                    vm_jit::HostArg::ImmI64(0),
+                    vm_jit::HostArg::Reg(2),
+                ],
+            },
+            vm_jit::JitInstr::Jump { target: 2 },
+        ];
+
+        assert!(
+            crate::reg_vm::native_loop_preserves_field_slot_for_receiver(
+                &code,
+                &jit_code,
+                &[
+                    NativeTy::Handle,
+                    NativeTy::Handle,
+                    NativeTy::Int,
+                    NativeTy::Int,
+                ],
+                0,
+                &query_args,
+                2,
+                5,
+                2,
+            ),
+            "same field slot on distinct proven-fresh receivers cannot alias"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
     fn native_translation_does_not_memoize_length_across_insert() {
         let source = r#"
 features: local
@@ -2870,15 +3095,48 @@ fn main() -> Unit {
             })
             .expect("compile test callee");
         let args = vec![vm_jit::HostArg::Reg(0), vm_jit::HostArg::ImmI64(0)];
-        let code = vec![vm_jit::JitInstr::CallNative {
-            callee,
-            dst: 1,
-            args: Vec::new(),
-        }];
+        let code = vec![
+            vm_jit::JitInstr::HostCall {
+                helper: vm_jit::HostHelper::FieldInt,
+                dst: 1,
+                args: args.clone(),
+            },
+            vm_jit::JitInstr::CallNative {
+                callee,
+                dst: 2,
+                args: Vec::new(),
+            },
+        ];
 
         assert!(
             !crate::reg_vm::native_field_load_slot_not_stored_in_loop(&args, &code, 0, code.len()),
             "an unsummarized native call must kill field-load memoization"
+        );
+        let reg_code = vec![
+            RegInstr::GetFieldSlot {
+                dst: 1,
+                base: 0,
+                slot: 0,
+            },
+            RegInstr::CallNative {
+                dst: 2,
+                key: "unknown".to_string(),
+                args: Vec::new(),
+                mut_args: Vec::new(),
+            },
+        ];
+        assert!(
+            !crate::reg_vm::native_loop_preserves_field_slot_for_receiver(
+                &reg_code,
+                &code,
+                &[NativeTy::Handle, NativeTy::Int, NativeTy::Int],
+                1,
+                &args,
+                0,
+                code.len(),
+                0,
+            ),
+            "the receiver-aware query must also treat an unsummarized call as a universal write"
         );
     }
 
