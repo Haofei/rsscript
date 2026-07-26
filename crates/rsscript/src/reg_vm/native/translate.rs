@@ -2052,7 +2052,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         &mut jit_code,
         &mut native_reg_types,
     );
-    native_forward_adjacent_direct_list_store_loads(&mut jit_code);
+    native_forward_direct_list_store_loads(&mut jit_code);
 
     let reg_types = native_reg_types
         .iter()
@@ -2099,47 +2099,85 @@ fn native_compose_ip_maps(
 }
 
 #[cfg(feature = "native-jit")]
-/// Forward an immediately reloaded flat-list element from the preceding store.
+/// Forward flat-list stores to later matching loads within a basic block.
 ///
-/// The store retains the only required bounds guard. Keeping this local and
-/// instruction-count preserving avoids control-flow, alias, and deopt-map changes.
-fn native_forward_adjacent_direct_list_store_loads(jit_code: &mut [vm_jit::JitInstr]) {
-    for ip in 1..jit_code.len() {
-        let replacement = match (&jit_code[ip - 1], &jit_code[ip]) {
-            (
-                vm_jit::JitInstr::ListSetIntDirect {
-                    dst: set_dst,
-                    base: set_base,
-                    index: set_index,
-                    value,
-                },
-                vm_jit::JitInstr::ListGetIntDirect { dst, base, index },
-            ) if set_base == base
-                && set_index == index
-                && set_dst != set_index
-                && set_dst != value =>
+/// Direct stores retain the required bounds guard. Loads become `Move`s so source
+/// IPs and instruction count stay unchanged.
+fn native_forward_direct_list_store_loads(jit_code: &mut [vm_jit::JitInstr]) {
+    #[derive(Clone, Copy)]
+    struct AvailableStore {
+        base: u32,
+        index: u32,
+        value: u32,
+    }
+
+    impl AvailableStore {
+        fn clobbered_by(self, reg: u32) -> bool {
+            self.base == reg || self.index == reg || self.value == reg
+        }
+    }
+
+    let mut block_entry = vec![false; jit_code.len()];
+    for instr in jit_code.iter() {
+        let targets: &[u32] = match instr {
+            vm_jit::JitInstr::Jump { target }
+            | vm_jit::JitInstr::JumpIfBool { target, .. }
+            | vm_jit::JitInstr::ProfiledJumpIfBool { target, .. }
+            | vm_jit::JitInstr::JumpIfIntCompare { target, .. }
+            | vm_jit::JitInstr::ProfiledJumpIfIntCompare { target, .. } => {
+                std::slice::from_ref(target)
+            }
+            vm_jit::JitInstr::MatchMapGetInt {
+                some_ip, none_ip, ..
+            }
+            | vm_jit::JitInstr::MatchMapGetFloat {
+                some_ip, none_ip, ..
+            }
+            | vm_jit::JitInstr::MatchSortedMapGetInt {
+                some_ip, none_ip, ..
+            }
+            | vm_jit::JitInstr::MatchSortedMapGetFloat {
+                some_ip, none_ip, ..
+            } => {
+                for target in [some_ip, none_ip] {
+                    if let Some(entry) = block_entry.get_mut(*target as usize) {
+                        *entry = true;
+                    }
+                }
+                continue;
+            }
+            _ => continue,
+        };
+        for target in targets {
+            if let Some(entry) = block_entry.get_mut(*target as usize) {
+                *entry = true;
+            }
+        }
+    }
+
+    let mut int_store: Option<AvailableStore> = None;
+    let mut float_store: Option<AvailableStore> = None;
+    for ip in 0..jit_code.len() {
+        if block_entry[ip] {
+            int_store = None;
+            float_store = None;
+        }
+
+        let replacement = match (&jit_code[ip], int_store, float_store) {
+            (vm_jit::JitInstr::ListGetIntDirect { dst, base, index }, Some(store), _)
+                if store.base == *base && store.index == *index =>
             {
                 Some(vm_jit::JitInstr::Move {
                     dst: *dst,
-                    src: *value,
+                    src: store.value,
                 })
             }
-            (
-                vm_jit::JitInstr::ListSetFloatDirect {
-                    dst: set_dst,
-                    base: set_base,
-                    index: set_index,
-                    value,
-                },
-                vm_jit::JitInstr::ListGetFloatDirect { dst, base, index },
-            ) if set_base == base
-                && set_index == index
-                && set_dst != set_index
-                && set_dst != value =>
+            (vm_jit::JitInstr::ListGetFloatDirect { dst, base, index }, _, Some(store))
+                if store.base == *base && store.index == *index =>
             {
                 Some(vm_jit::JitInstr::Move {
                     dst: *dst,
-                    src: *value,
+                    src: store.value,
                 })
             }
             _ => None,
@@ -2147,7 +2185,87 @@ fn native_forward_adjacent_direct_list_store_loads(jit_code: &mut [vm_jit::JitIn
         if let Some(replacement) = replacement {
             jit_code[ip] = replacement;
         }
+
+        match &jit_code[ip] {
+            vm_jit::JitInstr::ListSetIntDirect {
+                dst,
+                base,
+                index,
+                value,
+            } => {
+                int_store =
+                    (*dst != *base && *dst != *index && *dst != *value).then_some(AvailableStore {
+                        base: *base,
+                        index: *index,
+                        value: *value,
+                    });
+                if float_store.is_some_and(|store| store.clobbered_by(*dst)) {
+                    float_store = None;
+                }
+            }
+            vm_jit::JitInstr::ListSetFloatDirect {
+                dst,
+                base,
+                index,
+                value,
+            } => {
+                float_store =
+                    (*dst != *base && *dst != *index && *dst != *value).then_some(AvailableStore {
+                        base: *base,
+                        index: *index,
+                        value: *value,
+                    });
+                if int_store.is_some_and(|store| store.clobbered_by(*dst)) {
+                    int_store = None;
+                }
+            }
+            instr if native_direct_store_forwarding_scalar(instr) => {
+                if let Some(dst) = native_jit_written_reg(instr) {
+                    if int_store.is_some_and(|store| store.clobbered_by(dst)) {
+                        int_store = None;
+                    }
+                    if float_store.is_some_and(|store| store.clobbered_by(dst)) {
+                        float_store = None;
+                    }
+                }
+            }
+            _ => {
+                int_store = None;
+                float_store = None;
+            }
+        }
     }
+}
+
+#[cfg(feature = "native-jit")]
+fn native_direct_store_forwarding_scalar(instr: &vm_jit::JitInstr) -> bool {
+    matches!(
+        instr,
+        vm_jit::JitInstr::Nop
+            | vm_jit::JitInstr::LoadInt { .. }
+            | vm_jit::JitInstr::LoadFloat { .. }
+            | vm_jit::JitInstr::LoadBool { .. }
+            | vm_jit::JitInstr::Move { .. }
+            | vm_jit::JitInstr::Add { .. }
+            | vm_jit::JitInstr::Sub { .. }
+            | vm_jit::JitInstr::Mul { .. }
+            | vm_jit::JitInstr::Div { .. }
+            | vm_jit::JitInstr::Mod { .. }
+            | vm_jit::JitInstr::IntToFloat { .. }
+            | vm_jit::JitInstr::FloatToInt { .. }
+            | vm_jit::JitInstr::BitAnd { .. }
+            | vm_jit::JitInstr::BitOr { .. }
+            | vm_jit::JitInstr::BitXor { .. }
+            | vm_jit::JitInstr::Shl { .. }
+            | vm_jit::JitInstr::Shr { .. }
+            | vm_jit::JitInstr::Compare { .. }
+            | vm_jit::JitInstr::Equal { .. }
+            | vm_jit::JitInstr::NotEqual { .. }
+            | vm_jit::JitInstr::ListGetIntDirect { .. }
+            | vm_jit::JitInstr::ListGetFloatDirect { .. }
+            | vm_jit::JitInstr::ListLenDirect { .. }
+            | vm_jit::JitInstr::ListIsEmptyDirect { .. }
+    )
 }
 
 #[cfg(feature = "native-jit")]
@@ -5003,7 +5121,7 @@ fn translate_osr_loop_inner(
         &mut jit_code,
         &mut native_reg_types,
     );
-    native_forward_adjacent_direct_list_store_loads(&mut jit_code);
+    native_forward_direct_list_store_loads(&mut jit_code);
     let mut written_regs = vec![false; native_reg_types.len()];
     for (ip, instr) in jit_code.iter().enumerate() {
         if in_loop(ip)
@@ -5038,4 +5156,136 @@ fn translate_osr_loop_inner(
         written_regs,
         string_literals,
     ))
+}
+
+#[cfg(all(test, feature = "native-jit"))]
+mod direct_store_forwarding_tests {
+    use super::*;
+
+    fn int_store(base: u32, index: u32, value: u32) -> vm_jit::JitInstr {
+        vm_jit::JitInstr::ListSetIntDirect {
+            dst: 30,
+            base,
+            index,
+            value,
+        }
+    }
+
+    fn int_load(dst: u32, base: u32, index: u32) -> vm_jit::JitInstr {
+        vm_jit::JitInstr::ListGetIntDirect { dst, base, index }
+    }
+
+    fn assert_move(instr: &vm_jit::JitInstr, expected_dst: u32, expected_src: u32) {
+        assert!(matches!(
+            instr,
+            vm_jit::JitInstr::Move { dst, src }
+                if *dst == expected_dst && *src == expected_src
+        ));
+    }
+
+    fn assert_int_load(instr: &vm_jit::JitInstr, expected_base: u32, expected_index: u32) {
+        assert!(matches!(
+            instr,
+            vm_jit::JitInstr::ListGetIntDirect { base, index, .. }
+                if *base == expected_base && *index == expected_index
+        ));
+    }
+
+    #[test]
+    fn forwards_int_and_float_stores_across_scalar_instructions() {
+        let mut code = vec![
+            int_store(0, 1, 2),
+            vm_jit::JitInstr::Add {
+                dst: 10,
+                lhs: 11,
+                rhs: 12,
+            },
+            int_load(3, 0, 1),
+            vm_jit::JitInstr::ListSetFloatDirect {
+                dst: 31,
+                base: 4,
+                index: 5,
+                value: 6,
+            },
+            vm_jit::JitInstr::ListLenDirect { dst: 13, base: 4 },
+            vm_jit::JitInstr::ListGetFloatDirect {
+                dst: 7,
+                base: 4,
+                index: 5,
+            },
+        ];
+
+        native_forward_direct_list_store_loads(&mut code);
+
+        assert_eq!(code.len(), 6);
+        assert_move(&code[2], 3, 2);
+        assert_move(&code[5], 7, 6);
+    }
+
+    #[test]
+    fn operand_clobbers_kill_available_store() {
+        for clobbered in [0, 1, 2] {
+            let mut code = vec![
+                int_store(0, 1, 2),
+                vm_jit::JitInstr::LoadInt {
+                    dst: clobbered,
+                    value: 99,
+                },
+                int_load(3, 0, 1),
+            ];
+
+            native_forward_direct_list_store_loads(&mut code);
+
+            assert_int_load(&code[2], 0, 1);
+        }
+    }
+
+    #[test]
+    fn compatible_store_with_different_base_kills_available_store() {
+        let mut code = vec![int_store(0, 1, 2), int_store(4, 5, 6), int_load(3, 0, 1)];
+
+        native_forward_direct_list_store_loads(&mut code);
+
+        assert_int_load(&code[2], 0, 1);
+    }
+
+    #[test]
+    fn calls_and_unknown_heap_effects_kill_available_store() {
+        let barriers = [
+            vm_jit::JitInstr::HostCall {
+                helper: vm_jit::HostHelper::StringLen,
+                dst: 19,
+                args: vec![vm_jit::HostArg::Reg(18)],
+            },
+            vm_jit::JitInstr::CallSelf {
+                dst: 20,
+                args: vec![],
+            },
+            vm_jit::JitInstr::GuardClosureId {
+                base: 21,
+                expected: 1,
+            },
+        ];
+        for barrier in barriers {
+            let mut code = vec![int_store(0, 1, 2), barrier, int_load(3, 0, 1)];
+
+            native_forward_direct_list_store_loads(&mut code);
+
+            assert_int_load(&code[2], 0, 1);
+        }
+    }
+
+    #[test]
+    fn branch_target_starts_without_linear_predecessor_facts() {
+        let mut code = vec![
+            vm_jit::JitInstr::Jump { target: 3 },
+            int_store(0, 1, 2),
+            vm_jit::JitInstr::LoadInt { dst: 10, value: 0 },
+            int_load(3, 0, 1),
+        ];
+
+        native_forward_direct_list_store_loads(&mut code);
+
+        assert_int_load(&code[3], 0, 1);
+    }
 }
