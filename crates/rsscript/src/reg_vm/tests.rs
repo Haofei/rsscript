@@ -6109,7 +6109,7 @@ fn main() -> Unit {
                     &func.code[candidate.header..candidate.exit],
                 )
             });
-        let telemetry = super::super::tier::NativeCompileTelemetry::from_jit_function(&jit);
+        let telemetry = super::super::tier::NativeCompileTelemetry::from_jit_function(&jit.0);
         assert_eq!(telemetry.fused_map_match_helper_sites, 1);
         assert_eq!(
             telemetry.host_call_sites, 1,

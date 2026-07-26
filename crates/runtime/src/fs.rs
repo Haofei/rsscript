@@ -61,6 +61,12 @@ pub trait RuntimePath {
     fn as_path(&self) -> &std::path::Path;
 }
 
+impl RuntimePath for std::path::Path {
+    fn as_path(&self) -> &std::path::Path {
+        self
+    }
+}
+
 impl RuntimePath for PathBuf {
     fn as_path(&self) -> &std::path::Path {
         self.as_path()

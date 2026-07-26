@@ -50,64 +50,6 @@ impl VmDbConnection {
     }
 }
 
-pub(super) struct VmProcessCapture {
-    pub(super) stdout: Vec<u8>,
-    pub(super) stderr: Vec<u8>,
-    pub(super) merged: Vec<u8>,
-    pub(super) cap: Option<usize>,
-    pub(super) used: usize,
-    pub(super) merge_stderr: bool,
-    pub(super) truncated: bool,
-}
-
-impl VmProcessCapture {
-    pub(super) fn new(cap: Option<usize>, merge_stderr: bool) -> Self {
-        Self {
-            stdout: Vec::new(),
-            stderr: Vec::new(),
-            merged: Vec::new(),
-            cap,
-            used: 0,
-            merge_stderr,
-            truncated: false,
-        }
-    }
-
-    pub(super) fn push(&mut self, stderr: bool, bytes: &[u8]) {
-        let bytes = self.capped_bytes(bytes).to_vec();
-        if bytes.is_empty() {
-            return;
-        }
-        if stderr {
-            self.stderr.extend_from_slice(&bytes);
-        } else {
-            self.stdout.extend_from_slice(&bytes);
-        }
-        if self.merge_stderr || !stderr {
-            self.merged.extend_from_slice(&bytes);
-        }
-    }
-
-    fn capped_bytes<'a>(&mut self, bytes: &'a [u8]) -> &'a [u8] {
-        let Some(cap) = self.cap else {
-            return bytes;
-        };
-        if self.used >= cap {
-            self.truncated = true;
-            return &bytes[..0];
-        }
-        let remaining = cap - self.used;
-        if bytes.len() > remaining {
-            self.truncated = true;
-            self.used = cap;
-            &bytes[..remaining]
-        } else {
-            self.used += bytes.len();
-            bytes
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(super) struct VmFileState {
     pub(super) path: String,
