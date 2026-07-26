@@ -4505,8 +4505,39 @@ fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
                 let hi = c1.max(c2).max(c3).max(c4);
                 set(&mut out, *dst, Interval { lo, hi });
             }
+            JitInstr::Mod { dst, lhs, rhs } => {
+                let numerator = read(in_set, *lhs);
+                let divisor = read(in_set, *rhs);
+                // On the successful continuation of signed remainder, the result
+                // has the numerator's sign and its magnitude is smaller than both
+                // |numerator| and |divisor|. Divide-by-zero and MIN % -1 deopt
+                // before defining `dst`, so they need not be represented here.
+                let max_divisor_abs = divisor.lo.abs().max(divisor.hi.abs());
+                let max_remainder = max_divisor_abs
+                    .saturating_sub(1)
+                    .min(numerator.lo.abs().max(numerator.hi.abs()));
+                let result = if max_divisor_abs == 0 {
+                    Interval::TOP
+                } else if numerator.lo >= 0 {
+                    Interval {
+                        lo: 0,
+                        hi: numerator.hi.min(max_remainder),
+                    }
+                } else if numerator.hi <= 0 {
+                    Interval {
+                        lo: numerator.lo.max(-max_remainder),
+                        hi: 0,
+                    }
+                } else {
+                    Interval {
+                        lo: numerator.lo.max(-max_remainder),
+                        hi: numerator.hi.min(max_remainder),
+                    }
+                };
+                set(&mut out, *dst, result);
+            }
             // Every other definer produces an untracked value ⇒ TOP. (Covers Div,
-            // Mod, bitops, shifts, compares, heap reads, ClosureId, params, etc.)
+            // bitops, shifts, compares, heap reads, ClosureId, params, etc.)
             other => {
                 if let Some(d) = instr_def(other) {
                     set(&mut out, d, Interval::TOP);
@@ -4805,6 +4836,157 @@ fn arith_cannot_overflow(intervals: &[Interval], instr: &JitInstr) -> bool {
     result.fits_i64()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UniqueValueOrigin {
+    Unknown,
+    Constant(i64),
+    ListLen(u32),
+    Mod {
+        ip: usize,
+        numerator: u32,
+        divisor: u32,
+    },
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ListBoundsPlan {
+    unchecked_ips: std::collections::HashSet<usize>,
+    /// Minimum entry length required for each flat-list base. Multiple constant
+    /// modulo accesses on one base are consolidated to the strongest guard.
+    entry_min_len: std::collections::BTreeMap<u32, i64>,
+}
+
+/// Resolve a register through its sole reachable definition. This is deliberately
+/// stricter than reaching-definition analysis: any reachable second definition,
+/// even on a disjoint branch, makes the value ambiguous and keeps accesses checked.
+fn unique_value_origin(
+    reg: u32,
+    program: &JitFunction,
+    unique_defs: &[Option<usize>],
+    ambiguous: &[bool],
+    visiting: &mut [bool],
+) -> UniqueValueOrigin {
+    let r = reg as usize;
+    if r >= unique_defs.len() || ambiguous[r] || visiting[r] {
+        return UniqueValueOrigin::Unknown;
+    }
+    let Some(ip) = unique_defs[r] else {
+        return UniqueValueOrigin::Unknown;
+    };
+    visiting[r] = true;
+    let origin = match &program.code[ip] {
+        JitInstr::LoadInt { value, .. } => UniqueValueOrigin::Constant(*value),
+        JitInstr::ListLenDirect { base, .. } => UniqueValueOrigin::ListLen(*base),
+        JitInstr::Move { src, .. } => {
+            unique_value_origin(*src, program, unique_defs, ambiguous, visiting)
+        }
+        JitInstr::Mod {
+            lhs: numerator,
+            rhs: divisor,
+            ..
+        } => UniqueValueOrigin::Mod {
+            ip,
+            numerator: *numerator,
+            divisor: *divisor,
+        },
+        _ => UniqueValueOrigin::Unknown,
+    };
+    visiting[r] = false;
+    origin
+}
+
+/// Find direct list accesses whose modulo-derived index is provably in range.
+/// Public `JitInstr` semantics stay checked; this plan only selects machine-code
+/// sites where a stronger entry guard or same-base length provenance proves safety.
+fn list_bounds_plan(
+    program: &JitFunction,
+    intervals: &[Vec<Interval>],
+    osr_entry: bool,
+) -> ListBoundsPlan {
+    let reachable = reachable_jit_instrs(program);
+    let n_regs = program.n_regs as usize;
+    let mut unique_defs = vec![None; n_regs];
+    let mut ambiguous = vec![false; n_regs];
+    // Entry values are definitions too. A normal function defines params and
+    // explicit zero-init scratch; OSR defines the whole register window. If code
+    // later writes one of these registers, provenance is necessarily multi-def.
+    if osr_entry {
+        ambiguous.fill(true);
+    } else {
+        ambiguous
+            .iter_mut()
+            .take(program.n_params as usize)
+            .for_each(|entry_defined| *entry_defined = true);
+        for &reg in &program.zero_init_regs {
+            ambiguous[reg as usize] = true;
+        }
+    }
+    for (ip, instr) in program.code.iter().enumerate() {
+        if !reachable[ip] {
+            continue;
+        }
+        let Some(dst) = instr_def(instr) else {
+            continue;
+        };
+        let r = dst as usize;
+        if unique_defs[r].replace(ip).is_some() {
+            ambiguous[r] = true;
+        }
+    }
+
+    let origin = |reg| {
+        unique_value_origin(
+            reg,
+            program,
+            &unique_defs,
+            &ambiguous,
+            &mut vec![false; n_regs],
+        )
+    };
+    let mut plan = ListBoundsPlan::default();
+    for (ip, instr) in program.code.iter().enumerate() {
+        if !reachable[ip] {
+            continue;
+        }
+        let (base, index) = match instr {
+            JitInstr::ListGetIntDirect { base, index, .. }
+            | JitInstr::ListSetIntDirect { base, index, .. }
+            | JitInstr::ListGetFloatDirect { base, index, .. }
+            | JitInstr::ListSetFloatDirect { base, index, .. } => (*base, *index),
+            _ => continue,
+        };
+        let UniqueValueOrigin::Mod {
+            ip: mod_ip,
+            numerator,
+            divisor,
+        } = origin(index)
+        else {
+            continue;
+        };
+        let numerator_nonnegative = intervals
+            .get(mod_ip)
+            .and_then(|row| row.get(numerator as usize))
+            .is_some_and(|range| range.lo >= 0);
+        if !numerator_nonnegative {
+            continue;
+        }
+        match origin(divisor) {
+            UniqueValueOrigin::Constant(divisor) if divisor > 0 => {
+                plan.unchecked_ips.insert(ip);
+                plan.entry_min_len
+                    .entry(base)
+                    .and_modify(|minimum| *minimum = (*minimum).max(divisor))
+                    .or_insert(divisor);
+            }
+            UniqueValueOrigin::ListLen(len_base) if len_base == base => {
+                plan.unchecked_ips.insert(ip);
+            }
+            _ => {}
+        }
+    }
+    plan
+}
+
 #[allow(clippy::too_many_arguments)]
 /// Push the `CompiledAbi` parameter/return signature onto `func` (args ptr, n_args,
 /// lens ptr, host ctx, out ptr, bail ptr, safepoint ptr, deopt payload ptr, native
@@ -4935,6 +5117,9 @@ fn build_function(
     // `definite_assignment`, host-side only — it shapes no code beyond choosing the
     // checked vs unchecked arithmetic form.
     let intervals = interval_analysis(program);
+    // Codegen-only direct-list bounds plan. The public IR remains checked; only
+    // individually proven access IPs use the unchecked machine-code emitter.
+    let list_bounds = list_bounds_plan(program, &intervals, osr_header.is_some());
     // Sites accumulate in emission order, aligned 1:1 with the `next_id` counter
     // (`sites[id - 1]` is the site for id `id`).
     let mut sites: Vec<DeoptSite> = Vec::new();
@@ -5099,6 +5284,22 @@ fn build_function(
 
     // The shared fallback block: "not completed".
     let fallback = bcx.create_block();
+
+    // Constant-modulo proofs require the target list to contain at least the
+    // divisor's number of elements. Check that once at anonymous entry instead of
+    // at every proven access. No safepoint id or payload is written here, so failure
+    // remains the existing re-run-from-entry deopt and cannot disturb source-IP maps.
+    for (&base, &minimum) in &list_bounds.entry_min_len {
+        let len = bcx
+            .ins()
+            .load(types::I64, MemFlags::trusted(), lens_ptr, (base as i32) * 8);
+        let required = bcx.ins().iconst(types::I64, minimum);
+        let too_short = bcx.ins().icmp(IntCC::SignedLessThan, len, required);
+        let cont = bcx.create_block();
+        bcx.ins().brif(too_short, fallback, &[], cont, &[]);
+        bcx.switch_to_block(cont);
+        bcx.seal_block(cont);
+    }
 
     // Block leaders: index 0, every jump target, and the instruction after any
     // control-transfer (so dead/own-block code never lands in a sealed block).
@@ -6355,6 +6556,7 @@ fn build_function(
                     reg(*index),
                     *base,
                     types::I64,
+                    !list_bounds.unchecked_ips.contains(&i),
                 );
                 bcx.def_var(reg(*dst), result);
             }
@@ -6377,6 +6579,7 @@ fn build_function(
                     reg(*index),
                     reg(*value),
                     *base,
+                    !list_bounds.unchecked_ips.contains(&i),
                 );
                 let zero = bcx.ins().iconst(types::I64, 0);
                 bcx.def_var(reg(*dst), zero);
@@ -6395,6 +6598,7 @@ fn build_function(
                     reg(*index),
                     *base,
                     types::F64,
+                    !list_bounds.unchecked_ips.contains(&i),
                 );
                 bcx.def_var(reg(*dst), result);
             }
@@ -6419,6 +6623,7 @@ fn build_function(
                     reg(*index),
                     reg(*value),
                     *base,
+                    !list_bounds.unchecked_ips.contains(&i),
                 );
                 let zero = bcx.ins().iconst(types::I64, 0);
                 bcx.def_var(reg(*dst), zero);
@@ -6532,30 +6737,33 @@ fn emit_direct_get(
     index_var: Variable,
     base_param: u32,
     elem_ty: types::Type,
+    checked: bool,
 ) -> Value {
     let index = bcx.use_var(index_var);
-    let len = bcx.ins().load(
-        types::I64,
-        MemFlags::trusted(),
-        lens_ptr,
-        (base_param as i32) * 8,
-    );
-    // Single unsigned compare folds "index < 0" (huge unsigned) and "index >= len"
-    // into one OOB test (len is a non-negative element count).
-    let oob = bcx
-        .ins()
-        .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
-    let cont = bail_if(
-        bcx,
-        oob,
-        fallback,
-        safepoint_ptr,
-        payload_ptr,
-        vars,
-        next_id,
-        deopt,
-    );
-    bcx.switch_to_block(cont);
+    if checked {
+        let len = bcx.ins().load(
+            types::I64,
+            MemFlags::trusted(),
+            lens_ptr,
+            (base_param as i32) * 8,
+        );
+        // Single unsigned compare folds "index < 0" (huge unsigned) and
+        // "index >= len" into one OOB test.
+        let oob = bcx
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
+        let cont = bail_if(
+            bcx,
+            oob,
+            fallback,
+            safepoint_ptr,
+            payload_ptr,
+            vars,
+            next_id,
+            deopt,
+        );
+        bcx.switch_to_block(cont);
+    }
     let base_ptr = bcx.use_var(base_var);
     let offset = bcx.ins().imul_imm(index, 8);
     let addr = bcx.ins().iadd(base_ptr, offset);
@@ -6576,28 +6784,31 @@ fn emit_direct_set_int(
     index_var: Variable,
     value_var: Variable,
     base_param: u32,
+    checked: bool,
 ) {
     let index = bcx.use_var(index_var);
-    let len = bcx.ins().load(
-        types::I64,
-        MemFlags::trusted(),
-        lens_ptr,
-        (base_param as i32) * 8,
-    );
-    let oob = bcx
-        .ins()
-        .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
-    let cont = bail_if(
-        bcx,
-        oob,
-        fallback,
-        safepoint_ptr,
-        payload_ptr,
-        vars,
-        next_id,
-        deopt,
-    );
-    bcx.switch_to_block(cont);
+    if checked {
+        let len = bcx.ins().load(
+            types::I64,
+            MemFlags::trusted(),
+            lens_ptr,
+            (base_param as i32) * 8,
+        );
+        let oob = bcx
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
+        let cont = bail_if(
+            bcx,
+            oob,
+            fallback,
+            safepoint_ptr,
+            payload_ptr,
+            vars,
+            next_id,
+            deopt,
+        );
+        bcx.switch_to_block(cont);
+    }
     let base_ptr = bcx.use_var(base_var);
     let value = bcx.use_var(value_var);
     let offset = bcx.ins().imul_imm(index, 8);
@@ -12344,6 +12555,469 @@ mod tests {
             for v in row {
                 assert!(v.lo <= v.hi, "malformed interval {v:?}");
             }
+        }
+    }
+
+    fn constant_mod_access(
+        list_ty: JitValueType,
+        result_ty: JitValueType,
+        set_value: Option<(JitValueType, i64)>,
+    ) -> JitFunction {
+        let mut reg_types = vec![
+            list_ty,
+            JitValueType::Int,
+            JitValueType::Int,
+            JitValueType::Int,
+            result_ty,
+        ];
+        let mut code = vec![
+            JitInstr::LoadInt { dst: 1, value: 11 },
+            JitInstr::LoadInt { dst: 2, value: 4 },
+            JitInstr::Mod {
+                dst: 3,
+                lhs: 1,
+                rhs: 2,
+            },
+        ];
+        match (list_ty, set_value) {
+            (JitValueType::FlatInt | JitValueType::FlatIntMut, None) => {
+                code.push(JitInstr::ListGetIntDirect {
+                    dst: 4,
+                    base: 0,
+                    index: 3,
+                });
+            }
+            (JitValueType::FlatFloat | JitValueType::FlatFloatMut, None) => {
+                code.push(JitInstr::ListGetFloatDirect {
+                    dst: 4,
+                    base: 0,
+                    index: 3,
+                });
+            }
+            (JitValueType::FlatIntMut, Some((value_ty, bits))) => {
+                reg_types.push(value_ty);
+                code.push(JitInstr::LoadInt {
+                    dst: 5,
+                    value: bits,
+                });
+                code.push(JitInstr::ListSetIntDirect {
+                    dst: 4,
+                    base: 0,
+                    index: 3,
+                    value: 5,
+                });
+            }
+            _ => unreachable!("unsupported test list operation"),
+        }
+        code.push(JitInstr::Return { src: 4 });
+        ft(1, reg_types, code)
+    }
+
+    #[test]
+    fn mod_interval_transfer_tracks_result_sign_and_magnitude() {
+        let positive = f(
+            0,
+            3,
+            vec![
+                JitInstr::LoadInt { dst: 0, value: 17 },
+                JitInstr::LoadInt { dst: 1, value: 5 },
+                JitInstr::Mod {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                JitInstr::Return { src: 2 },
+            ],
+        );
+        let positive_intervals = interval_analysis(&positive);
+        assert_eq!(positive_intervals[3][2], Interval { lo: 0, hi: 4 });
+
+        let negative = f(
+            0,
+            3,
+            vec![
+                JitInstr::LoadInt { dst: 0, value: -17 },
+                JitInstr::LoadInt { dst: 1, value: 5 },
+                JitInstr::Mod {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                JitInstr::Return { src: 2 },
+            ],
+        );
+        assert_eq!(
+            interval_analysis(&negative)[3][2],
+            Interval { lo: -4, hi: 0 }
+        );
+    }
+
+    #[test]
+    fn list_bounds_plan_accepts_only_unique_sound_provenance() {
+        use JitValueType::{FlatInt, Int};
+
+        let constant = constant_mod_access(FlatInt, Int, None);
+        let constant_plan = list_bounds_plan(&constant, &interval_analysis(&constant), false);
+        assert_eq!(constant_plan.unchecked_ips, [3].into_iter().collect());
+        assert_eq!(constant_plan.entry_min_len.get(&0), Some(&4));
+
+        // Unique Move forwarding is provenance-preserving for both divisor and
+        // modulo result.
+        let moved = ft(
+            1,
+            vec![FlatInt, Int, Int, Int, Int, Int, Int],
+            vec![
+                JitInstr::LoadInt { dst: 1, value: 9 },
+                JitInstr::LoadInt { dst: 2, value: 3 },
+                JitInstr::Move { dst: 3, src: 2 },
+                JitInstr::Mod {
+                    dst: 4,
+                    lhs: 1,
+                    rhs: 3,
+                },
+                JitInstr::Move { dst: 5, src: 4 },
+                JitInstr::ListGetIntDirect {
+                    dst: 6,
+                    base: 0,
+                    index: 5,
+                },
+                JitInstr::Return { src: 6 },
+            ],
+        );
+        assert!(
+            list_bounds_plan(&moved, &interval_analysis(&moved), false)
+                .unchecked_ips
+                .contains(&5)
+        );
+
+        // A second reachable definition makes the divisor ambiguous even though
+        // the last definition is also positive.
+        let multi_def = ft(
+            1,
+            vec![FlatInt, Int, Int, Int, Int],
+            vec![
+                JitInstr::LoadInt { dst: 1, value: 9 },
+                JitInstr::LoadInt { dst: 2, value: 3 },
+                JitInstr::LoadInt { dst: 2, value: 4 },
+                JitInstr::Mod {
+                    dst: 3,
+                    lhs: 1,
+                    rhs: 2,
+                },
+                JitInstr::ListGetIntDirect {
+                    dst: 4,
+                    base: 0,
+                    index: 3,
+                },
+                JitInstr::Return { src: 4 },
+            ],
+        );
+        assert!(
+            list_bounds_plan(&multi_def, &interval_analysis(&multi_def), false)
+                .unchecked_ips
+                .is_empty()
+        );
+
+        // A parameter's incoming value is its first definition. Overwriting it
+        // once in code is still multi-def and cannot manufacture provenance.
+        let overwritten_param = ft(
+            3,
+            vec![FlatInt, Int, Int, Int, Int],
+            vec![
+                JitInstr::LoadInt { dst: 1, value: 9 },
+                JitInstr::LoadInt { dst: 2, value: 4 },
+                JitInstr::Mod {
+                    dst: 3,
+                    lhs: 1,
+                    rhs: 2,
+                },
+                JitInstr::ListGetIntDirect {
+                    dst: 4,
+                    base: 0,
+                    index: 3,
+                },
+                JitInstr::Return { src: 4 },
+            ],
+        );
+        assert!(
+            list_bounds_plan(
+                &overwritten_param,
+                &interval_analysis(&overwritten_param),
+                false,
+            )
+            .unchecked_ips
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn constant_modulo_elides_all_direct_get_and_set_checks() {
+        use JitValueType::{FlatFloat, FlatFloatMut, FlatInt, FlatIntMut, Float, Int};
+        let mut m = module();
+
+        let int_get = m.compile(&constant_mod_access(FlatInt, Int, None)).unwrap();
+        let ints = [10, 20, 30, 40];
+        assert_eq!(
+            m.call_with_host_ctx(
+                int_get,
+                &[ints.as_ptr() as i64],
+                &[ints.len() as i64],
+                0,
+                &mut [FlatBufferArg::Int(&ints)],
+            )
+            .completed(),
+            Some(40)
+        );
+
+        let float_get = m
+            .compile(&constant_mod_access(FlatFloat, Float, None))
+            .unwrap();
+        let floats = [1.0, 2.0, 3.0, 4.5];
+        let bits = m
+            .call_with_host_ctx(
+                float_get,
+                &[floats.as_ptr() as i64],
+                &[floats.len() as i64],
+                0,
+                &mut [FlatBufferArg::Float(&floats)],
+            )
+            .completed()
+            .unwrap();
+        assert_eq!(f64::from_bits(bits as u64), 4.5);
+
+        let int_set = m
+            .compile(&constant_mod_access(FlatIntMut, Int, Some((Int, 99))))
+            .unwrap();
+        let mut mutable = [10, 20, 30, 40];
+        let mutable_ptr = mutable.as_mut_ptr() as i64;
+        assert_eq!(
+            m.call_with_host_ctx(
+                int_set,
+                &[mutable_ptr],
+                &[mutable.len() as i64],
+                0,
+                &mut [FlatBufferArg::IntMut(&mut mutable)],
+            )
+            .completed(),
+            Some(0)
+        );
+        assert_eq!(mutable, [10, 20, 30, 99]);
+
+        let float_set_program = ft(
+            1,
+            vec![FlatFloatMut, Int, Int, Int, Float, Int],
+            vec![
+                JitInstr::LoadInt { dst: 1, value: 11 },
+                JitInstr::LoadInt { dst: 2, value: 4 },
+                JitInstr::Mod {
+                    dst: 3,
+                    lhs: 1,
+                    rhs: 2,
+                },
+                JitInstr::LoadFloat {
+                    dst: 4,
+                    value: 9.25,
+                },
+                JitInstr::ListSetFloatDirect {
+                    dst: 5,
+                    base: 0,
+                    index: 3,
+                    value: 4,
+                },
+                JitInstr::Return { src: 5 },
+            ],
+        );
+        assert!(
+            list_bounds_plan(
+                &float_set_program,
+                &interval_analysis(&float_set_program),
+                false,
+            )
+            .unchecked_ips
+            .contains(&4)
+        );
+        let float_set = m.compile(&float_set_program).unwrap();
+        let mut mutable_floats = [1.0, 2.0, 3.0, 4.0];
+        let mutable_floats_ptr = mutable_floats.as_mut_ptr() as i64;
+        assert_eq!(
+            m.call_with_host_ctx(
+                float_set,
+                &[mutable_floats_ptr],
+                &[mutable_floats.len() as i64],
+                0,
+                &mut [FlatBufferArg::FloatMut(&mut mutable_floats)],
+            )
+            .completed(),
+            Some(0)
+        );
+        assert_eq!(mutable_floats, [1.0, 2.0, 3.0, 9.25]);
+    }
+
+    #[test]
+    fn constant_modulo_short_list_deopts_anonymously_before_source() {
+        use JitValueType::{FlatInt, Int};
+        let mut m = module();
+        let program = constant_mod_access(FlatInt, Int, None);
+        let id = m.compile(&program).unwrap();
+        // Only the two checked-Mod sites remain. The direct access at ip 3 has no
+        // safepoint, while its entry length guard is intentionally anonymous.
+        let map = m.deopt_map(id).unwrap();
+        assert_eq!(map.sites.len(), 2);
+        assert!(map.sites.iter().all(|site| site.resume_ip == 2));
+
+        let short = [10, 20, 30];
+        assert!(matches!(
+            m.call_with_host_ctx(
+                id,
+                &[short.as_ptr() as i64],
+                &[short.len() as i64],
+                0,
+                &mut [FlatBufferArg::Int(&short)],
+            ),
+            NativeOutcome::Deopt {
+                safepoint_id: SafepointId::ANONYMOUS,
+                live,
+                ..
+            } if live.is_empty()
+        ));
+    }
+
+    #[test]
+    fn same_base_list_len_modulo_elides_access_but_preserves_mod_deopt_ip() {
+        use JitValueType::{FlatInt, Int};
+        let program = ft(
+            1,
+            vec![FlatInt, Int, Int, Int, Int],
+            vec![
+                JitInstr::ListLenDirect { dst: 1, base: 0 },
+                JitInstr::LoadInt { dst: 2, value: 7 },
+                JitInstr::Mod {
+                    dst: 3,
+                    lhs: 2,
+                    rhs: 1,
+                },
+                JitInstr::ListGetIntDirect {
+                    dst: 4,
+                    base: 0,
+                    index: 3,
+                },
+                JitInstr::Return { src: 4 },
+            ],
+        );
+        let plan = list_bounds_plan(&program, &interval_analysis(&program), false);
+        assert_eq!(plan.unchecked_ips, [3].into_iter().collect());
+        assert!(plan.entry_min_len.is_empty());
+
+        let mut m = module();
+        let id = m.compile(&program).unwrap();
+        assert_eq!(m.deopt_map(id).unwrap().sites.len(), 2);
+        let empty: [i64; 0] = [];
+        match m.call_with_host_ctx(
+            id,
+            &[empty.as_ptr() as i64],
+            &[0],
+            0,
+            &mut [FlatBufferArg::Int(&empty)],
+        ) {
+            NativeOutcome::Deopt {
+                safepoint_id, live, ..
+            } => {
+                assert_eq!(safepoint_id, SafepointId(1));
+                assert_eq!(m.deopt_map(id).unwrap().sites[0].resume_ip, 2);
+                assert!(live.iter().any(|value| value.reg == 1));
+            }
+            outcome => panic!("expected modulo deopt, got {outcome:?}"),
+        }
+    }
+
+    #[test]
+    fn negative_and_wrong_base_modulo_accesses_stay_checked() {
+        use JitValueType::{FlatInt, Int};
+        let negative = ft(
+            1,
+            vec![FlatInt, Int, Int, Int, Int],
+            vec![
+                JitInstr::LoadInt { dst: 1, value: -1 },
+                JitInstr::LoadInt { dst: 2, value: 4 },
+                JitInstr::Mod {
+                    dst: 3,
+                    lhs: 1,
+                    rhs: 2,
+                },
+                JitInstr::ListGetIntDirect {
+                    dst: 4,
+                    base: 0,
+                    index: 3,
+                },
+                JitInstr::Return { src: 4 },
+            ],
+        );
+        assert!(
+            list_bounds_plan(&negative, &interval_analysis(&negative), false)
+                .unchecked_ips
+                .is_empty()
+        );
+
+        let wrong_base = ft(
+            2,
+            vec![FlatInt, FlatInt, Int, Int, Int, Int],
+            vec![
+                JitInstr::ListLenDirect { dst: 2, base: 0 },
+                JitInstr::LoadInt { dst: 3, value: 7 },
+                JitInstr::Mod {
+                    dst: 4,
+                    lhs: 3,
+                    rhs: 2,
+                },
+                JitInstr::ListGetIntDirect {
+                    dst: 5,
+                    base: 1,
+                    index: 4,
+                },
+                JitInstr::Return { src: 5 },
+            ],
+        );
+        assert!(
+            list_bounds_plan(&wrong_base, &interval_analysis(&wrong_base), false)
+                .unchecked_ips
+                .is_empty()
+        );
+
+        let mut m = module();
+        let negative_id = m.compile(&negative).unwrap();
+        let values = [10, 20, 30, 40];
+        match m.call_with_host_ctx(
+            negative_id,
+            &[values.as_ptr() as i64],
+            &[values.len() as i64],
+            0,
+            &mut [FlatBufferArg::Int(&values)],
+        ) {
+            NativeOutcome::Deopt { safepoint_id, .. } => {
+                let site = &m.deopt_map(negative_id).unwrap().sites[safepoint_id.0 as usize - 1];
+                assert_eq!(site.resume_ip, 3);
+            }
+            outcome => panic!("expected checked negative-index deopt, got {outcome:?}"),
+        }
+
+        let wrong_base_id = m.compile(&wrong_base).unwrap();
+        let divisor_list = [10, 20, 30, 40];
+        let target_list = [99];
+        match m.call_with_host_ctx(
+            wrong_base_id,
+            &[divisor_list.as_ptr() as i64, target_list.as_ptr() as i64],
+            &[divisor_list.len() as i64, target_list.len() as i64],
+            0,
+            &mut [
+                FlatBufferArg::Int(&divisor_list),
+                FlatBufferArg::Int(&target_list),
+            ],
+        ) {
+            NativeOutcome::Deopt { safepoint_id, .. } => {
+                let site = &m.deopt_map(wrong_base_id).unwrap().sites[safepoint_id.0 as usize - 1];
+                assert_eq!(site.resume_ip, 3);
+            }
+            outcome => panic!("expected checked wrong-base deopt, got {outcome:?}"),
         }
     }
 }
