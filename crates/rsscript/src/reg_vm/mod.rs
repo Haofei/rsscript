@@ -1372,8 +1372,9 @@ impl RegVmExecutable {
     /// The default tier-up threshold is 0 (compile on first call), which keeps
     /// the differential's full coverage. The `RSS_JIT_TIER_THRESHOLD` env var
     /// overrides it with any valid `u32`: a function then only compiles to
-    /// native after being called more than that many times. This is the runtime
-    /// knob for tuning/measuring tier-up (see plan §3.4) and for production
+    /// baseline native after accumulating more than that many deterministic
+    /// interpreted-work units. This is the runtime knob for tuning/measuring
+    /// tier-up (see plan §3.4) and for production
     /// deployments that want to defer native compilation for cold functions.
     /// The differential never sets it, so its behavior is unchanged.
     #[cfg(feature = "native-jit")]
@@ -1707,11 +1708,9 @@ impl RegVmExecutable {
         // the interpreter/tier-0 path enforces it via `tick()`.
         vm.set_limits(limits);
         // Native first, then tier-0, then interpreter.
-        // `RSS_JIT_BASELINE=1` selects the Phase-2 path-B baseline tier
-        // (`opt_level="none"`); default (unset) keeps the optimizing tier
-        // (`opt_level="speed"`). Only the Cranelift opt flag changes — the
-        // compiled subset, host helpers, and deopt oracle are identical, so the
-        // differential (which never sets this var) is undisturbed.
+        // `RSS_JIT_BASELINE=1` is an explicit baseline-only mode. Otherwise the
+        // bounded ladder starts at `opt_level=none` and promotes eligible regions
+        // into a separate `opt_level=speed` module.
         let baseline = std::env::var_os("RSS_JIT_BASELINE").is_some();
         // Precise resume (J0.1/J0.2): a native bail resumes the interpreter at the
         // safepoint's `resume_ip` (reconstructing the live register window —
@@ -2330,10 +2329,13 @@ type NativeCompiledEntry = (
 /// deopt knobs.
 #[cfg(feature = "native-jit")]
 struct NativeState {
-    module: vm_jit::NativeModule,
+    baseline_module: vm_jit::NativeModule,
+    /// The speed-optimized tier. `None` is the explicit
+    /// `RSS_JIT_BASELINE` baseline-only mode.
+    optimized_module: Option<vm_jit::NativeModule>,
     /// Process-local JIT work admission. This bounds code made available for
-    /// dispatch; rejected Cranelift output remains owned by `module` until the VM
-    /// is dropped and is not executable-memory reclamation.
+    /// dispatch across both modules; rejected Cranelift output remains owned by
+    /// its module until the VM is dropped and is not executable-memory reclamation.
     admission: NativeAdmissionBudget,
     // `None` = known not native-eligible; `Some((id, ret, params, has_backedge, scalar_leaf_callable, literals, precise_resume_safe))`
     // = compiled handle, return type (to box the 64-bit result), parameter types
@@ -2343,10 +2345,18 @@ struct NativeState {
     // (`NATIVE_NOAMORTIZE_GIVEUP`): a loop-free body dispatched per loop iteration
     // can never amortize FFI cost, so it is demoted after `K` dispatches.
     cache: HashMap<usize, Option<NativeCompiledEntry>>,
-    /// Per-function call counts, for tiering: a function is compiled and run
-    /// natively only once it has been entered more than `tier_up_threshold` times
-    /// (a hot-function heuristic). `0` means "compile on first call" (force-all).
-    counts: HashMap<usize, u32>,
+    /// Module-local optimized handles. IDs from this cache are dispatched only
+    /// through `optimized_module`.
+    optimized_cache: HashMap<usize, NativeCompiledEntry>,
+    /// Recompile sources retained only for baseline whole functions that contain
+    /// no native-to-native call edges.
+    optimization_sources: HashMap<usize, vm_jit::JitFunction>,
+    /// Per-function deterministic interpreted-work counts for baseline tiering.
+    /// `0` means "compile on first call" (force-all).
+    counts: HashMap<usize, u64>,
+    /// Deterministic interpreted-work accumulated after baseline admission.
+    promotion_work: HashMap<usize, u64>,
+    optimize_work_threshold: u64,
     /// Per-function *consecutive* runtime-bail counts, keyed like `counts`/`cache`.
     /// Incremented on every bail after native was chosen (arg mismatch or runtime
     /// guard), reset to 0 on a successful native completion. At
@@ -2404,6 +2414,10 @@ struct NativeState {
     /// is a compiled OSR entry; `None` is a stable per-region negative result.
     #[allow(clippy::type_complexity)]
     osr_cache: HashMap<RegionKey, Option<OsrEntry>>,
+    /// Optimized OSR entries and their bounded baseline recompile sources.
+    optimized_osr_cache: HashMap<RegionKey, OsrEntry>,
+    osr_optimization_sources: HashMap<RegionKey, OsrOptimizationSource>,
+    osr_promotion_work: HashMap<RegionKey, u64>,
     /// Native self-recursion cache (native-call-ABI slice 3; generalized in Phase 2):
     /// per-function (`*const RegFunction` key) compiled `CallSelf` entry, with the
     /// compiled parameter `NativeTy`s and return `NativeTy` so the dispatcher
@@ -2461,6 +2475,22 @@ struct NativeState {
 const DEFAULT_NATIVE_MAX_CODE_BYTES: u64 = 16 * 1024 * 1024;
 #[cfg(feature = "native-jit")]
 const DEFAULT_NATIVE_MAX_COMPILE_MILLIS: u64 = 2_000;
+#[cfg(feature = "native-jit")]
+const DEFAULT_NATIVE_OPTIMIZE_WORK_THRESHOLD: u64 = 50_000;
+
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NativeCodeTier {
+    Baseline,
+    Optimized,
+}
+
+#[cfg(feature = "native-jit")]
+struct OsrOptimizationSource {
+    jit_fn: vm_jit::JitFunction,
+    header: u32,
+    exit: usize,
+}
 
 #[cfg(feature = "native-jit")]
 #[derive(Debug)]
@@ -2489,6 +2519,16 @@ pub struct NativeStats {
     pub native_decline_reasons: BTreeMap<String, u64>,
     /// Functions Cranelift compiled to machine code.
     pub compiled: u64,
+    /// Regions compiled by the `opt_level=none` baseline module.
+    pub baseline_compiles: u64,
+    /// Regions compiled by the `opt_level=speed` optimized module.
+    pub optimized_compiles: u64,
+    /// Successful baseline native dispatches, including OSR.
+    pub baseline_calls: u64,
+    /// Successful optimized native dispatches, including OSR.
+    pub optimized_calls: u64,
+    /// Baseline entries successfully promoted and admitted.
+    pub promotions: u64,
     /// Total native IR instructions accepted by Cranelift across compiled regions.
     pub compiled_ir_instrs: u64,
     /// Total machine-code bytes emitted by Cranelift across compiled regions.
@@ -2579,12 +2619,17 @@ pub struct NativeStats {
 impl NativeStats {
     fn summary(&self) -> String {
         format!(
-            "native-jit: considered={} translated={} compiled={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_host_call_sites={} host_call_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
+            "native-jit: considered={} translated={} compiled={} baseline_compiles={} optimized_compiles={} baseline_calls={} optimized_calls={} promotions={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_host_call_sites={} host_call_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
 compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} tier_deferred={} \
 compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             self.considered,
             self.translated,
             self.compiled,
+            self.baseline_compiles,
+            self.optimized_compiles,
+            self.baseline_calls,
+            self.optimized_calls,
+            self.promotions,
             self.compiled_ir_instrs,
             self.compiled_code_bytes,
             self.admission_admitted,
@@ -2665,7 +2710,7 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
 
     /// Telemetry as JSON for VM/JIT benchmark and reporting harnesses.
     pub fn to_json(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut value = serde_json::json!({
             "considered": self.considered,
             "translated": self.translated,
             "compiled": self.compiled,
@@ -2707,7 +2752,14 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             "unprofitable_declines": self.unprofitable_declines,
             "unprofitable_decline_reasons": &self.unprofitable_decline_reasons,
             "unprofitable_declined_fns": &self.unprofitable_declined_fns,
-        })
+        });
+        let object = value.as_object_mut().expect("stats JSON is an object");
+        object.insert("baseline_compiles".into(), self.baseline_compiles.into());
+        object.insert("optimized_compiles".into(), self.optimized_compiles.into());
+        object.insert("baseline_calls".into(), self.baseline_calls.into());
+        object.insert("optimized_calls".into(), self.optimized_calls.into());
+        object.insert("promotions".into(), self.promotions.into());
+        value
     }
 }
 
@@ -6903,9 +6955,22 @@ impl NativeState {
             "RSS_JIT_MAX_COMPILE_MS",
             DEFAULT_NATIVE_MAX_COMPILE_MILLIS,
         );
+        let optimize_work_threshold = Self::admission_limit_from_env(
+            "RSS_JIT_OPT_THRESHOLD",
+            DEFAULT_NATIVE_OPTIMIZE_WORK_THRESHOLD,
+        )
+        .max(u64::from(tier_up_threshold) + 1);
         Ok(Self {
-            module: vm_jit::NativeModule::new_with_opt(jit_host_helpers(), baseline)
+            baseline_module: vm_jit::NativeModule::new_with_opt(jit_host_helpers(), true)
                 .map_err(|e| EvalError::Runtime(e.to_string()))?,
+            optimized_module: if baseline {
+                None
+            } else {
+                Some(
+                    vm_jit::NativeModule::new_with_opt(jit_host_helpers(), false)
+                        .map_err(|e| EvalError::Runtime(e.to_string()))?,
+                )
+            },
             admission: NativeAdmissionBudget {
                 max_code_bytes,
                 max_compile_nanos: u128::from(max_compile_millis) * 1_000_000,
@@ -6914,7 +6979,11 @@ impl NativeState {
                 code_exhausted: false,
             },
             cache: HashMap::new(),
+            optimized_cache: HashMap::new(),
+            optimization_sources: HashMap::new(),
             counts: HashMap::new(),
+            promotion_work: HashMap::new(),
+            optimize_work_threshold,
             bail_counts: HashMap::new(),
             noamortize_counts: HashMap::new(),
             tier_up_threshold,
@@ -6928,6 +6997,9 @@ impl NativeState {
             osr_candidates: HashMap::new(),
             osr_triggers: HashMap::new(),
             osr_cache: HashMap::new(),
+            optimized_osr_cache: HashMap::new(),
+            osr_optimization_sources: HashMap::new(),
+            osr_promotion_work: HashMap::new(),
             self_recursive_native: HashMap::new(),
             mutual_recursive_native: HashMap::new(),
             scratch_args: Vec::new(),
@@ -6964,6 +7036,8 @@ impl NativeState {
         if *count >= NATIVE_BAIL_GIVEUP_THRESHOLD {
             func.native_status.set(NATIVE_STATUS_NOT_ELIGIBLE);
             self.cache.remove(&native_key);
+            self.optimized_cache.remove(&native_key);
+            self.optimization_sources.remove(&native_key);
             self.bail_counts.remove(&native_key);
         }
     }

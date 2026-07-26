@@ -2478,6 +2478,11 @@ fn main() -> Unit {
     #[test]
     fn native_compile_shape_telemetry_is_visible_in_summary_and_json() {
         let stats = NativeStats {
+            baseline_compiles: 2,
+            optimized_compiles: 1,
+            baseline_calls: 8,
+            optimized_calls: 13,
+            promotions: 1,
             admission_admitted: 5,
             admission_admitted_bytes: 4096,
             admission_rejected: 3,
@@ -2489,6 +2494,11 @@ fn main() -> Unit {
             ..NativeStats::default()
         };
         let json = stats.to_json();
+        assert_eq!(json["baseline_compiles"].as_u64(), Some(2));
+        assert_eq!(json["optimized_compiles"].as_u64(), Some(1));
+        assert_eq!(json["baseline_calls"].as_u64(), Some(8));
+        assert_eq!(json["optimized_calls"].as_u64(), Some(13));
+        assert_eq!(json["promotions"].as_u64(), Some(1));
         assert_eq!(json["direct_list_bounds_check_sites"].as_u64(), Some(4));
         assert_eq!(json["memoized_host_call_sites"].as_u64(), Some(3));
         assert_eq!(json["host_call_sites"].as_u64(), Some(2));
@@ -2502,6 +2512,11 @@ fn main() -> Unit {
         );
         let summary = stats.summary();
         for field in [
+            "baseline_compiles=2",
+            "optimized_compiles=1",
+            "baseline_calls=8",
+            "optimized_calls=13",
+            "promotions=1",
             "direct_list_bounds_check_sites=4",
             "memoized_host_call_sites=3",
             "host_call_sites=2",
@@ -2529,6 +2544,185 @@ fn main() -> Unit {
                 RegInstr::Return { src: 0 },
             ],
         )
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_ladder_promotes_and_prefers_optimized_dispatch() {
+        let mut vm = empty_vm();
+        let mut native = NativeState::new_with_opt(0, false, true, false, true, false, false)
+            .expect("native ladder");
+        native.optimize_work_threshold = u64::MAX;
+        vm.native = Some(native);
+        vm.prepare_frame(0, 1).expect("frame");
+        let func = native_constant_func("promote", 7);
+
+        assert!(matches!(
+            vm.try_native(&func, 0),
+            NativeAttempt::Completed(VmValue::Int(7))
+        ));
+        {
+            let native = vm.native.as_ref().expect("native");
+            assert_eq!(native.stats.baseline_compiles, 1);
+            assert_eq!(native.stats.baseline_calls, 1);
+            assert_eq!(native.stats.optimized_compiles, 0);
+        }
+
+        vm.native.as_mut().expect("native").optimize_work_threshold = 0;
+        for _ in 0..2 {
+            assert!(matches!(
+                vm.try_native(&func, 0),
+                NativeAttempt::Completed(VmValue::Int(7))
+            ));
+        }
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert_eq!(stats.baseline_compiles, 1);
+        assert_eq!(stats.optimized_compiles, 1);
+        assert_eq!(stats.promotions, 1);
+        assert_eq!(stats.baseline_calls, 1);
+        assert_eq!(
+            stats.optimized_calls, 2,
+            "the promoted cache must remain the preferred dispatch"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_ladder_does_not_promote_below_work_threshold() {
+        let mut vm = empty_vm();
+        let mut native = NativeState::new_with_opt(0, false, true, false, true, false, false)
+            .expect("native ladder");
+        native.optimize_work_threshold = u64::MAX;
+        vm.native = Some(native);
+        vm.prepare_frame(0, 1).expect("frame");
+        let func = native_constant_func("stay_baseline", 9);
+
+        for _ in 0..3 {
+            assert!(matches!(
+                vm.try_native(&func, 0),
+                NativeAttempt::Completed(VmValue::Int(9))
+            ));
+        }
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert_eq!(stats.baseline_compiles, 1);
+        assert_eq!(stats.baseline_calls, 3);
+        assert_eq!(stats.optimized_compiles, 0);
+        assert_eq!(stats.optimized_calls, 0);
+        assert_eq!(stats.promotions, 0);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_ladder_shares_admission_budget_across_modules() {
+        let mut vm = empty_vm();
+        let mut native = NativeState::new_with_opt(0, false, true, false, true, false, false)
+            .expect("native ladder");
+        native.optimize_work_threshold = u64::MAX;
+        vm.native = Some(native);
+        vm.prepare_frame(0, 1).expect("frame");
+        let func = native_constant_func("shared_budget", 11);
+
+        assert!(matches!(
+            vm.try_native(&func, 0),
+            NativeAttempt::Completed(VmValue::Int(11))
+        ));
+        let baseline_bytes = vm
+            .native
+            .as_ref()
+            .expect("native")
+            .admission
+            .admitted_code_bytes;
+        {
+            let native = vm.native.as_mut().expect("native");
+            native.admission.max_code_bytes = baseline_bytes;
+            native.optimize_work_threshold = 0;
+        }
+        assert!(matches!(
+            vm.try_native(&func, 0),
+            NativeAttempt::Completed(VmValue::Int(11))
+        ));
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert_eq!(stats.baseline_calls, 2);
+        assert_eq!(stats.optimized_calls, 0);
+        assert_eq!(stats.optimized_compiles, 0);
+        assert_eq!(stats.promotions, 0);
+        assert_eq!(stats.admission_rejected, 1);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn baseline_only_mode_preserves_precise_deopt() {
+        let mut vm = empty_vm();
+        vm.native = Some(
+            NativeState::new_with_opt(0, false, true, true, true, false, false)
+                .expect("baseline-only native module"),
+        );
+        let func = Rc::new(add_then_square_func());
+        let big = 4_000_000_000i64;
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(big));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        assert!(matches!(vm.try_native(&func, 0), NativeAttempt::Resumed));
+        let native = vm.native.as_ref().expect("native");
+        assert!(native.optimized_module.is_none());
+        assert_eq!(native.stats.baseline_compiles, 1);
+        assert_eq!(native.stats.optimized_compiles, 0);
+        assert_eq!(native.stats.promotions, 0);
+        assert_eq!(vm.frames.last().expect("frame").ip, 2);
+        assert_eq!(*vm.reg(1), VmValue::Int(big + 1));
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_ladder_promotes_region() {
+        let source = "\
+fn hot(limit: Int) -> Int {
+    Log.write(message: \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        total = total + i * 3 + 1
+        i = i + 1
+    }
+    Log.write(message: \"end\")
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: String.from_int(value: hot(limit: 8)))
+    return Unit
+}
+";
+        let executable = reg_vm_compile_source("osr-ladder.rss", source).expect("source compiles");
+        let mut vm = RegVm::new(
+            Rc::clone(&executable.unit),
+            Vec::new(),
+            HashMap::<String, NativeInterpreterFn>::new(),
+        );
+        let mut native = NativeState::new_with_opt(0, false, true, false, true, true, false)
+            .expect("native ladder");
+        native.optimize_work_threshold = 0;
+        vm.native = Some(native);
+        vm.jit_enabled = true;
+        vm.jit_force_all = true;
+
+        vm.run_program("main").expect("program runs");
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert_eq!(stats.baseline_compiles, 1);
+        assert_eq!(stats.optimized_compiles, 1);
+        assert_eq!(stats.promotions, 1);
+        assert_eq!(stats.baseline_calls, 0);
+        assert_eq!(stats.optimized_calls, 1);
+        assert_eq!(stats.osr_entries, 1);
     }
 
     #[cfg(feature = "native-jit")]

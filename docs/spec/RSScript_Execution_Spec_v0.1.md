@@ -649,9 +649,14 @@ Normative conventions (part of this contract):
    private `RegInstr`. The two layers MUST stay decoupled across this IR; a
    producer/consumer version mismatch is an error, not a silent miscompile.
 2. `vm-jit` MUST re-validate received IR (`validate`) before codegen.
-3. Codegen is Cranelift (`cranelift-jit`/`-frontend`/`-codegen`/`-native`) at
-   `opt_level=speed`. Source-level constant folding / intrinsic inlining MAY be
-   layered on later, each behind the §2 differential gate.
+3. Codegen is a bounded Cranelift ladder: admitted regions first compile in a
+   baseline module at `opt_level=none`, then eligible whole functions and OSR
+   regions may promote at a higher deterministic interpreted-work threshold into
+   a separate `opt_level=speed` module. Optimized dispatch is preferred once
+   present. Recursive and native-call-group regions remain baseline-only so a
+   module-local compiled ID is never referenced by another module.
+   `RSS_JIT_BASELINE` explicitly disables the optimized module. Both modules share
+   the same code-byte and compile-time admission budgets.
 
 ---
 
@@ -770,15 +775,16 @@ Built verification-first; the governing invariants are §2 (parity) and §7
   coverage spans heap/field/match, collection get/set, and cross-function calls.
 - **Phase 2 — native (Cranelift) codegen. Done.** Lives in the separate `vm-jit`
   crate behind a safe API (§6, §7.1). ~64× faster than the interpreter on numeric
-  kernels. Cranelift at `opt_level=speed`; the stable versioned IR is
+  kernels. Cranelift uses the bounded baseline-to-optimized ladder from §9; the stable versioned IR is
   `JitInstr`/`JitFunction` (`IR_VERSION`); value glue unboxes by storage class;
   heap reads and declared transactional writes go through `extern "C"` host helpers;
   direct mutable-flat writes are snapshotted by the embedding VM. Any unsatisfied
   guard bails, rolls back, and replays in the interpreter. Eligibility requires every
   parameter's runtime value to match its declared register class;
   `vm-jit::validate` independently re-checks the IR before codegen.
-- **Phase 3 — tiering / deopt / fuzz. Done (baseline).** Per-function hot-call
-  counter (`tier_up_threshold`) defers native compilation until hot; experimental
+- **Phase 3 — tiering / deopt / fuzz. Done (baseline).** Per-function deterministic
+  work counters defer baseline compilation until `tier_up_threshold` and optimized
+  promotion until the higher `RSS_JIT_OPT_THRESHOLD` (default 50,000). Experimental
   OSR-entry is implemented for eligible natural loops (§7), while unsupported state
   shapes remain staged. Native bails at every arithmetic guard and the interpreter
   re-runs from the original args; a permanent `force-deopt` backend exercises the

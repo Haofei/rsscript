@@ -280,18 +280,42 @@ impl NativeCompileTelemetry {
 }
 
 #[cfg(feature = "native-jit")]
+fn native_region_is_promotion_eligible(jit_fn: &vm_jit::JitFunction) -> bool {
+    !jit_fn.code.iter().any(|instr| {
+        matches!(
+            instr,
+            vm_jit::JitInstr::CallNative { .. }
+                | vm_jit::JitInstr::CallSelf { .. }
+                | vm_jit::JitInstr::CallGroup { .. }
+        )
+    })
+}
+
+#[cfg(feature = "native-jit")]
 fn record_native_compile_stats(
     native: &mut NativeState,
     id: vm_jit::CompiledId,
     jit_fn: &vm_jit::JitFunction,
+    tier: NativeCodeTier,
 ) {
     if !native.collect_stats {
         return;
     }
     let telemetry = NativeCompileTelemetry::from_jit_function(jit_fn);
+    let module = match tier {
+        NativeCodeTier::Baseline => &native.baseline_module,
+        NativeCodeTier::Optimized => native
+            .optimized_module
+            .as_ref()
+            .expect("optimized compile requires optimized module"),
+    };
     native.stats.compiled += 1;
+    match tier {
+        NativeCodeTier::Baseline => native.stats.baseline_compiles += 1,
+        NativeCodeTier::Optimized => native.stats.optimized_compiles += 1,
+    }
     native.stats.compiled_ir_instrs += jit_fn.code.len() as u64;
-    native.stats.compiled_code_bytes += native.module.code_size_bytes(id).unwrap_or(0);
+    native.stats.compiled_code_bytes += module.code_size_bytes(id).unwrap_or(0);
     native.stats.direct_list_bounds_check_sites += telemetry.direct_list_bounds_check_sites;
     native.stats.memoized_host_call_sites += telemetry.memoized_host_call_sites;
     native.stats.host_call_sites += telemetry.host_call_sites;
@@ -303,15 +327,12 @@ fn record_native_compile_stats(
     native.stats.native_call_depth_max = native
         .stats
         .native_call_depth_max
-        .max(native.module.native_call_depth(id).map_or(0, u64::from));
+        .max(module.native_call_depth(id).map_or(0, u64::from));
     native.stats.profile_closure_guard_sites += telemetry.profile_closure_guard_sites;
     native.stats.profile_closure_id_reads += telemetry.profile_closure_id_reads;
     native.stats.profile_closure_pic_sites += telemetry.profile_closure_pic_sites;
     native.stats.profile_closure_pic_arms += telemetry.profile_closure_pic_arms;
-    native.stats.deopt_sites += native
-        .module
-        .deopt_map(id)
-        .map_or(0, |map| map.sites.len() as u64);
+    native.stats.deopt_sites += module.deopt_map(id).map_or(0, |map| map.sites.len() as u64);
 }
 
 #[cfg(feature = "native-jit")]
@@ -360,14 +381,22 @@ fn finish_native_compile(
     native: &mut NativeState,
     admission: NativeCompileAdmission,
     ids: &[vm_jit::CompiledId],
+    tier: NativeCodeTier,
 ) -> bool {
     let elapsed = admission.started.elapsed().as_nanos();
     native.admission.compile_nanos = native.admission.compile_nanos.saturating_add(elapsed);
     if native.collect_stats {
         native.stats.compile_nanos = native.stats.compile_nanos.saturating_add(elapsed);
     }
+    let module = match tier {
+        NativeCodeTier::Baseline => &native.baseline_module,
+        NativeCodeTier::Optimized => native
+            .optimized_module
+            .as_ref()
+            .expect("optimized admission requires optimized module"),
+    };
     let code_bytes = ids.iter().fold(0u64, |total, &id| {
-        total.saturating_add(native.module.code_size_bytes(id).unwrap_or(0))
+        total.saturating_add(module.code_size_bytes(id).unwrap_or(0))
     });
     let admitted_bytes = native
         .admission
@@ -593,11 +622,11 @@ fn native_compile_direct_scalar_callee(
         return None;
     };
     let compiled = if native.force_all_safepoints {
-        native.module.compile_forcing_all_bails(&jit_fn)
+        native.baseline_module.compile_forcing_all_bails(&jit_fn)
     } else {
         match native.forced_safepoint {
-            Some(site) => native.module.compile_forcing_bail(&jit_fn, site),
-            None => native.module.compile(&jit_fn),
+            Some(site) => native.baseline_module.compile_forcing_bail(&jit_fn, site),
+            None => native.baseline_module.compile(&jit_fn),
         }
     };
     let id = match compiled {
@@ -614,15 +643,18 @@ fn native_compile_direct_scalar_callee(
             return None;
         }
     };
-    if !finish_native_compile(native, admission, &[id]) {
+    if !finish_native_compile(native, admission, &[id], NativeCodeTier::Baseline) {
         stack.remove(&callee_key);
         return None;
     }
     let verify_native = cfg!(debug_assertions) || jit_native_verify_is_strict();
     if verify_native {
-        if let Err(err) =
-            jit_verify_compiled_native(&native.module, id, &jit_fn, native.forced_safepoint)
-        {
+        if let Err(err) = jit_verify_compiled_native(
+            &native.baseline_module,
+            id,
+            &jit_fn,
+            native.forced_safepoint,
+        ) {
             debug_assert!(false, "native verifier failed: {err}");
             if jit_native_verify_is_strict() {
                 if native.collect_stats {
@@ -633,7 +665,7 @@ fn native_compile_direct_scalar_callee(
             }
         }
     }
-    record_native_compile_stats(native, id, &jit_fn);
+    record_native_compile_stats(native, id, &jit_fn, NativeCodeTier::Baseline);
     let has_backedge = jit_function_has_loop(&callee.code);
     let entry = (
         id,
@@ -1004,7 +1036,7 @@ impl RegVm {
     ) -> Option<usize> {
         self.native
             .as_ref()
-            .and_then(|native| native.module.deopt_map(function))
+            .and_then(|native| native.baseline_module.deopt_map(function))
             .and_then(|map| map.sites.get(safepoint_id.0 as usize - 1))
             .map(|site| site.resume_ip as usize)
     }
@@ -1205,7 +1237,7 @@ impl RegVm {
         let native_key = func as *const RegFunction as usize;
         // Phase 1: tiering + resolve (and lazily compile) the native function.
         // `None` in the cache means "known not native-eligible".
-        let (id, ret_type, param_types, string_literals, precise_resume_safe) = {
+        let (id, ret_type, param_types, string_literals, precise_resume_safe, selected_tier) = {
             let Some(native) = self.native.as_mut() else {
                 return NativeAttempt::Fallback;
             };
@@ -1214,10 +1246,11 @@ impl RegVm {
                 // guard, so the interpreter handles the function.
                 return NativeAttempt::Fallback;
             }
-            // Tiering: stay on the interpreter until the function is hot.
+            // Tiering: accumulate deterministic source-work, then stay on the
+            // interpreter until the lower baseline threshold is crossed.
             let count = native.counts.entry(native_key).or_insert(0);
-            *count += 1;
-            if *count <= native.tier_up_threshold {
+            *count = count.saturating_add(u64::from(interpreted_region_work(&func.code)));
+            if *count <= u64::from(native.tier_up_threshold) {
                 if native.collect_stats {
                     native.stats.tier_deferred += 1;
                 }
@@ -1266,18 +1299,23 @@ impl RegVm {
                                     return NativeAttempt::Fallback;
                                 };
                                 let compiled = if native.force_all_safepoints {
-                                    native.module.compile_forcing_all_bails(&jit_fn)
+                                    native.baseline_module.compile_forcing_all_bails(&jit_fn)
                                 } else {
                                     match native.forced_safepoint {
-                                        Some(site) => {
-                                            native.module.compile_forcing_bail(&jit_fn, site)
-                                        }
-                                        None => native.module.compile(&jit_fn),
+                                        Some(site) => native
+                                            .baseline_module
+                                            .compile_forcing_bail(&jit_fn, site),
+                                        None => native.baseline_module.compile(&jit_fn),
                                     }
                                 };
                                 match compiled {
                                     Ok(id) => {
-                                        if !finish_native_compile(native, admission, &[id]) {
+                                        if !finish_native_compile(
+                                            native,
+                                            admission,
+                                            &[id],
+                                            NativeCodeTier::Baseline,
+                                        ) {
                                             native.cache.insert(native_key, None);
                                             return NativeAttempt::Fallback;
                                         }
@@ -1285,7 +1323,7 @@ impl RegVm {
                                             cfg!(debug_assertions) || jit_native_verify_is_strict();
                                         if verify_native {
                                             if let Err(err) = jit_verify_compiled_native(
-                                                &native.module,
+                                                &native.baseline_module,
                                                 id,
                                                 &jit_fn,
                                                 native.forced_safepoint,
@@ -1302,7 +1340,19 @@ impl RegVm {
                                                 }
                                             }
                                         }
-                                        record_native_compile_stats(native, id, &jit_fn);
+                                        record_native_compile_stats(
+                                            native,
+                                            id,
+                                            &jit_fn,
+                                            NativeCodeTier::Baseline,
+                                        );
+                                        if native.optimized_module.is_some()
+                                            && native_region_is_promotion_eligible(&jit_fn)
+                                        {
+                                            native
+                                                .optimization_sources
+                                                .insert(native_key, jit_fn.clone());
+                                        }
                                         // `has_backedge` (hoisted above for the cost-model gate)
                                         // also drives `NATIVE_NOAMORTIZE_GIVEUP`: a loop-free body
                                         // dispatched per interpreter iteration never amortizes FFI.
@@ -1354,6 +1404,80 @@ impl RegVm {
                     entry
                 }
             };
+            let mut selected_tier = NativeCodeTier::Baseline;
+            let mut selected_entry = entry;
+            if native.optimized_module.is_some() {
+                let work = u64::from(interpreted_region_work(&func.code));
+                let accumulated = native.promotion_work.entry(native_key).or_insert(0);
+                *accumulated = accumulated.saturating_add(work);
+                if *accumulated >= native.optimize_work_threshold
+                    && !native.optimized_cache.contains_key(&native_key)
+                    && let Some(jit_fn) = native.optimization_sources.remove(&native_key)
+                    && let Some(admission) = begin_native_compile(native, 1)
+                {
+                    let compiled = if native.force_all_safepoints {
+                        native
+                            .optimized_module
+                            .as_mut()
+                            .expect("optimized module")
+                            .compile_forcing_all_bails(&jit_fn)
+                    } else {
+                        match native.forced_safepoint {
+                            Some(site) => native
+                                .optimized_module
+                                .as_mut()
+                                .expect("optimized module")
+                                .compile_forcing_bail(&jit_fn, site),
+                            None => native
+                                .optimized_module
+                                .as_mut()
+                                .expect("optimized module")
+                                .compile(&jit_fn),
+                        }
+                    };
+                    match compiled {
+                        Ok(optimized_id) => {
+                            if finish_native_compile(
+                                native,
+                                admission,
+                                &[optimized_id],
+                                NativeCodeTier::Optimized,
+                            ) {
+                                let verify_native =
+                                    cfg!(debug_assertions) || jit_native_verify_is_strict();
+                                let verified = !verify_native
+                                    || jit_verify_compiled_native(
+                                        native.optimized_module.as_ref().expect("optimized module"),
+                                        optimized_id,
+                                        &jit_fn,
+                                        native.forced_safepoint,
+                                    )
+                                    .is_ok();
+                                if verified || !jit_native_verify_is_strict() {
+                                    record_native_compile_stats(
+                                        native,
+                                        optimized_id,
+                                        &jit_fn,
+                                        NativeCodeTier::Optimized,
+                                    );
+                                    if let Some(mut promoted) = selected_entry.clone() {
+                                        promoted.0 = optimized_id;
+                                        native.optimized_cache.insert(native_key, promoted);
+                                        if native.collect_stats {
+                                            native.stats.promotions += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => finish_native_compile_failure(native, admission),
+                    }
+                }
+                if let Some(promoted) = native.optimized_cache.get(&native_key) {
+                    selected_tier = NativeCodeTier::Optimized;
+                    selected_entry = Some(promoted.clone());
+                }
+            }
             let (
                 id,
                 ret,
@@ -1362,7 +1486,7 @@ impl RegVm {
                 _scalar_leaf_callable,
                 string_literals,
                 precise_resume_safe,
-            ) = match entry {
+            ) = match selected_entry {
                 Some(entry) => entry,
                 None => return NativeAttempt::Fallback,
             };
@@ -1383,11 +1507,20 @@ impl RegVm {
                 if *count >= NATIVE_NOAMORTIZE_GIVEUP {
                     func.native_status.set(NATIVE_STATUS_NOT_ELIGIBLE);
                     native.cache.remove(&native_key);
+                    native.optimized_cache.remove(&native_key);
+                    native.optimization_sources.remove(&native_key);
                     native.noamortize_counts.remove(&native_key);
                     return NativeAttempt::Fallback;
                 }
             }
-            (id, ret, params, string_literals, precise_resume_safe)
+            (
+                id,
+                ret,
+                params,
+                string_literals,
+                precise_resume_safe,
+                selected_tier,
+            )
         };
         // Phase 2: marshal each argument to 64 bits per its inferred parameter
         // type. Scalars unbox directly; a `Handle` (struct/list) is registered in
@@ -1623,7 +1756,14 @@ impl RegVm {
             let collect_stats = native_ref.collect_stats;
             let started = collect_stats.then(std::time::Instant::now);
             let _literal_guard = jit_install_string_literals(&string_literals);
-            let result = native_ref.module.call_with_host_ctx_at_depth(
+            let module = match selected_tier {
+                NativeCodeTier::Baseline => &native_ref.baseline_module,
+                NativeCodeTier::Optimized => native_ref
+                    .optimized_module
+                    .as_ref()
+                    .expect("optimized dispatch requires optimized module"),
+            };
+            let result = module.call_with_host_ctx_at_depth(
                 id,
                 &scratch.args,
                 &scratch.lens,
@@ -1665,6 +1805,10 @@ impl RegVm {
                 if let Some(native) = self.native.as_mut() {
                     if native.collect_stats {
                         native.stats.native_calls += 1;
+                        match selected_tier {
+                            NativeCodeTier::Baseline => native.stats.baseline_calls += 1,
+                            NativeCodeTier::Optimized => native.stats.optimized_calls += 1,
+                        }
                     }
                     // Lever 2 (observational): record that this function actually ran
                     // natively to completion, so the report's `native: ok` positive
@@ -1709,6 +1853,10 @@ impl RegVm {
                         if let Some(native) = self.native.as_mut() {
                             if native.collect_stats {
                                 native.stats.native_calls += 1;
+                                match selected_tier {
+                                    NativeCodeTier::Baseline => native.stats.baseline_calls += 1,
+                                    NativeCodeTier::Optimized => native.stats.optimized_calls += 1,
+                                }
                             }
                             if native.report {
                                 native.report_native_ok.insert(native_key);
@@ -1768,7 +1916,13 @@ impl RegVm {
                     let resume_ip = self
                         .native
                         .as_ref()
-                        .and_then(|n| n.module.deopt_map(id))
+                        .and_then(|native| match selected_tier {
+                            NativeCodeTier::Baseline => native.baseline_module.deopt_map(id),
+                            NativeCodeTier::Optimized => native
+                                .optimized_module
+                                .as_ref()
+                                .and_then(|module| module.deopt_map(id)),
+                        })
                         .and_then(|m| m.sites.get(safepoint_id.0 as usize - 1))
                         .map(|site| site.resume_ip);
                     if let Some(resume_ip) = resume_ip {
@@ -1972,6 +2126,7 @@ impl RegVm {
             written_regs,
             string_literals,
             materialize_recipes,
+            selected_tier,
         ) = {
             // Fast path: cached and NOT at the header ⇒ nothing to do (no clone).
             if let Some(native) = self.native.as_ref() {
@@ -2084,21 +2239,26 @@ impl RegVm {
                                 }
                                 let heap_input_regs = osr_heap_input_regs(&jit_fn);
                                 let admission = begin_native_compile(native, 1)?;
-                                match native.module.compile_osr(
+                                match native.baseline_module.compile_osr(
                                     &jit_fn,
                                     lp.header as u32,
                                     emit_step,
                                     emit_cancel,
                                 ) {
                                     Ok(id) => {
-                                        if !finish_native_compile(native, admission, &[id]) {
+                                        if !finish_native_compile(
+                                            native,
+                                            admission,
+                                            &[id],
+                                            NativeCodeTier::Baseline,
+                                        ) {
                                             return None;
                                         }
                                         let verify_native =
                                             cfg!(debug_assertions) || jit_native_verify_is_strict();
                                         if verify_native {
                                             if let Err(err) = jit_verify_compiled_osr(
-                                                &native.module,
+                                                &native.baseline_module,
                                                 id,
                                                 &jit_fn,
                                                 lp.exit,
@@ -2112,7 +2272,24 @@ impl RegVm {
                                                 }
                                             }
                                         }
-                                        record_native_compile_stats(native, id, &jit_fn);
+                                        record_native_compile_stats(
+                                            native,
+                                            id,
+                                            &jit_fn,
+                                            NativeCodeTier::Baseline,
+                                        );
+                                        if native.optimized_module.is_some()
+                                            && native_region_is_promotion_eligible(&jit_fn)
+                                        {
+                                            native.osr_optimization_sources.insert(
+                                                region_key,
+                                                OsrOptimizationSource {
+                                                    jit_fn: jit_fn.clone(),
+                                                    header: lp.header as u32,
+                                                    exit: lp.exit,
+                                                },
+                                            );
+                                        }
                                         Some(OsrEntry {
                                             id,
                                             orig_header: lp.header,
@@ -2474,16 +2651,21 @@ impl RegVm {
                                     }
                                     let heap_input_regs = osr_heap_input_regs(&jit_fn);
                                     let admission = begin_native_compile(native, 1)?;
-                                    match native.module.compile_osr(&jit_fn, lp.header as u32, emit_step, emit_cancel) {
+                                    match native.baseline_module.compile_osr(&jit_fn, lp.header as u32, emit_step, emit_cancel) {
                                         Ok(id) => {
-                                            if !finish_native_compile(native, admission, &[id]) {
+                                            if !finish_native_compile(
+                                                native,
+                                                admission,
+                                                &[id],
+                                                NativeCodeTier::Baseline,
+                                            ) {
                                                 return None;
                                             }
                                             let verify_native =
                                                 cfg!(debug_assertions) || jit_native_verify_is_strict();
                                             if verify_native {
                                                 if let Err(err) = jit_verify_compiled_osr(
-                                                    &native.module,
+                                                    &native.baseline_module,
                                                     id,
                                                     &jit_fn,
                                                     lp.exit,
@@ -2494,7 +2676,24 @@ impl RegVm {
                                                     }
                                                 }
                                             }
-                                            record_native_compile_stats(native, id, &jit_fn);
+                                            record_native_compile_stats(
+                                                native,
+                                                id,
+                                                &jit_fn,
+                                                NativeCodeTier::Baseline,
+                                            );
+                                            if native.optimized_module.is_some()
+                                                && native_region_is_promotion_eligible(&jit_fn)
+                                            {
+                                                native.osr_optimization_sources.insert(
+                                                    region_key,
+                                                    OsrOptimizationSource {
+                                                        jit_fn: jit_fn.clone(),
+                                                        header: lp.header as u32,
+                                                        exit: lp.exit,
+                                                    },
+                                                );
+                                            }
                                             let mut materialize_recipes = option_recipes1;
                                             materialize_recipes.extend(variant_recipes2);
                                             materialize_recipes.extend(struct_recipes3);
@@ -2593,10 +2792,94 @@ impl RegVm {
                     native.osr_cache.insert(region_key, entry);
                 }
             }
-            match native.osr_cache.get(&region_key) {
+            if native.optimized_module.is_some() {
+                let iteration_work = native
+                    .osr_candidates
+                    .get(&native_key)
+                    .and_then(|candidates| {
+                        candidates
+                            .iter()
+                            .find(|candidate| candidate.header_ip == header_ip)
+                    })
+                    .map_or(1, |candidate| candidate.iteration_work);
+                let trigger_work = match native.osr_triggers.get(&region_key) {
+                    Some(OsrTrigger::Counting { count, .. }) => u64::from(*count),
+                    _ => 0,
+                };
+                let accumulated = match native.osr_promotion_work.entry(region_key) {
+                    std::collections::hash_map::Entry::Vacant(entry) => {
+                        entry.insert(trigger_work.max(u64::from(iteration_work)))
+                    }
+                    std::collections::hash_map::Entry::Occupied(entry) => {
+                        let accumulated = entry.into_mut();
+                        *accumulated = accumulated.saturating_add(u64::from(iteration_work));
+                        accumulated
+                    }
+                };
+                if *accumulated >= native.optimize_work_threshold
+                    && !native.optimized_osr_cache.contains_key(&region_key)
+                    && let Some(source) = native.osr_optimization_sources.remove(&region_key)
+                    && let Some(admission) = begin_native_compile(native, 1)
+                {
+                    let compiled = native
+                        .optimized_module
+                        .as_mut()
+                        .expect("optimized module")
+                        .compile_osr(&source.jit_fn, source.header, emit_step, emit_cancel);
+                    match compiled {
+                        Ok(optimized_id) => {
+                            if finish_native_compile(
+                                native,
+                                admission,
+                                &[optimized_id],
+                                NativeCodeTier::Optimized,
+                            ) {
+                                let verify_native =
+                                    cfg!(debug_assertions) || jit_native_verify_is_strict();
+                                let verified = !verify_native
+                                    || jit_verify_compiled_osr(
+                                        native.optimized_module.as_ref().expect("optimized module"),
+                                        optimized_id,
+                                        &source.jit_fn,
+                                        source.exit,
+                                    )
+                                    .is_ok();
+                                if verified || !jit_native_verify_is_strict() {
+                                    record_native_compile_stats(
+                                        native,
+                                        optimized_id,
+                                        &source.jit_fn,
+                                        NativeCodeTier::Optimized,
+                                    );
+                                    if let Some(Some(baseline)) = native.osr_cache.get(&region_key)
+                                    {
+                                        let mut promoted = baseline.clone();
+                                        promoted.id = optimized_id;
+                                        native.optimized_osr_cache.insert(region_key, promoted);
+                                        if native.collect_stats {
+                                            native.stats.promotions += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(_) => finish_native_compile_failure(native, admission),
+                    }
+                }
+            }
+            let (entry, selected_tier) =
+                if let Some(entry) = native.optimized_osr_cache.get(&region_key) {
+                    (Some(entry), NativeCodeTier::Optimized)
+                } else {
+                    (
+                        native.osr_cache.get(&region_key).and_then(Option::as_ref),
+                        NativeCodeTier::Baseline,
+                    )
+                };
+            match entry {
                 // Only OSR when the interpreter is *at* the cached loop's (original)
                 // header ip.
-                Some(Some(e)) if e.orig_header == header_ip => (
+                Some(e) if e.orig_header == header_ip => (
                     e.id,
                     e.trans_exit,
                     e.orig_exit,
@@ -2609,6 +2892,7 @@ impl RegVm {
                     e.written_regs.clone(),
                     e.string_literals.clone(),
                     e.materialize_recipes.clone(),
+                    selected_tier,
                 ),
                 _ => {
                     return false;
@@ -2954,7 +3238,14 @@ impl RegVm {
         let physical_depth = self.frames.len();
         let prior_tail_calls = self.frames.last().map_or(0, |frame| frame.tail_calls);
         let initial_depth = osr_initial_logical_depth(physical_depth, prior_tail_calls);
-        let result = native_ref.module.call_with_host_ctx_at_depth(
+        let module = match selected_tier {
+            NativeCodeTier::Baseline => &native_ref.baseline_module,
+            NativeCodeTier::Optimized => native_ref
+                .optimized_module
+                .as_ref()
+                .expect("optimized OSR dispatch requires optimized module"),
+        };
+        let result = module.call_with_host_ctx_at_depth(
             id,
             &scratch.window,
             &scratch.lens,
@@ -2994,7 +3285,13 @@ impl RegVm {
                 let resume_ip = self
                     .native
                     .as_ref()
-                    .and_then(|n| n.module.deopt_map(id))
+                    .and_then(|native| match selected_tier {
+                        NativeCodeTier::Baseline => native.baseline_module.deopt_map(id),
+                        NativeCodeTier::Optimized => native
+                            .optimized_module
+                            .as_ref()
+                            .and_then(|module| module.deopt_map(id)),
+                    })
                     .and_then(|m| m.sites.get(safepoint_id.0 as usize - 1))
                     .map(|site| site.resume_ip);
                 let Some(resume_ip) = resume_ip else {
@@ -3161,6 +3458,10 @@ impl RegVm {
                 if let Some(native) = self.native.as_mut() {
                     if native.collect_stats {
                         native.stats.osr_entries += 1;
+                        match selected_tier {
+                            NativeCodeTier::Baseline => native.stats.baseline_calls += 1,
+                            NativeCodeTier::Optimized => native.stats.optimized_calls += 1,
+                        }
                     }
                     // Lever 2 (observational): record this function actually OSR-
                     // entered, so the report's `osr: entered` positive matches the
@@ -3358,10 +3659,20 @@ impl RegVm {
                                     return None;
                                 }
                                 let admission = begin_native_compile(native, 1)?;
-                                match native.module.compile(&jit_fn) {
+                                match native.baseline_module.compile(&jit_fn) {
                                     Ok(id) => {
-                                        if finish_native_compile(native, admission, &[id]) {
-                                            record_native_compile_stats(native, id, &jit_fn);
+                                        if finish_native_compile(
+                                            native,
+                                            admission,
+                                            &[id],
+                                            NativeCodeTier::Baseline,
+                                        ) {
+                                            record_native_compile_stats(
+                                                native,
+                                                id,
+                                                &jit_fn,
+                                                NativeCodeTier::Baseline,
+                                            );
                                             Some((id, param_tys, ret))
                                         } else {
                                             None
@@ -3403,7 +3714,7 @@ impl RegVm {
         let initial_depth = self.frames.len().saturating_add(1);
         let outcome = {
             let native = self.native.as_ref()?;
-            native.module.call_with_host_ctx_at_depth(
+            native.baseline_module.call_with_host_ctx_at_depth(
                 id,
                 &int_args,
                 &lens,
@@ -3422,6 +3733,7 @@ impl RegVm {
                     && native.collect_stats
                 {
                     native.stats.native_calls += 1;
+                    native.stats.baseline_calls += 1;
                 }
                 Some(match ret {
                     NativeTy::Float => VmValue::Float(f64::from_bits(bits as u64)),
@@ -3515,18 +3827,18 @@ impl RegVm {
                         jit_funcs.push(jit_fn);
                     }
                     let admission = begin_native_compile(native, jit_funcs.len())?;
-                    let ids = match native.module.compile_recursive_group(&jit_funcs) {
+                    let ids = match native.baseline_module.compile_recursive_group(&jit_funcs) {
                         Ok(ids) => ids,
                         Err(_) => {
                             finish_native_compile_failure(native, admission);
                             return None;
                         }
                     };
-                    if !finish_native_compile(native, admission, &ids) {
+                    if !finish_native_compile(native, admission, &ids, NativeCodeTier::Baseline) {
                         return None;
                     }
                     for (&id, jit_fn) in ids.iter().zip(&jit_funcs) {
-                        record_native_compile_stats(native, id, jit_fn);
+                        record_native_compile_stats(native, id, jit_fn, NativeCodeTier::Baseline);
                     }
                     Some((ids, member_sigs))
                 });
@@ -3587,7 +3899,7 @@ impl RegVm {
         let initial_depth = self.frames.len().saturating_add(1);
         let outcome = {
             let native = self.native.as_ref()?;
-            native.module.call_with_host_ctx_at_depth(
+            native.baseline_module.call_with_host_ctx_at_depth(
                 id,
                 &int_args,
                 &lens,
@@ -3606,6 +3918,7 @@ impl RegVm {
                     && native.collect_stats
                 {
                     native.stats.native_calls += 1;
+                    native.stats.baseline_calls += 1;
                 }
                 Some(match ret {
                     NativeTy::Float => VmValue::Float(f64::from_bits(bits as u64)),
