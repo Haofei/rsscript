@@ -2557,6 +2557,7 @@ fn main() -> Unit {
             direct_list_bounds_check_sites: 4,
             memoized_host_call_sites: 3,
             host_call_sites: 2,
+            fused_map_match_helper_sites: 1,
             direct_list_store_load_forwarded_moves: 1,
             ..NativeStats::default()
         };
@@ -2569,6 +2570,7 @@ fn main() -> Unit {
         assert_eq!(json["direct_list_bounds_check_sites"].as_u64(), Some(4));
         assert_eq!(json["memoized_host_call_sites"].as_u64(), Some(3));
         assert_eq!(json["host_call_sites"].as_u64(), Some(2));
+        assert_eq!(json["fused_map_match_helper_sites"].as_u64(), Some(1));
         assert_eq!(json["admission_admitted"].as_u64(), Some(5));
         assert_eq!(json["admission_admitted_bytes"].as_u64(), Some(4096));
         assert_eq!(json["admission_rejected"].as_u64(), Some(3));
@@ -2587,6 +2589,7 @@ fn main() -> Unit {
             "direct_list_bounds_check_sites=4",
             "memoized_host_call_sites=3",
             "host_call_sites=2",
+            "fused_map_match_helper_sites=1",
             "direct_list_store_load_forwarded_moves=1",
             "admission_admitted=5",
             "admission_admitted_bytes=4096",
@@ -6099,13 +6102,19 @@ fn main() -> Unit {
         let func = executable.unit.functions[main].as_ref();
         let candidate = super::super::tier::select_osr_candidate_loop(&executable.unit, func)
             .expect("sorted-map get loop should be selected for OSR");
-        translate_osr_loop(&func.code, func.regs, func.params, func.captures, candidate)
+        let jit = translate_osr_loop(&func.code, func.regs, func.params, func.captures, candidate)
             .unwrap_or_else(|| {
                 panic!(
                     "selected sorted-map get loop should translate to OSR native IR; region={:#?}",
                     &func.code[candidate.header..candidate.exit],
                 )
             });
+        let telemetry = super::super::tier::NativeCompileTelemetry::from_jit_function(&jit);
+        assert_eq!(telemetry.fused_map_match_helper_sites, 1);
+        assert_eq!(
+            telemetry.host_call_sites, 1,
+            "one sorted-map match must cross exactly one host-helper boundary",
+        );
         let (out, stats) = executable
             .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
             .expect("program should run");
@@ -6125,21 +6134,22 @@ fn main() -> Unit {
         let _heap_guard = JitCallCtxGuard::enter();
         JitCallCtx::push_heap_arg(VmValue::Map(Rc::new(RefCell::new(entries))));
 
+        let mut found = -1;
         assert_eq!(
-            rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 1),
+            rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 1, &mut found),
             0
         );
-        assert_eq!(rss_jit_map_get_match_found(JitCallCtx::active_token()), 1);
+        assert_eq!(found, 1);
         assert_eq!(
-            rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 2),
+            rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 2, &mut found),
             22
         );
-        assert_eq!(rss_jit_map_get_match_found(JitCallCtx::active_token()), 1);
+        assert_eq!(found, 1);
         assert_eq!(
-            rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 3),
+            rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 3, &mut found),
             0
         );
-        assert_eq!(rss_jit_map_get_match_found(JitCallCtx::active_token()), 0);
+        assert_eq!(found, 0);
     }
 
     #[cfg(feature = "native-jit")]
@@ -6156,33 +6166,34 @@ fn main() -> Unit {
             cache.borrow_mut().take();
         });
 
+        let mut found = -1;
         assert_eq!(
-            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 1),
+            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 1, &mut found),
             10
         );
-        assert_eq!(rss_jit_sorted_map_get_found(JitCallCtx::active_token()), 1);
+        assert_eq!(found, 1);
         assert_eq!(
-            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 3),
+            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 3, &mut found),
             30
         );
-        assert_eq!(rss_jit_sorted_map_get_found(JitCallCtx::active_token()), 1);
+        assert_eq!(found, 1);
         assert_eq!(
-            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 7),
+            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 7, &mut found),
             70
         );
-        assert_eq!(rss_jit_sorted_map_get_found(JitCallCtx::active_token()), 1);
+        assert_eq!(found, 1);
 
         // Non-sequential access must still fall back to the binary-search path.
         assert_eq!(
-            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 3),
+            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 3, &mut found),
             30
         );
-        assert_eq!(rss_jit_sorted_map_get_found(JitCallCtx::active_token()), 1);
+        assert_eq!(found, 1);
         assert_eq!(
-            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 4),
+            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 4, &mut found),
             0
         );
-        assert_eq!(rss_jit_sorted_map_get_found(JitCallCtx::active_token()), 0);
+        assert_eq!(found, 0);
 
         JIT_SORTED_MAP_SCAN_CACHE.with(|cache| {
             cache.borrow_mut().take();
@@ -6276,11 +6287,12 @@ fn main() -> Unit {
             let mut tx = JitHeapTransactionGuard::begin();
             let _heap_guard = JitCallCtxGuard::enter();
             JitCallCtx::push_heap_arg(VmValue::Map(Rc::clone(&first)));
+            let mut found = -1;
             assert_eq!(
-                rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 1),
+                rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 1, &mut found),
                 10
             );
-            assert_eq!(rss_jit_map_get_match_found(JitCallCtx::active_token()), 1);
+            assert_eq!(found, 1);
             assert_eq!(
                 rss_jit_map_insert_int(JitCallCtx::active_token(), 0, 2, 20),
                 0
@@ -6296,12 +6308,13 @@ fn main() -> Unit {
             let mut tx = JitHeapTransactionGuard::begin();
             let _heap_guard = JitCallCtxGuard::enter();
             JitCallCtx::push_heap_arg(VmValue::Map(Rc::clone(&second)));
+            let mut found = -1;
             assert_eq!(
-                rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 1),
+                rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 1, &mut found),
                 30,
                 "handle 0 in a new native attempt must resolve the new heap arg, not the cached prior map",
             );
-            assert_eq!(rss_jit_map_get_match_found(JitCallCtx::active_token()), 1);
+            assert_eq!(found, 1);
             assert_eq!(
                 rss_jit_map_insert_int(JitCallCtx::active_token(), 0, 2, 40),
                 0

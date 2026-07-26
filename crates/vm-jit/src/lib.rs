@@ -209,17 +209,12 @@ pub type MapInsertFloatFn = extern "C" fn(HostCtx, i64, i64, f64) -> i64;
 /// `(map_handle, key) -> i64`: return an Int payload for an existing map key.
 /// Missing keys or non-Int payloads signal a bail.
 pub type MapGetIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
-/// `(map_handle, key) -> i64`: return an Int payload for a map key, or 0 for a
-/// missing key. Call `map_get_match_found` to distinguish missing from a real
-/// zero payload. Wrong shape/non-Int payloads signal a bail.
-pub type MapGetMatchIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
-/// `(map_handle, key) -> f64`: return a Float payload for a map key, or `0.0` for a
-/// missing key (the Float value-side mirror of [`MapGetMatchIntFn`]). Call
-/// `map_get_match_found` to distinguish missing from a real `0.0` payload. Wrong
-/// shape / non-Float payloads signal a bail.
-pub type MapGetMatchFloatFn = extern "C" fn(HostCtx, i64, i64) -> f64;
-/// `() -> i64`: return whether the previous map-get-match helper found its key.
-pub type MapGetMatchFoundFn = extern "C" fn(HostCtx) -> i64;
+/// `(map_handle, key, found_out) -> i64`: return an Int payload for a map key, or
+/// 0 for a missing key, and write 1/0 to `found_out` in the same host call. Wrong
+/// shape/non-Int payloads signal a bail.
+pub type MapGetMatchIntFn = extern "C" fn(HostCtx, i64, i64, &mut i64) -> i64;
+/// `(map_handle, key, found_out) -> f64`: Float mirror of [`MapGetMatchIntFn`].
+pub type MapGetMatchFloatFn = extern "C" fn(HostCtx, i64, i64, &mut i64) -> f64;
 /// `(map_handle, key) -> i64`: return `1` when the Int key exists, else `0`.
 /// A wrong container/key shape signals a bail.
 pub type MapContainsIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
@@ -248,16 +243,11 @@ pub type SortedMapInsertIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
 /// `(map_handle, key_handle, value: i64) -> i64`: insert an `Int` value under a **heap**
 /// key (e.g. `String`) into a sorted map. Ordering/equality is the host's own.
 pub type SortedMapInsertHandleKeyIntFn = extern "C" fn(HostCtx, i64, i64, i64) -> i64;
-/// `(map_handle, key) -> i64`: return an Int payload for an existing sorted-map
-/// key, or 0 for a missing key. Call `sorted_map_get_found` to distinguish
-/// missing from a real zero payload. Wrong shape/non-Int payloads signal a bail.
-pub type SortedMapGetIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
-/// `(map_handle, key) -> f64`: Float value-side mirror of [`SortedMapGetIntFn`] for a
-/// sorted `Map<_, Float>`. Call `sorted_map_get_found` to distinguish missing from a
-/// real `0.0` payload. Wrong shape / non-Float payloads signal a bail.
-pub type SortedMapGetFloatFn = extern "C" fn(HostCtx, i64, i64) -> f64;
-/// `() -> i64`: return whether the previous sorted-map get helper found its key.
-pub type SortedMapGetFoundFn = extern "C" fn(HostCtx) -> i64;
+/// `(map_handle, key, found_out) -> i64`: return an Int payload for an existing
+/// sorted-map key, or 0 for a missing key, and write 1/0 to `found_out`.
+pub type SortedMapGetIntFn = extern "C" fn(HostCtx, i64, i64, &mut i64) -> i64;
+/// `(map_handle, key, found_out) -> f64`: Float mirror of [`SortedMapGetIntFn`].
+pub type SortedMapGetFloatFn = extern "C" fn(HostCtx, i64, i64, &mut i64) -> f64;
 /// `(map_handle, key) -> i64`: return `1` when the Int key exists, else `0`.
 /// A wrong container/key shape signals a bail.
 pub type SortedMapContainsKeyIntFn = extern "C" fn(HostCtx, i64, i64) -> i64;
@@ -349,7 +339,6 @@ pub struct HostHelpers {
     pub map_get_int: MapGetIntFn,
     pub map_get_match_int: MapGetMatchIntFn,
     pub map_get_match_float: MapGetMatchFloatFn,
-    pub map_get_match_found: MapGetMatchFoundFn,
     pub map_contains_int: MapContainsIntFn,
     pub map_len: CollectionLenFn,
     pub map_is_empty: IsEmptyFn,
@@ -365,7 +354,6 @@ pub struct HostHelpers {
     pub sorted_map_insert_handle_key_int: SortedMapInsertHandleKeyIntFn,
     pub sorted_map_get_int: SortedMapGetIntFn,
     pub sorted_map_get_float: SortedMapGetFloatFn,
-    pub sorted_map_get_found: SortedMapGetFoundFn,
     pub sorted_map_contains_key_int: SortedMapContainsKeyIntFn,
     pub sorted_map_is_empty: IsEmptyFn,
     pub sorted_map_len: SortedMapLenFn,
@@ -387,7 +375,7 @@ pub struct HostHelpers {
 /// producer (`rsscript`) translates its private bytecode into this stable,
 /// versioned surface, so the two crates are decoupled: a breaking IR change bumps
 /// this and the producer is updated in lock-step.
-pub const IR_VERSION: u32 = 24;
+pub const IR_VERSION: u32 = 25;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostFailureMode {
@@ -476,6 +464,7 @@ impl HostHeapEffect {
 #[derive(Debug, Clone, Copy)]
 struct HostHelperSig {
     args: &'static [JitValueType],
+    found_out: bool,
     result: HostResult,
     failure: HostFailureMode,
 }
@@ -503,6 +492,15 @@ macro_rules! host_heap_effect {
     };
 }
 
+macro_rules! host_found_out {
+    () => {
+        false
+    };
+    ($found_out:expr) => {
+        $found_out
+    };
+}
+
 macro_rules! host_helpers {
     ($(
         $helper:ident => {
@@ -511,6 +509,7 @@ macro_rules! host_helpers {
             args: [$($arg:expr),* $(,)?],
             result: $result:expr,
             failure: $failure:expr,
+            $(found_out: $found_out:expr,)?
             $(heap_effect: $heap_effect:expr,)?
         }
     ),+ $(,)?) => {
@@ -536,11 +535,12 @@ macro_rules! host_helpers {
             ];
 
             const DESCRIPTORS: &'static [HostHelperDescriptor] = &[
-                $(HostHelperDescriptor {
+            $(HostHelperDescriptor {
                     helper: HostHelper::$helper,
                     symbol: $symbol,
                     sig: HostHelperSig {
                         args: &[$($arg),*],
+                        found_out: host_found_out!($($found_out)?),
                         result: $result,
                         failure: $failure,
                     },
@@ -958,6 +958,7 @@ host_helpers! {
         args: [JitValueType::Handle, JitValueType::Int],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
+        found_out: true,
     },
     MapGetMatchFloat => {
         field: map_get_match_float,
@@ -965,13 +966,7 @@ host_helpers! {
         args: [JitValueType::Handle, JitValueType::Int],
         result: HostResult::Exact(JitValueType::Float),
         failure: HostFailureMode::BailFlag,
-    },
-    MapGetMatchFound => {
-        field: map_get_match_found,
-        symbol: "rss_jit_map_get_match_found",
-        args: [],
-        result: HostResult::Exact(JitValueType::Bool),
-        failure: HostFailureMode::CannotFail,
+        found_out: true,
     },
     MapContainsInt => {
         field: map_contains_int,
@@ -1076,6 +1071,7 @@ host_helpers! {
         args: [JitValueType::Handle, JitValueType::Int],
         result: HostResult::Exact(JitValueType::Int),
         failure: HostFailureMode::BailFlag,
+        found_out: true,
     },
     SortedMapGetFloat => {
         field: sorted_map_get_float,
@@ -1083,13 +1079,7 @@ host_helpers! {
         args: [JitValueType::Handle, JitValueType::Int],
         result: HostResult::Exact(JitValueType::Float),
         failure: HostFailureMode::BailFlag,
-    },
-    SortedMapGetFound => {
-        field: sorted_map_get_found,
-        symbol: "rss_jit_sorted_map_get_found",
-        args: [],
-        result: HostResult::Exact(JitValueType::Bool),
-        failure: HostFailureMode::CannotFail,
+        found_out: true,
     },
     SortedMapContainsKeyInt => {
         field: sorted_map_contains_key_int,
@@ -1825,10 +1815,11 @@ fn host_abi_type(ty: JitValueType) -> cranelift_codegen::ir::Type {
 }
 
 /// Declare an imported host helper from its signature: one opaque `HostCtx` word
-/// followed by one param per declared arg type (`Float` → `f64`, else `i64`) and a
-/// result typed from the declared result (`Float` → `f64`, else `i64`). Deriving the
-/// ABI from the declared types — rather than assuming all-`i64` — is what lets a
-/// helper take a `Float` argument (e.g. `FieldSetFloat`), not just return one.
+/// followed by one param per declared arg type (`Float` → `f64`, else `i64`), an
+/// optional private `found_out` pointer, and a result typed from the declared result
+/// (`Float` → `f64`, else `i64`). Deriving the ABI from the declared types — rather
+/// than assuming all-`i64` — is what lets a helper take a `Float` argument (e.g.
+/// `FieldSetFloat`), not just return one.
 fn declare_import_for(
     module: &mut JITModule,
     name: &str,
@@ -1838,6 +1829,11 @@ fn declare_import_for(
     cl_sig.params.push(AbiParam::new(types::I64)); // HostCtx
     for arg in sig.args {
         cl_sig.params.push(AbiParam::new(host_abi_type(*arg)));
+    }
+    if sig.found_out {
+        cl_sig
+            .params
+            .push(AbiParam::new(module.target_config().pointer_type()));
     }
     let ret = match sig.result {
         HostResult::Exact(JitValueType::Float) => types::F64,
@@ -3620,6 +3616,11 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             }
             JitInstr::HostCall { helper, dst, args } => {
                 let sig = helper.signature();
+                if sig.found_out {
+                    return Err(JitError(format!(
+                        "HostCall {helper:?}: helper has a private found output"
+                    )));
+                }
                 if args.len() != sig.args.len() {
                     return Err(JitError(format!(
                         "HostCall {helper:?}: got {} args, expected {}",
@@ -3666,6 +3667,11 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 helper, dst, args, ..
             } => {
                 let sig = helper.signature();
+                if sig.found_out {
+                    return Err(JitError(format!(
+                        "MemoizedHostCall {helper:?}: helper has a private found output"
+                    )));
+                }
                 if helper.heap_effect().writes_existing_heap() {
                     return Err(JitError(format!(
                         "MemoizedHostCall {helper:?}: heap-writing helpers cannot be memoized"
@@ -6293,9 +6299,17 @@ fn build_function(
             } => {
                 let map_value = bcx.use_var(reg(*map));
                 let key_value = bcx.use_var(reg(*key));
+                let found_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                ));
+                let zero = bcx.ins().iconst(types::I64, 0);
+                bcx.ins().stack_store(zero, found_slot, 0);
+                let found_ptr = bcx.ins().stack_addr(ptr_ty, found_slot, 0);
                 let loaded = bcx.ins().call(
                     helper_ref(HostHelper::MapGetMatchInt),
-                    &[host_ctx, map_value, key_value],
+                    &[host_ctx, map_value, key_value, found_ptr],
                 );
                 let value = bcx.inst_results(loaded)[0];
                 let cont = bail_if_helper_failed(
@@ -6309,14 +6323,10 @@ fn build_function(
                     deopt!(i),
                 );
                 bcx.switch_to_block(cont);
-                let found_call = bcx
-                    .ins()
-                    .call(helper_ref(HostHelper::MapGetMatchFound), &[host_ctx]);
-                let found = bcx.inst_results(found_call)[0];
+                let found = bcx.ins().stack_load(types::I64, found_slot, 0);
 
                 let some_block = block_for[*some_ip as usize].unwrap();
                 let none_block = block_for[*none_ip as usize].unwrap();
-                let zero = bcx.ins().iconst(types::I64, 0);
                 let is_found = bcx.ins().icmp(IntCC::NotEqual, found, zero);
                 bcx.def_var(reg(*value_dst), value);
                 bcx.ins().brif(is_found, some_block, &[], none_block, &[]);
@@ -6334,9 +6344,17 @@ fn build_function(
                 // is the interpreter's — the helper calls the same `map.get`.
                 let map_value = bcx.use_var(reg(*map));
                 let key_value = bcx.use_var(reg(*key));
+                let found_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                ));
+                let zero = bcx.ins().iconst(types::I64, 0);
+                bcx.ins().stack_store(zero, found_slot, 0);
+                let found_ptr = bcx.ins().stack_addr(ptr_ty, found_slot, 0);
                 let loaded = bcx.ins().call(
                     helper_ref(HostHelper::MapGetMatchFloat),
-                    &[host_ctx, map_value, key_value],
+                    &[host_ctx, map_value, key_value, found_ptr],
                 );
                 let value = bcx.inst_results(loaded)[0];
                 let cont = bail_if_helper_failed(
@@ -6350,13 +6368,9 @@ fn build_function(
                     deopt!(i),
                 );
                 bcx.switch_to_block(cont);
-                let found_call = bcx
-                    .ins()
-                    .call(helper_ref(HostHelper::MapGetMatchFound), &[host_ctx]);
-                let found = bcx.inst_results(found_call)[0];
+                let found = bcx.ins().stack_load(types::I64, found_slot, 0);
                 let some_block = block_for[*some_ip as usize].unwrap();
                 let none_block = block_for[*none_ip as usize].unwrap();
-                let zero = bcx.ins().iconst(types::I64, 0);
                 let is_found = bcx.ins().icmp(IntCC::NotEqual, found, zero);
                 bcx.def_var(reg(*value_dst), value);
                 bcx.ins().brif(is_found, some_block, &[], none_block, &[]);
@@ -6371,9 +6385,17 @@ fn build_function(
             } => {
                 let map_value = bcx.use_var(reg(*map));
                 let key_value = bcx.use_var(reg(*key));
+                let found_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                ));
+                let zero = bcx.ins().iconst(types::I64, 0);
+                bcx.ins().stack_store(zero, found_slot, 0);
+                let found_ptr = bcx.ins().stack_addr(ptr_ty, found_slot, 0);
                 let loaded = bcx.ins().call(
                     helper_ref(HostHelper::SortedMapGetInt),
-                    &[host_ctx, map_value, key_value],
+                    &[host_ctx, map_value, key_value, found_ptr],
                 );
                 let value = bcx.inst_results(loaded)[0];
                 let cont = bail_if_helper_failed(
@@ -6387,13 +6409,9 @@ fn build_function(
                     deopt!(i),
                 );
                 bcx.switch_to_block(cont);
-                let found_call = bcx
-                    .ins()
-                    .call(helper_ref(HostHelper::SortedMapGetFound), &[host_ctx]);
-                let found = bcx.inst_results(found_call)[0];
+                let found = bcx.ins().stack_load(types::I64, found_slot, 0);
                 let some_block = block_for[*some_ip as usize].unwrap();
                 let none_block = block_for[*none_ip as usize].unwrap();
-                let zero = bcx.ins().iconst(types::I64, 0);
                 let is_found = bcx.ins().icmp(IntCC::NotEqual, found, zero);
                 bcx.def_var(reg(*value_dst), value);
                 bcx.ins().brif(is_found, some_block, &[], none_block, &[]);
@@ -6409,9 +6427,17 @@ fn build_function(
                 // Mirror of MatchSortedMapGetInt; f64 payload helper + Float value_dst.
                 let map_value = bcx.use_var(reg(*map));
                 let key_value = bcx.use_var(reg(*key));
+                let found_slot = bcx.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    8,
+                    3,
+                ));
+                let zero = bcx.ins().iconst(types::I64, 0);
+                bcx.ins().stack_store(zero, found_slot, 0);
+                let found_ptr = bcx.ins().stack_addr(ptr_ty, found_slot, 0);
                 let loaded = bcx.ins().call(
                     helper_ref(HostHelper::SortedMapGetFloat),
-                    &[host_ctx, map_value, key_value],
+                    &[host_ctx, map_value, key_value, found_ptr],
                 );
                 let value = bcx.inst_results(loaded)[0];
                 let cont = bail_if_helper_failed(
@@ -6425,13 +6451,9 @@ fn build_function(
                     deopt!(i),
                 );
                 bcx.switch_to_block(cont);
-                let found_call = bcx
-                    .ins()
-                    .call(helper_ref(HostHelper::SortedMapGetFound), &[host_ctx]);
-                let found = bcx.inst_results(found_call)[0];
+                let found = bcx.ins().stack_load(types::I64, found_slot, 0);
                 let some_block = block_for[*some_ip as usize].unwrap();
                 let none_block = block_for[*none_ip as usize].unwrap();
-                let zero = bcx.ins().iconst(types::I64, 0);
                 let is_found = bcx.ins().icmp(IntCC::NotEqual, found, zero);
                 bcx.def_var(reg(*value_dst), value);
                 bcx.ins().brif(is_found, some_block, &[], none_block, &[]);
@@ -7330,6 +7352,39 @@ mod tests {
                 );
             }
         }
+        let found_out_helpers = helpers
+            .iter()
+            .copied()
+            .filter(|helper| helper.signature().found_out)
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            found_out_helpers,
+            std::collections::HashSet::from([
+                HostHelper::MapGetMatchInt,
+                HostHelper::MapGetMatchFloat,
+                HostHelper::SortedMapGetInt,
+                HostHelper::SortedMapGetFloat,
+            ]),
+        );
+    }
+
+    #[test]
+    fn generic_host_call_rejects_private_map_match_output() {
+        use JitValueType::{Handle, Int};
+        let program = ft(
+            2,
+            vec![Handle, Int, Int],
+            vec![
+                JitInstr::HostCall {
+                    helper: HostHelper::MapGetMatchInt,
+                    dst: 2,
+                    args: vec![HostArg::Reg(0), HostArg::Reg(1)],
+                },
+                JitInstr::Return { src: 2 },
+            ],
+        );
+        let error = validate(&program).expect_err("typed match instruction owns found output");
+        assert!(error.0.contains("private found output"), "{error:?}");
     }
 
     #[test]
@@ -7615,14 +7670,23 @@ mod tests {
     extern "C" fn noop_map_get_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
         0
     }
-    extern "C" fn noop_map_get_match_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
+    extern "C" fn noop_map_get_match_int(
+        _ctx: HostCtx,
+        _map: i64,
+        _key: i64,
+        found: &mut i64,
+    ) -> i64 {
+        *found = 0;
         0
     }
-    extern "C" fn noop_map_get_match_float(_ctx: HostCtx, _map: i64, _key: i64) -> f64 {
+    extern "C" fn noop_map_get_match_float(
+        _ctx: HostCtx,
+        _map: i64,
+        _key: i64,
+        found: &mut i64,
+    ) -> f64 {
+        *found = 0;
         0.0
-    }
-    extern "C" fn noop_map_get_match_found(_ctx: HostCtx) -> i64 {
-        0
     }
     extern "C" fn noop_map_contains_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
         0
@@ -7644,14 +7708,23 @@ mod tests {
     ) -> i64 {
         0
     }
-    extern "C" fn noop_sorted_map_get_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
+    extern "C" fn noop_sorted_map_get_int(
+        _ctx: HostCtx,
+        _map: i64,
+        _key: i64,
+        found: &mut i64,
+    ) -> i64 {
+        *found = 0;
         0
     }
-    extern "C" fn noop_sorted_map_get_float(_ctx: HostCtx, _map: i64, _key: i64) -> f64 {
+    extern "C" fn noop_sorted_map_get_float(
+        _ctx: HostCtx,
+        _map: i64,
+        _key: i64,
+        found: &mut i64,
+    ) -> f64 {
+        *found = 0;
         0.0
-    }
-    extern "C" fn noop_sorted_map_get_found(_ctx: HostCtx) -> i64 {
-        0
     }
     extern "C" fn noop_sorted_map_contains_key_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
         0
@@ -7732,7 +7805,6 @@ mod tests {
             map_get_int: noop_map_get_int,
             map_get_match_int: noop_map_get_match_int,
             map_get_match_float: noop_map_get_match_float,
-            map_get_match_found: noop_map_get_match_found,
             map_contains_int: noop_map_contains_int,
             map_len: noop_collection_len,
             map_is_empty: noop_is_empty,
@@ -7748,7 +7820,6 @@ mod tests {
             sorted_map_insert_handle_key_int: noop_sorted_map_insert_int,
             sorted_map_get_int: noop_sorted_map_get_int,
             sorted_map_get_float: noop_sorted_map_get_float,
-            sorted_map_get_found: noop_sorted_map_get_found,
             sorted_map_contains_key_int: noop_sorted_map_contains_key_int,
             sorted_map_is_empty: noop_is_empty,
             sorted_map_len: noop_sorted_map_len,
@@ -8367,30 +8438,36 @@ mod tests {
 
     static MAP_GET_MATCH_CALLS: std::sync::atomic::AtomicUsize =
         std::sync::atomic::AtomicUsize::new(0);
+    static MAP_GET_MATCH_FLOAT_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+    static SORTED_MAP_GET_INT_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+    static SORTED_MAP_GET_FLOAT_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
     static MAP_CONTAINS_CALLS: std::sync::atomic::AtomicUsize =
         std::sync::atomic::AtomicUsize::new(0);
-    static MAP_GET_MATCH_FOUND: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
 
-    extern "C" fn counting_map_get_match_int(_ctx: HostCtx, _map: i64, key: i64) -> i64 {
+    extern "C" fn counting_map_get_match_int(
+        _ctx: HostCtx,
+        _map: i64,
+        key: i64,
+        found: &mut i64,
+    ) -> i64 {
         MAP_GET_MATCH_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         match key {
             7 => {
-                MAP_GET_MATCH_FOUND.store(1, std::sync::atomic::Ordering::SeqCst);
+                *found = 1;
                 0
             }
             8 => {
-                MAP_GET_MATCH_FOUND.store(1, std::sync::atomic::Ordering::SeqCst);
+                *found = 1;
                 123
             }
             _ => {
-                MAP_GET_MATCH_FOUND.store(0, std::sync::atomic::Ordering::SeqCst);
+                *found = 0;
                 0
             }
         }
-    }
-
-    extern "C" fn counting_map_get_match_found(_ctx: HostCtx) -> i64 {
-        MAP_GET_MATCH_FOUND.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     extern "C" fn counting_map_contains_int(_ctx: HostCtx, _map: i64, _key: i64) -> i64 {
@@ -8398,17 +8475,81 @@ mod tests {
         1
     }
 
+    extern "C" fn counting_map_get_match_float(
+        _ctx: HostCtx,
+        _map: i64,
+        key: i64,
+        found: &mut i64,
+    ) -> f64 {
+        MAP_GET_MATCH_FLOAT_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        match key {
+            7 => {
+                *found = 1;
+                0.0
+            }
+            8 => {
+                *found = 1;
+                -2.5
+            }
+            _ => {
+                *found = 0;
+                0.0
+            }
+        }
+    }
+
+    extern "C" fn counting_sorted_map_get_int(
+        _ctx: HostCtx,
+        _map: i64,
+        key: i64,
+        found: &mut i64,
+    ) -> i64 {
+        SORTED_MAP_GET_INT_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if key == 4 {
+            *found = 1;
+            -77
+        } else {
+            *found = 0;
+            0
+        }
+    }
+
+    extern "C" fn counting_sorted_map_get_float(
+        _ctx: HostCtx,
+        _map: i64,
+        key: i64,
+        found: &mut i64,
+    ) -> f64 {
+        SORTED_MAP_GET_FLOAT_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if key == 4 {
+            *found = 1;
+            -0.0
+        } else {
+            *found = 0;
+            0.0
+        }
+    }
+
+    extern "C" fn bailing_map_get_match_int(
+        _ctx: HostCtx,
+        _map: i64,
+        _key: i64,
+        found: &mut i64,
+    ) -> i64 {
+        *found = 1;
+        signal_bail();
+        99
+    }
+
     #[test]
-    fn match_map_get_uses_single_lookup_and_found_flag() {
+    fn match_map_get_uses_single_helper_boundary() {
         use JitValueType::{Handle, Int};
 
         MAP_GET_MATCH_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
         MAP_CONTAINS_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
-        MAP_GET_MATCH_FOUND.store(0, std::sync::atomic::Ordering::SeqCst);
 
         let mut helpers = host_helpers();
         helpers.map_get_match_int = counting_map_get_match_int;
-        helpers.map_get_match_found = counting_map_get_match_found;
         helpers.map_contains_int = counting_map_contains_int;
         let mut m = NativeModule::new(helpers).unwrap();
         let id = m
@@ -8442,6 +8583,149 @@ mod tests {
             MAP_CONTAINS_CALLS.load(std::sync::atomic::Ordering::SeqCst),
             0
         );
+    }
+
+    #[test]
+    fn fused_map_match_helpers_preserve_float_sorted_and_bail_semantics() {
+        use JitValueType::{Float, Handle, Int};
+
+        MAP_GET_MATCH_FLOAT_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        SORTED_MAP_GET_INT_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        SORTED_MAP_GET_FLOAT_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+
+        let mut helpers = host_helpers();
+        helpers.map_get_match_float = counting_map_get_match_float;
+        helpers.sorted_map_get_int = counting_sorted_map_get_int;
+        helpers.sorted_map_get_float = counting_sorted_map_get_float;
+        let mut module = NativeModule::new(helpers).unwrap();
+
+        let map_float = module
+            .compile(&ft(
+                2,
+                vec![Handle, Int, Float],
+                vec![
+                    JitInstr::MatchMapGetFloat {
+                        map: 0,
+                        key: 1,
+                        value_dst: 2,
+                        some_ip: 1,
+                        none_ip: 3,
+                    },
+                    JitInstr::Return { src: 2 },
+                    JitInstr::Nop,
+                    JitInstr::LoadFloat {
+                        dst: 2,
+                        value: 11.5,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        for (key, expected) in [(7, 0.0), (8, -2.5), (9, 11.5)] {
+            let NativeOutcome::Completed(bits) = module.call(map_float, &[42, key], &[0, 0]) else {
+                panic!("map float match should complete");
+            };
+            assert_eq!(f64::from_bits(bits as u64), expected);
+        }
+
+        let sorted_int = module
+            .compile(&ft(
+                2,
+                vec![Handle, Int, Int],
+                vec![
+                    JitInstr::MatchSortedMapGetInt {
+                        map: 0,
+                        key: 1,
+                        value_dst: 2,
+                        some_ip: 1,
+                        none_ip: 3,
+                    },
+                    JitInstr::Return { src: 2 },
+                    JitInstr::Nop,
+                    JitInstr::LoadInt { dst: 2, value: 5 },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        assert_eq!(
+            module.call(sorted_int, &[42, 4], &[0, 0]).completed(),
+            Some(-77)
+        );
+        assert_eq!(
+            module.call(sorted_int, &[42, 5], &[0, 0]).completed(),
+            Some(5)
+        );
+
+        let sorted_float = module
+            .compile(&ft(
+                2,
+                vec![Handle, Int, Float],
+                vec![
+                    JitInstr::MatchSortedMapGetFloat {
+                        map: 0,
+                        key: 1,
+                        value_dst: 2,
+                        some_ip: 1,
+                        none_ip: 3,
+                    },
+                    JitInstr::Return { src: 2 },
+                    JitInstr::Nop,
+                    JitInstr::LoadFloat {
+                        dst: 2,
+                        value: 8.25,
+                    },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        let NativeOutcome::Completed(bits) = module.call(sorted_float, &[42, 4], &[0, 0]) else {
+            panic!("sorted float hit should complete");
+        };
+        assert_eq!(bits as u64, (-0.0f64).to_bits());
+        let NativeOutcome::Completed(bits) = module.call(sorted_float, &[42, 5], &[0, 0]) else {
+            panic!("sorted float miss should complete");
+        };
+        assert_eq!(f64::from_bits(bits as u64), 8.25);
+
+        assert_eq!(
+            MAP_GET_MATCH_FLOAT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            3
+        );
+        assert_eq!(
+            SORTED_MAP_GET_INT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+        assert_eq!(
+            SORTED_MAP_GET_FLOAT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+
+        let mut helpers = host_helpers();
+        helpers.map_get_match_int = bailing_map_get_match_int;
+        let mut module = NativeModule::new(helpers).unwrap();
+        let bailing = module
+            .compile(&ft(
+                2,
+                vec![Handle, Int, Int],
+                vec![
+                    JitInstr::MatchMapGetInt {
+                        map: 0,
+                        key: 1,
+                        value_dst: 2,
+                        some_ip: 1,
+                        none_ip: 3,
+                    },
+                    JitInstr::Return { src: 2 },
+                    JitInstr::Nop,
+                    JitInstr::LoadInt { dst: 2, value: -1 },
+                    JitInstr::Return { src: 2 },
+                ],
+            ))
+            .unwrap();
+        assert!(matches!(
+            module.call(bailing, &[42, 1], &[0, 0]),
+            NativeOutcome::Deopt { .. }
+        ));
     }
 
     #[test]

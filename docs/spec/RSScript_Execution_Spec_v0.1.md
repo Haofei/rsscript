@@ -525,11 +525,13 @@ contract is normative:
    that byte and branch to fallback **immediately after every helper call**, so a
    failed read can never keep executing (a bad read feeding a loop condition could
    otherwise loop forever).
-5. **No raw pointers cross the public API.** Host helpers cross as **typed**
-   `extern "C"` function pointers; the bail flag is owned by `vm-jit` (its `call`
-   resets it and passes its own address inward). A safe caller can supply neither
-   a bad helper address nor a dangling bail pointer. The only `unsafe`
-   (symbol registration, the indirect call) is private to `vm-jit`.
+5. **No caller-owned raw pointers cross the public API.** Host helpers cross as
+   **typed** `extern "C"` function pointers; the bail flag and any match `found`
+   output slot are owned by `vm-jit`. Map-match helpers receive the latter as a
+   typed `&mut i64` backed by a generated stack slot and return payload plus
+   presence through one helper boundary. A safe caller can supply neither a bad
+   helper address nor a dangling output pointer. The only `unsafe` (symbol
+   registration and the indirect call) is private to `vm-jit`.
 
 6. **The signed handle encoding is checked.** `h >= 0` denotes input-table index
    `h`; `h < 0` denotes speculative output-table index `-(h + 1)`. Both lookups
@@ -644,7 +646,7 @@ Normative conventions (part of this contract):
 ## 9. JIT IR and Crate Boundary
 
 1. The native tier consumes a **stable, versioned IR** defined by `vm-jit`
-   (`JitInstr`/`JitFunction`, `vm_jit::IR_VERSION`, currently `24`). `rsscript`
+   (`JitInstr`/`JitFunction`, `vm_jit::IR_VERSION`, currently `25`). `rsscript`
    *translates* eligible `RegFunction`s into that IR rather than exposing its
    private `RegInstr`. The two layers MUST stay decoupled across this IR; a
    producer/consumer version mismatch is an error, not a silent miscompile.

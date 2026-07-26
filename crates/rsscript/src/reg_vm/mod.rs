@@ -2674,6 +2674,8 @@ pub struct NativeStats {
     pub memoized_host_call_sites: u64,
     /// Ordinary, non-memoized host calls emitted across compiled regions.
     pub host_call_sites: u64,
+    /// Map/sorted-map match sites whose payload and found flag use one host call.
+    pub fused_map_match_helper_sites: u64,
     /// Direct flat-list stores followed by the matching `Move` shape produced when
     /// an adjacent load is forwarded from the stored value.
     pub direct_list_store_load_forwarded_moves: u64,
@@ -2751,7 +2753,7 @@ pub struct NativeStats {
 impl NativeStats {
     fn summary(&self) -> String {
         format!(
-            "native-jit: considered={} translated={} compiled={} baseline_compiles={} optimized_compiles={} baseline_calls={} optimized_calls={} promotions={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_host_call_sites={} host_call_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
+            "native-jit: considered={} translated={} compiled={} baseline_compiles={} optimized_compiles={} baseline_calls={} optimized_calls={} promotions={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_host_call_sites={} host_call_sites={} fused_map_match_helper_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
 compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} shape_versions={} shape_cache_hits={} shape_limit_fallbacks={} shape_bails={} tier_deferred={} \
 compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             self.considered,
@@ -2772,6 +2774,7 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             self.direct_list_bounds_check_sites,
             self.memoized_host_call_sites,
             self.host_call_sites,
+            self.fused_map_match_helper_sites,
             self.direct_list_store_load_forwarded_moves,
             self.native_call_edges,
             self.native_call_depth_max,
@@ -2895,6 +2898,10 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
         object.insert("baseline_calls".into(), self.baseline_calls.into());
         object.insert("optimized_calls".into(), self.optimized_calls.into());
         object.insert("promotions".into(), self.promotions.into());
+        object.insert(
+            "fused_map_match_helper_sites".into(),
+            self.fused_map_match_helper_sites.into(),
+        );
         object.insert("shape_versions".into(), self.shape_versions.into());
         object.insert("shape_cache_hits".into(), self.shape_cache_hits.into());
         object.insert(
@@ -3311,8 +3318,6 @@ struct JitCallCtxState {
     heap_results: Vec<VmValue>,
     heap_result_roots: Vec<Option<usize>>,
     heap_writebacks: Vec<(usize, i64)>,
-    map_get_match_found: bool,
-    sorted_map_get_found: bool,
 }
 
 #[cfg(feature = "native-jit")]
@@ -3326,15 +3331,11 @@ impl JitCallCtxState {
             heap_results: Vec::new(),
             heap_result_roots: Vec::new(),
             heap_writebacks: Vec::new(),
-            map_get_match_found: false,
-            sorted_map_get_found: false,
         }
     }
 
-    fn reset_inputs_and_flags(&mut self) {
+    fn reset_inputs(&mut self) {
         self.heap_args.clear();
-        self.map_get_match_found = false;
-        self.sorted_map_get_found = false;
     }
 
     fn clear_results(&mut self) {
@@ -3356,8 +3357,7 @@ impl JitCallCtxState {
 #[cfg(feature = "native-jit")]
 thread_local! {
     /// Native call ABI state: heap input handles, speculative heap result handles,
-    /// pending heap writebacks, and small match-helper side-channel flags for the
-    /// in-flight native call.
+    /// pending heap writebacks for the in-flight native call.
     ///
     /// Heap results and writebacks remain speculative until a clean native completion.
     /// On every bail/drop path the transaction/frame clears this context before the
@@ -3498,7 +3498,7 @@ impl JitCallCtx {
         JIT_CALL_CTX.with(|ctx| {
             let mut ctx = ctx.borrow_mut();
             if ctx.active_depth == 0 {
-                ctx.reset_inputs_and_flags();
+                ctx.reset_inputs();
                 ctx.clear_results();
                 ctx.clear_writebacks();
                 ctx.active_token = ctx.allocate_token();
@@ -3519,7 +3519,7 @@ impl JitCallCtx {
                 ctx.active_depth -= 1;
             }
             if ctx.active_depth == 0 {
-                ctx.reset_inputs_and_flags();
+                ctx.reset_inputs();
                 ctx.clear_results();
                 ctx.clear_writebacks();
                 ctx.active_token = 0;
@@ -3667,32 +3667,6 @@ impl JitCallCtx {
             read(ctx.heap_writebacks.as_slice())
         })
     }
-
-    fn set_map_get_match_found(value: bool) {
-        JIT_CALL_CTX.with(|ctx| {
-            let mut ctx = ctx.borrow_mut();
-            if ctx.active_depth > 0 {
-                ctx.map_get_match_found = value;
-            }
-        });
-    }
-
-    fn map_get_match_found() -> bool {
-        JIT_CALL_CTX.with(|ctx| ctx.borrow().map_get_match_found)
-    }
-
-    fn set_sorted_map_get_found(value: bool) {
-        JIT_CALL_CTX.with(|ctx| {
-            let mut ctx = ctx.borrow_mut();
-            if ctx.active_depth > 0 {
-                ctx.sorted_map_get_found = value;
-            }
-        });
-    }
-
-    fn sorted_map_get_found() -> bool {
-        JIT_CALL_CTX.with(|ctx| ctx.borrow().sorted_map_get_found)
-    }
 }
 
 #[cfg(feature = "native-jit")]
@@ -3753,22 +3727,6 @@ impl JitHostCallCtx {
 
     fn with_heap_writebacks<R>(self, read: impl FnOnce(&[(usize, i64)]) -> R) -> R {
         JitCallCtx::with_heap_writebacks(read)
-    }
-
-    fn set_map_get_match_found(self, value: bool) {
-        JitCallCtx::set_map_get_match_found(value);
-    }
-
-    fn map_get_match_found(self) -> bool {
-        JitCallCtx::map_get_match_found()
-    }
-
-    fn set_sorted_map_get_found(self, value: bool) {
-        JitCallCtx::set_sorted_map_get_found(value);
-    }
-
-    fn sorted_map_get_found(self) -> bool {
-        JitCallCtx::sorted_map_get_found()
     }
 
     fn heap_read<R>(self, handle: i64, read: impl FnOnce(&VmValue) -> Option<R>) -> Option<R> {
@@ -3938,14 +3896,6 @@ fn jit_debug_assert_call_ctx_clean() {
     debug_assert!(
         JIT_DEQUE_HANDLE_CACHE.with(|cache| cache.borrow().is_none()),
         "native call context leaked deque handle cache",
-    );
-    debug_assert!(
-        !JIT_CALL_CTX.with(|ctx| ctx.borrow().map_get_match_found),
-        "native call context leaked map-get found flag",
-    );
-    debug_assert!(
-        !JIT_CALL_CTX.with(|ctx| ctx.borrow().sorted_map_get_found),
-        "native call context leaked sorted-map-get found flag",
     );
 }
 
@@ -4155,7 +4105,6 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         map_get_int: rss_jit_map_get_int,
         map_get_match_int: rss_jit_map_get_match_int,
         map_get_match_float: rss_jit_map_get_match_float,
-        map_get_match_found: rss_jit_map_get_match_found,
         map_contains_int: rss_jit_map_contains_int,
         map_len: rss_jit_map_len,
         map_is_empty: rss_jit_map_is_empty,
@@ -4171,7 +4120,6 @@ fn jit_host_helpers() -> vm_jit::HostHelpers {
         sorted_map_insert_handle_key_int: rss_jit_sorted_map_insert_handle_key_int,
         sorted_map_get_int: rss_jit_sorted_map_get_int,
         sorted_map_get_float: rss_jit_sorted_map_get_float,
-        sorted_map_get_found: rss_jit_sorted_map_get_found,
         sorted_map_contains_key_int: rss_jit_sorted_map_contains_key_int,
         sorted_map_is_empty: rss_jit_sorted_map_is_empty,
         sorted_map_len: rss_jit_sorted_map_len,
@@ -5513,19 +5461,24 @@ extern "C" fn rss_jit_map_get_int(_ctx: vm_jit::HostCtx, handle: i64, key: i64) 
 }
 
 #[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_map_get_match_int(_ctx: vm_jit::HostCtx, handle: i64, key: i64) -> i64 {
+extern "C" fn rss_jit_map_get_match_int(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    key: i64,
+    found: &mut i64,
+) -> i64 {
+    *found = 0;
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0;
     };
-    _ctx.set_map_get_match_found(false);
     let Some(map) = _ctx.heap_map_handle(handle) else {
         vm_jit::signal_bail();
         return 0;
     };
     match map.borrow().get(&jit_int_key(key)) {
         Some(VmValue::Int(value)) => {
-            _ctx.set_map_get_match_found(true);
+            *found = 1;
             *value
         }
         None => 0,
@@ -5538,21 +5491,27 @@ extern "C" fn rss_jit_map_get_match_int(_ctx: vm_jit::HostCtx, handle: i64, key:
 
 /// Float value-side mirror of `rss_jit_map_get_match_int`: the lookup is the
 /// interpreter's own `map.get`; this only extracts the `Float` payload (f64 channel)
-/// and sets the shared `found` flag. A non-Float payload bails out-of-band.
+/// and writes the `found` output in the same host call. A non-Float payload bails
+/// out-of-band.
 #[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_map_get_match_float(_ctx: vm_jit::HostCtx, handle: i64, key: i64) -> f64 {
+extern "C" fn rss_jit_map_get_match_float(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    key: i64,
+    found: &mut i64,
+) -> f64 {
+    *found = 0;
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0.0;
     };
-    _ctx.set_map_get_match_found(false);
     let Some(map) = _ctx.heap_map_handle(handle) else {
         vm_jit::signal_bail();
         return 0.0;
     };
     match map.borrow().get(&jit_int_key(key)) {
         Some(VmValue::Float(value)) => {
-            _ctx.set_map_get_match_found(true);
+            *found = 1;
             *value
         }
         None => 0.0,
@@ -5561,15 +5520,6 @@ extern "C" fn rss_jit_map_get_match_float(_ctx: vm_jit::HostCtx, handle: i64, ke
             0.0
         }
     }
-}
-
-#[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_map_get_match_found(_ctx: vm_jit::HostCtx) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
-        return 0;
-    };
-    i64::from(_ctx.map_get_match_found())
 }
 
 #[cfg(feature = "native-jit")]
@@ -5985,12 +5935,17 @@ extern "C" fn rss_jit_sorted_map_insert_handle_key_int(
 }
 
 #[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_sorted_map_get_int(_ctx: vm_jit::HostCtx, handle: i64, key: i64) -> i64 {
+extern "C" fn rss_jit_sorted_map_get_int(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    key: i64,
+    found: &mut i64,
+) -> i64 {
+    *found = 0;
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0;
     };
-    _ctx.set_sorted_map_get_found(false);
     let Some(list) = _ctx.heap_list_handle(handle) else {
         vm_jit::signal_bail();
         return 0;
@@ -6013,7 +5968,7 @@ extern "C" fn rss_jit_sorted_map_get_int(_ctx: vm_jit::HostCtx, handle: i64, key
     }) {
         return match cached {
             Ok(value) => {
-                _ctx.set_sorted_map_get_found(true);
+                *found = 1;
                 value
             }
             Err(_) => {
@@ -6027,7 +5982,7 @@ extern "C" fn rss_jit_sorted_map_get_int(_ctx: vm_jit::HostCtx, handle: i64, key
     }
     match jit_sorted_map_find_int(&backing, key) {
         Ok(Some((index, value))) => {
-            _ctx.set_sorted_map_get_found(true);
+            *found = 1;
             JIT_SORTED_MAP_SCAN_CACHE.with(|cache| {
                 cache.borrow_mut().replace(JitSortedMapScanCache {
                     handle,
@@ -6052,33 +6007,29 @@ extern "C" fn rss_jit_sorted_map_get_int(_ctx: vm_jit::HostCtx, handle: i64, key
     }
 }
 
-#[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_sorted_map_get_found(_ctx: vm_jit::HostCtx) -> i64 {
-    let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
-        vm_jit::signal_bail();
-        return 0;
-    };
-    i64::from(_ctx.sorted_map_get_found())
-}
-
 /// Int-key / Float-value sorted-map get (mirror of `rss_jit_sorted_map_get_int`),
-/// sharing the same `sorted_map_get_found` flag. Plain binary search — it omits the
-/// sequential scan cache (a perf-only fast path), so the result is identical. A
-/// non-Float value or wrong shape bails to the interpreter.
+/// writing the same-call `found` output. Plain binary search — it omits the sequential
+/// scan cache (a perf-only fast path), so the result is identical. A non-Float value
+/// or wrong shape bails to the interpreter.
 #[cfg(feature = "native-jit")]
-extern "C" fn rss_jit_sorted_map_get_float(_ctx: vm_jit::HostCtx, handle: i64, key: i64) -> f64 {
+extern "C" fn rss_jit_sorted_map_get_float(
+    _ctx: vm_jit::HostCtx,
+    handle: i64,
+    key: i64,
+    found: &mut i64,
+) -> f64 {
+    *found = 0;
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0.0;
     };
-    _ctx.set_sorted_map_get_found(false);
     let Some(list) = _ctx.heap_list_handle(handle) else {
         vm_jit::signal_bail();
         return 0.0;
     };
     match jit_sorted_map_find_int_key_float(&list.borrow(), key) {
         Ok(Some(value)) => {
-            _ctx.set_sorted_map_get_found(true);
+            *found = 1;
             value
         }
         Ok(None) => 0.0,

@@ -212,6 +212,7 @@ pub(super) struct NativeCompileTelemetry {
     pub(super) direct_list_bounds_check_sites: u64,
     pub(super) memoized_host_call_sites: u64,
     pub(super) host_call_sites: u64,
+    pub(super) fused_map_match_helper_sites: u64,
     pub(super) direct_list_store_load_forwarded_moves: u64,
     native_call_edges: u64,
     profile_closure_guard_sites: u64,
@@ -244,6 +245,13 @@ impl NativeCompileTelemetry {
                         telemetry.profile_closure_pic_arms +=
                             profile_closure_pic_arm_count(&jit_fn.code, ip);
                     }
+                }
+                vm_jit::JitInstr::MatchMapGetInt { .. }
+                | vm_jit::JitInstr::MatchMapGetFloat { .. }
+                | vm_jit::JitInstr::MatchSortedMapGetInt { .. }
+                | vm_jit::JitInstr::MatchSortedMapGetFloat { .. } => {
+                    telemetry.host_call_sites += 1;
+                    telemetry.fused_map_match_helper_sites += 1;
                 }
                 vm_jit::JitInstr::CallNative { .. }
                 | vm_jit::JitInstr::CallSelf { .. }
@@ -319,6 +327,7 @@ fn record_native_compile_stats(
     native.stats.direct_list_bounds_check_sites += telemetry.direct_list_bounds_check_sites;
     native.stats.memoized_host_call_sites += telemetry.memoized_host_call_sites;
     native.stats.host_call_sites += telemetry.host_call_sites;
+    native.stats.fused_map_match_helper_sites += telemetry.fused_map_match_helper_sites;
     native.stats.direct_list_store_load_forwarded_moves +=
         telemetry.direct_list_store_load_forwarded_moves;
     native.stats.profile_branch_cold_blocks += jit_fn.cold_blocks.len() as u64;
