@@ -693,6 +693,16 @@ and resume." This is the prerequisite for *all* speculation and for §3.2w write
 > J2 outside OSR remains a coverage scaffold; the wins come through OSR.) **Float captures
 > now shipped** (scalarized via `f64::to_bits`). **Remaining:** megamorphic sites and
 > non-scalar (heap) captures stay un-inlined (conservative).
+>
+> **Bounded shape multiversioning (2026-07-26): SHIPPED.** Whole-function and OSR
+> dispatch caches are keyed by region/function plus a runtime `ShapeKey`. The key
+> contains only stable marshalling metadata: parameter ABI class, closure function
+> id, and interned concrete struct/variant layout identity. Scalar payloads and
+> collection lengths are excluded. Each tier/site admits at most two versions; a
+> third shape takes the generic interpreter/PIC fallback without compiling. Runtime
+> mismatch/deopt counters and give-up decisions are per version, while invariant
+> structural translation failure remains function-global. Every version still
+> passes through the shared code/time admission budgets.
 
 Inlining is C2's highest-leverage move: it's what *exposes* every other optimization.
 - [ ] **J2.1 Profile-guided monomorphic inlining.** At a call site the profile says is

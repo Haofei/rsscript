@@ -7540,11 +7540,10 @@ fn main() -> Unit {
     /// Predict-and-skip bail: a function that PASSES the
     /// structural predictor (it compiles) but bails at runtime on *every* call must
     /// not re-compile/marshal/bail forever. After `NATIVE_BAIL_GIVEUP_THRESHOLD`
-    /// consecutive bails the native tier gives up — it demotes the function to
-    /// `NOT_ELIGIBLE` and the cheap-negative early-return in `try_native`
-    /// short-circuits all further calls. So the count of native *attempts*
-    /// (`considered`) must PLATEAU at the threshold rather than scale with the call
-    /// count. Here the bail is an arg-type mismatch (Int param, heap argument).
+    /// consecutive bails the native tier gives up on that shape and negative-caches
+    /// its version, so costly marshalling failures plateau at the threshold even
+    /// though hot calls continue consulting the shape cache. Here the bail is an
+    /// arg-type mismatch (Int param, heap argument).
     #[cfg(feature = "native-jit")]
     #[test]
     fn native_gives_up_after_consecutive_bails() {
@@ -7560,47 +7559,41 @@ fn main() -> Unit {
         vm.set_reg(0, VmValue::List(Rc::new(RefCell::new(TypedVec::new()))));
 
         const CALLS: usize = 50;
-        let mut first_demoted_at: Option<usize> = None;
-        for call in 1..=CALLS {
+        for _ in 1..=CALLS {
             // Native is never chosen (it bails), so the result is always `None`
             // (fall back to the interpreter).
             assert!(
                 matches!(vm.try_native(&func, 0), NativeAttempt::Fallback),
                 "always-mismatching native call must bail to the interpreter",
             );
-            if func.native_status.get() == NATIVE_STATUS_NOT_ELIGIBLE && first_demoted_at.is_none()
-            {
-                first_demoted_at = Some(call);
-            }
         }
 
-        // Give-up fired exactly at the threshold (the Nth consecutive bail demotes).
-        assert_eq!(
-            first_demoted_at,
-            Some(NATIVE_BAIL_GIVEUP_THRESHOLD as usize),
-            "function must be demoted on the {NATIVE_BAIL_GIVEUP_THRESHOLD}th bail",
+        assert_ne!(
+            func.native_status.get(),
+            NATIVE_STATUS_NOT_ELIGIBLE,
+            "runtime mismatch must not globally demote a structurally eligible function",
         );
 
         let stats = &vm.native.as_ref().unwrap().stats;
-        // The decisive assertion: native attempts PLATEAU at the threshold instead
-        // of scaling with CALLS. Without give-up, `considered` and `arg_mismatch`
-        // would both equal CALLS (50).
+        // The shape lookup is still considered on every hot call, but expensive
+        // marshalling failures plateau once the version is negative-cached.
         assert_eq!(
-            stats.considered, NATIVE_BAIL_GIVEUP_THRESHOLD as u64,
-            "native attempts must plateau at the give-up threshold, not scale with calls",
+            stats.considered, CALLS as u64,
+            "hot calls still consult the bounded shape cache",
         );
         assert_eq!(
             stats.arg_mismatch, NATIVE_BAIL_GIVEUP_THRESHOLD as u64,
             "bail count must plateau at the give-up threshold",
         );
-        // The compiled entry was dropped from the cache on give-up.
-        assert!(
-            !vm.native
-                .as_ref()
-                .unwrap()
-                .cache
-                .contains_key(&(&func as *const RegFunction as usize)),
-            "compiled code must be evicted on give-up",
+        let native = vm.native.as_ref().unwrap();
+        let version_key = NativeVersionKey {
+            function: &func as *const RegFunction as usize,
+            shape: ShapeKey::from_values([vm.reg(0)]),
+        };
+        assert_eq!(
+            native.cache.get(&version_key),
+            Some(&None),
+            "failing shape must be negative-cached on give-up",
         );
     }
 
@@ -8892,32 +8885,39 @@ fn main() -> Unit {
     #[test]
     fn native_bail_counter_resets_on_success() {
         let mut native = NativeState::new(0, false, true).expect("native module");
-        let func = always_arg_mismatch_func();
-        let key = &func as *const RegFunction as usize;
+        let function = 7;
+        let key = NativeVersionKey {
+            function,
+            shape: ShapeKey(vec![NativeParamShape::Int]),
+        };
+        let successful_key = NativeVersionKey {
+            function,
+            shape: ShapeKey(vec![NativeParamShape::Bool]),
+        };
 
         // Two consecutive bails — one short of the give-up threshold (3).
-        native.record_bail(key, &func);
-        native.record_bail(key, &func);
+        native.record_bail(&key);
+        native.record_bail(&key);
         assert_eq!(native.bail_counts.get(&key), Some(&2));
-        assert_ne!(
-            func.native_status.get(),
-            NATIVE_STATUS_NOT_ELIGIBLE,
-            "must not give up before the threshold",
-        );
 
         // A success resets the counter (mirrors the `Some(bits)` arm in try_native).
-        native.bail_counts.insert(key, 0);
+        native.bail_counts.insert(key.clone(), 0);
         assert_eq!(native.bail_counts.get(&key), Some(&0));
+        native.bail_counts.insert(successful_key.clone(), 0);
 
-        // It now takes a full fresh run of `threshold` bails to demote — proving the
-        // semantics are consecutive, not cumulative.
+        // It now takes a full fresh run of `threshold` bails to disable this version.
         for _ in 0..NATIVE_BAIL_GIVEUP_THRESHOLD {
-            native.record_bail(key, &func);
+            native.record_bail(&key);
         }
         assert_eq!(
-            func.native_status.get(),
-            NATIVE_STATUS_NOT_ELIGIBLE,
-            "must give up after a fresh run of consecutive bails",
+            native.cache.get(&key),
+            Some(&None),
+            "failed shape must be negative-cached",
+        );
+        assert_eq!(
+            native.bail_counts.get(&successful_key),
+            Some(&0),
+            "one shape's failure must not alter another version's success state",
         );
     }
 }
@@ -9645,6 +9645,151 @@ fn main() -> Unit {
             func.call_count.get() <= PROFILE_WARMUP,
             "call_count reflects the cold call volume"
         );
+    }
+
+    #[cfg(feature = "native-jit")]
+    fn shaped_dispatch_program(targets: usize, calls: usize) -> String {
+        let dispatch = match targets {
+            2 => {
+                r#"
+        if i % 2 == 0 {
+            total = total + dispatch(f: read a, x: read i)
+        } else {
+            total = total + dispatch(f: read b, x: read i)
+        }
+"#
+            }
+            3 => {
+                r#"
+        if i % 3 == 0 {
+            total = total + dispatch(f: read a, x: read i)
+        } else if i % 3 == 1 {
+            total = total + dispatch(f: read b, x: read i)
+        } else {
+            total = total + dispatch(f: read c, x: read i)
+        }
+"#
+            }
+            _ => unreachable!("shape fixture supports two or three targets"),
+        };
+        format!(
+            r#"
+fn dispatch(f: read Fn(Int) -> Int, x: Int) -> Int {{
+    let mut j = 0
+    let mut total = 0
+    while j < 4 {{
+        total = total + f(x + j)
+        j = j + 1
+    }}
+    return total
+}}
+
+fn main() -> Unit {{
+    let a: Fn(Int) -> Int = |x| {{ return x * 2 }}
+    let b: Fn(Int) -> Int = |x| {{ return x + 7 }}
+    let c: Fn(Int) -> Int = |x| {{ return 0 - x }}
+    let mut i = 0
+    let mut total = 0
+    while i < {calls} {{
+{dispatch}
+        i = i + 1
+    }}
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}}
+"#
+        )
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_shape_key_uses_stable_abi_metadata_only() {
+        let short = VmValue::List(Rc::new(RefCell::new(TypedVec::Ints(vec![1]))));
+        let long = VmValue::List(Rc::new(RefCell::new(TypedVec::Ints(vec![1, 2, 3]))));
+        assert_eq!(
+            ShapeKey::from_values([&VmValue::Int(1), &short]),
+            ShapeKey::from_values([&VmValue::Int(99), &long]),
+            "scalar payloads and collection lengths must not enter the shape",
+        );
+
+        let closure_a = VmValue::Closure(Rc::new(VmClosure {
+            function: 1,
+            captures: Vec::new(),
+        }));
+        let closure_b = VmValue::Closure(Rc::new(VmClosure {
+            function: 2,
+            captures: Vec::new(),
+        }));
+        assert_ne!(
+            ShapeKey::from_values([&closure_a]),
+            ShapeKey::from_values([&closure_b]),
+            "closure function identity is stable dispatch metadata",
+        );
+
+        let left = VmValue::Struct(Rc::new(VmStruct::from_named(
+            "LeftShape",
+            [("value", VmValue::Int(1))],
+        )));
+        let right = VmValue::Struct(Rc::new(VmStruct::from_named(
+            "RightShape",
+            [("value", VmValue::Int(1))],
+        )));
+        assert_ne!(
+            ShapeKey::from_values([&left]),
+            ShapeKey::from_values([&right]),
+            "interned concrete layouts must distinguish aggregate shapes",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_alternating_two_shapes_reuses_two_versions() {
+        let source = shaped_dispatch_program(2, 140);
+        let expected = compile(&source)
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("interpreter run");
+        let (actual, stats) = with_native_cost_model_disabled(|| {
+            compile(&source).eval_main_with_args_native_with_stats(Vec::<String>::new())
+        })
+        .expect("native run");
+        assert_eq!(actual.stdout, expected.stdout);
+        assert_eq!(actual.value, expected.value);
+        assert!(stats.shape_versions >= 2, "stats={stats:?}");
+        assert!(stats.shape_cache_hits > 0, "stats={stats:?}");
+        assert_eq!(stats.shape_limit_fallbacks, 0, "stats={stats:?}");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_third_shape_falls_back_without_compiling() {
+        let source = shaped_dispatch_program(3, 180);
+        let expected = compile(&source)
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("interpreter run");
+        let (actual, stats) = with_native_cost_model_disabled(|| {
+            compile(&source).eval_main_with_args_native_with_stats(Vec::<String>::new())
+        })
+        .expect("native run");
+        assert_eq!(actual.stdout, expected.stdout);
+        assert_eq!(actual.value, expected.value);
+        assert!(
+            stats.shape_limit_fallbacks > 0,
+            "the third dispatcher shape must use the generic fallback; stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_multishape_forced_deopt_matches_interpreter() {
+        let source = shaped_dispatch_program(3, 100);
+        let expected = compile(&source)
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("interpreter run");
+        let actual = compile(&source)
+            .eval_main_with_args_native_force_all_safepoints(Vec::<String>::new())
+            .expect("forced-deopt native run");
+        assert_eq!(actual.stdout, expected.stdout);
+        assert_eq!(actual.value, expected.value);
     }
 
     /// Unit-level check of the mono/poly/mega classification and saturating count

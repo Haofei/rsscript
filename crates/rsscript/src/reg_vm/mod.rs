@@ -2324,9 +2324,86 @@ type NativeCompiledEntry = (
     bool,
 );
 
-/// State for the native JIT tier: the Cranelift module owning the compiled code,
-/// a per-function cache (`None` = known not native-eligible), and the tiering /
-/// deopt knobs.
+#[cfg(feature = "native-jit")]
+const MAX_NATIVE_SHAPE_VERSIONS: usize = 2;
+
+/// Stable runtime ABI shape used for bounded native multiversioning. Scalar
+/// payloads and collection lengths are deliberately absent. Heap identities are
+/// included only where the runtime already exposes stable dispatch metadata:
+/// closure function ids and interned struct/variant layouts.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum NativeParamShape {
+    Int,
+    Bool,
+    Float,
+    FlatInt,
+    FlatFloat,
+    Handle,
+    Closure(usize),
+    Struct(*const TypeLayout),
+    Variant(*const TypeLayout),
+    Unsupported,
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+struct ShapeKey(Vec<NativeParamShape>);
+
+#[cfg(feature = "native-jit")]
+impl ShapeKey {
+    fn from_values<'a>(values: impl IntoIterator<Item = &'a VmValue>) -> Self {
+        Self(values.into_iter().map(native_param_shape).collect())
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn native_param_shape(value: &VmValue) -> NativeParamShape {
+    match value {
+        VmValue::Int(_) => NativeParamShape::Int,
+        VmValue::Bool(_) => NativeParamShape::Bool,
+        VmValue::Float(_) => NativeParamShape::Float,
+        VmValue::List(values) => match values.try_borrow().ok().as_deref() {
+            Some(TypedVec::Ints(_)) => NativeParamShape::FlatInt,
+            Some(TypedVec::Floats(_)) => NativeParamShape::FlatFloat,
+            _ => NativeParamShape::Handle,
+        },
+        VmValue::Closure(closure) => NativeParamShape::Closure(closure.function),
+        VmValue::Struct(value) => NativeParamShape::Struct(Rc::as_ptr(&value.layout)),
+        VmValue::Variant(value) => NativeParamShape::Variant(Rc::as_ptr(&value.layout)),
+        VmValue::Managed(inner) => inner
+            .try_borrow()
+            .ok()
+            .map_or(NativeParamShape::Handle, |value| native_param_shape(&value)),
+        VmValue::String(_)
+        | VmValue::Bytes(_)
+        | VmValue::Json(_)
+        | VmValue::Deque(_)
+        | VmValue::Map(_)
+        | VmValue::Native(_)
+        | VmValue::OptionSomeHeap(_) => NativeParamShape::Handle,
+        VmValue::Unit | VmValue::Char(_) | VmValue::OptionNone | VmValue::OptionSomeScalar(_) => {
+            NativeParamShape::Unsupported
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct NativeVersionKey {
+    function: usize,
+    shape: ShapeKey,
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct OsrVersionKey {
+    region: RegionKey,
+    shape: ShapeKey,
+}
+
+/// State for the native JIT tier: the Cranelift modules owning compiled code,
+/// bounded per-function/per-region shape caches, and tiering/deopt knobs.
 #[cfg(feature = "native-jit")]
 struct NativeState {
     baseline_module: vm_jit::NativeModule,
@@ -2343,33 +2420,30 @@ struct NativeState {
     // and whether the function's body contains an internal back-edge (a loop). The
     // back-edge bit drives the no-amortization profitability gate
     // (`NATIVE_NOAMORTIZE_GIVEUP`): a loop-free body dispatched per loop iteration
-    // can never amortize FFI cost, so it is demoted after `K` dispatches.
-    cache: HashMap<usize, Option<NativeCompiledEntry>>,
+    // can never amortize FFI cost, so that version is disabled after `K` dispatches.
+    cache: HashMap<NativeVersionKey, Option<NativeCompiledEntry>>,
     /// Module-local optimized handles. IDs from this cache are dispatched only
     /// through `optimized_module`.
-    optimized_cache: HashMap<usize, NativeCompiledEntry>,
+    optimized_cache: HashMap<NativeVersionKey, NativeCompiledEntry>,
     /// Recompile sources retained only for baseline whole functions that contain
     /// no native-to-native call edges.
-    optimization_sources: HashMap<usize, vm_jit::JitFunction>,
+    optimization_sources: HashMap<NativeVersionKey, vm_jit::JitFunction>,
     /// Per-function deterministic interpreted-work counts for baseline tiering.
     /// `0` means "compile on first call" (force-all).
     counts: HashMap<usize, u64>,
     /// Deterministic interpreted-work accumulated after baseline admission.
-    promotion_work: HashMap<usize, u64>,
+    promotion_work: HashMap<NativeVersionKey, u64>,
     optimize_work_threshold: u64,
-    /// Per-function *consecutive* runtime-bail counts, keyed like `counts`/`cache`.
+    /// Per-version *consecutive* runtime-bail counts, keyed like `cache`.
     /// Incremented on every bail after native was chosen (arg mismatch or runtime
     /// guard), reset to 0 on a successful native completion. At
-    /// `NATIVE_BAIL_GIVEUP_THRESHOLD` the function is demoted to `NOT_ELIGIBLE` and
-    /// dropped from `cache`, so the predict-and-skip path stops the wasted
-    /// compile-marshal-bail churn.
-    bail_counts: HashMap<usize, u32>,
-    /// Per-function count of *native dispatches of a back-edge-free body*, keyed
-    /// like `counts`/`cache`. Only loop-free bodies are counted here; at
-    /// `NATIVE_NOAMORTIZE_GIVEUP` the function is demoted to `NOT_ELIGIBLE` and
-    /// dropped from `cache` (the no-amortization profitability gate). Loop-bearing
-    /// bodies are never inserted, so they are never demoted by this counter.
-    noamortize_counts: HashMap<usize, u32>,
+    /// `NATIVE_BAIL_GIVEUP_THRESHOLD` only that shape is negative-cached, so one
+    /// failing shape cannot demote successful versions.
+    bail_counts: HashMap<NativeVersionKey, u32>,
+    /// Per-version count of native dispatches of a back-edge-free body. At
+    /// `NATIVE_NOAMORTIZE_GIVEUP` only that shape is negative-cached. Loop-bearing
+    /// bodies are never inserted, so they are never disabled by this counter.
+    noamortize_counts: HashMap<NativeVersionKey, u32>,
     tier_up_threshold: u32,
     /// Deopt stress mode: when set, the native tier always bails, so every
     /// native-eligible function exercises the fallback path. Used to verify
@@ -2410,14 +2484,17 @@ struct NativeState {
     /// Evaluation-local hot-backedge state, independent for each candidate region.
     /// A stable decline at one header cannot disable another header in the function.
     osr_triggers: HashMap<RegionKey, OsrTrigger>,
-    /// OSR compile cache keyed by function and original loop header. `Some(entry)`
-    /// is a compiled OSR entry; `None` is a stable per-region negative result.
+    /// OSR compile cache keyed by function, original loop header, and runtime
+    /// shape. `Some(entry)` is compiled; `None` is a stable per-version decline.
     #[allow(clippy::type_complexity)]
-    osr_cache: HashMap<RegionKey, Option<OsrEntry>>,
+    osr_cache: HashMap<OsrVersionKey, Option<OsrEntry>>,
     /// Optimized OSR entries and their bounded baseline recompile sources.
-    optimized_osr_cache: HashMap<RegionKey, OsrEntry>,
-    osr_optimization_sources: HashMap<RegionKey, OsrOptimizationSource>,
-    osr_promotion_work: HashMap<RegionKey, u64>,
+    optimized_osr_cache: HashMap<OsrVersionKey, OsrEntry>,
+    osr_optimization_sources: HashMap<OsrVersionKey, OsrOptimizationSource>,
+    osr_promotion_work: HashMap<OsrVersionKey, u64>,
+    /// Abnormal OSR exits attributed to the selected shape version. Normal
+    /// `OsrExit` deopts are successful entries and reset this counter.
+    osr_bail_counts: HashMap<OsrVersionKey, u32>,
     /// Native self-recursion cache (native-call-ABI slice 3; generalized in Phase 2):
     /// per-function (`*const RegFunction` key) compiled `CallSelf` entry, with the
     /// compiled parameter `NativeTy`s and return `NativeTy` so the dispatcher
@@ -2581,6 +2658,14 @@ pub struct NativeStats {
     pub compile_failed: u64,
     /// Native calls whose runtime args didn't match the inferred parameter types.
     pub arg_mismatch: u64,
+    /// Baseline shape versions admitted to whole-function or OSR caches.
+    pub shape_versions: u64,
+    /// Dispatches served by an existing shape-specific native version.
+    pub shape_cache_hits: u64,
+    /// New shapes declined after a tier/site reached its two-version cap.
+    pub shape_limit_fallbacks: u64,
+    /// Runtime bails attributed to the selected shape version.
+    pub shape_bails: u64,
     /// Native calls that ran to completion.
     pub native_calls: u64,
     /// Native calls that bailed at a guard (overflow/div-by-zero/…) → interpreter.
@@ -2620,7 +2705,7 @@ impl NativeStats {
     fn summary(&self) -> String {
         format!(
             "native-jit: considered={} translated={} compiled={} baseline_compiles={} optimized_compiles={} baseline_calls={} optimized_calls={} promotions={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_host_call_sites={} host_call_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
-compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} tier_deferred={} \
+compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} shape_versions={} shape_cache_hits={} shape_limit_fallbacks={} shape_bails={} tier_deferred={} \
 compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             self.considered,
             self.translated,
@@ -2661,6 +2746,10 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             self.native_child_bails,
             self.native_child_resumes,
             self.arg_mismatch,
+            self.shape_versions,
+            self.shape_cache_hits,
+            self.shape_limit_fallbacks,
+            self.shape_bails,
             self.tier_deferred,
             self.compile_nanos as f64 / 1.0e6,
             self.run_nanos as f64 / 1.0e6,
@@ -2759,6 +2848,13 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
         object.insert("baseline_calls".into(), self.baseline_calls.into());
         object.insert("optimized_calls".into(), self.optimized_calls.into());
         object.insert("promotions".into(), self.promotions.into());
+        object.insert("shape_versions".into(), self.shape_versions.into());
+        object.insert("shape_cache_hits".into(), self.shape_cache_hits.into());
+        object.insert(
+            "shape_limit_fallbacks".into(),
+            self.shape_limit_fallbacks.into(),
+        );
+        object.insert("shape_bails".into(), self.shape_bails.into());
         value
     }
 }
@@ -7000,6 +7096,7 @@ impl NativeState {
             optimized_osr_cache: HashMap::new(),
             osr_optimization_sources: HashMap::new(),
             osr_promotion_work: HashMap::new(),
+            osr_bail_counts: HashMap::new(),
             self_recursive_native: HashMap::new(),
             mutual_recursive_native: HashMap::new(),
             scratch_args: Vec::new(),
@@ -7021,25 +7118,35 @@ impl NativeState {
         })
     }
 
-    /// Records a consecutive runtime bail for a structurally-eligible function
-    /// (called after native was chosen, on either an arg-type mismatch or a guard
-    /// bail). At [`NATIVE_BAIL_GIVEUP_THRESHOLD`] consecutive bails the function is
-    /// permanently demoted: `native_status` is set to `NOT_ELIGIBLE` (so the
-    /// cheap-negative early-return in `try_native` short-circuits all future calls)
-    /// and its compiled entry is dropped from the dispatch cache. The owning
-    /// `NativeModule` retains emitted code until VM drop. Reusing
-    /// `NOT_ELIGIBLE` is correct here: its only meaning is "don't attempt native",
-    /// which is exactly the give-up verdict.
-    fn record_bail(&mut self, native_key: usize, func: &RegFunction) {
-        let count = self.bail_counts.entry(native_key).or_insert(0);
+    /// Record a consecutive failure against one shape version. Reaching the
+    /// threshold negative-caches only that version; invariant translation
+    /// failures remain the sole owner of function-global `native_status`.
+    fn record_bail(&mut self, version_key: &NativeVersionKey) {
+        let count = self.bail_counts.entry(version_key.clone()).or_insert(0);
         *count += 1;
-        if *count >= NATIVE_BAIL_GIVEUP_THRESHOLD {
-            func.native_status.set(NATIVE_STATUS_NOT_ELIGIBLE);
-            self.cache.remove(&native_key);
-            self.optimized_cache.remove(&native_key);
-            self.optimization_sources.remove(&native_key);
-            self.bail_counts.remove(&native_key);
+        if self.collect_stats {
+            self.stats.shape_bails += 1;
         }
+        if *count >= NATIVE_BAIL_GIVEUP_THRESHOLD {
+            self.cache.insert(version_key.clone(), None);
+            self.optimized_cache.remove(version_key);
+            self.optimization_sources.remove(version_key);
+            self.bail_counts.remove(version_key);
+        }
+    }
+
+    fn whole_shape_count(&self, function: usize) -> usize {
+        self.cache
+            .keys()
+            .filter(|key| key.function == function)
+            .count()
+    }
+
+    fn osr_shape_count(&self, region: RegionKey) -> usize {
+        self.osr_cache
+            .keys()
+            .filter(|key| key.region == region)
+            .count()
     }
 }
 

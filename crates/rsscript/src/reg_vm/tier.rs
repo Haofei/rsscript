@@ -581,10 +581,17 @@ fn native_compile_direct_scalar_callee(
     callee_key: usize,
     stack: &mut std::collections::HashSet<usize>,
 ) -> Option<NativeCompiledCallee> {
-    if let Some(cached) = native.cache.get(&callee_key) {
+    let version_key = NativeVersionKey {
+        function: callee_key,
+        shape: ShapeKey::default(),
+    };
+    if let Some(cached) = native.cache.get(&version_key) {
         return cached
             .as_ref()
             .and_then(native_compiled_entry_call_descriptor);
+    }
+    if native.whole_shape_count(callee_key) >= MAX_NATIVE_SHAPE_VERSIONS {
+        return None;
     }
     if native_scalar_callee_pending_on_branch_profile(callee) {
         return None;
@@ -676,7 +683,10 @@ fn native_compile_direct_scalar_callee(
         string_literals,
         precise_resume_safe,
     );
-    native.cache.insert(callee_key, Some(entry));
+    native.cache.insert(version_key, Some(entry));
+    if native.collect_stats {
+        native.stats.shape_versions += 1;
+    }
     stack.remove(&callee_key);
     Some(NativeCompiledCallee {
         id,
@@ -1046,8 +1056,13 @@ impl RegVm {
         let key = func as *const RegFunction as usize;
         self.native
             .as_ref()
-            .and_then(|native| native.cache.get(&key))
-            .and_then(|entry| entry.as_ref())
+            .and_then(|native| {
+                native
+                    .cache
+                    .iter()
+                    .find(|(version, entry)| version.function == key && entry.as_ref().is_some())
+                    .and_then(|(_, entry)| entry.as_ref())
+            })
             .map(|entry| entry.0)
     }
 
@@ -1235,6 +1250,11 @@ impl RegVm {
         // mutable `self.native` borrow below doesn't conflict.
         let unit = Rc::clone(&self.unit);
         let native_key = func as *const RegFunction as usize;
+        let shape = ShapeKey::from_values((0..func.params).map(|index| self.reg(base + index)));
+        let version_key = NativeVersionKey {
+            function: native_key,
+            shape,
+        };
         // Phase 1: tiering + resolve (and lazily compile) the native function.
         // `None` in the cache means "known not native-eligible".
         let (id, ret_type, param_types, string_literals, precise_resume_safe, selected_tier) = {
@@ -1259,9 +1279,20 @@ impl RegVm {
             if native.collect_stats {
                 native.stats.considered += 1;
             }
-            let entry = match native.cache.get(&native_key) {
-                Some(entry) => entry.clone(),
+            let entry = match native.cache.get(&version_key) {
+                Some(entry) => {
+                    if native.collect_stats {
+                        native.stats.shape_cache_hits += 1;
+                    }
+                    entry.clone()
+                }
                 None => {
+                    if native.whole_shape_count(native_key) >= MAX_NATIVE_SHAPE_VERSIONS {
+                        if native.collect_stats {
+                            native.stats.shape_limit_fallbacks += 1;
+                        }
+                        return NativeAttempt::Fallback;
+                    }
                     let compiled_call_sites =
                         native_compiled_call_sites(native, &unit, func, native_key);
                     let translated = if compiled_call_sites.is_empty() {
@@ -1295,7 +1326,7 @@ impl RegVm {
                                 None
                             } else {
                                 let Some(admission) = begin_native_compile(native, 1) else {
-                                    native.cache.insert(native_key, None);
+                                    native.cache.insert(version_key.clone(), None);
                                     return NativeAttempt::Fallback;
                                 };
                                 let compiled = if native.force_all_safepoints {
@@ -1316,7 +1347,7 @@ impl RegVm {
                                             &[id],
                                             NativeCodeTier::Baseline,
                                         ) {
-                                            native.cache.insert(native_key, None);
+                                            native.cache.insert(version_key.clone(), None);
                                             return NativeAttempt::Fallback;
                                         }
                                         let verify_native =
@@ -1351,7 +1382,7 @@ impl RegVm {
                                         {
                                             native
                                                 .optimization_sources
-                                                .insert(native_key, jit_fn.clone());
+                                                .insert(version_key.clone(), jit_fn.clone());
                                         }
                                         // `has_backedge` (hoisted above for the cost-model gate)
                                         // also drives `NATIVE_NOAMORTIZE_GIVEUP`: a loop-free body
@@ -1400,7 +1431,10 @@ impl RegVm {
                             None
                         }
                     };
-                    native.cache.insert(native_key, entry.clone());
+                    native.cache.insert(version_key.clone(), entry.clone());
+                    if entry.is_some() && native.collect_stats {
+                        native.stats.shape_versions += 1;
+                    }
                     entry
                 }
             };
@@ -1408,11 +1442,14 @@ impl RegVm {
             let mut selected_entry = entry;
             if native.optimized_module.is_some() {
                 let work = u64::from(interpreted_region_work(&func.code));
-                let accumulated = native.promotion_work.entry(native_key).or_insert(0);
+                let accumulated = native
+                    .promotion_work
+                    .entry(version_key.clone())
+                    .or_insert(0);
                 *accumulated = accumulated.saturating_add(work);
                 if *accumulated >= native.optimize_work_threshold
-                    && !native.optimized_cache.contains_key(&native_key)
-                    && let Some(jit_fn) = native.optimization_sources.remove(&native_key)
+                    && !native.optimized_cache.contains_key(&version_key)
+                    && let Some(jit_fn) = native.optimization_sources.remove(&version_key)
                     && let Some(admission) = begin_native_compile(native, 1)
                 {
                     let compiled = if native.force_all_safepoints {
@@ -1462,7 +1499,9 @@ impl RegVm {
                                     );
                                     if let Some(mut promoted) = selected_entry.clone() {
                                         promoted.0 = optimized_id;
-                                        native.optimized_cache.insert(native_key, promoted);
+                                        native
+                                            .optimized_cache
+                                            .insert(version_key.clone(), promoted);
                                         if native.collect_stats {
                                             native.stats.promotions += 1;
                                         }
@@ -1473,7 +1512,7 @@ impl RegVm {
                         Err(_) => finish_native_compile_failure(native, admission),
                     }
                 }
-                if let Some(promoted) = native.optimized_cache.get(&native_key) {
+                if let Some(promoted) = native.optimized_cache.get(&version_key) {
                     selected_tier = NativeCodeTier::Optimized;
                     selected_entry = Some(promoted.clone());
                 }
@@ -1493,23 +1532,24 @@ impl RegVm {
             // No-amortization profitability gate. A loop-free body does O(1) work
             // per dispatch; dispatched once per interpreter loop iteration it pays
             // FFI + marshalling cost it can never amortize. After
-            // `NATIVE_NOAMORTIZE_GIVEUP` such dispatches, demote it to NOT_ELIGIBLE
-            // (reusing the `record_bail` demotion machinery: set the status bit, drop
-            // the cache + the counter) so the remainder of the loop takes the cheap
-            // interpreter fallback. Loop-bearing bodies (`has_backedge`) do O(n) work
+            // `NATIVE_NOAMORTIZE_GIVEUP` such dispatches, negative-cache this shape
+            // so the remainder of the loop takes the cheap interpreter fallback.
+            // Loop-bearing bodies (`has_backedge`) do O(n) work
             // per dispatch, amortize the cost, and are never counted here — they are
             // dispatched `calls=1` (the whole loop compiled into one native body) and
             // so could never reach `K` anyway. This is the same predict-and-skip
             // pattern as the bail give-up, not a parallel system.
             if !has_backedge {
-                let count = native.noamortize_counts.entry(native_key).or_insert(0);
+                let count = native
+                    .noamortize_counts
+                    .entry(version_key.clone())
+                    .or_insert(0);
                 *count += 1;
                 if *count >= NATIVE_NOAMORTIZE_GIVEUP {
-                    func.native_status.set(NATIVE_STATUS_NOT_ELIGIBLE);
-                    native.cache.remove(&native_key);
-                    native.optimized_cache.remove(&native_key);
-                    native.optimization_sources.remove(&native_key);
-                    native.noamortize_counts.remove(&native_key);
+                    native.cache.insert(version_key.clone(), None);
+                    native.optimized_cache.remove(&version_key);
+                    native.optimization_sources.remove(&version_key);
+                    native.noamortize_counts.remove(&version_key);
                     return NativeAttempt::Fallback;
                 }
             }
@@ -1556,7 +1596,7 @@ impl RegVm {
                 if native.collect_stats {
                     native.stats.arg_mismatch += 1;
                 }
-                native.record_bail(native_key, func);
+                native.record_bail(&version_key);
             }
         };
         for index in 0..n {
@@ -1794,7 +1834,7 @@ impl RegVm {
                 else {
                     heap_tx.abort();
                     if let Some(native) = self.native.as_mut() {
-                        native.record_bail(native_key, func);
+                        native.record_bail(&version_key);
                     }
                     scratch.restore(self.native.as_mut());
                     return NativeAttempt::Fallback;
@@ -1819,7 +1859,7 @@ impl RegVm {
                     }
                     // Consecutive-bail semantics: a clean completion clears the
                     // give-up counter, so only *sustained* failure demotes a function.
-                    native.bail_counts.insert(native_key, 0);
+                    native.bail_counts.insert(version_key.clone(), 0);
                 }
                 debug_assert_ne!(
                     ret_type,
@@ -1861,7 +1901,7 @@ impl RegVm {
                             if native.report {
                                 native.report_native_ok.insert(native_key);
                             }
-                            native.bail_counts.insert(native_key, 0);
+                            native.bail_counts.insert(version_key.clone(), 0);
                         }
                         let result = NativeAttempt::Completed(value);
                         scratch.restore(self.native.as_mut());
@@ -1872,7 +1912,7 @@ impl RegVm {
                         // the interpreter (always correct, no effect leaked).
                         heap_tx.abort();
                         if let Some(native) = self.native.as_mut() {
-                            native.record_bail(native_key, func);
+                            native.record_bail(&version_key);
                         }
                         scratch.restore(self.native.as_mut());
                         NativeAttempt::Fallback
@@ -1897,7 +1937,7 @@ impl RegVm {
                             native.stats.native_child_bails += 1;
                         }
                     }
-                    native.record_bail(native_key, func);
+                    native.record_bail(&version_key);
                     native.precise_deopt
                 } else {
                     false
@@ -2077,6 +2117,33 @@ impl RegVm {
             function: native_key,
             header: header_ip,
         };
+        let shape = ShapeKey(
+            (0..func.regs)
+                .map(|index| {
+                    let slot = base + index;
+                    if !self.written.get(slot).copied().unwrap_or(false) {
+                        return NativeParamShape::Unsupported;
+                    }
+                    let shape = native_param_shape(&self.stack[slot]);
+                    if index < func.params
+                        || matches!(
+                            shape,
+                            NativeParamShape::Closure(_)
+                                | NativeParamShape::Struct(_)
+                                | NativeParamShape::Variant(_)
+                        )
+                    {
+                        shape
+                    } else {
+                        NativeParamShape::Unsupported
+                    }
+                })
+                .collect(),
+        );
+        let osr_version_key = OsrVersionKey {
+            region: region_key,
+            shape,
+        };
 
         // J0.1 #7 (live-after heap payload): classify each param by its LIVE value, for the
         // OSR translator to seed a param used in-region ONLY as a dissolved Result/Option
@@ -2130,7 +2197,7 @@ impl RegVm {
         ) = {
             // Fast path: cached and NOT at the header ⇒ nothing to do (no clone).
             if let Some(native) = self.native.as_ref() {
-                if let Some(entry) = native.osr_cache.get(&region_key) {
+                if let Some(entry) = native.osr_cache.get(&osr_version_key) {
                     match entry {
                         Some(e) if e.orig_header == header_ip => {}
                         _ => return false,
@@ -2157,7 +2224,13 @@ impl RegVm {
             // resumes). When the body has no replaceable Option the region pass
             // returns the code unchanged with an identity ip-map, so plain
             // native-subset OSR is byte-for-byte the old path.
-            if !native.osr_cache.contains_key(&region_key) {
+            if !native.osr_cache.contains_key(&osr_version_key) {
+                if native.osr_shape_count(region_key) >= MAX_NATIVE_SHAPE_VERSIONS {
+                    if native.collect_stats {
+                        native.stats.shape_limit_fallbacks += 1;
+                    }
+                    return false;
+                }
                 // OSR × inline-leaf-calls (Pending #1): FIRST inline straight-line
                 // leaf `CallKnown`/closure calls into the function body, so a value
                 // that is built in one helper and matched in another — both called
@@ -2282,7 +2355,7 @@ impl RegVm {
                                             && native_region_is_promotion_eligible(&jit_fn)
                                         {
                                             native.osr_optimization_sources.insert(
-                                                region_key,
+                                                osr_version_key.clone(),
                                                 OsrOptimizationSource {
                                                     jit_fn: jit_fn.clone(),
                                                     header: lp.header as u32,
@@ -2686,7 +2759,7 @@ impl RegVm {
                                                 && native_region_is_promotion_eligible(&jit_fn)
                                             {
                                                 native.osr_optimization_sources.insert(
-                                                    region_key,
+                                                    osr_version_key.clone(),
                                                     OsrOptimizationSource {
                                                         jit_fn: jit_fn.clone(),
                                                         header: lp.header as u32,
@@ -2789,8 +2862,13 @@ impl RegVm {
                 // profile settles (or there is no pending site) the `None`/`Some`
                 // verdict is stable and we cache it.
                 if entry.is_some() || !native_translation_pending_on_profile(&unit, func) {
-                    native.osr_cache.insert(region_key, entry);
+                    if entry.is_some() && native.collect_stats {
+                        native.stats.shape_versions += 1;
+                    }
+                    native.osr_cache.insert(osr_version_key.clone(), entry);
                 }
+            } else if native.collect_stats {
+                native.stats.shape_cache_hits += 1;
             }
             if native.optimized_module.is_some() {
                 let iteration_work = native
@@ -2806,7 +2884,7 @@ impl RegVm {
                     Some(OsrTrigger::Counting { count, .. }) => u64::from(*count),
                     _ => 0,
                 };
-                let accumulated = match native.osr_promotion_work.entry(region_key) {
+                let accumulated = match native.osr_promotion_work.entry(osr_version_key.clone()) {
                     std::collections::hash_map::Entry::Vacant(entry) => {
                         entry.insert(trigger_work.max(u64::from(iteration_work)))
                     }
@@ -2817,8 +2895,8 @@ impl RegVm {
                     }
                 };
                 if *accumulated >= native.optimize_work_threshold
-                    && !native.optimized_osr_cache.contains_key(&region_key)
-                    && let Some(source) = native.osr_optimization_sources.remove(&region_key)
+                    && !native.optimized_osr_cache.contains_key(&osr_version_key)
+                    && let Some(source) = native.osr_optimization_sources.remove(&osr_version_key)
                     && let Some(admission) = begin_native_compile(native, 1)
                 {
                     let compiled = native
@@ -2851,11 +2929,14 @@ impl RegVm {
                                         &source.jit_fn,
                                         NativeCodeTier::Optimized,
                                     );
-                                    if let Some(Some(baseline)) = native.osr_cache.get(&region_key)
+                                    if let Some(Some(baseline)) =
+                                        native.osr_cache.get(&osr_version_key)
                                     {
                                         let mut promoted = baseline.clone();
                                         promoted.id = optimized_id;
-                                        native.optimized_osr_cache.insert(region_key, promoted);
+                                        native
+                                            .optimized_osr_cache
+                                            .insert(osr_version_key.clone(), promoted);
                                         if native.collect_stats {
                                             native.stats.promotions += 1;
                                         }
@@ -2868,11 +2949,14 @@ impl RegVm {
                 }
             }
             let (entry, selected_tier) =
-                if let Some(entry) = native.optimized_osr_cache.get(&region_key) {
+                if let Some(entry) = native.optimized_osr_cache.get(&osr_version_key) {
                     (Some(entry), NativeCodeTier::Optimized)
                 } else {
                     (
-                        native.osr_cache.get(&region_key).and_then(Option::as_ref),
+                        native
+                            .osr_cache
+                            .get(&osr_version_key)
+                            .and_then(Option::as_ref),
                         NativeCodeTier::Baseline,
                     )
                 };
@@ -3463,6 +3547,7 @@ impl RegVm {
                             NativeCodeTier::Optimized => native.stats.optimized_calls += 1,
                         }
                     }
+                    native.osr_bail_counts.insert(osr_version_key.clone(), 0);
                     // Lever 2 (observational): record this function actually OSR-
                     // entered, so the report's `osr: entered` positive matches the
                     // real outcome. Gated on `report`; no effect on any decision.
@@ -3482,6 +3567,14 @@ impl RegVm {
                 heap_tx.abort();
                 if let Some(native) = self.native.as_mut() {
                     native.osr_dynamic_bail = true;
+                    let count = native
+                        .osr_bail_counts
+                        .entry(osr_version_key.clone())
+                        .or_insert(0);
+                    *count = count.saturating_add(1);
+                    if native.collect_stats {
+                        native.stats.shape_bails += 1;
+                    }
                 }
                 scratch.restore(self.native.as_mut());
                 false
