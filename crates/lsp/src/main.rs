@@ -6,8 +6,8 @@
 //! command line.
 
 use std::collections::{HashMap, HashSet};
+use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use rsscript::{
     Definition, Diagnostic as RsDiagnostic, PackageReviewFileKind, Reference, RssDocumentSymbol,
@@ -28,6 +28,41 @@ struct Document {
     text: String,
     diagnostics: Vec<RsDiagnostic>,
     revision: u64,
+    version: i32,
+}
+
+struct DocumentStore {
+    documents: HashMap<Url, Document>,
+    next_revision: u64,
+}
+
+impl DocumentStore {
+    fn new() -> Self {
+        Self {
+            documents: HashMap::new(),
+            next_revision: 1,
+        }
+    }
+
+    fn allocate_revision(&mut self) -> u64 {
+        let revision = self.next_revision;
+        self.next_revision += 1;
+        revision
+    }
+}
+
+impl Deref for DocumentStore {
+    type Target = HashMap<Url, Document>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.documents
+    }
+}
+
+impl DerefMut for DocumentStore {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.documents
+    }
 }
 
 #[derive(Clone)]
@@ -39,50 +74,126 @@ struct WorkspaceDocument {
 
 struct Backend {
     client: Client,
-    documents: tokio::sync::Mutex<HashMap<Url, Document>>,
-    next_revision: AtomicU64,
+    documents: tokio::sync::Mutex<DocumentStore>,
+    diagnostics_publication: tokio::sync::Mutex<()>,
+}
+
+struct AnalysisJob {
+    uri: Url,
+    revision: u64,
+    version: i32,
+    open_documents: HashMap<Url, Document>,
 }
 
 fn commit_diagnostics_if_current(
     documents: &mut HashMap<Url, Document>,
     uri: &Url,
     revision: u64,
+    version: i32,
     diagnostics: Vec<RsDiagnostic>,
 ) -> bool {
     let Some(document) = documents.get_mut(uri) else {
         return false;
     };
-    if document.revision != revision {
+    if document.revision != revision || document.version != version {
         return false;
     }
     document.diagnostics = diagnostics;
     true
 }
 
+fn analysis_job(documents: &DocumentStore, uri: Url, revision: u64, version: i32) -> AnalysisJob {
+    AnalysisJob {
+        uri,
+        revision,
+        version,
+        open_documents: documents.documents.clone(),
+    }
+}
+
+fn open_document(
+    documents: &mut DocumentStore,
+    uri: Url,
+    text: String,
+    version: i32,
+) -> Option<AnalysisJob> {
+    if documents
+        .get(&uri)
+        .is_some_and(|document| version <= document.version)
+    {
+        return None;
+    }
+
+    let revision = documents.allocate_revision();
+    documents.insert(
+        uri.clone(),
+        Document {
+            text,
+            diagnostics: Vec::new(),
+            revision,
+            version,
+        },
+    );
+    Some(analysis_job(documents, uri, revision, version))
+}
+
+fn change_document(
+    documents: &mut DocumentStore,
+    uri: Url,
+    version: i32,
+    changes: &[TextDocumentContentChangeEvent],
+) -> Option<AnalysisJob> {
+    let document = documents.get(&uri)?;
+    if version <= document.version {
+        return None;
+    }
+
+    let mut text = document.text.clone();
+    for change in changes {
+        apply_change(&mut text, change);
+    }
+
+    let revision = documents.allocate_revision();
+    let document = documents
+        .get_mut(&uri)
+        .expect("document remains present while the store is locked");
+    document.text = text;
+    document.diagnostics.clear();
+    document.revision = revision;
+    document.version = version;
+    Some(analysis_job(documents, uri, revision, version))
+}
+
+fn save_document(documents: &mut DocumentStore, uri: Url, text: String) -> Option<AnalysisJob> {
+    let version = documents.get(&uri)?.version;
+    let revision = documents.allocate_revision();
+    let document = documents
+        .get_mut(&uri)
+        .expect("document remains present while the store is locked");
+    document.text = text;
+    document.diagnostics.clear();
+    document.revision = revision;
+    Some(analysis_job(documents, uri, revision, version))
+}
+
 impl Backend {
     fn new(client: Client) -> Self {
         Self {
             client,
-            documents: tokio::sync::Mutex::new(HashMap::new()),
-            next_revision: AtomicU64::new(1),
+            documents: tokio::sync::Mutex::new(DocumentStore::new()),
+            diagnostics_publication: tokio::sync::Mutex::new(()),
         }
     }
 
-    /// Run the checker over `text` and publish the results for `uri`.
-    async fn analyze_and_publish(&self, uri: Url, text: String, version: Option<i32>) {
-        let revision = self.next_revision.fetch_add(1, Ordering::Relaxed);
-        let open_documents = {
-            let mut documents = self.documents.lock().await;
-            documents.insert(
-                uri.clone(),
-                Document {
-                    text,
-                    diagnostics: Vec::new(),
-                    revision,
-                },
-            );
-            documents.clone()
-        };
+    /// Run the checker over a stable document snapshot and publish if it is
+    /// still the current revision.
+    async fn analyze_and_publish(&self, job: AnalysisJob) {
+        let AnalysisJob {
+            uri,
+            revision,
+            version,
+            open_documents,
+        } = job;
         let analysis_uri = uri.clone();
         let analysis = tokio::task::spawn_blocking(move || {
             let diagnostics = diagnostics_for_uri(&analysis_uri, &open_documents);
@@ -98,12 +209,16 @@ impl Backend {
             return;
         };
 
-        let mut documents = self.documents.lock().await;
-        if !commit_diagnostics_if_current(&mut documents, &uri, revision, diagnostics) {
-            return;
+        let _publication = self.diagnostics_publication.lock().await;
+        {
+            let mut documents = self.documents.lock().await;
+            if !commit_diagnostics_if_current(&mut documents, &uri, revision, version, diagnostics)
+            {
+                return;
+            }
         }
         self.client
-            .publish_diagnostics(uri, lsp_diagnostics, version)
+            .publish_diagnostics(uri, lsp_diagnostics, Some(version))
             .await;
     }
 }
@@ -171,40 +286,50 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let doc = params.text_document;
-        self.analyze_and_publish(doc.uri, doc.text, Some(doc.version))
-            .await;
+        let job = {
+            let mut documents = self.documents.lock().await;
+            open_document(&mut documents, doc.uri, doc.text, doc.version)
+        };
+        if let Some(job) = job {
+            self.analyze_and_publish(job).await;
+        }
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        let uri = params.text_document.uri;
-        // Start from the last known text and apply the incremental edits in
-        // order. A change with no range is a full-document replacement.
-        let mut text = {
-            let documents = self.documents.lock().await;
-            documents
-                .get(&uri)
-                .map(|document| document.text.clone())
-                .unwrap_or_default()
+        let job = {
+            let mut documents = self.documents.lock().await;
+            change_document(
+                &mut documents,
+                params.text_document.uri,
+                params.text_document.version,
+                &params.content_changes,
+            )
         };
-        for change in &params.content_changes {
-            apply_change(&mut text, change);
+        if let Some(job) = job {
+            self.analyze_and_publish(job).await;
         }
-        self.analyze_and_publish(uri, text, Some(params.text_document.version))
-            .await;
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         if let Some(text) = params.text {
-            self.analyze_and_publish(params.text_document.uri, text, None)
-                .await;
+            let job = {
+                let mut documents = self.documents.lock().await;
+                save_document(&mut documents, params.text_document.uri, text)
+            };
+            if let Some(job) = job {
+                self.analyze_and_publish(job).await;
+            }
         }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        self.documents
-            .lock()
-            .await
-            .remove(&params.text_document.uri);
+        let _publication = self.diagnostics_publication.lock().await;
+        {
+            self.documents
+                .lock()
+                .await
+                .remove(&params.text_document.uri);
+        }
         self.client
             .publish_diagnostics(params.text_document.uri, Vec::new(), None)
             .await;
@@ -1811,7 +1936,9 @@ async fn main() {
 mod tests {
     use super::*;
     use std::fs;
+    use std::sync::Arc;
     use std::time::{SystemTime, UNIX_EPOCH};
+    use tokio::sync::oneshot;
 
     fn file_url(name: &str) -> Url {
         Url::parse(&format!("file:///workspace/{name}")).expect("valid file URL")
@@ -1822,6 +1949,7 @@ mod tests {
             text: text.to_string(),
             diagnostics: Vec::new(),
             revision: 0,
+            version: 0,
         }
     }
 
@@ -1838,6 +1966,7 @@ mod tests {
             &mut documents,
             &uri,
             1,
+            0,
             Vec::new(),
         ));
         assert_eq!(
@@ -1847,6 +1976,141 @@ mod tests {
                 .revision,
             2
         );
+    }
+
+    #[test]
+    fn analysis_for_stale_version_cannot_replace_diagnostics() {
+        let uri = file_url("stale-version.rss");
+        let mut documents = HashMap::from([(uri.clone(), document("new source"))]);
+        let document = documents.get_mut(&uri).expect("document should exist");
+        document.revision = 2;
+        document.version = 3;
+
+        assert!(!commit_diagnostics_if_current(
+            &mut documents,
+            &uri,
+            2,
+            2,
+            Vec::new(),
+        ));
+        assert_eq!(
+            documents.get(&uri).expect("document should remain").version,
+            3
+        );
+    }
+
+    #[tokio::test]
+    async fn concurrent_incremental_changes_apply_to_the_committed_version() {
+        let uri = file_url("concurrent.rss");
+        let mut initial = DocumentStore::new();
+        open_document(&mut initial, uri.clone(), "a".to_string(), 1)
+            .expect("initial document should open");
+        let documents = Arc::new(tokio::sync::Mutex::new(initial));
+        let (version_two_done, wait_for_version_two) = oneshot::channel();
+
+        let first_documents = Arc::clone(&documents);
+        let first_uri = uri.clone();
+        let version_two = tokio::spawn(async move {
+            let change = TextDocumentContentChangeEvent {
+                range: Some(Range::new(Position::new(0, 1), Position::new(0, 1))),
+                range_length: None,
+                text: "b".to_string(),
+            };
+            let job = {
+                let mut documents = first_documents.lock().await;
+                change_document(&mut documents, first_uri, 2, &[change])
+            };
+            version_two_done
+                .send(())
+                .expect("version three should still be waiting");
+            job
+        });
+
+        let second_documents = Arc::clone(&documents);
+        let second_uri = uri.clone();
+        let version_three = tokio::spawn(async move {
+            wait_for_version_two
+                .await
+                .expect("version two should complete");
+            let change = TextDocumentContentChangeEvent {
+                range: Some(Range::new(Position::new(0, 2), Position::new(0, 2))),
+                range_length: None,
+                text: "c".to_string(),
+            };
+            let mut documents = second_documents.lock().await;
+            change_document(&mut documents, second_uri, 3, &[change])
+        });
+
+        assert!(
+            version_two
+                .await
+                .expect("version two task should finish")
+                .is_some()
+        );
+        assert!(
+            version_three
+                .await
+                .expect("version three task should finish")
+                .is_some()
+        );
+
+        let documents = documents.lock().await;
+        let document = documents.get(&uri).expect("document should remain open");
+        assert_eq!(document.text, "abc");
+        assert_eq!(document.version, 3);
+        assert_eq!(document.revision, 3);
+        assert_eq!(documents.next_revision, 4);
+    }
+
+    #[tokio::test]
+    async fn late_out_of_order_change_is_ignored_without_allocating_revision() {
+        let uri = file_url("out-of-order.rss");
+        let mut initial = DocumentStore::new();
+        open_document(&mut initial, uri.clone(), "initial".to_string(), 1)
+            .expect("initial document should open");
+        let documents = Arc::new(tokio::sync::Mutex::new(initial));
+        let (newer_done, wait_for_newer) = oneshot::channel();
+
+        let newer_documents = Arc::clone(&documents);
+        let newer_uri = uri.clone();
+        let newer = tokio::spawn(async move {
+            let change = TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "newest".to_string(),
+            };
+            let job = {
+                let mut documents = newer_documents.lock().await;
+                change_document(&mut documents, newer_uri, 3, &[change])
+            };
+            newer_done
+                .send(())
+                .expect("older change should still be waiting");
+            job
+        });
+
+        let older_documents = Arc::clone(&documents);
+        let older_uri = uri.clone();
+        let older = tokio::spawn(async move {
+            wait_for_newer.await.expect("newer change should complete");
+            let change = TextDocumentContentChangeEvent {
+                range: None,
+                range_length: None,
+                text: "stale".to_string(),
+            };
+            let mut documents = older_documents.lock().await;
+            change_document(&mut documents, older_uri, 2, &[change])
+        });
+
+        assert!(newer.await.expect("newer task should finish").is_some());
+        assert!(older.await.expect("older task should finish").is_none());
+
+        let documents = documents.lock().await;
+        let document = documents.get(&uri).expect("document should remain open");
+        assert_eq!(document.text, "newest");
+        assert_eq!(document.version, 3);
+        assert_eq!(document.revision, 2);
+        assert_eq!(documents.next_revision, 3);
     }
 
     #[test]
