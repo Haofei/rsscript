@@ -1,5 +1,10 @@
 use super::*;
 
+#[cfg(feature = "native-jit")]
+fn accumulate_osr_work(current: u32, iteration_work: u32) -> u32 {
+    current.saturating_add(iteration_work)
+}
+
 impl RegVm {
     pub(super) fn new(
         unit: Rc<RegUnit>,
@@ -1683,12 +1688,18 @@ impl RegVm {
             };
             #[cfg(not(feature = "native-jit"))]
             let _osr_candidate: Option<usize> = None;
+            #[cfg(feature = "native-jit")]
+            let osr_iteration_work = osr_candidate
+                .and_then(|header| detect_natural_loop_at(&func.code, header))
+                .and_then(|lp| func.code.get(lp.header..lp.exit))
+                .map(interpreted_region_work)
+                .unwrap_or(1);
 
             while let Some(instr) = func.code.get(ip) {
                 // OSR trigger: only candidate functions enter this arm (`None` for
                 // every non-loop / unanalyzable function ⇒ a hoisted never-taken
                 // branch, no per-instruction work). When the interpreter reaches the
-                // candidate header, count the backedge; at the threshold (or
+                // candidate header, charge one estimated iteration; at the threshold (or
                 // immediately when eager) fire `try_osr`. `try_osr` is total — on any
                 // non-applicability it leaves the frame untouched and returns `false`,
                 // and we mark `GaveUp` so we never recompile-probe in a tight loop.
@@ -1698,14 +1709,15 @@ impl RegVm {
                         let fire = if osr_eager {
                             true
                         } else {
-                            // Count this backedge/header hit; fire at threshold.
+                            // Charge this backedge/header hit in interpreted-work
+                            // units; fire at the shared work threshold.
                             match func.osr_state.get() {
                                 OsrTrigger::Counting {
                                     header_ip,
                                     count,
                                     probe_cc,
                                 } => {
-                                    let next = count.saturating_add(1);
+                                    let next = accumulate_osr_work(count, osr_iteration_work);
                                     if next >= osr_backedge_threshold() {
                                         true
                                     } else {
@@ -2562,5 +2574,16 @@ impl RegVm {
             }
             self.set_reg(frame.ret_dst, VmValue::Unit);
         }
+    }
+}
+
+#[cfg(all(test, feature = "native-jit"))]
+mod tests {
+    use super::accumulate_osr_work;
+
+    #[test]
+    fn osr_work_accounting_saturates() {
+        assert_eq!(accumulate_osr_work(u32::MAX - 2, 10), u32::MAX);
+        assert_eq!(accumulate_osr_work(u32::MAX, 1), u32::MAX);
     }
 }

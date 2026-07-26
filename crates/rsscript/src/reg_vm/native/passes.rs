@@ -10159,19 +10159,20 @@ pub(in crate::reg_vm) const NATIVE_BAIL_GIVEUP_THRESHOLD: u32 = 3;
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) const NATIVE_NOAMORTIZE_GIVEUP: u32 = 64;
 
-/// Backedge count at which a counting OSR candidate fires `try_osr`. Chosen so
-/// tiny loops (which run < this many iterations) never pay OSR compile/setup, but
-/// genuinely hot loops cross it quickly and then run native for the rest of their
-/// (much longer) life. The eager path (`RSS_JIT_OSR`) uses threshold 0.
+/// Interpreted-work units at which a counting OSR candidate fires `try_osr`.
+/// Tiny loop bodies need more backedges to accumulate this much work, while
+/// genuinely heavy loops cross it quickly and then run native for the rest of
+/// their life. The eager path (`RSS_JIT_OSR`) uses threshold 0.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) const OSR_BACKEDGE_THRESHOLD: u32 = 1000;
 
-/// Effective OSR backedge threshold. Defaults to [`OSR_BACKEDGE_THRESHOLD`]
+/// Effective OSR interpreted-work threshold. Defaults to [`OSR_BACKEDGE_THRESHOLD`]
 /// (1000); a bench/test-only `RSS_JIT_OSR_THRESHOLD` env var, when set to a
 /// parseable `u32`, overrides it (mirrors `RSS_JIT_OSR`). Unset or unparseable
-/// ⇒ exactly the default constant, so production behavior is unchanged. Read
-/// per-fire (cheap relative to the OSR compile it gates); the override exists so
-/// the auto-trigger threshold can be swept without recompiling per value.
+/// ⇒ exactly the default constant, preserving the production threshold
+/// configuration. Read per-fire (cheap relative to the OSR compile it gates); the
+/// override exists so the auto-trigger work threshold can be swept without
+/// recompiling per value.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn osr_backedge_threshold() -> u32 {
     match std::env::var("RSS_JIT_OSR_THRESHOLD") {

@@ -17,6 +17,7 @@
 
 #![cfg(feature = "native-jit")]
 
+use crate::reg_vm::RegInstr;
 use vm_jit::{HostHelper, JitFunction, JitInstr};
 
 /// Tri-state env gate (`RSS_JIT_COST_MODEL`):
@@ -109,6 +110,54 @@ const W_CLOSURE_GUARD: i64 = 4; // GuardClosureId: monomorphic closure dispatch 
 // heavily so a region whose hot work IS the PIC declines, while a region that merely
 // contains a PIC amid substantial real work keeps its (much larger) base score.
 const W_CLOSURE_PIC: i64 = 18;
+
+/// Deterministic interpreter work estimate for one register instruction.
+///
+/// These positive work units mirror the corresponding native-profitability
+/// credits/debits above. Every instruction costs at least one unit so even a
+/// control-only loop eventually tiers, while scalar-heavy and helper-heavy loop
+/// bodies consume the shared OSR work threshold sooner.
+pub(in crate::reg_vm) fn interpreted_work_weight(instr: &RegInstr) -> u32 {
+    match instr {
+        RegInstr::AddInt { .. }
+        | RegInstr::SubInt { .. }
+        | RegInstr::MulInt { .. }
+        | RegInstr::DivInt { .. }
+        | RegInstr::ModInt { .. }
+        | RegInstr::BitAndInt { .. }
+        | RegInstr::BitOrInt { .. }
+        | RegInstr::BitXorInt { .. }
+        | RegInstr::ShiftLeftInt { .. }
+        | RegInstr::ShiftRightInt { .. }
+        | RegInstr::LessInt { .. }
+        | RegInstr::LessEqualInt { .. }
+        | RegInstr::GreaterInt { .. }
+        | RegInstr::GreaterEqualInt { .. }
+        | RegInstr::Equal { .. }
+        | RegInstr::NotEqual { .. } => W_SCALAR_ALU as u32,
+        RegInstr::ListGet { .. } | RegInstr::ListSet { .. } | RegInstr::ListLen { .. } => {
+            W_DIRECT_LIST as u32
+        }
+        RegInstr::MatchMapGet { .. } | RegInstr::MatchSortedMapGet { .. } => W_MATCH_MAP_GET as u32,
+        RegInstr::NativeGuardClosureId { .. } | RegInstr::CallClosure { .. } => {
+            W_CLOSURE_GUARD as u32
+        }
+        RegInstr::NativeClosureCapture { .. }
+        | RegInstr::NativeFieldClosureCapture { .. }
+        | RegInstr::CallNative { .. }
+        | RegInstr::CallIntrinsic { .. }
+        | RegInstr::CallTypedIntrinsic { .. } => W_HOST_CALL as u32,
+        _ => W_LOAD_MOVE as u32,
+    }
+}
+
+/// Saturating work estimate for one interpreted loop iteration.
+pub(in crate::reg_vm) fn interpreted_region_work(code: &[RegInstr]) -> u32 {
+    code.iter()
+        .map(interpreted_work_weight)
+        .fold(0, u32::saturating_add)
+        .max(1)
+}
 
 /// Per-region threshold for BACK-EDGE (loop) regions: decline only when
 /// `score <= DECLINE_AT`, i.e. the estimated benefit is strictly NEGATIVE. A
@@ -295,4 +344,50 @@ pub(in crate::reg_vm) fn native_region_profitability(
     // beneficial native-call leaf); the adaptive give-up path handles it.
     p.decline = (has_backedge && score <= DECLINE_AT) || (!has_backedge && p.pic_sites > 0);
     p
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interpreted_work_weights_are_stable_and_body_sensitive() {
+        let tiny = [
+            RegInstr::AddInt {
+                dst: 0,
+                lhs: 0,
+                rhs: 1,
+            },
+            RegInstr::Jump { target: 0 },
+        ];
+        let heavy = [
+            RegInstr::MulInt {
+                dst: 2,
+                lhs: 0,
+                rhs: 1,
+            },
+            RegInstr::AddInt {
+                dst: 3,
+                lhs: 2,
+                rhs: 1,
+            },
+            RegInstr::SubInt {
+                dst: 0,
+                lhs: 3,
+                rhs: 1,
+            },
+            RegInstr::ListGet {
+                dst: 4,
+                list: 5,
+                index: 0,
+            },
+            RegInstr::Jump { target: 0 },
+        ];
+
+        let tiny_work = interpreted_region_work(&tiny);
+        let heavy_work = interpreted_region_work(&heavy);
+        assert_eq!(tiny_work, interpreted_region_work(&tiny));
+        assert_eq!(heavy_work, interpreted_region_work(&heavy));
+        assert!(heavy_work > tiny_work);
+    }
 }

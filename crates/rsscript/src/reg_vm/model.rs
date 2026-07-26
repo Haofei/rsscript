@@ -481,8 +481,9 @@ pub(crate) struct RegFunction {
     /// first `drive` entry into this function: a cheap single-natural-loop
     /// detection decides `NotCandidate` (no loop / unanalyzable — the common case,
     /// which then pays nothing per-instruction) vs `Counting` (has a candidate
-    /// header). For a candidate, the interpreter counts backedges to the header and
-    /// at [`OSR_BACKEDGE_THRESHOLD`] calls `try_osr` (the real detect+compile); on
+    /// header). For a candidate, the interpreter accumulates estimated loop work at
+    /// backedges to the header and calls `try_osr` (the real detect+compile) once
+    /// [`OSR_BACKEDGE_THRESHOLD`] interpreted-work units have accumulated; on
     /// success the loop runs native and the counter cost is bounded to the warm-up
     /// iterations, on failure the state goes `GaveUp` (never retried). A `Cell`
     /// (interior-mut, no allocation), so a non-candidate function pays one `Cell`
@@ -501,15 +502,18 @@ pub(crate) enum OsrTrigger {
     /// No qualifying single natural loop (or step/cancel budget armed): pays only a
     /// single hoisted `Cell` read per call, NO per-instruction cost.
     NotCandidate,
-    /// Has a candidate loop header; the interpreter counts backedges to `header_ip`.
-    /// At [`OSR_BACKEDGE_THRESHOLD`] it fires `try_osr`. `probe_cc` is the function's
-    /// dynamic-call count (`call_count`) as of the LAST `try_osr` probe (0 before the
-    /// first), used to gate re-probes: a pending-profile decline only resets the counter
-    /// if the profile has ADVANCED (`call_count` increased) since then — otherwise the
-    /// site is dynamically dead/stalled and we `GaveUp`. `call_count` is capped at
-    /// `PROFILE_RECORD_LIMIT`, so the number of progress-resets is bounded.
+    /// Has a candidate loop header; the interpreter accumulates the selected loop's
+    /// estimated per-iteration work on backedges to `header_ip`. At
+    /// [`OSR_BACKEDGE_THRESHOLD`] work units it fires `try_osr`. `probe_cc` is the
+    /// function's dynamic-call count (`call_count`) as of the LAST `try_osr` probe
+    /// (0 before the first), used to gate re-probes: a pending-profile decline only
+    /// resets the counter if the profile has ADVANCED (`call_count` increased) since
+    /// then — otherwise the site is dynamically dead/stalled and we `GaveUp`.
+    /// `call_count` is capped at `PROFILE_RECORD_LIMIT`, so the number of
+    /// progress-resets is bounded.
     Counting {
         header_ip: usize,
+        /// Saturating interpreted-work units, not a raw backedge count.
         count: u32,
         probe_cc: u32,
     },
