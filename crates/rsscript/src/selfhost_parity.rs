@@ -6440,6 +6440,53 @@ fn bad(values: read List<Int>) -> Unit {
 }
 
 #[test]
+fn checker_nested_alias_arguments_match_rust_oracle() {
+    let source = r#"type Scalar = Int
+type Boxed<T> = List<T>
+
+fn consume(values: read List<Int>) -> Unit {
+    return Unit
+}
+
+fn main(values: read Boxed<Scalar>) -> Unit {
+    consume(values: read values)
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("nested-alias-args.rss", source, "RS0207");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0207",
+    );
+    assert_eq!(oracle, actual, "nested alias arguments diverged");
+}
+
+#[test]
+fn checker_bounded_generic_alias_parameters_match_rust_oracle() {
+    let source = r#"struct Item {
+    id: Int
+}
+
+type Boxed<T: Struct> = List<T>
+
+fn consume(items: read List<Item>) -> Unit {
+    return Unit
+}
+
+fn main(items: read Boxed<Item>) -> Unit {
+    consume(items: read items)
+    return Unit
+}
+"#;
+    let oracle = checker_oracle_records("bounded-generic-alias.rss", source, "RS0207");
+    let actual = diagnostic_records_for_code(
+        run_cached_checker_records(source).expect("rss checker should emit records"),
+        "RS0207",
+    );
+    assert_eq!(oracle, actual, "bounded generic alias diverged");
+}
+
+#[test]
 fn type_helpers_detect_prefixed_and_late_generic_args() {
     let mut sources = tool_sources("types.rss").expect("selfhost types deps should load");
     sources.push((

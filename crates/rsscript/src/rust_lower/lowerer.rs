@@ -14,6 +14,7 @@ pub(super) struct RustLowerer<'a> {
     pub(super) program: &'a Program,
     pub(super) type_kinds: BTreeMap<String, TypeKind>,
     pub(super) type_fields: BTreeMap<String, Vec<FieldDecl>>,
+    pub(super) type_params: BTreeMap<String, Vec<String>>,
     pub(super) type_aliases: BTreeMap<String, (Vec<String>, TypeRef)>,
     pub(super) protocol_names: BTreeSet<String>,
     pub(super) native_boundary_callees: BTreeSet<String>,
@@ -79,7 +80,15 @@ impl<'a> RustLowerer<'a> {
             })
             .chain(program.items.iter())
             .filter_map(|item| match item {
-                Item::Type(ty) => Some((ty.name.clone(), ty.kind, ty.fields.clone())),
+                Item::Type(ty) => Some((
+                    ty.name.clone(),
+                    ty.kind,
+                    ty.type_params
+                        .iter()
+                        .map(|parameter| parameter.name.clone())
+                        .collect::<Vec<_>>(),
+                    ty.fields.clone(),
+                )),
                 Item::SumType(_) => None,
                 Item::Function(_)
                 | Item::TypeAlias(_)
@@ -90,11 +99,15 @@ impl<'a> RustLowerer<'a> {
             .collect::<Vec<_>>();
         let type_kinds = type_declarations
             .iter()
-            .map(|(name, kind, _)| (name.clone(), *kind))
+            .map(|(name, kind, _, _)| (name.clone(), *kind))
+            .collect();
+        let type_params = type_declarations
+            .iter()
+            .map(|(name, _, params, _)| (name.clone(), params.clone()))
             .collect();
         let type_fields = type_declarations
             .into_iter()
-            .map(|(name, _, fields)| (name, fields))
+            .map(|(name, _, _, fields)| (name, fields))
             .collect();
         let type_aliases = interface_programs
             .iter()
@@ -161,6 +174,7 @@ impl<'a> RustLowerer<'a> {
             program,
             type_kinds,
             type_fields,
+            type_params,
             type_aliases,
             protocol_names,
             native_boundary_callees,
@@ -1165,13 +1179,11 @@ impl<'a> RustLowerer<'a> {
                 } else if self.is_runtime_handle_field(ctor_name, field_name) {
                     fields.push(format!(
                         "{field}: {}",
-                        self.lower_runtime_handle_field_value(
-                            ctor_name, field_name, value, value_span
-                        )
+                        self.lower_runtime_handle_field_value(name, field_name, value, value_span)
                     ));
                 } else {
                     let value = self
-                        .field_type(ctor_name, field_name)
+                        .field_type(name, field_name)
                         .map(|expected| self.lower_expr_for_expected_type(value, &expected))
                         .unwrap_or_else(|| self.lower_owned_expr(value));
                     fields.push(format!("{field}: {value}"));
@@ -3007,11 +3019,15 @@ impl<'a> RustLowerer<'a> {
             length: 1,
         };
         let ty = self.canonical_type_ref(&type_ref_from_display(type_name, &span));
-        self.type_fields
-            .get(type_root_name(&ty.name))?
+        let root = type_root_name(&ty.name);
+        let field = self
+            .type_fields
+            .get(root)?
             .iter()
             .find(|field| field.name == field_name)
-            .map(|field| field.ty.clone())
+            .map(|field| field.ty.clone())?;
+        let params = self.type_params.get(root).map(Vec::as_slice).unwrap_or(&[]);
+        Some(substitute_generic_type(&field, params, &ty.args))
     }
 
     pub(super) fn is_resource_type(&self, ty: &TypeRef) -> bool {
@@ -3388,10 +3404,81 @@ pub(super) fn rust_binary_is_comparison(op: BinaryOp) -> bool {
 }
 
 pub(super) fn type_ref_from_display(name: &str, span: &Span) -> TypeRef {
-    let (name, is_fresh) = name
-        .trim()
-        .strip_prefix("fresh ")
-        .map_or((name.trim(), false), |name| (name.trim(), true));
+    let mut name = name.trim();
+    let mut is_fresh = false;
+    let mut is_noescape = false;
+    let mut is_owned = false;
+    loop {
+        if let Some(rest) = name.strip_prefix("fresh ") {
+            is_fresh = true;
+            name = rest.trim();
+        } else if let Some(rest) = name.strip_prefix("noescape ") {
+            is_noescape = true;
+            name = rest.trim();
+        } else if let Some(rest) = name.strip_prefix("owned ") {
+            is_owned = true;
+            name = rest.trim();
+        } else {
+            break;
+        }
+    }
+
+    if let Some(params_start) = name.strip_prefix("Fn(") {
+        let mut depth = 0usize;
+        let close = params_start
+            .char_indices()
+            .find_map(|(index, ch)| match ch {
+                '(' => {
+                    depth += 1;
+                    None
+                }
+                ')' if depth == 0 => Some(index),
+                ')' => {
+                    depth -= 1;
+                    None
+                }
+                _ => None,
+            });
+        if let Some(close) = close {
+            let params_text = &params_start[..close];
+            let mut fn_params = Vec::new();
+            let mut fn_param_effects = Vec::new();
+            for param in crate::text_util::split_top_level_type_args(params_text) {
+                let (effect, param) = if let Some(param) = param.strip_prefix("read ") {
+                    (Some(DataEffect::Read), param)
+                } else if let Some(param) = param.strip_prefix("mut ") {
+                    (Some(DataEffect::Mut), param)
+                } else if let Some(param) = param.strip_prefix("take ") {
+                    (Some(DataEffect::Take), param)
+                } else {
+                    (None, param)
+                };
+                if !param.is_empty() {
+                    fn_params.push(type_ref_from_display(param, span));
+                    fn_param_effects.push(effect);
+                }
+            }
+            let rest = params_start[close + 1..].trim();
+            let fn_return = rest
+                .strip_prefix("->")
+                .map(str::trim)
+                .filter(|return_type| !return_type.is_empty())
+                .map(|return_type| Box::new(type_ref_from_display(return_type, span)));
+            return TypeRef {
+                name: "Fn".to_string(),
+                args: Vec::new(),
+                malformed_arg_spans: Vec::new(),
+                is_fresh,
+                is_noescape,
+                is_owned,
+                fn_params,
+                fn_param_effects,
+                fn_return,
+                span: span.clone(),
+            };
+        }
+    }
+
     TypeRef {
         name: type_root_name(name).to_string(),
         args: type_arg_names(name)
@@ -3401,8 +3488,8 @@ pub(super) fn type_ref_from_display(name: &str, span: &Span) -> TypeRef {
             .collect(),
         malformed_arg_spans: Vec::new(),
         is_fresh,
-        is_noescape: false,
-        is_owned: false,
+        is_noescape,
+        is_owned,
         fn_params: Vec::new(),
         fn_param_effects: Vec::new(),
         fn_return: None,

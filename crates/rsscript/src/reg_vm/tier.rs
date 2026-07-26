@@ -227,65 +227,6 @@ fn profile_closure_pic_arm_count(code: &[vm_jit::JitInstr], closure_id_ip: usize
 }
 
 #[cfg(feature = "native-jit")]
-fn jit_function_scalar_leaf_callable(jit_fn: &vm_jit::JitFunction) -> bool {
-    jit_fn.reg_types.iter().all(|ty| {
-        matches!(
-            ty,
-            vm_jit::JitValueType::Int
-                | vm_jit::JitValueType::Bool
-                | vm_jit::JitValueType::Float
-                | vm_jit::JitValueType::Handle
-                | vm_jit::JitValueType::FlatInt
-                | vm_jit::JitValueType::FlatIntMut
-                | vm_jit::JitValueType::FlatFloat
-                | vm_jit::JitValueType::FlatFloatMut
-        )
-    }) && jit_fn.code.iter().all(|instr| {
-        (matches!(
-            instr,
-            vm_jit::JitInstr::Nop
-                | vm_jit::JitInstr::LoadInt { .. }
-                | vm_jit::JitInstr::LoadFloat { .. }
-                | vm_jit::JitInstr::LoadBool { .. }
-                | vm_jit::JitInstr::Move { .. }
-                | vm_jit::JitInstr::Add { .. }
-                | vm_jit::JitInstr::Sub { .. }
-                | vm_jit::JitInstr::Mul { .. }
-                | vm_jit::JitInstr::Div { .. }
-                | vm_jit::JitInstr::Mod { .. }
-                | vm_jit::JitInstr::IntToFloat { .. }
-                | vm_jit::JitInstr::BitAnd { .. }
-                | vm_jit::JitInstr::BitOr { .. }
-                | vm_jit::JitInstr::BitXor { .. }
-                | vm_jit::JitInstr::Shl { .. }
-                | vm_jit::JitInstr::Shr { .. }
-                | vm_jit::JitInstr::Compare { .. }
-                | vm_jit::JitInstr::Equal { .. }
-                | vm_jit::JitInstr::NotEqual { .. }
-                | vm_jit::JitInstr::Jump { .. }
-                | vm_jit::JitInstr::JumpIfBool { .. }
-                | vm_jit::JitInstr::JumpIfIntCompare { .. }
-                | vm_jit::JitInstr::ProfiledJumpIfBool { .. }
-                | vm_jit::JitInstr::ProfiledJumpIfIntCompare { .. }
-                | vm_jit::JitInstr::CallNative { .. }
-                | vm_jit::JitInstr::CallSelf { .. }
-                | vm_jit::JitInstr::HostCall { .. }
-                | vm_jit::JitInstr::MemoizedHostCall { .. }
-                | vm_jit::JitInstr::Return { .. }
-                | vm_jit::JitInstr::Bail // Flat-list direct ops (get/set/len/is_empty) come from the canonical
-                                         // `is_flat_list_direct` set so this list can't drift out of sync with the
-                                         // cost model / simple-subset sites (the historical leaf-set omission bug).
-        ) || instr.is_flat_list_direct())
-            && !matches!(
-                instr,
-                vm_jit::JitInstr::HostCall { helper, .. }
-                    | vm_jit::JitInstr::MemoizedHostCall { helper, .. }
-                    if helper.heap_effect().extends_input_handles()
-            )
-    })
-}
-
-#[cfg(feature = "native-jit")]
 fn native_ty_is_callable_param_abi(ty: NativeTy) -> bool {
     matches!(
         ty,
@@ -388,7 +329,7 @@ fn native_compile_direct_scalar_callee(
         stack.remove(&callee_key);
         return None;
     };
-    let scalar_leaf_callable = jit_function_scalar_leaf_callable(&jit_fn);
+    let scalar_leaf_callable = vm_jit::is_native_callable_leaf(&jit_fn);
     if !scalar_leaf_callable
         || !native_ty_is_callable_return_abi(ret)
         || !params.iter().copied().all(native_ty_is_callable_param_abi)
@@ -1041,7 +982,7 @@ impl RegVm {
                             if native.collect_stats {
                                 native.stats.translated += 1;
                             }
-                            let scalar_leaf_callable = jit_function_scalar_leaf_callable(&jit_fn);
+                            let scalar_leaf_callable = vm_jit::is_native_callable_leaf(&jit_fn);
                             // Step 1 cost model (eligibility already proven by `translate`):
                             // in `enforce` mode, decline an unprofitable region and keep the
                             // function on the interpreter (cached below as not-native). `off`

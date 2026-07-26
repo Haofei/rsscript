@@ -1464,8 +1464,8 @@ pub enum JitInstr {
     },
     /// TV2 direct emptiness test: `dst = (len(base) == 0)` for the flat-array param
     /// `base` (a `FlatInt`/`FlatFloat` register). Reads the length from the param's
-    /// `lens` slot and compares to zero — no host call. `dst` is an `Int` register
-    /// holding a 0/1 boolean (the same storage class as `Equal`/`Compare` results).
+    /// `lens` slot and compares to zero — no host call. `dst` is a `Bool` register,
+    /// represented as an i64 0/1 in generated code.
     /// The flat-list counterpart of the `List.is_empty` host helper.
     ListIsEmptyDirect {
         dst: u32,
@@ -1572,7 +1572,9 @@ impl JitFunction {
 }
 
 /// The native ABI of every compiled function:
-/// `(args_ptr, n_args, lens_ptr, out_ptr, bail_ptr, safepoint_ptr) -> completed`.
+/// `(args_ptr, n_args, lens_ptr, host_ctx, out_ptr, bail_ptr, safepoint_ptr,
+/// payload_ptr, native_call_depth, logical_call_depth, logical_depth_limit,
+/// limits_ptr) -> completed`.
 /// Returns `1` and writes the result to `*out` on success, or `0` (leaving `*out`
 /// untouched) to request fallback. `lens_ptr` points at an `i64` array parallel to
 /// `args`: for a TV2 flat-array param (`FlatInt`/`FlatFloat`) the args word holds
@@ -1684,6 +1686,12 @@ fn native_scalar_leaf_callable(function: &JitFunction, osr: bool, _returns_handl
                     if helper.heap_effect().extends_input_handles()
             )
     })
+}
+
+/// Whether a normal (non-OSR) function can participate in the scalar native-call
+/// ABI. Keep this predicate in vm-jit so tiering and compilation cannot drift.
+pub fn is_native_callable_leaf(function: &JitFunction) -> bool {
+    native_scalar_leaf_callable(function, false, false)
 }
 
 /// Declare an imported host helper with one opaque `HostCtx` word plus `n_args`
@@ -3115,7 +3123,7 @@ fn check_zero_init_reg(program: &JitFunction, reg: u32) -> Result<(), JitError> 
 ///
 /// Storage-class rules mirror `build_function`'s lowering: arithmetic preserves the
 /// operand class (and forbids `Handle`), the int-only ops (`Mod`, bit/shift) require
-/// `Int`, comparisons yield an `Int` boolean, and `Handle` registers are only valid
+/// `Int`, comparisons yield a logical `Bool`, and `Handle` registers are only valid
 /// as the `base` of a heap read.
 fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
     const MAX_JIT_REGS: usize = 65_536;
@@ -3300,7 +3308,22 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
     };
 
     let mut returns = Vec::new();
-    let mut memo_scratch_regs = std::collections::HashSet::new();
+    let mut memo_scratch_owners = std::collections::HashMap::new();
+    for (ip, instr) in program.code.iter().enumerate() {
+        let JitInstr::MemoizedHostCall { cache, flag, .. } = instr else {
+            continue;
+        };
+        for (role, reg) in [("cache", *cache), ("flag", *flag)] {
+            if let Some((owner, owner_role)) = memo_scratch_owners.get(&reg)
+                && *owner != ip
+            {
+                return Err(JitError(format!(
+                    "MemoizedHostCall scratch register {reg} is owned by both instruction {owner} ({owner_role}) and instruction {ip} ({role})"
+                )));
+            }
+            memo_scratch_owners.insert(reg, (ip, role));
+        }
+    }
     for (i, instr) in program.code.iter().enumerate() {
         // Conditional branches fall through to `i + 1` (`build_function` indexes
         // `block_for[i + 1]`), so the instruction must not be the last one.
@@ -3422,11 +3445,6 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                     if reg < program.n_params {
                         return Err(JitError(format!(
                             "MemoizedHostCall {helper:?}: {name} register {reg} cannot be a parameter"
-                        )));
-                    }
-                    if !memo_scratch_regs.insert(reg) {
-                        return Err(JitError(format!(
-                            "MemoizedHostCall {helper:?}: scratch register {reg} is shared by multiple memoization sites"
                         )));
                     }
                     if args
@@ -3772,6 +3790,22 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                     ));
                 }
             }
+        }
+    }
+    for (ip, instr) in program.code.iter().enumerate() {
+        for reg in instr_uses(instr).into_iter().chain(instr_def(instr)) {
+            if let Some((owner, role)) = memo_scratch_owners.get(&reg) {
+                return Err(JitError(format!(
+                    "instruction {ip} accesses memoization {role} register {reg} owned by instruction {owner}"
+                )));
+            }
+        }
+    }
+    for &reg in &program.zero_init_regs {
+        if let Some((owner, role)) = memo_scratch_owners.get(&reg) {
+            return Err(JitError(format!(
+                "zero_init_regs accesses memoization {role} register {reg} owned by instruction {owner}"
+            )));
         }
     }
     let reachable = reachable_jit_instrs(program);
@@ -4261,11 +4295,19 @@ fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
         }
     };
 
-    // Predecessor lists from the forward CFG (same shape as definite_assignment).
+    // Predecessor lists from the reachable CFG. Dead islands must not contribute
+    // facts to reachable code: a dead backedge into instruction zero otherwise
+    // narrows unknown function parameters and can unsafely remove overflow checks.
+    let reachable = reachable_jit_instrs(program);
     let mut preds: Vec<Vec<usize>> = vec![Vec::new(); n];
     for i in 0..n {
+        if !reachable[i] {
+            continue;
+        }
         for s in successors(program, i) {
-            preds[s].push(i);
+            if reachable[s] {
+                preds[s].push(i);
+            }
         }
     }
 
@@ -4492,11 +4534,10 @@ fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
     while changed {
         changed = false;
         for j in 0..n {
-            // Instruction 0 and any predecessor-less block keep the all-TOP entry,
-            // which is sound (params and unreachable-block inputs are untracked). Mark
-            // it initialized so it counts as a real predecessor for the optimistic
-            // join below (its all-TOP in-set is its final, correct value).
-            if preds[j].is_empty() {
+            // Instruction zero always has a virtual external predecessor carrying
+            // TOP, even when a real loop backedge also targets zero. Unreachable and
+            // predecessor-less blocks likewise stay at the conservative TOP seed.
+            if j == 0 || !reachable[j] || preds[j].is_empty() {
                 initialized[j] = true;
                 continue;
             }
@@ -4587,7 +4628,7 @@ fn interval_analysis(program: &JitFunction) -> Vec<Vec<Interval>> {
     for _ in 0..=n {
         let mut changed = false;
         for j in 0..n {
-            if multi_pred[j] || preds[j].is_empty() {
+            if j == 0 || !reachable[j] || multi_pred[j] || preds[j].is_empty() {
                 // Joins and entry/unreachable blocks keep their Phase-1 value.
                 continue;
             }
@@ -10420,7 +10461,86 @@ mod tests {
             ],
         );
         let err = validate(&shared).expect_err("memoization sites need dedicated scratch");
-        assert!(err.0.contains("shared by multiple"), "{}", err.0);
+        assert!(err.0.contains("owned by both"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_all_external_memoization_scratch_accesses() {
+        use JitValueType::{Handle, Int};
+
+        let cases = [
+            (
+                "ordinary flag write",
+                JitInstr::LoadInt { dst: 3, value: 1 },
+            ),
+            (
+                "ordinary cache write",
+                JitInstr::LoadInt { dst: 2, value: 7 },
+            ),
+            ("ordinary flag read", JitInstr::Move { dst: 1, src: 3 }),
+            ("ordinary cache read", JitInstr::Move { dst: 1, src: 2 }),
+        ];
+        for (name, access) in cases {
+            let err = validate(&ft(
+                1,
+                vec![Handle, Int, Int, Int],
+                vec![
+                    access,
+                    JitInstr::MemoizedHostCall {
+                        helper: HostHelper::ListLen,
+                        dst: 1,
+                        args: vec![HostArg::Reg(0)],
+                        cache: 2,
+                        flag: 3,
+                    },
+                    JitInstr::Return { src: 1 },
+                ],
+            ))
+            .expect_err(name);
+            assert!(err.0.contains("memoization"), "{name}: {}", err.0);
+        }
+
+        let err = validate(&ft(
+            1,
+            vec![Handle, Int, Int, Int, Int, Int],
+            vec![
+                JitInstr::MemoizedHostCall {
+                    helper: HostHelper::ListLen,
+                    dst: 1,
+                    args: vec![HostArg::Reg(0)],
+                    cache: 2,
+                    flag: 3,
+                },
+                JitInstr::MemoizedHostCall {
+                    helper: HostHelper::ListLen,
+                    dst: 2,
+                    args: vec![HostArg::Reg(0)],
+                    cache: 4,
+                    flag: 5,
+                },
+                JitInstr::Return { src: 1 },
+            ],
+        ))
+        .expect_err("another memoization result cannot overwrite scratch");
+        assert!(err.0.contains("memoization"), "{}", err.0);
+
+        let mut zero_init = ft(
+            1,
+            vec![Handle, Int, Int, Int],
+            vec![
+                JitInstr::MemoizedHostCall {
+                    helper: HostHelper::ListLen,
+                    dst: 1,
+                    args: vec![HostArg::Reg(0)],
+                    cache: 2,
+                    flag: 3,
+                },
+                JitInstr::Return { src: 1 },
+            ],
+        );
+        zero_init.zero_init_regs.push(3);
+        let err = validate(&zero_init).expect_err("memo scratch cannot be a declared live-in");
+        assert!(err.0.contains("zero_init_regs"), "{}", err.0);
     }
 
     #[test]
@@ -10511,6 +10631,49 @@ mod tests {
         ))
         .expect_err("comparison branches reject mixed numeric classes");
         assert!(err.0.contains("classes differ"), "{}", err.0);
+    }
+
+    #[test]
+    fn canonical_leaf_classifier_covers_recursive_and_float_conversion_ops() {
+        use JitValueType::{Float, Int};
+
+        let float_to_int = ft(
+            1,
+            vec![Float, Int],
+            vec![
+                JitInstr::FloatToInt {
+                    dst: 1,
+                    src: 0,
+                    rounding: FloatRounding::Floor,
+                },
+                JitInstr::Return { src: 1 },
+            ],
+        );
+        assert!(is_native_callable_leaf(&float_to_int));
+
+        let guarded = f(
+            1,
+            1,
+            vec![
+                JitInstr::TailCallGuard { max_depth: 32 },
+                JitInstr::Return { src: 0 },
+            ],
+        );
+        assert!(is_native_callable_leaf(&guarded));
+
+        let grouped = f(
+            1,
+            2,
+            vec![
+                JitInstr::CallGroup {
+                    group_index: 0,
+                    dst: 1,
+                    args: vec![0],
+                },
+                JitInstr::Return { src: 1 },
+            ],
+        );
+        assert!(is_native_callable_leaf(&grouped));
     }
 
     #[test]
@@ -11598,6 +11761,98 @@ mod tests {
         assert_eq!(m.callt(id, &[2, 3]), Some(5));
         // i64::MAX + 1 overflows ⇒ the retained check bails.
         assert_eq!(m.callt(id, &[i64::MAX, 1]), None);
+    }
+
+    #[test]
+    fn unreachable_predecessors_cannot_narrow_entry_parameters() {
+        let cases = [
+            (
+                "add",
+                JitInstr::Add {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                [i64::MAX, 1],
+            ),
+            (
+                "sub",
+                JitInstr::Sub {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                [i64::MIN, 1],
+            ),
+            (
+                "mul",
+                JitInstr::Mul {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                [i64::MAX, 2],
+            ),
+        ];
+
+        for (name, arithmetic, args) in cases {
+            let program = f(
+                2,
+                3,
+                vec![
+                    arithmetic,
+                    JitInstr::Return { src: 2 },
+                    JitInstr::LoadInt { dst: 0, value: 0 },
+                    JitInstr::LoadInt { dst: 1, value: 1 },
+                    JitInstr::Jump { target: 0 },
+                ],
+            );
+            let intervals = interval_analysis(&program);
+            assert_eq!(intervals[0][0], Interval::TOP, "{name}");
+            assert_eq!(intervals[0][1], Interval::TOP, "{name}");
+            assert!(
+                !arith_cannot_overflow(&intervals[0], &program.code[0]),
+                "{name}"
+            );
+
+            let mut module = module();
+            let id = module.compile(&program).expect(name);
+            assert_eq!(module.callt(id, &args), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn reachable_backedge_cannot_narrow_virtual_entry_parameters() {
+        use JitValueType::{Bool, Int};
+
+        let program = ft(
+            3,
+            vec![Int, Int, Bool, Int],
+            vec![
+                JitInstr::Add {
+                    dst: 3,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                JitInstr::JumpIfBool {
+                    cond: 2,
+                    expected: true,
+                    target: 5,
+                },
+                JitInstr::LoadInt { dst: 0, value: 0 },
+                JitInstr::LoadInt { dst: 1, value: 1 },
+                JitInstr::Jump { target: 0 },
+                JitInstr::Return { src: 3 },
+            ],
+        );
+        let intervals = interval_analysis(&program);
+        assert_eq!(intervals[0][0], Interval::TOP);
+        assert_eq!(intervals[0][1], Interval::TOP);
+        assert!(!arith_cannot_overflow(&intervals[0], &program.code[0]));
+
+        let mut module = module();
+        let id = module.compile(&program).expect("program should compile");
+        assert_eq!(module.callt(id, &[i64::MAX, 1, 1]), None);
     }
 
     /// A register fed by `ListLen` is `[0, i64::MAX]` — non-negative but with NO

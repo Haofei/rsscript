@@ -110,10 +110,11 @@ impl RustLowerer<'_> {
             }
             Expr::Field { base, name, span } => {
                 let base_ty = self.canonical_type_ref(&self.infer_expr_type(base)?);
-                self.field_type(&base_ty.name, name).map(|ty| TypeRef {
-                    span: span.clone(),
-                    ..ty
-                })
+                self.field_type(&type_ref_display_name(&base_ty), name)
+                    .map(|ty| TypeRef {
+                        span: span.clone(),
+                        ..ty
+                    })
             }
             Expr::Call {
                 callee: Callee::Name(name),

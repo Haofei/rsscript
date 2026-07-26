@@ -74,6 +74,38 @@ pub fn maybe_value(flag: Bool) -> Option<Int> {
 }
 
 #[test]
+fn rust_lowering_instantiates_generic_constructor_field_types() {
+    let source = r#"
+struct Holder<T> {
+    value: T
+}
+
+fn make_list() -> Holder<List<Int>> {
+    return Holder<List<Int>>(value: [])
+}
+
+fn make_option() -> Holder<Option<Int>> {
+    return Holder<Option<Int>>(value: None)
+}
+
+fn make_callback() -> Holder<owned Fn(Int) -> Int> {
+    return Holder<owned Fn(Int) -> Int>(value: |value| value + 0)
+}
+"#;
+    let rust = lower_source_to_rust("generic-constructor-fields.rss", source)
+        .expect("generic constructor fields should lower");
+
+    assert!(rust.contains("return Holder { value: vec![] };"), "{rust}");
+    assert!(rust.contains("return Holder { value: None };"), "{rust}");
+    assert!(
+        rust.contains(
+            "return Holder { value: std::rc::Rc::new(move |value: &i64| value + 0i64) };"
+        ),
+        "{rust}"
+    );
+}
+
+#[test]
 fn rust_lowering_expands_compiler_owned_derives() {
     let source = r#"
 struct User derives(Clone, Eq, Ord, Hash, JsonEncode, JsonDecode, Schema) {

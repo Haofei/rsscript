@@ -329,6 +329,14 @@ fn make_handler() -> Handler {
     }
 }
 
+struct Holder<T> {
+    value: T
+}
+
+fn make_generic_handler() -> Holder<owned Fn(Int) -> Int> {
+    return Holder<owned Fn(Int) -> Int>(value: |value| value + 1)
+}
+
 fn main() -> Result<Unit, String> {
     let xs: List<Int> = [1, 2, 3]
     let ys = xs.pipeline().filter(|item| {

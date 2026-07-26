@@ -7693,6 +7693,39 @@ fn type_token_string(toks: List<Tok>, ts: Int, te: Int) -> String {
     return sb
 }
 
+// Declaration generic parameters are not type expressions: bounds belong to
+// the parameter declaration, not to the substitution key. Serialize only each
+// top-level segment's leading identifier (`T: Struct` -> `T`).
+fn type_parameter_name_string(toks: List<Tok>, ts: Int, te: Int) -> String {
+    let mut out = ""
+    let mut i = ts
+    let mut angle = 0
+    let mut paren = 0
+    let mut atStart = true
+    while i < te {
+        if atStart && angle == 0 && paren == 0 && is_ident_tok(toks: toks, i: i) {
+            if String.len(value: out) > 0 {
+                out = String.concat(left: out, right: ", ")
+            }
+            out = String.concat(left: out, right: tk_text(toks, i: i))
+            atStart = false
+        }
+        if at_symbol(toks: toks, i: i, code: SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if at_symbol(toks: toks, i: i, code: SYM_LPAREN) {
+            paren = paren + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) {
+            if paren > 0 { paren = paren - 1 }
+        } else if at_symbol(toks: toks, i: i, code: SYM_COMMA) && angle == 0 && paren == 0 {
+            atStart = true
+        }
+        i = i + 1
+    }
+    return out
+}
+
 // The enclosing module path (`module rss.package.review` -> "rss.package.review"),
 // or "" if the file declares no module. The analyzer canonicalizes a return-type
 // annotation's module-local type names to this prefix (see qualified_type_string).
@@ -7775,7 +7808,7 @@ fn collect_type_alias_index(toks: List<Tok>) -> Map<String, String> {
                     if at_symbol(toks: toks, i: (a + 1), code: SYM_LANGLE) {
                         let close = find_matching(toks: toks, open: (a + 1), openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
                         if close >= 0 && close < eq {
-                            let params = type_token_string(toks, ts: (a + 2), te: close)
+                            let params = type_parameter_name_string(toks, ts: (a + 2), te: close)
                             let paramSpec = String.concat(left: String.concat(left: "Params<", right: params), right: ">")
                             let paramKey = String.concat(left: " params:", right: nm)
                             Map.insert<String, String>(map: mut m, key: paramKey, value: paramSpec)
@@ -7897,38 +7930,110 @@ fn collect_cyclic_type_alias_tokens(toks: List<Tok>, out: mut List<Int>) -> Bool
     return hit
 }
 
-// Expand a bare type-alias root through the O(1) alias index. Cycles stop at the
-// repeated alias; finite chains are never truncated.
-fn expand_type_alias(aliasIdx: Map<String, String>, ty: String) -> String {
-    let mut cur = ty
-    let mut seen = Set<String>.new()
-    let mut expanding = true
-    while expanding {
-        let root = str_type_root(s: cur)
-        if Set.contains<String>(set: seen, value: root) {
-            return cur
-        }
-        Set.insert<String>(set: mut seen, value: root)
-        let rhs0 = Map.get_or_default<String, String>(map: aliasIdx, key: root, default: "")
-        if String.len(value: rhs0) == 0 { return cur }
-        let paramKey = String.concat(left: " params:", right: root)
-        let params = Map.get_or_default<String, String>(map: aliasIdx, key: paramKey, default: "")
-        let mut rhs = rhs0
-        let mut paramIndex = 0
-        let mut substituting = String.len(value: params) > 0
-        while substituting {
-            let param = str_top_arg(s: params, which: paramIndex)
-            let argument = str_top_arg(s: cur, which: paramIndex)
-            if String.len(value: param) == 0 || String.len(value: argument) == 0 {
-                substituting = false
-            } else {
-                rhs = str_replace_type_ident(s: rhs, name: param, replacement: argument)
-                paramIndex = paramIndex + 1
+const SELFHOST_ALIAS_EXPANSION_LIMIT: Int = 100
+
+fn expand_type_alias_inner(aliasIdx: Map<String, String>, ty: String, visiting: mut Set<String>, depth: Int) -> String {
+    let trimmed = str_trim(s: ty)
+    if depth >= SELFHOST_ALIAS_EXPANSION_LIMIT { return trimmed }
+    let body = strip_type_prefixes(s: trimmed)
+    let prefixLen = String.len(value: trimmed) - String.len(value: body)
+    let prefix = String.slice(value: trimmed, start: 0, len: prefixLen)
+    let root = str_type_root(s: body)
+
+    let mut normalizedBody = body
+    let fnArity = fn_type_arity(body: body)
+    if fnArity >= 0 {
+        normalizedBody = "Fn("
+        let mut i = 0
+        while i < fnArity {
+            if i > 0 {
+                normalizedBody = String.concat(left: normalizedBody, right: ", ")
             }
+            normalizedBody = String.concat(
+                left: normalizedBody,
+                right: expand_type_alias_inner(
+                    aliasIdx: aliasIdx,
+                    ty: fn_type_arg_at(body: body, which: i),
+                    visiting: mut visiting,
+                    depth: (depth + 1)
+                )
+            )
+            i = i + 1
         }
-        cur = rhs
+        normalizedBody = String.concat(left: normalizedBody, right: ")")
+        let ret = fn_type_return(body: body)
+        if String.len(value: ret) > 0 {
+            normalizedBody = String.concat(
+                left: String.concat(left: normalizedBody, right: " -> "),
+                right: expand_type_alias_inner(
+                    aliasIdx: aliasIdx,
+                    ty: ret,
+                    visiting: mut visiting,
+                    depth: (depth + 1)
+                )
+            )
+        }
+    } else {
+        let argCount = str_type_arg_count(s: body)
+        if argCount > 0 {
+            normalizedBody = String.concat(left: root, right: "<")
+            let mut i = 0
+            while i < argCount {
+                if i > 0 {
+                    normalizedBody = String.concat(left: normalizedBody, right: ", ")
+                }
+                normalizedBody = String.concat(
+                    left: normalizedBody,
+                    right: expand_type_alias_inner(
+                        aliasIdx: aliasIdx,
+                        ty: str_top_arg(s: body, which: i),
+                        visiting: mut visiting,
+                        depth: (depth + 1)
+                    )
+                )
+                i = i + 1
+            }
+            normalizedBody = String.concat(left: normalizedBody, right: ">")
+        }
     }
-    return cur
+
+    let rhs0 = Map.get_or_default<String, String>(map: aliasIdx, key: root, default: "")
+    if String.len(value: rhs0) == 0 {
+        return String.concat(left: prefix, right: normalizedBody)
+    }
+    if Set.contains<String>(set: visiting, value: root) {
+        return String.concat(left: prefix, right: normalizedBody)
+    }
+    Set.insert<String>(set: mut visiting, value: root)
+    let paramKey = String.concat(left: " params:", right: root)
+    let params = Map.get_or_default<String, String>(map: aliasIdx, key: paramKey, default: "")
+    let mut rhs = rhs0
+    let mut paramIndex = 0
+    let mut substituting = String.len(value: params) > 0
+    while substituting {
+        let param = str_top_arg(s: params, which: paramIndex)
+        let argument = str_top_arg(s: normalizedBody, which: paramIndex)
+        if String.len(value: param) == 0 || String.len(value: argument) == 0 {
+            substituting = false
+        } else {
+            rhs = str_replace_type_ident(s: rhs, name: param, replacement: argument)
+            paramIndex = paramIndex + 1
+        }
+    }
+    let expanded = expand_type_alias_inner(
+        aliasIdx: aliasIdx,
+        ty: rhs,
+        visiting: mut visiting,
+        depth: (depth + 1)
+    )
+    Set.remove<String>(set: mut visiting, value: root)
+    return String.concat(left: prefix, right: expanded)
+}
+
+// Expand aliases structurally through generic arguments and Fn components.
+fn expand_type_alias(aliasIdx: Map<String, String>, ty: String) -> String {
+    let mut visiting = Set<String>.new()
+    return expand_type_alias_inner(aliasIdx: aliasIdx, ty: ty, visiting: mut visiting, depth: 0)
 }
 
 fn build_file_type_model(toks: List<Tok>) -> FileTypeModel {
@@ -8967,7 +9072,8 @@ fn call_arg_type_bad(toks: List<Tok>, ns: String, callee: String, open: Int, clo
                     if comma >= 0 { argEnd = comma }
                     if (k + 2) < argEnd {
                         if callback_arg_bad(toks, as0: (k + 2), ae: argEnd, expected, popen, pclose, bodyOpen, fnIdx, locals) { bad = true }
-                        let actual = return_actual_type(toks, s0: (k + 2), e: argEnd, popen, pclose, bodyOpen, fnIdx, locals)
+                        let actual0 = return_actual_type(toks, s0: (k + 2), e: argEnd, popen, pclose, bodyOpen, fnIdx, locals)
+                        let actual = expand_type_alias(aliasIdx, ty: actual0)
                         if String.len(value: actual) > 0 && str_is_unresolved_generic(s: actual) == false {
                             if arg_type_matches(expected: expected, actual: actual) == false { bad = true }
                         } else if String.len(value: actual) == 0 {
@@ -9017,7 +9123,8 @@ fn collect_call_arg_type_bad_tokens(toks: List<Tok>, ns: String, callee: String,
                     if cm >= 0 { ae = cm }
                     if (k + 2) < ae {
                         let callbackBad = callback_arg_bad(toks, as0: (k + 2), ae, pt, popen, pclose, bodyOpen, fnIdx, locals)
-                        let at = return_actual_type(toks, s0: (k + 2), e: ae, popen, pclose, bodyOpen, fnIdx, locals)
+                        let at0 = return_actual_type(toks, s0: (k + 2), e: ae, popen, pclose, bodyOpen, fnIdx, locals)
+                        let at = expand_type_alias(aliasIdx, ty: at0)
                         let mut mismatch = callbackBad
                         if String.len(value: at) > 0 && str_is_unresolved_generic(s: at) == false {
                             if arg_type_matches(expected: pt, actual: at) == false { mismatch = true }
