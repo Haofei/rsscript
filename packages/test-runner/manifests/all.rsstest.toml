@@ -41,19 +41,17 @@ args = [
 
 [[tests]]
 name = "generated Rust packages compile"
-kind = "command_for_each_path"
+kind = "command_success"
 command = "cargo"
 timeout_ms = 180000
-args = ["--locked", "check", "--manifest-path"]
-jobs = 1
-paths = [
-  "crates/rsscript/tests/generated/simple/Cargo.toml",
-  "crates/rsscript/tests/generated/managed/Cargo.toml",
-  "crates/rsscript/tests/generated/resource_pool/Cargo.toml",
-  "crates/rsscript/tests/generated/effects/Cargo.toml",
-  "crates/rsscript/tests/generated/result/Cargo.toml",
-  "crates/rsscript/tests/generated/try/Cargo.toml",
-  "crates/rsscript/tests/generated/runnable/Cargo.toml",
+args = [
+  "--locked",
+  "check",
+  "--workspace",
+  "--manifest-path",
+  "crates/rsscript/tests/generated/Cargo.toml",
+  "--target-dir",
+  "target/rsscript-generated-fixtures",
 ]
 
 [[tests]]
