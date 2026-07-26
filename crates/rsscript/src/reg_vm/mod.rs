@@ -3000,13 +3000,13 @@ fn native_decline_reason(unit: &RegUnit, func: &RegFunction) -> String {
         return "not scalar-replaced: Option escapes the region".to_string();
     };
     let region_exit = native_whole_function_region_exit(&code);
-    let Some((code, _n_regs, _ip_map)) =
+    let Some((code, _n_regs, _ip_map, _recipes)) =
         native_scalar_replace_variants_in_region(&code, _n_regs, 0, region_exit)
     else {
         return "not scalar-replaced: variant escapes the region".to_string();
     };
     let region_exit = native_whole_function_region_exit(&code);
-    let Some((code, _n_regs, _ip_map)) =
+    let Some((code, _n_regs, _ip_map, _recipes)) =
         native_scalar_replace_structs_in_region(&code, _n_regs, 0, region_exit)
     else {
         return "not scalar-replaced: struct escapes the region".to_string();

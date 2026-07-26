@@ -11,6 +11,109 @@ fn osr_committed_tail_calls(final_logical_depth: usize, physical_depth: usize) -
 }
 
 #[cfg(feature = "native-jit")]
+fn osr_materialize_recipe_is_supported(
+    value: &OsrMaterializeValue,
+    reg_types: &[NativeTy],
+    depth: usize,
+    nodes: &mut usize,
+) -> bool {
+    if depth >= MAX_OSR_MATERIALIZE_DEPTH || *nodes >= MAX_OSR_MATERIALIZE_NODES {
+        return false;
+    }
+    *nodes += 1;
+    match value {
+        OsrMaterializeValue::Register(reg) => matches!(
+            reg_types.get(*reg),
+            Some(NativeTy::Int | NativeTy::Bool | NativeTy::Float | NativeTy::Handle)
+        ),
+        OsrMaterializeValue::OptionSome(payload) => {
+            osr_materialize_recipe_is_supported(payload, reg_types, depth + 1, nodes)
+        }
+        OsrMaterializeValue::Struct { fields, .. } => fields
+            .iter()
+            .all(|field| osr_materialize_recipe_is_supported(field, reg_types, depth + 1, nodes)),
+        OsrMaterializeValue::Variant { tag_reg, arms } => {
+            !arms.is_empty()
+                && tag_reg.is_none_or(|reg| {
+                    matches!(reg_types.get(reg), Some(NativeTy::Int | NativeTy::Bool))
+                })
+                && arms.iter().all(|arm| {
+                    arm.fields.iter().all(|field| {
+                        osr_materialize_recipe_is_supported(field, reg_types, depth + 1, nodes)
+                    })
+                })
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
+fn osr_materialize_value(
+    value: &OsrMaterializeValue,
+    live: &[vm_jit::DeoptReg],
+    ctx: JitHostCallCtx,
+    depth: usize,
+    nodes: &mut usize,
+) -> Option<VmValue> {
+    if depth >= MAX_OSR_MATERIALIZE_DEPTH || *nodes >= MAX_OSR_MATERIALIZE_NODES {
+        return None;
+    }
+    *nodes += 1;
+    let deopt_value = |reg: usize| {
+        live.iter()
+            .find(|deopt| deopt.reg as usize == reg)
+            .map(|deopt| deopt.value)
+    };
+    match value {
+        OsrMaterializeValue::Register(reg) => match deopt_value(*reg)? {
+            vm_jit::DeoptValue::Int(value) => Some(VmValue::Int(value)),
+            vm_jit::DeoptValue::Bool(value) => Some(VmValue::Bool(value)),
+            vm_jit::DeoptValue::Float(value) => Some(VmValue::Float(value)),
+            vm_jit::DeoptValue::Handle(handle) => {
+                ctx.heap_read_handle(handle, |value| Some(value.clone()))
+            }
+        },
+        OsrMaterializeValue::OptionSome(payload) => Some(VmValue::some(osr_materialize_value(
+            payload,
+            live,
+            ctx,
+            depth + 1,
+            nodes,
+        )?)),
+        OsrMaterializeValue::Struct { layout, fields } => {
+            let fields = fields
+                .iter()
+                .map(|field| osr_materialize_value(field, live, ctx, depth + 1, nodes))
+                .collect::<Option<Vec<_>>>()?;
+            Some(VmValue::Struct(Rc::new(VmStruct::with_layout(
+                Rc::clone(layout),
+                fields,
+            ))))
+        }
+        OsrMaterializeValue::Variant { tag_reg, arms } => {
+            let tag = match tag_reg {
+                Some(reg) => match deopt_value(*reg)? {
+                    vm_jit::DeoptValue::Int(value) => value,
+                    vm_jit::DeoptValue::Bool(value) => i64::from(value),
+                    _ => return None,
+                },
+                None if arms.len() == 1 => arms[0].tag,
+                None => return None,
+            };
+            let arm = arms.iter().find(|arm| arm.tag == tag)?;
+            let fields = arm
+                .fields
+                .iter()
+                .map(|field| osr_materialize_value(field, live, ctx, depth + 1, nodes))
+                .collect::<Option<Vec<_>>>()?;
+            Some(VmValue::Variant(Rc::new(VmStruct::with_layout(
+                Rc::clone(&arm.layout),
+                fields,
+            ))))
+        }
+    }
+}
+
+#[cfg(feature = "native-jit")]
 fn osr_loop_region_is_native_subset(code: &[RegInstr], lp: OsrLoop, n_params: usize) -> bool {
     code.get(lp.header..lp.exit).is_some_and(|region| {
         let region_defs = native_osr_region_defined_regs(region);
@@ -1868,8 +1971,7 @@ impl RegVm {
             reg_types,
             written_regs,
             string_literals,
-            variant_reconstructs,
-            some_option_reconstructs,
+            materialize_recipes,
         ) = {
             // Fast path: cached and NOT at the header ⇒ nothing to do (no clone).
             if let Some(native) = self.native.as_ref() {
@@ -2024,10 +2126,7 @@ impl RegVm {
                                             reg_types,
                                             written_regs,
                                             string_literals,
-                                            // Direct path runs no RESULT-SR/OPTION-SR ⇒ no
-                                            // live-after reconstruction recipes.
-                                            variant_reconstructs: Vec::new(),
-                                            some_option_reconstructs: Vec::new(),
+                                            materialize_recipes: Vec::new(),
                                         })
                                     }
                                     Err(_) => {
@@ -2199,9 +2298,10 @@ impl RegVm {
                         // byte-for-byte the old path. Compose the transformed→
                         // original ip-maps.
                         let lp_v = mapped_osr_loop(&code1, &ip_map1, lp1.header)?;
-                        let (code2, n_regs2, ip_map2) = native_scalar_replace_variants_in_region(
-                            &code1, n_regs1, lp_v.header, lp_v.exit,
-                        )?;
+                        let (code2, n_regs2, ip_map2, variant_recipes2) =
+                            native_scalar_replace_variants_in_region(
+                                &code1, n_regs1, lp_v.header, lp_v.exit,
+                            )?;
                         // OSR × J3 for STRUCTS: after dissolving Options and variants,
                         // re-detect the loop on the transformed stream and scalar-replace
                         // any non-escaping flat user struct living entirely inside that
@@ -2212,9 +2312,10 @@ impl RegVm {
                         // transformed→original ip-maps:
                         // `ip_map[t] = ip_map1[ip_map2[ip_map3[t]]]`.
                         let lp_s = mapped_osr_loop(&code2, &ip_map2, lp_v.header)?;
-                        let (code_s, n_regs_s, ip_map3) = native_scalar_replace_structs_in_region(
-                            &code2, n_regs2, lp_s.header, lp_s.exit,
-                        )?;
+                        let (code_s, n_regs_s, ip_map3, struct_recipes3) =
+                            native_scalar_replace_structs_in_region(
+                                &code2, n_regs2, lp_s.header, lp_s.exit,
+                            )?;
                         // OSR × J3 for LOOP-CARRIED STRUCTS: after the loop-LOCAL
                         // struct pass, dissolve a struct created in the pre-header,
                         // mutated in place across iterations (`SetFieldSlot`), and dead
@@ -2394,47 +2495,57 @@ impl RegVm {
                                                 }
                                             }
                                             record_native_compile_stats(native, id, &jit_fn);
-                                            // J0.1(b): every live-after recipe must
-                                            // reconstruct from SCALAR registers — the
-                                            // deopt ABI carries only Int/Float. A
-                                            // non-scalar payload (struct handle, flat) or
-                                            // tag cannot be rematerialized, so decline OSR.
-                                            let scalar = |reg: usize| {
-                                                matches!(
-                                                    reg_types.get(reg),
-                                                    Some(NativeTy::Int | NativeTy::Float)
-                                                )
-                                            };
-                                            // The tag is a boolean — deopt-representable as
-                                            // an Int (vm-jit has no Bool class), so allow
-                                            // `Bool` for it in addition to Int/Float.
-                                            let scalar_or_bool = |reg: usize| {
-                                                scalar(reg)
-                                                    || matches!(reg_types.get(reg), Some(NativeTy::Bool))
-                                            };
-                                            // A payload reconstructs at OSR-exit if it is
-                                            // scalar (deopt Int/Float) OR a `Handle` (its
-                                            // heap-table index is captured and resolved
-                                            // against the live JIT heap — J0.1 heap-payload
-                                            // live-after). A flat reg has no mapping ⇒ declines.
-                                            let scalar_or_handle = |reg: usize| {
-                                                scalar(reg)
-                                                    || matches!(reg_types.get(reg), Some(NativeTy::Handle))
-                                            };
-                                            for (_r, ok_payload, err_payload, tag_reg) in &recipes_r {
-                                                if !scalar_or_handle(*ok_payload)
-                                                    || !scalar_or_handle(*err_payload)
-                                                {
-                                                    return None;
+                                            let mut materialize_recipes = option_recipes1;
+                                            materialize_recipes.extend(variant_recipes2);
+                                            materialize_recipes.extend(struct_recipes3);
+                                            for (
+                                                dst_reg,
+                                                ok_payload,
+                                                err_payload,
+                                                tag_reg,
+                                            ) in recipes_r
+                                            {
+                                                let mut arms = vec![
+                                                    OsrMaterializeVariantArm {
+                                                        tag: 1,
+                                                        layout: result_ok_layout(),
+                                                        fields: vec![
+                                                            OsrMaterializeValue::Register(
+                                                                ok_payload,
+                                                            ),
+                                                        ],
+                                                    },
+                                                ];
+                                                if tag_reg.is_some() {
+                                                    arms.push(OsrMaterializeVariantArm {
+                                                        tag: 0,
+                                                        layout: result_err_layout(),
+                                                        fields: vec![
+                                                            OsrMaterializeValue::Register(
+                                                                err_payload,
+                                                            ),
+                                                        ],
+                                                    });
                                                 }
-                                                if let Some(tag_reg) = tag_reg {
-                                                    if !scalar_or_bool(*tag_reg) {
-                                                        return None;
-                                                    }
-                                                }
+                                                materialize_recipes.push(
+                                                    OsrMaterializeRecipe {
+                                                        dst_reg,
+                                                        value:
+                                                            OsrMaterializeValue::Variant {
+                                                                tag_reg,
+                                                                arms,
+                                                            },
+                                                    },
+                                                );
                                             }
-                                            for (_r, payload_reg) in &option_recipes1 {
-                                                if !scalar(*payload_reg) {
+                                            for recipe in &materialize_recipes {
+                                                let mut nodes = 0;
+                                                if !osr_materialize_recipe_is_supported(
+                                                    &recipe.value,
+                                                    &reg_types,
+                                                    0,
+                                                    &mut nodes,
+                                                ) {
                                                     return None;
                                                 }
                                             }
@@ -2451,8 +2562,7 @@ impl RegVm {
                                                 reg_types,
                                                 written_regs,
                                                 string_literals,
-                                                variant_reconstructs: recipes_r,
-                                                some_option_reconstructs: option_recipes1,
+                                                materialize_recipes,
                                             })
                                         }
                                         Err(_) => {
@@ -2498,8 +2608,7 @@ impl RegVm {
                     e.reg_types.clone(),
                     e.written_regs.clone(),
                     e.string_literals.clone(),
-                    e.variant_reconstructs.clone(),
-                    e.some_option_reconstructs.clone(),
+                    e.materialize_recipes.clone(),
                 ),
                 _ => {
                     return false;
@@ -2930,6 +3039,23 @@ impl RegVm {
                     };
                     handle_liveouts.push((base + reg, value));
                 }
+                let Some(materialize_ctx) = JitHostCallCtx::from_token(heap_tx.host_ctx()) else {
+                    heap_tx.abort();
+                    scratch.restore(self.native.as_mut());
+                    return false;
+                };
+                let mut aggregate_liveouts = Vec::with_capacity(materialize_recipes.len());
+                for recipe in &materialize_recipes {
+                    let mut nodes = 0;
+                    let Some(value) =
+                        osr_materialize_value(&recipe.value, &live, materialize_ctx, 0, &mut nodes)
+                    else {
+                        heap_tx.abort();
+                        scratch.restore(self.native.as_mut());
+                        return false;
+                    };
+                    aggregate_liveouts.push((base + recipe.dst_reg, value));
+                }
                 let Some(writebacks) =
                     heap_tx.commit_scalar_with_writebacks(&scratch.heap_input_slots)
                 else {
@@ -2941,6 +3067,9 @@ impl RegVm {
                     self.set_reg(slot, value);
                 }
                 for (slot, value) in handle_liveouts {
+                    self.set_reg(slot, value);
+                }
+                for (slot, value) in aggregate_liveouts {
                     self.set_reg(slot, value);
                 }
                 // J0.5 mem: this is the CLEAN OSR exit (heap writes committed above), so
@@ -2986,89 +3115,9 @@ impl RegVm {
                     self.set_reg(slot, updated);
                 }
                 // Restore only original non-param registers that the native OSR loop
-                // actually wrote. Live-through slots that were assigned before the
-                // loop are already correct in the interpreter window; restoring their
-                // native payload would corrupt heap/list slots whose native word is
-                // only an opaque handle/pointer/zero. Also skip J3-added tag/payload
-                // registers (index >= func.regs). Handle registers were materialized
-                // above while the call's handle table was still alive; flat classes
-                // contain raw pointers and remain loop-invariant.
-                // J0.1(b): rebuild any live-after always-`Ok` Result from its scalar
-                // payload register's live-out value into the original variant slot. The
-                // RESULT-SR pass dissolved the Result to a scalar `payload_reg` and the
-                // native loop never wrote the original `variant_reg`, so the interpreter
-                // slot is stale (its pre-loop value). The pass guaranteed the `Ok` def is
-                // reached unconditionally, so after >=1 iteration `payload_reg` is in the
-                // deopt live set and we reconstruct `Ok(payload)`. If `payload_reg` is
-                // ABSENT, the native loop ran 0 iterations and the pre-loop value already
-                // in the slot is exactly correct, so we leave it untouched.
-                // For a two-armed Result (`tag_reg` is `Some`), the live-out tag selects
-                // the arm: non-zero ⇒ `Ok(payload)`, zero ⇒ `Err(payload)`. An always-`Ok`
-                // Result (`tag_reg` is `None`) always reconstructs `Ok(payload)`.
-                for (variant_reg, ok_payload_reg, err_payload_reg, tag_reg) in &variant_reconstructs
-                {
-                    // The live tag selects the arm; read ONLY that arm's payload register
-                    // (per-arm payloads — the other may be stale/undefined).
-                    let is_ok = match tag_reg {
-                        None => true,
-                        Some(tag_reg) => live
-                            .iter()
-                            .find(|d| d.reg as usize == *tag_reg)
-                            .map(|d| {
-                                matches!(d.value, vm_jit::DeoptValue::Bool(true))
-                                    || matches!(d.value, vm_jit::DeoptValue::Int(i) if i != 0)
-                            })
-                            .unwrap_or(true),
-                    };
-                    let payload_reg = if is_ok {
-                        *ok_payload_reg
-                    } else {
-                        *err_payload_reg
-                    };
-                    if let Some(dr) = live.iter().find(|d| d.reg as usize == payload_reg) {
-                        let payload = match dr.value {
-                            vm_jit::DeoptValue::Int(i) => VmValue::Int(i),
-                            vm_jit::DeoptValue::Bool(b) => VmValue::Bool(b),
-                            vm_jit::DeoptValue::Float(f) => VmValue::Float(f),
-                            // J0.1 heap payload: resolve the captured heap-table index
-                            // against the still-live JIT heap (heap_tx is live here, same
-                            // path host helpers use). Unresolvable ⇒ leave pre-loop slot.
-                            vm_jit::DeoptValue::Handle(h) => {
-                                match JitHostCallCtx::from_token(heap_tx.host_ctx())
-                                    .and_then(|ctx| ctx.heap_read_handle(h, |v| Some(v.clone())))
-                                {
-                                    Some(v) => v,
-                                    None => continue,
-                                }
-                            }
-                        };
-                        let layout = if is_ok {
-                            result_ok_layout()
-                        } else {
-                            result_err_layout()
-                        };
-                        let value = VmValue::Variant(std::rc::Rc::new(
-                            crate::vm_value::VmStruct::with_layout(layout, vec![payload]),
-                        ));
-                        self.set_reg(base + *variant_reg, value);
-                    }
-                }
-                // J0.1(b): the Option analog — rebuild `Some(payload)` for a live-after
-                // always-`Some` Option from its scalar payload register. Absent payload
-                // ⇒ 0 native iterations ⇒ pre-loop value already correct, leave it.
-                for (opt_reg, payload_reg) in &some_option_reconstructs {
-                    if let Some(dr) = live.iter().find(|d| d.reg as usize == *payload_reg) {
-                        let payload = match dr.value {
-                            vm_jit::DeoptValue::Int(i) => VmValue::Int(i),
-                            vm_jit::DeoptValue::Bool(b) => VmValue::Bool(b),
-                            vm_jit::DeoptValue::Float(f) => VmValue::Float(f),
-                            // Always-`Some` Option payloads are validated scalar; a Handle
-                            // never reaches here — skip defensively for exhaustiveness.
-                            vm_jit::DeoptValue::Handle(_) => continue,
-                        };
-                        self.set_reg(base + *opt_reg, VmValue::some(payload));
-                    }
-                }
+                // actually wrote. Aggregate destinations were rebuilt above, while
+                // their source Handle leaves were cloned before the heap transaction
+                // commit preserved ownership.
                 let n_params = func.params;
                 let n_orig_regs = func.regs;
                 for vm_jit::DeoptReg { reg, value } in live {

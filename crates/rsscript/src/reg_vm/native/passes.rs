@@ -995,77 +995,6 @@ fn native_liveness_transfer(instr: &RegInstr, n_regs: usize, live: &mut [bool]) 
 }
 
 #[cfg(feature = "native-jit")]
-fn native_footprint_touches_mask(
-    footprint: RegFootprint,
-    n_regs: usize,
-    mask: &[bool],
-) -> Option<bool> {
-    match footprint {
-        RegFootprint::Some(regs) => Some(
-            regs.into_iter()
-                .any(|reg| reg < n_regs && mask.get(reg).copied().unwrap_or(false)),
-        ),
-        RegFootprint::All => None,
-    }
-}
-
-#[cfg(feature = "native-jit")]
-fn native_region_external_footprint_touches(
-    code: &[RegInstr],
-    n_regs: usize,
-    header: usize,
-    exit: usize,
-    mask: &[bool],
-    mut footprint: impl FnMut(&RegInstr) -> RegFootprint,
-) -> Option<bool> {
-    for (ip, instr) in code.iter().enumerate() {
-        if ip >= header && ip < exit {
-            continue;
-        }
-        if native_footprint_touches_mask(footprint(instr), n_regs, mask)? {
-            return Some(true);
-        }
-    }
-    Some(false)
-}
-
-#[cfg(feature = "native-jit")]
-fn native_region_external_reads_touch(
-    code: &[RegInstr],
-    n_regs: usize,
-    header: usize,
-    exit: usize,
-    mask: &[bool],
-) -> Option<bool> {
-    native_region_external_footprint_touches(code, n_regs, header, exit, mask, instr_read_regs)
-}
-
-#[cfg(feature = "native-jit")]
-fn native_region_external_writes_touch(
-    code: &[RegInstr],
-    n_regs: usize,
-    header: usize,
-    exit: usize,
-    mask: &[bool],
-) -> Option<bool> {
-    native_region_external_footprint_touches(code, n_regs, header, exit, mask, instr_written_reg)
-}
-
-#[cfg(feature = "native-jit")]
-fn native_region_external_reads_or_writes_touch(
-    code: &[RegInstr],
-    n_regs: usize,
-    header: usize,
-    exit: usize,
-    mask: &[bool],
-) -> Option<bool> {
-    Some(
-        native_region_external_reads_touch(code, n_regs, header, exit, mask)?
-            || native_region_external_writes_touch(code, n_regs, header, exit, mask)?,
-    )
-}
-
-#[cfg(feature = "native-jit")]
 fn native_global_def_counts(code: &[RegInstr], n_regs: usize) -> Option<Vec<usize>> {
     // The whole program is just the region spanning the full instruction range.
     native_region_def_counts(code, n_regs, 0, code.len())
@@ -1310,16 +1239,6 @@ impl NativeRegionAnalysis {
     fn alias_class_readonly_for_list_slice(&self, code: &[RegInstr], slice_reg: usize) -> bool {
         self.effects
             .alias_class_readonly_for_list_slice(code, self.n_regs, slice_reg)
-    }
-
-    fn external_reads_or_writes_touch(&self, code: &[RegInstr], mask: &[bool]) -> Option<bool> {
-        native_region_external_reads_or_writes_touch(
-            code,
-            self.n_regs,
-            self.header,
-            self.exit,
-            mask,
-        )
     }
 
     fn mark_external_writes(&self, code: &[RegInstr], mask: &mut [bool]) -> Option<()> {
@@ -6103,6 +6022,43 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
     Some((new_code, next_reg, ip_map))
 }
 
+/// A bounded clean-OSR-exit reconstruction tree. Aggregate scalar replacement
+/// emits only register leaves; the cache builder later verifies that every leaf
+/// is represented by the deopt ABI as a scalar or owned heap handle.
+#[cfg(feature = "native-jit")]
+#[derive(Clone, Debug)]
+pub(in crate::reg_vm) struct OsrMaterializeRecipe {
+    pub(in crate::reg_vm) dst_reg: usize,
+    pub(in crate::reg_vm) value: OsrMaterializeValue,
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Clone, Debug)]
+pub(in crate::reg_vm) struct OsrMaterializeVariantArm {
+    pub(in crate::reg_vm) tag: i64,
+    pub(in crate::reg_vm) layout: Rc<crate::vm_value::TypeLayout>,
+    pub(in crate::reg_vm) fields: Vec<OsrMaterializeValue>,
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Clone, Debug)]
+pub(in crate::reg_vm) enum OsrMaterializeValue {
+    Register(usize),
+    OptionSome(Box<OsrMaterializeValue>),
+    Struct {
+        layout: Rc<crate::vm_value::TypeLayout>,
+        fields: Vec<OsrMaterializeValue>,
+    },
+    Variant {
+        /// `None` is a statically selected single arm (used by always-Ok Result).
+        tag_reg: Option<usize>,
+        arms: Vec<OsrMaterializeVariantArm>,
+    },
+}
+
+pub(in crate::reg_vm) const MAX_OSR_MATERIALIZE_DEPTH: usize = 8;
+pub(in crate::reg_vm) const MAX_OSR_MATERIALIZE_NODES: usize = 64;
+
 /// OSR × J3: scalar-replace non-escaping scalar `Option`s that live entirely
 /// inside the loop region `[header, exit)` of an otherwise native-INELIGIBLE
 /// function (one whose pre/post-loop code does I/O — calls, `Log.write`, …, which
@@ -6129,7 +6085,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
     n_regs: usize,
     header: usize,
     exit: usize,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<(usize, usize)>)> {
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<OsrMaterializeRecipe>)> {
     if header >= exit || exit > code.len() {
         return None;
     }
@@ -6325,12 +6281,17 @@ pub(in crate::reg_vm) fn native_scalar_replace_options_in_region(
         }
     }
 
-    // J0.1(b) Some-Option reconstruction recipes: (opt_reg, payload_reg).
-    let option_recipes: Vec<(usize, usize)> = reconstruct
+    // J0.1(b) Some-Option reconstruction recipes.
+    let option_recipes: Vec<OsrMaterializeRecipe> = reconstruct
         .iter()
         .enumerate()
         .filter(|&(_, &needs)| needs)
-        .map(|(reg, _)| (reg, payload_reg[reg]))
+        .map(|(reg, _)| OsrMaterializeRecipe {
+            dst_reg: reg,
+            value: OsrMaterializeValue::OptionSome(Box::new(OsrMaterializeValue::Register(
+                payload_reg[reg],
+            ))),
+        })
         .collect();
 
     // Rewrite the WHOLE code, scalar-replacing in-region Option ops and copying
@@ -7327,7 +7288,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     n_regs: usize,
     header: usize,
     exit: usize,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<OsrMaterializeRecipe>)> {
     if header >= exit || exit > code.len() {
         return None;
     }
@@ -7336,7 +7297,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     // Fast path: no variant op inside the region ⇒ nothing for THIS pass to do.
     if !(header..exit).any(|i| is_variant_op(&code[i])) {
         let ip_map: Vec<usize> = (0..code.len()).collect();
-        return Some((code.to_vec(), n_regs, ip_map));
+        return Some((code.to_vec(), n_regs, ip_map, Vec::new()));
     }
 
     let analysis = NativeRegionAnalysis::compute_prefix(code, n_regs, header, exit)?;
@@ -7414,15 +7375,35 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
         }
     }
 
-    // Dead-at-boundary soundness (identical argument to the Option pass): every VAR
-    // register must be neither read nor written by ANY instruction OUTSIDE the region,
-    // so the original register slot is never observed by interpreter-run code across
-    // either OSR boundary. A footprint we cannot model reports `All` ⇒ bail.
-    if analysis
-        .external_reads_or_writes_touch(code, &var)
-        .unwrap_or(true)
-    {
-        return None;
+    // Permit a post-loop read only when the dissolved variant can be rebuilt from
+    // its tag and selected arm leaves. Pre-loop reads and post-loop writes remain
+    // unsupported and conservatively decline OSR.
+    let mut reconstruct = vec![false; n_regs];
+    for i in 0..code.len() {
+        if in_region(i) {
+            continue;
+        }
+        match instr_written_reg(&code[i]) {
+            RegFootprint::Some(regs) => {
+                if i >= exit && regs.iter().any(|&r| r < n_regs && var[r]) {
+                    return None;
+                }
+            }
+            RegFootprint::All => return None,
+        }
+        match instr_read_regs(&code[i]) {
+            RegFootprint::Some(regs) => {
+                for r in regs {
+                    if r < n_regs && var[r] {
+                        if i < header {
+                            return None;
+                        }
+                        reconstruct[r] = true;
+                    }
+                }
+            }
+            RegFootprint::All => return None,
+        }
     }
 
     // `Move`-aliased VAR registers share ONE tag/payload register pair (the alias
@@ -7501,6 +7482,8 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
     // MUST agree on the field-name vector (they always do for a single `sum` type; a
     // disagreement means an unresolvable shape ⇒ bail). `(root, arm_name)` keys.
     let mut class_arm_fields: HashMap<(usize, String), Vec<Rc<str>>> = HashMap::new();
+    let mut class_arm_layout: HashMap<(usize, String), Rc<crate::vm_value::TypeLayout>> =
+        HashMap::new();
     for i in header..exit {
         if let RegInstr::MakeVariant { dst, layout, .. } = &code[i] {
             if var[*dst] {
@@ -7512,6 +7495,19 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
                     Some(_) => {}
                     None => {
                         class_arm_fields.insert(key, shape);
+                    }
+                }
+                let key = (root, layout.name.to_string());
+                match class_arm_layout.get(&key) {
+                    Some(previous)
+                        if previous.name != layout.name
+                            || previous.field_names != layout.field_names =>
+                    {
+                        return None;
+                    }
+                    Some(_) => {}
+                    None => {
+                        class_arm_layout.insert(key, Rc::clone(layout));
                     }
                 }
             }
@@ -7597,6 +7593,45 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
                 .position(|f| &**f == name)?;
             Some((arm, slot))
         };
+
+    let mut recipes = Vec::new();
+    for (reg, &needs) in reconstruct.iter().enumerate() {
+        if !needs {
+            continue;
+        }
+        let root = find(&mut parent, reg);
+        let mut arms: Vec<OsrMaterializeVariantArm> = class_arm_layout
+            .iter()
+            .filter(|((class, _), _)| *class == root)
+            .map(|((_, arm_name), layout)| {
+                let tag = class_arm_index.get(&root)?.get(arm_name).copied()?;
+                let fields = layout
+                    .field_names
+                    .iter()
+                    .enumerate()
+                    .map(|(slot, _)| {
+                        leaf_of(reg, &mut parent, arm_name, slot).map(OsrMaterializeValue::Register)
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(OsrMaterializeVariantArm {
+                    tag,
+                    layout: Rc::clone(layout),
+                    fields,
+                })
+            })
+            .collect::<Option<Vec<_>>>()?;
+        arms.sort_by_key(|arm| arm.tag);
+        if arms.is_empty() {
+            return None;
+        }
+        recipes.push(OsrMaterializeRecipe {
+            dst_reg: reg,
+            value: OsrMaterializeValue::Variant {
+                tag_reg: Some(tag_reg[reg]),
+                arms,
+            },
+        });
+    }
 
     // PRE-FLIGHT (bail-rather-than-panic): every in-region payload read of a VAR
     // register must resolve to a concrete leaf register BEFORE we rewrite. A
@@ -7797,7 +7832,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_variants_in_region(
             ip_map[t] = i;
         }
     }
-    Some((new_code, next_reg, ip_map))
+    Some((new_code, next_reg, ip_map, recipes))
 }
 
 /// OSR × J3 for non-escaping FLAT user STRUCTS. Mirrors
@@ -7939,7 +7974,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     n_regs: usize,
     header: usize,
     exit: usize,
-) -> Option<(Vec<RegInstr>, usize, Vec<usize>)> {
+) -> Option<(Vec<RegInstr>, usize, Vec<usize>, Vec<OsrMaterializeRecipe>)> {
     if header >= exit || exit > code.len() {
         return None;
     }
@@ -7949,7 +7984,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     // (A bare `GetFieldSlot` whose base is a handle param stays a native heap read.)
     if !(header..exit).any(|i| is_make_struct_op(&code[i])) {
         let ip_map: Vec<usize> = (0..code.len()).collect();
-        return Some((code.to_vec(), n_regs, ip_map));
+        return Some((code.to_vec(), n_regs, ip_map, Vec::new()));
     }
 
     // Every in-region instruction must be native-subset or a `MakeStruct`.
@@ -8083,16 +8118,65 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
         }
     }
 
-    // Dead-at-boundary soundness (identical argument to the Option/variant passes):
-    // every STR register must be neither read nor written by ANY instruction OUTSIDE
-    // the region, so the original register slot is never observed across either OSR
-    // boundary. A footprint we cannot model reports `All` ⇒ bail.
+    // Permit clean live-after reconstruction, but continue to reject live-in reads,
+    // post-loop writes, and imprecise register footprints.
     let analysis = NativeRegionAnalysis::compute_prefix(code, n_regs, header, exit)?;
-    if analysis
-        .external_reads_or_writes_touch(code, &strv)
-        .unwrap_or(true)
-    {
-        return None;
+    let mut reconstruct = vec![false; n_regs];
+    for i in 0..code.len() {
+        if in_region(i) {
+            continue;
+        }
+        match instr_written_reg(&code[i]) {
+            RegFootprint::Some(regs) => {
+                if i >= exit && regs.iter().any(|&r| r < n_regs && strv[r]) {
+                    return None;
+                }
+            }
+            RegFootprint::All => return None,
+        }
+        match instr_read_regs(&code[i]) {
+            RegFootprint::Some(regs) => {
+                for r in regs {
+                    if r < n_regs && strv[r] {
+                        if i < header {
+                            return None;
+                        }
+                        reconstruct[r] = true;
+                    }
+                }
+            }
+            RegFootprint::All => return None,
+        }
+    }
+    for (reg, &needs) in reconstruct.iter().enumerate() {
+        if !needs {
+            continue;
+        }
+        let defs: Vec<usize> = analysis
+            .writer_ips_of(code, reg)?
+            .into_iter()
+            .filter(|&i| in_region(i))
+            .collect();
+        if defs.len() != 1 {
+            return None;
+        }
+        for instr in &code[header..defs[0]] {
+            match instr {
+                RegInstr::JumpIfBool { target, .. } | RegInstr::JumpIfIntCompare { target, .. }
+                    if *target >= exit => {}
+                RegInstr::Jump { .. }
+                | RegInstr::JumpIfBool { .. }
+                | RegInstr::JumpIfIntCompare { .. }
+                | RegInstr::MatchOption { .. }
+                | RegInstr::MatchResult { .. }
+                | RegInstr::MatchVariant { .. }
+                | RegInstr::MatchMapGet { .. }
+                | RegInstr::MatchSortedMapGet { .. }
+                | RegInstr::Return { .. }
+                | RegInstr::RuntimeError { .. } => return None,
+                _ => {}
+            }
+        }
     }
 
     // Alias union-find. STR registers that name the SAME logical struct value share
@@ -8190,6 +8274,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
     // Determine ONE canonical layout shape (field_names) per alias class from its
     // `MakeStruct` defs. All defs in a class must agree on the shape.
     let mut class_shape: HashMap<usize, Vec<Rc<str>>> = HashMap::new();
+    let mut class_layout: HashMap<usize, Rc<crate::vm_value::TypeLayout>> = HashMap::new();
     for i in header..exit {
         if let RegInstr::MakeStruct { dst, layout, .. } = &code[i] {
             if strv[*dst] {
@@ -8200,6 +8285,18 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
                     Some(_) => {}
                     None => {
                         class_shape.insert(root, shape);
+                    }
+                }
+                match class_layout.get(&root) {
+                    Some(previous)
+                        if previous.name != layout.name
+                            || previous.field_names != layout.field_names =>
+                    {
+                        return None;
+                    }
+                    Some(_) => {}
+                    None => {
+                        class_layout.insert(root, Rc::clone(layout));
                     }
                 }
             }
@@ -8281,6 +8378,70 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
                 }
             }
             _ => {}
+        }
+    }
+
+    fn build_struct_recipe_value(
+        reg: usize,
+        parent: &mut Vec<usize>,
+        class_layout: &HashMap<usize, Rc<crate::vm_value::TypeLayout>>,
+        nested_slots: &HashMap<Vec<Rc<str>>, std::collections::HashSet<usize>>,
+        anchors: &HashMap<(usize, usize), usize>,
+        class_slot_reg: &HashMap<(usize, usize), usize>,
+        depth: usize,
+        nodes: &mut usize,
+    ) -> Option<OsrMaterializeValue> {
+        if depth >= MAX_OSR_MATERIALIZE_DEPTH || *nodes >= MAX_OSR_MATERIALIZE_NODES {
+            return None;
+        }
+        *nodes += 1;
+        let root = find(parent, reg);
+        let layout = Rc::clone(class_layout.get(&root)?);
+        let nested = nested_slots.get(&layout.field_names);
+        let mut fields = Vec::with_capacity(layout.field_names.len());
+        for slot in 0..layout.field_names.len() {
+            if *nodes >= MAX_OSR_MATERIALIZE_NODES {
+                return None;
+            }
+            if nested.is_some_and(|slots| slots.contains(&slot)) {
+                let anchor = *anchors.get(&(root, slot))?;
+                fields.push(build_struct_recipe_value(
+                    anchor,
+                    parent,
+                    class_layout,
+                    nested_slots,
+                    anchors,
+                    class_slot_reg,
+                    depth + 1,
+                    nodes,
+                )?);
+            } else {
+                *nodes += 1;
+                fields.push(OsrMaterializeValue::Register(
+                    *class_slot_reg.get(&(root, slot))?,
+                ));
+            }
+        }
+        Some(OsrMaterializeValue::Struct { layout, fields })
+    }
+
+    let mut recipes = Vec::new();
+    for (reg, &needs) in reconstruct.iter().enumerate() {
+        if needs {
+            let mut nodes = 0;
+            recipes.push(OsrMaterializeRecipe {
+                dst_reg: reg,
+                value: build_struct_recipe_value(
+                    reg,
+                    &mut parent,
+                    &class_layout,
+                    &nested_slots,
+                    &anchors,
+                    &class_slot_reg,
+                    0,
+                    &mut nodes,
+                )?,
+            });
         }
     }
 
@@ -8420,7 +8581,7 @@ pub(in crate::reg_vm) fn native_scalar_replace_structs_in_region(
             ip_map[t] = i;
         }
     }
-    Some((new_code, next_reg, ip_map))
+    Some((new_code, next_reg, ip_map, recipes))
 }
 
 /// OSR × J3 (loop-carried struct scalar replacement). Extends

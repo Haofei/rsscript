@@ -1439,8 +1439,7 @@ fn main() -> Unit {
     assert_eq!(osr.stdout.trim_end(), "begin\n59\n1770\n1770");
     assert_eq!(
         stats.osr_entries, 0,
-        "a loop whose variant is live after the loop must NOT OSR (the dead-at-boundary \
-         gate must bail): {stats:?}",
+        "a live-after user variant still declines OSR safely: {stats:?}",
     );
 }
 
@@ -1594,8 +1593,7 @@ fn main() -> Unit {
     assert_eq!(osr.stdout.trim_end(), "begin\n177\n5310\n5310");
     assert_eq!(
         stats.osr_entries, 0,
-        "a loop whose multi-field variant is live after the loop must NOT OSR (the \
-         dead-at-boundary gate must bail): {stats:?}",
+        "a live-after multi-field user variant still declines OSR safely: {stats:?}",
     );
 }
 
@@ -1659,19 +1657,11 @@ fn main() -> Unit {
     );
 }
 
-/// OSR × J3 struct negative test — the dead-at-boundary safety guard. The core
-/// soundness rule of `native_scalar_replace_structs_in_region` is that every scalar-
-/// replaced struct register must be DEAD outside `[header, exit)`. Here `p` is
-/// declared before the loop AND read AFTER it, so it is live across the loop boundary:
-/// the region gate MUST refuse to scalar-replace it and therefore MUST NOT OSR
-/// (`osr_entries == 0`), or the interpreter would read a stale `p` slot the native loop
-/// never wrote back. We assert both that the program is still correct (the interpreter
-/// runs the whole loop, no OSR) and that OSR genuinely bailed. This protects against a
-/// future edit to `instr_read_regs`/`instr_written_reg` accidentally making a boundary-
-/// escaping struct look dead.
+/// A flat struct built in the loop and read after it is rebuilt from its scalar
+/// field registers at the clean OSR exit.
 #[cfg(feature = "native-jit")]
 #[test]
-fn native_osr_j3_escaping_struct_does_not_osr() {
+fn native_osr_j3_live_after_struct_reconstructs() {
     let source = "\
 struct Point {
     x: Int,
@@ -1710,10 +1700,9 @@ fn main() -> Unit {
     );
     // i in 0..60: total = 3 * 1770 = 5310; p = Point(59, 118) after the loop ⇒ p.x = 59.
     assert_eq!(osr.stdout.trim_end(), "begin\n59\n5310\n5310");
-    assert_eq!(
-        stats.osr_entries, 0,
-        "a loop whose struct is live after the loop must NOT OSR (the dead-at-boundary \
-         gate must bail): {stats:?}",
+    assert!(
+        stats.osr_entries > 0,
+        "a reconstructible struct live after the loop must OSR: {stats:?}",
     );
 }
 
@@ -1779,15 +1768,11 @@ fn main() -> Unit {
     );
 }
 
-/// OSR × J3 NESTED-struct negative test — the dead-at-boundary guard, recursive case.
-/// The outer struct `node` (and thus its inner struct) is declared before the loop and
-/// read AFTER it, so it is live across the loop boundary. The recursive struct pass
-/// MUST refuse to dissolve it and therefore MUST NOT OSR (`osr_entries == 0`), or the
-/// interpreter would read a stale `node`/`node.inner` slot the native loop never wrote
-/// back. We assert interpreter-identical output AND that OSR genuinely bailed.
+/// The recursive recipe counterpart: rebuild `Outer` and its nested `Inner` from
+/// scalar leaf registers at the clean OSR exit.
 #[cfg(feature = "native-jit")]
 #[test]
-fn native_osr_j3_escaping_nested_struct_does_not_osr() {
+fn native_osr_j3_live_after_nested_struct_reconstructs() {
     let source = "\
 struct Inner {
     value: Int,
@@ -1831,10 +1816,9 @@ fn main() -> Unit {
     );
     // total = sum_{i=0}^{59}(4i-1) = 7020; node.inner.value = 59 after the loop.
     assert_eq!(osr.stdout.trim_end(), "begin\n59\n7020\n7020");
-    assert_eq!(
-        stats.osr_entries, 0,
-        "a loop whose nested struct is live after the loop must NOT OSR (the dead-at-\
-         boundary gate must bail): {stats:?}",
+    assert!(
+        stats.osr_entries > 0,
+        "a reconstructible nested struct live after the loop must OSR: {stats:?}",
     );
 }
 
@@ -3719,6 +3703,101 @@ fn main() -> Unit {
         stats.osr_entries > 0,
         "a live-after always-Some Option with an unconditional scalar def must OSR via \
          reconstruction (J0.1(b)): {stats:?}",
+    );
+}
+
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_live_after_option_string_reconstructs() {
+    let source = "\
+fn f(value: read String, limit: Int) -> String {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    let mut last: Option<String> = Some(read value)
+    while i < limit {
+        last = Some(read value)
+        match read last {
+            Some(text) => { total = total + String.len(value: read text) }
+            None => { total = total + 1000 }
+        }
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    match last {
+        Some(text) => { return text }
+        None => { return \"none\" }
+    }
+}
+
+fn main() -> Unit {
+    Log.write(message: read f(value: read \"heap\", limit: read 60))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-live-after-option-string.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(interp.stdout, osr.stdout);
+    assert_eq!(osr.stdout.trim_end(), "begin\n240\nheap");
+    assert!(
+        stats.osr_entries > 0,
+        "live-after Option<String> must OSR through Handle materialization: {stats:?}",
+    );
+}
+
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_osr_j3_live_after_mixed_variant_declines_safely() {
+    let source = "\
+sum Event {
+    Text(code: Int, label: String)
+    Count(value: Int)
+}
+
+fn f(label: read String, limit: Int) -> Int {
+    Log.write(message: read \"begin\")
+    let mut i = 0
+    let mut total = 0
+    let mut last: Event = Text(code: 0, label: read label)
+    while i < limit {
+        last = Text(code: i, label: read label)
+        match read last {
+            Text { code: code, label: text } => {
+                total = total + read code + String.len(value: read text)
+            }
+            Count(value) => { total = total + read value }
+        }
+        i = i + 1
+    }
+    match read last {
+        Text { code: code, label: text } => {
+            Log.write(message: read text)
+            return total + read code
+        }
+        Count(value) => { return total + read value }
+    }
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: f(label: read \"heap\", limit: read 60)))
+    return Unit
+}
+";
+    let file = "jit-osr-j3-live-after-mixed-variant.rss";
+    let interp = common::run_vm_source(file, source, &[]).expect("interp run");
+    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let (osr, stats) = executable
+        .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
+        .expect("osr native run");
+    assert_eq!(interp.stdout, osr.stdout);
+    assert_eq!(osr.stdout.trim_end(), "begin\nheap\n2069");
+    assert_eq!(
+        stats.osr_entries, 0,
+        "live-after mixed scalar/Handle variant must preserve forced-interpreter fallback: {stats:?}",
     );
 }
 

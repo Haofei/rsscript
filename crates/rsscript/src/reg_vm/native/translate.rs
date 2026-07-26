@@ -244,11 +244,11 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         native_scalar_replace_options(&code, n_regs)?;
     ip_map = native_compose_ip_maps(&ip_map, &next_ip_map)?;
     let region_exit = native_whole_function_region_exit(&code);
-    let (code, n_regs, next_ip_map) =
+    let (code, n_regs, next_ip_map, _recipes) =
         native_scalar_replace_variants_in_region(&code, n_regs, 0, region_exit)?;
     ip_map = native_compose_ip_maps(&ip_map, &next_ip_map)?;
     let region_exit = native_whole_function_region_exit(&code);
-    let (code, n_regs, next_ip_map) =
+    let (code, n_regs, next_ip_map, _recipes) =
         native_scalar_replace_structs_in_region(&code, n_regs, 0, region_exit)?;
     ip_map = native_compose_ip_maps(&ip_map, &next_ip_map)?;
     if func.params > n_regs {
@@ -3152,28 +3152,10 @@ pub(in crate::reg_vm) struct OsrEntry {
     /// opaque handle-table index or an untyped zero.
     pub(in crate::reg_vm) written_regs: Vec<bool>,
     pub(in crate::reg_vm) string_literals: Vec<Rc<String>>,
-    /// J0.1(b) live-after Result reconstruction recipes (see
-    /// [`super::passes::ResultRecipe`]). Each entry is `(variant_reg, ok_payload,
-    /// err_payload, tag_reg)`: a Result register `variant_reg` the RESULT-SR pass
-    /// dissolved but which is READ after the loop. The native loop writes the PER-ARM
-    /// payloads (`ok_payload` on `Ok` defs, `err_payload` on `Err` defs) and, for a
-    /// two-armed Result, the boolean `tag_reg`; the original `variant_reg` slot is never
-    /// written, so at OSR-exit the interpreter would read a stale value. For each recipe,
-    /// OSR-exit reads the live tag, picks the matching arm's payload, and rebuilds:
-    /// `tag_reg == None` (always-`Ok`) ⇒ `Ok(ok_payload)`; `Some(tag)` ⇒ `Ok(ok_payload)`
-    /// if the tag's live value is non-zero, else `Err(err_payload)`. Both payloads are
-    /// scalar `Int`/`Float` (verified at the build site; a heap arm declines). The
-    /// reconstructed value is observed after the loop, so a wrong recipe diverges from the
-    /// interpreter and is caught by the differential.
-    pub(in crate::reg_vm) variant_reconstructs: Vec<super::passes::ResultRecipe>,
-    /// J0.1(b) live-after always-`Some` Option reconstruction recipes — the `Option`
-    /// analog of [`variant_reconstructs`]. Each `(opt_reg, payload_reg)` is an Option
-    /// register the OPTION-SR pass dissolved that is always-`Some` (no in-region
-    /// `LoadNone` def), reached unconditionally, scalar payload, and READ after the
-    /// loop. OSR-exit rebuilds `Some(payload)` = `VmValue::some(payload)` into
-    /// `opt_reg`, or leaves the correct pre-loop value after 0 iterations. Same
-    /// soundness obligations and differential coverage as [`variant_reconstructs`].
-    pub(in crate::reg_vm) some_option_reconstructs: Vec<(usize, usize)>,
+    /// Bounded clean-exit reconstruction trees for scalar-replaced aggregates that
+    /// remain live after the OSR region. Every leaf is verified as a scalar or Handle
+    /// register before this entry is cached.
+    pub(in crate::reg_vm) materialize_recipes: Vec<super::passes::OsrMaterializeRecipe>,
 }
 
 /// Detect one natural loop at a specific header, allowing other disjoint loops

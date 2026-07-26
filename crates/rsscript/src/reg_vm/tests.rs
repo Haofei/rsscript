@@ -2164,7 +2164,7 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
-    fn native_aggregate_region_scalar_replacement_rejects_external_read() {
+    fn native_variant_region_scalar_replacement_emits_live_after_recipe() {
         let variant_layout = native_test_layout("Boxed", &["value"]);
         let code = vec![
             RegInstr::LoadInt { dst: 0, value: 7 },
@@ -2187,10 +2187,19 @@ fn main() -> Unit {
             RegInstr::Return { src: 2 },
         ];
 
-        assert!(
-            native_scalar_replace_variants_in_region(&code, 5, 1, 4).is_none(),
-            "variant SR must reject regions whose original aggregate is read after OSR exit",
-        );
+        let (_, _, _, recipes) = native_scalar_replace_variants_in_region(&code, 5, 1, 4)
+            .expect("variant SR should describe a reconstructible live-after value");
+        assert_eq!(recipes.len(), 1);
+        assert_eq!(recipes[0].dst_reg, 2);
+        assert!(matches!(
+            &recipes[0].value,
+            OsrMaterializeValue::Variant {
+                tag_reg: Some(_),
+                arms,
+            } if arms.len() == 1
+                && arms[0].layout.name.as_ref() == "Boxed"
+                && matches!(arms[0].fields.as_slice(), [OsrMaterializeValue::Register(_)])
+        ));
     }
 
     #[cfg(feature = "native-jit")]
@@ -6385,14 +6394,14 @@ fn main() -> Unit {
             .into_iter()
             .next()
             .expect("loop should remain after option SR");
-        let (code, n_regs, _) =
+        let (code, n_regs, _, _) =
             native_scalar_replace_variants_in_region(&code, n_regs, lp.header, lp.exit)
                 .expect("variant SR should accept inlined hot loop");
         let lp = detect_natural_loops(&code)
             .into_iter()
             .next()
             .expect("loop should remain after variant SR");
-        let (code, n_regs, _) =
+        let (code, n_regs, _, _) =
             native_scalar_replace_structs_in_region(&code, n_regs, lp.header, lp.exit)
                 .expect("struct SR should accept inlined hot loop");
         let lp = detect_natural_loops(&code)
@@ -6520,7 +6529,7 @@ fn main() -> Unit {
             .into_iter()
             .next()
             .expect("loop should remain after inlining");
-        let (code, n_regs, _) =
+        let (code, n_regs, _, _) =
             native_scalar_replace_structs_in_region(&code, n_regs, lp.header, lp.exit)
                 .expect("loop-local struct pass should accept or return identity");
         let lp = detect_natural_loops(&code)
@@ -6800,12 +6809,12 @@ fn main() -> Unit {
                 .expect("option SR should accept selfhost mailbox hot loop");
         let lp =
             detect_natural_loop_at(&code, lp.header).expect("loop should remain after option SR");
-        let (code, n_regs, _) =
+        let (code, n_regs, _, _) =
             native_scalar_replace_variants_in_region(&code, n_regs, lp.header, lp.exit)
                 .expect("variant SR should accept selfhost mailbox hot loop");
         let lp =
             detect_natural_loop_at(&code, lp.header).expect("loop should remain after variant SR");
-        let (code, n_regs, _) =
+        let (code, n_regs, _, _) =
             native_scalar_replace_structs_in_region(&code, n_regs, lp.header, lp.exit)
                 .expect("struct SR should accept selfhost mailbox hot loop");
         let lp =
