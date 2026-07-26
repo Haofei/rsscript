@@ -4809,7 +4809,34 @@ fn rss_jit_field_set_float_with_ctx(
 }
 
 #[cfg(feature = "native-jit")]
+#[cfg(test)]
+thread_local! {
+    static JIT_COLLECTION_METADATA_HELPER_CALLS: RefCell<usize> = const { RefCell::new(0) };
+}
+
+#[cfg(all(feature = "native-jit", test))]
+fn record_jit_collection_metadata_helper_call() {
+    JIT_COLLECTION_METADATA_HELPER_CALLS.with(|calls| {
+        *calls.borrow_mut() += 1;
+    });
+}
+
+#[cfg(all(feature = "native-jit", test))]
+fn reset_jit_collection_metadata_helper_calls() {
+    JIT_COLLECTION_METADATA_HELPER_CALLS.with(|calls| {
+        *calls.borrow_mut() = 0;
+    });
+}
+
+#[cfg(all(feature = "native-jit", test))]
+fn jit_collection_metadata_helper_calls() -> usize {
+    JIT_COLLECTION_METADATA_HELPER_CALLS.with(|calls| *calls.borrow())
+}
+
+#[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_list_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    #[cfg(test)]
+    record_jit_collection_metadata_helper_call();
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0;
@@ -4829,6 +4856,8 @@ extern "C" fn rss_jit_list_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_list_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    #[cfg(test)]
+    record_jit_collection_metadata_helper_call();
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0;
@@ -5305,6 +5334,8 @@ extern "C" fn rss_jit_map_contains_int(_ctx: vm_jit::HostCtx, handle: i64, key: 
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_map_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    #[cfg(test)]
+    record_jit_collection_metadata_helper_call();
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0;
@@ -5324,6 +5355,8 @@ extern "C" fn rss_jit_map_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_map_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    #[cfg(test)]
+    record_jit_collection_metadata_helper_call();
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0;
@@ -5397,6 +5430,8 @@ fn rss_jit_set_insert_handle_with_ctx(ctx: JitHostCallCtx, handle: i64, value_ha
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_set_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    #[cfg(test)]
+    record_jit_collection_metadata_helper_call();
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0;
@@ -5416,6 +5451,8 @@ extern "C" fn rss_jit_set_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_set_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    #[cfg(test)]
+    record_jit_collection_metadata_helper_call();
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0;
@@ -5516,6 +5553,8 @@ extern "C" fn rss_jit_sorted_set_contains_int(
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_sorted_set_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    #[cfg(test)]
+    record_jit_collection_metadata_helper_call();
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0;
@@ -5822,6 +5861,8 @@ extern "C" fn rss_jit_sorted_map_contains_key_int(
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_sorted_map_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    #[cfg(test)]
+    record_jit_collection_metadata_helper_call();
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0;
@@ -5835,6 +5876,8 @@ extern "C" fn rss_jit_sorted_map_is_empty(_ctx: vm_jit::HostCtx, handle: i64) ->
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_sorted_map_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    #[cfg(test)]
+    record_jit_collection_metadata_helper_call();
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0;
@@ -5854,6 +5897,8 @@ extern "C" fn rss_jit_sorted_map_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_deque_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    #[cfg(test)]
+    record_jit_collection_metadata_helper_call();
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0;
@@ -5873,6 +5918,8 @@ extern "C" fn rss_jit_deque_len(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
 
 #[cfg(feature = "native-jit")]
 extern "C" fn rss_jit_deque_is_empty(_ctx: vm_jit::HostCtx, handle: i64) -> i64 {
+    #[cfg(test)]
+    record_jit_collection_metadata_helper_call();
     let Some(_ctx) = JitHostCallCtx::from_token(_ctx) else {
         vm_jit::signal_bail();
         return 0;

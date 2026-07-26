@@ -404,6 +404,51 @@ pub enum HostHeapEffect {
     ReplacesInput,
 }
 
+/// Heap substructure observed or modified by a host helper. Native optimization
+/// passes use these projections to distinguish shape-preserving element writes
+/// from operations that can change collection metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HostHeapProjection {
+    CollectionLen,
+    Elements,
+    KeySet,
+    Fields,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HostHeapAccess {
+    pub arg: u8,
+    pub projection: HostHeapProjection,
+}
+
+impl HostHeapAccess {
+    pub const fn new(arg: u8, projection: HostHeapProjection) -> Self {
+        Self { arg, projection }
+    }
+}
+
+const HOST_READ_COLLECTION_LEN: [HostHeapAccess; 1] =
+    [HostHeapAccess::new(0, HostHeapProjection::CollectionLen)];
+const HOST_WRITE_ELEMENTS: [HostHeapAccess; 1] =
+    [HostHeapAccess::new(0, HostHeapProjection::Elements)];
+const HOST_WRITE_COLLECTION_SHAPE: [HostHeapAccess; 2] = [
+    HostHeapAccess::new(0, HostHeapProjection::CollectionLen),
+    HostHeapAccess::new(0, HostHeapProjection::Elements),
+];
+const HOST_WRITE_MAP_SHAPE: [HostHeapAccess; 3] = [
+    HostHeapAccess::new(0, HostHeapProjection::CollectionLen),
+    HostHeapAccess::new(0, HostHeapProjection::KeySet),
+    HostHeapAccess::new(0, HostHeapProjection::Elements),
+];
+const HOST_WRITE_SET_SHAPE: [HostHeapAccess; 2] = [
+    HostHeapAccess::new(0, HostHeapProjection::CollectionLen),
+    HostHeapAccess::new(0, HostHeapProjection::KeySet),
+];
+const HOST_WRITE_FIELDS: [HostHeapAccess; 1] = [HostHeapAccess::new(0, HostHeapProjection::Fields)];
+const HOST_WRITE_UNKNOWN: [HostHeapAccess; 1] =
+    [HostHeapAccess::new(0, HostHeapProjection::Unknown)];
+
 impl HostHeapEffect {
     pub fn requires_transaction(self) -> bool {
         !matches!(self, HostHeapEffect::ReadOnly)
@@ -531,6 +576,61 @@ macro_rules! host_helpers {
 
             pub fn heap_effect(self) -> HostHeapEffect {
                 self.descriptor().heap_effect
+            }
+
+            pub fn heap_reads(self) -> &'static [HostHeapAccess] {
+                match self {
+                    HostHelper::ListLen
+                    | HostHelper::ListIsEmpty
+                    | HostHelper::MapLen
+                    | HostHelper::MapIsEmpty
+                    | HostHelper::SetLen
+                    | HostHelper::SetIsEmpty
+                    | HostHelper::SortedSetIsEmpty
+                    | HostHelper::SortedMapLen
+                    | HostHelper::SortedMapIsEmpty
+                    | HostHelper::DequeLen
+                    | HostHelper::DequeIsEmpty => &HOST_READ_COLLECTION_LEN,
+                    _ => &[],
+                }
+            }
+
+            pub fn heap_writes(self) -> &'static [HostHeapAccess] {
+                match self {
+                    HostHelper::ListSetInt | HostHelper::ListSetFloat => {
+                        &HOST_WRITE_ELEMENTS
+                    }
+                    HostHelper::ListSortInt => &HOST_WRITE_ELEMENTS,
+                    HostHelper::ListPushInt
+                    | HostHelper::ListPushHandle
+                    | HostHelper::ListPushFloat
+                    | HostHelper::DequePushBackInt
+                    | HostHelper::DequePushBackHandle
+                    | HostHelper::DequePushBackFloat
+                    | HostHelper::DequePushFrontInt
+                    | HostHelper::DequePushFrontHandle
+                    | HostHelper::DequePushFrontFloat
+                    | HostHelper::DequePopFrontInt
+                    | HostHelper::DequePopBackInt
+                    | HostHelper::DequePopFrontFloat
+                    | HostHelper::DequePopBackFloat => &HOST_WRITE_COLLECTION_SHAPE,
+                    HostHelper::MapInsertInt
+                    | HostHelper::MapInsertHandleKeyInt
+                    | HostHelper::MapInsertFloat
+                    | HostHelper::SortedMapInsertInt
+                    | HostHelper::SortedMapInsertHandleKeyInt => &HOST_WRITE_MAP_SHAPE,
+                    HostHelper::SetInsertInt
+                    | HostHelper::SetInsertHandle
+                    | HostHelper::SortedSetInsertInt
+                    | HostHelper::SortedSetInsertHandle => &HOST_WRITE_SET_SHAPE,
+                    HostHelper::FieldSetInt
+                    | HostHelper::FieldSetFloat
+                    | HostHelper::FieldSetHandle => &HOST_WRITE_FIELDS,
+                    helper if helper.heap_effect().writes_existing_heap() => {
+                        &HOST_WRITE_UNKNOWN
+                    }
+                    _ => &[],
+                }
             }
 
             fn signature(self) -> HostHelperSig {
@@ -6933,6 +7033,49 @@ mod tests {
         assert!(mutates_input.is_empty());
         assert!(allocates_result.is_empty());
         assert!(extends_input_handles.is_empty());
+    }
+
+    #[test]
+    fn host_helper_projection_metadata_distinguishes_shape_writes() {
+        let collection_len_readers = [
+            HostHelper::ListLen,
+            HostHelper::ListIsEmpty,
+            HostHelper::MapLen,
+            HostHelper::MapIsEmpty,
+            HostHelper::SetLen,
+            HostHelper::SetIsEmpty,
+            HostHelper::SortedSetIsEmpty,
+            HostHelper::SortedMapLen,
+            HostHelper::SortedMapIsEmpty,
+            HostHelper::DequeLen,
+            HostHelper::DequeIsEmpty,
+        ];
+        for helper in collection_len_readers {
+            assert_eq!(
+                helper.heap_reads(),
+                &[HostHeapAccess::new(0, HostHeapProjection::CollectionLen)],
+                "{helper:?}"
+            );
+        }
+
+        assert_eq!(
+            HostHelper::ListSetInt.heap_writes(),
+            &[HostHeapAccess::new(0, HostHeapProjection::Elements)]
+        );
+        assert!(
+            HostHelper::MapInsertInt
+                .heap_writes()
+                .iter()
+                .any(|access| access.projection == HostHeapProjection::CollectionLen)
+        );
+        for &helper in HostHelper::all() {
+            if helper.heap_effect().writes_existing_heap() {
+                assert!(
+                    !helper.heap_writes().is_empty(),
+                    "{helper:?} needs conservative write projection metadata"
+                );
+            }
+        }
     }
 
     /// Test-only convenience over [`NativeModule::call`]: pass a zeroed `lens`

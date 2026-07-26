@@ -2297,12 +2297,23 @@ fn native_memoize_loop_invariant_host_calls(
                     ip,
                     original_n_regs,
                 );
+            let collection_metadata_eligible = native_collection_metadata_helper(helper)
+                && native_loop_preserves_heap_projection(
+                    &jit_code,
+                    lp.header,
+                    lp.exit,
+                    vm_jit::HostHeapProjection::CollectionLen,
+                );
             let args_loop_stable = if field_load_eligible {
                 true
             } else {
                 native_host_args_loop_invariant(&args, &invariants, ip)
             };
-            if !(native_memoizable_helper(helper) || field_load_eligible) || !args_loop_stable {
+            if !(native_memoizable_helper(helper)
+                || field_load_eligible
+                || collection_metadata_eligible)
+                || !args_loop_stable
+            {
                 continue;
             }
             let Some(&result_ty) = native_reg_types.get(dst as usize) else {
@@ -2380,6 +2391,47 @@ fn native_memoizable_field_load_helper(helper: vm_jit::HostHelper) -> bool {
         helper,
         vm_jit::HostHelper::FieldInt | vm_jit::HostHelper::FieldFloat
     )
+}
+
+#[cfg(feature = "native-jit")]
+fn native_collection_metadata_helper(helper: vm_jit::HostHelper) -> bool {
+    helper.heap_reads().iter().any(|access| {
+        access.arg == 0 && access.projection == vm_jit::HostHeapProjection::CollectionLen
+    })
+}
+
+#[cfg(feature = "native-jit")]
+pub(crate) fn native_loop_preserves_heap_projection(
+    jit_code: &[vm_jit::JitInstr],
+    header: usize,
+    exit: usize,
+    projection: vm_jit::HostHeapProjection,
+) -> bool {
+    for instr in &jit_code[header..exit] {
+        match instr {
+            vm_jit::JitInstr::HostCall { helper, .. }
+            | vm_jit::JitInstr::MemoizedHostCall { helper, .. } => {
+                if helper.heap_writes().iter().any(|access| {
+                    access.projection == projection
+                        || access.projection == vm_jit::HostHeapProjection::Unknown
+                }) {
+                    return false;
+                }
+            }
+            vm_jit::JitInstr::CallNative { .. }
+            | vm_jit::JitInstr::CallSelf { .. }
+            | vm_jit::JitInstr::CallGroup { .. } => return false,
+            // Direct flat-list stores preserve the view's length.
+            vm_jit::JitInstr::ListSetIntDirect { .. }
+            | vm_jit::JitInstr::ListSetFloatDirect { .. } => {
+                if projection == vm_jit::HostHeapProjection::Elements {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+    true
 }
 
 #[cfg(feature = "native-jit")]

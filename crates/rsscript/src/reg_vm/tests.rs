@@ -2349,6 +2349,207 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
+    fn native_translation_memoizes_read_only_collection_metadata_once() {
+        let source = r#"
+features: local
+
+fn hot(
+    table: read Map<Int, Int>,
+    set: read Set<Int>,
+    sorted: read SortedSet<Int>,
+    sorted_table: read SortedMap<Int, Int>,
+    queue: read Deque<Int>,
+    limit: Int
+) -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        total = total + Map.len<Int, Int>(map: read table)
+        total = total + Set.len<Int>(set: read set)
+        total = total + SortedSet.len<Int>(set: read sorted)
+        total = total + SortedMap.len<Int, Int>(map: read sorted_table)
+        total = total + Deque.len<Int>(deque: read queue)
+        if Map.is_empty<Int, Int>(map: read table) {
+            total = total + 100
+        }
+        if Set.is_empty<Int>(set: read set) {
+            total = total + 100
+        }
+        if SortedSet.is_empty<Int>(set: read sorted) {
+            total = total + 100
+        }
+        if SortedMap.is_empty<Int, Int>(map: read sorted_table) {
+            total = total + 100
+        }
+        if Deque.is_empty<Int>(deque: read queue) {
+            total = total + 100
+        }
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    local table = Map<Int, Int>.new()
+    local set = Set.new<Int>()
+    local sorted = SortedSet.new<Int>()
+    local sorted_table = SortedMap<Int, Int>.new()
+    local queue = Deque<Int>.new()
+    Map.insert<Int, Int>(map: mut table, key: read 1, value: read 1)
+    Set.insert(set: mut set, value: read 1)
+    let _sorted_inserted = SortedSet.insert<Int>(set: mut sorted, value: read 1)
+    SortedMap.insert<Int, Int>(map: mut sorted_table, key: read 1, value: read 1)
+    Deque.push_back<Int>(deque: mut queue, value: read 1)
+    let total = hot(
+        table: read table,
+        set: read set,
+        sorted: read sorted,
+        sorted_table: read sorted_table,
+        queue: read queue,
+        limit: 50
+    )
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("collection-metadata.rss", source).expect("lowering should work");
+        let hot = executable.unit.function_ids["hot"];
+        let (jit, _, _, _, _) =
+            translate_to_native_jit(&executable.unit, executable.unit.functions[hot].as_ref())
+                .expect("read-only collection metadata loop should translate");
+
+        for helper in [
+            vm_jit::HostHelper::MapLen,
+            vm_jit::HostHelper::SetLen,
+            vm_jit::HostHelper::ListLen,
+            vm_jit::HostHelper::SortedMapLen,
+            vm_jit::HostHelper::DequeLen,
+            vm_jit::HostHelper::MapIsEmpty,
+            vm_jit::HostHelper::SetIsEmpty,
+            vm_jit::HostHelper::SortedSetIsEmpty,
+            vm_jit::HostHelper::SortedMapIsEmpty,
+            vm_jit::HostHelper::DequeIsEmpty,
+        ] {
+            assert!(
+                jit.code.iter().any(|instr| matches!(
+                    instr,
+                    vm_jit::JitInstr::MemoizedHostCall { helper: actual, .. }
+                        if *actual == helper
+                )),
+                "{helper:?} should be lazily memoized; code={:#?}",
+                jit.code
+            );
+        }
+
+        reset_jit_collection_metadata_helper_calls();
+        let (output, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert_eq!(output.stdout.trim(), "250");
+        assert!(stats.native_calls > 0, "hot function must run natively");
+        assert_eq!(
+            jit_collection_metadata_helper_calls(),
+            10,
+            "each metadata query site should call its helper once per native invocation"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn collection_len_memoization_respects_projection_writes() {
+        let list_set = vec![vm_jit::JitInstr::HostCall {
+            helper: vm_jit::HostHelper::ListSetInt,
+            dst: 3,
+            args: vec![
+                vm_jit::HostArg::Reg(0),
+                vm_jit::HostArg::Reg(1),
+                vm_jit::HostArg::Reg(2),
+            ],
+        }];
+        assert!(
+            crate::reg_vm::native_loop_preserves_heap_projection(
+                &list_set,
+                0,
+                list_set.len(),
+                vm_jit::HostHeapProjection::CollectionLen,
+            ),
+            "element replacement does not change collection length"
+        );
+
+        let map_insert = vec![vm_jit::JitInstr::HostCall {
+            helper: vm_jit::HostHelper::MapInsertInt,
+            dst: 3,
+            args: vec![
+                vm_jit::HostArg::Reg(0),
+                vm_jit::HostArg::Reg(1),
+                vm_jit::HostArg::Reg(2),
+            ],
+        }];
+        assert!(
+            !crate::reg_vm::native_loop_preserves_heap_projection(
+                &map_insert,
+                0,
+                map_insert.len(),
+                vm_jit::HostHeapProjection::CollectionLen,
+            ),
+            "insertion can change collection length"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_does_not_memoize_length_across_insert() {
+        let source = r#"
+features: local
+
+fn hot(table: mut Map<Int, Int>, limit: Int) -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        total = total + Map.len<Int, Int>(map: read table)
+        Map.insert<Int, Int>(map: mut table, key: read index, value: read index)
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("collection-metadata-write.rss", source).expect("lowering");
+        let hot = executable.unit.function_ids["hot"];
+        let (jit, _, _, _, _) =
+            translate_to_native_jit(&executable.unit, executable.unit.functions[hot].as_ref())
+                .expect("collection mutation loop should translate");
+
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::MapLen,
+                    ..
+                }
+            )),
+            "Map.len must remain a real call when insert can change length: {:#?}",
+            jit.code
+        );
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::MapLen,
+                    ..
+                }
+            )),
+            "Map.len cannot be cached across insert"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
     fn native_translation_does_not_memoize_variant_loop_helper_args() {
         let source = r#"
 fn hot(prefix: read String, limit: Int) -> Int {
@@ -4384,12 +4585,12 @@ fn main() -> Unit {
         assert!(
             jit.code.iter().any(|instr| matches!(
                 instr,
-                vm_jit::JitInstr::HostCall {
+                vm_jit::JitInstr::MemoizedHostCall {
                     helper: vm_jit::HostHelper::ListLen,
                     ..
                 }
             )),
-            "SortedSet.len should lower through the existing ListLen host helper; code={:#?}",
+            "loop-invariant SortedSet.len should lazily memoize the ListLen helper; code={:#?}",
             jit.code,
         );
         let (out, stats) = executable

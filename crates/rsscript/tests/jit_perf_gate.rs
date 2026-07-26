@@ -76,6 +76,9 @@ const DEFAULT_CASES: &[&str] = &[
     "native_call_mut_handle_param.rss",
     "osr_closure_loop.rss",
     "native_bytes_slice_len_loop.rss",
+    "native_sorted_set_len_loop.rss",
+    "native_collection_is_empty_loop.rss",
+    "native_map_set_len_loop.rss",
     // Real-project workloads: a collection-heavy stdlib path and a mixed
     // ring-buffer mailbox actor. Both are WALL-TIME gated against a committed
     // baseline (native beats the interpreter ~2.4x on mailbox) plus a JIT
