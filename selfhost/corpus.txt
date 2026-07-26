@@ -527,6 +527,7 @@ examples/scripts/core/rules_config_reload.rss
 examples/scripts/core/uop_interning.rss
 examples/scripts/core/yaml_config.rss
 packages/adapters/sqlite/tests/sqlite-smoke/src/main.rss
+packages/adapters/sqlx-ffi/tests/sqlx-ffi-smoke/src/main.rss
 packages/adapters/sqlx/src/lib.rss
 packages/adapters/sqlx/tests/sqlx-smoke/src/main.rss
 packages/agent-tools/src/lib.rss
