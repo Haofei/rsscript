@@ -5689,7 +5689,7 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
-    fn native_translates_bytes_len_and_slice_helpers() {
+    fn native_folds_non_escaping_bytes_slice_len() {
         let source = r#"
 features: local
 
@@ -5716,19 +5716,38 @@ fn main() -> Unit {
         let hot = executable.unit.function_ids["bytes_slice_score"];
         let func = executable.unit.functions[hot].as_ref();
         let (jit, _, _, _, _) = translate_to_native_jit(&executable.unit, func)
-            .expect("Bytes.len/Bytes.slice helper function should translate to native IR");
-        for expected in [vm_jit::HostHelper::BytesSlice, vm_jit::HostHelper::BytesLen] {
-            assert!(
-                jit.code.iter().any(|instr| matches!(
+            .expect("Bytes.slice/len function should translate to native IR");
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::BytesSlice,
+                    ..
+                } | vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::BytesSlice,
+                    ..
+                }
+            )),
+            "non-escaping Bytes.slice must be dissolved before native lowering; code={:#?}",
+            jit.code,
+        );
+        let memoized_lengths = jit
+            .code
+            .iter()
+            .filter(|instr| {
+                matches!(
                     instr,
-                    vm_jit::JitInstr::HostCall { helper, .. }
-                        | vm_jit::JitInstr::MemoizedHostCall { helper, .. }
-                        if *helper == expected
-                )),
-                "{expected:?} should lower through the generic host-helper path; code={:#?}",
-                jit.code,
-            );
-        }
+                    vm_jit::JitInstr::MemoizedHostCall {
+                        helper: vm_jit::HostHelper::BytesLen,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            memoized_lengths, 2,
+            "both invariant source-length reads should execute at most once per invocation"
+        );
 
         let (out, stats) = executable
             .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
@@ -5738,6 +5757,143 @@ fn main() -> Unit {
             "bytes_slice_score should run through whole-function native JIT; stats={stats:?}",
         );
         assert_eq!(out.stdout.trim(), "30");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_folded_bytes_slice_len_matches_clamped_edge_semantics() {
+        let source = r#"
+features: local
+
+fn edge_score(data: read Bytes) -> Int {
+    let negative_start = Bytes.slice(value: read data, start: -5, len: 2)
+    let saturating_len = Bytes.slice(value: read data, start: 1, len: 9223372036854775807)
+    let past_end = Bytes.slice(value: read data, start: 9223372036854775807, len: 3)
+    let negative_len = Bytes.slice(value: read data, start: 2, len: -9)
+    return Bytes.len(value: read negative_start)
+        + Bytes.len(value: read saturating_len)
+        + Bytes.len(value: read past_end)
+        + Bytes.len(value: read negative_len)
+}
+
+fn main() -> Unit {
+    let data = Bytes.from_string(value: read "abcdef")
+    Log.write(message: read String.from_int(value: edge_score(data: read data)))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let hot = executable.unit.function_ids["edge_score"];
+        let func = executable.unit.functions[hot].as_ref();
+        let (jit, _, _, _, _) = translate_to_native_jit(&executable.unit, func)
+            .expect("edge-case Bytes.slice/len function should translate");
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::BytesSlice,
+                    ..
+                } | vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::BytesSlice,
+                    ..
+                }
+            )),
+            "all non-escaping slices should be scalarized; code={:#?}",
+            jit.code,
+        );
+
+        let (out, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("edge-case program should run natively");
+        assert!(stats.native_calls > 0, "edge_score must enter native code");
+        assert_eq!(out.stdout.trim(), "7");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_keeps_escaping_bytes_slice_allocation() {
+        let source = r#"
+features: local
+
+fn retained_slice(data: read Bytes) -> Bytes {
+    return Bytes.slice(value: read data, start: 1, len: 4)
+}
+
+fn main() -> Unit {
+    let data = Bytes.from_string(value: read "abcdef")
+    let head = retained_slice(data: read data)
+    Log.write(message: read String.from_int(value: Bytes.len(value: read head)))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let hot = executable.unit.function_ids["retained_slice"];
+        let func = executable.unit.functions[hot].as_ref();
+        let (jit, _, _, _, _) = translate_to_native_jit(&executable.unit, func)
+            .expect("escaping Bytes.slice should remain native-helper eligible");
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::BytesSlice,
+                    ..
+                }
+            )),
+            "an escaping Bytes result must retain its allocation; code={:#?}",
+            jit.code,
+        );
+
+        let (out, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("escaping-slice program should run");
+        assert!(
+            stats.native_calls > 0,
+            "retained_slice must enter native code"
+        );
+        assert_eq!(out.stdout.trim(), "4");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_keeps_unrelated_dynamic_bytes_len_translatable() {
+        let source = r#"
+features: local
+
+fn byte_count(data: read Bytes) -> Int {
+    return Bytes.len(value: read data)
+}
+
+fn main() -> Unit {
+    let data = Bytes.from_string(value: read "abcdef")
+    Log.write(message: read String.from_int(value: byte_count(data: read data)))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let hot = executable.unit.function_ids["byte_count"];
+        let func = executable.unit.functions[hot].as_ref();
+        let (jit, _, _, _, _) = translate_to_native_jit(&executable.unit, func)
+            .expect("a direct dynamic Bytes.len must remain native eligible");
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::BytesLen,
+                    ..
+                }
+            )),
+            "the unrelated length query must remain a validating helper; code={:#?}",
+            jit.code,
+        );
+
+        let (out, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("direct Bytes.len program should run");
+        assert!(stats.native_calls > 0, "byte_count must enter native code");
+        assert_eq!(out.stdout.trim(), "6");
     }
 
     #[cfg(feature = "native-jit")]

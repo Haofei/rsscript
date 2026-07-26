@@ -617,6 +617,9 @@ fn expected_min_counters(case: &str) -> &'static [(&'static str, i64)] {
         "native_sorted_set_len_loop.rss" => {
             &[("memoized_host_call_sites", 1), ("compiled_code_bytes", 1)]
         }
+        "native_bytes_slice_len_loop.rss" => {
+            &[("memoized_host_call_sites", 1), ("compiled_code_bytes", 1)]
+        }
         _ => &[],
     }
 }

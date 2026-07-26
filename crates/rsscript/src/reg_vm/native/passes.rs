@@ -5365,24 +5365,22 @@ pub(in crate::reg_vm) fn native_string_length_fold_in_region(
 /// boundary, so the slice length law is the EXACT clamp arithmetic of [`bytes_slice`]
 /// with NO ASCII gate — verified identical: `bytes_slice` does `s'=max(start,0); if
 /// s'>=L {0} else { min(s'+max(len,0), L) - s' }`, which is precisely the
-/// `emit_slice_len` law (`sc=max(start,0); sclamp=min(sc,L); ec=sclamp+max(len,0);
-/// e=min(ec,L); out=e-sclamp` — for `sc>=L` it yields `L-L=0`). `Bytes.len` is
+/// overflow-free `emit_slice_len` law (`sc=max(start,0); if sc>=L {0} else
+/// {min(max(len,0),L-sc)}`). `Bytes.len` is
 /// `value.len()` (raw byte count) and `Bytes.from_string(s)` is `s.as_bytes().len()`,
 /// so a from-string's byte length equals the source String's byte length.
 ///
-/// A length source may be (a) an in-region foldable Bytes producer, or (b) ANY register
-/// whose byte length resolves to a COMPILE-TIME CONSTANT through its unique global def
-/// (covers a loop-invariant `Bytes.from_string(<literal>)` defined before the loop —
-/// the `bytes_scan` shape). The constant is materialized as an in-region `LoadInt` so it
-/// is available after the native OSR entry (which lands AT the loop header, skipping any
-/// pre-header transformed code). The constant trace requires the register be defined
-/// EXACTLY ONCE in the whole function by a chain of immutable constant ops, so the
-/// length is loop-invariant and exact.
+/// A length source may be (a) an in-region foldable Bytes producer, (b) ANY register
+/// whose byte length resolves to a COMPILE-TIME CONSTANT through its unique global def,
+/// or (c) a dynamic Bytes input with no in-region definition. Constants are materialized
+/// as in-region `LoadInt`s. Dynamic inputs retain a validating `Bytes.len` at each folded
+/// slice site; whole-function loop memoization can make that helper activation-local
+/// O(1) work. The constant trace requires every register in the chain to have exactly one
+/// whole-function definition.
 ///
-/// Conservative bail: any escaping foldable Bytes register, any in-region `Bytes.len`
-/// whose source does not resolve, or any unmodelled read/write footprint ⇒ `None`
-/// (no fold; the interpreter runs the loop). A body with no foldable `Bytes.len`
-/// returns the code unchanged with an identity ip-map (byte-for-byte the old path).
+/// Conservative bail: any escaping foldable Bytes register or unmodelled read/write
+/// footprint ⇒ `None` (no fold). Unrelated direct dynamic `Bytes.len` calls remain
+/// ordinary helpers.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
     code: &[RegInstr],
@@ -5571,12 +5569,35 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
         }
     }
 
-    // A length source resolves iff it is an in-region foldable producer OR has a
-    // constant byte length. `foldable[r]` marks the in-region producers we will
-    // dissolve; `const_len` sources stay live (cheap loop-invariant) and supply a
-    // `LoadInt`. Resolve in-region producer foldability by fixpoint.
+    // A loop-invariant dynamic Bytes input can also provide its length without
+    // materializing a slice. Keep this deliberately narrow: only operands already
+    // proven to be Bytes by `Bytes.len`/`Bytes.slice`, and only registers with no
+    // in-region definition. The validating `Bytes.len` helper remains at the original
+    // slice site, preserving the first possible failure point; the later native
+    // memoization pass may cache it when the surrounding loop proves invariance.
+    let mut dynamic_len_source = vec![false; n_regs];
+    for instr in &code[header..exit] {
+        let (role, args) = match instr {
+            RegInstr::CallIntrinsic {
+                intrinsic, args, ..
+            }
+            | RegInstr::CallTypedIntrinsic {
+                intrinsic, args, ..
+            } => (intrinsic_descriptor(*intrinsic).bytes_fold_role, args),
+            _ => continue,
+        };
+        if role == Some(BytesFoldRole::ProducerSlice) && !args.is_empty() {
+            let src = args[0];
+            if src < n_regs && const_len[src].is_none() && analysis.region_def_count(src)? == 0 {
+                dynamic_len_source[src] = true;
+            }
+        }
+    }
+
+    // A length source resolves iff it is an in-region foldable producer, has a
+    // constant byte length, or is a loop-invariant dynamic Bytes input.
     let resolves = |r: usize, foldable: &[bool]| -> bool {
-        r < n_regs && (foldable[r] || const_len[r].is_some())
+        r < n_regs && (foldable[r] || const_len[r].is_some() || dynamic_len_source[r])
     };
     let mut foldable = vec![false; n_regs];
     let mut changed = true;
@@ -5685,31 +5706,16 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
         }
     }
 
-    // Every in-region `Bytes.len` MUST now resolve, else a real (non-subset) `BytesLen`
-    // survives and blocks OSR ⇒ bail.
-    for i in header..exit {
-        if is_bytes_len(&code[i]) {
-            let src = match &code[i] {
-                RegInstr::CallIntrinsic { args, .. }
-                | RegInstr::CallTypedIntrinsic { args, .. } => args[0],
-                _ => unreachable!(),
-            };
-            if !resolves(src, &foldable) {
-                return None;
-            }
-        }
-    }
-    // Nothing to dissolve (e.g. the only `Bytes.len` was directly on a constant-length
-    // source with no in-region producer) is still a WIN: we replace the `Bytes.len`
-    // with a `LoadInt`/`Move`. Only bail if no `Bytes.len` resolves at all — but the
-    // loop above already guaranteed every `Bytes.len` resolves, so proceed.
+    // Unresolved direct `Bytes.len` reads remain ordinary native helpers. This lets the
+    // pass dissolve an independent non-escaping slice without making unrelated dynamic
+    // length reads a precondition for the whole region.
 
     // --- Length registers + constant materialization ---------------------------------
     // One fresh Int `len_reg` per resolvable register (foldable producer OR constant
     // source). Constant sources get a `LoadInt` materialized at the region head so the
     // value is live after the native OSR entry (which lands at `header`).
     let needs_len = |r: usize, foldable: &[bool]| -> bool {
-        r < n_regs && (foldable[r] || const_len[r].is_some())
+        r < n_regs && (foldable[r] || const_len[r].is_some() || dynamic_len_source[r])
     };
     let mut len_reg = vec![0usize; n_regs];
     let mut next_reg = n_regs;
@@ -5772,8 +5778,9 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
         }
     }
     // out = clamp slice length, byte-exact mirror of `bytes_slice`:
-    //   sc = max(start,0); s_clamp = min(sc, L); ec = s_clamp + max(len,0);
-    //   e_clamp = min(ec, L); out = e_clamp - s_clamp.
+    //   sc = max(start,0); if sc >= L { 0 } else { min(max(len,0), L-sc) }.
+    // This form cannot overflow for `len == i64::MAX`, unlike computing `sc + len`,
+    // and matches the runtime's saturating `usize` addition.
     fn emit_slice_len_b(
         out_code: &mut Vec<RegInstr>,
         out: usize,
@@ -5784,28 +5791,40 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
     ) {
         let zero = *next_reg;
         let sc = *next_reg + 1;
-        let sclamp = *next_reg + 2;
+        let available = *next_reg + 2;
         let lc = *next_reg + 3;
-        let ec = *next_reg + 4;
-        *next_reg += 5;
+        *next_reg += 4;
         out_code.push(RegInstr::LoadInt {
             dst: zero,
             value: 0,
         });
         emit_max_b(out_code, sc, start, zero);
-        emit_min_b(out_code, sclamp, sc, l_src);
-        emit_max_b(out_code, lc, len, zero);
-        out_code.push(RegInstr::AddInt {
-            dst: ec,
-            lhs: sclamp,
-            rhs: lc,
+        let empty = out_code.len();
+        out_code.push(RegInstr::JumpIfIntCompare {
+            lhs: sc,
+            rhs: l_src,
+            op: RegIntCompare::GreaterEqual,
+            expected: true,
+            target: 0,
         });
-        emit_min_b(out_code, ec, ec, l_src);
         out_code.push(RegInstr::SubInt {
-            dst: out,
-            lhs: ec,
-            rhs: sclamp,
+            dst: available,
+            lhs: l_src,
+            rhs: sc,
         });
+        emit_max_b(out_code, lc, len, zero);
+        emit_min_b(out_code, out, lc, available);
+        let done = out_code.len();
+        out_code.push(RegInstr::Jump { target: 0 });
+        let empty_target = out_code.len();
+        out_code.push(RegInstr::LoadInt { dst: out, value: 0 });
+        let merge = out_code.len();
+        if let RegInstr::JumpIfIntCompare { target, .. } = &mut out_code[empty] {
+            *target = empty_target;
+        }
+        if let RegInstr::Jump { target } = &mut out_code[done] {
+            *target = merge;
+        }
     }
 
     // --- Rewrite the stream ----------------------------------------------------------
@@ -5862,6 +5881,13 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
                             == Some(BytesFoldRole::ProducerSlice) =>
                 {
                     if let Some(BProducer::Slice { src, start, len }) = &producer[*dst] {
+                        if dynamic_len_source[*src] {
+                            new_code.push(RegInstr::CallIntrinsic {
+                                dst: len_reg[*src],
+                                intrinsic: RegIntrinsic::BytesLen,
+                                args: vec![*src],
+                            });
+                        }
                         emit_slice_len_b(
                             &mut new_code,
                             len_reg[*dst],
@@ -5886,11 +5912,15 @@ pub(in crate::reg_vm) fn native_bytes_length_fold_in_region(
                         | RegInstr::CallTypedIntrinsic { dst, args, .. } => (*dst, args[0]),
                         _ => unreachable!(),
                     };
-                    new_code.push(RegInstr::Move {
-                        dst,
-                        src: len_reg[src],
-                    });
-                    true
+                    if foldable[src] || const_len[src].is_some() {
+                        new_code.push(RegInstr::Move {
+                            dst,
+                            src: len_reg[src],
+                        });
+                        true
+                    } else {
+                        false
+                    }
                 }
                 _ => false,
             };
