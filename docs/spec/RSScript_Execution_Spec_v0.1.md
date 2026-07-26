@@ -644,7 +644,7 @@ Normative conventions (part of this contract):
 ## 9. JIT IR and Crate Boundary
 
 1. The native tier consumes a **stable, versioned IR** defined by `vm-jit`
-   (`JitInstr`/`JitFunction`, `vm_jit::IR_VERSION`, currently `23`). `rsscript`
+   (`JitInstr`/`JitFunction`, `vm_jit::IR_VERSION`, currently `24`). `rsscript`
    *translates* eligible `RegFunction`s into that IR rather than exposing its
    private `RegInstr`. The two layers MUST stay decoupled across this IR; a
    producer/consumer version mismatch is an error, not a silent miscompile.

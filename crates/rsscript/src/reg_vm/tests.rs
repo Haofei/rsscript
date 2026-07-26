@@ -2607,6 +2607,66 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
+    fn native_nested_loop_memo_resets_once_per_outer_activation() {
+        let source = r#"
+features: local
+
+fn hot(queue: mut Deque<Int>, outer_limit: Int, inner_limit: Int) -> Int {
+    let mut outer = 0
+    let mut total = 0
+    while outer < outer_limit {
+        Deque.push_back<Int>(deque: mut queue, value: read outer)
+        let mut inner = 0
+        while inner < inner_limit {
+            total = total + Deque.len<Int>(deque: read queue)
+            inner = inner + 1
+        }
+        outer = outer + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    local queue = Deque.new<Int>()
+    let total = hot(queue: mut queue, outer_limit: 3, inner_limit: 4)
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("nested-loop-memo.rss", source).expect("lowering should work");
+        let hot = executable.unit.function_ids["hot"];
+        let (jit, _, _, _, _) =
+            translate_to_native_jit(&executable.unit, executable.unit.functions[hot].as_ref())
+                .expect("structured nested loop should translate");
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::DequeLen,
+                    ..
+                }
+            )),
+            "inner-loop Deque.len should be memoized: {:#?}",
+            jit.code
+        );
+        assert_eq!(jit.memo_scopes.len(), 1, "{:#?}", jit.memo_scopes);
+
+        reset_jit_collection_metadata_helper_calls();
+        let (output, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert_eq!(output.stdout.trim(), "24");
+        assert!(stats.native_calls > 0, "hot function must run natively");
+        assert_eq!(
+            jit_collection_metadata_helper_calls(),
+            3,
+            "Deque.len should run once per outer-loop activation"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
     fn collection_len_memoization_respects_projection_writes() {
         let list_set = vec![vm_jit::JitInstr::HostCall {
             helper: vm_jit::HostHelper::ListSetInt,
@@ -2805,6 +2865,7 @@ fn main() -> Unit {
                     vm_jit::JitInstr::LoadInt { dst: 0, value: 0 },
                     vm_jit::JitInstr::Return { src: 0 },
                 ],
+                memo_scopes: Vec::new(),
                 cold_blocks: Vec::new(),
             })
             .expect("compile test callee");

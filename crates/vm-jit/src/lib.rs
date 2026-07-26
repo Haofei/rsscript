@@ -387,7 +387,7 @@ pub struct HostHelpers {
 /// producer (`rsscript`) translates its private bytecode into this stable,
 /// versioned surface, so the two crates are decoupled: a breaking IR change bumps
 /// this and the producer is updated in lock-step.
-pub const IR_VERSION: u32 = 23;
+pub const IR_VERSION: u32 = 24;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostFailureMode {
@@ -1645,6 +1645,20 @@ pub enum JitValueType {
     FlatFloatMut,
 }
 
+/// Activation boundary for one or more loop-local memo slots.
+///
+/// The half-open instruction range `[header, exit)` must be a structured loop:
+/// outside control flow may enter only at `header`, control flow may leave only at
+/// `exit`, and every backedge to `header` must be an unconditional [`JitInstr::Jump`].
+/// Codegen resets `memo_slots` on function/OSR/forward entries to `header`, while
+/// preserving them across those validated backedges.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MemoScope {
+    pub header: u32,
+    pub exit: u32,
+    pub memo_slots: Vec<u32>,
+}
+
 /// A compilable function: register count, per-register storage class, and the
 /// instruction stream. Callers unbox each argument to `i64` bits (an `f64`'s bit
 /// pattern for float registers) and read the result back the same way.
@@ -1659,6 +1673,9 @@ pub struct JitFunction {
     /// typed placeholder on a path where the logical value is absent.
     pub zero_init_regs: Vec<u32>,
     pub code: Vec<JitInstr>,
+    /// Validated loop activation boundaries for every [`JitInstr::MemoizedHostCall`].
+    /// Each memo slot must belong to exactly one scope.
+    pub memo_scopes: Vec<MemoScope>,
     /// Instruction indices that should start cold blocks. Producers may populate
     /// this from dynamic profile feedback; codegen treats it as a layout hint only.
     /// It never changes control flow or values.
@@ -3215,6 +3232,111 @@ fn check_zero_init_reg(program: &JitFunction, reg: u32) -> Result<(), JitError> 
     Ok(())
 }
 
+fn validate_memo_scopes(
+    program: &JitFunction,
+    memo_slot_owners: &[Option<usize>],
+) -> Result<(), JitError> {
+    let n = program.code.len();
+    let mut slot_scopes = vec![None; memo_slot_owners.len()];
+
+    for (scope_index, scope) in program.memo_scopes.iter().enumerate() {
+        let header = scope.header as usize;
+        let exit = scope.exit as usize;
+        if header >= exit || exit >= n {
+            return Err(JitError(format!(
+                "memo scope {scope_index}: expected 0 <= header < exit < code length, got [{header}, {exit}) for {n} instructions"
+            )));
+        }
+        if scope.memo_slots.is_empty() {
+            return Err(JitError(format!(
+                "memo scope {scope_index}: memo_slots cannot be empty"
+            )));
+        }
+
+        let mut has_backedge = false;
+        for (source, _) in program.code.iter().enumerate() {
+            let source_in_scope = source >= header && source < exit;
+            for target in successors(program, source) {
+                let target_in_scope = target >= header && target < exit;
+                if !source_in_scope && target_in_scope && target != header {
+                    return Err(JitError(format!(
+                        "memo scope {scope_index}: external edge {source} -> {target} enters scope interior"
+                    )));
+                }
+                if source_in_scope && !target_in_scope && target != exit {
+                    return Err(JitError(format!(
+                        "memo scope {scope_index}: edge {source} -> {target} leaves scope anywhere other than exit {exit}"
+                    )));
+                }
+                if source_in_scope && target == header {
+                    if !matches!(
+                        program.code[source],
+                        JitInstr::Jump { target } if target as usize == header
+                    ) {
+                        return Err(JitError(format!(
+                            "memo scope {scope_index}: backedge {source} -> {header} must be an unconditional Jump"
+                        )));
+                    }
+                    has_backedge = true;
+                }
+            }
+        }
+        if !has_backedge {
+            return Err(JitError(format!(
+                "memo scope {scope_index}: no backedge targets header {header}"
+            )));
+        }
+
+        for &slot in &scope.memo_slots {
+            let Some(owner) = memo_slot_owners.get(slot as usize).and_then(|owner| *owner) else {
+                return Err(JitError(format!(
+                    "memo scope {scope_index}: memo_slot {slot} has no memoized call site"
+                )));
+            };
+            let Some(previous_scope) = slot_scopes.get_mut(slot as usize) else {
+                return Err(JitError(format!(
+                    "memo scope {scope_index}: memo_slot {slot} is out of range"
+                )));
+            };
+            if let Some(previous_scope) = previous_scope {
+                return Err(JitError(format!(
+                    "memo_slot {slot} belongs to both memo scopes {previous_scope} and {scope_index}"
+                )));
+            }
+            if owner < header || owner >= exit {
+                return Err(JitError(format!(
+                    "memo scope {scope_index}: memo_slot {slot} site {owner} is outside [{header}, {exit})"
+                )));
+            }
+            *previous_scope = Some(scope_index);
+        }
+    }
+
+    for (slot, scope) in slot_scopes.iter().enumerate() {
+        if scope.is_none() {
+            return Err(JitError(format!(
+                "MemoizedHostCall memo_slot {slot} does not belong to a memo scope"
+            )));
+        }
+    }
+    for left in 0..program.memo_scopes.len() {
+        for right in left + 1..program.memo_scopes.len() {
+            let a = &program.memo_scopes[left];
+            let b = &program.memo_scopes[right];
+            let disjoint = a.exit <= b.header || b.exit <= a.header;
+            let strictly_nested = (a.header < b.header && b.exit <= a.exit)
+                || (b.header < a.header && a.exit <= b.exit);
+            if !disjoint && !strictly_nested {
+                return Err(JitError(format!(
+                    "memo scopes {left} [{}, {}) and {right} [{}, {}) overlap without strict nesting",
+                    a.header, a.exit, b.header, b.exit
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Validate public IR before codegen. `build_function` assumes well-formed input
 /// (it indexes `reg_types`/`code` directly and relies on Cranelift register types
 /// matching each opcode); this turns every such assumption into a clean
@@ -3871,6 +3993,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
             }
         }
     }
+    validate_memo_scopes(program, &memo_slot_owners)?;
     let reachable = reachable_jit_instrs(program);
     let mut reachable_return_type = None;
     for (ip, ty) in returns {
@@ -5148,6 +5271,11 @@ fn build_function(
     let memo_flags: Vec<Variable> = (0..memo_count)
         .map(|_| bcx.declare_var(types::I64))
         .collect();
+    let memo_scope_backedges: Vec<Variable> = program
+        .memo_scopes
+        .iter()
+        .map(|_| bcx.declare_var(types::I64))
+        .collect();
 
     // Entry: read params from the args array, zero the rest, then jump to the
     // block for instruction 0. Args are passed as raw 64-bit words; loading a
@@ -5258,6 +5386,9 @@ fn build_function(
         };
         bcx.def_var(value_var, initial_value);
         bcx.def_var(flag_var, zero_i);
+    }
+    for &backedge_var in &memo_scope_backedges {
+        bcx.def_var(backedge_var, zero_i);
     }
 
     // The shared fallback block: "not completed".
@@ -5472,6 +5603,19 @@ fn build_function(
     } else {
         Vec::new()
     };
+    let mut memo_scope_for_header = vec![None; n];
+    let mut memo_scope_for_backedge = vec![None; n];
+    for (scope_index, scope) in program.memo_scopes.iter().enumerate() {
+        memo_scope_for_header[scope.header as usize] = Some(scope_index);
+        for source in scope.header as usize..scope.exit as usize {
+            if matches!(
+                program.code[source],
+                JitInstr::Jump { target } if target == scope.header
+            ) {
+                memo_scope_for_backedge[source] = Some(scope_index);
+            }
+        }
+    }
 
     let mut terminated = true;
     for i in 0..n {
@@ -5481,6 +5625,32 @@ fn build_function(
             }
             bcx.switch_to_block(b);
             terminated = false;
+        }
+        if let Some(scope_index) = memo_scope_for_header[i] {
+            let scope = &program.memo_scopes[scope_index];
+            let backedge = bcx.use_var(memo_scope_backedges[scope_index]);
+            let zero = bcx.ins().iconst(types::I64, 0);
+            let preserve = bcx.ins().icmp(IntCC::NotEqual, backedge, zero);
+            let preserve_block = bcx.create_block();
+            let reset_block = bcx.create_block();
+            let body_block = bcx.create_block();
+            bcx.ins()
+                .brif(preserve, preserve_block, &[], reset_block, &[]);
+
+            bcx.switch_to_block(reset_block);
+            bcx.seal_block(reset_block);
+            for &slot in &scope.memo_slots {
+                bcx.def_var(memo_flags[slot as usize], zero);
+            }
+            bcx.ins().jump(body_block, &[]);
+
+            bcx.switch_to_block(preserve_block);
+            bcx.seal_block(preserve_block);
+            bcx.ins().jump(body_block, &[]);
+
+            bcx.switch_to_block(body_block);
+            bcx.seal_block(body_block);
+            bcx.def_var(memo_scope_backedges[scope_index], zero);
         }
         // J0.5 step accounting: tick once per instruction, before its body — exactly
         // where the interpreter calls `tick()` (one tick per dispatched instruction),
@@ -6349,6 +6519,10 @@ fn build_function(
                 bcx.def_var(reg(*dst), c64);
             }
             JitInstr::Jump { target } => {
+                if let Some(scope_index) = memo_scope_for_backedge[i] {
+                    let one = bcx.ins().iconst(types::I64, 1);
+                    bcx.def_var(memo_scope_backedges[scope_index], one);
+                }
                 bcx.ins().jump(block_for[*target as usize].unwrap(), &[]);
                 terminated = true;
             }
@@ -7605,6 +7779,7 @@ mod tests {
             reg_types: vec![JitValueType::Int; n_regs as usize],
             zero_init_regs: Vec::new(),
             code,
+            memo_scopes: Vec::new(),
             cold_blocks: Vec::new(),
         }
     }
@@ -7617,6 +7792,7 @@ mod tests {
             reg_types,
             zero_init_regs: Vec::new(),
             code,
+            memo_scopes: Vec::new(),
             cold_blocks: Vec::new(),
         }
     }
@@ -7691,42 +7867,46 @@ mod tests {
         let mut helpers = host_helpers();
         helpers.string_split_count = counting_string_split_count;
         let mut m = NativeModule::new(helpers).unwrap();
-        let id = m
-            .compile(&ft(
-                3,
-                vec![Handle, Handle, Int, Int, Int, Int, Int],
-                vec![
-                    JitInstr::LoadInt { dst: 3, value: 0 },
-                    JitInstr::LoadInt { dst: 4, value: 0 },
-                    JitInstr::JumpIfIntCompare {
-                        lhs: 3,
-                        rhs: 2,
-                        op: JitCompare::Lt,
-                        expected: false,
-                        target: 8,
-                    },
-                    JitInstr::MemoizedHostCall {
-                        helper: HostHelper::StringSplitCount,
-                        dst: 5,
-                        args: vec![HostArg::Reg(0), HostArg::Reg(1)],
-                        memo_slot: 0,
-                    },
-                    JitInstr::Add {
-                        dst: 4,
-                        lhs: 4,
-                        rhs: 5,
-                    },
-                    JitInstr::LoadInt { dst: 6, value: 1 },
-                    JitInstr::Add {
-                        dst: 3,
-                        lhs: 3,
-                        rhs: 6,
-                    },
-                    JitInstr::Jump { target: 2 },
-                    JitInstr::Return { src: 4 },
-                ],
-            ))
-            .unwrap();
+        let mut program = ft(
+            3,
+            vec![Handle, Handle, Int, Int, Int, Int, Int],
+            vec![
+                JitInstr::LoadInt { dst: 3, value: 0 },
+                JitInstr::LoadInt { dst: 4, value: 0 },
+                JitInstr::JumpIfIntCompare {
+                    lhs: 3,
+                    rhs: 2,
+                    op: JitCompare::Lt,
+                    expected: false,
+                    target: 8,
+                },
+                JitInstr::MemoizedHostCall {
+                    helper: HostHelper::StringSplitCount,
+                    dst: 5,
+                    args: vec![HostArg::Reg(0), HostArg::Reg(1)],
+                    memo_slot: 0,
+                },
+                JitInstr::Add {
+                    dst: 4,
+                    lhs: 4,
+                    rhs: 5,
+                },
+                JitInstr::LoadInt { dst: 6, value: 1 },
+                JitInstr::Add {
+                    dst: 3,
+                    lhs: 3,
+                    rhs: 6,
+                },
+                JitInstr::Jump { target: 2 },
+                JitInstr::Return { src: 4 },
+            ],
+        );
+        program.memo_scopes.push(MemoScope {
+            header: 2,
+            exit: 8,
+            memo_slots: vec![0],
+        });
+        let id = m.compile(&program).unwrap();
         assert_eq!(m.n_regs(id), Some(7));
         assert_eq!(m.deopt_map(id).unwrap().payload_words, 7);
 
@@ -7737,6 +7917,155 @@ mod tests {
         assert_eq!(
             MEMOIZED_SPLIT_COUNT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
             1,
+        );
+    }
+
+    fn nested_memo_program(osr: bool) -> JitFunction {
+        use JitValueType::{Handle, Int};
+
+        let mut program = ft(
+            4,
+            vec![Handle, Handle, Int, Int, Int, Int, Int, Int, Int],
+            vec![
+                JitInstr::LoadInt { dst: 4, value: 0 },
+                JitInstr::LoadInt { dst: 5, value: 0 },
+                JitInstr::JumpIfIntCompare {
+                    lhs: 4,
+                    rhs: 2,
+                    op: JitCompare::Lt,
+                    expected: false,
+                    target: 13,
+                },
+                JitInstr::LoadInt { dst: 6, value: 0 },
+                JitInstr::JumpIfIntCompare {
+                    lhs: 6,
+                    rhs: 3,
+                    op: JitCompare::Lt,
+                    expected: false,
+                    target: 10,
+                },
+                JitInstr::MemoizedHostCall {
+                    helper: HostHelper::StringSplitCount,
+                    dst: 7,
+                    args: vec![HostArg::Reg(0), HostArg::Reg(1)],
+                    memo_slot: 0,
+                },
+                JitInstr::Add {
+                    dst: 5,
+                    lhs: 5,
+                    rhs: 7,
+                },
+                JitInstr::LoadInt { dst: 8, value: 1 },
+                JitInstr::Add {
+                    dst: 6,
+                    lhs: 6,
+                    rhs: 8,
+                },
+                JitInstr::Jump { target: 4 },
+                JitInstr::LoadInt { dst: 8, value: 1 },
+                JitInstr::Add {
+                    dst: 4,
+                    lhs: 4,
+                    rhs: 8,
+                },
+                JitInstr::Jump { target: 2 },
+                if osr {
+                    JitInstr::OsrExit
+                } else {
+                    JitInstr::Return { src: 5 }
+                },
+            ],
+        );
+        program.memo_scopes.push(MemoScope {
+            header: 4,
+            exit: 10,
+            memo_slots: vec![0],
+        });
+        program
+    }
+
+    #[test]
+    fn nested_memo_scope_resets_once_per_outer_activation_and_stays_lazy() {
+        MEMOIZED_SPLIT_COUNT_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let mut helpers = host_helpers();
+        helpers.string_split_count = counting_string_split_count;
+        let mut module = NativeModule::new(helpers).unwrap();
+        let id = module.compile(&nested_memo_program(false)).unwrap();
+
+        assert_eq!(module.callt(id, &[10, 11, 3, 4]), Some(60));
+        assert_eq!(
+            MEMOIZED_SPLIT_COUNT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "the helper runs once for each activation of the inner loop"
+        );
+
+        MEMOIZED_SPLIT_COUNT_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(module.callt(id, &[10, 11, 3, 0]), Some(0));
+        assert_eq!(
+            MEMOIZED_SPLIT_COUNT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "zero-iteration inner loops must not eagerly populate the memo"
+        );
+    }
+
+    #[test]
+    fn nested_memo_scope_osr_entry_resets_then_preserves_backedges() {
+        MEMOIZED_SPLIT_COUNT_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
+        let mut helpers = host_helpers();
+        helpers.string_split_count = counting_string_split_count;
+        let mut module = NativeModule::new(helpers).unwrap();
+        let program = nested_memo_program(true);
+        let id = module.compile_osr(&program, 2, false, false).unwrap();
+        let args = [10, 11, 3, 2, 0, 0, 0, 0, 0];
+        let lens = [0; 9];
+
+        assert!(matches!(
+            module.call(id, &args, &lens),
+            NativeOutcome::Deopt { .. }
+        ));
+        assert_eq!(
+            MEMOIZED_SPLIT_COUNT_CALLS.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "OSR entry must begin with empty activation-local memo state"
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_memo_scopes() {
+        let mut unscoped = nested_memo_program(false);
+        unscoped.memo_scopes.clear();
+        let error = validate(&unscoped).expect_err("every memo slot needs a scope");
+        assert!(error.0.contains("does not belong"), "{}", error.0);
+
+        let mut interior_entry = nested_memo_program(false);
+        interior_entry.code[0] = JitInstr::Jump { target: 5 };
+        let error =
+            validate(&interior_entry).expect_err("outside control flow cannot enter the interior");
+        assert!(error.0.contains("enters scope interior"), "{}", error.0);
+
+        let mut conditional_backedge = nested_memo_program(false);
+        conditional_backedge.code[9] = JitInstr::JumpIfIntCompare {
+            lhs: 6,
+            rhs: 3,
+            op: JitCompare::Lt,
+            expected: true,
+            target: 4,
+        };
+        let error =
+            validate(&conditional_backedge).expect_err("conditional backedges are unsupported");
+        assert!(
+            error.0.contains("must be an unconditional Jump"),
+            "{}",
+            error.0
+        );
+
+        let mut bad_range = nested_memo_program(false);
+        bad_range.memo_scopes[0].exit = bad_range.code.len() as u32;
+        let error = validate(&bad_range).expect_err("scope exit must name an instruction");
+        assert!(
+            error.0.contains("header < exit < code length"),
+            "{}",
+            error.0
         );
     }
 
@@ -10578,6 +10907,7 @@ mod tests {
             reg_types: vec![JitValueType::Int; 2],
             zero_init_regs: Vec::new(),
             code: vec![],
+            memo_scopes: Vec::new(),
             cold_blocks: Vec::new(),
         };
         let err = validate(&bad).unwrap_err();
@@ -10598,6 +10928,7 @@ mod tests {
             reg_types: vec![JitValueType::Int; 1_001],
             zero_init_regs: Vec::new(),
             code: vec![JitInstr::Jump { target: 0 }; 1_000],
+            memo_scopes: Vec::new(),
             cold_blocks: Vec::new(),
         };
 
@@ -11716,6 +12047,7 @@ mod tests {
             reg_types,
             zero_init_regs: Vec::new(),
             code,
+            memo_scopes: Vec::new(),
             cold_blocks: Vec::new(),
         }
     }
@@ -11823,6 +12155,7 @@ mod tests {
                 reg_types,
                 zero_init_regs: Vec::new(),
                 code,
+                memo_scopes: Vec::new(),
                 cold_blocks: Vec::new(),
             };
             if let Ok(id) = m.compile(&prog) {

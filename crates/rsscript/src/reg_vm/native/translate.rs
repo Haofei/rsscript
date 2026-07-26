@@ -2046,7 +2046,12 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     let native_reg_types: Vec<NativeTy> = (0..n_regs)
         .map(|reg| ty[reg].unwrap_or(NativeTy::Int))
         .collect();
-    native_memoize_loop_invariant_host_calls(&code, &reachable, &mut jit_code, &native_reg_types);
+    let memo_scopes = native_memoize_loop_invariant_host_calls(
+        &code,
+        &reachable,
+        &mut jit_code,
+        &native_reg_types,
+    );
     native_forward_direct_list_store_loads(&mut jit_code);
 
     let reg_types = native_reg_types
@@ -2064,6 +2069,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         reg_types,
         zero_init_regs: scalar_payload_regs.iter().map(|&reg| reg as u32).collect(),
         code: jit_code,
+        memo_scopes,
         cold_blocks: profile_guidance.cold_blocks,
     };
     // A self-recursive function uses re-run-from-top deopt (its `CallSelf` is
@@ -2433,23 +2439,18 @@ fn native_memoize_loop_invariant_host_calls(
     reachable: &[bool],
     jit_code: &mut [vm_jit::JitInstr],
     native_reg_types: &[NativeTy],
-) {
+) -> Vec<vm_jit::MemoScope> {
     let original_n_regs = native_reg_types.len();
     let mut next_memo_slot = 0_u32;
+    let mut memo_scopes = Vec::new();
     let loops = detect_natural_loops(code);
     for lp in &loops {
-        // The lazy cache lives for the whole native invocation. An inner loop can
-        // be re-entered with new outer-loop values, so its invariance proof does
-        // not justify a function-lifetime cache.
-        if loops
-            .iter()
-            .any(|outer| outer.header < lp.header && lp.exit <= outer.exit)
-        {
+        // Scope lowering marks only unconditional jumps as backedges. This covers
+        // structured `while` loops without splitting conditional CFG edges.
+        if !native_memo_scope_representable(code, lp.header, lp.exit) {
             continue;
         }
-        if native_loop_has_external_header_branch(code, lp.header, lp.exit) {
-            continue;
-        }
+        let first_memo_slot = next_memo_slot;
         let Some(mut invariants) =
             native_loop_invariant_regs(code, reachable, lp.header, lp.exit, original_n_regs)
         else {
@@ -2520,7 +2521,15 @@ fn native_memoize_loop_invariant_host_calls(
                 }
             }
         }
+        if next_memo_slot > first_memo_slot {
+            memo_scopes.push(vm_jit::MemoScope {
+                header: lp.header as u32,
+                exit: lp.exit as u32,
+                memo_slots: (first_memo_slot..next_memo_slot).collect(),
+            });
+        }
     }
+    memo_scopes
 }
 
 #[cfg(feature = "native-jit")]
@@ -2868,31 +2877,29 @@ fn native_reg_loop_invariant_at(
 }
 
 #[cfg(feature = "native-jit")]
-fn native_loop_has_external_header_branch(code: &[RegInstr], header: usize, exit: usize) -> bool {
-    for (ip, instr) in code.iter().enumerate() {
-        if ip >= header && ip < exit {
-            continue;
-        }
-        let targets_header = match instr {
-            RegInstr::Jump { target }
-            | RegInstr::JumpIfBool { target, .. }
-            | RegInstr::JumpIfIntCompare { target, .. } => *target == header,
-            RegInstr::MatchOption {
+fn native_memo_scope_representable(code: &[RegInstr], header: usize, exit: usize) -> bool {
+    (header..exit).any(|ip| {
+        matches!(
+            code.get(ip),
+            Some(RegInstr::Jump { target }) if *target == header
+        )
+    }) && !(header..exit).any(|ip| {
+        let targets_header = match code.get(ip) {
+            Some(RegInstr::JumpIfBool { target, .. })
+            | Some(RegInstr::JumpIfIntCompare { target, .. }) => *target == header,
+            Some(RegInstr::MatchOption {
                 some_ip, none_ip, ..
-            }
-            | RegInstr::MatchMapGet {
+            })
+            | Some(RegInstr::MatchMapGet {
                 some_ip, none_ip, ..
-            }
-            | RegInstr::MatchSortedMapGet {
+            })
+            | Some(RegInstr::MatchSortedMapGet {
                 some_ip, none_ip, ..
-            } => *some_ip == header || *none_ip == header,
+            }) => *some_ip == header || *none_ip == header,
             _ => false,
         };
-        if targets_header {
-            return true;
-        }
-    }
-    false
+        targets_header
+    })
 }
 
 /// `Some(())` if the condition holds, else `None` — lets the translator use `?`
@@ -5107,7 +5114,12 @@ fn translate_osr_loop_inner(
         native_reg_types.push(NativeTy::Int);
     }
     let reachable = native_reachable_instructions(code);
-    native_memoize_loop_invariant_host_calls(code, &reachable, &mut jit_code, &native_reg_types);
+    let memo_scopes = native_memoize_loop_invariant_host_calls(
+        code,
+        &reachable,
+        &mut jit_code,
+        &native_reg_types,
+    );
     native_forward_direct_list_store_loads(&mut jit_code);
     let mut written_regs = vec![false; native_reg_types.len()];
     for (ip, instr) in jit_code.iter().enumerate() {
@@ -5132,6 +5144,7 @@ fn translate_osr_loop_inner(
         reg_types,
         zero_init_regs: Vec::new(),
         code: jit_code,
+        memo_scopes,
         cold_blocks,
     };
     Some((
