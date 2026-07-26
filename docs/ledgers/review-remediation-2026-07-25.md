@@ -62,8 +62,9 @@ conservative fallback boundaries.
 - Process timeout/cancellation remains the primary result when termination also
   causes a stdin broken pipe.
 - File reads and stream chunks use a shared 64 MiB ceiling.
-- VM file intrinsics use the same bounded runtime readers; rejected cursor reads
-  leave the cursor unchanged.
+- All audited VM file-backed entry points use the same bounded runtime readers,
+  including bytes streams, path strings, JSON/TOML parsing, and CSV streams;
+  rejected cursor reads leave the cursor unchanged.
 - Recursive directory listing rejects symlinks and enforces depth, entry-count,
   and path-byte budgets.
 - Process execution uses one streaming, capped engine. Stdin writing no longer
@@ -78,6 +79,9 @@ conservative fallback boundaries.
   streaming copy/hash operations, file/depth/byte budgets, bounded Cargo output,
   deadlines, process-group termination, and a reduced deterministic environment.
   Native authorization remains full host-code execution, not sandboxing.
+- Binding/Cargo manifests are capped before whole allocation, directory entries
+  are counted before bounded sorting, and streaming hashes enforce the approved
+  scan length so growing files cannot bypass the byte budget.
 - LSP document edits, versions, and revisions are committed atomically;
   diagnostics publication does not hold the document mutex across an await.
 
@@ -124,6 +128,7 @@ The batch was validated incrementally with:
 - `cargo test -p rss-lsp`
 - native SQLite and SQLx tests and VM smoke packages
 - the consolidated generated-fixture locked workspace check
+- final bounded-input regressions (8 focused tests)
 
 The final release performance gate passed with zero native bails. Against the
 committed baseline, the largest collection improvements were:
