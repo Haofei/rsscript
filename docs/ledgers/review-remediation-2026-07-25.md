@@ -43,6 +43,10 @@ LSP, SQL adapter, release-gate, and test-speed findings reviewed through commit
 - Folded non-escaping `Bytes.slice(...); Bytes.len(...)` into overflow-free
   scalar clamp arithmetic. Dynamic inputs retain validation at the original
   slice site, while activation-local memoization removes repeated helpers.
+- Fused Map and SortedMap integer/float lookup matches so payload and `found`
+  cross one helper boundary. Removed the thread-local found-flag side channel,
+  retained edge-sensitive definite assignment, and bumped the public JIT IR to
+  version 25.
 
 The implementation deliberately does not claim executable-code reclamation.
 Cranelift code rejected after emission remains owned until VM teardown. Logical
@@ -58,11 +62,22 @@ conservative fallback boundaries.
 - Process timeout/cancellation remains the primary result when termination also
   causes a stdin broken pipe.
 - File reads and stream chunks use a shared 64 MiB ceiling.
+- VM file intrinsics use the same bounded runtime readers; rejected cursor reads
+  leave the cursor unchanged.
+- Recursive directory listing rejects symlinks and enforces depth, entry-count,
+  and path-byte budgets.
+- Process execution uses one streaming, capped engine. Stdin writing no longer
+  blocks timeout startup, zero output caps select the 64 MiB ceiling, and
+  timeout/cancellation/drop terminate the child process group.
 - Package locks reject duplicate `(name, version, source)` identities and
   distinguish version changes from source changes.
 - Vendor destinations use full SHA-256 source identities.
 - Native package paths reject rooted, prefixed, and parent components and
   canonicalize existing paths.
+- Native package/shim preparation uses symlink-safe deterministic traversal,
+  streaming copy/hash operations, file/depth/byte budgets, bounded Cargo output,
+  deadlines, process-group termination, and a reduced deterministic environment.
+  Native authorization remains full host-code execution, not sandboxing.
 - LSP document edits, versions, and revisions are committed atomically;
   diagnostics publication does not hold the document mutex across an await.
 
@@ -83,6 +98,10 @@ the adapter can apply its byte ceiling.
 
 - Cargo commands that resolve dependencies in the all-test manifest use
   `--locked`, and the gate rejects `Cargo.lock` drift.
+- Release artifacts now depend on a dedicated complete-workspace validation job
+  covering runtime, LSP, vm-jit, native ABI/adapters, generated Rust backends,
+  native-JIT, and self-host parity. Hardware/live-service tests are explicitly
+  excluded rather than silently skipped.
 - Seven generated Rust fixtures now share one workspace, lockfile, target
   directory, and Cargo process.
 - Measured fixture-process count fell from seven to one. A controlled warm check
@@ -96,12 +115,12 @@ The batch was validated incrementally with:
 
 - `cargo fmt --all -- --check`
 - `cargo check --workspace --locked`
-- `cargo test -p vm-jit`
-- `cargo test -p rsscript --features native-jit --lib`
+- `cargo test -p vm-jit --lib` (123 passed)
+- `cargo test -p rsscript --features native-jit --lib` (594 passed, 7 ignored)
 - focused OSR, memoization, shape, admission, deopt, and performance-gate tests
 - the complete release JIT performance gate (20 kernels)
 - `cargo test -p reir`
-- `cargo test -p rsscript-runtime`
+- `cargo test -p rsscript-runtime` (207 passed)
 - `cargo test -p rss-lsp`
 - native SQLite and SQLx tests and VM smoke packages
 - the consolidated generated-fixture locked workspace check
