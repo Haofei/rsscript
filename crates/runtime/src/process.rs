@@ -2,10 +2,11 @@ use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
-use crate::stream_from_external_receiver;
+use crate::channel::stream_from_external_receiver_with_drop;
 use crate::{ChannelError, NativeAsyncPending, RssStream, spawn_tokio_native};
 use crate::{JsonValue, json_to_string};
 use crate::{RssCancellationToken, cancellation_token_is_cancelled};
@@ -261,6 +262,8 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
         .map_err(|error| format!("failed to run `{}`: {error}", request.command))?;
     let stdin = request.stdin.clone();
     let command_name = request.command.clone();
+    let stream_dropped = Arc::new(AtomicBool::new(false));
+    let monitor_dropped = Arc::clone(&stream_dropped);
     let limit = Arc::new(Mutex::new(ProcessStreamLimit::new(cap)));
     let (sender, receiver) = mpsc::channel::<Result<ProcessEvent, ChannelError>>();
     let stdout = child.stdout.take();
@@ -271,19 +274,29 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
     if let Some(stderr) = stderr {
         spawn_process_event_reader(stderr, "stderr", Arc::clone(&limit), sender.clone());
     }
+    if let Some(stdin) = stdin
+        && let Some(mut child_stdin) = child.stdin.take()
+    {
+        let stdin_sender = sender.clone();
+        let stdin_command = command_name.clone();
+        std::thread::spawn(move || {
+            if let Err(error) = child_stdin.write_all(stdin.as_bytes()) {
+                let _ = stdin_sender.send(Ok(ProcessEvent {
+                    kind: "error".to_string(),
+                    data: format!("failed to write stdin for `{stdin_command}`: {error}"),
+                    status: -1,
+                }));
+            }
+        });
+    }
     std::thread::spawn(move || {
-        if let Some(stdin) = stdin
-            && let Some(mut child_stdin) = child.stdin.take()
-            && let Err(error) = child_stdin.write_all(stdin.as_bytes())
-        {
-            let _ = sender.send(Ok(ProcessEvent {
-                kind: "error".to_string(),
-                data: format!("failed to write stdin for `{command_name}`: {error}"),
-                status: -1,
-            }));
-        }
         let started = Instant::now();
         loop {
+            if monitor_dropped.load(Ordering::Acquire) {
+                terminate_process_child(&mut child);
+                let _ = child.wait();
+                break;
+            }
             match child.try_wait() {
                 Ok(Some(status)) => {
                     let _ = sender.send(Ok(ProcessEvent {
@@ -323,7 +336,12 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
         }
     });
 
-    Ok(stream_from_external_receiver(receiver))
+    Ok(stream_from_external_receiver_with_drop(
+        receiver,
+        Some(Box::new(move || {
+            stream_dropped.store(true, Ordering::Release);
+        })),
+    ))
 }
 
 fn process_run_request_with_cancellation(
@@ -1165,5 +1183,76 @@ mod tests {
         assert_eq!(status, Some(7));
         assert!(data.contains("out"));
         assert!(data.contains("err"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn process_stream_timeout_is_not_blocked_by_stdin_writes() {
+        let request = super::ProcessRequest {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "sleep 5".to_string()],
+            cwd: None,
+            stdin: Some("x".repeat(8 * 1024 * 1024)),
+            env: Vec::new(),
+            timeout_ms: 30,
+            merge_stderr: true,
+            output_cap_bytes: 1024,
+        };
+        let started = std::time::Instant::now();
+        let stream = super::process_stream(&request).expect("process stream should start");
+        let events = crate::stream_collect_list(&stream).expect("stream should complete");
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "timeout monitor was blocked by stdin"
+        );
+        assert!(events.iter().any(|event| event.kind == "timeout"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn dropping_process_stream_terminates_the_child() {
+        let pid_file = std::env::temp_dir().join(format!(
+            "rsscript-process-stream-drop-{}.pid",
+            std::process::id()
+        ));
+        let request = super::ProcessRequest {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                format!("echo $$ > '{}'; sleep 5", pid_file.display()),
+            ],
+            cwd: None,
+            stdin: None,
+            env: Vec::new(),
+            timeout_ms: 30_000,
+            merge_stderr: true,
+            output_cap_bytes: 1024,
+        };
+        let stream = super::process_stream(&request).expect("process stream should start");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        while !pid_file.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let pid = std::fs::read_to_string(&pid_file)
+            .expect("child should publish its pid")
+            .trim()
+            .to_string();
+
+        drop(stream);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+        let mut alive = true;
+        while alive && std::time::Instant::now() < deadline {
+            alive = std::process::Command::new("kill")
+                .args(["-0", &pid])
+                .status()
+                .is_ok_and(|status| status.success());
+            if alive {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+
+        let _ = std::fs::remove_file(pid_file);
+        assert!(!alive, "child process {pid} survived stream drop");
     }
 }

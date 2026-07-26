@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use rsscript::{
     Definition, Diagnostic as RsDiagnostic, PackageReviewFileKind, Reference, RssDocumentSymbol,
@@ -26,6 +27,7 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 struct Document {
     text: String,
     diagnostics: Vec<RsDiagnostic>,
+    revision: u64,
 }
 
 #[derive(Clone)]
@@ -38,6 +40,23 @@ struct WorkspaceDocument {
 struct Backend {
     client: Client,
     documents: tokio::sync::Mutex<HashMap<Url, Document>>,
+    next_revision: AtomicU64,
+}
+
+fn commit_diagnostics_if_current(
+    documents: &mut HashMap<Url, Document>,
+    uri: &Url,
+    revision: u64,
+    diagnostics: Vec<RsDiagnostic>,
+) -> bool {
+    let Some(document) = documents.get_mut(uri) else {
+        return false;
+    };
+    if document.revision != revision {
+        return false;
+    }
+    document.diagnostics = diagnostics;
+    true
 }
 
 impl Backend {
@@ -45,11 +64,13 @@ impl Backend {
         Self {
             client,
             documents: tokio::sync::Mutex::new(HashMap::new()),
+            next_revision: AtomicU64::new(1),
         }
     }
 
     /// Run the checker over `text` and publish the results for `uri`.
     async fn analyze_and_publish(&self, uri: Url, text: String, version: Option<i32>) {
+        let revision = self.next_revision.fetch_add(1, Ordering::Relaxed);
         let open_documents = {
             let mut documents = self.documents.lock().await;
             documents.insert(
@@ -57,21 +78,33 @@ impl Backend {
                 Document {
                     text,
                     diagnostics: Vec::new(),
+                    revision,
                 },
             );
             documents.clone()
         };
-        let diagnostics = diagnostics_for_uri(&uri, &open_documents);
+        let analysis_uri = uri.clone();
+        let analysis = tokio::task::spawn_blocking(move || {
+            let diagnostics = diagnostics_for_uri(&analysis_uri, &open_documents);
+            let lsp_diagnostics =
+                lsp_diagnostics_from_diagnostics(&analysis_uri, &open_documents, &diagnostics);
+            (diagnostics, lsp_diagnostics)
+        })
+        .await;
+        let Ok((diagnostics, lsp_diagnostics)) = analysis else {
+            self.client
+                .log_message(MessageType::ERROR, "RSScript analysis task failed")
+                .await;
+            return;
+        };
 
-        let lsp_diagnostics = lsp_diagnostics_from_diagnostics(&uri, &open_documents, &diagnostics);
-
-        self.client
-            .publish_diagnostics(uri.clone(), lsp_diagnostics, version)
-            .await;
-
-        if let Some(document) = self.documents.lock().await.get_mut(&uri) {
-            document.diagnostics = diagnostics;
+        let mut documents = self.documents.lock().await;
+        if !commit_diagnostics_if_current(&mut documents, &uri, revision, diagnostics) {
+            return;
         }
+        self.client
+            .publish_diagnostics(uri, lsp_diagnostics, version)
+            .await;
     }
 }
 
@@ -1788,7 +1821,32 @@ mod tests {
         Document {
             text: text.to_string(),
             diagnostics: Vec::new(),
+            revision: 0,
         }
+    }
+
+    #[test]
+    fn stale_analysis_cannot_replace_newer_diagnostics() {
+        let uri = file_url("stale.rss");
+        let mut documents = HashMap::from([(uri.clone(), document("new source"))]);
+        documents
+            .get_mut(&uri)
+            .expect("document should exist")
+            .revision = 2;
+
+        assert!(!commit_diagnostics_if_current(
+            &mut documents,
+            &uri,
+            1,
+            Vec::new(),
+        ));
+        assert_eq!(
+            documents
+                .get(&uri)
+                .expect("document should remain")
+                .revision,
+            2
+        );
     }
 
     #[test]

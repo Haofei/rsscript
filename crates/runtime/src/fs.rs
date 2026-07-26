@@ -330,8 +330,14 @@ pub fn file_read_all_string(file: &mut File) -> Result<String, FileError> {
 }
 
 pub fn file_read_into(file: &mut File, buffer: &mut Vec<u8>) -> Result<bool, FileError> {
+    let limit = buffer.capacity();
     buffer.clear();
-    let bytes_read = file.inner.read_to_end(buffer)?;
+    if limit == 0 {
+        return Ok(false);
+    }
+    let bytes_read = Read::by_ref(&mut file.inner)
+        .take(limit as u64)
+        .read_to_end(buffer)?;
     Ok(bytes_read > 0)
 }
 

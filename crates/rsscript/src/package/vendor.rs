@@ -2,6 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
+use sha2::{Digest, Sha256};
+
 use super::lock::{package_checksum, package_native_hash};
 use super::source_set::load_package;
 use super::{
@@ -32,8 +34,15 @@ pub fn vendor_package_dir(
         left.name
             .cmp(&right.name)
             .then(left.version.cmp(&right.version))
+            .then(left.source_path.cmp(&right.source_path))
+            .then(left.checksum.cmp(&right.checksum))
     });
-    entries.dedup_by(|left, right| left.name == right.name && left.version == right.version);
+    entries.dedup_by(|left, right| {
+        left.name == right.name
+            && left.version == right.version
+            && left.source_path == right.source_path
+            && left.checksum == right.checksum
+    });
     unresolved.sort_by(|left, right| left.name.cmp(&right.name));
 
     if !dry_run {
@@ -118,7 +127,7 @@ fn collect_vendor_dependencies(
         let dependency_package = load_package(&dependency_dir)?;
         let identity = package_identity(&dependency_package.manifest);
         let canonical = canonical_path_label(&dependency_dir);
-        let vendor_path = vendor_dir.join(vendor_package_dir_name(&identity));
+        let vendor_path = vendor_dir.join(vendor_package_dir_name(&identity, &canonical));
         let native = dependency_package
             .manifest
             .native
@@ -149,10 +158,32 @@ fn collect_vendor_dependencies(
     Ok(())
 }
 
-fn vendor_package_dir_name(identity: &PackageIdentity) -> String {
+fn vendor_package_dir_name(identity: &PackageIdentity, canonical_source: &str) -> String {
+    let source_digest = hex::encode(Sha256::digest(canonical_source.as_bytes()));
     format!(
-        "{}-{}",
+        "{}-{}-{}",
         sanitize_vendor_path_component(&identity.name),
-        sanitize_vendor_path_component(&identity.version)
+        sanitize_vendor_path_component(&identity.version),
+        &source_digest[..12]
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vendor_directory_names_include_source_identity() {
+        let identity = PackageIdentity {
+            name: "same/name".to_string(),
+            version: "1.0.0".to_string(),
+            edition: "2026".to_string(),
+        };
+
+        let first = vendor_package_dir_name(&identity, "/packages/first");
+        let second = vendor_package_dir_name(&identity, "/packages/second");
+
+        assert_ne!(first, second);
+        assert!(first.starts_with("same_name-1.0.0-"));
+    }
 }

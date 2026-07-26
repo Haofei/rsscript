@@ -106,18 +106,22 @@ pub(super) fn compare_locked_packages(
     old_packages: &[PackageLockPackage],
     new_packages: &[PackageLockPackage],
 ) -> Vec<PackageLockPackageChange> {
-    let old_packages = locked_packages_by_name(old_packages);
-    let new_packages = locked_packages_by_name(new_packages);
-    let names = old_packages
+    let duplicate_names = duplicate_locked_package_names(old_packages)
+        .into_iter()
+        .chain(duplicate_locked_package_names(new_packages))
+        .collect::<BTreeSet<_>>();
+    let old_packages = locked_packages_by_identity(old_packages, &duplicate_names);
+    let new_packages = locked_packages_by_identity(new_packages, &duplicate_names);
+    let identities = old_packages
         .keys()
         .chain(new_packages.keys())
         .cloned()
         .collect::<BTreeSet<_>>();
     let mut changes = Vec::new();
-    for name in names {
-        match (old_packages.get(&name), new_packages.get(&name)) {
+    for identity in identities {
+        match (old_packages.get(&identity), new_packages.get(&identity)) {
             (None, Some(new)) => changes.push(PackageLockPackageChange {
-                name,
+                name: new.name.clone(),
                 before_version: None,
                 after_version: Some(new.version.clone()),
                 risk: PackageRisk::Elevated,
@@ -129,7 +133,7 @@ pub(super) fn compare_locked_packages(
                 }],
             }),
             (Some(old), None) => changes.push(PackageLockPackageChange {
-                name,
+                name: old.name.clone(),
                 before_version: Some(old.version.clone()),
                 after_version: None,
                 risk: PackageRisk::High,
@@ -147,7 +151,7 @@ pub(super) fn compare_locked_packages(
                         .iter()
                         .fold(PackageRisk::Low, |risk, change| risk.max(change.risk));
                     changes.push(PackageLockPackageChange {
-                        name,
+                        name: old.name.clone(),
                         before_version: Some(old.version.clone()),
                         after_version: Some(new.version.clone()),
                         risk,
@@ -161,12 +165,31 @@ pub(super) fn compare_locked_packages(
     changes
 }
 
-fn locked_packages_by_name(
-    packages: &[PackageLockPackage],
-) -> BTreeMap<String, &PackageLockPackage> {
+fn duplicate_locked_package_names(packages: &[PackageLockPackage]) -> BTreeSet<String> {
+    let mut seen = BTreeSet::new();
+    let mut duplicates = BTreeSet::new();
+    for package in packages {
+        if !seen.insert(package.name.clone()) {
+            duplicates.insert(package.name.clone());
+        }
+    }
+    duplicates
+}
+
+fn locked_packages_by_identity<'a>(
+    packages: &'a [PackageLockPackage],
+    duplicate_names: &BTreeSet<String>,
+) -> BTreeMap<String, &'a PackageLockPackage> {
     packages
         .iter()
-        .map(|package| (package.name.clone(), package))
+        .map(|package| {
+            let identity = if duplicate_names.contains(&package.name) {
+                format!("{}\0{}\0{}", package.name, package.version, package.source)
+            } else {
+                package.name.clone()
+            };
+            (identity, package)
+        })
         .collect()
 }
 
@@ -590,7 +613,10 @@ pub(super) fn package_native_hash(
     let Some(native) = native.filter(|native| native.enabled) else {
         return Ok(None);
     };
-    let native_root = package_dir.join(native.path.as_deref().unwrap_or("native/rust"));
+    let native_root = super::native::confined_native_rust_path(
+        package_dir,
+        native.path.as_deref().unwrap_or("native/rust"),
+    )?;
     let mut input = String::new();
     input.push_str(native.path.as_deref().unwrap_or("native/rust"));
     input.push('\n');
@@ -672,4 +698,38 @@ fn sha256_label(bytes: &[u8]) -> String {
         output.push_str(&format!("{byte:02x}"));
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn locked(name: &str, version: &str, source: &str) -> PackageLockPackage {
+        PackageLockPackage {
+            name: name.to_string(),
+            version: version.to_string(),
+            source: source.to_string(),
+            checksum: format!("checksum:{source}"),
+            interface_hash: "interface".to_string(),
+            review_hash: "review".to_string(),
+            native_hash: None,
+            features: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn lock_diff_preserves_same_name_multi_source_instances() {
+        let first = locked("shared", "1.0.0", "path+/first");
+        let second = locked("shared", "2.0.0", "path+/second");
+
+        let changes = compare_locked_packages(
+            &[first.clone(), second.clone()],
+            std::slice::from_ref(&first),
+        );
+
+        assert_eq!(changes.len(), 1, "{changes:#?}");
+        assert_eq!(changes[0].name, "shared");
+        assert_eq!(changes[0].before_version.as_deref(), Some("2.0.0"));
+        assert_eq!(changes[0].after_version, None);
+    }
 }

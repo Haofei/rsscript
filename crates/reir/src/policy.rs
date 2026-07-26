@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Evidence, Reconciliation, ReconciliationKind, Subject};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PolicyResult {
     pub schema: String,
     pub id: String,
@@ -32,6 +33,7 @@ pub enum PolicyStatus {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Exception {
     pub id: String,
     pub accepted_by: String,
@@ -43,6 +45,7 @@ pub struct Exception {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Profile {
     pub kind: String,
     #[serde(default)]
@@ -60,6 +63,7 @@ pub enum ProfilePermission {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProfileBudget {
     #[serde(default)]
     pub max_missing_capabilities: usize,
@@ -168,6 +172,7 @@ fn budget_result(
 /// require_verified_capabilities = true
 /// ```
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GatePolicyFile {
     #[serde(default)]
     pub default: TargetGatePolicy,
@@ -176,6 +181,7 @@ pub struct GatePolicyFile {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TargetGatePolicy {
     pub fail_on_missing: Option<bool>,
     pub fail_on_unknown: Option<bool>,
@@ -269,5 +275,18 @@ require_verified_capabilities = true
         assert!(policy.fail_on_unknown);
         assert!(policy.fail_on_excess);
         assert!(policy.require_verified_capabilities);
+    }
+
+    #[test]
+    fn policy_files_reject_unknown_fields() {
+        let error = GatePolicyFile::parse(
+            r#"
+[default]
+fail_on_unkown = false
+"#,
+        )
+        .expect_err("misspelled security policy fields must fail closed");
+
+        assert!(error.contains("unknown field `fail_on_unkown`"), "{error}");
     }
 }

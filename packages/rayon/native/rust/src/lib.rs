@@ -1,11 +1,23 @@
 use rayon::prelude::*;
 
 pub fn sum_int(values: &Vec<i64>) -> i64 {
-    values.par_iter().sum()
+    checked_sum(values.iter().copied())
 }
 
 pub fn sum_squares(values: &Vec<i64>) -> i64 {
-    values.par_iter().map(|value| value * value).sum()
+    let squares = values
+        .par_iter()
+        .map(|value| value.checked_mul(*value))
+        .collect::<Option<Vec<_>>>()
+        .unwrap_or_else(|| panic!("RSScript integer overflow"));
+    checked_sum(squares.into_iter())
+}
+
+fn checked_sum(values: impl IntoIterator<Item = i64>) -> i64 {
+    values
+        .into_iter()
+        .try_fold(0_i64, i64::checked_add)
+        .unwrap_or_else(|| panic!("RSScript integer overflow"))
 }
 
 pub fn count_positive_int(values: &Vec<i64>) -> i64 {
@@ -55,5 +67,11 @@ mod tests {
             parallel_elapsed.as_nanos() * 100 < serial_elapsed.as_nanos() * 95,
             "Rayon sort must beat serial sort by at least 5%: serial={serial_elapsed:?} rayon={parallel_elapsed:?}"
         );
+    }
+
+    #[test]
+    fn integer_reductions_trap_on_overflow_in_every_profile() {
+        assert!(std::panic::catch_unwind(|| super::sum_int(&vec![i64::MAX, 1])).is_err());
+        assert!(std::panic::catch_unwind(|| super::sum_squares(&vec![i64::MAX])).is_err());
     }
 }

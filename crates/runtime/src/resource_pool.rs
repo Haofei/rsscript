@@ -604,9 +604,13 @@ mod tests {
         }
 
         let mut file = crate::file_open_read(&path).expect("file should open for read");
-        let mut buffer = crate::buffer_new(64);
+        let mut buffer = crate::buffer_new(5);
         assert!(crate::file_read_into(&mut file, &mut buffer).expect("read should succeed"));
-        assert_eq!(buffer, b"hello buffer");
+        assert_eq!(buffer, b"hello");
+        assert!(crate::file_read_into(&mut file, &mut buffer).expect("read should succeed"));
+        assert_eq!(buffer, b" buff");
+        assert!(crate::file_read_into(&mut file, &mut buffer).expect("read should succeed"));
+        assert_eq!(buffer, b"er");
         assert!(!crate::file_read_into(&mut file, &mut buffer).expect("EOF should succeed"));
         assert!(buffer.is_empty());
         crate::buffer_clear(&mut buffer);
@@ -1287,13 +1291,13 @@ mod tests {
     }
 
     #[test]
-    fn native_async_completer_rejects_completion_after_cancellation() {
+    fn native_async_completer_can_finish_after_cancellation() {
         let cancellation = crate::CancellationToken::new();
         let (_pending, completer) = crate::native_async_pending::<usize>(cancellation.clone());
 
         cancellation.cancel();
 
-        assert!(!completer.complete(99));
+        assert!(completer.complete(99));
     }
 
     #[test]

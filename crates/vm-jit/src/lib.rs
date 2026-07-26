@@ -3129,6 +3129,7 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
     const MAX_JIT_REGS: usize = 65_536;
     const MAX_JIT_PARAMS: usize = 16_384;
     const MAX_JIT_INSTRUCTIONS: usize = 1_000_000;
+    const MAX_JIT_ANALYSIS_CELLS: usize = 1_000_000;
 
     let n_regs = program.n_regs as usize;
     let n = program.code.len();
@@ -3159,6 +3160,17 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
     if n > MAX_JIT_INSTRUCTIONS {
         return Err(JitError(format!(
             "code length {n} exceeds the JIT limit {MAX_JIT_INSTRUCTIONS}"
+        )));
+    }
+    let analysis_cells = n_regs.checked_mul(n).ok_or_else(|| {
+        JitError(format!(
+            "JIT analysis dimensions overflow: {n} instructions x {n_regs} registers"
+        ))
+    })?;
+    if analysis_cells > MAX_JIT_ANALYSIS_CELLS {
+        return Err(JitError(format!(
+            "JIT analysis size {analysis_cells} cells exceeds the limit {MAX_JIT_ANALYSIS_CELLS} \
+             ({n} instructions x {n_regs} registers)"
         )));
     }
     for &reg in &program.zero_init_regs {
@@ -10244,6 +10256,21 @@ mod tests {
     fn rejects_params_exceeding_regs() {
         let err = validate(&f(4, 2, vec![])).unwrap_err();
         assert!(err.0.contains("n_params"), "{}", err.0);
+    }
+
+    #[test]
+    fn rejects_excessive_combined_analysis_dimensions() {
+        let program = JitFunction {
+            n_params: 0,
+            n_regs: 1_001,
+            reg_types: vec![JitValueType::Int; 1_001],
+            zero_init_regs: Vec::new(),
+            code: vec![JitInstr::Jump { target: 0 }; 1_000],
+            cold_blocks: Vec::new(),
+        };
+
+        let error = validate(&program).expect_err("analysis matrices must have a joint limit");
+        assert!(error.0.contains("analysis size"), "{}", error.0);
     }
 
     #[test]

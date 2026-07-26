@@ -151,6 +151,17 @@ fn reconcile_capabilities_impl(
             || required_fact
                 .validate_for_gate(FactRole::Required, GateFactDomain::Requirement)
                 .is_empty();
+        let matching_denies: Vec<&Fact> = denied_with_capability
+            .iter()
+            .copied()
+            .filter(|denied_fact| {
+                principal.is_none_or(|id| denied_fact.matches_gate_principal(id))
+                    && denied_fact
+                        .capability
+                        .as_ref()
+                        .is_some_and(|denied| capability_intersects(denied, required_capability))
+            })
+            .collect();
         let matching_grants: Vec<&Fact> = granted_with_capability
             .iter()
             .copied()
@@ -168,12 +179,6 @@ fn reconcile_capabilities_impl(
                         .is_some_and(|granted_capability| {
                             capability_covers(granted_capability, required_capability)
                         })
-                    && !denied_with_capability.iter().any(|denied_fact| {
-                        principal.is_none_or(|id| denied_fact.matches_gate_principal(id))
-                            && denied_fact.capability.as_ref().is_some_and(|denied| {
-                                capability_covers(denied, required_capability)
-                            })
-                    })
             })
             .collect();
 
@@ -195,7 +200,41 @@ fn reconcile_capabilities_impl(
                                 .is_empty()))
             });
 
-        if matching_grants.is_empty() && has_unknown_coverage {
+        let deny_covers_requirement = matching_denies.iter().any(|fact| {
+            fact.capability
+                .as_ref()
+                .is_some_and(|denied| capability_covers(denied, required_capability))
+        });
+        if !matching_grants.is_empty() && !matching_denies.is_empty() && !deny_covers_requirement {
+            let mut evidence = required_fact.evidence.clone();
+            for fact in matching_grants.iter().chain(matching_denies.iter()) {
+                evidence.extend(fact.evidence.clone());
+            }
+            results.push(Reconciliation {
+                schema: "reir.reconciliation.v0.1".to_string(),
+                id: format!("recon.partial.{}", required_fact.id),
+                kind: ReconciliationKind::PartialCoverage,
+                status: ReconciliationStatus::Fail,
+                target: target.clone(),
+                subject_chain: None,
+                required_fact: Some(required_fact.id.clone()),
+                granted_facts: matching_grants
+                    .iter()
+                    .chain(matching_denies.iter())
+                    .map(|fact| fact.id.clone())
+                    .collect(),
+                observed_fact: None,
+                capability: Some(required_capability.clone()),
+                risk: Some(ReconciliationRisk {
+                    class: RiskClass::Security,
+                    severity: RiskSeverity::High,
+                    reason: Some(
+                        "explicit_deny_intersects_an_otherwise_covering_grant".to_string(),
+                    ),
+                }),
+                evidence,
+            });
+        } else if matching_grants.is_empty() && has_unknown_coverage {
             results.push(Reconciliation {
                 schema: "reir.reconciliation.v0.1".to_string(),
                 id: format!("recon.unknown.{}", required_fact.id),
@@ -222,7 +261,7 @@ fn reconcile_capabilities_impl(
                 }),
                 evidence: required_fact.evidence.clone(),
             });
-        } else if matching_grants.is_empty() {
+        } else if matching_grants.is_empty() || deny_covers_requirement {
             results.push(Reconciliation {
                 schema: "reir.reconciliation.v0.1".to_string(),
                 id: format!("recon.missing.{}", required_fact.id),
@@ -323,6 +362,48 @@ fn capability_covers(granted: &Capability, required: &Capability) -> bool {
         && action_covers(granted.action.as_deref(), required.action.as_deref())
         && resource_covers(granted.resource.as_deref(), required.resource.as_deref())
         && constraints_cover(&granted.constraints, &required.constraints)
+}
+
+fn capability_intersects(left: &Capability, right: &Capability) -> bool {
+    left.category == right.category
+        && optional_field_intersects(left.provider.as_deref(), right.provider.as_deref())
+        && optional_field_intersects(left.service.as_deref(), right.service.as_deref())
+        && optional_field_intersects(left.action.as_deref(), right.action.as_deref())
+        && resource_intersects(left.resource.as_deref(), right.resource.as_deref())
+        && constraints_intersect(&left.constraints, &right.constraints)
+}
+
+fn optional_field_intersects(left: Option<&str>, right: Option<&str>) -> bool {
+    match (left, right) {
+        (None, _) | (_, None) | (Some("*"), _) | (_, Some("*")) => true,
+        (Some(left), Some(right)) => left == right,
+    }
+}
+
+fn resource_intersects(left: Option<&str>, right: Option<&str>) -> bool {
+    match (left, right) {
+        (None, _) | (_, None) | (Some("*"), _) | (_, Some("*")) => true,
+        (Some(left), Some(right)) => {
+            let left_prefix = left.strip_suffix('*').unwrap_or(left);
+            let right_prefix = right.strip_suffix('*').unwrap_or(right);
+            if left.ends_with('*') || right.ends_with('*') {
+                left_prefix.starts_with(right_prefix) || right_prefix.starts_with(left_prefix)
+            } else {
+                left == right
+            }
+        }
+    }
+}
+
+fn constraints_intersect(
+    left: &std::collections::HashMap<String, String>,
+    right: &std::collections::HashMap<String, String>,
+) -> bool {
+    left.iter().all(|(key, left_value)| {
+        right.get(key).is_none_or(|right_value| {
+            left_value == "*" || right_value == "*" || left_value == right_value
+        })
+    })
 }
 
 fn capability_key_compatible(granted: &Capability, required: &Capability) -> bool {
@@ -598,6 +679,62 @@ mod tests {
                 .iter()
                 .any(|result| result.kind == ReconciliationKind::MissingCapability)
         );
+        assert!(
+            !results
+                .iter()
+                .any(|result| result.kind == ReconciliationKind::Covered)
+        );
+    }
+
+    #[test]
+    fn narrow_deny_prevents_a_broad_grant_from_reporting_full_coverage() {
+        let required = Fact {
+            schema: "reir.fact.v0.1".to_string(),
+            id: "required".to_string(),
+            kind: FactKind::Capability,
+            role: Some(FactRole::Required),
+            subject: Subject {
+                kind: SubjectKind::CodeFunction,
+                id: "code::run".to_string(),
+                name: None,
+                package: None,
+            },
+            capability: Some(wildcard(CapabilityCategory::ObjectStorageWrite, "aws")),
+            value: FactValue::True,
+            confidence: Confidence {
+                level: ConfidenceLevel::Computed,
+                source: Some("test".to_string()),
+            },
+            acquisition_mode: AcquisitionMode::SourceScan,
+            precision: Precision::ResourceScoped,
+            evidence: Vec::new(),
+            unknown_reason: None,
+        };
+        let principal = Subject {
+            kind: SubjectKind::CloudRole,
+            id: "role.prod".to_string(),
+            name: None,
+            package: None,
+        };
+        let grant = Fact {
+            id: "grant".to_string(),
+            role: Some(FactRole::Granted),
+            subject: principal.clone(),
+            ..required.clone()
+        };
+        let deny = Fact {
+            id: "deny".to_string(),
+            role: Some(FactRole::Denied),
+            subject: principal,
+            capability: Some(capability("s3")),
+            ..required.clone()
+        };
+
+        let results = reconcile_capabilities(&[required], &[grant, deny]);
+        assert!(results.iter().any(|result| {
+            result.kind == ReconciliationKind::PartialCoverage
+                && result.status == ReconciliationStatus::Fail
+        }));
         assert!(
             !results
                 .iter()

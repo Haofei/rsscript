@@ -167,7 +167,8 @@ pub(super) fn review_package_dir_with_features(
         .as_ref()
         .and_then(|native| native.rust.as_ref())
         .filter(|native| native.enabled)
-        .map(|native| package_native_rust_review(package_dir, manifest, sources, native));
+        .map(|native| package_native_rust_review(package_dir, manifest, sources, native))
+        .transpose()?;
 
     let capabilities = package_review_capabilities(manifest, sources);
     let unknown_capability_bindings = capabilities

@@ -3,6 +3,8 @@ use std::sync::Arc;
 use crate::{NativeAsyncPending, spawn_tokio_native};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+const MAX_TCP_READ_BYTES: i64 = 16 * 1024 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TcpError {
     message: String,
@@ -49,6 +51,11 @@ pub fn tcp_stream_read(
     spawn_tokio_native(async move {
         if max_bytes <= 0 {
             return Err(TcpError::new("TCP read max_bytes must be positive"));
+        }
+        if max_bytes > MAX_TCP_READ_BYTES {
+            return Err(TcpError::new(format!(
+                "TCP read max_bytes must not exceed {MAX_TCP_READ_BYTES}"
+            )));
         }
         let mut buffer = vec![0; max_bytes as usize];
         let mut stream = stream.lock().await;

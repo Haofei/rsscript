@@ -194,15 +194,13 @@ fn package_own_native_rust_dependencies(
             "native.rust enabled packages must declare `crate` before Rust lowering.".to_string()
         })?;
     let native_path = native.path.as_deref().unwrap_or("native/rust");
+    let native_root = confined_native_rust_path(package_dir, native_path)?;
     let bindings = package_native_bindings(package_dir)?;
     let cargo_features =
         selected_native_cargo_features_for_package_features(native, selected_features);
     Ok(vec![NativeRustDependency {
         crate_name: crate_name.to_string(),
-        path: absolute_package_path(package_dir)
-            .join(native_path)
-            .display()
-            .to_string(),
+        path: native_root.display().to_string(),
         cargo_features,
         bindings,
     }])
@@ -234,15 +232,6 @@ fn dedup_native_rust_dependencies(
         deduped.push(dependency);
     }
     Ok(deduped)
-}
-
-fn absolute_package_path(package_dir: &Path) -> PathBuf {
-    if package_dir.is_absolute() {
-        return package_dir.to_path_buf();
-    }
-    env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(package_dir)
 }
 
 pub(super) fn package_native_bindings(
@@ -566,7 +555,7 @@ pub(super) fn check_package_native_rust(
     let Some(native) = native else {
         return Ok(None);
     };
-    let native_root = package_dir.join(&native.path);
+    let native_root = confined_native_rust_path(package_dir, &native.path)?;
     let cargo_toml = native_root.join("Cargo.toml");
     let cargo_toml_present = cargo_toml.exists();
     let mut files = Vec::new();
@@ -638,12 +627,12 @@ pub(super) fn package_native_rust_review(
     manifest: &Manifest,
     sources: &[PackageSource],
     native: &ManifestNativeRust,
-) -> PackageNativeRustReview {
+) -> Result<PackageNativeRustReview, String> {
     let path = native
         .path
         .clone()
         .unwrap_or_else(|| "native/rust".to_string());
-    let native_root = package_dir.join(&path);
+    let native_root = confined_native_rust_path(package_dir, &path)?;
     let cargo_toml = native_root.join("Cargo.toml");
     let cargo_source = fs::read_to_string(&cargo_toml).unwrap_or_default();
     let cargo_features = selected_native_cargo_features(manifest, native);
@@ -651,9 +640,6 @@ pub(super) fn package_native_rust_review(
     let author_parallel = package_declares_parallel_native_api(sources);
     let backend = scan.native_parallel_backends.first().cloned();
     let mut risk_reasons = Vec::new();
-    if native_path_escapes_package(&path) {
-        risk_reasons.push("native Rust wrapper path is outside the package root".to_string());
-    }
     if author_parallel {
         risk_reasons.push("native API declares parallel worker execution".to_string());
     }
@@ -664,7 +650,7 @@ pub(super) fn package_native_rust_review(
         risk_reasons.push("native Cargo features selected".to_string());
     }
 
-    PackageNativeRustReview {
+    Ok(PackageNativeRustReview {
         path,
         crate_name: native.crate_name.clone(),
         build_scripts: native_effective_build_policy(manifest, native.effective_build_scripts()),
@@ -682,7 +668,7 @@ pub(super) fn package_native_rust_review(
             },
             source_scan_best_effort: scan,
         },
-    }
+    })
 }
 
 fn native_path_escapes_package(path: &str) -> bool {
@@ -691,6 +677,47 @@ fn native_path_escapes_package(path: &str) -> bool {
         || path
             .components()
             .any(|component| matches!(component, std::path::Component::ParentDir))
+}
+
+pub(super) fn confined_native_rust_path(
+    package_dir: &Path,
+    configured_path: &str,
+) -> Result<PathBuf, String> {
+    if configured_path.trim().is_empty() {
+        return Err("native Rust wrapper path must not be empty".to_string());
+    }
+    if native_path_escapes_package(configured_path) {
+        return Err(format!(
+            "native Rust wrapper path `{configured_path}` escapes the package root"
+        ));
+    }
+
+    let package_root = fs::canonicalize(package_dir).map_err(|error| {
+        format!(
+            "failed to canonicalize package root {}: {error}",
+            package_dir.display()
+        )
+    })?;
+    let candidate = package_root.join(configured_path);
+    let mut existing = candidate.as_path();
+    while !existing.exists() {
+        existing = existing.parent().ok_or_else(|| {
+            format!("native Rust wrapper path `{configured_path}` has no existing package ancestor")
+        })?;
+    }
+    let canonical_existing = fs::canonicalize(existing).map_err(|error| {
+        format!(
+            "failed to canonicalize native Rust path ancestor {}: {error}",
+            existing.display()
+        )
+    })?;
+    if !canonical_existing.starts_with(&package_root) {
+        return Err(format!(
+            "native Rust wrapper path `{configured_path}` resolves outside the package root"
+        ));
+    }
+
+    Ok(candidate)
 }
 
 fn package_declares_parallel_native_api(sources: &[PackageSource]) -> bool {

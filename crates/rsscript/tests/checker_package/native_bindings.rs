@@ -3,6 +3,59 @@
 use super::*;
 
 #[test]
+fn native_rust_path_cannot_escape_the_package_root() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-native-path-escape");
+    common::write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "../outside"
+crate = "outside"
+"#,
+        "",
+    );
+
+    let error = review_package_dir(&temp_dir)
+        .expect_err("native paths outside the package must fail before review scanning");
+    assert!(error.contains("escapes the package root"), "{error}");
+
+    let _ = fs::remove_dir_all(&temp_dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn native_rust_symlink_cannot_escape_the_package_root() {
+    use std::os::unix::fs::symlink;
+
+    let temp_dir = common::unique_temp_dir("rsscript-package-native-symlink-escape");
+    let outside = common::unique_temp_dir("rsscript-package-native-symlink-target");
+    common::write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "outside"
+"#,
+        "",
+    );
+    fs::create_dir_all(temp_dir.join("native")).expect("native parent should be created");
+    fs::create_dir_all(&outside).expect("outside target should be created");
+    symlink(&outside, temp_dir.join("native/rust")).expect("escape symlink should be created");
+
+    let error = review_package_dir(&temp_dir)
+        .expect_err("symlinked native paths outside the package must fail before scanning");
+    assert!(
+        error.contains("resolves outside the package root"),
+        "{error}"
+    );
+
+    let _ = fs::remove_dir_all(&temp_dir);
+    let _ = fs::remove_dir_all(&outside);
+}
+
+#[test]
 fn package_review_marks_async_native_await_boundary() {
     let temp_dir = common::unique_temp_dir("rsscript-package-review-async-native-boundary");
     common::write_package_fixture(

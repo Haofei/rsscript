@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use crate::domain::TimerError;
@@ -203,6 +203,35 @@ impl WakeHandle {
     fn drain_ready_keys(&self) -> Vec<usize> {
         let mut state = self.signal.state.lock().expect("wake signal lock poisoned");
         std::mem::take(&mut state.ready_keys)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct WeakWakeHandle {
+    signal: Weak<WakeSignal>,
+    key: Option<usize>,
+}
+
+impl WeakWakeHandle {
+    fn new(wake: &WakeHandle) -> Self {
+        Self {
+            signal: Arc::downgrade(&wake.signal),
+            key: wake.key,
+        }
+    }
+
+    fn same_registration(&self, wake: &WakeHandle) -> bool {
+        self.signal.ptr_eq(&Arc::downgrade(&wake.signal)) && self.key == wake.key
+    }
+
+    fn wake(self) {
+        if let Some(signal) = self.signal.upgrade() {
+            WakeHandle {
+                signal,
+                key: self.key,
+            }
+            .wake();
+        }
     }
 }
 
@@ -514,33 +543,26 @@ where
 
 pub struct NativeAsyncPending<T> {
     result: Arc<Mutex<Option<T>>>,
-    cancellation: CancellationToken,
     wake: Arc<Mutex<Option<WakeHandle>>>,
 }
 
 #[derive(Clone)]
 pub struct NativeAsyncCompleter<T> {
     result: Arc<Mutex<Option<T>>>,
-    cancellation: CancellationToken,
     wake: Arc<Mutex<Option<WakeHandle>>>,
 }
 
 pub fn native_async_pending<T>(
-    cancellation: CancellationToken,
+    _cancellation: CancellationToken,
 ) -> (NativeAsyncPending<T>, NativeAsyncCompleter<T>) {
     let result = Arc::new(Mutex::new(None));
     let wake = Arc::new(Mutex::new(None));
     (
         NativeAsyncPending {
             result: result.clone(),
-            cancellation: cancellation.clone(),
             wake: wake.clone(),
         },
-        NativeAsyncCompleter {
-            result,
-            cancellation,
-            wake,
-        },
+        NativeAsyncCompleter { result, wake },
     )
 }
 
@@ -584,9 +606,6 @@ where
 
 impl<T> NativeAsyncCompleter<T> {
     pub fn complete(&self, value: T) -> bool {
-        if self.cancellation.is_cancelled() {
-            return false;
-        }
         let mut result = self
             .result
             .lock()
@@ -610,9 +629,6 @@ impl<T> NativeAsyncCompleter<T> {
 
 impl<T> Pending<T> for NativeAsyncPending<T> {
     fn poll(&mut self, cx: &mut Context<'_>) -> AsyncPoll<T> {
-        if self.cancellation.is_cancelled() {
-            return AsyncPoll::Pending;
-        }
         let mut result = self
             .result
             .lock()
@@ -633,6 +649,7 @@ pub struct TaskGroup<T> {
 #[derive(Debug, Clone, Default)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
+    waiters: Arc<Mutex<Vec<WeakWakeHandle>>>,
 }
 
 impl CancellationToken {
@@ -641,11 +658,45 @@ impl CancellationToken {
     }
 
     pub fn cancel(&self) {
-        self.cancelled.store(true, Ordering::SeqCst);
+        if self.cancelled.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let waiters = std::mem::take(
+            &mut *self
+                .waiters
+                .lock()
+                .expect("cancellation waiter lock poisoned"),
+        );
+        for waiter in waiters {
+            waiter.wake();
+        }
     }
 
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::SeqCst)
+    }
+
+    fn register_wake(&self, wake: WakeHandle) {
+        if self.is_cancelled() {
+            wake.wake();
+            return;
+        }
+        let mut waiters = self
+            .waiters
+            .lock()
+            .expect("cancellation waiter lock poisoned");
+        if self.is_cancelled() {
+            drop(waiters);
+            wake.wake();
+            return;
+        }
+        if !waiters
+            .iter()
+            .any(|existing| existing.same_registration(&wake))
+        {
+            waiters.retain(|existing| existing.signal.strong_count() > 0);
+            waiters.push(WeakWakeHandle::new(&wake));
+        }
     }
 }
 
@@ -683,6 +734,10 @@ pub fn cancellation_source_cancel(source: &mut RssCancellationSource) {
 
 pub fn cancellation_token_is_cancelled(token: &RssCancellationToken) -> bool {
     token.token.is_cancelled()
+}
+
+pub(crate) fn cancellation_token_register_wake(token: &RssCancellationToken, wake: WakeHandle) {
+    token.token.register_wake(wake);
 }
 
 pub fn trace_async_runtime_phase(
@@ -972,9 +1027,7 @@ pub fn timer_sleep_native_start_with_cancellation(
     let (pending, completer) = native_async_pending(cancellation.clone());
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(millis));
-        if !cancellation.is_cancelled() {
-            let _completed = completer.complete(Ok(()));
-        }
+        let _completed = completer.complete(Ok(()));
     });
     pending
 }

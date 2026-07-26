@@ -2602,6 +2602,9 @@ impl<'a> RustLowerer<'a> {
         let Some(params) = self.function_param_types.get(&key) else {
             return;
         };
+        let Some(type_params) = self.function_type_params.get(&key) else {
+            return;
+        };
         for (index, arg) in args.iter().enumerate() {
             let Some((_, expected)) = arg
                 .name
@@ -2614,7 +2617,7 @@ impl<'a> RustLowerer<'a> {
             let Some(actual) = self.infer_call_arg_type(&arg.value) else {
                 continue;
             };
-            collect_type_ref_substitutions(expected, &actual, substitutions);
+            collect_type_ref_substitutions(expected, &actual, type_params, substitutions);
         }
     }
 
@@ -3549,33 +3552,33 @@ pub(super) fn substitute_type_ref(
 pub(super) fn collect_type_ref_substitutions(
     pattern: &TypeRef,
     actual: &TypeRef,
+    type_params: &[String],
     substitutions: &mut BTreeMap<String, TypeRef>,
 ) {
-    if pattern.args.is_empty() && pattern.fn_params.is_empty() && pattern.fn_return.is_none() {
-        match pattern.name.as_str() {
-            "T" | "K" | "V" | "E" | "P" => {
-                substitutions
-                    .entry(pattern.name.clone())
-                    .or_insert_with(|| actual.clone());
-                return;
-            }
-            _ => {}
-        }
+    if pattern.args.is_empty()
+        && pattern.fn_params.is_empty()
+        && pattern.fn_return.is_none()
+        && type_params.iter().any(|param| param == &pattern.name)
+    {
+        substitutions
+            .entry(pattern.name.clone())
+            .or_insert_with(|| actual.clone());
+        return;
     }
 
     if pattern.name != actual.name || pattern.args.len() != actual.args.len() {
         return;
     }
     for (pattern_arg, actual_arg) in pattern.args.iter().zip(actual.args.iter()) {
-        collect_type_ref_substitutions(pattern_arg, actual_arg, substitutions);
+        collect_type_ref_substitutions(pattern_arg, actual_arg, type_params, substitutions);
     }
     for (pattern_param, actual_param) in pattern.fn_params.iter().zip(actual.fn_params.iter()) {
-        collect_type_ref_substitutions(pattern_param, actual_param, substitutions);
+        collect_type_ref_substitutions(pattern_param, actual_param, type_params, substitutions);
     }
     if let (Some(pattern_return), Some(actual_return)) =
         (pattern.fn_return.as_ref(), actual.fn_return.as_ref())
     {
-        collect_type_ref_substitutions(pattern_return, actual_return, substitutions);
+        collect_type_ref_substitutions(pattern_return, actual_return, type_params, substitutions);
     }
 }
 
@@ -3789,6 +3792,36 @@ pub(super) fn is_try_wrapped(expr: &Expr) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn generic_substitution_uses_declared_parameter_names() {
+        let span = Span {
+            file: "generic-substitution.rss".to_string(),
+            line: 1,
+            column: 1,
+            length: 1,
+        };
+        let pattern = type_ref_from_display("Result<U, List<W>>", &span);
+        let actual = type_ref_from_display("Result<Int, List<String>>", &span);
+        let mut substitutions = BTreeMap::new();
+
+        collect_type_ref_substitutions(
+            &pattern,
+            &actual,
+            &["U".to_string(), "W".to_string()],
+            &mut substitutions,
+        );
+
+        assert_eq!(
+            substitutions.get("U").map(|ty| ty.name.as_str()),
+            Some("Int")
+        );
+        assert_eq!(
+            substitutions.get("W").map(|ty| ty.name.as_str()),
+            Some("String")
+        );
+        assert!(!substitutions.contains_key("T"));
+    }
 
     #[test]
     fn builtin_generic_type_params_use_each_type_s_own_param_names() {

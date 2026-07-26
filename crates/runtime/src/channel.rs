@@ -7,9 +7,11 @@
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
-use std::sync::mpsc as std_mpsc;
+use std::sync::{Arc, Condvar, Mutex, mpsc as std_mpsc};
 
-use crate::async_runtime::{AsyncPoll, Context, Pending, RssCancellationToken};
+use crate::async_runtime::{
+    AsyncPoll, Context, Pending, RssCancellationToken, WakeHandle, cancellation_token_register_wake,
+};
 
 /// Opaque channel error surfaced to RSScript. (Variant matching — `Closed` vs
 /// `Cancelled` vs `InvalidCapacity` — is deferred; for now the message
@@ -58,12 +60,24 @@ pub struct RssReceiver<T> {
 
 pub struct RssStream<T> {
     backend: RefCell<RssStreamBackend<T>>,
+    on_drop: Option<Box<dyn FnOnce()>>,
 }
 
 enum RssStreamBackend<T> {
     Receiver(RssReceiver<T>),
     Iterator(Box<dyn Iterator<Item = Result<T, ChannelError>>>),
-    External(std_mpsc::Receiver<Result<T, ChannelError>>),
+    External(Arc<ExternalStream<T>>),
+}
+
+struct ExternalStream<T> {
+    state: Mutex<ExternalStreamState<T>>,
+    ready: Condvar,
+}
+
+struct ExternalStreamState<T> {
+    items: VecDeque<Result<T, ChannelError>>,
+    disconnected: bool,
+    wake: Option<WakeHandle>,
 }
 
 // A `Sender` clone is another producer with its own closed flag and its own slot
@@ -144,6 +158,7 @@ pub fn receiver_close<T>(receiver: &mut RssReceiver<T>) {
 pub fn receiver_into_stream<T>(receiver: RssReceiver<T>) -> RssStream<T> {
     RssStream {
         backend: RefCell::new(RssStreamBackend::Receiver(receiver)),
+        on_drop: None,
     }
 }
 
@@ -152,6 +167,7 @@ pub fn stream_from_list<T: 'static>(items: Vec<T>) -> RssStream<T> {
         backend: RefCell::new(RssStreamBackend::Iterator(Box::new(
             items.into_iter().map(Ok),
         ))),
+        on_drop: None,
     }
 }
 
@@ -160,14 +176,68 @@ pub fn stream_from_iterator<T: 'static>(
 ) -> RssStream<T> {
     RssStream {
         backend: RefCell::new(RssStreamBackend::Iterator(Box::new(items))),
+        on_drop: None,
     }
 }
 
-pub fn stream_from_external_receiver<T: 'static>(
+pub fn stream_from_external_receiver<T: Send + 'static>(
     receiver: std_mpsc::Receiver<Result<T, ChannelError>>,
 ) -> RssStream<T> {
+    stream_from_external_receiver_with_drop(receiver, None)
+}
+
+pub(crate) fn stream_from_external_receiver_with_drop<T: Send + 'static>(
+    receiver: std_mpsc::Receiver<Result<T, ChannelError>>,
+    on_drop: Option<Box<dyn FnOnce()>>,
+) -> RssStream<T> {
+    let external = Arc::new(ExternalStream {
+        state: Mutex::new(ExternalStreamState {
+            items: VecDeque::new(),
+            disconnected: false,
+            wake: None,
+        }),
+        ready: Condvar::new(),
+    });
+    let producer = Arc::clone(&external);
+    std::thread::spawn(move || {
+        while let Ok(item) = receiver.recv() {
+            let wake = {
+                let mut state = producer
+                    .state
+                    .lock()
+                    .expect("external stream lock poisoned");
+                state.items.push_back(item);
+                producer.ready.notify_all();
+                state.wake.take()
+            };
+            if let Some(wake) = wake {
+                wake.wake();
+            }
+        }
+        let wake = {
+            let mut state = producer
+                .state
+                .lock()
+                .expect("external stream lock poisoned");
+            state.disconnected = true;
+            producer.ready.notify_all();
+            state.wake.take()
+        };
+        if let Some(wake) = wake {
+            wake.wake();
+        }
+    });
     RssStream {
-        backend: RefCell::new(RssStreamBackend::External(receiver)),
+        backend: RefCell::new(RssStreamBackend::External(external)),
+        on_drop,
+    }
+}
+
+impl<T> Drop for RssStream<T> {
+    fn drop(&mut self) {
+        if let Some(on_drop) = self.on_drop.take() {
+            on_drop();
+        }
     }
 }
 
@@ -201,7 +271,7 @@ pub fn sender_send_cancellable<T>(
 }
 
 impl<T> Pending<Result<(), ChannelError>> for SendPending<T> {
-    fn poll(&mut self, _cx: &mut Context<'_>) -> AsyncPoll<Result<(), ChannelError>> {
+    fn poll(&mut self, cx: &mut Context<'_>) -> AsyncPoll<Result<(), ChannelError>> {
         if let Some(token) = &self.cancellation
             && crate::async_runtime::cancellation_token_is_cancelled(token)
         {
@@ -221,6 +291,9 @@ impl<T> Pending<Result<(), ChannelError>> for SendPending<T> {
                     .expect("send pending polled after completion"),
             );
             return AsyncPoll::Ready(Ok(()));
+        }
+        if let Some(token) = &self.cancellation {
+            cancellation_token_register_wake(token, cx.wake_handle());
         }
         AsyncPoll::Pending
     }
@@ -253,7 +326,7 @@ pub fn receiver_recv_cancellable<T>(
 }
 
 impl<T> Pending<Result<Option<T>, ChannelError>> for RecvPending<T> {
-    fn poll(&mut self, _cx: &mut Context<'_>) -> AsyncPoll<Result<Option<T>, ChannelError>> {
+    fn poll(&mut self, cx: &mut Context<'_>) -> AsyncPoll<Result<Option<T>, ChannelError>> {
         if let Some(token) = &self.cancellation
             && crate::async_runtime::cancellation_token_is_cancelled(token)
         {
@@ -266,6 +339,9 @@ impl<T> Pending<Result<Option<T>, ChannelError>> for RecvPending<T> {
         if state.senders == 0 {
             // All senders gone and the queue is drained: end of stream.
             return AsyncPoll::Ready(Ok(None));
+        }
+        if let Some(token) = &self.cancellation {
+            cancellation_token_register_wake(token, cx.wake_handle());
         }
         AsyncPoll::Pending
     }
@@ -281,11 +357,20 @@ impl<T> Pending<Result<Option<T>, ChannelError>> for StreamNextPending<'_, T> {
         match &mut *backend {
             RssStreamBackend::Receiver(receiver) => receiver_recv(receiver).poll(cx),
             RssStreamBackend::Iterator(iterator) => AsyncPoll::Ready(iterator.next().transpose()),
-            RssStreamBackend::External(receiver) => match receiver.try_recv() {
-                Ok(item) => AsyncPoll::Ready(item.map(Some)),
-                Err(std_mpsc::TryRecvError::Empty) => AsyncPoll::Pending,
-                Err(std_mpsc::TryRecvError::Disconnected) => AsyncPoll::Ready(Ok(None)),
-            },
+            RssStreamBackend::External(external) => {
+                let mut state = external
+                    .state
+                    .lock()
+                    .expect("external stream lock poisoned");
+                if let Some(item) = state.items.pop_front() {
+                    AsyncPoll::Ready(item.map(Some))
+                } else if state.disconnected {
+                    AsyncPoll::Ready(Ok(None))
+                } else {
+                    state.wake = Some(cx.wake_handle());
+                    AsyncPoll::Pending
+                }
+            }
         }
     }
 }
@@ -313,12 +398,24 @@ pub fn stream_collect_list<T>(stream: &RssStream<T>) -> Result<Vec<T>, ChannelEr
                 ))
             }
         }
-        RssStreamBackend::External(receiver) => loop {
-            match receiver.recv() {
-                Ok(item) => values.push(item?),
-                Err(std_mpsc::RecvError) => return Ok(values),
+        RssStreamBackend::External(external) => {
+            let mut state = external
+                .state
+                .lock()
+                .expect("external stream lock poisoned");
+            loop {
+                while let Some(item) = state.items.pop_front() {
+                    values.push(item?);
+                }
+                if state.disconnected {
+                    return Ok(values);
+                }
+                state = external
+                    .ready
+                    .wait(state)
+                    .expect("external stream condvar wait poisoned");
             }
-        },
+        }
     }
 }
 
@@ -332,6 +429,41 @@ mod tests {
         assert!(channel_bounded::<i64>(0).is_err());
         assert!(channel_bounded::<i64>(-1).is_err());
         assert!(channel_bounded::<i64>(1).is_ok());
+    }
+
+    #[test]
+    fn external_stream_wakes_when_a_background_sender_produces() {
+        let (sender, receiver) = std_mpsc::channel();
+        let stream = stream_from_external_receiver(receiver);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            sender
+                .send(Ok(7_i64))
+                .expect("stream receiver should remain alive");
+        });
+
+        let value = Executor::new()
+            .run_pending(stream_next(&stream))
+            .expect("external stream should not fail");
+        assert_eq!(value, Some(7));
+    }
+
+    #[test]
+    fn cancellable_receive_wakes_and_returns_an_error() {
+        let mut channel = channel_bounded::<i64>(1).expect("channel should be created");
+        let _sender = channel_sender(&channel);
+        let receiver = channel_receiver(&mut channel).expect("receiver should be created");
+        let mut source = crate::cancellation_source_new();
+        let token = crate::cancellation_source_token(&source);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            crate::cancellation_source_cancel(&mut source);
+        });
+
+        let error = Executor::new()
+            .run_pending(receiver_recv_cancellable(&receiver, &token))
+            .expect_err("cancellation should complete the pending receive");
+        assert_eq!(channel_error_message(&error), "channel recv cancelled");
     }
 
     #[test]
