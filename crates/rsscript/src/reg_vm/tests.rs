@@ -1371,7 +1371,7 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
-    fn native_translation_lowers_flat_int_list_set_to_direct_write() {
+    fn native_translation_forwards_adjacent_flat_int_list_store_load() {
         let function = native_test_function(
             "flat_list_set_hot",
             2,
@@ -1405,10 +1405,120 @@ fn main() -> Unit {
             jit.code,
         );
         assert!(
+            !jit.code
+                .iter()
+                .any(|instr| matches!(instr, vm_jit::JitInstr::ListGetIntDirect { .. })),
+            "an adjacent List.get<Int> of the stored slot should not repeat the direct read; jit code: {:#?}",
+            jit.code,
+        );
+        assert!(
+            jit.code
+                .iter()
+                .any(|instr| matches!(instr, vm_jit::JitInstr::Move { dst: 4, src: 1 })),
+            "the stored value should be forwarded to the List.get destination; jit code: {:#?}",
+            jit.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_does_not_forward_list_store_when_result_clobbers_index() {
+        let function = native_test_function(
+            "flat_list_set_clobbers_index",
+            2,
+            4,
+            vec![
+                RegInstr::LoadInt { dst: 2, value: 1 },
+                RegInstr::ListSet {
+                    dst: 2,
+                    list: 0,
+                    index: 2,
+                    value: 1,
+                },
+                RegInstr::ListGet {
+                    dst: 3,
+                    list: 0,
+                    index: 2,
+                },
+                RegInstr::Return { src: 3 },
+            ],
+        );
+        let unit = native_test_unit(vec![function]);
+        let (jit, _, params, _, _) = translate_to_native_jit(&unit, unit.functions[0].as_ref())
+            .expect("flat Int list set/get should translate");
+
+        assert_eq!(params[0], NativeTy::FlatIntMut);
+        assert!(
             jit.code
                 .iter()
                 .any(|instr| matches!(instr, vm_jit::JitInstr::ListGetIntDirect { .. })),
-            "List.get<Int> on the same flat mutable list param should lower to direct read; jit code: {:#?}",
+            "the load must remain because ListSet overwrites the index register before it; jit code: {:#?}",
+            jit.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_forwards_adjacent_flat_float_list_store_load() {
+        let function = native_test_function(
+            "flat_float_list_set_hot",
+            2,
+            5,
+            vec![
+                RegInstr::LoadInt { dst: 2, value: 0 },
+                RegInstr::ListGet {
+                    dst: 4,
+                    list: 0,
+                    index: 2,
+                },
+                RegInstr::ListSet {
+                    dst: 3,
+                    list: 0,
+                    index: 2,
+                    value: 1,
+                },
+                RegInstr::ListGet {
+                    dst: 4,
+                    list: 0,
+                    index: 2,
+                },
+                RegInstr::Return { src: 4 },
+            ],
+        );
+        let mut unit = native_test_unit(vec![function]);
+        unit.native_signatures.insert(
+            "flat_float_list_set_hot".to_string(),
+            RegNativeSignature {
+                params: vec!["List<Float>".to_string(), "Float".to_string()],
+                return_type: Some("Float".to_string()),
+            },
+        );
+        let (jit, ret, params, _, _) = translate_to_native_jit(&unit, unit.functions[0].as_ref())
+            .expect("flat Float list set/get should translate");
+
+        assert_eq!(params[0], NativeTy::FlatFloatMut);
+        assert_eq!(ret, NativeTy::Float);
+        assert!(
+            jit.code
+                .iter()
+                .any(|instr| matches!(instr, vm_jit::JitInstr::ListSetFloatDirect { .. })),
+            "List.set<Float> should remain a checked direct write; jit code: {:#?}",
+            jit.code,
+        );
+        assert!(
+            jit.code
+                .iter()
+                .filter(|instr| matches!(instr, vm_jit::JitInstr::ListGetFloatDirect { .. }))
+                .count()
+                == 1,
+            "only the initial Float read should remain; the adjacent post-store read should be forwarded; jit code: {:#?}",
+            jit.code,
+        );
+        assert!(
+            jit.code
+                .iter()
+                .any(|instr| matches!(instr, vm_jit::JitInstr::Move { dst: 4, src: 1 })),
+            "the stored Float should be forwarded to the load destination; jit code: {:#?}",
             jit.code,
         );
     }
@@ -4315,10 +4425,10 @@ fn main() -> Unit {
             jit.code,
         );
         assert!(
-            jit.code
+            !jit.code
                 .iter()
                 .any(|instr| matches!(instr, vm_jit::JitInstr::ListGetIntDirect { .. })),
-            "steady-state List.get should lower to direct flat read; jit={:#?}",
+            "the adjacent steady-state List.get should forward the stored value; jit={:#?}",
             jit.code,
         );
 

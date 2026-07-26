@@ -460,9 +460,17 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                     index,
                     value,
                 } => {
+                    // The element type flows from the value's definition or declared
+                    // signature. Preserve a proven Float; otherwise retain the
+                    // untyped register VM's historical Int default.
+                    let value_ty = if ty[*value] == Some(NativeTy::Float) {
+                        NativeTy::Float
+                    } else {
+                        NativeTy::Int
+                    };
                     native_set_ty(ty, *list, NativeTy::Handle, c)
                         && native_set_ty(ty, *index, NativeTy::Int, c)
-                        && native_set_ty(ty, *value, NativeTy::Int, c)
+                        && native_set_ty(ty, *value, value_ty, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::ListPush {
@@ -1424,7 +1432,10 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
                 require(int(*index))?;
                 // TV2 flat params lower to direct in-register reads; the flat kind
                 // (set by classification) matches the dst kind by construction.
-                if ty[*list] == Some(NativeTy::FlatFloat) {
+                if matches!(
+                    ty[*list],
+                    Some(NativeTy::FlatFloat | NativeTy::FlatFloatMut)
+                ) {
                     require(float(*dst))?;
                     JitInstr::ListGetFloatDirect {
                         dst: r(*dst),
@@ -2041,6 +2052,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         &mut jit_code,
         &mut native_reg_types,
     );
+    native_forward_adjacent_direct_list_store_loads(&mut jit_code);
 
     let reg_types = native_reg_types
         .iter()
@@ -2084,6 +2096,58 @@ fn native_compose_ip_maps(
         .iter()
         .map(|&previous| previous_to_original.get(previous).copied())
         .collect()
+}
+
+#[cfg(feature = "native-jit")]
+/// Forward an immediately reloaded flat-list element from the preceding store.
+///
+/// The store retains the only required bounds guard. Keeping this local and
+/// instruction-count preserving avoids control-flow, alias, and deopt-map changes.
+fn native_forward_adjacent_direct_list_store_loads(jit_code: &mut [vm_jit::JitInstr]) {
+    for ip in 1..jit_code.len() {
+        let replacement = match (&jit_code[ip - 1], &jit_code[ip]) {
+            (
+                vm_jit::JitInstr::ListSetIntDirect {
+                    dst: set_dst,
+                    base: set_base,
+                    index: set_index,
+                    value,
+                },
+                vm_jit::JitInstr::ListGetIntDirect { dst, base, index },
+            ) if set_base == base
+                && set_index == index
+                && set_dst != set_index
+                && set_dst != value =>
+            {
+                Some(vm_jit::JitInstr::Move {
+                    dst: *dst,
+                    src: *value,
+                })
+            }
+            (
+                vm_jit::JitInstr::ListSetFloatDirect {
+                    dst: set_dst,
+                    base: set_base,
+                    index: set_index,
+                    value,
+                },
+                vm_jit::JitInstr::ListGetFloatDirect { dst, base, index },
+            ) if set_base == base
+                && set_index == index
+                && set_dst != set_index
+                && set_dst != value =>
+            {
+                Some(vm_jit::JitInstr::Move {
+                    dst: *dst,
+                    src: *value,
+                })
+            }
+            _ => None,
+        };
+        if let Some(replacement) = replacement {
+            jit_code[ip] = replacement;
+        }
+    }
 }
 
 #[cfg(feature = "native-jit")]
@@ -3385,18 +3449,18 @@ fn translate_osr_loop_inner(
                     index,
                     value,
                 } => {
+                    // Preserve Float element facts from the OSR live-in/value flow;
+                    // otherwise retain the existing heap-live-in/Int defaults.
+                    let value_ty = if ty[*value] == Some(NativeTy::Float) {
+                        NativeTy::Float
+                    } else if heap_param(*value) {
+                        NativeTy::Handle
+                    } else {
+                        NativeTy::Int
+                    };
                     native_set_ty(ty, *list, NativeTy::Handle, c)
                         && native_set_ty(ty, *index, NativeTy::Int, c)
-                        && native_set_ty(
-                            ty,
-                            *value,
-                            if heap_param(*value) {
-                                NativeTy::Handle
-                            } else {
-                                NativeTy::Int
-                            },
-                            c,
-                        )
+                        && native_set_ty(ty, *value, value_ty, c)
                         && native_set_ty(ty, *dst, NativeTy::Int, c)
                 }
                 RegInstr::ListPush {
@@ -4382,7 +4446,10 @@ fn translate_osr_loop_inner(
             RegInstr::ListGet { dst, list, index } => {
                 require(int(*index))?;
                 // TV2 flat (loop-invariant typed) list ⇒ bounds-checked direct read.
-                if ty[*list] == Some(NativeTy::FlatFloat) {
+                if matches!(
+                    ty[*list],
+                    Some(NativeTy::FlatFloat | NativeTy::FlatFloatMut)
+                ) {
                     require(float(*dst))?;
                     JitInstr::ListGetFloatDirect {
                         dst: r(*dst),
@@ -4936,6 +5003,7 @@ fn translate_osr_loop_inner(
         &mut jit_code,
         &mut native_reg_types,
     );
+    native_forward_adjacent_direct_list_store_loads(&mut jit_code);
     let mut written_regs = vec![false; native_reg_types.len()];
     for (ip, instr) in jit_code.iter().enumerate() {
         if in_loop(ip)

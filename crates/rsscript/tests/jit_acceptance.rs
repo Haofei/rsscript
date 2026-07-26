@@ -5209,6 +5209,43 @@ fn main() -> Unit {
     }
 }
 
+/// Store-to-load forwarding removes the second direct-list bounds check, but the
+/// preceding store remains guarded. An out-of-bounds store must therefore still
+/// deopt and reproduce the interpreter error rather than reaching the forwarded
+/// value.
+#[cfg(feature = "native-jit")]
+#[test]
+fn native_direct_list_forwarded_load_keeps_store_oob_guard() {
+    let source = "\
+features: local
+
+fn replace(xs: mut List<Int>, index: Int) -> Int {
+    List.set<Int>(list: mut xs, index: index, value: 9)
+    return List.get<Int>(list: xs, index: index)
+}
+
+fn main() -> Unit {
+    local xs = List<Int>.new()
+    List.push<Int>(list: mut xs, value: 1)
+    Log.write(message: \"begin\")
+    let value = replace(xs: mut xs, index: 1)
+    Log.write(message: String.from_int(value: value))
+    return Unit
+}
+";
+    let file = "jit-direct-list-forwarded-load-oob.rss";
+    rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let interp = common::run_vm_source(file, source, &[]);
+    let native =
+        rsscript::reg_vm_eval_source_main_native(file, source, std::iter::empty::<String>());
+
+    assert!(
+        matches!((&interp, &native), (Err(_), Err(_))),
+        "interpreter and native execution must both reject the out-of-bounds store: \
+         interp={interp:?} native={native:?}",
+    );
+}
+
 /// Native-call ABI (slice 3): a non-tail self-recursive `fib` runs NATIVELY (via
 /// `CallSelf`) and is byte-identical to the interpreter. `native_calls > 0` proves
 /// the native self-recursive path actually executed (not the tier-0 scalar executor).
