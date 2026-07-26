@@ -1408,6 +1408,7 @@ impl RegVm {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(super) fn try_call_captureless_pure_closure(
         &self,
         unit: &RegUnit,
@@ -1420,6 +1421,7 @@ impl RegVm {
     }
 
     #[cfg(test)]
+    #[allow(dead_code)]
     pub(super) fn try_fold_int_list_with_struct_plan_for_test(
         unit: &RegUnit,
         list: &Rc<RefCell<TypedVec>>,

@@ -5613,12 +5613,17 @@ fn build_function(
     let mut memo_scope_for_backedge = vec![None; n];
     for (scope_index, scope) in program.memo_scopes.iter().enumerate() {
         memo_scope_for_header[scope.header as usize] = Some(scope_index);
-        for source in scope.header as usize..scope.exit as usize {
+        for (source, backedge_scope) in memo_scope_for_backedge
+            .iter_mut()
+            .enumerate()
+            .take(scope.exit as usize)
+            .skip(scope.header as usize)
+        {
             if matches!(
                 program.code[source],
                 JitInstr::Jump { target } if target == scope.header
             ) {
-                memo_scope_for_backedge[source] = Some(scope_index);
+                *backedge_scope = Some(scope_index);
             }
         }
     }

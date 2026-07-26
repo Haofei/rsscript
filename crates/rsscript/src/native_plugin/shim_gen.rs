@@ -50,6 +50,14 @@ pub(crate) struct ShimCrate {
     pub lib_rs: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ShimDependency {
+    pub crate_name: String,
+    pub path: String,
+    pub cargo_features: Vec<String>,
+    pub default_features: bool,
+}
+
 impl ShimType {
     /// Owned Rust type a `NativeValue` extracts into for this shape.
     fn owned_rust_ty(&self) -> String {
@@ -160,17 +168,26 @@ impl ShimType {
 }
 
 /// Generate the cdylib shim crate for `bindings`. `native_deps` are the
-/// `(crate_name, absolute_path)` pairs of the native crates the bindings call
-/// into; `native_abi_path` is the path to the shared `rss-native-abi` crate.
+/// native crates the bindings call into, including the complete Cargo feature
+/// selection; `native_abi_path` is the path to the shared `rss-native-abi` crate.
 pub(crate) fn generate_shim_crate(
     shim_crate_name: &str,
-    native_deps: &[(String, String)],
+    native_deps: &[ShimDependency],
     native_abi_path: &str,
     bindings: &[ShimBinding],
 ) -> ShimCrate {
     let mut native_dep_toml = String::new();
-    for (crate_name, path) in native_deps {
-        native_dep_toml.push_str(&format!("{crate_name} = {{ path = {path:?} }}\n"));
+    for dependency in native_deps {
+        let features = dependency
+            .cargo_features
+            .iter()
+            .map(|feature| format!("{feature:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        native_dep_toml.push_str(&format!(
+            "{} = {{ path = {:?}, default-features = {}, features = [{}] }}\n",
+            dependency.crate_name, dependency.path, dependency.default_features, features
+        ));
     }
     // An empty `[workspace]` makes the generated crate its own workspace root so
     // cargo does not try to attach it to the repo workspace via path deps.
@@ -308,7 +325,12 @@ mod tests {
     fn read_only_result_binding_calls_native_and_registers() {
         let crate_ = generate_shim_crate(
             "rss_shim_demo",
-            &[("demo_native".to_string(), "/tmp/demo".to_string())],
+            &[ShimDependency {
+                crate_name: "demo_native".to_string(),
+                path: "/tmp/demo".to_string(),
+                cargo_features: vec![],
+                default_features: true,
+            }],
             "/abs/native-abi",
             &[binding(
                 vec![ShimType::String],
@@ -317,11 +339,9 @@ mod tests {
             )],
         );
         assert!(crate_.cargo_toml.contains("crate-type = [\"cdylib\"]"));
-        assert!(
-            crate_
-                .cargo_toml
-                .contains("demo_native = { path = \"/tmp/demo\" }")
-        );
+        assert!(crate_.cargo_toml.contains(
+            "demo_native = { path = \"/tmp/demo\", default-features = true, features = [] }"
+        ));
         assert!(crate_.lib_rs.contains("demo_native::run(&__p0)"));
         assert!(crate_.lib_rs.contains("Ok(__value) => __ok"));
         assert!(crate_.lib_rs.contains(
@@ -348,7 +368,12 @@ mod tests {
     fn mut_binding_passes_mut_ref_and_returns_envelope() {
         let crate_ = generate_shim_crate(
             "rss_shim_demo",
-            &[("demo_native".to_string(), "/tmp/demo".to_string())],
+            &[ShimDependency {
+                crate_name: "demo_native".to_string(),
+                path: "/tmp/demo".to_string(),
+                cargo_features: vec![],
+                default_features: true,
+            }],
             "/abs/native-abi",
             &[binding(
                 vec![ShimType::List(Box::new(ShimType::Int))],
@@ -360,5 +385,24 @@ mod tests {
         assert!(crate_.lib_rs.contains("demo_native::run(&mut __p0)"));
         // Envelope: result followed by the mutated param.
         assert!(crate_.lib_rs.contains("NativeValue::List(vec![__result,"));
+    }
+
+    #[test]
+    fn cargo_manifest_preserves_dependency_feature_identity() {
+        let crate_ = generate_shim_crate(
+            "rss_shim_features",
+            &[ShimDependency {
+                crate_name: "demo_native".to_string(),
+                path: "/tmp/demo".to_string(),
+                cargo_features: vec!["serde".to_string(), "simd".to_string()],
+                default_features: false,
+            }],
+            "/abs/native-abi",
+            &[],
+        );
+
+        assert!(crate_.cargo_toml.contains(
+            "demo_native = { path = \"/tmp/demo\", default-features = false, features = [\"serde\", \"simd\"] }"
+        ));
     }
 }

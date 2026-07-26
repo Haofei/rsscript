@@ -25,15 +25,11 @@ members = [
 [profile.release]
 lto = "thin"
 codegen-units = 1
-# Invariant 2 (runtime hardening): a Rust panic in release means a runtime *bug*,
-# not a program fault (program faults are returned as `EvalError` values). Abort
-# instead of unwinding so a panic can never unwind across the C ABI at the
-# JIT/FFI/native-helper seams (that is undefined behavior). Tradeoff: we give up
-# Rust task-panic isolation, which is fine here because RSS task failures are
-# values, not panics. `tests/hostile.rs` uses `catch_unwind`, but `cargo test`
-# runs the dev profile (still unwind), so normal testing is unaffected. The fuzz
-# crate sets its own profile.
-panic = "abort"
+# Tooling, the LSP, and native adapters need a recoverable panic boundary in
+# release builds. Native ABI dispatch catches unwinds before returning across its
+# C boundary; VM program faults remain Result/EvalError values. Dedicated worker
+# binaries may choose abort independently when process isolation is intentional.
+panic = "unwind"
 
 # Test builds are used as a fast feedback loop, not for debugger sessions. Full
 # debuginfo for the monolithic `rsscript` crate makes test compiles/linking much

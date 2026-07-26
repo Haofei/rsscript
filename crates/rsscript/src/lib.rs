@@ -95,13 +95,14 @@ pub use package::{
     lock_package_dir, package_lowering_input, package_metadata, package_metadata_verify,
     package_sources, package_sources_with_dependency_interfaces, package_tree,
     publish_package_dry_run, publish_package_dry_run_with_registry, review_package_dir,
-    vendor_package_dir,
+    vendor_package_dir, write_package_artifact_atomic,
 };
 pub use reg_vm::{
     JitPlan, RegVmExecutable, RegVmExecutable as VmExecutable, VmLimits, reg_vm_compile_package,
     reg_vm_compile_source as vm_compile_source, reg_vm_compile_source,
     reg_vm_eval_package_main_with_args as eval_package_main_with_args,
     reg_vm_eval_package_main_with_args_and_native_bindings as eval_package_main_with_args_and_native_bindings,
+    reg_vm_eval_package_main_with_args_and_native_bindings_and_limits as eval_package_main_with_args_and_native_bindings_and_limits,
     reg_vm_eval_package_main_with_args_and_native_bindings_streaming_stdout as eval_package_main_with_args_and_native_bindings_streaming_stdout,
     reg_vm_eval_source_main as eval_source_main, reg_vm_eval_source_main_jit,
     reg_vm_eval_source_main_with_args,
@@ -109,6 +110,7 @@ pub use reg_vm::{
     reg_vm_eval_source_main_with_args as vm_eval_source_main_with_args,
     reg_vm_eval_source_main_with_args_and_native_bindings as eval_source_main_with_args_and_native_bindings,
     reg_vm_eval_source_main_with_args_and_native_bindings,
+    reg_vm_eval_source_main_with_args_and_native_bindings_and_limits,
     reg_vm_eval_source_main_with_args_streaming_stdout as eval_source_main_with_args_streaming_stdout,
     reg_vm_eval_source_main_with_limits,
 };

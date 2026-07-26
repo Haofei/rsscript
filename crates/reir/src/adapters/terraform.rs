@@ -2,7 +2,8 @@
 //! Converts rendered `.tf` IAM policy resources into granted capability facts.
 
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
@@ -13,16 +14,50 @@ const FACT_SCHEMA: &str = "reir.fact.v0.1";
 const PRODUCER_VERSION: &str = "0.1.0";
 const ADAPTER_VERSION: &str = "0.1";
 const PRODUCER_SOURCE: &str = "terraform_iac";
+const SOURCE_EVIDENCE_REASON: &str =
+    "Terraform source scan is not proof of rendered, planned, or deployed authorization";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerraformSourceLimits {
+    pub max_files: usize,
+    pub max_depth: usize,
+    pub max_file_bytes: u64,
+    pub max_total_bytes: u64,
+}
+
+impl Default for TerraformSourceLimits {
+    fn default() -> Self {
+        Self {
+            max_files: 1_024,
+            max_depth: 32,
+            max_file_bytes: 2 * 1024 * 1024,
+            max_total_bytes: 16 * 1024 * 1024,
+        }
+    }
+}
+
+#[derive(Default)]
+struct TerraformSourceBudget {
+    files: usize,
+    bytes: u64,
+}
 
 pub fn terraform_dir_to_bundle(root: &Path) -> Result<Bundle, String> {
+    terraform_dir_to_bundle_with_limits(root, TerraformSourceLimits::default())
+}
+
+pub fn terraform_dir_to_bundle_with_limits(
+    root: &Path,
+    limits: TerraformSourceLimits,
+) -> Result<Bundle, String> {
     let mut files = Vec::new();
-    collect_tf_files(root, &mut files)?;
+    let mut budget = TerraformSourceBudget::default();
+    collect_tf_files(root, 0, limits, &mut budget, &mut files)?;
     files.sort();
 
     let mut facts = Vec::new();
     for file in files {
-        let text = fs::read_to_string(&file)
-            .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
+        let text = read_tf_file(&file, limits.max_file_bytes)?;
         let relative = file
             .strip_prefix(root)
             .unwrap_or(&file)
@@ -49,6 +84,9 @@ pub fn terraform_dir_to_bundle(root: &Path) -> Result<Bundle, String> {
             }
         }
     }
+    for fact in &mut facts {
+        mark_source_scan_unverified(fact);
+    }
 
     let mut bundle = Bundle::new();
     bundle.producers.push(crate::subject::Producer {
@@ -68,6 +106,27 @@ pub fn terraform_dir_to_bundle(root: &Path) -> Result<Bundle, String> {
     Ok(bundle)
 }
 
+fn mark_source_scan_unverified(fact: &mut Fact) {
+    fact.value = FactValue::Unknown;
+    fact.confidence = Confidence {
+        level: ConfidenceLevel::Scanned,
+        source: Some(PRODUCER_SOURCE.to_owned()),
+    };
+    fact.acquisition_mode = AcquisitionMode::SourceScan;
+    fact.unknown_reason = Some(match fact.unknown_reason.take() {
+        Some(reason) => format!("{reason}; {SOURCE_EVIDENCE_REASON}"),
+        None => SOURCE_EVIDENCE_REASON.to_owned(),
+    });
+    for evidence in &mut fact.evidence {
+        evidence.kind = EvidenceKind::SourceTemplatePointer;
+        evidence.source = Some(PRODUCER_SOURCE.to_owned());
+        evidence.reason = Some(match evidence.reason.take() {
+            Some(reason) => format!("{reason}; {SOURCE_EVIDENCE_REASON}"),
+            None => SOURCE_EVIDENCE_REASON.to_owned(),
+        });
+    }
+}
+
 #[derive(Debug, Clone)]
 struct TerraformResourceBlock {
     file: String,
@@ -77,13 +136,42 @@ struct TerraformResourceBlock {
     line: usize,
 }
 
-fn collect_tf_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
-    if root.is_file() {
+fn collect_tf_files(
+    root: &Path,
+    depth: usize,
+    limits: TerraformSourceLimits,
+    budget: &mut TerraformSourceBudget,
+    files: &mut Vec<PathBuf>,
+) -> Result<(), String> {
+    if depth > limits.max_depth {
+        return Err(format!(
+            "Terraform source traversal exceeded maximum depth {} at {}",
+            limits.max_depth,
+            root.display()
+        ));
+    }
+    let metadata = fs::symlink_metadata(root)
+        .map_err(|error| format!("failed to inspect {}: {error}", root.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!(
+            "refusing to follow symlink in Terraform source tree: {}",
+            root.display()
+        ));
+    }
+    if metadata.is_file() {
         if root.extension().is_some_and(|extension| extension == "tf") {
+            account_tf_file(root, metadata.len(), limits, budget)?;
             files.push(root.to_path_buf());
         }
         return Ok(());
     }
+    if !metadata.is_dir() {
+        return Err(format!(
+            "Terraform source root is neither a file nor directory: {}",
+            root.display()
+        ));
+    }
+
     let entries = fs::read_dir(root).map_err(|error| {
         format!(
             "failed to read Terraform directory {}: {error}",
@@ -94,13 +182,90 @@ fn collect_tf_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<(), String>
         let entry =
             entry.map_err(|error| format!("failed to read Terraform directory entry: {error}"))?;
         let path = entry.path();
-        if path.is_dir() {
-            collect_tf_files(&path, files)?;
-        } else if path.extension().is_some_and(|extension| extension == "tf") {
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "refusing to follow symlink in Terraform source tree: {}",
+                path.display()
+            ));
+        }
+        if metadata.is_dir() {
+            collect_tf_files(&path, depth + 1, limits, budget, files)?;
+        } else if metadata.is_file() && path.extension().is_some_and(|extension| extension == "tf")
+        {
+            account_tf_file(&path, metadata.len(), limits, budget)?;
             files.push(path);
         }
     }
     Ok(())
+}
+
+fn account_tf_file(
+    path: &Path,
+    bytes: u64,
+    limits: TerraformSourceLimits,
+    budget: &mut TerraformSourceBudget,
+) -> Result<(), String> {
+    if bytes > limits.max_file_bytes {
+        return Err(format!(
+            "Terraform source file {} is {bytes} bytes, exceeding the {} byte limit",
+            path.display(),
+            limits.max_file_bytes
+        ));
+    }
+    budget.files = budget
+        .files
+        .checked_add(1)
+        .ok_or_else(|| "Terraform source file count overflow".to_owned())?;
+    if budget.files > limits.max_files {
+        return Err(format!(
+            "Terraform source traversal exceeded the {} file limit",
+            limits.max_files
+        ));
+    }
+    budget.bytes = budget
+        .bytes
+        .checked_add(bytes)
+        .ok_or_else(|| "Terraform source byte count overflow".to_owned())?;
+    if budget.bytes > limits.max_total_bytes {
+        return Err(format!(
+            "Terraform source traversal exceeded the {} byte limit",
+            limits.max_total_bytes
+        ));
+    }
+    Ok(())
+}
+
+fn read_tf_file(path: &Path, max_bytes: u64) -> Result<String, String> {
+    let mut file =
+        File::open(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "Terraform source file {} exceeds the {max_bytes} byte limit",
+            path.display()
+        ));
+    }
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.by_ref()
+        .take(max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!(
+            "Terraform source file {} grew beyond the {max_bytes} byte limit while reading",
+            path.display()
+        ));
+    }
+    String::from_utf8(bytes).map_err(|error| {
+        format!(
+            "Terraform source file {} is not UTF-8: {error}",
+            path.display()
+        )
+    })
 }
 
 fn terraform_resource_blocks(file: &str, text: &str) -> Vec<TerraformResourceBlock> {
@@ -837,6 +1002,18 @@ POLICY
                         && capability.resource.as_deref() == Some("arn:aws:s3:::reports-prod/*")
                 })
         }));
+        assert!(bundle.facts.iter().all(|fact| {
+            fact.value == FactValue::Unknown
+                && fact.confidence.level == ConfidenceLevel::Scanned
+                && fact.acquisition_mode == AcquisitionMode::SourceScan
+                && fact.evidence.iter().all(|evidence| {
+                    evidence.kind == EvidenceKind::SourceTemplatePointer
+                        && evidence
+                            .reason
+                            .as_deref()
+                            .is_some_and(|reason| reason.contains("not proof"))
+                })
+        }));
     }
 
     #[test]
@@ -979,6 +1156,10 @@ POLICY
         assert_eq!(bundle.facts.len(), 1);
         assert_eq!(bundle.facts[0].value, FactValue::True);
         assert_eq!(
+            bundle.facts[0].acquisition_mode,
+            AcquisitionMode::TerraformPlan
+        );
+        assert_eq!(
             bundle.facts[0].evidence[0].principal.as_deref(),
             Some("prod-reader")
         );
@@ -1079,5 +1260,88 @@ POLICY
             .collect::<std::collections::BTreeSet<_>>();
         assert!(actions.contains("SELECT"));
         assert!(actions.contains("INSERT"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terraform_source_traversal_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "reir-terraform-symlink-test-{}",
+            std::process::id()
+        ));
+        let outside = temp_dir.with_extension("outside");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("escaped.tf"), "resource \"x\" \"y\" {}").unwrap();
+        symlink(&outside, temp_dir.join("linked")).unwrap();
+
+        let error = terraform_dir_to_bundle(&temp_dir).expect_err("symlink must be rejected");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let _ = std::fs::remove_dir_all(&outside);
+        assert!(error.contains("refusing to follow symlink"), "{error}");
+    }
+
+    #[test]
+    fn terraform_source_traversal_enforces_file_and_byte_budgets() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("reir-terraform-budget-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        std::fs::write(temp_dir.join("a.tf"), "aaaa").unwrap();
+        std::fs::write(temp_dir.join("b.tf"), "bbbb").unwrap();
+
+        let file_error = terraform_dir_to_bundle_with_limits(
+            &temp_dir,
+            TerraformSourceLimits {
+                max_files: 1,
+                max_depth: 4,
+                max_file_bytes: 16,
+                max_total_bytes: 32,
+            },
+        )
+        .expect_err("file count must be bounded");
+        let byte_error = terraform_dir_to_bundle_with_limits(
+            &temp_dir,
+            TerraformSourceLimits {
+                max_files: 4,
+                max_depth: 4,
+                max_file_bytes: 3,
+                max_total_bytes: 32,
+            },
+        )
+        .expect_err("individual file bytes must be bounded");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        assert!(file_error.contains("file limit"), "{file_error}");
+        assert!(byte_error.contains("exceeding"), "{byte_error}");
+    }
+
+    #[test]
+    fn terraform_source_traversal_enforces_depth_budget() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("reir-terraform-depth-test-{}", std::process::id()));
+        let nested = temp_dir.join("nested");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("main.tf"), "").unwrap();
+
+        let error = terraform_dir_to_bundle_with_limits(
+            &temp_dir,
+            TerraformSourceLimits {
+                max_files: 4,
+                max_depth: 0,
+                max_file_bytes: 16,
+                max_total_bytes: 32,
+            },
+        )
+        .expect_err("depth must be bounded");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        assert!(error.contains("maximum depth"), "{error}");
     }
 }

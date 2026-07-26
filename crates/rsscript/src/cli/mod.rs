@@ -1,5 +1,7 @@
 use std::env;
 use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -13,6 +15,7 @@ mod check;
 mod fix;
 mod fmt;
 mod package;
+mod process;
 mod run_cmd;
 mod test_cmd;
 
@@ -90,6 +93,51 @@ pub(crate) struct InterfaceSource {
     pub(crate) contents: String,
 }
 
+pub(crate) const CLI_SOURCE_MAX_BYTES: u64 = 16 * 1024 * 1024;
+
+pub(crate) fn read_cli_source(path: &Path) -> Result<String, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "RSScript source must be a regular non-symlink file: {}",
+            path.display()
+        ));
+    }
+    if metadata.len() > CLI_SOURCE_MAX_BYTES {
+        return Err(format!(
+            "RSScript source exceeds the {} byte CLI limit: {}",
+            CLI_SOURCE_MAX_BYTES,
+            path.display()
+        ));
+    }
+    let file =
+        File::open(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let capacity = usize::try_from(metadata.len()).map_err(|_| {
+        format!(
+            "RSScript source is too large for this platform: {}",
+            path.display()
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    Read::take(file, CLI_SOURCE_MAX_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    if bytes.len() as u64 > CLI_SOURCE_MAX_BYTES {
+        return Err(format!(
+            "RSScript source exceeds the {} byte CLI limit while reading: {}",
+            CLI_SOURCE_MAX_BYTES,
+            path.display()
+        ));
+    }
+    String::from_utf8(bytes).map_err(|error| {
+        format!(
+            "RSScript source is not valid UTF-8 at {}: {error}",
+            path.display()
+        )
+    })
+}
+
 pub(crate) fn read_interface_sources(paths: &[&str]) -> Result<Vec<InterfaceSource>, String> {
     paths
         .iter()
@@ -127,8 +175,8 @@ pub(crate) fn lower_cli_input_to_rust_package(
         });
     }
 
-    let source = fs::read_to_string(path).map_err(|error| {
-        eprintln!("failed to read {path}: {error}");
+    let source = read_cli_source(Path::new(path)).map_err(|error| {
+        eprintln!("{error}");
         ExitCode::from(2)
     })?;
     let package_name = generated_package_name(path);
@@ -247,7 +295,7 @@ pub(crate) fn run_input_fingerprint(
             ));
         }
     } else {
-        let source = fs::read_to_string(input_path).ok()?;
+        let source = read_cli_source(Path::new(input_path)).ok()?;
         parts.push(format!("file:{input_path}\n{source}"));
     }
 
@@ -346,7 +394,9 @@ pub(crate) fn print_usage() {
     );
     eprintln!("  rss fmt <file.rss>  # writes formatted source to stdout");
     eprintln!("  rss new <package-name>");
-    eprintln!("  rss run [--json] --vm <file-or-package-directory> [-- <args>...]");
+    eprintln!(
+        "  rss run [--json] --vm [--trusted-unlimited] <file-or-package-directory> [-- <args>...]"
+    );
     eprintln!(
         "  rss run [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]"
     );
@@ -457,6 +507,19 @@ mod tests {
         assert_ne!(first, release);
         assert_ne!(first, runtime);
         assert_ne!(first, changed);
+        fs::remove_dir_all(root).expect("temp directory should clean up");
+    }
+
+    #[test]
+    fn cli_source_read_rejects_input_over_limit_before_allocation() {
+        let root = unique_temp_dir("source-limit");
+        let source = root.join("large.rss");
+        let file = fs::File::create(&source).expect("source fixture should create");
+        file.set_len(super::CLI_SOURCE_MAX_BYTES + 1)
+            .expect("source fixture should resize");
+
+        let error = super::read_cli_source(&source).expect_err("oversized source must fail");
+        assert!(error.contains("CLI limit"), "{error}");
         fs::remove_dir_all(root).expect("temp directory should clean up");
     }
 

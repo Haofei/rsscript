@@ -116,6 +116,7 @@ async fn main() -> Result<Unit, HostError> {
             crate_name: "timer_native".to_string(),
             path: "/workspace/timer-native".to_string(),
             cargo_features: Vec::new(),
+            default_features: true,
             bindings: BTreeMap::from([(
                 "Host.wait".to_string(),
                 "timer_native::sleep_start".to_string(),

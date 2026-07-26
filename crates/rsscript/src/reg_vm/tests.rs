@@ -10077,4 +10077,14 @@ fn main() -> Unit {{
         sat.record(9, true);
         assert_eq!(sat.observed[0].1, u32::MAX);
     }
+
+    #[test]
+    fn safe_default_arms_cli_resource_budgets() {
+        let limits = VmLimits::safe_default();
+        assert!(limits.max_depth < VmLimits::default().max_depth);
+        assert!(limits.step_budget.is_some());
+        assert!(limits.mem_budget.is_some());
+        assert!(limits.stdout_budget.is_some());
+        assert!(limits.host_call_budget.is_some());
+    }
 }

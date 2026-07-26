@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
 
       - name: Build dev container
         run: docker compose build dev
@@ -47,13 +47,13 @@ jobs:
           docker compose run --rm dev cargo test -p rsscript --test runtime report_groups_native_decline_reasons_by_count --features native-jit -- --test-threads=1
           docker compose run --rm dev bash -lc 'RSS_DIFF_PROPTEST_CASES=16 RSS_DIFF_SHRINK_ITERS=0 cargo test -p rsscript --test differential backends_agree_on_seed_decoded_programs --features native-jit -- --test-threads=1'
           docker compose run --rm dev cargo test --release -p rsscript --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture
-          docker compose run --rm dev bash -lc 'rustup toolchain install nightly --component rust-src && target="$(rustc -vV | sed -n "s/^host: //p")" && RUSTFLAGS="-Zsanitizer=address" cargo +nightly test -Zbuild-std --target "$target" -p vm-jit native_scalar_call -- --test-threads=1 && RUSTFLAGS="-Zsanitizer=address" cargo +nightly test -Zbuild-std --target "$target" -p rsscript child_native --features native-jit -- --test-threads=1 && RUSTFLAGS="-Zsanitizer=address" cargo +nightly test -Zbuild-std --target "$target" -p rsscript forced_all_native_safepoints_exercises_child_native_deopt --features native-jit -- --test-threads=1 && RUSTFLAGS="-Zsanitizer=address" cargo +nightly test -Zbuild-std --target "$target" -p vm-jit guard_closure_id_passes_or_bails -- --test-threads=1 && RUSTFLAGS="-Zsanitizer=address" cargo +nightly test -Zbuild-std --target "$target" -p vm-jit direct_flat_reads_index_in_register -- --test-threads=1'
+          docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 --component rust-src && target="$(rustc -vV | sed -n "s/^host: //p")" && RUSTFLAGS="-Zsanitizer=address" cargo +nightly-2026-07-20 test -Zbuild-std --target "$target" -p vm-jit native_scalar_call -- --test-threads=1 && RUSTFLAGS="-Zsanitizer=address" cargo +nightly-2026-07-20 test -Zbuild-std --target "$target" -p rsscript child_native --features native-jit -- --test-threads=1 && RUSTFLAGS="-Zsanitizer=address" cargo +nightly-2026-07-20 test -Zbuild-std --target "$target" -p rsscript forced_all_native_safepoints_exercises_child_native_deopt --features native-jit -- --test-threads=1 && RUSTFLAGS="-Zsanitizer=address" cargo +nightly-2026-07-20 test -Zbuild-std --target "$target" -p vm-jit guard_closure_id_passes_or_bails -- --test-threads=1 && RUSTFLAGS="-Zsanitizer=address" cargo +nightly-2026-07-20 test -Zbuild-std --target "$target" -p vm-jit direct_flat_reads_index_in_register -- --test-threads=1'
 
       - name: Miri pure-core smoke
-        run: docker compose run --rm dev bash -lc 'rustup toolchain install nightly --component miri,rust-src && cargo +nightly miri test -p rss-testgen --lib'
+        run: docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 --component miri,rust-src && cargo +nightly-2026-07-20 miri test -p rss-testgen --lib'
 
       - name: No-panic fuzz smoke
-        run: docker compose run --rm dev bash -lc 'rustup toolchain install nightly && (command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked) && cd fuzz && cargo +nightly fuzz run no_panic -- -runs=20000 -max_total_time=60'
+        run: docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 && (command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --version 0.13.2 --locked) && cd fuzz && cargo +nightly-2026-07-20 fuzz run no_panic -- -runs=20000 -max_total_time=60'
 
       - name: Native JIT differential fuzz smoke
-        run: docker compose run --rm dev bash -lc 'rustup toolchain install nightly && (command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --locked) && cd fuzz && cargo +nightly fuzz run differential --features native-jit -- -runs=5000 -max_total_time=60'
+        run: docker compose run --rm dev bash -lc 'rustup toolchain install nightly-2026-07-20 && (command -v cargo-fuzz >/dev/null || cargo install cargo-fuzz --version 0.13.2 --locked) && cd fuzz && cargo +nightly-2026-07-20 fuzz run differential --features native-jit -- -runs=5000 -max_total_time=60'

@@ -134,6 +134,20 @@ pub fn reg_vm_eval_source_main_with_limits(
     reg_vm_compile_source(file, source)?.eval_main_with_limits(args, limits)
 }
 
+pub fn reg_vm_eval_source_main_with_args_and_native_bindings_and_limits(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+    limits: VmLimits,
+) -> Result<EvalOutput, EvalError> {
+    reg_vm_compile_source(file, source)?.eval_main_with_args_and_native_bindings_and_limits(
+        args,
+        native_bindings,
+        limits,
+    )
+}
+
 /// Tier-0 JIT entry point.
 ///
 /// Compiles the source, runs the per-function JIT-eligibility analysis (the seam
@@ -1213,6 +1227,19 @@ pub fn reg_vm_eval_package_main_with_args_and_native_bindings(
         .eval_main_with_args_and_native_bindings(args, native_bindings)
 }
 
+pub fn reg_vm_eval_package_main_with_args_and_native_bindings_and_limits(
+    package_dir: &Path,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+    limits: VmLimits,
+) -> Result<EvalOutput, EvalError> {
+    reg_vm_compile_package(package_dir)?.eval_main_with_args_and_native_bindings_and_limits(
+        args,
+        native_bindings,
+        limits,
+    )
+}
+
 /// Compile a multi-file package (its merged sources plus dependency and builtin
 /// interfaces) into a reusable VM executable. Native functions are resolved at
 /// run time via the `native_bindings` passed to the eval call, so this can be
@@ -1920,6 +1947,19 @@ impl RegVmExecutable {
         args: impl IntoIterator<Item = impl Into<String>>,
         native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
     ) -> Result<EvalOutput, EvalError> {
+        self.eval_main_with_args_and_native_bindings_and_limits(
+            args,
+            native_bindings,
+            VmLimits::default(),
+        )
+    }
+
+    pub fn eval_main_with_args_and_native_bindings_and_limits(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+        limits: VmLimits,
+    ) -> Result<EvalOutput, EvalError> {
         let mut vm = RegVm::new(
             Rc::clone(&self.unit),
             args.into_iter().map(Into::into).collect(),
@@ -1928,6 +1968,7 @@ impl RegVmExecutable {
                 .map(|(key, function)| (key.into(), function))
                 .collect(),
         );
+        vm.set_limits(limits);
         let value = vm.run_program("main")?;
         let display_value = value.display();
         let native_value = value.native_value();
@@ -2195,6 +2236,22 @@ impl Default for VmLimits {
             cancel: None,
             stdout_budget: None,
             host_call_budget: None,
+        }
+    }
+}
+
+impl VmLimits {
+    /// Conservative defaults for CLI execution of untrusted or accidental
+    /// runaway programs. Library callers retain [`Default`] for compatibility
+    /// and can opt into these limits explicitly.
+    pub fn safe_default() -> Self {
+        Self {
+            max_depth: 4_096,
+            step_budget: Some(50_000_000),
+            mem_budget: Some(256 * 1024 * 1024),
+            cancel: None,
+            stdout_budget: Some(4 * 1024 * 1024),
+            host_call_budget: Some(1_000_000),
         }
     }
 }

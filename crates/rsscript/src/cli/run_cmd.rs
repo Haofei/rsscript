@@ -1,20 +1,29 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use rsscript::{
-    EvalError, EvalOutput, NativeValue, check_generated_rust_package,
-    eval_package_main_with_args_and_native_bindings, format_diagnostics_human,
+    EvalError, EvalOutput, NativeValue, VmLimits, check_generated_rust_package,
+    eval_package_main_with_args_and_native_bindings,
+    eval_package_main_with_args_and_native_bindings_and_limits, format_diagnostics_human,
     format_diagnostics_json, load_package_native_bindings, parse_runtime_diagnostics,
-    reg_vm_eval_source_main_with_args, write_generated_rust_package,
+    reg_vm_eval_source_main_with_args, reg_vm_eval_source_main_with_limits,
+    write_generated_rust_package,
 };
 
 use super::{
     cleanup_temp_dir, cli_input_package_name, default_runtime_path, generated_target_dir_from_env,
     is_package_directory, lower_cli_input_to_rust_package, print_diagnostics, print_usage,
-    read_cached_fingerprint, required_flag_value, run_cache_dir, run_input_fingerprint,
-    write_cached_fingerprint,
+    read_cached_fingerprint, read_cli_source, required_flag_value, run_cache_dir,
+    run_input_fingerprint, write_cached_fingerprint,
 };
+use crate::cli::process::run_bounded;
+
+const CLI_VM_WALL_TIME: Duration = Duration::from_secs(60);
+const CLI_AOT_WALL_TIME: Duration = Duration::from_secs(10 * 60);
+const CLI_AOT_OUTPUT_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug)]
 struct RunOptions<'a> {
@@ -22,6 +31,7 @@ struct RunOptions<'a> {
     vm: bool,
     release: bool,
     dry_run: bool,
+    trusted_unlimited: bool,
     path: Option<&'a str>,
     out_dir: Option<&'a str>,
     program_args: Vec<&'a str>,
@@ -32,6 +42,7 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
     let mut vm = false;
     let mut release = false;
     let mut dry_run = false;
+    let mut trusted_unlimited = false;
     let mut path = None;
     let mut out_dir = None;
     let mut program_args = Vec::new();
@@ -49,6 +60,8 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
             release = true;
         } else if arg == "--dry-run" {
             dry_run = true;
+        } else if arg == "--trusted-unlimited" {
+            trusted_unlimited = true;
         } else if arg == "--out-dir" {
             index += 1;
             out_dir = Some(required_flag_value(args, index, "--out-dir")?);
@@ -67,6 +80,7 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
         vm,
         release,
         dry_run,
+        trusted_unlimited,
         path,
         out_dir,
         program_args,
@@ -85,6 +99,9 @@ fn validate_run_options(options: &RunOptions<'_>) -> Result<(), String> {
     if options.vm && options.out_dir.is_some() {
         return Err("`rss run --vm` cannot be combined with `--out-dir`.".to_string());
     }
+    if options.trusted_unlimited && !options.vm {
+        return Err("`--trusted-unlimited` is only valid with `rss run --vm`.".to_string());
+    }
     Ok(())
 }
 pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
@@ -100,7 +117,12 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     if options.vm {
-        return run_via_vm(path, &options.program_args, options.json);
+        return run_via_vm(
+            path,
+            &options.program_args,
+            options.json,
+            options.trusted_unlimited,
+        );
     }
     let runtime_path = match default_runtime_path() {
         Ok(path) => path,
@@ -198,38 +220,74 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
 /// Execute through the register VM instead of the Rust-lowering AOT backend.
 /// This is the fast edit-run path folded into `rss run` so VM execution remains
 /// available without growing the top-level command set.
-fn run_via_vm(path: &str, program_args: &[&str], json: bool) -> ExitCode {
-    let result = if is_package_directory(path) {
-        run_package_via_vm(path, program_args)
+fn run_via_vm(path: &str, program_args: &[&str], json: bool, trusted_unlimited: bool) -> ExitCode {
+    let limits = if trusted_unlimited {
+        VmLimits::default()
     } else {
-        let source = match fs::read_to_string(path) {
+        cli_vm_limits()
+    };
+    let result = if is_package_directory(path) {
+        run_package_via_vm(path, program_args, limits)
+    } else {
+        let source = match read_cli_source(Path::new(path)) {
             Ok(source) => source,
             Err(error) => {
-                eprintln!("failed to read {path}: {error}");
+                eprintln!("{error}");
                 return ExitCode::from(2);
             }
         };
-        run_source_via_vm(path, &source, program_args)
+        run_source_via_vm(path, &source, program_args, limits)
     };
     finish_vm_run(result, json)
+}
+
+fn cli_vm_limits() -> VmLimits {
+    let cancel = Arc::new(AtomicBool::new(false));
+    let watchdog = Arc::clone(&cancel);
+    std::thread::spawn(move || {
+        std::thread::sleep(CLI_VM_WALL_TIME);
+        watchdog.store(true, Ordering::Release);
+    });
+    VmLimits {
+        cancel: Some(cancel),
+        ..VmLimits::safe_default()
+    }
 }
 
 fn run_source_via_vm(
     path: &str,
     source: &str,
     program_args: &[&str],
+    limits: VmLimits,
 ) -> Result<EvalOutput, EvalError> {
-    reg_vm_eval_source_main_with_args(path, source, program_args.iter().copied())
+    if limits.step_budget.is_none() {
+        reg_vm_eval_source_main_with_args(path, source, program_args.iter().copied())
+    } else {
+        reg_vm_eval_source_main_with_limits(path, source, program_args.iter().copied(), limits)
+    }
 }
 
-fn run_package_via_vm(path: &str, program_args: &[&str]) -> Result<EvalOutput, EvalError> {
+fn run_package_via_vm(
+    path: &str,
+    program_args: &[&str],
+    limits: VmLimits,
+) -> Result<EvalOutput, EvalError> {
     let package_dir = Path::new(path);
     let bindings = load_package_native_bindings(package_dir).map_err(EvalError::Runtime)?;
-    eval_package_main_with_args_and_native_bindings(
-        package_dir,
-        program_args.iter().copied(),
-        bindings,
-    )
+    if limits.step_budget.is_none() {
+        eval_package_main_with_args_and_native_bindings(
+            package_dir,
+            program_args.iter().copied(),
+            bindings,
+        )
+    } else {
+        eval_package_main_with_args_and_native_bindings_and_limits(
+            package_dir,
+            program_args.iter().copied(),
+            bindings,
+            limits,
+        )
+    }
 }
 
 fn finish_vm_run(result: Result<EvalOutput, EvalError>, json: bool) -> ExitCode {
@@ -293,7 +351,12 @@ fn build_and_run_package(
     if let Ok(current_dir) = std::env::current_dir() {
         cargo.env("RSS_RUN_WORKSPACE_ROOT", current_dir);
     }
-    let output = match cargo.output() {
+    let output = match run_bounded(
+        &mut cargo,
+        "generated Rust build and execution",
+        CLI_AOT_WALL_TIME,
+        CLI_AOT_OUTPUT_MAX_BYTES,
+    ) {
         Ok(output) => output,
         Err(error) => {
             eprintln!("failed to run cargo: {error}");
@@ -432,6 +495,7 @@ mod tests {
         assert!(options.vm);
         assert!(!options.release);
         assert!(!options.dry_run);
+        assert!(!options.trusted_unlimited);
         assert_eq!(options.path, Some("demo.rss"));
         assert_eq!(options.program_args, vec!["input"]);
     }
@@ -517,5 +581,23 @@ mod tests {
         let error = super::parse_run_args(&values).expect_err("vm out-dir combo should fail");
 
         assert_eq!(error, "`rss run --vm` cannot be combined with `--out-dir`.");
+    }
+
+    #[test]
+    fn parse_run_args_accepts_explicit_trusted_unlimited_vm_mode() {
+        let values = args(&["--vm", "--trusted-unlimited", "demo.rss"]);
+        let options = super::parse_run_args(&values).expect("trusted mode should parse");
+        assert!(options.vm);
+        assert!(options.trusted_unlimited);
+    }
+
+    #[test]
+    fn parse_run_args_rejects_trusted_unlimited_aot_mode() {
+        let values = args(&["--trusted-unlimited", "demo.rss"]);
+        let error = super::parse_run_args(&values).expect_err("AOT mode stays bounded");
+        assert_eq!(
+            error,
+            "`--trusted-unlimited` is only valid with `rss run --vm`."
+        );
     }
 }

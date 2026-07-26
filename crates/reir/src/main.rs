@@ -1909,7 +1909,12 @@ POLICY
 
         assert!(bundle.facts.iter().any(|fact| {
             fact.role == Some(FactRole::Granted)
-                && fact.acquisition_mode == AcquisitionMode::TerraformPlan
+                && fact.value == FactValue::Unknown
+                && fact.acquisition_mode == AcquisitionMode::SourceScan
+                && fact
+                    .evidence
+                    .iter()
+                    .all(|evidence| evidence.kind == EvidenceKind::SourceTemplatePointer)
                 && fact.capability.as_ref().is_some_and(|capability| {
                     capability.action.as_deref() == Some("s3:PutObject")
                         && capability.resource.as_deref() == Some("arn:aws:s3:::reports-prod/*")

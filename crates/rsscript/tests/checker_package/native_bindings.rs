@@ -423,6 +423,7 @@ enabled = true
 path = "native/rust"
 crate = "rss_feature_native"
 cargo_features = ["base-native"]
+default-features = false
 build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
@@ -1533,7 +1534,7 @@ unsafe = "forbid"
 
     assert_eq!(input.native_dependencies.len(), 1);
     assert_eq!(input.native_dependencies[0].crate_name, "rss_json_native");
-    assert!(input.native_dependencies[0].path.ends_with("native/rust"));
+    assert!(std::path::Path::new(&input.native_dependencies[0].path).ends_with("native/rust"));
     assert!(
         package
             .cargo_toml
@@ -1555,6 +1556,7 @@ enabled = true
 path = "native/rust"
 crate = "rss_feature_native"
 cargo_features = ["base-native"]
+default-features = false
 build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
@@ -1589,6 +1591,7 @@ simd = { cargo_features = ["dep/simd"] }
         input.native_dependencies[0].cargo_features,
         vec!["base-native".to_string(), "dep/simd".to_string()]
     );
+    assert!(!input.native_dependencies[0].default_features);
     assert!(
         package
             .cargo_toml
@@ -1599,6 +1602,7 @@ simd = { cargo_features = ["dep/simd"] }
             .cargo_toml
             .contains("features = [\"base-native\", \"dep/simd\"]")
     );
+    assert!(package.cargo_toml.contains("default-features = false"));
 }
 
 #[test]

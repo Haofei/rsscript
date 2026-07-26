@@ -977,23 +977,13 @@ rss-dep = {{ path = "{}" }}
 
 #[test]
 fn package_review_update_reports_lockfile_contract_changes() {
-    let old_dir = common::unique_temp_dir("rsscript-package-update-old");
-    let new_dir = common::unique_temp_dir("rsscript-package-update-new");
+    let package_dir = common::unique_temp_dir("rsscript-package-update");
     let lock_dir = common::unique_temp_dir("rsscript-package-update-locks");
     common::write_package_fixture(
-        &old_dir,
+        &package_dir,
         "0.1.0",
         "",
         r#"pub fn add(left: Int, right: Int) -> Int
-"#,
-    );
-    common::write_package_fixture(
-        &new_dir,
-        "0.2.0",
-        r#"[features]
-fast = []
-"#,
-        r#"pub fn add(left: Int, right: Int) -> Result<Int, MathError>
 "#,
     );
     fs::create_dir_all(&lock_dir).expect("lock dir should be created");
@@ -1001,12 +991,25 @@ fast = []
     let new_lock_path = lock_dir.join("new.rsspkg.lock");
     fs::write(
         &old_lock_path,
-        format_package_lock_toml(&lock_package_dir(&old_dir).expect("old lock should be built")),
+        format_package_lock_toml(
+            &lock_package_dir(&package_dir).expect("old lock should be built"),
+        ),
     )
     .expect("old lock should be written");
+    common::write_package_fixture(
+        &package_dir,
+        "0.2.0",
+        r#"[features]
+fast = []
+"#,
+        r#"pub fn add(left: Int, right: Int) -> Result<Int, MathError>
+"#,
+    );
     fs::write(
         &new_lock_path,
-        format_package_lock_toml(&lock_package_dir(&new_dir).expect("new lock should be built")),
+        format_package_lock_toml(
+            &lock_package_dir(&package_dir).expect("new lock should be built"),
+        ),
     )
     .expect("new lock should be written");
 
@@ -1017,8 +1020,7 @@ fast = []
     let reir_json: Value =
         serde_json::from_str(&rsscript::format_package_lock_diff_reir_json(&diff))
             .expect("lock diff REIR JSON should parse");
-    let _ = fs::remove_dir_all(&old_dir);
-    let _ = fs::remove_dir_all(&new_dir);
+    let _ = fs::remove_dir_all(&package_dir);
     let _ = fs::remove_dir_all(&lock_dir);
 
     assert_eq!(json["risk"], "high");
@@ -1609,6 +1611,122 @@ rss-vendor-symlink-dep = { path = "../dep" }
 
     assert!(error.contains("package copy rejects symlinks"));
     assert!(error.contains("leak.txt"));
+}
+
+#[cfg(unix)]
+#[test]
+fn package_vendor_rejects_symlinked_vendor_root() {
+    use std::os::unix::fs::symlink;
+
+    let temp_dir = common::unique_temp_dir("rsscript-package-vendor-root-symlink");
+    let root_dir = temp_dir.join("root");
+    let dep_dir = temp_dir.join("dep");
+    let outside_dir = temp_dir.join("outside");
+    common::write_named_package_fixture(
+        &dep_dir,
+        "rss-vendor-root-dep",
+        "0.1.0",
+        "",
+        "pub fn Dep.run() -> Unit\n",
+    );
+    common::write_named_package_fixture(
+        &root_dir,
+        "rss-vendor-root-app",
+        "0.1.0",
+        r#"[dependencies]
+rss-vendor-root-dep = { path = "../dep" }
+"#,
+        "pub fn App.run() -> Unit\n",
+    );
+    fs::create_dir_all(&outside_dir).expect("outside fixture directory");
+    symlink(&outside_dir, root_dir.join("vendor")).expect("vendor symlink fixture");
+
+    let error =
+        vendor_package_dir(&root_dir, false).expect_err("vendor root symlink must be rejected");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert!(
+        error.contains("vendor directory must be a real directory"),
+        "{error}"
+    );
+}
+
+#[test]
+fn package_tree_deduplicates_diamond_dependency_expansion() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-tree-diamond");
+    let root_dir = temp_dir.join("root");
+    let left_dir = temp_dir.join("left");
+    let right_dir = temp_dir.join("right");
+    let shared_dir = temp_dir.join("shared");
+    let leaf_dir = temp_dir.join("leaf");
+    common::write_named_package_fixture(
+        &leaf_dir,
+        "rss-diamond-leaf",
+        "0.1.0",
+        "",
+        "pub fn Leaf.run() -> Unit\n",
+    );
+    common::write_named_package_fixture(
+        &shared_dir,
+        "rss-diamond-shared",
+        "0.1.0",
+        r#"[dependencies]
+rss-diamond-leaf = { path = "../leaf" }
+"#,
+        "pub fn Shared.run() -> Unit\n",
+    );
+    for (directory, name) in [
+        (&left_dir, "rss-diamond-left"),
+        (&right_dir, "rss-diamond-right"),
+    ] {
+        common::write_named_package_fixture(
+            directory,
+            name,
+            "0.1.0",
+            r#"[dependencies]
+rss-diamond-shared = { path = "../shared" }
+"#,
+            "pub fn Branch.run() -> Unit\n",
+        );
+    }
+    common::write_named_package_fixture(
+        &root_dir,
+        "rss-diamond-root",
+        "0.1.0",
+        r#"[dependencies]
+rss-diamond-left = { path = "../left" }
+rss-diamond-right = { path = "../right" }
+"#,
+        "pub fn Root.run() -> Unit\n",
+    );
+
+    let tree = package_tree(&root_dir).expect("diamond package tree should succeed");
+    let shared_nodes = tree
+        .root
+        .dependencies
+        .iter()
+        .flat_map(|branch| branch.dependencies.iter())
+        .filter(|dependency| dependency.name == "rss-diamond-shared")
+        .collect::<Vec<_>>();
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(shared_nodes.len(), 2);
+    assert_eq!(
+        shared_nodes
+            .iter()
+            .filter(|node| node.reference.is_some())
+            .count(),
+        1
+    );
+    assert_eq!(
+        shared_nodes
+            .iter()
+            .filter(|node| !node.dependencies.is_empty())
+            .count(),
+        1,
+        "the shared subtree must be materialized only once"
+    );
+    assert_eq!(tree.summary.packages, 5);
 }
 
 #[test]

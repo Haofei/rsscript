@@ -8,8 +8,8 @@ use super::lock::{package_checksum, package_native_hash};
 use super::source_set::load_package;
 use super::{
     PackageIdentity, PackageRisk, PackageVendorEntry, PackageVendorReport, PackageVendorUnresolved,
-    canonical_path_label, copy_package_directory, package_dependency_spec, package_identity,
-    sanitize_vendor_path_component,
+    canonical_checked_root, canonical_path_label, copy_package_directory, package_dependency_spec,
+    package_identity, sanitize_vendor_path_component, write_package_artifact_atomic,
 };
 
 pub fn vendor_package_dir(
@@ -17,7 +17,8 @@ pub fn vendor_package_dir(
     dry_run: bool,
 ) -> Result<PackageVendorReport, String> {
     let package = load_package(package_dir)?;
-    let vendor_dir = package_dir.join("vendor");
+    let package_root = canonical_checked_root(package_dir, "package vendor write")?;
+    let vendor_dir = package_root.join("vendor");
     let mut visiting = BTreeSet::new();
     let mut entries = Vec::new();
     let mut unresolved = Vec::new();
@@ -46,12 +47,36 @@ pub fn vendor_package_dir(
     unresolved.sort_by(|left, right| left.name.cmp(&right.name));
 
     if !dry_run {
-        fs::create_dir_all(&vendor_dir)
-            .map_err(|error| format!("failed to create {}: {error}", vendor_dir.display()))?;
+        match fs::symlink_metadata(&vendor_dir) {
+            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                return Err(format!(
+                    "vendor directory must be a real directory, not a symlink: {}",
+                    vendor_dir.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                fs::create_dir(&vendor_dir).map_err(|error| {
+                    format!("failed to create {}: {error}", vendor_dir.display())
+                })?;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "failed to inspect {}: {error}",
+                    vendor_dir.display()
+                ));
+            }
+        }
         for entry in &entries {
             let source_path = Path::new(&entry.source_path);
             let vendor_path = Path::new(&entry.vendor_path);
-            if vendor_path.exists() {
+            if let Ok(metadata) = fs::symlink_metadata(vendor_path) {
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(format!(
+                        "vendor destination must be a real directory, not a symlink: {}",
+                        vendor_path.display()
+                    ));
+                }
                 fs::remove_dir_all(vendor_path).map_err(|error| {
                     format!("failed to remove {}: {error}", vendor_path.display())
                 })?;
@@ -61,8 +86,12 @@ pub fn vendor_package_dir(
         let metadata_path = vendor_dir.join("rss-vendor.json");
         let metadata = serde_json::to_string_pretty(&entries)
             .expect("vendor metadata JSON serialization should not fail");
-        fs::write(&metadata_path, metadata)
-            .map_err(|error| format!("failed to write {}: {error}", metadata_path.display()))?;
+        write_package_artifact_atomic(
+            &package_root,
+            &metadata_path,
+            metadata.as_bytes(),
+            "vendor metadata",
+        )?;
     }
 
     let ok = unresolved.is_empty();

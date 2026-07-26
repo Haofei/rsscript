@@ -148,6 +148,12 @@ pub(super) struct ManifestNativeRust {
     pub(super) crate_name: Option<String>,
     #[serde(default)]
     pub(super) cargo_features: Vec<String>,
+    #[serde(
+        default = "native_default_features_enabled",
+        rename = "default-features",
+        alias = "default_features"
+    )]
+    pub(super) default_features: bool,
     #[serde(default)]
     pub(super) feature_map: BTreeMap<String, ManifestNativeRustFeature>,
     #[serde(default)]
@@ -160,6 +166,10 @@ pub(super) struct ManifestNativeRust {
     pub(super) ffi: Option<String>,
     #[serde(default)]
     pub(super) links: Vec<String>,
+}
+
+fn native_default_features_enabled() -> bool {
+    true
 }
 
 #[derive(Debug, Default, Deserialize)]

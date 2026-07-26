@@ -320,16 +320,18 @@ The reg-VM is a sandbox for untrusted/AI-generated programs. Two invariants hold
 interpreter, tier-0, native JIT helpers, and embedding APIs, a program-level fault
 (overflow trap, divide-by-zero, out-of-bounds, step/memory-budget exhaustion,
 cancellation) MUST be returned as an `EvalError` value, never a Rust panic.
-Standalone generated-Rust AOT executables may use a controlled Rust panic/abort
+Standalone generated-Rust AOT executables may use a controlled Rust panic
 as the backend mechanism described by §2.1, because v0.1 exposes no catchable
 language-level fault value there. Such a panic is equivalent only when it has the
 same fault class and semantic point and no additional observable effect precedes
 it.
 
 **Invariant 2 — a Rust panic inside an embedded VM/JIT boundary means an engine
-bug, not a program fault.** The release profile sets `panic = "abort"` (workspace
-`Cargo.toml`, `[profile.release]`), so a panic can never unwind across the C ABI
-at the JIT / FFI / native-helper seams (that would be undefined behavior). The `rsscript` crate is
+bug, not a program fault.** Tooling and adapter release builds use
+`panic = "unwind"` so a task or native adapter failure can be translated at its
+boundary instead of terminating the whole CLI/LSP process. Native ABI dispatch
+catches unwinds before returning across the C ABI; no unwind may cross the JIT /
+FFI / native-helper seams. The `rsscript` crate is
 `#![forbid(unsafe_code)]` (`lib.rs` and `main.rs`); all `unsafe` (machine-code
 execution, indirect calls, symbol registration) is confined to the `vm-jit`
 crate behind a safe API (§7.1).
@@ -351,6 +353,13 @@ the compared execution modes accept the same configured policy.
 | `cancel` | Host preemption flag (e.g. watchdog/timeout); checked at a throttled step tick, even inside a tight non-awaiting loop. Preempts the whole eval with a "cancelled" runtime error. | `None` (near-free off path) |
 | `stdout_budget` | Max total bytes a program may write to captured stdout (all `Log.write`/trace paths funnel through one append point); the write that would exceed it fails cleanly *before* appending. Stops an output flood that `step_budget` (silent loops) does not. | `None` (unlimited) |
 | `host_call_budget` | Max stdlib/runtime intrinsic dispatches — the `Type.method` boundary out of pure VM bytecode into host library code, where all file/process/network/clock/logging effects enter. Caps the *volume* of host calls independently of instruction count (one intrinsic can do unbounded I/O). | `None` (uncounted) |
+
+The library-level `Default` remains compatibility-oriented. The `rss run --vm`
+CLI instead uses `VmLimits::safe_default()` plus a 60-second cancellation
+watchdog. An operator must explicitly pass `--trusted-unlimited` to restore the
+unlimited VM budgets. The AOT CLI does not emulate instruction or heap metering,
+but bounds its combined Cargo/program subprocess by a 10-minute deadline and a
+16 MiB cap on each captured output stream.
 
 The off path for each limit MUST stay near-zero-overhead (no atomic touch when
 `cancel` is `None`, no accounting when `mem_budget` is `None`, a single
@@ -689,8 +698,8 @@ Within the engine (distinct from the language §21 list):
    generative fuzz passing (§2 consequence 3).
 3. Do not widen the JIT-supported instruction set without extending the program
    generator to exercise it (§2 consequence 4).
-4. Do not remove the written-bit (§4.1), the `panic=abort` seam, or the
-   `forbid(unsafe_code)` boundary (§6) as "optimizations."
+4. Do not remove the written-bit (§4.1), the caught-unwind/no-unwind-across-ABI
+   seam, or the `forbid(unsafe_code)` boundary (§6) as "optimizations."
 5. Any change touching observable behavior is the **language spec's** call first;
    this engine conforms.
 

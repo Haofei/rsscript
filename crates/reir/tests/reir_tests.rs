@@ -1078,7 +1078,7 @@ fn validated_gate_blocks_narrow_deny_as_missing_coverage() {
         ),
     );
     let reconciliations = reconcile_capabilities_for_gate(
-        &[required.clone()],
+        std::slice::from_ref(&required),
         &[grant.clone(), deny.clone()],
         None,
         None,
@@ -1145,7 +1145,7 @@ fn validated_gate_validates_narrow_deny_with_denied_role() {
     deny.confidence.source = None;
     deny.evidence.clear();
     let reconciliations = reconcile_capabilities_for_gate(
-        &[required.clone()],
+        std::slice::from_ref(&required),
         &[grant.clone(), deny.clone()],
         None,
         None,

@@ -43,7 +43,9 @@ already use exactly this idiom — we are extending a proven pattern.
 6. **Keep struct *definitions* in the parent** (`mod.rs`) so child `impl` blocks
    inherit field visibility; move *methods*, not the struct.
 7. `#![forbid(unsafe_code)]` holds in `rsscript`; never introduce `unsafe` into a
-   moved module. `panic = "abort"` — faults are `EvalError` values, never panics.
+   moved module. Program faults are `EvalError` values, never panics; release
+   tooling uses unwind only so boundary code can translate unexpected adapter
+   failures before they reach an ABI seam.
 8. The four Cargo test targets (`static`/`runtime`/`differential`/`soak`) are
    fixed; internal test modules live under them. Don't add new Cargo targets.
 

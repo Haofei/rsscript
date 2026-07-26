@@ -1,16 +1,19 @@
 use rayon::prelude::*;
 
+// RSScript's native List<Int> ABI passes Vec-backed values to adapter functions.
+#[allow(clippy::ptr_arg)]
 pub fn sum_int(values: &Vec<i64>) -> i64 {
     checked_sum(values.iter().copied())
 }
 
+#[allow(clippy::ptr_arg)]
 pub fn sum_squares(values: &Vec<i64>) -> i64 {
     let squares = values
         .par_iter()
         .map(|value| value.checked_mul(*value))
         .collect::<Option<Vec<_>>>()
         .unwrap_or_else(|| panic!("RSScript integer overflow"));
-    checked_sum(squares.into_iter())
+    checked_sum(squares)
 }
 
 fn checked_sum(values: impl IntoIterator<Item = i64>) -> i64 {
@@ -20,6 +23,7 @@ fn checked_sum(values: impl IntoIterator<Item = i64>) -> i64 {
         .unwrap_or_else(|| panic!("RSScript integer overflow"))
 }
 
+#[allow(clippy::ptr_arg)]
 pub fn count_positive_int(values: &Vec<i64>) -> i64 {
     values.par_iter().filter(|value| **value > 0).count() as i64
 }
@@ -70,7 +74,7 @@ mod tests {
     }
 
     #[test]
-    fn integer_reductions_trap_on_overflow_in_every_profile() {
+    fn integer_reductions_unwind_on_overflow_for_the_native_abi_boundary() {
         assert!(std::panic::catch_unwind(|| super::sum_int(&vec![i64::MAX, 1])).is_err());
         assert!(std::panic::catch_unwind(|| super::sum_squares(&vec![i64::MAX])).is_err());
     }

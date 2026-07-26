@@ -5631,6 +5631,7 @@ fn main() -> Unit {
 // dispatch natively (they run on the interpreter / tier-0, which `tick()`s).
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "native-jit")]
 const FIB_SELF_SRC: &str = "\
 fn fib(n: Int) -> Int {
     if n < 2 { return n }
@@ -5642,6 +5643,7 @@ fn main() -> Unit {
 }
 ";
 
+#[cfg(feature = "native-jit")]
 const IS_EVEN_MUTUAL_SRC: &str = "\
 fn is_even(n: Int) -> Int {
     if n < 1 { return 1 }

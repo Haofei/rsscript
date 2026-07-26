@@ -746,6 +746,13 @@ runnable entry source but `rss check` may check the package source set.
 
 `rss run <file.rss>` lowers the file to a Rust package and invokes Cargo on that package. `rss run --vm <file.rss>` executes the same file through the register VM for fast feedback. `rss run <package-directory>` uses the package manifest, package source set, and interface environment; `--vm` runs that package through the package VM with native host bindings loaded. For packages with multiple source files, `src/main.rss` is the runnable entry source.
 
+CLI execution is resource-bounded by default. Single-file input is limited to
+16 MiB. VM runs use finite step, cumulative allocation, output, host-call,
+recursion, and wall-clock budgets; `--trusted-unlimited` is the explicit
+trusted-input opt-out. Generated-Rust runs retain AOT semantics but execute the
+Cargo/program subprocess under a 10-minute deadline with a 16 MiB cap on each
+captured output stream.
+
 `rss run --dry-run --out-dir <directory> <file.rss>` performs the same lowering and retains the generated package and `rsscript-source-map.json` for inspection without executing it.
 
 The RSScript frontend is responsible for RSScript semantics. rustc is responsible for Rust type checking of generated code, optimization, machine code generation, linking, and platform integration.

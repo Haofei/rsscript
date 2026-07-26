@@ -1119,6 +1119,22 @@
       "dev_dependencies": []
     },
     {
+      "kind": "adapter",
+      "name": "rss-sqlx-ffi-smoke",
+      "version": "0.1.0",
+      "path": "packages/adapters/sqlx-ffi/tests/sqlx-ffi-smoke",
+      "interface_files": [],
+      "source_files": [
+        "src/main.rss"
+      ],
+      "native_rust": null,
+      "virtual_package": null,
+      "dependencies": [
+        "rss-sqlx-ffi"
+      ],
+      "dev_dependencies": []
+    },
+    {
       "kind": "package",
       "name": "rss-agent",
       "version": "0.1.0",

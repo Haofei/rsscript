@@ -67,6 +67,15 @@ pub struct PackageLoweringInput {
     pub native_dependencies: Vec<NativeRustDependency>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NativePluginBuildDependency {
+    pub crate_name: String,
+    pub path: String,
+    pub cargo_features: Vec<String>,
+    pub default_features: bool,
+    pub bindings: BTreeMap<String, String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PackageMetadataReport {
     pub package: PackageIdentity,
@@ -324,6 +333,8 @@ pub struct PackageTreeNode {
     pub implements: Vec<PackageProviderImplementation>,
     pub dependency_kind: PackageDependencyKind,
     pub reasons: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
     pub dependencies: Vec<PackageTreeNode>,
 }
 

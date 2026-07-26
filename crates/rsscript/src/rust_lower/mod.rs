@@ -346,9 +346,10 @@ pub fn lower_sources_to_rust_package_with_options(
                 )
             };
             format!(
-                "\"{}\" = {{ path = \"{}\"{} }}\n",
+                "\"{}\" = {{ path = \"{}\", default-features = {}{} }}\n",
                 toml_string(&dependency.crate_name),
                 toml_string(&dependency.path),
+                dependency.default_features,
                 feature_toml
             )
         })

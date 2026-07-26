@@ -24,6 +24,7 @@ pub fn run() -> Unit {
             crate_name: "host_native".to_string(),
             path: "/workspace/host-native".to_string(),
             cargo_features: Vec::new(),
+            default_features: true,
             bindings: BTreeMap::from([("host_emit".to_string(), "host_native::emit".to_string())]),
         }],
     )
@@ -72,6 +73,7 @@ pub fn run() -> Unit {
             crate_name: "alpha_native".to_string(),
             path: "/workspace/alpha-native".to_string(),
             cargo_features: Vec::new(),
+            default_features: true,
             bindings: BTreeMap::from([
                 ("Alpha.open".to_string(), "alpha_native::open".to_string()),
                 (
@@ -116,15 +118,16 @@ fn main() -> Unit {
             crate_name: "rss_json_native".to_string(),
             path: "/workspace/rss-json/native/rust".to_string(),
             cargo_features: Vec::new(),
+            default_features: true,
             bindings: BTreeMap::new(),
         }],
     )
     .expect("source should lower into package with native dependency");
 
     assert!(
-        package
-            .cargo_toml
-            .contains("\"rss_json_native\" = { path = \"/workspace/rss-json/native/rust\" }")
+        package.cargo_toml.contains(
+            "\"rss_json_native\" = { path = \"/workspace/rss-json/native/rust\", default-features = true }"
+        )
     );
 }
 

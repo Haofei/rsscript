@@ -1026,6 +1026,7 @@ pub fn echo(message: &String) -> String {
             crate_name: "rsscript_test_native".to_string(),
             path: native_dir.to_string_lossy().to_string(),
             cargo_features: Vec::new(),
+            default_features: true,
             bindings: BTreeMap::from([
                 (
                     "Host.echo".to_string(),

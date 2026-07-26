@@ -1907,6 +1907,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::mutable_key_type)]
     fn map_transaction_snapshot_preserves_spare_capacity() {
         let mut map = ValueMap::with_capacity_and_hasher(128, Default::default());
         map.insert(VmMapKey::new(VmValue::Int(1)), VmValue::Int(2));

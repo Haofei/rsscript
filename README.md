@@ -451,7 +451,7 @@ rss pkg      lock     [--json|--reir] [package-directory]
 rss pkg      tree     [--json|--reir] [package-directory]
 rss pkg      metadata [--verify|--dry-run] [--json|--reir] [package-directory]
 rss pkg      vendor   [--dry-run] [--json|--reir] [package-directory]
-rss run      [--json] --vm <file-or-package-directory> [-- <args>...]
+rss run      [--json] --vm [--trusted-unlimited] <file-or-package-directory> [-- <args>...]
 rss run      [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]
 rss test     [--all] [--json] [--filter <substring>]
 ```
@@ -469,7 +469,7 @@ rss test     [--all] [--json] [--filter <substring>]
 - `rss pkg diff` compares two local package directories and reports semantic package changes.
 - `rss pkg ci` is the CI-facing package check entrypoint. It uses the same package health rules as `rss pkg`, with stable `--json` output for automation.
 - `rss pkg publish --dry-run` runs pre-publish checks without uploading and reports whether the package is ready.
-- `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package and delegates to `cargo run`; package lowering carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--vm` runs the same input through the register VM for fast feedback instead of invoking Cargo; it cannot be combined with AOT-only flags (`--release`, `--dry-run`, or `--out-dir`). `--dry-run` prints the generated `Cargo.toml`, lowered Rust, and cargo invocation without executing it; `--release` delegates to Cargo's release profile, `--out-dir` keeps the generated package, and arguments after `--` reach the program through the core `Args` API.
+- `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package and delegates to a bounded `cargo run` (10-minute deadline and 16 MiB cap per output stream); package lowering carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--vm` runs the same input through the register VM for fast feedback with default step, memory, output, host-call, recursion, and 60-second wall-clock limits; `--trusted-unlimited` explicitly restores the embedding API's unlimited VM budgets. `--vm` cannot be combined with AOT-only flags (`--release`, `--dry-run`, or `--out-dir`). Single-file CLI input is capped at 16 MiB. `--dry-run` prints the generated `Cargo.toml`, lowered Rust, and cargo invocation without executing it; `--release` delegates to Cargo's release profile, `--out-dir` keeps the generated package, and arguments after `--` reach the program through the core `Args` API.
 
 > **Performance — use a release-built `rss` for package-scale checking.** On large, generics-heavy packages, `rss check` / `rss pkg` can be noticeably slow when run from a **debug** build of the compiler, because generic type-argument substitution currently re-parses type strings at each nesting level (a known, deferred ~O(n³) path in generic substitution). The debug build leaves that path unoptimized; a release build optimizes it enough to be comfortable. For repeated package-wide validation (e.g. an inner edit→check loop on a big codebase), build the compiler once in release and use that binary:
 >

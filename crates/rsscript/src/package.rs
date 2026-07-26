@@ -48,6 +48,7 @@ pub use format::*;
 pub use graph::package_tree;
 pub use lock::{diff_package_locks, lock_package_dir};
 pub use metadata::{package_lowering_input, package_metadata, package_metadata_verify};
+pub(crate) use native::package_native_plugin_build_dependencies;
 use native::{manifest_native_enabled, manifest_native_unsafe_boundary};
 pub use publish::{publish_package_dry_run, publish_package_dry_run_with_registry};
 pub use review::review_package_dir;
@@ -570,6 +571,113 @@ fn canonical_checked_root(path: &Path, operation: &str) -> Result<PathBuf, Strin
         .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))
 }
 
+/// Atomically replace a regular package artifact without following symlinks in
+/// its parent path or at the destination.
+pub fn write_package_artifact_atomic(
+    package_root: &Path,
+    destination: &Path,
+    contents: &[u8],
+    label: &str,
+) -> Result<(), String> {
+    let canonical_root = canonical_checked_root(package_root, label)?;
+    let relative = destination.strip_prefix(package_root).map_err(|_| {
+        format!(
+            "{label} destination escapes package root: {}",
+            destination.display()
+        )
+    })?;
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err(format!(
+            "{label} destination escapes package root: {}",
+            destination.display()
+        ));
+    }
+    let destination = canonical_root.join(relative);
+    let parent = destination.parent().ok_or_else(|| {
+        format!(
+            "{label} destination has no parent: {}",
+            destination.display()
+        )
+    })?;
+    ensure_real_package_directory(&canonical_root, parent, label)?;
+    if let Ok(metadata) = fs::symlink_metadata(&destination)
+        && (metadata.file_type().is_symlink() || !metadata.is_file())
+    {
+        return Err(format!(
+            "{label} destination must be a regular file, not a symlink: {}",
+            destination.display()
+        ));
+    }
+
+    let file_name = destination
+        .file_name()
+        .ok_or_else(|| format!("{label} destination has no file name"))?;
+    let temporary = parent.join(format!(
+        ".{}.{}.{}.tmp",
+        file_name.to_string_lossy(),
+        std::process::id(),
+        uuid::Uuid::new_v4()
+    ));
+    let result = (|| {
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+            .map_err(|error| {
+                format!(
+                    "failed to create temporary {label} file {}: {error}",
+                    temporary.display()
+                )
+            })?;
+        file.write_all(contents)
+            .map_err(|error| format!("failed to write {label}: {error}"))?;
+        file.sync_all()
+            .map_err(|error| format!("failed to sync {label}: {error}"))?;
+        drop(file);
+        fs::rename(&temporary, &destination)
+            .map_err(|error| format!("failed to atomically publish {label}: {error}"))?;
+        if let Ok(parent_file) = File::open(parent) {
+            let _ = parent_file.sync_all();
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
+}
+
+fn ensure_real_package_directory(root: &Path, directory: &Path, label: &str) -> Result<(), String> {
+    let relative = directory.strip_prefix(root).map_err(|_| {
+        format!(
+            "{label} directory escapes package root: {}",
+            directory.display()
+        )
+    })?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        current.push(component);
+        let metadata = fs::symlink_metadata(&current).map_err(|error| {
+            format!(
+                "failed to inspect {label} directory {}: {error}",
+                current.display()
+            )
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(format!(
+                "{label} directory must be a real directory, not a symlink: {}",
+                current.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn package_path_metadata(path: &Path, operation: &str) -> Result<fs::Metadata, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
@@ -894,6 +1002,41 @@ mod preparation_limit_tests {
             .expect_err("oversized manifest must be rejected");
         assert!(error.contains("byte limit of 4"), "{error}");
         fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn package_artifact_write_replaces_regular_files_atomically() {
+        let root = test_dir("artifact-write");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join("rsspkg.lock");
+        fs::write(&path, b"old").expect("old fixture");
+
+        write_package_artifact_atomic(&root, &path, b"new", "test package lock")
+            .expect("regular artifact should update");
+
+        assert_eq!(fs::read(&path).expect("artifact should read"), b"new");
+        fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_artifact_write_rejects_symlink_destinations() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_dir("artifact-symlink");
+        let outside = test_dir("artifact-outside");
+        fs::create_dir_all(&root).expect("fixture directory");
+        fs::write(&outside, b"outside").expect("outside fixture");
+        let path = root.join("rsspkg.lock");
+        symlink(&outside, &path).expect("fixture symlink");
+
+        let error = write_package_artifact_atomic(&root, &path, b"new", "test package lock")
+            .expect_err("symlink artifact must be rejected");
+
+        assert!(error.contains("not a symlink"), "{error}");
+        assert_eq!(fs::read(&outside).expect("outside should read"), b"outside");
+        fs::remove_dir_all(root).expect("fixture cleanup");
+        fs::remove_file(outside).expect("outside cleanup");
     }
 
     #[test]

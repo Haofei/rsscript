@@ -18,7 +18,13 @@ use super::{
 
 pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
     let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
-    let root = package_tree_node(&graph, &graph.root, PackageDependencyKind::Root, None)?;
+    let root = package_tree_node(
+        &graph,
+        &graph.root,
+        PackageDependencyKind::Root,
+        None,
+        &mut BTreeMap::new(),
+    )?;
     let mut summary = PackageTreeSummary::default();
     collect_package_tree_summary(&root, &mut summary, &mut BTreeSet::new());
     Ok(PackageTree { root, summary })
@@ -267,7 +273,16 @@ fn package_tree_node(
     key: &str,
     dependency_kind: PackageDependencyKind,
     incoming: Option<&ResolvedDependencyEdge>,
+    cache: &mut BTreeMap<(String, PackageDependencyKind), PackageTreeNode>,
 ) -> Result<PackageTreeNode, String> {
+    let cache_key = (key.to_string(), dependency_kind);
+    if let Some(cached) = cache.get(&cache_key) {
+        let mut reference = cached.clone();
+        apply_incoming_edge(&mut reference, incoming);
+        reference.reference = Some(key.to_string());
+        reference.dependencies.clear();
+        return Ok(reference);
+    }
     let resolved = &graph.nodes[key];
     let package_dir = &resolved.package_dir;
     let features = resolved.features.clone();
@@ -283,7 +298,7 @@ fn package_tree_node(
             edge.kind
         };
         dependencies.push(match &edge.target {
-            Some(target) => package_tree_node(graph, target, child_kind, Some(edge))?,
+            Some(target) => package_tree_node(graph, target, child_kind, Some(edge), cache)?,
             None => {
                 unresolved_dependency_node(edge.spec.clone(), child_kind, unresolved_reasons(edge))
             }
@@ -292,7 +307,7 @@ fn package_tree_node(
 
     let spec = incoming.map(|edge| &edge.spec);
 
-    Ok(PackageTreeNode {
+    let node = PackageTreeNode {
         name: identity.name,
         version: Some(identity.version),
         requirement: spec.and_then(|spec| spec.requirement.clone()),
@@ -309,8 +324,21 @@ fn package_tree_node(
         implements: package_provider_implementations(&package.manifest),
         dependency_kind,
         reasons: review.reasons,
+        reference: None,
         dependencies,
-    })
+    };
+    cache.insert(cache_key, node.clone());
+    Ok(node)
+}
+
+fn apply_incoming_edge(node: &mut PackageTreeNode, incoming: Option<&ResolvedDependencyEdge>) {
+    let Some(edge) = incoming else {
+        return;
+    };
+    node.requirement = edge.spec.requirement.clone();
+    node.compile_only = edge.spec.compile_only;
+    node.test_only = edge.spec.test_only;
+    node.platform_provided = edge.spec.platform_provided;
 }
 
 fn unresolved_reasons(edge: &ResolvedDependencyEdge) -> Vec<String> {
@@ -350,6 +378,7 @@ fn unresolved_dependency_node(
         implements: Vec::new(),
         dependency_kind,
         reasons,
+        reference: None,
         dependencies: Vec::new(),
     }
 }

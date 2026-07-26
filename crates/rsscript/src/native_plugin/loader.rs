@@ -22,14 +22,14 @@ use rss_native_abi::NativeInterpreterFn;
 use sha2::{Digest, Sha256};
 
 use crate::package::{
-    BoundedRegularFile, CARGO_BUILD_TIMEOUT, CARGO_OUTPUT_MAX_BYTES, TreeLimits,
+    BoundedRegularFile, CARGO_BUILD_TIMEOUT, CARGO_OUTPUT_MAX_BYTES, TreeLimits, check_package_dir,
     collect_bounded_regular_files, configure_reduced_build_environment, package_lowering_input,
-    run_bounded_command,
+    package_native_plugin_build_dependencies, run_bounded_command,
 };
 use crate::syntax::ast::{DataEffect, Item, Param, TypeRef};
 use crate::syntax::parse_source;
 
-use super::shim_gen::{ShimBinding, ShimReturn, ShimType, generate_shim_crate};
+use super::shim_gen::{ShimBinding, ShimDependency, ShimReturn, ShimType, generate_shim_crate};
 
 /// Load (generating and building the shim cdylib on demand) the native host
 /// bindings for `package_dir`. Returns an empty list for pure-RSS packages.
@@ -43,6 +43,7 @@ pub fn load_package_native_bindings(
     if input.native_dependencies.is_empty() {
         return Ok(Vec::new());
     }
+    authorize_native_package(package_dir)?;
 
     // Collect the native-fn signatures declared across the package interfaces.
     let mut signatures: BTreeMap<String, (Vec<Param>, Option<TypeRef>)> = BTreeMap::new();
@@ -60,9 +61,15 @@ pub fn load_package_native_bindings(
 
     // Build the shim binding specs plus the set of native crate deps to link.
     let mut bindings = Vec::new();
-    let mut native_deps: Vec<(String, String)> = Vec::new();
-    for dependency in &input.native_dependencies {
-        native_deps.push((dependency.crate_name.clone(), dependency.path.clone()));
+    let native_build_dependencies = package_native_plugin_build_dependencies(package_dir)?;
+    let mut native_deps = Vec::new();
+    for dependency in &native_build_dependencies {
+        native_deps.push(ShimDependency {
+            crate_name: dependency.crate_name.clone(),
+            path: dependency.path.clone(),
+            cargo_features: dependency.cargo_features.clone(),
+            default_features: dependency.default_features,
+        });
         for (symbol, rust_path) in &dependency.bindings {
             let (params, return_ty) = signatures.get(symbol).ok_or_else(|| {
                 format!("native binding `{symbol}` has no interface signature for the VM shim.")
@@ -75,12 +82,33 @@ pub fn load_package_native_bindings(
             )?);
         }
     }
-    native_deps.sort();
+    native_deps.sort_by(|left, right| {
+        left.crate_name
+            .cmp(&right.crate_name)
+            .then(left.path.cmp(&right.path))
+            .then(left.cargo_features.cmp(&right.cargo_features))
+            .then(left.default_features.cmp(&right.default_features))
+    });
     native_deps.dedup();
     bindings.sort_by(|left, right| left.symbol.cmp(&right.symbol));
 
     let library_path = build_shim_library(package_dir, &native_deps, &bindings)?;
     rss_native_abi::load_registry(&library_path)
+}
+
+fn authorize_native_package(package_dir: &Path) -> Result<(), String> {
+    let check = check_package_dir(package_dir)?;
+    if check.ok {
+        return Ok(());
+    }
+    let reasons = if check.reasons.is_empty() {
+        "package check did not authorize native execution".to_string()
+    } else {
+        check.reasons.join("; ")
+    };
+    Err(format!(
+        "native build/load denied because package review or policy did not authorize execution: {reasons}"
+    ))
 }
 
 /// Build a shim binding spec. `mut` parameters are supported: their positions are
@@ -161,7 +189,7 @@ fn shim_return(return_ty: Option<&TypeRef>) -> Result<ShimReturn, String> {
 /// Generate (if needed) and cargo-build the shim cdylib, returning its path.
 fn build_shim_library(
     package_dir: &Path,
-    native_deps: &[(String, String)],
+    native_deps: &[ShimDependency],
     bindings: &[ShimBinding],
 ) -> Result<PathBuf, String> {
     let abi_path = format!("{}/../native-abi", env!("CARGO_MANIFEST_DIR"));
@@ -281,7 +309,7 @@ fn build_shim_library(
 fn shim_cache_key(
     cargo_toml: &str,
     lib_rs: &str,
-    native_deps: &[(String, String)],
+    native_deps: &[ShimDependency],
     abi_path: &str,
 ) -> Result<String, String> {
     let mut digest = Sha256::new();
@@ -306,8 +334,8 @@ fn shim_cache_key(
     digest.update(std::env::consts::ARCH.as_bytes());
     digest.update(std::env::consts::OS.as_bytes());
     hash_source_tree(Path::new(abi_path), &mut digest)?;
-    for (_, path) in native_deps {
-        hash_source_tree(Path::new(path), &mut digest)?;
+    for dependency in native_deps {
+        hash_source_tree(Path::new(&dependency.path), &mut digest)?;
     }
     Ok(hex::encode(digest.finalize()))
 }
@@ -662,6 +690,33 @@ mod tests {
     }
 
     #[test]
+    fn native_authorization_rejects_package_without_successful_check() {
+        let root = std::env::temp_dir().join(format!(
+            "rss-native-authorization-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(root.join("src")).expect("fixture source directory");
+        fs::write(
+            root.join("rsspkg.toml"),
+            "[package]\nname = \"authorization-test\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n",
+        )
+        .expect("fixture manifest");
+        fs::write(
+            root.join("src/main.rss"),
+            "fn main() -> Unit { return Unit }\n",
+        )
+        .expect("fixture source");
+
+        let error = authorize_native_package(&root)
+            .expect_err("a package without an approved lock/check must not authorize native load");
+        let _ = fs::remove_dir_all(&root);
+
+        assert!(error.contains("native build/load denied"), "{error}");
+        assert!(error.contains("rsspkg.lock missing"), "{error}");
+    }
+
+    #[test]
     fn builds_plain_scalar_binding() {
         let (params, ret) =
             sig("native fn Adder.add(a: Int, b: Int) -> Int\n    effects(native)\n");
@@ -796,10 +851,12 @@ mod tests {
             "pub fn add_one(value: i64) -> i64 { value + 1 }\n",
         )
         .expect("native source should write");
-        let deps = vec![(
-            "shim_test_native".to_string(),
-            native.to_string_lossy().into_owned(),
-        )];
+        let deps = vec![ShimDependency {
+            crate_name: "shim_test_native".to_string(),
+            path: native.to_string_lossy().into_owned(),
+            cargo_features: vec![],
+            default_features: true,
+        }];
         let bindings = vec![ShimBinding {
             symbol: "Demo.add_one".to_string(),
             rust_path: "shim_test_native::add_one".to_string(),

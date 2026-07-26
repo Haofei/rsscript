@@ -16,6 +16,7 @@ pub struct NativeRustDependency {
     pub crate_name: String,
     pub path: String,
     pub cargo_features: Vec<String>,
+    pub default_features: bool,
     pub bindings: BTreeMap<String, String>,
 }
 

@@ -18,7 +18,7 @@ use crate::syntax::parse_source;
 use super::contract::collect_package_function_contracts;
 use super::dependency::package_dependency_spec;
 use super::source_set::{
-    load_package_manifest, load_package_with_features, resolve_package_features,
+    load_package, load_package_manifest, load_package_with_features, resolve_package_features,
     selected_root_package_features,
 };
 use super::{
@@ -134,6 +134,123 @@ pub(super) fn package_native_rust_dependencies(
     dedup_native_rust_dependencies(dependencies)
 }
 
+pub(crate) fn package_native_plugin_build_dependencies(
+    package_dir: &Path,
+) -> Result<Vec<super::NativePluginBuildDependency>, String> {
+    let package = load_package(package_dir)?;
+    let manifest = &package.manifest;
+    let mut visited = BTreeSet::new();
+    let mut dependencies = Vec::new();
+    let selected_features = selected_root_package_features(manifest);
+    collect_package_native_plugin_build_dependencies(
+        package_dir,
+        manifest,
+        &selected_features,
+        &mut visited,
+        &mut dependencies,
+    )?;
+    dedup_native_plugin_build_dependencies(dependencies)
+}
+
+fn collect_package_native_plugin_build_dependencies(
+    package_dir: &Path,
+    manifest: &Manifest,
+    selected_features: &[String],
+    visited: &mut BTreeSet<String>,
+    dependencies: &mut Vec<super::NativePluginBuildDependency>,
+) -> Result<(), String> {
+    let canonical = canonical_path_label(package_dir);
+    if !visited.insert(canonical) {
+        return Ok(());
+    }
+    if let Some(native) = manifest
+        .native
+        .as_ref()
+        .and_then(|native| native.rust.as_ref())
+        .filter(|native| native.enabled)
+    {
+        let crate_name = native
+            .crate_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| {
+                "native.rust enabled packages must declare `crate` before native loading."
+                    .to_string()
+            })?;
+        let native_path = native.path.as_deref().unwrap_or("native/rust");
+        let native_root = confined_native_rust_path(package_dir, native_path)?;
+        dependencies.push(super::NativePluginBuildDependency {
+            crate_name: crate_name.to_string(),
+            path: native_root.display().to_string(),
+            cargo_features: selected_native_cargo_features_for_package_features(
+                native,
+                selected_features,
+            ),
+            default_features: native.default_features,
+            bindings: package_native_bindings(package_dir)?,
+        });
+    }
+    for (name, value) in &manifest.dependencies {
+        let spec = package_dependency_spec(name, value);
+        let Some(path) = &spec.path else {
+            continue;
+        };
+        let dependency_dir = package_dir.join(path);
+        if !dependency_dir.join("rsspkg.toml").exists() {
+            continue;
+        }
+        let dependency_manifest = load_package_manifest(&dependency_dir)?;
+        let selected_features = resolve_package_features(&dependency_manifest, &spec.features);
+        let dependency_package =
+            load_package_with_features(&dependency_dir, Some(&selected_features.selected))?;
+        collect_package_native_plugin_build_dependencies(
+            &dependency_dir,
+            &dependency_package.manifest,
+            &selected_features.selected,
+            visited,
+            dependencies,
+        )?;
+    }
+    Ok(())
+}
+
+fn dedup_native_plugin_build_dependencies(
+    dependencies: Vec<super::NativePluginBuildDependency>,
+) -> Result<Vec<super::NativePluginBuildDependency>, String> {
+    let mut by_crate: BTreeMap<String, usize> = BTreeMap::new();
+    let mut deduped: Vec<super::NativePluginBuildDependency> = Vec::new();
+    for mut dependency in dependencies {
+        if let Some(existing_index) = by_crate.get(&dependency.crate_name).copied() {
+            let existing = &mut deduped[existing_index];
+            if existing.path != dependency.path {
+                return Err(format!(
+                    "native Rust dependency crate `{}` is provided by both `{}` and `{}`.",
+                    dependency.crate_name, existing.path, dependency.path
+                ));
+            }
+            if existing.default_features != dependency.default_features {
+                return Err(format!(
+                    "native Rust dependency crate `{}` has conflicting `default-features` settings.",
+                    dependency.crate_name
+                ));
+            }
+            existing
+                .cargo_features
+                .append(&mut dependency.cargo_features);
+            existing.cargo_features.sort();
+            existing.cargo_features.dedup();
+            existing.bindings.append(&mut dependency.bindings);
+            continue;
+        }
+        dependency.cargo_features.sort();
+        dependency.cargo_features.dedup();
+        by_crate.insert(dependency.crate_name.clone(), deduped.len());
+        deduped.push(dependency);
+    }
+    Ok(deduped)
+}
+
 fn collect_package_native_rust_dependencies(
     package_dir: &Path,
     manifest: &Manifest,
@@ -206,6 +323,7 @@ fn package_own_native_rust_dependencies(
         crate_name: crate_name.to_string(),
         path: native_root.display().to_string(),
         cargo_features,
+        default_features: native.default_features,
         bindings,
     }])
 }
@@ -221,6 +339,12 @@ fn dedup_native_rust_dependencies(
                 return Err(format!(
                     "native Rust dependency crate `{}` is provided by both `{}` and `{}`.",
                     dependency.crate_name, deduped[existing_index].path, dependency.path
+                ));
+            }
+            if deduped[existing_index].default_features != dependency.default_features {
+                return Err(format!(
+                    "native Rust dependency crate `{}` has conflicting `default-features` settings.",
+                    dependency.crate_name
                 ));
             }
             deduped[existing_index]
@@ -1305,6 +1429,56 @@ mod adapter_binding_tests {
             flatten("[adapter.File]\ncrate = \"file_native\"\nfunctions = []\n").is_err(),
             "empty functions must error"
         );
+    }
+
+    #[test]
+    fn plugin_build_dependencies_preserve_features_and_default_feature_policy() {
+        let root = std::env::temp_dir().join(format!(
+            "rss-native-build-spec-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(root.join("src")).expect("fixture source directory");
+        fs::create_dir_all(root.join("native/rust")).expect("fixture native directory");
+        fs::write(
+            root.join("rsspkg.toml"),
+            r#"[package]
+name = "native-build-spec"
+version = "0.1.0"
+edition = "2026"
+
+[sources]
+paths = ["src"]
+
+[features]
+fast = []
+default = ["fast"]
+
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "native_build_spec"
+cargo_features = ["base"]
+default-features = false
+
+[native.rust.feature_map.fast]
+cargo_features = ["simd"]
+"#,
+        )
+        .expect("fixture manifest");
+        fs::write(
+            root.join("src/main.rss"),
+            "fn main() -> Unit { return Unit }\n",
+        )
+        .expect("fixture source");
+
+        let dependencies = package_native_plugin_build_dependencies(&root)
+            .expect("native build specs should resolve");
+        let _ = fs::remove_dir_all(&root);
+
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].cargo_features, ["base", "simd"]);
+        assert!(!dependencies[0].default_features);
     }
 
     #[test]

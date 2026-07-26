@@ -469,11 +469,10 @@ fn bootstrap_ir_data(lines: &mut Vec<String>, decl: &crate::syntax::ast::TypeDec
         crate::syntax::ast::TypeKind::Struct => "struct",
         crate::syntax::ast::TypeKind::Resource => "resource",
     };
+    let name = format!("{}{}", decl.name, bootstrap_ir_generics(&decl.type_params));
     lines.push(format!(
-        "type {kind} {} public={} opaque={}",
-        format!("{}{}", decl.name, bootstrap_ir_generics(&decl.type_params)),
-        decl.is_public,
-        decl.is_opaque
+        "type {kind} {name} public={} opaque={}",
+        decl.is_public, decl.is_opaque
     ));
     if !decl.derives.is_empty() {
         lines.push(format!("  derives {}", decl.derives.join(",")));
@@ -491,11 +490,8 @@ fn bootstrap_ir_data(lines: &mut Vec<String>, decl: &crate::syntax::ast::TypeDec
 }
 
 fn bootstrap_ir_sum(lines: &mut Vec<String>, decl: &crate::syntax::ast::SumTypeDecl) {
-    lines.push(format!(
-        "sum {} public={}",
-        format!("{}{}", decl.name, bootstrap_ir_generics(&decl.type_params)),
-        decl.is_public
-    ));
+    let name = format!("{}{}", decl.name, bootstrap_ir_generics(&decl.type_params));
+    lines.push(format!("sum {name} public={}", decl.is_public));
     if !decl.derives.is_empty() {
         lines.push(format!("  derives {}", decl.derives.join(",")));
     }
@@ -3212,7 +3208,7 @@ fn parse_checker_records(stdout: &str) -> Result<Vec<SelfhostDiagnosticRecord>, 
     if lines.as_slice() == ["CLEAN"] {
         return Ok(Vec::new());
     }
-    if lines.iter().any(|line| *line == "CLEAN") {
+    if lines.contains(&"CLEAN") {
         return Err("rss checker emitted CLEAN together with structured diagnostics".to_string());
     }
     for line in lines {
@@ -4802,7 +4798,7 @@ fn main() -> Unit {
 "#;
     let oracle = checker_oracle_records("rs0207-callback-fallback.rss", source, "RS0207");
     assert!(
-        oracle.is_empty() == false,
+        !oracle.is_empty(),
         "fixture must exercise contextual callback-body checking"
     );
     let actual = diagnostic_records_for_code(
@@ -4810,7 +4806,7 @@ fn main() -> Unit {
         "RS0207",
     );
     assert!(
-        actual.is_empty() == false,
+        !actual.is_empty(),
         "RS0207 contextual callback fallback disappeared during migration"
     );
 }
@@ -7479,6 +7475,7 @@ fn dump_block(out: &mut String, depth: usize, b: &ast::Block) {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn dump_match(
     out: &mut String,
     depth: usize,
@@ -8388,13 +8385,14 @@ fn ast_parity_corpus() {
     let workers = AST_CORPUS_WORKERS.min(total.max(1));
     let next = std::sync::atomic::AtomicUsize::new(0);
     let completed = std::sync::atomic::AtomicUsize::new(0);
-    let partials: Vec<(
+    type AstWorkerResult = (
         usize,
         Vec<String>,
         Vec<String>,
         std::time::Duration,
         Vec<(std::time::Duration, String)>,
-    )> = std::thread::scope(|scope| {
+    );
+    let partials: Vec<AstWorkerResult> = std::thread::scope(|scope| {
         let handles: Vec<_> =
             (0..workers)
                 .map(|worker| {

@@ -664,6 +664,7 @@ pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
     waiters: Arc<Mutex<Vec<WeakWakeHandle>>>,
     abort_handles: Arc<Mutex<Vec<tokio::task::AbortHandle>>>,
+    notification: Arc<tokio::sync::Notify>,
 }
 
 impl CancellationToken {
@@ -692,6 +693,7 @@ impl CancellationToken {
         ) {
             abort_handle.abort();
         }
+        self.notification.notify_waiters();
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -736,6 +738,14 @@ impl CancellationToken {
             return;
         }
         abort_handles.push(abort_handle);
+    }
+
+    async fn cancelled(&self) {
+        let mut notified = Box::pin(self.notification.notified());
+        notified.as_mut().enable();
+        if !self.is_cancelled() {
+            notified.await;
+        }
     }
 }
 
@@ -1039,23 +1049,14 @@ pub fn timer_sleep_cancellable_native_start(
     ms: i64,
     token: &RssCancellationToken,
 ) -> NativeAsyncPending<Result<(), TimerError>> {
-    let deadline = Instant::now() + Duration::from_millis(u64::try_from(ms).unwrap_or(0));
     let cancellation = token.token.clone();
-    // A fresh internal token keeps completion ungated; we observe the external
-    // cancellation ourselves and complete early when it fires.
-    let (pending, completer) = native_async_pending(CancellationToken::new());
-    std::thread::spawn(move || {
-        let tick = Duration::from_millis(5);
-        loop {
-            let now = Instant::now();
-            if cancellation.is_cancelled() || now >= deadline {
-                let _completed = completer.complete(Ok(()));
-                return;
-            }
-            std::thread::sleep(tick.min(deadline - now));
-        }
-    });
-    pending
+    let duration = Duration::from_millis(u64::try_from(ms).unwrap_or(0));
+    spawn_tokio_native(async move {
+        let sleep = Box::pin(tokio::time::sleep(duration));
+        let cancelled = Box::pin(cancellation.cancelled());
+        let _completed_first = futures_util::future::select(sleep, cancelled).await;
+        Ok(())
+    })
 }
 
 pub fn timer_sleep_native_start_with_cancellation(
@@ -1063,12 +1064,10 @@ pub fn timer_sleep_native_start_with_cancellation(
     cancellation: CancellationToken,
 ) -> NativeAsyncPending<Result<(), TimerError>> {
     let millis = u64::try_from(ms).unwrap_or(0);
-    let (pending, completer) = native_async_pending(cancellation.clone());
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(millis));
-        let _completed = completer.complete(Ok(()));
-    });
-    pending
+    spawn_tokio_native_with_cancellation(cancellation, async move {
+        tokio::time::sleep(Duration::from_millis(millis)).await;
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -1280,6 +1279,17 @@ mod tests {
         // did not, this test would hang rather than fail.
         let pending = timer_sleep_cancellable_native_start(100_000, &token);
         assert!(executor.run_pending(pending).is_ok());
+    }
+
+    #[test]
+    fn native_timers_share_the_tokio_runtime() {
+        let mut executor = Executor::new();
+        let timers = (0..1_000)
+            .map(|_| timer_sleep_native_start(1))
+            .collect::<Vec<_>>();
+        for timer in timers {
+            assert!(executor.run_pending(timer).is_ok());
+        }
     }
 
     #[test]

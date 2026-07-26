@@ -1,13 +1,12 @@
 # Cross-platform development image for RSScript.
 #
-# The workspace is edition 2024, which requires Rust >= 1.85; `rust:1-bookworm`
-# tracks the latest stable 1.x and always satisfies that. Pin to a concrete tag
-# (e.g. `rust:1.88-bookworm`) if you want a fully reproducible toolchain.
+# The workspace is edition 2024. Keep the image aligned with CI and pin the
+# multi-architecture manifest so an upstream tag move cannot change builds.
 #
 # The source tree is NOT copied into the image — it is bind-mounted at runtime
 # (see compose.yaml) so edits on the host are seen instantly on every platform.
 # This image only provides the toolchain and system libraries.
-FROM rust:1-bookworm
+FROM rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
 
 # System libraries needed to build the workspace and the Rust packages that
 # RSScript lowers to. Everything here uses rustls/ring (no OpenSSL) and a
@@ -30,17 +29,23 @@ RUN apt-get update \
 # runner the `rss test` command and CI use). Prefer the prebuilt nextest binary
 # per architecture (works on amd64 and Apple-Silicon/arm64); fall back to a
 # source build on other arches.
+ARG CARGO_NEXTEST_VERSION=0.9.140
+ARG CARGO_NEXTEST_X86_64_SHA256=4ee9aaa0d0171a985a5d0eb735b87355894c1c455972e9674fb9fdbd1387c9a3
+ARG CARGO_NEXTEST_AARCH64_SHA256=8b3f4d4560b6b0f83774fecc6be07e47716dbad0eb0bb6c3890f478f4affe4b6
+
 RUN rustup component add clippy rustfmt \
     && set -eux; \
     case "$(uname -m)" in \
-        x86_64)  url="https://get.nexte.st/latest/linux" ;; \
-        aarch64) url="https://get.nexte.st/latest/linux-arm" ;; \
-        *)       url="" ;; \
+        x86_64)  url="https://get.nexte.st/${CARGO_NEXTEST_VERSION}/linux"; expected="${CARGO_NEXTEST_X86_64_SHA256}" ;; \
+        aarch64) url="https://get.nexte.st/${CARGO_NEXTEST_VERSION}/linux-arm"; expected="${CARGO_NEXTEST_AARCH64_SHA256}" ;; \
+        *)       url=""; expected="" ;; \
     esac; \
     if [ -n "$url" ]; then \
-        curl -LsSf "$url" | tar zxf - -C "${CARGO_HOME:-/usr/local/cargo}/bin"; \
+        curl -LsSf "$url" -o /tmp/cargo-nextest.tar.gz; \
+        echo "${expected}  /tmp/cargo-nextest.tar.gz" | sha256sum -c -; \
+        tar zxf /tmp/cargo-nextest.tar.gz -C "${CARGO_HOME:-/usr/local/cargo}/bin"; \
     else \
-        cargo install cargo-nextest --locked; \
+        cargo install cargo-nextest --version "${CARGO_NEXTEST_VERSION}" --locked; \
     fi
 
 # The base image puts the toolchain on PATH via the container environment, but a

@@ -11,6 +11,14 @@ use crate::diagnostics::Resource;
 use crate::fs::{File, RuntimePath, file_open_read};
 use crate::managed::{Managed, WeakManaged, manage, weak};
 
+const DEFAULT_HTTP_TIMEOUT_MS: i64 = 30_000;
+#[cfg(feature = "net")]
+const MAX_HTTP_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+#[cfg(feature = "net")]
+const MAX_HTTP_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+#[cfg(feature = "net")]
+const MAX_HTTP_ATTEMPTS: i64 = 4;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
     path: String,
@@ -37,15 +45,44 @@ pub struct HttpRequest {
 
 pub fn http_request_debug_summary(request: &HttpRequest) -> String {
     format!(
-        "HttpRequest {{ attempts: {}, backoff_ms: {}, body: {}, header_count: {}, method: {}, timeout_ms: {}, url: {} }}",
+        "HttpRequest {{ attempts: {}, backoff_ms: {}, body_bytes: {}, header_count: {}, method: {}, timeout_ms: {}, url: {} }}",
         request.attempts,
         request.backoff_ms,
-        request.body.clone().unwrap_or_default(),
+        request.body.as_ref().map_or(0, String::len),
         request.headers.len(),
         request.method,
         request.timeout_ms,
-        request.url
+        redact_http_url(&request.url)
     )
+}
+
+fn redact_http_url(url: &str) -> String {
+    let without_fragment = url.split_once('#').map_or(url, |(prefix, _)| prefix);
+    let (base, has_query) = without_fragment
+        .split_once('?')
+        .map_or((without_fragment, false), |(prefix, _)| (prefix, true));
+    let authority_start = base.find("://").map(|index| index + 3).unwrap_or(0);
+    let authority_end = base[authority_start..]
+        .find('/')
+        .map(|index| authority_start + index)
+        .unwrap_or(base.len());
+    let authority = &base[authority_start..authority_end];
+    let redacted_base = authority.rfind('@').map_or_else(
+        || base.to_string(),
+        |at| {
+            format!(
+                "{}[redacted]@{}{}",
+                &base[..authority_start],
+                &authority[at + 1..],
+                &base[authority_end..]
+            )
+        },
+    );
+    if has_query {
+        format!("{redacted_base}?[redacted]")
+    } else {
+        redacted_base
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -486,7 +523,7 @@ fn http_request_new(
         headers: Vec::new(),
         content_type,
         body,
-        timeout_ms: 0,
+        timeout_ms: DEFAULT_HTTP_TIMEOUT_MS,
         attempts: 1,
         backoff_ms: 0,
     }
@@ -667,7 +704,48 @@ async fn http_request_async(
     content_type: Option<&str>,
     body: Option<String>,
 ) -> Result<Response, HttpError> {
-    let client = reqwest::Client::new();
+    http_request_timeout_async(
+        method,
+        url,
+        headers,
+        content_type,
+        body,
+        DEFAULT_HTTP_TIMEOUT_MS,
+    )
+    .await
+}
+
+#[cfg(feature = "net")]
+fn shared_http_client() -> &'static reqwest::Client {
+    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("HTTP client should build with static configuration")
+    })
+}
+
+#[cfg(feature = "net")]
+async fn http_request_once_async(
+    method: &str,
+    url: &str,
+    headers: Vec<(String, String)>,
+    content_type: Option<&str>,
+    body: Option<String>,
+) -> Result<Response, HttpError> {
+    let client = shared_http_client();
+    let display_url = redact_http_url(url);
+    if body
+        .as_ref()
+        .is_some_and(|body| body.len() > MAX_HTTP_REQUEST_BYTES)
+    {
+        return Err(HttpError {
+            message: format!(
+                "HTTP request body for {display_url} exceeds {MAX_HTTP_REQUEST_BYTES} bytes"
+            ),
+        });
+    }
     let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| HttpError {
         message: format!("invalid HTTP method `{method}`: {error}"),
     })?;
@@ -681,14 +759,41 @@ async fn http_request_async(
     if let Some(body) = body {
         request = request.body(body);
     }
-    let response = request.send().await.map_err(|error| HttpError {
-        message: format!("HTTP request failed for {url}: {error}"),
+    let mut response = request.send().await.map_err(|error| HttpError {
+        message: format!("HTTP request failed for {display_url}: {error}"),
     })?;
     let status = i64::from(response.status().as_u16());
-    let body = response.bytes().await.map_err(|error| HttpError {
-        message: format!("failed to read HTTP response body from {url}: {error}"),
-    })?;
-    let body_bytes = body.to_vec();
+    if response
+        .content_length()
+        .is_some_and(|length| length > MAX_HTTP_RESPONSE_BYTES as u64)
+    {
+        return Err(HttpError {
+            message: format!(
+                "HTTP response body from {display_url} exceeds {MAX_HTTP_RESPONSE_BYTES} bytes"
+            ),
+        });
+    }
+    let mut body_bytes = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|error| HttpError {
+        message: format!("failed to read HTTP response body from {display_url}: {error}"),
+    })? {
+        let next_len = body_bytes
+            .len()
+            .checked_add(chunk.len())
+            .ok_or_else(|| HttpError {
+                message: format!(
+                    "HTTP response body from {display_url} exceeds {MAX_HTTP_RESPONSE_BYTES} bytes"
+                ),
+            })?;
+        if next_len > MAX_HTTP_RESPONSE_BYTES {
+            return Err(HttpError {
+                message: format!(
+                    "HTTP response body from {display_url} exceeds {MAX_HTTP_RESPONSE_BYTES} bytes"
+                ),
+            });
+        }
+        body_bytes.extend_from_slice(&chunk);
+    }
     Ok(Response {
         status,
         body: String::from_utf8_lossy(&body_bytes).to_string(),
@@ -705,33 +810,48 @@ async fn http_request_timeout_async(
     body: Option<String>,
     timeout_ms: i64,
 ) -> Result<Response, HttpError> {
-    if timeout_ms <= 0 {
-        return http_request_async(method, url, headers, content_type, body).await;
-    }
+    let timeout_ms = normalized_http_timeout_ms(timeout_ms);
+    let display_url = redact_http_url(url);
     tokio::time::timeout(
         std::time::Duration::from_millis(timeout_ms as u64),
-        http_request_async(method, url, headers, content_type, body),
+        http_request_once_async(method, url, headers, content_type, body),
     )
     .await
     .map_err(|_| HttpError {
-        message: format!("HTTP request to {url} timed out after {timeout_ms}ms"),
+        message: format!("HTTP request to {display_url} timed out after {timeout_ms}ms"),
     })?
 }
 
 #[cfg(feature = "net")]
+fn normalized_http_timeout_ms(timeout_ms: i64) -> i64 {
+    if timeout_ms <= 0 {
+        DEFAULT_HTTP_TIMEOUT_MS
+    } else {
+        timeout_ms
+    }
+}
+
+#[cfg(feature = "net")]
 async fn http_request_retry_async(request: HttpRequest) -> Result<Response, HttpError> {
-    let attempts = request.attempts.max(1);
+    let attempts = request.attempts.clamp(1, MAX_HTTP_ATTEMPTS);
     let backoff_ms = request.backoff_ms.max(0) as u64;
+    let total_timeout_ms = normalized_http_timeout_ms(request.timeout_ms);
+    let deadline =
+        tokio::time::Instant::now() + std::time::Duration::from_millis(total_timeout_ms as u64);
     let mut last_error = None;
     let mut last_response = None;
     for attempt in 0..attempts {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
         match http_request_timeout_async(
             &request.method,
             &request.url,
             request.headers.clone(),
             request.content_type.as_deref(),
             request.body.clone(),
-            request.timeout_ms,
+            i64::try_from(remaining.as_millis()).unwrap_or(i64::MAX),
         )
         .await
         {
@@ -744,14 +864,21 @@ async fn http_request_retry_async(request: HttpRequest) -> Result<Response, Http
             Err(error) => last_error = Some(error),
         }
         if attempt + 1 < attempts && backoff_ms > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms).min(remaining)).await;
         }
     }
     if let Some(response) = last_response {
         return Ok(response);
     }
     Err(last_error.unwrap_or_else(|| HttpError {
-        message: format!("HTTP request to {} failed", request.url),
+        message: format!(
+            "HTTP request to {} timed out after {total_timeout_ms}ms",
+            redact_http_url(&request.url)
+        ),
     }))
 }
 
@@ -1812,6 +1939,31 @@ mod tests {
     use crate::async_runtime::Executor;
 
     #[test]
+    fn http_request_defaults_are_bounded_and_debug_output_is_redacted() {
+        let request = http_request_with_header(
+            http_request_json(
+                "https://user:password@example.test/path?token=secret",
+                r#"{"api_key":"secret"}"#,
+            ),
+            "Authorization",
+            "Bearer secret-token",
+        );
+
+        assert_eq!(request.timeout_ms, DEFAULT_HTTP_TIMEOUT_MS);
+        let summary = http_request_debug_summary(&request);
+        assert!(summary.contains("body_bytes: 20"));
+        assert!(summary.contains("[redacted]@example.test/path?[redacted]"));
+        assert!(!summary.contains("api_key"));
+        assert!(!summary.contains("password"));
+        assert!(!summary.contains("secret-token"));
+    }
+
+    #[test]
+    fn http_client_is_reused() {
+        assert!(std::ptr::eq(shared_http_client(), shared_http_client()));
+    }
+
+    #[test]
     fn http_get_async_uses_reqwest_tokio_io() {
         use std::io::{Read, Write};
         use std::net::TcpListener;
@@ -1949,6 +2101,119 @@ mod tests {
             .expect_err("invalid URL should be reported");
 
         assert!(error.message.contains("HTTP request failed"));
+    }
+
+    #[test]
+    fn http_response_body_is_bounded_before_allocation() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let addr = listener.local_addr().expect("listener addr should exist");
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("client should connect");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).expect("request should read");
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                MAX_HTTP_RESPONSE_BYTES + 1
+            )
+            .expect("response headers should write");
+        });
+
+        let mut executor = Executor::new();
+        let error = executor
+            .run_pending(http_get_async(&format!("http://{addr}/oversized")))
+            .expect_err("oversized response should fail");
+        assert!(error.message.contains("exceeds"));
+        handle.join().expect("server thread should finish");
+    }
+
+    #[test]
+    fn http_request_body_is_bounded_before_connecting() {
+        let body = "x".repeat(MAX_HTTP_REQUEST_BYTES + 1);
+        let mut executor = Executor::new();
+        let error = executor
+            .run_pending(http_post_json_async("http://127.0.0.1:1/oversized", &body))
+            .expect_err("oversized request should fail before connecting");
+        assert!(error.message.contains("request body"), "{}", error.message);
+        assert!(error.message.contains("exceeds"), "{}", error.message);
+    }
+
+    #[test]
+    fn http_retry_attempts_are_capped() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let addr = listener.local_addr().expect("listener addr should exist");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let accepted_by_server = Arc::clone(&accepted);
+        let handle = std::thread::spawn(move || {
+            for _ in 0..MAX_HTTP_ATTEMPTS {
+                let (mut stream, _) = listener.accept().expect("client should connect");
+                accepted_by_server.fetch_add(1, Ordering::SeqCst);
+                let mut request = [0_u8; 1024];
+                let _ = stream.read(&mut request).expect("request should read");
+                stream
+                    .write_all(
+                        b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .expect("response should write");
+            }
+        });
+
+        let request = http_request_with_retry(
+            http_request_json(&format!("http://{addr}/retry"), "{}"),
+            100,
+            0,
+        );
+        let mut executor = Executor::new();
+        let response = executor
+            .run_pending(http_send_async(request))
+            .expect("final HTTP status should be returned");
+        assert_eq!(response.status, 500);
+        handle.join().expect("server thread should finish");
+        assert_eq!(accepted.load(Ordering::SeqCst), MAX_HTTP_ATTEMPTS as usize);
+    }
+
+    #[test]
+    fn http_retry_timeout_is_a_total_budget() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let addr = listener.local_addr().expect("listener addr should exist");
+        let accepted = Arc::new(AtomicUsize::new(0));
+        let accepted_by_server = Arc::clone(&accepted);
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("client should connect");
+            accepted_by_server.fetch_add(1, Ordering::SeqCst);
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).expect("request should read");
+            std::thread::sleep(Duration::from_millis(100));
+        });
+
+        let request = http_request_with_retry(
+            http_request_with_timeout(http_request_json(&format!("http://{addr}/slow"), "{}"), 25),
+            4,
+            10,
+        );
+        let mut executor = Executor::new();
+        let started = std::time::Instant::now();
+        let error = executor
+            .run_pending(http_send_async(request))
+            .expect_err("request should exhaust its total timeout");
+        assert!(error.message.contains("timed out"));
+        assert!(started.elapsed() < Duration::from_millis(90));
+        handle.join().expect("server thread should finish");
+        assert_eq!(accepted.load(Ordering::SeqCst), 1);
     }
 
     #[test]

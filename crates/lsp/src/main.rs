@@ -8,6 +8,8 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
 
 use rsscript::{
     Definition, Diagnostic as RsDiagnostic, PackageReviewFileKind, Reference, RssDocumentSymbol,
@@ -25,21 +27,21 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 /// hover can explain whichever diagnostic the cursor is on).
 #[derive(Clone)]
 struct Document {
-    text: String,
-    diagnostics: Vec<RsDiagnostic>,
+    text: Arc<str>,
+    diagnostics: Arc<Vec<RsDiagnostic>>,
     revision: u64,
     version: i32,
 }
 
 struct DocumentStore {
-    documents: HashMap<Url, Document>,
+    documents: Arc<HashMap<Url, Document>>,
     next_revision: u64,
 }
 
 impl DocumentStore {
     fn new() -> Self {
         Self {
-            documents: HashMap::new(),
+            documents: Arc::new(HashMap::new()),
             next_revision: 1,
         }
     }
@@ -61,7 +63,7 @@ impl Deref for DocumentStore {
 
 impl DerefMut for DocumentStore {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.documents
+        Arc::make_mut(&mut self.documents)
     }
 }
 
@@ -74,15 +76,16 @@ struct WorkspaceDocument {
 
 struct Backend {
     client: Client,
-    documents: tokio::sync::Mutex<DocumentStore>,
-    diagnostics_publication: tokio::sync::Mutex<()>,
+    documents: Arc<tokio::sync::Mutex<DocumentStore>>,
+    diagnostics_publication: Arc<tokio::sync::Mutex<()>>,
+    pending_analysis: tokio::sync::Mutex<HashMap<Url, tokio::task::AbortHandle>>,
 }
 
 struct AnalysisJob {
     uri: Url,
     revision: u64,
     version: i32,
-    open_documents: HashMap<Url, Document>,
+    open_documents: Arc<HashMap<Url, Document>>,
 }
 
 fn commit_diagnostics_if_current(
@@ -98,7 +101,7 @@ fn commit_diagnostics_if_current(
     if document.revision != revision || document.version != version {
         return false;
     }
-    document.diagnostics = diagnostics;
+    document.diagnostics = Arc::new(diagnostics);
     true
 }
 
@@ -107,7 +110,17 @@ fn analysis_job(documents: &DocumentStore, uri: Url, revision: u64, version: i32
         uri,
         revision,
         version,
-        open_documents: documents.documents.clone(),
+        open_documents: Arc::clone(&documents.documents),
+    }
+}
+
+fn replace_pending_analysis(
+    pending: &mut HashMap<Url, tokio::task::AbortHandle>,
+    uri: Url,
+    task: tokio::task::AbortHandle,
+) {
+    if let Some(previous) = pending.insert(uri, task) {
+        previous.abort();
     }
 }
 
@@ -128,8 +141,8 @@ fn open_document(
     documents.insert(
         uri.clone(),
         Document {
-            text,
-            diagnostics: Vec::new(),
+            text: Arc::from(text),
+            diagnostics: Arc::new(Vec::new()),
             revision,
             version,
         },
@@ -148,7 +161,7 @@ fn change_document(
         return None;
     }
 
-    let mut text = document.text.clone();
+    let mut text = document.text.to_string();
     for change in changes {
         apply_change(&mut text, change);
     }
@@ -157,8 +170,8 @@ fn change_document(
     let document = documents
         .get_mut(&uri)
         .expect("document remains present while the store is locked");
-    document.text = text;
-    document.diagnostics.clear();
+    document.text = Arc::from(text);
+    document.diagnostics = Arc::new(Vec::new());
     document.revision = revision;
     document.version = version;
     Some(analysis_job(documents, uri, revision, version))
@@ -170,8 +183,8 @@ fn save_document(documents: &mut DocumentStore, uri: Url, text: String) -> Optio
     let document = documents
         .get_mut(&uri)
         .expect("document remains present while the store is locked");
-    document.text = text;
-    document.diagnostics.clear();
+    document.text = Arc::from(text);
+    document.diagnostics = Arc::new(Vec::new());
     document.revision = revision;
     Some(analysis_job(documents, uri, revision, version))
 }
@@ -180,14 +193,34 @@ impl Backend {
     fn new(client: Client) -> Self {
         Self {
             client,
-            documents: tokio::sync::Mutex::new(DocumentStore::new()),
-            diagnostics_publication: tokio::sync::Mutex::new(()),
+            documents: Arc::new(tokio::sync::Mutex::new(DocumentStore::new())),
+            diagnostics_publication: Arc::new(tokio::sync::Mutex::new(())),
+            pending_analysis: tokio::sync::Mutex::new(HashMap::new()),
         }
+    }
+
+    /// Debounce analysis for one document and cancel any superseded task.
+    async fn schedule_analysis(&self, job: AnalysisJob) {
+        let uri = job.uri.clone();
+        let client = self.client.clone();
+        let documents = Arc::clone(&self.documents);
+        let diagnostics_publication = Arc::clone(&self.diagnostics_publication);
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            Self::analyze_and_publish(client, documents, diagnostics_publication, job).await;
+        });
+        let mut pending = self.pending_analysis.lock().await;
+        replace_pending_analysis(&mut pending, uri, task.abort_handle());
     }
 
     /// Run the checker over a stable document snapshot and publish if it is
     /// still the current revision.
-    async fn analyze_and_publish(&self, job: AnalysisJob) {
+    async fn analyze_and_publish(
+        client: Client,
+        documents: Arc<tokio::sync::Mutex<DocumentStore>>,
+        diagnostics_publication: Arc<tokio::sync::Mutex<()>>,
+        job: AnalysisJob,
+    ) {
         let AnalysisJob {
             uri,
             revision,
@@ -203,21 +236,21 @@ impl Backend {
         })
         .await;
         let Ok((diagnostics, lsp_diagnostics)) = analysis else {
-            self.client
+            client
                 .log_message(MessageType::ERROR, "RSScript analysis task failed")
                 .await;
             return;
         };
 
-        let _publication = self.diagnostics_publication.lock().await;
+        let _publication = diagnostics_publication.lock().await;
         {
-            let mut documents = self.documents.lock().await;
+            let mut documents = documents.lock().await;
             if !commit_diagnostics_if_current(&mut documents, &uri, revision, version, diagnostics)
             {
                 return;
             }
         }
-        self.client
+        client
             .publish_diagnostics(uri, lsp_diagnostics, Some(version))
             .await;
     }
@@ -291,7 +324,7 @@ impl LanguageServer for Backend {
             open_document(&mut documents, doc.uri, doc.text, doc.version)
         };
         if let Some(job) = job {
-            self.analyze_and_publish(job).await;
+            self.schedule_analysis(job).await;
         }
     }
 
@@ -306,7 +339,7 @@ impl LanguageServer for Backend {
             )
         };
         if let Some(job) = job {
-            self.analyze_and_publish(job).await;
+            self.schedule_analysis(job).await;
         }
     }
 
@@ -317,12 +350,20 @@ impl LanguageServer for Backend {
                 save_document(&mut documents, params.text_document.uri, text)
             };
             if let Some(job) = job {
-                self.analyze_and_publish(job).await;
+                self.schedule_analysis(job).await;
             }
         }
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        if let Some(pending) = self
+            .pending_analysis
+            .lock()
+            .await
+            .remove(&params.text_document.uri)
+        {
+            pending.abort();
+        }
         let _publication = self.diagnostics_publication.lock().await;
         {
             self.documents
@@ -342,7 +383,7 @@ impl LanguageServer for Backend {
         };
         let path = params.text_document.uri.path();
         let formatted = format_source(path, &document.text);
-        if formatted == document.text {
+        if formatted == document.text.as_ref() {
             return Ok(None);
         }
         Ok(Some(vec![TextEdit {
@@ -1241,7 +1282,7 @@ fn lsp_diagnostics_from_diagnostics(
 ) -> Vec<Diagnostic> {
     let text = open_documents
         .get(uri)
-        .map(|document| document.text.as_str())
+        .map(|document| document.text.as_ref())
         .unwrap_or("");
     diagnostics
         .iter()
@@ -1327,7 +1368,7 @@ fn overlay_open_documents(
             uri.clone(),
             WorkspaceDocument {
                 uri: uri.clone(),
-                text: document.text.clone(),
+                text: document.text.to_string(),
                 kind: infer_document_kind(uri),
             },
         );
@@ -1946,11 +1987,68 @@ mod tests {
 
     fn document(text: &str) -> Document {
         Document {
-            text: text.to_string(),
-            diagnostics: Vec::new(),
+            text: Arc::from(text),
+            diagnostics: Arc::new(Vec::new()),
             revision: 0,
             version: 0,
         }
+    }
+
+    #[test]
+    fn analysis_jobs_share_immutable_document_snapshots() {
+        let uri = file_url("snapshot.rss");
+        let mut documents = DocumentStore::new();
+        let first = open_document(&mut documents, uri.clone(), "first".to_owned(), 1)
+            .expect("document should open");
+        let first_text = Arc::clone(
+            &first
+                .open_documents
+                .get(&uri)
+                .expect("snapshot contains document")
+                .text,
+        );
+
+        let replacement = TextDocumentContentChangeEvent {
+            range: None,
+            range_length: None,
+            text: "second".to_owned(),
+        };
+        let second = change_document(&mut documents, uri.clone(), 2, &[replacement])
+            .expect("new version should produce a job");
+
+        assert_eq!(
+            first.open_documents.get(&uri).unwrap().text.as_ref(),
+            "first"
+        );
+        assert_eq!(
+            second.open_documents.get(&uri).unwrap().text.as_ref(),
+            "second"
+        );
+        assert!(Arc::ptr_eq(
+            &first_text,
+            &first.open_documents.get(&uri).unwrap().text
+        ));
+    }
+
+    #[tokio::test]
+    async fn replacing_pending_analysis_aborts_superseded_task() {
+        let uri = file_url("debounce.rss");
+        let mut pending = HashMap::new();
+        let first = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+        replace_pending_analysis(&mut pending, uri.clone(), first.abort_handle());
+
+        let second = tokio::spawn(async {});
+        replace_pending_analysis(&mut pending, uri, second.abort_handle());
+
+        assert!(
+            first
+                .await
+                .expect_err("superseded task should abort")
+                .is_cancelled()
+        );
+        second.await.expect("latest task should complete");
     }
 
     #[test]
@@ -2056,7 +2154,7 @@ mod tests {
 
         let documents = documents.lock().await;
         let document = documents.get(&uri).expect("document should remain open");
-        assert_eq!(document.text, "abc");
+        assert_eq!(document.text.as_ref(), "abc");
         assert_eq!(document.version, 3);
         assert_eq!(document.revision, 3);
         assert_eq!(documents.next_revision, 4);
@@ -2107,7 +2205,7 @@ mod tests {
 
         let documents = documents.lock().await;
         let document = documents.get(&uri).expect("document should remain open");
-        assert_eq!(document.text, "newest");
+        assert_eq!(document.text.as_ref(), "newest");
         assert_eq!(document.version, 3);
         assert_eq!(document.revision, 2);
         assert_eq!(documents.next_revision, 3);

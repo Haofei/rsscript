@@ -12,7 +12,7 @@ use rsscript::{
     format_package_tree_json, format_package_tree_reir_json, format_package_vendor_human,
     format_package_vendor_json, format_package_vendor_reir_json, lock_package_dir,
     package_metadata, package_metadata_verify, package_tree, publish_package_dry_run_with_registry,
-    review_package_dir, vendor_package_dir,
+    review_package_dir, vendor_package_dir, write_package_artifact_atomic,
 };
 
 use super::{print_usage, required_flag_value};
@@ -292,13 +292,25 @@ fn create_new_package(path: &Path, name: &str) -> Result<(), String> {
     }
     fs::create_dir_all(path.join("src"))
         .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
-    fs::write(path.join("rsspkg.toml"), package_manifest_template(name))
-        .map_err(|error| format!("failed to write {}/rsspkg.toml: {error}", path.display()))?;
-    fs::write(path.join("src/main.rss"), package_main_template(name))
-        .map_err(|error| format!("failed to write {}/src/main.rss: {error}", path.display()))?;
+    write_package_artifact_atomic(
+        path,
+        &path.join("rsspkg.toml"),
+        package_manifest_template(name).as_bytes(),
+        "package manifest",
+    )?;
+    write_package_artifact_atomic(
+        path,
+        &path.join("src/main.rss"),
+        package_main_template(name).as_bytes(),
+        "package main source",
+    )?;
     let lock = lock_package_dir(path)?;
-    fs::write(path.join("rsspkg.lock"), format_package_lock_toml(&lock))
-        .map_err(|error| format!("failed to write {}/rsspkg.lock: {error}", path.display()))?;
+    write_package_artifact_atomic(
+        path,
+        &path.join("rsspkg.lock"),
+        format_package_lock_toml(&lock).as_bytes(),
+        "package lock",
+    )?;
     Ok(())
 }
 
@@ -436,8 +448,10 @@ fn run_package_lock(json: bool, reir: bool, path: &str) -> ExitCode {
 
     let toml = format_package_lock_toml(&lock);
     let lock_path = Path::new(path).join("rsspkg.lock");
-    if let Err(error) = fs::write(&lock_path, &toml) {
-        eprintln!("failed to write {}: {error}", lock_path.display());
+    if let Err(error) =
+        write_package_artifact_atomic(Path::new(path), &lock_path, toml.as_bytes(), "package lock")
+    {
+        eprintln!("{error}");
         return ExitCode::from(2);
     }
 
@@ -560,8 +574,12 @@ fn add_dependency_to_package(package_dir: &Path, dependency: &str) -> Result<Str
     dependencies.insert(name.clone(), value);
     let rendered = toml::to_string_pretty(&manifest)
         .map_err(|error| format!("failed to render {}: {error}", manifest_path.display()))?;
-    fs::write(&manifest_path, rendered)
-        .map_err(|error| format!("failed to write {}: {error}", manifest_path.display()))?;
+    write_package_artifact_atomic(
+        package_dir,
+        &manifest_path,
+        rendered.as_bytes(),
+        "package manifest",
+    )?;
     Ok(name)
 }
 
