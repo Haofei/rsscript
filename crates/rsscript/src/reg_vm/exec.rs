@@ -1634,10 +1634,10 @@ impl RegVm {
             // native has already had first refusal above; this only changes the
             // native-active, function-ineligible-but-loop-eligible shape.
             #[cfg(feature = "native-jit")]
-            let osr_pre_candidate = if ip == 0 && self.native.is_some() {
-                self.resolve_osr_candidate(&func)
+            let osr_pre_candidates = if ip == 0 && self.native.is_some() {
+                self.resolve_osr_candidates(&func)
             } else {
-                None
+                OsrCandidates::default()
             };
             #[cfg(not(feature = "native-jit"))]
             let osr_pre_candidate: Option<usize> = None;
@@ -1648,7 +1648,16 @@ impl RegVm {
             // they are always entered at `ip == 0`.
             if self.jit_enabled
                 && ip == 0
-                && osr_pre_candidate.is_none()
+                && {
+                    #[cfg(feature = "native-jit")]
+                    {
+                        osr_pre_candidates.is_empty()
+                    }
+                    #[cfg(not(feature = "native-jit"))]
+                    {
+                        osr_pre_candidate.is_none()
+                    }
+                }
                 && self.is_jit_eligible(&func)
             {
                 let value = self.run_jit(unit, &func, base)?;
@@ -1661,15 +1670,10 @@ impl RegVm {
                 continue 'frames;
             }
 
-            // OSR auto-trigger (Pending #2): resolve this function's OSR-candidate
-            // state ONCE (lazy, cached in `func.osr_state`) and hoist the candidate
-            // loop header into a single per-frame local. For the overwhelming common
-            // case — a function with no analyzable natural loop — this is a single
-            // `Cell` read that yields `None`, and the per-instruction guard below is
-            // then EXACTLY today's hoisted never-taken branch (`if let Some(..)`),
-            // so the non-candidate interpreter hot path is byte-for-byte unchanged.
-            // Only a candidate function pays the per-`ip` header compare, and only
-            // until OSR fires (after which the loop runs native).
+            // OSR auto-trigger: resolve a bounded candidate set once per function and
+            // evaluation, then hoist its fixed-size value into the frame. Empty sets
+            // retain the non-candidate never-taken branch. Candidate counters and
+            // stable declines are keyed independently by `(function, header)`.
             //
             // `osr_eager` (set by `RSS_JIT_OSR` / a test override) keeps the forced
             // path: threshold 0, so the FIRST header hit triggers `try_osr` — this
@@ -1678,64 +1682,66 @@ impl RegVm {
             // targets functions that are native-INELIGIBLE as a whole (the loop is
             // wrapped by non-native I/O); the verdict is cached in `native.osr_cache`.
             #[cfg(feature = "native-jit")]
-            let (osr_candidate, osr_eager) = if self.native.is_some() {
+            let (osr_candidates, osr_eager) = if self.native.is_some() {
                 (
-                    osr_pre_candidate.or_else(|| self.resolve_osr_candidate(&func)),
+                    if osr_pre_candidates.is_empty() {
+                        self.resolve_osr_candidates(&func)
+                    } else {
+                        osr_pre_candidates
+                    },
                     self.native.as_ref().is_some_and(|n| n.osr_enabled),
                 )
             } else {
-                (None, false)
+                (OsrCandidates::default(), false)
             };
             #[cfg(not(feature = "native-jit"))]
             let _osr_candidate: Option<usize> = None;
-            #[cfg(feature = "native-jit")]
-            let osr_iteration_work = osr_candidate
-                .and_then(|header| detect_natural_loop_at(&func.code, header))
-                .and_then(|lp| func.code.get(lp.header..lp.exit))
-                .map(interpreted_region_work)
-                .unwrap_or(1);
 
             while let Some(instr) = func.code.get(ip) {
-                // OSR trigger: only candidate functions enter this arm (`None` for
-                // every non-loop / unanalyzable function ⇒ a hoisted never-taken
-                // branch, no per-instruction work). When the interpreter reaches the
-                // candidate header, charge one estimated iteration; at the threshold (or
-                // immediately when eager) fire `try_osr`. `try_osr` is total — on any
-                // non-applicability it leaves the frame untouched and returns `false`,
-                // and we mark `GaveUp` so we never recompile-probe in a tight loop.
+                // At most four comparisons are performed for candidate functions.
+                // Each matching header charges and probes only its own RegionKey.
                 #[cfg(feature = "native-jit")]
-                if let Some(header) = osr_candidate {
-                    if ip == header {
+                if let Some(candidate) = osr_candidates
+                    .iter()
+                    .find(|candidate| candidate.header_ip == ip)
+                {
+                    let region_key = RegionKey {
+                        function: Rc::as_ptr(&func) as usize,
+                        header: ip,
+                    };
+                    let trigger = self
+                        .native
+                        .as_ref()
+                        .and_then(|native| native.osr_triggers.get(&region_key))
+                        .copied();
+                    if !matches!(trigger, Some(OsrTrigger::GaveUp)) || osr_eager {
                         let fire = if osr_eager {
                             true
                         } else {
-                            // Charge this backedge/header hit in interpreted-work
-                            // units; fire at the shared work threshold.
-                            match func.osr_state.get() {
-                                OsrTrigger::Counting {
-                                    header_ip,
-                                    count,
-                                    probe_cc,
-                                } => {
-                                    let next = accumulate_osr_work(count, osr_iteration_work);
+                            match trigger {
+                                Some(OsrTrigger::Counting { count, probe_cc }) => {
+                                    let next = accumulate_osr_work(count, candidate.iteration_work);
                                     if next >= osr_backedge_threshold() {
                                         true
                                     } else {
-                                        func.osr_state.set(OsrTrigger::Counting {
-                                            header_ip,
-                                            count: next,
-                                            probe_cc,
-                                        });
+                                        if let Some(native) = self.native.as_mut() {
+                                            native.osr_triggers.insert(
+                                                region_key,
+                                                OsrTrigger::Counting {
+                                                    count: next,
+                                                    probe_cc,
+                                                },
+                                            );
+                                        }
                                         false
                                     }
                                 }
-                                // Already fired/gave up: stop probing.
                                 _ => false,
                             }
                         };
                         if fire {
-                            let prev_probe_cc = match func.osr_state.get() {
-                                OsrTrigger::Counting { probe_cc, .. } => probe_cc,
+                            let prev_probe_cc = match trigger {
+                                Some(OsrTrigger::Counting { probe_cc, .. }) => probe_cc,
                                 _ => func.call_count.get(),
                             };
                             self.frames.last_mut().expect("active frame").ip = ip;
@@ -1769,21 +1775,31 @@ impl RegVm {
                             if !osr_eager {
                                 let cc = func.call_count.get();
                                 if dynamic_osr_bail {
-                                    func.osr_state.set(OsrTrigger::Counting {
-                                        header_ip: ip,
-                                        count: 0,
-                                        probe_cc: cc,
-                                    });
+                                    if let Some(native) = self.native.as_mut() {
+                                        native.osr_triggers.insert(
+                                            region_key,
+                                            OsrTrigger::Counting {
+                                                count: 0,
+                                                probe_cc: cc,
+                                            },
+                                        );
+                                    }
                                 } else if cc > prev_probe_cc
                                     && native_translation_pending_on_profile(&self.unit, &func)
                                 {
-                                    func.osr_state.set(OsrTrigger::Counting {
-                                        header_ip: ip,
-                                        count: 0,
-                                        probe_cc: cc,
-                                    });
+                                    if let Some(native) = self.native.as_mut() {
+                                        native.osr_triggers.insert(
+                                            region_key,
+                                            OsrTrigger::Counting {
+                                                count: 0,
+                                                probe_cc: cc,
+                                            },
+                                        );
+                                    }
                                 } else {
-                                    func.osr_state.set(OsrTrigger::GaveUp);
+                                    if let Some(native) = self.native.as_mut() {
+                                        native.osr_triggers.insert(region_key, OsrTrigger::GaveUp);
+                                    }
                                 }
                             }
                         }

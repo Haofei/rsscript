@@ -477,33 +477,63 @@ pub(crate) struct RegFunction {
     /// (zero allocation). Feeds J2/J4 compile decisions only — never a value
     /// (determinism).
     pub(crate) profile: RefCell<Option<Box<FunctionProfile>>>,
-    /// OSR hot-backedge auto-trigger state (Pending #2). Lazily resolved ONCE on
-    /// first `drive` entry into this function: a cheap single-natural-loop
-    /// detection decides `NotCandidate` (no loop / unanalyzable — the common case,
-    /// which then pays nothing per-instruction) vs `Counting` (has a candidate
-    /// header). For a candidate, the interpreter accumulates estimated loop work at
-    /// backedges to the header and calls `try_osr` (the real detect+compile) once
-    /// [`OSR_BACKEDGE_THRESHOLD`] interpreted-work units have accumulated; on
-    /// success the loop runs native and the counter cost is bounded to the warm-up
-    /// iterations, on failure the state goes `GaveUp` (never retried). A `Cell`
-    /// (interior-mut, no allocation), so a non-candidate function pays one `Cell`
-    /// read per call and zero per-instruction cost.
-    #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
+    /// Legacy constructor slot retained while OSR trigger state lives in
+    /// [`NativeState`]. Keeping it here avoids coupling lowering-only function
+    /// construction to the native-JIT feature; evaluation never mutates it.
+    #[allow(dead_code)]
     pub(crate) osr_state: std::cell::Cell<OsrTrigger>,
 }
 
-/// Per-function OSR auto-trigger state machine (Pending #2). Lives in a `Cell` on
-/// [`RegFunction`]; see `osr_state`.
+pub(crate) const MAX_OSR_REGIONS_PER_FUNCTION: usize = 4;
+
+/// Stable identity for one OSR region. A function can own several independently
+/// compiled loop regions, so function identity alone is not a sufficient cache key.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct RegionKey {
+    pub(crate) function: usize,
+    pub(crate) header: usize,
+}
+
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct OsrCandidate {
+    pub(crate) header_ip: usize,
+    pub(crate) iteration_work: u32,
+}
+
+/// Fixed-capacity candidate list. The bound keeps selection and the interpreter
+/// header check predictable without allocating per frame.
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct OsrCandidates {
+    pub(crate) entries: [Option<OsrCandidate>; MAX_OSR_REGIONS_PER_FUNCTION],
+}
+
+#[cfg(feature = "native-jit")]
+impl OsrCandidates {
+    pub(crate) fn iter(self) -> impl Iterator<Item = OsrCandidate> {
+        self.entries.into_iter().flatten()
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn first_header(self) -> Option<usize> {
+        self.iter().next().map(|candidate| candidate.header_ip)
+    }
+
+    pub(crate) fn is_empty(self) -> bool {
+        self.entries[0].is_none()
+    }
+}
+
+/// Per-region OSR auto-trigger state machine. Live instances are evaluation-local
+/// entries in [`NativeState::osr_triggers`].
 #[cfg(feature = "native-jit")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum OsrTrigger {
-    /// Not yet inspected — resolved on first `drive` entry.
+    /// Constructor-only sentinel for the legacy [`RegFunction::osr_state`] slot.
     Unknown,
-    /// No qualifying single natural loop (or step/cancel budget armed): pays only a
-    /// single hoisted `Cell` read per call, NO per-instruction cost.
-    NotCandidate,
-    /// Has a candidate loop header; the interpreter accumulates the selected loop's
-    /// estimated per-iteration work on backedges to `header_ip`. At
+    /// The interpreter accumulates this region's estimated per-iteration work. At
     /// [`OSR_BACKEDGE_THRESHOLD`] work units it fires `try_osr`. `probe_cc` is the
     /// function's dynamic-call count (`call_count`) as of the LAST `try_osr` probe
     /// (0 before the first), used to gate re-probes: a pending-profile decline only
@@ -512,14 +542,11 @@ pub(crate) enum OsrTrigger {
     /// `call_count` is capped at `PROFILE_RECORD_LIMIT`, so the number of
     /// progress-resets is bounded.
     Counting {
-        header_ip: usize,
         /// Saturating interpreted-work units, not a raw backedge count.
         count: u32,
         probe_cc: u32,
     },
-    /// OSR fired (or `try_osr` declined at threshold): stop counting. `GaveUp` and
-    /// `Fired` collapse to the same terminal "do nothing" behavior, but are kept
-    /// distinct for telemetry/clarity.
+    /// This region declined stably. Other regions in the function remain active.
     GaveUp,
 }
 

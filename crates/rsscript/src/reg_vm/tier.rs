@@ -773,14 +773,26 @@ fn osr_loop_candidate_score(code: &[RegInstr], lp: OsrLoop) -> (u8, u8, u8, usiz
 }
 
 #[cfg(feature = "native-jit")]
+pub(in crate::reg_vm) fn select_osr_candidate_loops(
+    unit: &RegUnit,
+    func: &RegFunction,
+) -> Vec<OsrLoop> {
+    let mut candidates: Vec<_> = detect_natural_loops(&func.code)
+        .into_iter()
+        .filter(|lp| osr_loop_region_is_transform_candidate(unit, func, *lp))
+        .collect();
+    candidates.sort_by_key(|lp| std::cmp::Reverse(osr_loop_candidate_score(&func.code, *lp)));
+    candidates.truncate(MAX_OSR_REGIONS_PER_FUNCTION);
+    candidates
+}
+
+#[cfg(feature = "native-jit")]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::reg_vm) fn select_osr_candidate_loop(
     unit: &RegUnit,
     func: &RegFunction,
 ) -> Option<OsrLoop> {
-    detect_natural_loops(&func.code)
-        .into_iter()
-        .filter(|lp| osr_loop_region_is_transform_candidate(unit, func, *lp))
-        .max_by_key(|lp| osr_loop_candidate_score(&func.code, *lp))
+    select_osr_candidate_loops(unit, func).into_iter().next()
 }
 
 impl RegVm {
@@ -1619,49 +1631,61 @@ impl RegVm {
     /// and the only native exit is the OSR-exit, whose `resume_ip` is the
     /// interpreter's own post-loop instruction index — so resuming there with the
     /// restored window is byte-identical to having interpreted the loop.
-    /// Resolve a function's OSR auto-trigger state ONCE, on first `drive` entry
-    /// (Pending #2). Returns the candidate loop header (if any) so the caller can
-    /// hoist it into a single per-frame local. Runs a cheap single-natural-loop
-    /// detection on `func.code` (no compile, no region passes — that is deferred to
-    /// the threshold `try_osr` call); a function with no analyzable loop becomes
-    /// `NotCandidate` and thereafter pays only one `Cell` read per call with NO
-    /// per-instruction cost. The eager `RSS_JIT_OSR` path resolves the same way but
-    /// fires at threshold 0 (handled by the caller), so its very first header hit
-    /// triggers — preserving the forced-OSR behavior and the differential backend.
+    /// Resolve up to four deterministically ranked OSR candidates on first entry
+    /// during this evaluation. Detection does not compile; each region compiles only
+    /// when its own threshold is reached. A non-candidate function caches an empty
+    /// fixed-size set and retains a hoisted never-taken interpreter branch.
     ///
     /// Determinism: this only decides *whether/when* to attempt OSR; `try_osr` is
     /// byte-identical to interpretation, so triggering never changes a value.
     #[cfg(feature = "native-jit")]
-    pub(super) fn resolve_osr_candidate(&self, func: &RegFunction) -> Option<usize> {
-        match func.osr_state.get() {
-            OsrTrigger::Unknown => {
-                // J0.5: no limit blocks candidacy here anymore. `step_budget`/`cancel`
-                // are enforced inside the armed OSR variant; `mem_budget` is decided in
-                // `try_osr` AFTER translation (a non-allocating loop runs, an allocating
-                // one declines), since candidacy alone cannot see the heap effects.
-                // Cheap candidacy pre-check. Use the unified scorer even when the
-                // function has an apparently "single" loop: helper-backed mutation
-                // loops, read loops, and profile-guided closure-inline loops have
-                // different payoff, and the legacy first-loop shortcut can arm a
-                // setup loop before the real hot transformable loop is considered.
-                let candidate = select_osr_candidate_loop(&self.unit, func);
-                let state = match candidate {
-                    Some(lp) => OsrTrigger::Counting {
-                        header_ip: lp.header,
+    pub(super) fn resolve_osr_candidates(&mut self, func: &RegFunction) -> OsrCandidates {
+        let function = func as *const RegFunction as usize;
+        if let Some(candidates) = self
+            .native
+            .as_ref()
+            .and_then(|native| native.osr_candidates.get(&function))
+        {
+            return *candidates;
+        }
+
+        // Resource gates remain in `try_osr`: candidacy cannot determine transformed
+        // allocation effects, and eager tests must use the same candidate ordering.
+        let loops = select_osr_candidate_loops(&self.unit, func);
+        let mut candidates = OsrCandidates::default();
+        for (slot, lp) in candidates.entries.iter_mut().zip(loops) {
+            let iteration_work = func
+                .code
+                .get(lp.header..lp.exit)
+                .map(interpreted_region_work)
+                .unwrap_or(1);
+            *slot = Some(OsrCandidate {
+                header_ip: lp.header,
+                iteration_work,
+            });
+        }
+        if let Some(native) = self.native.as_mut() {
+            for candidate in candidates.iter() {
+                native.osr_triggers.insert(
+                    RegionKey {
+                        function,
+                        header: candidate.header_ip,
+                    },
+                    OsrTrigger::Counting {
                         count: 0,
                         probe_cc: 0,
                     },
-                    None => OsrTrigger::NotCandidate,
-                };
-                func.osr_state.set(state);
-                match state {
-                    OsrTrigger::Counting { header_ip, .. } => Some(header_ip),
-                    _ => None,
-                }
+                );
             }
-            OsrTrigger::Counting { header_ip, .. } => Some(header_ip),
-            OsrTrigger::NotCandidate | OsrTrigger::GaveUp => None,
+            native.osr_candidates.insert(function, candidates);
         }
+        candidates
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) fn resolve_osr_candidate(&mut self, func: &RegFunction) -> Option<usize> {
+        self.resolve_osr_candidates(func).first_header()
     }
 
     #[cfg(feature = "native-jit")]
@@ -1690,6 +1714,10 @@ impl RegVm {
             native.osr_dynamic_bail = false;
         }
         let native_key = func as *const RegFunction as usize;
+        let region_key = RegionKey {
+            function: native_key,
+            header: header_ip,
+        };
 
         // J0.1 #7 (live-after heap payload): classify each param by its LIVE value, for the
         // OSR translator to seed a param used in-region ONLY as a dissolved Result/Option
@@ -1743,7 +1771,7 @@ impl RegVm {
         ) = {
             // Fast path: cached and NOT at the header ⇒ nothing to do (no clone).
             if let Some(native) = self.native.as_ref() {
-                if let Some(entry) = native.osr_cache.get(&native_key) {
+                if let Some(entry) = native.osr_cache.get(&region_key) {
                     match entry {
                         Some(e) if e.orig_header == header_ip => {}
                         _ => return false,
@@ -1770,7 +1798,7 @@ impl RegVm {
             // resumes). When the body has no replaceable Option the region pass
             // returns the code unchanged with an identity ip-map, so plain
             // native-subset OSR is byte-for-byte the old path.
-            if !native.osr_cache.contains_key(&native_key) {
+            if !native.osr_cache.contains_key(&region_key) {
                 // OSR × inline-leaf-calls (Pending #1): FIRST inline straight-line
                 // leaf `CallKnown`/closure calls into the function body, so a value
                 // that is built in one helper and matched in another — both called
@@ -2336,10 +2364,10 @@ impl RegVm {
                 // profile settles (or there is no pending site) the `None`/`Some`
                 // verdict is stable and we cache it.
                 if entry.is_some() || !native_translation_pending_on_profile(&unit, func) {
-                    native.osr_cache.insert(native_key, entry);
+                    native.osr_cache.insert(region_key, entry);
                 }
             }
-            match native.osr_cache.get(&native_key) {
+            match native.osr_cache.get(&region_key) {
                 // Only OSR when the interpreter is *at* the cached loop's (original)
                 // header ip.
                 Some(Some(e)) if e.orig_header == header_ip => (

@@ -4198,6 +4198,122 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
+    fn native_osr_enters_two_sequential_regions() {
+        let source = r#"
+fn main() -> Unit {
+    let mut first = 0
+    let mut total = 0
+    while first < 80 {
+        total = total + first * 3 + first / 2
+        first = first + 1
+    }
+
+    let mut second = 0
+    while second < 90 {
+        total = total + second * 5 - second / 3
+        second = second + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("osr-sequential-regions.rss", source).expect("compile");
+        let func = executable.unit.functions[executable.unit.function_ids["main"]].as_ref();
+        let candidates = super::super::tier::select_osr_candidate_loops(&executable.unit, func);
+        assert_eq!(
+            candidates.len(),
+            2,
+            "both sequential loops should be bounded OSR candidates: {candidates:?}"
+        );
+        assert_ne!(candidates[0].header, candidates[1].header);
+
+        let reference = executable
+            .eval_main_with_args(std::iter::empty::<&str>())
+            .expect("interpreter run");
+        let (native, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("forced OSR run");
+        assert_eq!(native, reference);
+        assert_eq!(
+            stats.osr_entries, 2,
+            "each sequential loop should enter its distinct region once: {stats:?}"
+        );
+        assert_eq!(
+            stats.compiled, 2,
+            "each sequential loop should compile a distinct RegionKey: {stats:?}"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_outer_decline_does_not_block_nested_inner_region() {
+        let source = r#"
+fn main() -> Unit {
+    let adjust: Fn(Int) -> Int = |value| { return value + 7 }
+    let mut outer = 0
+    let mut total = 0
+    while outer < 2 {
+        let mut inner = 0
+        while inner < 80 {
+            total = total + inner * 3 - inner / 2
+            inner = inner + 1
+        }
+        total = total + adjust(outer)
+        outer = outer + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable = reg_vm_compile_source("osr-nested-fallback.rss", source).expect("compile");
+        let func = executable.unit.functions[executable.unit.function_ids["main"]].as_ref();
+        let candidates = super::super::tier::select_osr_candidate_loops(&executable.unit, func);
+        assert_eq!(
+            candidates.len(),
+            2,
+            "outer and inner loops should both be considered: {candidates:?}"
+        );
+        let outer = *candidates
+            .iter()
+            .find(|lp| {
+                func.code[lp.header..lp.exit]
+                    .iter()
+                    .any(|instr| matches!(instr, RegInstr::CallClosure { .. }))
+            })
+            .expect("outer candidate should contain the cold closure call");
+        let inner = *candidates
+            .iter()
+            .find(|lp| lp.header != outer.header)
+            .expect("inner candidate");
+        assert!(
+            translate_osr_loop(&func.code, func.regs, func.params, func.captures, outer).is_none(),
+            "cold outer closure region should decline direct OSR translation"
+        );
+        translate_osr_loop(&func.code, func.regs, func.params, func.captures, inner)
+            .expect("nested scalar loop should translate");
+
+        let reference = executable
+            .eval_main_with_args(std::iter::empty::<&str>())
+            .expect("interpreter run");
+        let (native, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("forced OSR run");
+        assert_eq!(native, reference);
+        assert_eq!(
+            stats.osr_entries, 2,
+            "the inner region should enter once per outer iteration: {stats:?}"
+        );
+        assert_eq!(
+            stats.compiled - stats.translated,
+            1,
+            "only the inner RegionKey should compile after the outer decline: {stats:?}"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
     fn native_osr_enters_direct_async_call_await_loop() {
         let source = r#"
 features: async
@@ -6155,7 +6271,7 @@ fn main() -> Unit {
         );
 
         main_func.osr_state.set(OsrTrigger::Unknown);
-        let vm = RegVm::new(
+        let mut vm = RegVm::new(
             Rc::clone(&executable.unit),
             Vec::<String>::new(),
             std::iter::empty::<(String, NativeInterpreterFn)>().collect(),

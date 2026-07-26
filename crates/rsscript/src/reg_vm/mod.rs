@@ -2389,12 +2389,17 @@ struct NativeState {
     /// execution uses the hot-backedge auto-trigger; this flag selects the eager
     /// trigger used by `RSS_JIT_OSR` and deterministic test/bench entry points.
     osr_enabled: bool,
-    /// Per-function OSR compile cache, keyed like `cache`. `Some((id, loop, params))`
-    /// is a compiled OSR-entry handle plus the loop it covers and the live-in param
-    /// types (for window marshalling); `None` means "known not OSR-eligible" (don't
-    /// re-analyze). Populated lazily the first time the interpreter reaches a header.
+    /// Deterministically ranked OSR candidates per function. Each fixed-size value
+    /// contains at most [`MAX_OSR_REGIONS_PER_FUNCTION`] headers, so a function's
+    /// interpreter overhead and native compile exposure stay bounded.
+    osr_candidates: HashMap<usize, OsrCandidates>,
+    /// Evaluation-local hot-backedge state, independent for each candidate region.
+    /// A stable decline at one header cannot disable another header in the function.
+    osr_triggers: HashMap<RegionKey, OsrTrigger>,
+    /// OSR compile cache keyed by function and original loop header. `Some(entry)`
+    /// is a compiled OSR entry; `None` is a stable per-region negative result.
     #[allow(clippy::type_complexity)]
-    osr_cache: HashMap<usize, Option<OsrEntry>>,
+    osr_cache: HashMap<RegionKey, Option<OsrEntry>>,
     /// Native self-recursion cache (native-call-ABI slice 3; generalized in Phase 2):
     /// per-function (`*const RegFunction` key) compiled `CallSelf` entry, with the
     /// compiled parameter `NativeTy`s and return `NativeTy` so the dispatcher
@@ -6864,6 +6869,8 @@ impl NativeState {
             collect_stats,
             precise_deopt,
             osr_enabled,
+            osr_candidates: HashMap::new(),
+            osr_triggers: HashMap::new(),
             osr_cache: HashMap::new(),
             self_recursive_native: HashMap::new(),
             mutual_recursive_native: HashMap::new(),
