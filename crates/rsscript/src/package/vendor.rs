@@ -164,7 +164,7 @@ fn vendor_package_dir_name(identity: &PackageIdentity, canonical_source: &str) -
         "{}-{}-{}",
         sanitize_vendor_path_component(&identity.name),
         sanitize_vendor_path_component(&identity.version),
-        &source_digest[..12]
+        source_digest
     )
 }
 
@@ -185,5 +185,10 @@ mod tests {
 
         assert_ne!(first, second);
         assert!(first.starts_with("same_name-1.0.0-"));
+        assert_eq!(
+            first.rsplit('-').next().map(str::len),
+            Some(64),
+            "vendor paths must retain the full source digest"
+        );
     }
 }

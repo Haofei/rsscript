@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -672,11 +672,12 @@ pub(super) fn package_native_rust_review(
 }
 
 fn native_path_escapes_package(path: &str) -> bool {
-    let path = Path::new(path);
-    path.is_absolute()
-        || path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
+    Path::new(path).components().any(|component| {
+        matches!(
+            component,
+            Component::Prefix(_) | Component::RootDir | Component::ParentDir
+        )
+    })
 }
 
 pub(super) fn confined_native_rust_path(
@@ -717,7 +718,10 @@ pub(super) fn confined_native_rust_path(
         ));
     }
 
-    Ok(candidate)
+    let absent_suffix = candidate
+        .strip_prefix(existing)
+        .map_err(|_| format!("failed to normalize native Rust wrapper path `{configured_path}`"))?;
+    Ok(canonical_existing.join(absent_suffix))
 }
 
 fn package_declares_parallel_native_api(sources: &[PackageSource]) -> bool {
@@ -1271,5 +1275,83 @@ mod adapter_binding_tests {
             flatten("[adapter.File]\ncrate = \"file_native\"\nfunctions = []\n").is_err(),
             "empty functions must error"
         );
+    }
+
+    #[test]
+    fn native_path_rejects_root_and_parent_components() {
+        assert!(native_path_escapes_package("/native/rust"));
+        assert!(native_path_escapes_package("native/../outside"));
+        assert!(!native_path_escapes_package("native/rust"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_path_rejects_windows_prefix_components() {
+        assert!(native_path_escapes_package(r"C:\native\rust"));
+        assert!(native_path_escapes_package(r"C:native\rust"));
+        assert!(native_path_escapes_package(r"\\server\share\native"));
+    }
+
+    #[test]
+    fn confined_native_path_canonicalizes_existing_target() {
+        let package_dir = native_path_test_dir("existing");
+        let native_dir = package_dir.join("native/rust");
+        fs::create_dir_all(&native_dir).expect("native path should be created");
+
+        let confined = confined_native_rust_path(&package_dir, "native/./rust")
+            .expect("existing native path should be confined");
+        let expected = native_dir
+            .canonicalize()
+            .expect("existing native path should canonicalize");
+        let _ = fs::remove_dir_all(&package_dir);
+
+        assert_eq!(confined, expected);
+    }
+
+    #[test]
+    fn confined_native_path_represents_absent_path_under_canonical_root() {
+        let package_dir = native_path_test_dir("absent");
+        fs::create_dir_all(&package_dir).expect("package path should be created");
+        let canonical_root = package_dir
+            .canonicalize()
+            .expect("package root should canonicalize");
+
+        let confined = confined_native_rust_path(&package_dir, "native/rust")
+            .expect("absent native path should be safely represented");
+        let _ = fs::remove_dir_all(&package_dir);
+
+        assert_eq!(confined, canonical_root.join("native/rust"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn confined_native_path_canonicalizes_existing_ancestor_of_absent_path() {
+        use std::os::unix::fs::symlink;
+
+        let package_dir = native_path_test_dir("absent-symlink");
+        let actual_dir = package_dir.join("actual");
+        fs::create_dir_all(&actual_dir).expect("actual native parent should be created");
+        symlink(&actual_dir, package_dir.join("native")).expect("native symlink should be created");
+
+        let confined = confined_native_rust_path(&package_dir, "native/rust")
+            .expect("absent native path beneath confined symlink should be represented");
+        let expected = actual_dir
+            .canonicalize()
+            .expect("actual native parent should canonicalize")
+            .join("rust");
+        let _ = fs::remove_dir_all(&package_dir);
+
+        assert_eq!(confined, expected);
+    }
+
+    fn native_path_test_dir(label: &str) -> PathBuf {
+        env::temp_dir().join(format!(
+            "rsscript-native-path-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ))
     }
 }

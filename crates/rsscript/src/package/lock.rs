@@ -35,6 +35,7 @@ pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
             node.features.clone(),
         )?);
     }
+    validate_locked_package_identities(&packages)?;
 
     Ok(PackageLock {
         version: 1,
@@ -99,98 +100,174 @@ pub fn diff_package_locks(old_path: &Path, new_path: &Path) -> Result<PackageLoc
 pub(super) fn read_package_lock(path: &Path) -> Result<PackageLock, String> {
     let source = fs::read_to_string(path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    toml::from_str(&source).map_err(|error| format!("failed to parse {}: {error}", path.display()))
+    let lock: PackageLock = toml::from_str(&source)
+        .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
+    validate_locked_package_identities(&lock.packages)
+        .map_err(|error| format!("invalid package lock {}: {error}", path.display()))?;
+    Ok(lock)
 }
 
 pub(super) fn compare_locked_packages(
     old_packages: &[PackageLockPackage],
     new_packages: &[PackageLockPackage],
 ) -> Vec<PackageLockPackageChange> {
-    let duplicate_names = duplicate_locked_package_names(old_packages)
-        .into_iter()
-        .chain(duplicate_locked_package_names(new_packages))
-        .collect::<BTreeSet<_>>();
-    let old_packages = locked_packages_by_identity(old_packages, &duplicate_names);
-    let new_packages = locked_packages_by_identity(new_packages, &duplicate_names);
-    let identities = old_packages
-        .keys()
-        .chain(new_packages.keys())
-        .cloned()
-        .collect::<BTreeSet<_>>();
-    let mut changes = Vec::new();
-    for identity in identities {
-        match (old_packages.get(&identity), new_packages.get(&identity)) {
-            (None, Some(new)) => changes.push(PackageLockPackageChange {
-                name: new.name.clone(),
-                before_version: None,
-                after_version: Some(new.version.clone()),
-                risk: PackageRisk::Elevated,
-                changes: vec![PackageLockFieldChange {
-                    field: "package".to_string(),
-                    before: None,
-                    after: Some("added".to_string()),
-                    risk: PackageRisk::Elevated,
-                }],
-            }),
-            (Some(old), None) => changes.push(PackageLockPackageChange {
-                name: old.name.clone(),
-                before_version: Some(old.version.clone()),
-                after_version: None,
-                risk: PackageRisk::High,
-                changes: vec![PackageLockFieldChange {
-                    field: "package".to_string(),
-                    before: Some("present".to_string()),
-                    after: None,
-                    risk: PackageRisk::High,
-                }],
-            }),
-            (Some(old), Some(new)) => {
-                let field_changes = compare_locked_package_fields(old, new);
-                if !field_changes.is_empty() {
-                    let risk = field_changes
-                        .iter()
-                        .fold(PackageRisk::Low, |risk, change| risk.max(change.risk));
-                    changes.push(PackageLockPackageChange {
-                        name: old.name.clone(),
-                        before_version: Some(old.version.clone()),
-                        after_version: Some(new.version.clone()),
-                        risk,
-                        changes: field_changes,
-                    });
-                }
-            }
-            (None, None) => {}
+    let mut old_matched = vec![false; old_packages.len()];
+    let mut new_matched = vec![false; new_packages.len()];
+    let mut pairs = Vec::new();
+
+    for (old_index, old) in old_packages.iter().enumerate() {
+        let Some(new_index) = new_packages.iter().enumerate().find_map(|(index, new)| {
+            (!new_matched[index] && locked_package_identity(old) == locked_package_identity(new))
+                .then_some(index)
+        }) else {
+            continue;
+        };
+        old_matched[old_index] = true;
+        new_matched[new_index] = true;
+        pairs.push((old_index, new_index));
+    }
+
+    let mut unmatched_by_name_source =
+        BTreeMap::<(String, String), (Vec<usize>, Vec<usize>)>::new();
+    for (index, package) in old_packages.iter().enumerate() {
+        if !old_matched[index] {
+            unmatched_by_name_source
+                .entry((package.name.clone(), package.source.clone()))
+                .or_default()
+                .0
+                .push(index);
         }
     }
+    for (index, package) in new_packages.iter().enumerate() {
+        if !new_matched[index] {
+            unmatched_by_name_source
+                .entry((package.name.clone(), package.source.clone()))
+                .or_default()
+                .1
+                .push(index);
+        }
+    }
+    for (_, (old_indices, new_indices)) in unmatched_by_name_source {
+        if let ([old_index], [new_index]) = (old_indices.as_slice(), new_indices.as_slice()) {
+            old_matched[*old_index] = true;
+            new_matched[*new_index] = true;
+            pairs.push((*old_index, *new_index));
+        }
+    }
+
+    let mut changes = Vec::new();
+    for (old_index, new_index) in pairs {
+        let old = &old_packages[old_index];
+        let new = &new_packages[new_index];
+        let field_changes = compare_locked_package_fields(old, new);
+        if !field_changes.is_empty() {
+            let risk = field_changes
+                .iter()
+                .fold(PackageRisk::Low, |risk, change| risk.max(change.risk));
+            changes.push(PackageLockPackageChange {
+                name: old.name.clone(),
+                before_version: Some(old.version.clone()),
+                after_version: Some(new.version.clone()),
+                risk,
+                changes: field_changes,
+            });
+        }
+    }
+    for (index, old) in old_packages.iter().enumerate() {
+        if !old_matched[index] {
+            changes.push(removed_locked_package_change(old));
+        }
+    }
+    for (index, new) in new_packages.iter().enumerate() {
+        if !new_matched[index] {
+            changes.push(added_locked_package_change(new));
+        }
+    }
+    changes.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then(left.before_version.cmp(&right.before_version))
+            .then(left.after_version.cmp(&right.after_version))
+            .then_with(|| lock_change_source(left).cmp(&lock_change_source(right)))
+    });
     changes
 }
 
-fn duplicate_locked_package_names(packages: &[PackageLockPackage]) -> BTreeSet<String> {
-    let mut seen = BTreeSet::new();
-    let mut duplicates = BTreeSet::new();
-    for package in packages {
-        if !seen.insert(package.name.clone()) {
-            duplicates.insert(package.name.clone());
-        }
-    }
-    duplicates
+fn lock_change_source(change: &PackageLockPackageChange) -> (Option<&str>, Option<&str>) {
+    change
+        .changes
+        .iter()
+        .find(|field| field.field == "source")
+        .map(|field| (field.before.as_deref(), field.after.as_deref()))
+        .unwrap_or((None, None))
 }
 
-fn locked_packages_by_identity<'a>(
-    packages: &'a [PackageLockPackage],
-    duplicate_names: &BTreeSet<String>,
-) -> BTreeMap<String, &'a PackageLockPackage> {
-    packages
-        .iter()
-        .map(|package| {
-            let identity = if duplicate_names.contains(&package.name) {
-                format!("{}\0{}\0{}", package.name, package.version, package.source)
-            } else {
-                package.name.clone()
-            };
-            (identity, package)
-        })
-        .collect()
+fn locked_package_identity(package: &PackageLockPackage) -> (&str, &str, &str) {
+    (&package.name, &package.version, &package.source)
+}
+
+fn validate_locked_package_identities(packages: &[PackageLockPackage]) -> Result<(), String> {
+    let mut seen = BTreeSet::new();
+    for package in packages {
+        let identity = (
+            package.name.clone(),
+            package.version.clone(),
+            package.source.clone(),
+        );
+        if !seen.insert(identity) {
+            return Err(format!(
+                "duplicate package identity `{}@{}` from `{}`",
+                package.name, package.version, package.source
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn added_locked_package_change(package: &PackageLockPackage) -> PackageLockPackageChange {
+    PackageLockPackageChange {
+        name: package.name.clone(),
+        before_version: None,
+        after_version: Some(package.version.clone()),
+        risk: PackageRisk::Elevated,
+        changes: vec![
+            PackageLockFieldChange {
+                field: "package".to_string(),
+                before: None,
+                after: Some("added".to_string()),
+                risk: PackageRisk::Elevated,
+            },
+            PackageLockFieldChange {
+                field: "source".to_string(),
+                before: None,
+                after: Some(package.source.clone()),
+                risk: PackageRisk::Elevated,
+            },
+        ],
+    }
+}
+
+fn removed_locked_package_change(package: &PackageLockPackage) -> PackageLockPackageChange {
+    PackageLockPackageChange {
+        name: package.name.clone(),
+        before_version: Some(package.version.clone()),
+        after_version: None,
+        risk: PackageRisk::High,
+        changes: vec![
+            PackageLockFieldChange {
+                field: "package".to_string(),
+                before: Some("present".to_string()),
+                after: None,
+                risk: PackageRisk::High,
+            },
+            PackageLockFieldChange {
+                field: "source".to_string(),
+                before: Some(package.source.clone()),
+                after: None,
+                risk: PackageRisk::High,
+            },
+        ],
+    }
 }
 
 fn compare_locked_package_fields(
@@ -731,5 +808,123 @@ mod tests {
         assert_eq!(changes[0].name, "shared");
         assert_eq!(changes[0].before_version.as_deref(), Some("2.0.0"));
         assert_eq!(changes[0].after_version, None);
+        assert!(changes[0].changes.iter().any(|change| {
+            change.field == "source"
+                && change.before.as_deref() == Some("path+/second")
+                && change.after.is_none()
+        }));
+    }
+
+    #[test]
+    fn lock_diff_matches_exact_identity_before_pairing_version_changes() {
+        let stable = locked("shared", "1.0.0", "path+/stable");
+        let old_changed = locked("shared", "1.0.0", "path+/changing");
+        let new_changed = locked("shared", "2.0.0", "path+/changing");
+
+        let changes =
+            compare_locked_packages(&[stable.clone(), old_changed], &[new_changed, stable]);
+
+        assert_eq!(changes.len(), 1, "{changes:#?}");
+        assert_eq!(changes[0].before_version.as_deref(), Some("1.0.0"));
+        assert_eq!(changes[0].after_version.as_deref(), Some("2.0.0"));
+        assert!(changes[0].changes.iter().any(|change| {
+            change.field == "version"
+                && change.before.as_deref() == Some("1.0.0")
+                && change.after.as_deref() == Some("2.0.0")
+        }));
+        assert!(
+            changes[0]
+                .changes
+                .iter()
+                .all(|change| change.field != "source")
+        );
+    }
+
+    #[test]
+    fn lock_diff_keeps_same_name_version_different_sources_distinct() {
+        let first = locked("shared", "1.0.0", "path+/first");
+        let second = locked("shared", "1.0.0", "path+/second");
+
+        let changes =
+            compare_locked_packages(std::slice::from_ref(&first), &[first.clone(), second]);
+
+        assert_eq!(changes.len(), 1, "{changes:#?}");
+        assert_eq!(changes[0].before_version, None);
+        assert_eq!(changes[0].after_version.as_deref(), Some("1.0.0"));
+        assert!(changes[0].changes.iter().any(|change| {
+            change.field == "source"
+                && change.before.is_none()
+                && change.after.as_deref() == Some("path+/second")
+        }));
+    }
+
+    #[test]
+    fn lock_diff_does_not_guess_between_ambiguous_version_changes() {
+        let old_first = locked("shared", "1.0.0", "path+/same");
+        let old_second = locked("shared", "2.0.0", "path+/same");
+        let new = locked("shared", "3.0.0", "path+/same");
+
+        let changes = compare_locked_packages(&[old_first, old_second], &[new]);
+
+        assert_eq!(changes.len(), 3, "{changes:#?}");
+        assert!(
+            changes
+                .iter()
+                .all(|change| change.changes.iter().all(|field| field.field != "version")),
+            "{changes:#?}"
+        );
+        assert_eq!(
+            changes
+                .iter()
+                .filter(|change| change.before_version.is_some())
+                .count(),
+            2
+        );
+        assert_eq!(
+            changes
+                .iter()
+                .filter(|change| change.after_version.is_some())
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn lock_reader_rejects_duplicate_exact_identities() {
+        let package = locked("duplicate", "1.0.0", "path+/same");
+        let lock = PackageLock {
+            version: 1,
+            packages: vec![package.clone(), package],
+            metadata: PackageLockMetadata {
+                rsscript_version: "test".to_string(),
+                created_by: "test".to_string(),
+            },
+        };
+        let path = std::env::temp_dir().join(format!(
+            "rsscript-duplicate-lock-{}-{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock after epoch")
+                .as_nanos()
+        ));
+        fs::write(&path, toml::to_string(&lock).expect("lock serializes"))
+            .expect("lock should be written");
+
+        let error = read_package_lock(&path).expect_err("duplicate identity must be rejected");
+        let _ = fs::remove_file(path);
+
+        assert!(error.contains("duplicate package identity"), "{error}");
+        assert!(error.contains("duplicate@1.0.0"), "{error}");
+        assert!(error.contains("path+/same"), "{error}");
+    }
+
+    #[test]
+    fn lock_identity_allows_same_name_version_from_different_sources() {
+        validate_locked_package_identities(&[
+            locked("shared", "1.0.0", "path+/first"),
+            locked("shared", "1.0.0", "path+/second"),
+        ])
+        .expect("source is part of the exact lock identity");
     }
 }
