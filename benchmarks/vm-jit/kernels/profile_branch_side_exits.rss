@@ -1,9 +1,8 @@
 // Profile-guided whole-function branch side-exit kernel.
 //
-// The perf gate runs this case with RSS_JIT_TIER_THRESHOLD=66. The first 66
-// calls to `branchy` stay interpreted, which is enough to collect 16 strong
-// post-warmup branch samples. Later calls compile `branchy` as a whole function
-// and should lower the cold branch edge as a profile-guided side exit, exposed
+// The perf gate defers this 11-work-unit body for 66 calls. That collects 16
+// strong post-warmup branch samples before later calls compile `branchy` as a
+// whole function and lower the cold edge as a profile-guided side exit, exposed
 // as `profile_branch_side_exits` / `br_x` telemetry.
 
 fn branchy(value: Int) -> Int {

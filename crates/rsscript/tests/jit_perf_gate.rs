@@ -477,7 +477,10 @@ fn run_bench(
 fn case_tier_up_threshold(case: &str) -> u32 {
     match case {
         "profile_branch_cold_blocks.rss" => 200,
-        "profile_branch_side_exits.rss" => 66,
+        // Tier thresholds are deterministic interpreted-work units, not raw
+        // calls. `branchy` weighs 11 units, so 66 interpreted calls provide the
+        // 16 post-warmup samples required by the side-exit transform.
+        "profile_branch_side_exits.rss" => 66 * 11,
         _ => 0,
     }
 }
