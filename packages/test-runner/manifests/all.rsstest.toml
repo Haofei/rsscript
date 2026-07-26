@@ -10,6 +10,7 @@ kind = "command_success"
 command = "cargo"
 timeout_ms = 600000
 args = [
+  "--locked",
   "clippy",
   "--workspace",
   "--exclude",
@@ -27,6 +28,7 @@ kind = "command_success"
 command = "cargo"
 timeout_ms = 600000
 args = [
+  "--locked",
   "clippy",
   "-p",
   "rsscript-runtime",
@@ -42,7 +44,7 @@ name = "generated Rust packages compile"
 kind = "command_for_each_path"
 command = "cargo"
 timeout_ms = 180000
-args = ["check", "--manifest-path"]
+args = ["--locked", "check", "--manifest-path"]
 jobs = 1
 paths = [
   "crates/rsscript/tests/generated/simple/Cargo.toml",
@@ -71,6 +73,7 @@ kind = "command_success"
 command = "cargo"
 timeout_ms = 1200000
 args = [
+  "--locked",
   "nextest",
   "run",
   "--workspace",
@@ -89,6 +92,7 @@ kind = "command_success"
 command = "cargo"
 timeout_ms = 1200000
 args = [
+  "--locked",
   "nextest",
   "run",
   "-p",
@@ -106,6 +110,7 @@ kind = "command_success"
 command = "cargo"
 timeout_ms = 600000
 args = [
+  "--locked",
   "test",
   "-p",
   "rsscript",
@@ -120,7 +125,7 @@ name = "rss binary builds"
 kind = "command_success"
 command = "cargo"
 timeout_ms = 300000
-args = ["build", "--quiet", "--bin", "rss"]
+args = ["--locked", "build", "--quiet", "--bin", "rss"]
 
 [[tests]]
 name = "readme package ci command works"
@@ -175,3 +180,9 @@ name = "git diff has no whitespace errors"
 kind = "command_success"
 command = "git"
 args = ["diff", "--check"]
+
+[[tests]]
+name = "Cargo.lock is unchanged"
+kind = "command_success"
+command = "git"
+args = ["diff", "--exit-code", "--", "Cargo.lock"]
