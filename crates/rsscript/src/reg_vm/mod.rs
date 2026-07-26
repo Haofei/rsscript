@@ -2330,9 +2330,11 @@ const MAX_NATIVE_SHAPE_VERSIONS: usize = 2;
 /// Stable runtime ABI shape used for bounded native multiversioning. Scalar
 /// payloads and collection lengths are deliberately absent. Heap identities are
 /// included only where the runtime already exposes stable dispatch metadata:
-/// closure function ids and interned struct/variant layouts.
+/// closure ABI class and interned struct/variant layouts. Closure function ids
+/// stay in the existing mono/PIC feedback so a three-arm PIC does not consume
+/// three whole-function shape versions.
 #[cfg(feature = "native-jit")]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum NativeParamShape {
     Int,
     Bool,
@@ -2340,20 +2342,65 @@ enum NativeParamShape {
     FlatInt,
     FlatFloat,
     Handle,
-    Closure(usize),
+    Closure,
     Struct(*const TypeLayout),
     Variant(*const TypeLayout),
     Unsupported,
 }
 
 #[cfg(feature = "native-jit")]
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
-struct ShapeKey(Vec<NativeParamShape>);
+const INLINE_SHAPE_PARAMS: usize = 8;
+
+#[cfg(feature = "native-jit")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ShapeKey {
+    Inline {
+        len: u8,
+        values: [NativeParamShape; INLINE_SHAPE_PARAMS],
+    },
+    Heap(Box<[NativeParamShape]>),
+}
+
+#[cfg(feature = "native-jit")]
+impl Default for ShapeKey {
+    fn default() -> Self {
+        Self::Inline {
+            len: 0,
+            values: [NativeParamShape::Unsupported; INLINE_SHAPE_PARAMS],
+        }
+    }
+}
 
 #[cfg(feature = "native-jit")]
 impl ShapeKey {
     fn from_values<'a>(values: impl IntoIterator<Item = &'a VmValue>) -> Self {
-        Self(values.into_iter().map(native_param_shape).collect())
+        Self::from_shapes(values.into_iter().map(native_param_shape))
+    }
+
+    fn from_shapes(values: impl IntoIterator<Item = NativeParamShape>) -> Self {
+        let mut inline = [NativeParamShape::Unsupported; INLINE_SHAPE_PARAMS];
+        let mut len = 0usize;
+        let mut overflow: Option<Vec<NativeParamShape>> = None;
+        for shape in values {
+            if let Some(values) = overflow.as_mut() {
+                values.push(shape);
+            } else if len < INLINE_SHAPE_PARAMS {
+                inline[len] = shape;
+                len += 1;
+            } else {
+                let mut values = inline.to_vec();
+                values.push(shape);
+                overflow = Some(values);
+            }
+        }
+        if let Some(values) = overflow {
+            Self::Heap(values.into_boxed_slice())
+        } else {
+            Self::Inline {
+                len: len as u8,
+                values: inline,
+            }
+        }
     }
 }
 
@@ -2368,7 +2415,7 @@ fn native_param_shape(value: &VmValue) -> NativeParamShape {
             Some(TypedVec::Floats(_)) => NativeParamShape::FlatFloat,
             _ => NativeParamShape::Handle,
         },
-        VmValue::Closure(closure) => NativeParamShape::Closure(closure.function),
+        VmValue::Closure(_) => NativeParamShape::Closure,
         VmValue::Struct(value) => NativeParamShape::Struct(Rc::as_ptr(&value.layout)),
         VmValue::Variant(value) => NativeParamShape::Variant(Rc::as_ptr(&value.layout)),
         VmValue::Managed(inner) => inner
@@ -7056,10 +7103,18 @@ impl NativeState {
             DEFAULT_NATIVE_OPTIMIZE_WORK_THRESHOLD,
         )
         .max(u64::from(tier_up_threshold) + 1);
+        // A zero threshold is the explicit eager/benchmark mode. Preserve the
+        // pre-ladder contract by compiling its only tier at `speed`; compiling
+        // baseline and optimized copies on every fresh evaluation doubles cold
+        // compile cost and can make helper-heavy kernels run in baseline code.
+        let eager_optimized = tier_up_threshold == 0 && !baseline;
         Ok(Self {
-            baseline_module: vm_jit::NativeModule::new_with_opt(jit_host_helpers(), true)
-                .map_err(|e| EvalError::Runtime(e.to_string()))?,
-            optimized_module: if baseline {
+            baseline_module: vm_jit::NativeModule::new_with_opt(
+                jit_host_helpers(),
+                !eager_optimized,
+            )
+            .map_err(|e| EvalError::Runtime(e.to_string()))?,
+            optimized_module: if baseline || eager_optimized {
                 None
             } else {
                 Some(

@@ -2117,29 +2117,25 @@ impl RegVm {
             function: native_key,
             header: header_ip,
         };
-        let shape = ShapeKey(
-            (0..func.regs)
-                .map(|index| {
-                    let slot = base + index;
-                    if !self.written.get(slot).copied().unwrap_or(false) {
-                        return NativeParamShape::Unsupported;
-                    }
-                    let shape = native_param_shape(&self.stack[slot]);
-                    if index < func.params
-                        || matches!(
-                            shape,
-                            NativeParamShape::Closure(_)
-                                | NativeParamShape::Struct(_)
-                                | NativeParamShape::Variant(_)
-                        )
-                    {
-                        shape
-                    } else {
-                        NativeParamShape::Unsupported
-                    }
-                })
-                .collect(),
-        );
+        let shape = ShapeKey::from_shapes((0..func.regs).map(|index| {
+            let slot = base + index;
+            if !self.written.get(slot).copied().unwrap_or(false) {
+                return NativeParamShape::Unsupported;
+            }
+            let shape = native_param_shape(&self.stack[slot]);
+            if index < func.params
+                || matches!(
+                    shape,
+                    NativeParamShape::Closure
+                        | NativeParamShape::Struct(_)
+                        | NativeParamShape::Variant(_)
+                )
+            {
+                shape
+            } else {
+                NativeParamShape::Unsupported
+            }
+        }));
         let osr_version_key = OsrVersionKey {
             region: region_key,
             shape,

@@ -2550,7 +2550,7 @@ fn main() -> Unit {
     #[test]
     fn native_ladder_promotes_and_prefers_optimized_dispatch() {
         let mut vm = empty_vm();
-        let mut native = NativeState::new_with_opt(0, false, true, false, true, false, false)
+        let mut native = NativeState::new_with_opt(1, false, true, false, true, false, false)
             .expect("native ladder");
         native.optimize_work_threshold = u64::MAX;
         vm.native = Some(native);
@@ -2590,7 +2590,7 @@ fn main() -> Unit {
     #[test]
     fn native_ladder_does_not_promote_below_work_threshold() {
         let mut vm = empty_vm();
-        let mut native = NativeState::new_with_opt(0, false, true, false, true, false, false)
+        let mut native = NativeState::new_with_opt(1, false, true, false, true, false, false)
             .expect("native ladder");
         native.optimize_work_threshold = u64::MAX;
         vm.native = Some(native);
@@ -2615,7 +2615,7 @@ fn main() -> Unit {
     #[test]
     fn native_ladder_shares_admission_budget_across_modules() {
         let mut vm = empty_vm();
-        let mut native = NativeState::new_with_opt(0, false, true, false, true, false, false)
+        let mut native = NativeState::new_with_opt(1, false, true, false, true, false, false)
             .expect("native ladder");
         native.optimize_work_threshold = u64::MAX;
         vm.native = Some(native);
@@ -2708,7 +2708,7 @@ fn main() -> Unit {
             Vec::new(),
             HashMap::<String, NativeInterpreterFn>::new(),
         );
-        let mut native = NativeState::new_with_opt(0, false, true, false, true, true, false)
+        let mut native = NativeState::new_with_opt(1, false, true, false, true, true, false)
             .expect("native ladder");
         native.optimize_work_threshold = 0;
         vm.native = Some(native);
@@ -8888,11 +8888,11 @@ fn main() -> Unit {
         let function = 7;
         let key = NativeVersionKey {
             function,
-            shape: ShapeKey(vec![NativeParamShape::Int]),
+            shape: ShapeKey::from_shapes([NativeParamShape::Int]),
         };
         let successful_key = NativeVersionKey {
             function,
-            shape: ShapeKey(vec![NativeParamShape::Bool]),
+            shape: ShapeKey::from_shapes([NativeParamShape::Bool]),
         };
 
         // Two consecutive bails — one short of the give-up threshold (3).
@@ -9720,10 +9720,10 @@ fn main() -> Unit {{
             function: 2,
             captures: Vec::new(),
         }));
-        assert_ne!(
+        assert_eq!(
             ShapeKey::from_values([&closure_a]),
             ShapeKey::from_values([&closure_b]),
-            "closure function identity is stable dispatch metadata",
+            "closure target identity belongs to the existing mono/PIC feedback, not whole-function shapes",
         );
 
         let left = VmValue::Struct(Rc::new(VmStruct::from_named(
@@ -9743,7 +9743,7 @@ fn main() -> Unit {{
 
     #[cfg(feature = "native-jit")]
     #[test]
-    fn native_alternating_two_shapes_reuses_two_versions() {
+    fn native_alternating_closures_reuse_the_pic_shape() {
         let source = shaped_dispatch_program(2, 140);
         let expected = compile(&source)
             .eval_main_with_args(Vec::<String>::new())
@@ -9754,14 +9754,17 @@ fn main() -> Unit {{
         .expect("native run");
         assert_eq!(actual.stdout, expected.stdout);
         assert_eq!(actual.value, expected.value);
-        assert!(stats.shape_versions >= 2, "stats={stats:?}");
+        assert!(
+            stats.profile_closure_pic_arms >= 2,
+            "both closure targets should share the dispatcher's PIC-backed shape; stats={stats:?}",
+        );
         assert!(stats.shape_cache_hits > 0, "stats={stats:?}");
         assert_eq!(stats.shape_limit_fallbacks, 0, "stats={stats:?}");
     }
 
     #[cfg(feature = "native-jit")]
     #[test]
-    fn native_third_shape_falls_back_without_compiling() {
+    fn native_third_closure_uses_pic_without_shape_fallback() {
         let source = shaped_dispatch_program(3, 180);
         let expected = compile(&source)
             .eval_main_with_args(Vec::<String>::new())
@@ -9772,10 +9775,7 @@ fn main() -> Unit {{
         .expect("native run");
         assert_eq!(actual.stdout, expected.stdout);
         assert_eq!(actual.value, expected.value);
-        assert!(
-            stats.shape_limit_fallbacks > 0,
-            "the third dispatcher shape must use the generic fallback; stats={stats:?}",
-        );
+        assert_eq!(stats.shape_limit_fallbacks, 0, "stats={stats:?}");
     }
 
     #[cfg(feature = "native-jit")]
