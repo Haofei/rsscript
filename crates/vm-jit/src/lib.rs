@@ -7853,6 +7853,7 @@ mod tests {
 
     static MEMOIZED_SPLIT_COUNT_CALLS: std::sync::atomic::AtomicUsize =
         std::sync::atomic::AtomicUsize::new(0);
+    static MEMOIZED_SPLIT_COUNT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     extern "C" fn counting_string_split_count(_ctx: HostCtx, _value: i64, _delimiter: i64) -> i64 {
         MEMOIZED_SPLIT_COUNT_CALLS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -7863,6 +7864,7 @@ mod tests {
     fn memoized_host_call_reuses_first_scalar_result_in_loop() {
         use JitValueType::{Handle, Int};
 
+        let _count_guard = MEMOIZED_SPLIT_COUNT_LOCK.lock().unwrap();
         MEMOIZED_SPLIT_COUNT_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
         let mut helpers = host_helpers();
         helpers.string_split_count = counting_string_split_count;
@@ -7986,6 +7988,7 @@ mod tests {
 
     #[test]
     fn nested_memo_scope_resets_once_per_outer_activation_and_stays_lazy() {
+        let _count_guard = MEMOIZED_SPLIT_COUNT_LOCK.lock().unwrap();
         MEMOIZED_SPLIT_COUNT_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
         let mut helpers = host_helpers();
         helpers.string_split_count = counting_string_split_count;
@@ -8010,6 +8013,7 @@ mod tests {
 
     #[test]
     fn nested_memo_scope_osr_entry_resets_then_preserves_backedges() {
+        let _count_guard = MEMOIZED_SPLIT_COUNT_LOCK.lock().unwrap();
         MEMOIZED_SPLIT_COUNT_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
         let mut helpers = host_helpers();
         helpers.string_split_count = counting_string_split_count;
