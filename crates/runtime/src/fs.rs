@@ -4,6 +4,9 @@ use std::path::PathBuf;
 use crate::async_runtime::{NativeAsyncPending, spawn_tokio_native};
 use crate::channel::{ChannelError, RssStream, stream_from_iterator};
 use crate::diagnostics::Resource;
+use tokio::io::AsyncReadExt;
+
+const RUNTIME_READ_CEILING_BYTES: usize = 64 * 1024 * 1024;
 
 pub struct File {
     pub(crate) inner: std::fs::File,
@@ -239,11 +242,11 @@ pub fn file_exists<P: RuntimePath + ?Sized>(path: &P) -> bool {
 }
 
 pub fn file_read_bytes<P: RuntimePath + ?Sized>(path: &P) -> Result<Vec<u8>, FileError> {
-    std::fs::read(path.as_path()).map_err(FileError::from)
+    read_path_bounded(path.as_path())
 }
 
 pub fn file_read_string<P: RuntimePath + ?Sized>(path: &P) -> Result<String, FileError> {
-    std::fs::read_to_string(path.as_path()).map_err(FileError::from)
+    bytes_to_string(read_path_bounded(path.as_path())?)
 }
 
 pub fn file_write_bytes<P: RuntimePath + ?Sized, B: RuntimeBytes + ?Sized>(
@@ -318,15 +321,12 @@ pub fn file_remove<P: RuntimePath + ?Sized>(path: &P) -> Result<(), FileError> {
 }
 
 pub fn file_read_all(file: &mut File) -> Result<Vec<u8>, FileError> {
-    let mut bytes = Vec::new();
-    file.inner.read_to_end(&mut bytes)?;
-    Ok(bytes)
+    let metadata_len = file.inner.metadata().ok().map(|metadata| metadata.len());
+    read_bounded(&mut file.inner, metadata_len, RUNTIME_READ_CEILING_BYTES)
 }
 
 pub fn file_read_all_string(file: &mut File) -> Result<String, FileError> {
-    let mut text = String::new();
-    file.inner.read_to_string(&mut text)?;
-    Ok(text)
+    bytes_to_string(file_read_all(file)?)
 }
 
 pub fn file_read_into(file: &mut File, buffer: &mut Vec<u8>) -> Result<bool, FileError> {
@@ -345,6 +345,12 @@ pub fn file_bytes_stream<P: RuntimePath + ?Sized>(
     path: &P,
     chunk_size: i64,
 ) -> Result<RssStream<Vec<u8>>, ChannelError> {
+    if chunk_size > RUNTIME_READ_CEILING_BYTES as i64 {
+        return Err(ChannelError::new(&format!(
+            "file byte stream chunk size {chunk_size} exceeds runtime read ceiling of \
+             {RUNTIME_READ_CEILING_BYTES} bytes"
+        )));
+    }
     let file = std::fs::File::open(path.as_path())
         .map_err(|error| ChannelError::new(&format!("file byte stream open failed: {error}")))?;
     let chunk_size = chunk_size.max(1) as usize;
@@ -408,18 +414,14 @@ pub fn file_read_all_async<P: RuntimePath + ?Sized>(
     path: &P,
 ) -> NativeAsyncPending<Result<Vec<u8>, FileError>> {
     let path = path.as_path().to_path_buf();
-    spawn_tokio_native(async move { tokio::fs::read(path).await.map_err(FileError::from) })
+    spawn_tokio_native(async move { read_path_bounded_async(path).await })
 }
 
 pub fn file_read_all_string_async<P: RuntimePath + ?Sized>(
     path: &P,
 ) -> NativeAsyncPending<Result<String, FileError>> {
     let path = path.as_path().to_path_buf();
-    spawn_tokio_native(async move {
-        tokio::fs::read_to_string(path)
-            .await
-            .map_err(FileError::from)
-    })
+    spawn_tokio_native(async move { bytes_to_string(read_path_bounded_async(path).await?) })
 }
 
 pub fn file_write_async<P: RuntimePath + ?Sized, B: RuntimeBytes + ?Sized>(
@@ -543,7 +545,70 @@ pub fn directory_metadata<P: RuntimePath + ?Sized>(path: &P) -> Result<FileMetad
 }
 
 pub fn directory_read_string<P: RuntimePath + ?Sized>(path: &P) -> Result<String, FileError> {
-    std::fs::read_to_string(path.as_path()).map_err(FileError::from)
+    file_read_string(path)
+}
+
+fn read_path_bounded(path: &std::path::Path) -> Result<Vec<u8>, FileError> {
+    let mut file = std::fs::File::open(path)?;
+    let metadata_len = file.metadata().ok().map(|metadata| metadata.len());
+    read_bounded(&mut file, metadata_len, RUNTIME_READ_CEILING_BYTES)
+}
+
+fn read_bounded(
+    reader: &mut impl Read,
+    metadata_len: Option<u64>,
+    ceiling: usize,
+) -> Result<Vec<u8>, FileError> {
+    let capacity = checked_read_capacity(metadata_len, ceiling)?;
+    let mut bytes = Vec::with_capacity(capacity);
+    reader
+        .take(ceiling.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > ceiling {
+        return Err(read_ceiling_error(bytes.len(), ceiling));
+    }
+    Ok(bytes)
+}
+
+async fn read_path_bounded_async(path: PathBuf) -> Result<Vec<u8>, FileError> {
+    let file = tokio::fs::File::open(path).await?;
+    let metadata_len = file.metadata().await.ok().map(|metadata| metadata.len());
+    let capacity = checked_read_capacity(metadata_len, RUNTIME_READ_CEILING_BYTES)?;
+    let mut bytes = Vec::with_capacity(capacity);
+    file.take(RUNTIME_READ_CEILING_BYTES.saturating_add(1) as u64)
+        .read_to_end(&mut bytes)
+        .await?;
+    if bytes.len() > RUNTIME_READ_CEILING_BYTES {
+        return Err(read_ceiling_error(bytes.len(), RUNTIME_READ_CEILING_BYTES));
+    }
+    Ok(bytes)
+}
+
+fn checked_read_capacity(metadata_len: Option<u64>, ceiling: usize) -> Result<usize, FileError> {
+    let Some(metadata_len) = metadata_len else {
+        return Ok(0);
+    };
+    if metadata_len > ceiling as u64 {
+        return Err(read_ceiling_error_u64(metadata_len, ceiling));
+    }
+    usize::try_from(metadata_len).map_err(|_| read_ceiling_error_u64(metadata_len, ceiling))
+}
+
+fn read_ceiling_error(actual: usize, ceiling: usize) -> FileError {
+    read_ceiling_error_u64(actual as u64, ceiling)
+}
+
+fn read_ceiling_error_u64(actual: u64, ceiling: usize) -> FileError {
+    FileError::new(
+        "FileTooLarge",
+        &format!("file read size {actual} exceeds runtime read ceiling of {ceiling} bytes"),
+    )
+}
+
+fn bytes_to_string(bytes: Vec<u8>) -> Result<String, FileError> {
+    String::from_utf8(bytes).map_err(|error| {
+        FileError::from(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+    })
 }
 
 pub fn directory_write_string<P: RuntimePath + ?Sized>(
@@ -609,5 +674,59 @@ mod tests {
         assert!(path_is_absolute(&path));
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn oversized_file_reads_are_rejected_from_metadata() {
+        let path =
+            std::env::temp_dir().join(format!("rsscript-oversized-file-{}", std::process::id()));
+        let file = std::fs::File::create(&path).expect("test file should be created");
+        file.set_len(RUNTIME_READ_CEILING_BYTES as u64 + 1)
+            .expect("sparse test file should be sized");
+        drop(file);
+
+        let error = file_read_bytes(&path).expect_err("oversized file should be rejected");
+
+        assert_eq!(error.kind(), "FileTooLarge");
+        assert!(error.message().contains("runtime read ceiling"));
+        let mut file = file_open_read(&path).expect("oversized file should still open");
+        assert_eq!(
+            file_read_all(&mut file)
+                .expect_err("oversized open file should be rejected")
+                .kind(),
+            "FileTooLarge"
+        );
+        assert_eq!(
+            Executor::new()
+                .run_pending(file_read_all_async(&path))
+                .expect_err("oversized async file should be rejected")
+                .kind(),
+            "FileTooLarge"
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn bounded_reader_rejects_data_beyond_reported_size() {
+        let mut reader = std::io::Cursor::new(b"12345");
+
+        let error = read_bounded(&mut reader, Some(4), 4)
+            .expect_err("reader growth beyond metadata should be rejected");
+
+        assert_eq!(error.kind(), "FileTooLarge");
+    }
+
+    #[test]
+    fn file_byte_stream_rejects_oversized_chunks_before_opening() {
+        let missing = std::env::temp_dir().join("rsscript-missing-stream-input");
+
+        let error = match file_bytes_stream(&missing, RUNTIME_READ_CEILING_BYTES as i64 + 1) {
+            Ok(_) => panic!("oversized chunks should be rejected"),
+            Err(error) => error,
+        };
+        let message = crate::channel_error_message(&error);
+
+        assert!(message.contains("chunk size"));
+        assert!(message.contains("runtime read ceiling"));
     }
 }

@@ -544,6 +544,7 @@ where
 pub struct NativeAsyncPending<T> {
     result: Arc<Mutex<Option<T>>>,
     wake: Arc<Mutex<Option<WakeHandle>>>,
+    abort_handle: Option<tokio::task::AbortHandle>,
 }
 
 #[derive(Clone)]
@@ -561,6 +562,7 @@ pub fn native_async_pending<T>(
         NativeAsyncPending {
             result: result.clone(),
             wake: wake.clone(),
+            abort_handle: None,
         },
         NativeAsyncCompleter { result, wake },
     )
@@ -596,11 +598,14 @@ where
     T: Send + 'static,
     F: Future<Output = T> + Send + 'static,
 {
-    let (pending, completer) = native_async_pending(cancellation);
-    tokio_native_runtime().spawn(async move {
+    let (mut pending, completer) = native_async_pending(cancellation.clone());
+    let task = tokio_native_runtime().spawn(async move {
         let value = future.await;
         completer.complete(value);
     });
+    let abort_handle = task.abort_handle();
+    cancellation.register_abort(abort_handle.clone());
+    pending.abort_handle = Some(abort_handle);
     pending
 }
 
@@ -641,6 +646,14 @@ impl<T> Pending<T> for NativeAsyncPending<T> {
     }
 }
 
+impl<T> Drop for NativeAsyncPending<T> {
+    fn drop(&mut self) {
+        if let Some(abort_handle) = self.abort_handle.take() {
+            abort_handle.abort();
+        }
+    }
+}
+
 pub struct TaskGroup<T> {
     tasks: Vec<Box<dyn Pending<T>>>,
     cancellation: CancellationToken,
@@ -650,6 +663,7 @@ pub struct TaskGroup<T> {
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
     waiters: Arc<Mutex<Vec<WeakWakeHandle>>>,
+    abort_handles: Arc<Mutex<Vec<tokio::task::AbortHandle>>>,
 }
 
 impl CancellationToken {
@@ -669,6 +683,14 @@ impl CancellationToken {
         );
         for waiter in waiters {
             waiter.wake();
+        }
+        for abort_handle in std::mem::take(
+            &mut *self
+                .abort_handles
+                .lock()
+                .expect("cancellation abort handle lock poisoned"),
+        ) {
+            abort_handle.abort();
         }
     }
 
@@ -697,6 +719,23 @@ impl CancellationToken {
             waiters.retain(|existing| existing.signal.strong_count() > 0);
             waiters.push(WeakWakeHandle::new(&wake));
         }
+    }
+
+    fn register_abort(&self, abort_handle: tokio::task::AbortHandle) {
+        if self.is_cancelled() {
+            abort_handle.abort();
+            return;
+        }
+        let mut abort_handles = self
+            .abort_handles
+            .lock()
+            .expect("cancellation abort handle lock poisoned");
+        if self.is_cancelled() {
+            drop(abort_handles);
+            abort_handle.abort();
+            return;
+        }
+        abort_handles.push(abort_handle);
     }
 }
 
@@ -1035,6 +1074,7 @@ pub fn timer_sleep_native_start_with_cancellation(
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::mpsc;
     use std::time::Duration;
 
     use super::*;
@@ -1048,6 +1088,63 @@ mod tests {
         });
 
         assert_eq!(executor.run_pending(pending), 42);
+    }
+
+    #[test]
+    fn dropping_tokio_native_pending_aborts_backend_work() {
+        struct DropSignal(mpsc::Sender<()>);
+
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
+        }
+
+        let (started_sender, started_receiver) = mpsc::channel();
+        let (dropped_sender, dropped_receiver) = mpsc::channel();
+        let pending = spawn_tokio_native(async move {
+            let _signal = DropSignal(dropped_sender);
+            started_sender.send(()).expect("test receiver should exist");
+            std::future::pending::<()>().await;
+        });
+        started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("Tokio task should start");
+
+        drop(pending);
+
+        dropped_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("dropping pending should abort and drop the Tokio future");
+    }
+
+    #[test]
+    fn cancelling_tokio_native_pending_aborts_backend_work() {
+        struct DropSignal(mpsc::Sender<()>);
+
+        impl Drop for DropSignal {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
+        }
+
+        let cancellation = CancellationToken::new();
+        let (started_sender, started_receiver) = mpsc::channel();
+        let (dropped_sender, dropped_receiver) = mpsc::channel();
+        let _pending = spawn_tokio_native_with_cancellation(cancellation.clone(), async move {
+            let _signal = DropSignal(dropped_sender);
+            started_sender.send(()).expect("test receiver should exist");
+            std::future::pending::<()>().await;
+        });
+        started_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("Tokio task should start");
+
+        cancellation.cancel();
+
+        dropped_receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("cancellation should abort and drop the Tokio future");
     }
 
     #[test]

@@ -429,18 +429,7 @@ fn process_run_request_with_cancellation(
     let status = child
         .wait()
         .map_err(|error| format!("failed to wait for `{}`: {error}", request.command))?;
-    if let Some(thread) = stdin_thread {
-        match thread.join() {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                return Err(format!(
-                    "failed to write stdin for `{}`: {error}",
-                    request.command
-                ));
-            }
-            Err(_) => return Err(format!("stdin writer panicked for `{}`", request.command)),
-        }
-    }
+    let stdin_result = stdin_thread.map(|thread| thread.join());
     join_process_reader(stdout_thread, "stdout", &request.command)?;
     join_process_reader(stderr_thread, "stderr", &request.command)?;
     while let Ok(chunk) = receiver.try_recv() {
@@ -468,6 +457,18 @@ fn process_run_request_with_cancellation(
             request.command,
             process_output_details_from_strings(&output.stdout, &output.stderr)
         ));
+    }
+    if let Some(stdin_result) = stdin_result {
+        match stdin_result {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                return Err(format!(
+                    "failed to write stdin for `{}`: {error}",
+                    request.command
+                ));
+            }
+            Err(_) => return Err(format!("stdin writer panicked for `{}`", request.command)),
+        }
     }
     Ok(output)
 }
@@ -676,6 +677,9 @@ fn configure_process_child(command: &mut std::process::Command) {
     }
     #[cfg(not(unix))]
     {
+        // Descendant-tree termination on Windows needs a job object and
+        // platform-specific bindings; until then the fallback below kills only
+        // the direct child.
         let _ = command;
     }
 }
@@ -1131,6 +1135,53 @@ mod tests {
             .expect_err("process should be cancelled");
 
         assert!(error.contains("cancelled"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn process_timeout_wins_over_stdin_broken_pipe() {
+        let request = super::ProcessRequest {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "sleep 5".to_string()],
+            cwd: None,
+            stdin: Some("x".repeat(8 * 1024 * 1024)),
+            env: Vec::new(),
+            timeout_ms: 30,
+            merge_stderr: true,
+            output_cap_bytes: 1024,
+        };
+
+        let error = super::process_run_request(&request).expect_err("process should time out");
+
+        assert!(error.contains("timed out"), "{error}");
+        assert!(!error.contains("failed to write stdin"), "{error}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn process_cancellation_wins_over_stdin_broken_pipe() {
+        let request = super::ProcessRequest {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "sleep 5".to_string()],
+            cwd: None,
+            stdin: Some("x".repeat(8 * 1024 * 1024)),
+            env: Vec::new(),
+            timeout_ms: 30_000,
+            merge_stderr: true,
+            output_cap_bytes: 1024,
+        };
+        let mut source = crate::cancellation_source_new();
+        let token = crate::cancellation_source_token(&source);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            crate::cancellation_source_cancel(&mut source);
+        });
+
+        let error = super::process_run_request_with_cancellation(&request, Some(&token))
+            .expect_err("process should be cancelled");
+
+        assert!(error.contains("cancelled"), "{error}");
+        assert!(!error.contains("failed to write stdin"), "{error}");
     }
 
     #[test]
