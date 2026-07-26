@@ -1,8 +1,6 @@
-// Drive the sqlx adapter end to end: create a table, insert rows, and read
-// them back through `query_strings` / `query_one_string`. The same checks run
-// against SQLite (always) and Postgres (only when RSS_SQLX_TEST_POSTGRES_URL is
-// set), so the pooled native bindings are exercised over both backends.
-fn check_backend(url: String) -> Result<Unit, String> {
+// Drive the plain-RSS facade end to end. The same checks run against SQLite
+// (always) and Postgres (when RSS_SQLX_TEST_POSTGRES_URL is set).
+fn check_backend(url: String, placeholder: String) -> Result<Unit, String> {
     Sqlx.execute(url: url, sql: "drop table if exists rss_sqlx_item")?
     Sqlx.execute(url: url, sql: "create table rss_sqlx_item(name text)")?
     Sqlx.execute(url: url, sql: "insert into rss_sqlx_item values ('a'), ('b')")?
@@ -29,6 +27,58 @@ fn check_backend(url: String) -> Result<Unit, String> {
         }
     }
 
+    let inserted = "a quote: ' and ?"
+    let insert_params = List.new<String>()
+    List.push<String>(list: mut insert_params, value: inserted)
+    let insert_sql = String.concat(
+        left: "insert into rss_sqlx_item(name) values (",
+        right: String.concat(left: placeholder, right: ")"),
+    )
+    Sqlx.execute_params(url: url, sql: insert_sql, params: insert_params)?
+
+    let query_params = List.new<String>()
+    List.push<String>(list: mut query_params, value: inserted)
+    let query_sql = String.concat(
+        left: "select name from rss_sqlx_item where name = ",
+        right: placeholder,
+    )
+    let bound_names = Sqlx.query_strings_params(
+        url: url,
+        sql: query_sql,
+        params: query_params,
+    )?
+    Assert.equal_int(left: List.len(list: bound_names), right: 1)
+    Assert.equal(left: List.get(list: bound_names, index: 0), right: inserted)
+
+    let one_params = List.new<String>()
+    List.push<String>(list: mut one_params, value: inserted)
+    match Sqlx.query_one_string_params(
+        url: url,
+        sql: query_sql,
+        params: one_params,
+    )? {
+        Some(value) => {
+            Assert.equal(left: value, right: inserted)
+        }
+        None => {
+            return Err("expected parameterized sqlx query to return one row")
+        }
+    }
+
+    Sqlx.close(url: url)?
+    let reopened = Sqlx.query_one_string(
+        url: url,
+        sql: "select name from rss_sqlx_item order by name",
+    )?
+    match reopened {
+        Some(value) => {
+            Assert.equal(left: value, right: "a")
+        }
+        None => {
+            return Err("expected sqlx query to reopen a closed pool")
+        }
+    }
+
     return Ok(Unit)
 }
 
@@ -43,12 +93,12 @@ fn sqlite_url() -> fresh String {
 
 fn main() -> Result<Unit, String> {
     let url = sqlite_url()
-    check_backend(url)?
+    check_backend(url: url, placeholder: "?")?
     Log.write(message: "sqlx sqlite backend ok")
 
     match Env.get(name: "RSS_SQLX_TEST_POSTGRES_URL") {
         Some(pg_url) => {
-            check_backend(url: pg_url)?
+            check_backend(url: pg_url, placeholder: "$1")?
             Log.write(message: "sqlx postgres backend ok")
         }
         None => {
@@ -56,5 +106,6 @@ fn main() -> Result<Unit, String> {
         }
     }
 
+    Sqlx.close_all()?
     return Ok(Unit)
 }

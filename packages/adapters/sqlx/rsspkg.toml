@@ -10,4 +10,4 @@ paths = ["interface"]
 paths = ["src"]
 
 [dependencies]
-rss-sqlx-ffi = { path = "../sqlx-ffi" }
+rss-sqlx-ffi = { path = "../sqlx-ffi", compile_only = true }

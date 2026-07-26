@@ -4,19 +4,19 @@ version = 1
 name = "rss-sqlx"
 version = "0.1.0"
 source = "path+packages/adapters/sqlx"
-checksum = "sha256:dce3642d7461d50578ff50f2a3acdbbf5c2025f8b2d6469fd4e2a6da4ce7afd6"
-interface_hash = "sha256:935904192acaccbdc3c64aa474b2c1e1b4677d848f09f3597e94b70f97de8ddd"
-review_hash = "sha256:ae684210751824572f7578671d909d4660229eac2f548c542d17474fac246ae9"
+checksum = "sha256:afc0660903f7e1c74ecd7b64eedf67b6feb4f4c0309935f05e1981373f1d0bf5"
+interface_hash = "sha256:3106f3eead06cb33cedc7e0b09d881d37017d42756d0264b5db88ba09119ca96"
+review_hash = "sha256:f2a175a91262d9f6db53d7a6c9568abc906db398cc50df0382ff51ca0f130fa8"
 features = []
 
 [[package]]
 name = "rss-sqlx-ffi"
 version = "0.1.0"
 source = "path+packages/adapters/sqlx-ffi"
-checksum = "sha256:31b05836ca997d6d6a4e4450376378aab2aa5cbf95f6bc0b77c207c9f8306892"
-interface_hash = "sha256:278dfc8763d620a3c4a603928b975ddcb919084e10dd6cf1550fc8dfdea031a8"
-review_hash = "sha256:3e59f928a567d7f308de84cf5b683893564ada9e3c282b989fc2fe9d6f7f9424"
-native_hash = "sha256:1f1a996dc8fe1c4d54f1faf7bd1e2d728221ea102f7a55130a949a7b731e22ba"
+checksum = "sha256:a7d5d2bdeca25d4f02745ceb9acc9a5b75696a22e21aa29dd7fe320e883c485d"
+interface_hash = "sha256:8fbb323b394781fafeb7cada8417a9cf42fb902b5c2b47d0cf5a5fd85a710759"
+review_hash = "sha256:b0e7af5b02a4bb5fc24f301dabe284e0da7ff38aacc0d7d94ac3cbf122b540a1"
+native_hash = "sha256:d2f433140fc019a58130cb8c889a68b05e6cd668790ac2029e4c81fd9611b4db"
 features = []
 
 [metadata]

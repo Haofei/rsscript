@@ -13,12 +13,49 @@ pub fn Sqlx.execute(url: String, sql: String) -> Result<Unit, String> {
     return SqlxFfi.execute(url: url, sql: sql)
 }
 
+// Run a statement with positional string parameters.
+pub fn Sqlx.execute_params(
+    url: String,
+    sql: String,
+    params: List<String>,
+) -> Result<Unit, String> {
+    return SqlxFfi.execute_params(url: url, sql: sql, params: params)
+}
+
 // Run a query and collect the first column of every row as a list of strings.
 pub fn Sqlx.query_strings(url: String, sql: String) -> Result<fresh List<String>, String> {
     return SqlxFfi.query_strings(url: url, sql: sql)
 }
 
+// Run a query with positional string parameters and collect its first column.
+pub fn Sqlx.query_strings_params(
+    url: String,
+    sql: String,
+    params: List<String>,
+) -> Result<fresh List<String>, String> {
+    return SqlxFfi.query_strings_params(url: url, sql: sql, params: params)
+}
+
 // Run a query and return the first column of the first row, if any.
 pub fn Sqlx.query_one_string(url: String, sql: String) -> Result<Option<String>, String> {
     return SqlxFfi.query_one_string(url: url, sql: sql)
+}
+
+// Run a query with positional string parameters and return its first value.
+pub fn Sqlx.query_one_string_params(
+    url: String,
+    sql: String,
+    params: List<String>,
+) -> Result<Option<String>, String> {
+    return SqlxFfi.query_one_string_params(url: url, sql: sql, params: params)
+}
+
+// Close and evict the cached pool for one connection URL.
+pub fn Sqlx.close(url: String) -> Result<Unit, String> {
+    return SqlxFfi.close(url: url)
+}
+
+// Close and evict every cached SQLx pool in this process.
+pub fn Sqlx.close_all() -> Result<Unit, String> {
+    return SqlxFfi.close_all()
 }
