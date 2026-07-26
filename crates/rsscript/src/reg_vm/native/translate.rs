@@ -2043,15 +2043,10 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
         })
         .unwrap_or(NativeTy::Int);
 
-    let mut native_reg_types: Vec<NativeTy> = (0..n_regs)
+    let native_reg_types: Vec<NativeTy> = (0..n_regs)
         .map(|reg| ty[reg].unwrap_or(NativeTy::Int))
         .collect();
-    native_memoize_loop_invariant_host_calls(
-        &code,
-        &reachable,
-        &mut jit_code,
-        &mut native_reg_types,
-    );
+    native_memoize_loop_invariant_host_calls(&code, &reachable, &mut jit_code, &native_reg_types);
     native_forward_direct_list_store_loads(&mut jit_code);
 
     let reg_types = native_reg_types
@@ -2437,9 +2432,10 @@ fn native_memoize_loop_invariant_host_calls(
     code: &[RegInstr],
     reachable: &[bool],
     jit_code: &mut [vm_jit::JitInstr],
-    native_reg_types: &mut Vec<NativeTy>,
+    native_reg_types: &[NativeTy],
 ) {
     let original_n_regs = native_reg_types.len();
+    let mut next_memo_slot = 0_u32;
     let loops = detect_natural_loops(code);
     for lp in &loops {
         // The lazy cache lives for the whole native invocation. An inner loop can
@@ -2507,17 +2503,13 @@ fn native_memoize_loop_invariant_host_calls(
             {
                 continue;
             }
-            let cache = native_reg_types.len() as u32;
-            native_reg_types.push(result_ty);
-            let flag = native_reg_types.len() as u32;
-            native_reg_types.push(NativeTy::Int);
             jit_code[ip] = vm_jit::JitInstr::MemoizedHostCall {
                 helper,
                 dst,
                 args,
-                cache,
-                flag,
+                memo_slot: next_memo_slot,
             };
+            next_memo_slot += 1;
             if invariants
                 .write_count
                 .get(dst as usize)
@@ -5115,12 +5107,7 @@ fn translate_osr_loop_inner(
         native_reg_types.push(NativeTy::Int);
     }
     let reachable = native_reachable_instructions(code);
-    native_memoize_loop_invariant_host_calls(
-        code,
-        &reachable,
-        &mut jit_code,
-        &mut native_reg_types,
-    );
+    native_memoize_loop_invariant_host_calls(code, &reachable, &mut jit_code, &native_reg_types);
     native_forward_direct_list_store_loads(&mut jit_code);
     let mut written_regs = vec![false; native_reg_types.len()];
     for (ip, instr) in jit_code.iter().enumerate() {

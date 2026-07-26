@@ -387,7 +387,7 @@ pub struct HostHelpers {
 /// producer (`rsscript`) translates its private bytecode into this stable,
 /// versioned surface, so the two crates are decoupled: a breaking IR change bumps
 /// this and the producer is updated in lock-step.
-pub const IR_VERSION: u32 = 22;
+pub const IR_VERSION: u32 = 23;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HostFailureMode {
@@ -1344,16 +1344,16 @@ pub enum JitInstr {
         args: Vec<HostArg>,
     },
     /// A pure scalar host helper whose arguments are loop-invariant. The first
-    /// executed visit calls the helper, stores its result in `cache`, and flips
-    /// `flag` to true. Later visits copy `cache` into `dst`. This keeps the IR
-    /// source-index aligned: the memoization expands inside codegen, so deopt
-    /// resume IPs still point at the original helper instruction.
+    /// executed visit calls the helper and stores its result in codegen-private
+    /// storage identified by `memo_slot`. Later visits copy that value into `dst`.
+    /// Memo slots are a dense, function-local namespace, separate from public VM
+    /// registers. This keeps the IR source-index aligned without changing register
+    /// windows, definite assignment, or deopt payloads.
     MemoizedHostCall {
         helper: HostHelper,
         dst: u32,
         args: Vec<HostArg>,
-        cache: u32,
-        flag: u32,
+        memo_slot: u32,
     },
     /// Staged native-call ABI: call another function already compiled in the same
     /// [`NativeModule`]. Callee params/results may be scalar or heap `Handle`s
@@ -3420,21 +3420,27 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
     };
 
     let mut returns = Vec::new();
-    let mut memo_scratch_owners = std::collections::HashMap::new();
+    let memo_count = program
+        .code
+        .iter()
+        .filter(|instr| matches!(instr, JitInstr::MemoizedHostCall { .. }))
+        .count();
+    let mut memo_slot_owners = vec![None; memo_count];
     for (ip, instr) in program.code.iter().enumerate() {
-        let JitInstr::MemoizedHostCall { cache, flag, .. } = instr else {
+        let JitInstr::MemoizedHostCall { memo_slot, .. } = instr else {
             continue;
         };
-        for (role, reg) in [("cache", *cache), ("flag", *flag)] {
-            if let Some((owner, owner_role)) = memo_scratch_owners.get(&reg)
-                && *owner != ip
-            {
-                return Err(JitError(format!(
-                    "MemoizedHostCall scratch register {reg} is owned by both instruction {owner} ({owner_role}) and instruction {ip} ({role})"
-                )));
-            }
-            memo_scratch_owners.insert(reg, (ip, role));
+        let Some(owner) = memo_slot_owners.get_mut(*memo_slot as usize) else {
+            return Err(JitError(format!(
+                "MemoizedHostCall at instruction {ip}: memo_slot {memo_slot} is out of range for {memo_count} memoization sites"
+            )));
+        };
+        if let Some(owner) = owner {
+            return Err(JitError(format!(
+                "MemoizedHostCall memo_slot {memo_slot} is shared by instructions {owner} and {ip}"
+            )));
         }
+        *owner = Some(ip);
     }
     for (i, instr) in program.code.iter().enumerate() {
         // Conditional branches fall through to `i + 1` (`build_function` indexes
@@ -3535,38 +3541,13 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                 }
             }
             JitInstr::MemoizedHostCall {
-                helper,
-                dst,
-                args,
-                cache,
-                flag,
+                helper, dst, args, ..
             } => {
                 let sig = helper.signature();
                 if helper.heap_effect().writes_existing_heap() {
                     return Err(JitError(format!(
                         "MemoizedHostCall {helper:?}: heap-writing helpers cannot be memoized"
                     )));
-                }
-                if *dst == *cache || *dst == *flag || *cache == *flag {
-                    return Err(JitError(format!(
-                        "MemoizedHostCall {helper:?}: dst, cache, and flag registers must be distinct"
-                    )));
-                }
-                for (name, reg) in [("cache", *cache), ("flag", *flag)] {
-                    check_reg(reg)?;
-                    if reg < program.n_params {
-                        return Err(JitError(format!(
-                            "MemoizedHostCall {helper:?}: {name} register {reg} cannot be a parameter"
-                        )));
-                    }
-                    if args
-                        .iter()
-                        .any(|arg| matches!(arg, HostArg::Reg(arg_reg) if *arg_reg == reg))
-                    {
-                        return Err(JitError(format!(
-                            "MemoizedHostCall {helper:?}: {name} register {reg} aliases an argument"
-                        )));
-                    }
                 }
                 if args.len() != sig.args.len() {
                     return Err(JitError(format!(
@@ -3591,7 +3572,6 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                         }
                     }
                 }
-                require_class(*flag, JitValueType::Int, "MemoizedHostCall flag")?;
                 match sig.result {
                     HostResult::Exact(result) => {
                         if !matches!(
@@ -3607,25 +3587,12 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                             result,
                             &format!("MemoizedHostCall {helper:?} result"),
                         )?;
-                        require_class(
-                            *cache,
-                            result,
-                            &format!("MemoizedHostCall {helper:?} cache"),
-                        )?;
                     }
                     HostResult::IntOrFloatBits => {
                         check_reg(*dst)?;
-                        check_reg(*cache)?;
                         if !matches!(class(*dst), JitValueType::Int | JitValueType::Float) {
                             return Err(JitError(format!(
                                 "MemoizedHostCall {helper:?} result: register {dst} is {:?}, expected Int or Float",
-                                class(*dst)
-                            )));
-                        }
-                        if class(*cache) != class(*dst) {
-                            return Err(JitError(format!(
-                                "MemoizedHostCall {helper:?} cache: class {:?} does not match result {:?}",
-                                class(*cache),
                                 class(*dst)
                             )));
                         }
@@ -3902,22 +3869,6 @@ fn validate(program: &JitFunction, osr: bool) -> Result<(), JitError> {
                     ));
                 }
             }
-        }
-    }
-    for (ip, instr) in program.code.iter().enumerate() {
-        for reg in instr_uses(instr).into_iter().chain(instr_def(instr)) {
-            if let Some((owner, role)) = memo_scratch_owners.get(&reg) {
-                return Err(JitError(format!(
-                    "instruction {ip} accesses memoization {role} register {reg} owned by instruction {owner}"
-                )));
-            }
-        }
-    }
-    for &reg in &program.zero_init_regs {
-        if let Some((owner, role)) = memo_scratch_owners.get(&reg) {
-            return Err(JitError(format!(
-                "zero_init_regs accesses memoization {role} register {reg} owned by instruction {owner}"
-            )));
         }
     }
     let reachable = reachable_jit_instrs(program);
@@ -5179,6 +5130,24 @@ fn build_function(
         }
     };
     let vars: Vec<Variable> = (0..n_regs).map(|i| bcx.declare_var(var_ty(i))).collect();
+    let memo_count = program
+        .code
+        .iter()
+        .filter(|instr| matches!(instr, JitInstr::MemoizedHostCall { .. }))
+        .count();
+    let mut memo_value_tys = vec![types::I64; memo_count];
+    for instr in &program.code {
+        if let JitInstr::MemoizedHostCall { dst, memo_slot, .. } = instr {
+            memo_value_tys[*memo_slot as usize] = var_ty(*dst as usize);
+        }
+    }
+    let memo_values: Vec<Variable> = memo_value_tys
+        .iter()
+        .map(|&ty| bcx.declare_var(ty))
+        .collect();
+    let memo_flags: Vec<Variable> = (0..memo_count)
+        .map(|_| bcx.declare_var(types::I64))
+        .collect();
 
     // Entry: read params from the args array, zero the rest, then jump to the
     // block for instruction 0. Args are passed as raw 64-bit words; loading a
@@ -5280,6 +5249,15 @@ fn build_function(
                 zero_i
             },
         );
+    }
+    for (slot, (&value_var, &flag_var)) in memo_values.iter().zip(memo_flags.iter()).enumerate() {
+        let initial_value = if memo_value_tys[slot] == types::F64 {
+            zero_f
+        } else {
+            zero_i
+        };
+        bcx.def_var(value_var, initial_value);
+        bcx.def_var(flag_var, zero_i);
     }
 
     // The shared fallback block: "not completed".
@@ -5765,20 +5743,20 @@ fn build_function(
                 helper,
                 dst,
                 args,
-                cache,
-                flag,
+                memo_slot,
             } => {
+                let slot = *memo_slot as usize;
                 let cached_block = bcx.create_block();
                 let call_block = bcx.create_block();
                 let done_block = bcx.create_block();
-                let flag_value = bcx.use_var(reg(*flag));
+                let flag_value = bcx.use_var(memo_flags[slot]);
                 let zero = bcx.ins().iconst(types::I64, 0);
                 let cached = bcx.ins().icmp(IntCC::NotEqual, flag_value, zero);
                 bcx.ins().brif(cached, cached_block, &[], call_block, &[]);
 
                 bcx.switch_to_block(cached_block);
                 bcx.seal_block(cached_block);
-                let cached_value = bcx.use_var(reg(*cache));
+                let cached_value = bcx.use_var(memo_values[slot]);
                 bcx.def_var(reg(*dst), cached_value);
                 bcx.ins().jump(done_block, &[]);
 
@@ -5816,9 +5794,9 @@ fn build_function(
                     HostResult::IntOrFloatBits => result,
                 };
                 bcx.def_var(reg(*dst), stored);
-                bcx.def_var(reg(*cache), stored);
+                bcx.def_var(memo_values[slot], stored);
                 let one = bcx.ins().iconst(types::I64, 1);
-                bcx.def_var(reg(*flag), one);
+                bcx.def_var(memo_flags[slot], one);
                 bcx.ins().jump(done_block, &[]);
 
                 bcx.switch_to_block(done_block);
@@ -7649,14 +7627,13 @@ mod tests {
 
         let err = validate(&ft(
             1,
-            vec![Handle, Int, Int, Int, Int],
+            vec![Handle, Int, Int, Int],
             vec![
                 JitInstr::MemoizedHostCall {
                     helper: HostHelper::ListSetInt,
                     dst: 3,
                     args: vec![HostArg::Reg(0), HostArg::Reg(1), HostArg::Reg(2)],
-                    cache: 4,
-                    flag: 1,
+                    memo_slot: 0,
                 },
                 JitInstr::Return { src: 3 },
             ],
@@ -7717,7 +7694,7 @@ mod tests {
         let id = m
             .compile(&ft(
                 3,
-                vec![Handle, Handle, Int, Int, Int, Int, Int, Int, Int],
+                vec![Handle, Handle, Int, Int, Int, Int, Int],
                 vec![
                     JitInstr::LoadInt { dst: 3, value: 0 },
                     JitInstr::LoadInt { dst: 4, value: 0 },
@@ -7732,8 +7709,7 @@ mod tests {
                         helper: HostHelper::StringSplitCount,
                         dst: 5,
                         args: vec![HostArg::Reg(0), HostArg::Reg(1)],
-                        cache: 7,
-                        flag: 8,
+                        memo_slot: 0,
                     },
                     JitInstr::Add {
                         dst: 4,
@@ -7751,6 +7727,8 @@ mod tests {
                 ],
             ))
             .unwrap();
+        assert_eq!(m.n_regs(id), Some(7));
+        assert_eq!(m.deopt_map(id).unwrap().payload_words, 7);
 
         match m.call(id, &[10, 11, 4], &[0, 0, 0]) {
             NativeOutcome::Completed(v) => assert_eq!(v, 20),
@@ -10801,9 +10779,25 @@ mod tests {
     }
 
     #[test]
-    fn rejects_overlapping_or_shared_memoization_scratch() {
+    fn rejects_duplicate_or_out_of_range_memo_slots() {
         use JitValueType::{Handle, Int};
-        let overlap = ft(
+        let out_of_range = ft(
+            1,
+            vec![Handle, Int],
+            vec![
+                JitInstr::MemoizedHostCall {
+                    helper: HostHelper::StringLen,
+                    dst: 1,
+                    args: vec![HostArg::Reg(0)],
+                    memo_slot: 1,
+                },
+                JitInstr::Return { src: 1 },
+            ],
+        );
+        let err = validate(&out_of_range).expect_err("one memo site only has slot zero");
+        assert!(err.0.contains("out of range"), "{}", err.0);
+
+        let duplicate = ft(
             1,
             vec![Handle, Int, Int],
             vec![
@@ -10811,117 +10805,19 @@ mod tests {
                     helper: HostHelper::StringLen,
                     dst: 1,
                     args: vec![HostArg::Reg(0)],
-                    cache: 2,
-                    flag: 1,
-                },
-                JitInstr::Return { src: 1 },
-            ],
-        );
-        let err = validate(&overlap).expect_err("flag must not alias the result");
-        assert!(err.0.contains("must be distinct"), "{}", err.0);
-
-        let shared = ft(
-            1,
-            vec![Handle, Int, Int, Int, Int],
-            vec![
-                JitInstr::MemoizedHostCall {
-                    helper: HostHelper::StringLen,
-                    dst: 1,
-                    args: vec![HostArg::Reg(0)],
-                    cache: 3,
-                    flag: 4,
+                    memo_slot: 0,
                 },
                 JitInstr::MemoizedHostCall {
                     helper: HostHelper::StringLen,
                     dst: 2,
                     args: vec![HostArg::Reg(0)],
-                    cache: 3,
-                    flag: 4,
+                    memo_slot: 0,
                 },
                 JitInstr::Return { src: 2 },
             ],
         );
-        let err = validate(&shared).expect_err("memoization sites need dedicated scratch");
-        assert!(err.0.contains("owned by both"), "{}", err.0);
-    }
-
-    #[test]
-    fn rejects_all_external_memoization_scratch_accesses() {
-        use JitValueType::{Handle, Int};
-
-        let cases = [
-            (
-                "ordinary flag write",
-                JitInstr::LoadInt { dst: 3, value: 1 },
-            ),
-            (
-                "ordinary cache write",
-                JitInstr::LoadInt { dst: 2, value: 7 },
-            ),
-            ("ordinary flag read", JitInstr::Move { dst: 1, src: 3 }),
-            ("ordinary cache read", JitInstr::Move { dst: 1, src: 2 }),
-        ];
-        for (name, access) in cases {
-            let err = validate(&ft(
-                1,
-                vec![Handle, Int, Int, Int],
-                vec![
-                    access,
-                    JitInstr::MemoizedHostCall {
-                        helper: HostHelper::ListLen,
-                        dst: 1,
-                        args: vec![HostArg::Reg(0)],
-                        cache: 2,
-                        flag: 3,
-                    },
-                    JitInstr::Return { src: 1 },
-                ],
-            ))
-            .expect_err(name);
-            assert!(err.0.contains("memoization"), "{name}: {}", err.0);
-        }
-
-        let err = validate(&ft(
-            1,
-            vec![Handle, Int, Int, Int, Int, Int],
-            vec![
-                JitInstr::MemoizedHostCall {
-                    helper: HostHelper::ListLen,
-                    dst: 1,
-                    args: vec![HostArg::Reg(0)],
-                    cache: 2,
-                    flag: 3,
-                },
-                JitInstr::MemoizedHostCall {
-                    helper: HostHelper::ListLen,
-                    dst: 2,
-                    args: vec![HostArg::Reg(0)],
-                    cache: 4,
-                    flag: 5,
-                },
-                JitInstr::Return { src: 1 },
-            ],
-        ))
-        .expect_err("another memoization result cannot overwrite scratch");
-        assert!(err.0.contains("memoization"), "{}", err.0);
-
-        let mut zero_init = ft(
-            1,
-            vec![Handle, Int, Int, Int],
-            vec![
-                JitInstr::MemoizedHostCall {
-                    helper: HostHelper::ListLen,
-                    dst: 1,
-                    args: vec![HostArg::Reg(0)],
-                    cache: 2,
-                    flag: 3,
-                },
-                JitInstr::Return { src: 1 },
-            ],
-        );
-        zero_init.zero_init_regs.push(3);
-        let err = validate(&zero_init).expect_err("memo scratch cannot be a declared live-in");
-        assert!(err.0.contains("zero_init_regs"), "{}", err.0);
+        let err = validate(&duplicate).expect_err("memoization sites need distinct slots");
+        assert!(err.0.contains("shared by instructions"), "{}", err.0);
     }
 
     #[test]
@@ -10929,14 +10825,13 @@ mod tests {
         use JitValueType::{Handle, Int};
         let err = validate(&ft(
             1,
-            vec![Int, Handle, Handle, Int],
+            vec![Int, Handle],
             vec![
                 JitInstr::MemoizedHostCall {
                     helper: HostHelper::StringFromInt,
                     dst: 1,
                     args: vec![HostArg::Reg(0)],
-                    cache: 2,
-                    flag: 3,
+                    memo_slot: 0,
                 },
                 JitInstr::Return { src: 1 },
             ],
