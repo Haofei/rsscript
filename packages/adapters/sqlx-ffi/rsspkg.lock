@@ -4,10 +4,10 @@ version = 1
 name = "rss-sqlx-ffi"
 version = "0.1.0"
 source = "path+packages/adapters/sqlx-ffi"
-checksum = "sha256:31b05836ca997d6d6a4e4450376378aab2aa5cbf95f6bc0b77c207c9f8306892"
-interface_hash = "sha256:278dfc8763d620a3c4a603928b975ddcb919084e10dd6cf1550fc8dfdea031a8"
-review_hash = "sha256:3e59f928a567d7f308de84cf5b683893564ada9e3c282b989fc2fe9d6f7f9424"
-native_hash = "sha256:1f1a996dc8fe1c4d54f1faf7bd1e2d728221ea102f7a55130a949a7b731e22ba"
+checksum = "sha256:4d0b80b1648df39a3c89b3a629edbe2b6862e93a85eb0565995e9a8437b137d1"
+interface_hash = "sha256:8fbb323b394781fafeb7cada8417a9cf42fb902b5c2b47d0cf5a5fd85a710759"
+review_hash = "sha256:b0e7af5b02a4bb5fc24f301dabe284e0da7ff38aacc0d7d94ac3cbf122b540a1"
+native_hash = "sha256:6d45da9310ecde2ecd7579f276a6b0fae10dcc0f047dc405d022092ea0b0b40a"
 features = []
 
 [metadata]

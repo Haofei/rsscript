@@ -4,10 +4,10 @@ version = 1
 name = "rss-sqlite"
 version = "0.1.0"
 source = "path+packages/adapters/sqlite"
-checksum = "sha256:af5e8f9c28299180c4ebc738936c7fae1ed261369cefb27a2b3d9415155c0baa"
-interface_hash = "sha256:d564fa176ff3b2dea26f7945831fd49ddaef1ec53c12c20813c9d5afc649cb1f"
-review_hash = "sha256:cab76dc840f2aea95660e3ffc65be182b21ef75549ae5a8cfa8b2017e1647698"
-native_hash = "sha256:afa12d5e46aa0c9e30dac79915b9cac3683b599e481d8378e82c03664bfc3b2f"
+checksum = "sha256:900658a71b9fa6d9315314df02ab09d842c604172f971469e7b32e9c87ce099f"
+interface_hash = "sha256:a6c0b50fe7b16470b39d3a7e1bd44dd1a0ba7ae0598a3479f30e06fd592acc33"
+review_hash = "sha256:799b6433f6b3a8f32f9407478f60f4d35f00f9dc4e2444da637ae9546143e96e"
+native_hash = "sha256:61dc8e00d2c22d10d8b4cf7e644b0e02c0528a0fb52eeab0fc4a2b491ef0eb71"
 features = []
 
 [metadata]

@@ -23,5 +23,26 @@ fn main() -> Result<Unit, String> {
     )?
     Assert.equal_int(left: List.len(list: names), right: 2)
 
+    let params = List.new<String>()
+    List.push<String>(list: mut params, value: "a quote: ' and ?")
+    Sqlite.execute_params(
+        path: path,
+        sql: "insert into item(name) values (?1)",
+        params: params,
+    )?
+    let bound = Sqlite.query_one_string_params(
+        path: path,
+        sql: "select name from item where name = ?1",
+        params: params,
+    )?
+    match bound {
+        Some(value) => {
+            Assert.equal(left: value, right: "a quote: ' and ?")
+        }
+        None => {
+            return Err("expected parameterized sqlite query to return one row")
+        }
+    }
+
     return Ok(Unit)
 }

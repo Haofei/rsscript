@@ -1,10 +1,35 @@
 features: native
 
+// Query results are capped at 10,000 rows and 16 MiB of returned UTF-8 data by
+// default. RSS_SQLITE_MAX_RESULT_ROWS and RSS_SQLITE_MAX_RESULT_BYTES can set
+// positive per-process overrides. Parameters are positional strings; use the
+// placeholders supported by SQLite (?1, ?2, ...).
 native fn Sqlite.execute(path: Path, sql: String) -> Result<Unit, String>
+    effects(native)
+
+native fn Sqlite.execute_params(
+    path: Path,
+    sql: String,
+    params: List<String>,
+) -> Result<Unit, String>
     effects(native)
 
 native fn Sqlite.query_strings(path: Path, sql: String) -> Result<fresh List<String>, String>
     effects(native)
 
+native fn Sqlite.query_strings_params(
+    path: Path,
+    sql: String,
+    params: List<String>,
+) -> Result<fresh List<String>, String>
+    effects(native)
+
 native fn Sqlite.query_one_string(path: Path, sql: String) -> Result<Option<String>, String>
+    effects(native)
+
+native fn Sqlite.query_one_string_params(
+    path: Path,
+    sql: String,
+    params: List<String>,
+) -> Result<Option<String>, String>
     effects(native)

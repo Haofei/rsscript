@@ -5,12 +5,45 @@ features: native
 // `rss-sqlx` facade package and call the plain-RSS `Sqlx.*` wrappers instead.
 //
 // `url` is a sqlx connection string whose scheme selects the backend (`sqlite:`
-// or `postgres:`). Queries read the first column of each row as text.
+// or `postgres:`). Queries read the first column of each row as text and are
+// capped at 10,000 rows and 16 MiB by default. RSS_SQLX_MAX_RESULT_ROWS,
+// RSS_SQLX_MAX_RESULT_BYTES, and RSS_SQLX_MAX_CACHED_POOLS can set positive
+// per-process overrides. The pool limit defaults to 32 URLs; a new URL is
+// rejected at capacity until close or close_all releases entries. Parameter
+// placeholders follow the selected backend (`?` for SQLite and `$1`, `$2`, ...
+// for Postgres); all bind values are strings.
 native fn SqlxFfi.execute(url: String, sql: String) -> Result<Unit, String>
+    effects(native)
+
+native fn SqlxFfi.execute_params(
+    url: String,
+    sql: String,
+    params: List<String>,
+) -> Result<Unit, String>
     effects(native)
 
 native fn SqlxFfi.query_strings(url: String, sql: String) -> Result<fresh List<String>, String>
     effects(native)
 
+native fn SqlxFfi.query_strings_params(
+    url: String,
+    sql: String,
+    params: List<String>,
+) -> Result<fresh List<String>, String>
+    effects(native)
+
 native fn SqlxFfi.query_one_string(url: String, sql: String) -> Result<Option<String>, String>
+    effects(native)
+
+native fn SqlxFfi.query_one_string_params(
+    url: String,
+    sql: String,
+    params: List<String>,
+) -> Result<Option<String>, String>
+    effects(native)
+
+native fn SqlxFfi.close(url: String) -> Result<Unit, String>
+    effects(native)
+
+native fn SqlxFfi.close_all() -> Result<Unit, String>
     effects(native)

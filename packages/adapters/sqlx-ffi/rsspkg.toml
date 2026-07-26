@@ -23,7 +23,23 @@ action = "execute"
 resource = "url"
 
 [[review.capability_bindings]]
+symbol = "SqlxFfi.execute_params"
+category = "database.write"
+provider = "sqlx"
+service = "sql"
+action = "execute"
+resource = "url"
+
+[[review.capability_bindings]]
 symbol = "SqlxFfi.query_strings"
+category = "database.read"
+provider = "sqlx"
+service = "sql"
+action = "select"
+resource = "url"
+
+[[review.capability_bindings]]
+symbol = "SqlxFfi.query_strings_params"
 category = "database.read"
 provider = "sqlx"
 service = "sql"
@@ -37,3 +53,27 @@ provider = "sqlx"
 service = "sql"
 action = "select"
 resource = "url"
+
+[[review.capability_bindings]]
+symbol = "SqlxFfi.query_one_string_params"
+category = "database.read"
+provider = "sqlx"
+service = "sql"
+action = "select"
+resource = "url"
+
+[[review.capability_bindings]]
+symbol = "SqlxFfi.close"
+category = "database.write"
+provider = "sqlx"
+service = "sql"
+action = "close"
+resource = "url"
+
+[[review.capability_bindings]]
+symbol = "SqlxFfi.close_all"
+category = "database.write"
+provider = "sqlx"
+service = "sql"
+action = "close"
+resource = "all"

@@ -23,6 +23,14 @@ action = "execute"
 resource = "path"
 
 [[review.capability_bindings]]
+symbol = "Sqlite.execute_params"
+category = "database.write"
+provider = "sqlite"
+service = "sqlite"
+action = "execute"
+resource = "path"
+
+[[review.capability_bindings]]
 symbol = "Sqlite.query_strings"
 category = "database.read"
 provider = "sqlite"
@@ -31,7 +39,23 @@ action = "select"
 resource = "path"
 
 [[review.capability_bindings]]
+symbol = "Sqlite.query_strings_params"
+category = "database.read"
+provider = "sqlite"
+service = "sqlite"
+action = "select"
+resource = "path"
+
+[[review.capability_bindings]]
 symbol = "Sqlite.query_one_string"
+category = "database.read"
+provider = "sqlite"
+service = "sqlite"
+action = "select"
+resource = "path"
+
+[[review.capability_bindings]]
+symbol = "Sqlite.query_one_string_params"
 category = "database.read"
 provider = "sqlite"
 service = "sqlite"
