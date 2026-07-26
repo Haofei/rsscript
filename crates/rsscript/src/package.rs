@@ -1,6 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
+use std::ffi::OsString;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::diagnostic::Diagnostic;
 
@@ -21,6 +28,13 @@ mod types;
 mod vendor;
 
 pub const PACKAGE_REVIEW_METADATA_SCHEMA: &str = "rss.review.package.v1";
+
+const PACKAGE_TREE_MAX_FILES: usize = 20_000;
+const PACKAGE_TREE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+const PACKAGE_TREE_MAX_DEPTH: usize = 64;
+pub(crate) const CARGO_OUTPUT_MAX_BYTES: usize = 4 * 1024 * 1024;
+pub(crate) const CARGO_METADATA_TIMEOUT: Duration = Duration::from_secs(60);
+pub(crate) const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 pub use check::check_package_dir;
 use dependency::{
@@ -80,17 +94,22 @@ fn relative_path(base: &Path, path: &Path) -> String {
 
 fn collect_regular_files(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
     let root = canonical_checked_root(path, "package file scan")?;
-    collect_regular_files_inner(&root, path, files)
+    let mut budget = TreeBudget::default();
+    collect_regular_files_inner(&root, path, files, 0, &mut budget)
 }
 
 fn collect_regular_files_inner(
     root: &Path,
     path: &Path,
     files: &mut Vec<PathBuf>,
+    depth: usize,
+    budget: &mut TreeBudget,
 ) -> Result<(), String> {
+    budget.check_depth(depth, "package file scan", path)?;
     let metadata = package_path_metadata(path, "package file scan")?;
     ensure_package_path_within_root(root, path, "package file scan")?;
     if metadata.is_file() {
+        budget.add_file(metadata.len(), "package file scan", path)?;
         files.push(path.to_path_buf());
         return Ok(());
     }
@@ -99,9 +118,11 @@ fn collect_regular_files_inner(
     }
     let entries = fs::read_dir(path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let mut entries = entries
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
+    entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
-        let entry = entry
-            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
         let path = entry.path();
         let name = entry.file_name();
         if matches!(
@@ -110,35 +131,42 @@ fn collect_regular_files_inner(
         ) {
             continue;
         }
-        collect_regular_files_inner(root, &path, files)?;
+        collect_regular_files_inner(root, &path, files, depth + 1, budget)?;
     }
     Ok(())
 }
 
 fn copy_package_directory(source: &Path, destination: &Path) -> Result<(), String> {
+    copy_package_directory_with_limits(source, destination, TreeLimits::default())
+}
+
+fn copy_package_directory_with_limits(
+    source: &Path,
+    destination: &Path,
+    limits: TreeLimits,
+) -> Result<(), String> {
     let root = canonical_checked_root(source, "package copy")?;
-    copy_package_directory_inner(&root, source, destination)
+    let mut budget = TreeBudget::with_limits(limits);
+    copy_package_directory_inner(&root, source, destination, 0, &mut budget)
 }
 
 fn copy_package_directory_inner(
     root: &Path,
     source: &Path,
     destination: &Path,
+    depth: usize,
+    budget: &mut TreeBudget,
 ) -> Result<(), String> {
+    budget.check_depth(depth, "package copy", source)?;
     let metadata = package_path_metadata(source, "package copy")?;
     ensure_package_path_within_root(root, source, "package copy")?;
     if metadata.is_file() {
+        budget.add_file(metadata.len(), "package copy", source)?;
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)
                 .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
         }
-        fs::copy(source, destination).map_err(|error| {
-            format!(
-                "failed to copy {} to {}: {error}",
-                source.display(),
-                destination.display()
-            )
-        })?;
+        copy_regular_file_bounded(source, destination, metadata.len())?;
         return Ok(());
     }
     if !metadata.is_dir() {
@@ -148,18 +176,351 @@ fn copy_package_directory_inner(
         .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
     let entries = fs::read_dir(source)
         .map_err(|error| format!("failed to read {}: {error}", source.display()))?;
+    let mut entries = entries
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to read entry in {}: {error}", source.display()))?;
+    entries.sort_by_key(|entry| entry.file_name());
     for entry in entries {
-        let entry = entry
-            .map_err(|error| format!("failed to read entry in {}: {error}", source.display()))?;
         let path = entry.path();
         let name = entry.file_name();
         if should_skip_vendor_copy_entry(&name.to_string_lossy()) {
             continue;
         }
         let target = destination.join(name);
-        copy_package_directory_inner(root, &path, &target)?;
+        copy_package_directory_inner(root, &path, &target, depth + 1, budget)?;
     }
     Ok(())
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct TreeLimits {
+    pub max_files: usize,
+    pub max_bytes: u64,
+    pub max_depth: usize,
+}
+
+impl Default for TreeLimits {
+    fn default() -> Self {
+        Self {
+            max_files: PACKAGE_TREE_MAX_FILES,
+            max_bytes: PACKAGE_TREE_MAX_BYTES,
+            max_depth: PACKAGE_TREE_MAX_DEPTH,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct TreeBudget {
+    limits: TreeLimits,
+    files: usize,
+    bytes: u64,
+}
+
+impl TreeBudget {
+    fn with_limits(limits: TreeLimits) -> Self {
+        Self {
+            limits,
+            files: 0,
+            bytes: 0,
+        }
+    }
+
+    fn check_depth(&self, depth: usize, operation: &str, path: &Path) -> Result<(), String> {
+        if depth > self.limits.max_depth {
+            return Err(format!(
+                "{operation} exceeded directory depth limit of {} at {}",
+                self.limits.max_depth,
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn add_file(&mut self, bytes: u64, operation: &str, path: &Path) -> Result<(), String> {
+        self.files = self.files.checked_add(1).ok_or_else(|| {
+            format!(
+                "{operation} file count overflow while visiting {}",
+                path.display()
+            )
+        })?;
+        self.bytes = self.bytes.checked_add(bytes).ok_or_else(|| {
+            format!(
+                "{operation} byte count overflow while visiting {}",
+                path.display()
+            )
+        })?;
+        if self.files > self.limits.max_files {
+            return Err(format!(
+                "{operation} exceeded file count limit of {} at {}",
+                self.limits.max_files,
+                path.display()
+            ));
+        }
+        if self.bytes > self.limits.max_bytes {
+            return Err(format!(
+                "{operation} exceeded total byte limit of {} at {}",
+                self.limits.max_bytes,
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn copy_regular_file_bounded(
+    source: &Path,
+    destination: &Path,
+    expected: u64,
+) -> Result<(), String> {
+    let mut input = File::open(source)
+        .map_err(|error| format!("failed to open {}: {error}", source.display()))?;
+    let mut output = File::create(destination)
+        .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
+    let copied = std::io::copy(
+        &mut Read::by_ref(&mut input).take(expected.saturating_add(1)),
+        &mut output,
+    )
+    .map_err(|error| {
+        format!(
+            "failed to copy {} to {}: {error}",
+            source.display(),
+            destination.display()
+        )
+    })?;
+    if copied > expected {
+        let _ = fs::remove_file(destination);
+        return Err(format!(
+            "package copy source grew while being copied: {}",
+            source.display()
+        ));
+    }
+    output.flush().map_err(|error| {
+        format!(
+            "failed to flush copied file {}: {error}",
+            destination.display()
+        )
+    })
+}
+
+pub(crate) fn collect_bounded_regular_files(
+    path: &Path,
+    limits: TreeLimits,
+    operation: &str,
+    skip: impl Fn(&Path, &fs::DirEntry) -> bool,
+) -> Result<Vec<PathBuf>, String> {
+    fn visit(
+        root: &Path,
+        path: &Path,
+        depth: usize,
+        operation: &str,
+        skip: &impl Fn(&Path, &fs::DirEntry) -> bool,
+        budget: &mut TreeBudget,
+        files: &mut Vec<PathBuf>,
+    ) -> Result<(), String> {
+        budget.check_depth(depth, operation, path)?;
+        let metadata = package_path_metadata(path, operation)?;
+        ensure_package_path_within_root(root, path, operation)?;
+        if metadata.is_file() {
+            budget.add_file(metadata.len(), operation, path)?;
+            files.push(path.to_path_buf());
+            return Ok(());
+        }
+        if !metadata.is_dir() {
+            return Err(format!(
+                "{operation} only accepts regular files or directories: {}",
+                path.display()
+            ));
+        }
+        let mut entries = fs::read_dir(path)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
+        entries.sort_by_key(|entry| entry.file_name());
+        for entry in entries {
+            if skip(path, &entry) {
+                continue;
+            }
+            visit(
+                root,
+                &entry.path(),
+                depth + 1,
+                operation,
+                skip,
+                budget,
+                files,
+            )?;
+        }
+        Ok(())
+    }
+
+    let root = canonical_checked_root(path, operation)?;
+    let mut files = Vec::new();
+    visit(
+        &root,
+        path,
+        0,
+        operation,
+        &skip,
+        &mut TreeBudget::with_limits(limits),
+        &mut files,
+    )?;
+    Ok(files)
+}
+
+#[derive(Debug)]
+pub(crate) struct BoundedCommandOutput {
+    pub status: ExitStatus,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+pub(crate) fn configure_reduced_build_environment(command: &mut Command) {
+    const ALLOWED: &[&str] = &[
+        "PATH",
+        "HOME",
+        "USERPROFILE",
+        "CARGO_HOME",
+        "RUSTUP_HOME",
+        "RUSTC",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "SYSTEMROOT",
+        "WINDIR",
+    ];
+    let preserved = ALLOWED
+        .iter()
+        .filter_map(|name| std::env::var_os(name).map(|value| (OsString::from(name), value)))
+        .collect::<Vec<_>>();
+    command.env_clear();
+    command.envs(preserved);
+    command
+        .env("CARGO_TERM_COLOR", "never")
+        .env("TERM", "dumb")
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .env("TZ", "UTC")
+        .env("SOURCE_DATE_EPOCH", "0")
+        .env_remove("CARGO_TARGET_DIR");
+}
+
+pub(crate) fn run_bounded_command(
+    command: &mut Command,
+    operation: &str,
+    timeout: Duration,
+    output_cap: usize,
+) -> Result<BoundedCommandOutput, String> {
+    command.stdout(Stdio::piped()).stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("failed to start {operation}: {error}"))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| format!("failed to capture {operation} stdout"))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| format!("failed to capture {operation} stderr"))?;
+    let output_exceeded = Arc::new(AtomicBool::new(false));
+    let stdout_exceeded = Arc::clone(&output_exceeded);
+    let stderr_exceeded = Arc::clone(&output_exceeded);
+    let stdout_reader =
+        thread::spawn(move || read_bounded_output(stdout, output_cap, &stdout_exceeded));
+    let stderr_reader =
+        thread::spawn(move || read_bounded_output(stderr, output_cap, &stderr_exceeded));
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child
+            .try_wait()
+            .map_err(|error| format!("failed while waiting for {operation}: {error}"))?
+        {
+            break status;
+        }
+        if output_exceeded.load(Ordering::Acquire) {
+            terminate_bounded_child(&mut child);
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(format!(
+                "{operation} exceeded output limit of {output_cap} bytes per stream"
+            ));
+        }
+        if Instant::now() >= deadline {
+            terminate_bounded_child(&mut child);
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(format!(
+                "{operation} exceeded deadline of {} seconds",
+                timeout.as_secs_f64()
+            ));
+        }
+        thread::sleep(Duration::from_millis(10));
+    };
+    let (stdout, stdout_exceeded) = stdout_reader
+        .join()
+        .map_err(|_| format!("{operation} stdout reader panicked"))??;
+    let (stderr, stderr_exceeded) = stderr_reader
+        .join()
+        .map_err(|_| format!("{operation} stderr reader panicked"))??;
+    if stdout_exceeded || stderr_exceeded {
+        return Err(format!(
+            "{operation} exceeded output limit of {output_cap} bytes per stream"
+        ));
+    }
+    Ok(BoundedCommandOutput {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn terminate_bounded_child(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        let _ = Command::new("kill")
+            .arg("-KILL")
+            .arg(format!("-{}", child.id()))
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn read_bounded_output(
+    mut input: impl Read,
+    cap: usize,
+    shared_exceeded: &AtomicBool,
+) -> Result<(Vec<u8>, bool), String> {
+    let mut output = Vec::with_capacity(cap.min(64 * 1024));
+    let mut exceeded = false;
+    let mut buffer = [0_u8; 16 * 1024];
+    loop {
+        let read = input
+            .read(&mut buffer)
+            .map_err(|error| format!("failed to read child output: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        let remaining = cap.saturating_sub(output.len());
+        output.extend_from_slice(&buffer[..read.min(remaining)]);
+        if read > remaining {
+            exceeded = true;
+            shared_exceeded.store(true, Ordering::Release);
+        }
+    }
+    Ok((output, exceeded))
 }
 
 fn canonical_checked_root(path: &Path, operation: &str) -> Result<PathBuf, String> {
@@ -349,5 +710,153 @@ fn package_risk_label(risk: PackageRisk) -> &'static str {
         PackageRisk::Elevated => "elevated",
         PackageRisk::High => "high",
         PackageRisk::Unknown => "unknown",
+    }
+}
+
+#[cfg(test)]
+mod preparation_limit_tests {
+    use super::*;
+
+    fn test_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "rss-package-preparation-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    #[test]
+    fn bounded_tree_scan_enforces_file_byte_and_depth_limits() {
+        let root = test_dir("tree-limits");
+        fs::create_dir_all(root.join("one/two")).expect("fixture directories");
+        fs::write(root.join("a"), b"1234").expect("first fixture");
+        fs::write(root.join("one/b"), b"5678").expect("second fixture");
+        fs::write(root.join("one/two/c"), b"9").expect("deep fixture");
+
+        let file_error = collect_bounded_regular_files(
+            &root,
+            TreeLimits {
+                max_files: 2,
+                max_bytes: 100,
+                max_depth: 10,
+            },
+            "test scan",
+            |_, _| false,
+        )
+        .expect_err("third file must exceed file budget");
+        assert!(file_error.contains("file count limit"), "{file_error}");
+
+        let byte_error = collect_bounded_regular_files(
+            &root,
+            TreeLimits {
+                max_files: 10,
+                max_bytes: 7,
+                max_depth: 10,
+            },
+            "test scan",
+            |_, _| false,
+        )
+        .expect_err("eight bytes must exceed byte budget");
+        assert!(byte_error.contains("total byte limit"), "{byte_error}");
+
+        let depth_error = collect_bounded_regular_files(
+            &root,
+            TreeLimits {
+                max_files: 10,
+                max_bytes: 100,
+                max_depth: 1,
+            },
+            "test scan",
+            |_, _| false,
+        )
+        .expect_err("nested fixture must exceed depth budget");
+        assert!(
+            depth_error.contains("directory depth limit"),
+            "{depth_error}"
+        );
+        fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn package_copy_fails_before_copying_file_beyond_budget() {
+        let source = test_dir("copy-source");
+        let destination = test_dir("copy-destination");
+        fs::create_dir_all(&source).expect("source directory");
+        fs::write(source.join("large"), b"12345").expect("source file");
+
+        let error = copy_package_directory_with_limits(
+            &source,
+            &destination,
+            TreeLimits {
+                max_files: 10,
+                max_bytes: 4,
+                max_depth: 10,
+            },
+        )
+        .expect_err("oversized package copy must fail");
+        assert!(error.contains("total byte limit"), "{error}");
+        assert!(!destination.join("large").exists());
+        let _ = fs::remove_dir_all(source);
+        let _ = fs::remove_dir_all(destination);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_tree_scan_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_dir("tree-symlink");
+        fs::create_dir_all(&root).expect("fixture directory");
+        fs::write(root.join("target"), b"x").expect("target fixture");
+        symlink(root.join("target"), root.join("link")).expect("fixture symlink");
+
+        let error =
+            collect_bounded_regular_files(&root, TreeLimits::default(), "test scan", |_, _| false)
+                .expect_err("symlink must be rejected");
+        assert!(error.contains("rejects symlinks"), "{error}");
+        fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bounded_command_enforces_deadline_and_output_cap() {
+        let mut timeout_command = Command::new("sh");
+        timeout_command.args(["-c", "sleep 2"]);
+        let timeout_error = run_bounded_command(
+            &mut timeout_command,
+            "timeout fixture",
+            Duration::from_millis(25),
+            1024,
+        )
+        .expect_err("sleeping command must time out");
+        assert!(
+            timeout_error.contains("exceeded deadline"),
+            "{timeout_error}"
+        );
+
+        let mut output_command = Command::new("sh");
+        output_command.args(["-c", "printf 123456789"]);
+        let output_error = run_bounded_command(
+            &mut output_command,
+            "output fixture",
+            Duration::from_secs(2),
+            4,
+        )
+        .expect_err("verbose command must exceed cap");
+        assert!(
+            output_error.contains("exceeded output limit"),
+            "{output_error}"
+        );
+    }
+
+    #[test]
+    fn reduced_build_environment_drops_unlisted_values() {
+        let mut command = Command::new("cargo");
+        command.env("RSS_SHOULD_NOT_REACH_NATIVE_BUILD", "secret");
+        configure_reduced_build_environment(&mut command);
+        let debug = format!("{command:?}");
+        assert!(!debug.contains("RSS_SHOULD_NOT_REACH_NATIVE_BUILD"));
+        assert!(debug.contains("CARGO_TERM_COLOR"));
+        assert!(debug.contains("SOURCE_DATE_EPOCH"));
     }
 }

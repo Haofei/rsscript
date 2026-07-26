@@ -22,9 +22,11 @@ use super::source_set::{
     selected_root_package_features,
 };
 use super::{
-    Manifest, ManifestNativeRust, PackageNativeRustAuthorDeclaration, PackageNativeRustCheck,
-    PackageNativeRustReview, PackageNativeRustSemanticReview, PackageNativeRustSourceScan,
-    PackageReviewFileKind, PackageRisk, PackageSource, canonical_path_label,
+    CARGO_METADATA_TIMEOUT, CARGO_OUTPUT_MAX_BYTES, Manifest, ManifestNativeRust,
+    PackageNativeRustAuthorDeclaration, PackageNativeRustCheck, PackageNativeRustReview,
+    PackageNativeRustSemanticReview, PackageNativeRustSourceScan, PackageReviewFileKind,
+    PackageRisk, PackageSource, canonical_path_label, configure_reduced_build_environment,
+    run_bounded_command,
 };
 
 #[derive(Debug, Deserialize)]
@@ -880,18 +882,25 @@ fn scan_native_cargo_metadata(
     super::copy_package_directory(native_root, &scan_root)?;
     let scan_cargo_toml = scan_root.join("Cargo.toml");
     isolate_cargo_manifest_from_parent_workspace(&scan_cargo_toml)?;
-    let output = Command::new("cargo")
+    let mut command = Command::new("cargo");
+    command
         .arg("metadata")
         .arg("--format-version")
         .arg("1")
         .arg("--no-deps")
         .arg("--manifest-path")
-        .arg(&scan_cargo_toml)
-        .output();
+        .arg(&scan_cargo_toml);
+    configure_reduced_build_environment(&mut command);
+    let output = run_bounded_command(
+        &mut command,
+        "native package cargo metadata",
+        CARGO_METADATA_TIMEOUT,
+        CARGO_OUTPUT_MAX_BYTES,
+    );
     let _ = fs::remove_dir_all(&scan_root);
     let output = output.map_err(|error| {
         format!(
-            "failed to run cargo metadata for {}: {error}",
+            "failed to run bounded cargo metadata for {}: {error}",
             cargo_toml.display()
         )
     })?;

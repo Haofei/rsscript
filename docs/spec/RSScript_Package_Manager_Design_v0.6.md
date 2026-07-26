@@ -403,6 +403,15 @@ automatic proof that Rust code does not block, allocate, panic, spawn, or retain
 app-level formal specification language
 ```
 
+Authorizing a native Rust dependency authorizes its Cargo build, build scripts,
+proc macros, linked tools, and resulting native code to execute with the host
+user's authority. Package preparation applies symlink-safe traversal budgets,
+streaming file limits, subprocess deadlines, output caps, and a reduced build
+environment to prevent accidental or adversarial resource exhaustion. These
+controls are containment for the preparation pipeline; they are **not** a
+sandbox and do not reduce authorized native code to the RSScript capability
+model.
+
 Important boundary:
 
 ```text

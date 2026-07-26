@@ -12,14 +12,19 @@ use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::fs::OpenOptions;
 use std::hash::{Hash, Hasher};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use fs2::FileExt;
 use rss_native_abi::NativeInterpreterFn;
 use sha2::{Digest, Sha256};
 
-use crate::package::package_lowering_input;
+use crate::package::{
+    CARGO_BUILD_TIMEOUT, CARGO_OUTPUT_MAX_BYTES, TreeLimits, collect_bounded_regular_files,
+    configure_reduced_build_environment, package_lowering_input, run_bounded_command,
+};
 use crate::syntax::ast::{DataEffect, Item, Param, TypeRef};
 use crate::syntax::parse_source;
 
@@ -205,13 +210,21 @@ fn build_shim_library(
         .map_err(|error| format!("failed to write shim source: {error}"))?;
 
     let manifest = staging.join("Cargo.toml");
-    let lock_output = Command::new("cargo")
+    let mut lock_command = Command::new("cargo");
+    lock_command
         .arg("generate-lockfile")
         .arg("--manifest-path")
-        .arg(&manifest)
-        .env_remove("CARGO_TARGET_DIR")
-        .output()
-        .map_err(|error| format!("failed to generate native shim lockfile: {error}"))?;
+        .arg(&manifest);
+    configure_reduced_build_environment(&mut lock_command);
+    let lock_output = run_bounded_command(
+        &mut lock_command,
+        "native shim cargo generate-lockfile",
+        CARGO_BUILD_TIMEOUT,
+        CARGO_OUTPUT_MAX_BYTES,
+    )
+    .inspect_err(|_| {
+        let _ = fs::remove_dir_all(&staging);
+    })?;
     if !lock_output.status.success() {
         let _ = fs::remove_dir_all(&staging);
         return Err(format!(
@@ -219,15 +232,23 @@ fn build_shim_library(
             String::from_utf8_lossy(&lock_output.stderr)
         ));
     }
-    let output = Command::new("cargo")
+    let mut build_command = Command::new("cargo");
+    build_command
         .arg("build")
         .arg("--locked")
         .arg("--release")
         .arg("--manifest-path")
-        .arg(&manifest)
-        .env_remove("CARGO_TARGET_DIR")
-        .output()
-        .map_err(|error| format!("failed to run cargo to build native shim: {error}"))?;
+        .arg(&manifest);
+    configure_reduced_build_environment(&mut build_command);
+    let output = run_bounded_command(
+        &mut build_command,
+        "native shim cargo build",
+        CARGO_BUILD_TIMEOUT,
+        CARGO_OUTPUT_MAX_BYTES,
+    )
+    .inspect_err(|_| {
+        let _ = fs::remove_dir_all(&staging);
+    })?;
     if !output.status.success() {
         let _ = fs::remove_dir_all(&staging);
         return Err(format!(
@@ -268,10 +289,15 @@ fn shim_cache_key(
     digest.update(cargo_toml.as_bytes());
     digest.update([0]);
     digest.update(lib_rs.as_bytes());
-    let rustc = Command::new("rustc")
-        .arg("-Vv")
-        .output()
-        .map_err(|error| format!("failed to inspect rustc for shim cache key: {error}"))?;
+    let mut rustc_command = Command::new("rustc");
+    rustc_command.arg("-Vv");
+    configure_reduced_build_environment(&mut rustc_command);
+    let rustc = run_bounded_command(
+        &mut rustc_command,
+        "rustc version inspection for native shim cache key",
+        Duration::from_secs(30),
+        256 * 1024,
+    )?;
     if !rustc.status.success() {
         return Err("rustc -Vv failed while computing shim cache key".to_string());
     }
@@ -286,48 +312,37 @@ fn shim_cache_key(
 }
 
 fn hash_source_tree(path: &Path, digest: &mut Sha256) -> Result<(), String> {
-    let mut files = Vec::new();
-    collect_cache_inputs(path, &mut files)?;
-    files.sort();
+    let files = collect_bounded_regular_files(
+        path,
+        TreeLimits::default(),
+        "native shim cache input scan",
+        |_parent, entry| {
+            matches!(
+                entry.file_name().to_str(),
+                Some("target" | ".git" | ".DS_Store")
+            )
+        },
+    )?;
     for file in files {
         digest.update(file.to_string_lossy().as_bytes());
         digest.update([0]);
-        digest.update(
-            fs::read(&file)
-                .map_err(|error| format!("failed to read {}: {error}", file.display()))?,
-        );
+        hash_file_streaming(&file, digest)?;
     }
     Ok(())
 }
 
-fn collect_cache_inputs(path: &Path, files: &mut Vec<PathBuf>) -> Result<(), String> {
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        format!(
-            "failed to inspect native source {}: {error}",
-            path.display()
-        )
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(format!(
-            "native shim cache input may not be a symlink: {}",
-            path.display()
-        ));
-    }
-    if path.is_file() {
-        files.push(path.to_path_buf());
-        return Ok(());
-    }
-    for entry in fs::read_dir(path)
-        .map_err(|error| format!("failed to read native source {}: {error}", path.display()))?
-    {
-        let entry =
-            entry.map_err(|error| format!("failed to read native source entry: {error}"))?;
-        let child = entry.path();
-        let name = entry.file_name();
-        if child.is_dir() && matches!(name.to_str(), Some("target" | ".git")) {
-            continue;
+fn hash_file_streaming(path: &Path, digest: &mut Sha256) -> Result<(), String> {
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        if read == 0 {
+            break;
         }
-        collect_cache_inputs(&child, files)?;
+        digest.update(&buffer[..read]);
     }
     Ok(())
 }
@@ -370,9 +385,9 @@ fn verified_cached_library(entry: &Path, crate_name: &str) -> Result<Option<Path
 }
 
 fn file_sha256(path: &Path) -> Result<String, String> {
-    let bytes =
-        fs::read(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    Ok(hex::encode(Sha256::digest(bytes)))
+    let mut digest = Sha256::new();
+    hash_file_streaming(path, &mut digest)?;
+    Ok(hex::encode(digest.finalize()))
 }
 
 fn create_private_dir(path: &Path) -> Result<(), String> {
