@@ -26,8 +26,10 @@ use super::{
     PackageNativeRustAuthorDeclaration, PackageNativeRustCheck, PackageNativeRustReview,
     PackageNativeRustSemanticReview, PackageNativeRustSourceScan, PackageReviewFileKind,
     PackageRisk, PackageSource, canonical_path_label, configure_reduced_build_environment,
-    run_bounded_command,
+    read_utf8_file_bounded, run_bounded_command,
 };
+
+const NATIVE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Deserialize)]
 struct CargoMetadata {
@@ -243,8 +245,11 @@ pub(super) fn package_native_bindings(
     if !path.exists() {
         return Ok(BTreeMap::new());
     }
-    let source = fs::read_to_string(&path)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let source = read_utf8_file_bounded(
+        &path,
+        NATIVE_MANIFEST_MAX_BYTES,
+        "native binding manifest read",
+    )?;
     let manifest: NativeBindingsManifest = toml::from_str(&source)
         .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
     flatten_native_bindings(manifest).map_err(|error| format!("{}: {error}", path.display()))
@@ -519,7 +524,12 @@ fn unsupported_native_value_type(ty: &TypeRef) -> Option<String> {
 fn native_binding_span(package_dir: &Path, symbol: &str) -> crate::diagnostic::Span {
     let path = package_dir.join("native/bindings.rssbind.toml");
     let file = path.display().to_string();
-    let source = fs::read_to_string(&path).unwrap_or_default();
+    let source = read_utf8_file_bounded(
+        &path,
+        NATIVE_MANIFEST_MAX_BYTES,
+        "native binding manifest diagnostic read",
+    )
+    .unwrap_or_default();
     for (index, line) in source.lines().enumerate() {
         if let Some(column) = line.find(symbol) {
             return crate::diagnostic::Span {
@@ -636,7 +646,15 @@ pub(super) fn package_native_rust_review(
         .unwrap_or_else(|| "native/rust".to_string());
     let native_root = confined_native_rust_path(package_dir, &path)?;
     let cargo_toml = native_root.join("Cargo.toml");
-    let cargo_source = fs::read_to_string(&cargo_toml).unwrap_or_default();
+    let cargo_source = if cargo_toml.exists() {
+        read_utf8_file_bounded(
+            &cargo_toml,
+            NATIVE_MANIFEST_MAX_BYTES,
+            "native Cargo.toml review read",
+        )?
+    } else {
+        String::new()
+    };
     let cargo_features = selected_native_cargo_features(manifest, native);
     let scan = scan_native_rust_semantics(&native_root, &cargo_source);
     let author_parallel = package_declares_parallel_native_api(sources);
@@ -958,8 +976,11 @@ fn scan_native_cargo_metadata(
 }
 
 fn isolate_cargo_manifest_from_parent_workspace(cargo_toml: &Path) -> Result<(), String> {
-    let manifest = fs::read_to_string(cargo_toml)
-        .map_err(|error| format!("failed to read {}: {error}", cargo_toml.display()))?;
+    let manifest = read_utf8_file_bounded(
+        cargo_toml,
+        NATIVE_MANIFEST_MAX_BYTES,
+        "native Cargo.toml workspace isolation read",
+    )?;
     if manifest
         .lines()
         .any(|line| line.trim_start().starts_with("[workspace]"))
@@ -1330,6 +1351,45 @@ mod adapter_binding_tests {
         let _ = fs::remove_dir_all(&package_dir);
 
         assert_eq!(confined, canonical_root.join("native/rust"));
+    }
+
+    #[test]
+    fn native_binding_manifest_is_bounded_before_parsing() {
+        let package_dir = native_path_test_dir("oversized-bindings");
+        fs::create_dir_all(package_dir.join("native")).expect("native directory");
+        fs::write(
+            package_dir.join("native/bindings.rssbind.toml"),
+            vec![b'x'; NATIVE_MANIFEST_MAX_BYTES as usize + 1],
+        )
+        .expect("oversized binding manifest");
+
+        let error =
+            package_native_bindings(&package_dir).expect_err("oversized manifest must be rejected");
+        let _ = fs::remove_dir_all(&package_dir);
+        assert!(
+            error.contains("native binding manifest read exceeded byte limit"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn cargo_manifest_is_bounded_before_workspace_isolation() {
+        let root = native_path_test_dir("oversized-cargo");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let cargo_toml = root.join("Cargo.toml");
+        fs::write(
+            &cargo_toml,
+            vec![b'x'; NATIVE_MANIFEST_MAX_BYTES as usize + 1],
+        )
+        .expect("oversized Cargo.toml");
+
+        let error = isolate_cargo_manifest_from_parent_workspace(&cargo_toml)
+            .expect_err("oversized Cargo.toml must be rejected");
+        let _ = fs::remove_dir_all(&root);
+        assert!(
+            error.contains("native Cargo.toml workspace isolation read exceeded byte limit"),
+            "{error}"
+        );
     }
 
     #[cfg(unix)]

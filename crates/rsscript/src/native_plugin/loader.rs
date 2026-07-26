@@ -22,8 +22,9 @@ use rss_native_abi::NativeInterpreterFn;
 use sha2::{Digest, Sha256};
 
 use crate::package::{
-    CARGO_BUILD_TIMEOUT, CARGO_OUTPUT_MAX_BYTES, TreeLimits, collect_bounded_regular_files,
-    configure_reduced_build_environment, package_lowering_input, run_bounded_command,
+    BoundedRegularFile, CARGO_BUILD_TIMEOUT, CARGO_OUTPUT_MAX_BYTES, TreeLimits,
+    collect_bounded_regular_files, configure_reduced_build_environment, package_lowering_input,
+    run_bounded_command,
 };
 use crate::syntax::ast::{DataEffect, Item, Param, TypeRef};
 use crate::syntax::parse_source;
@@ -312,9 +313,10 @@ fn shim_cache_key(
 }
 
 fn hash_source_tree(path: &Path, digest: &mut Sha256) -> Result<(), String> {
+    let limits = TreeLimits::default();
     let files = collect_bounded_regular_files(
         path,
-        TreeLimits::default(),
+        limits.clone(),
         "native shim cache input scan",
         |_parent, entry| {
             matches!(
@@ -323,28 +325,74 @@ fn hash_source_tree(path: &Path, digest: &mut Sha256) -> Result<(), String> {
             )
         },
     )?;
-    for file in files {
+    let mut remaining = limits.max_bytes;
+    for BoundedRegularFile {
+        path: file,
+        bytes: expected,
+    } in files
+    {
+        if expected > remaining {
+            return Err(format!(
+                "native shim cache input hashing exceeded total byte limit of {} at {}",
+                limits.max_bytes,
+                file.display()
+            ));
+        }
         digest.update(file.to_string_lossy().as_bytes());
         digest.update([0]);
-        hash_file_streaming(&file, digest)?;
+        let hashed = hash_file_streaming_bounded(&file, digest, expected)?;
+        remaining -= hashed;
     }
     Ok(())
 }
 
 fn hash_file_streaming(path: &Path, digest: &mut Sha256) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "native cache hashing requires a regular file, not a symlink: {}",
+            path.display()
+        ));
+    }
+    hash_file_streaming_bounded(path, digest, metadata.len()).map(|_| ())
+}
+
+fn hash_file_streaming_bounded(
+    path: &Path,
+    digest: &mut Sha256,
+    max_bytes: u64,
+) -> Result<u64, String> {
     let mut file = fs::File::open(path)
         .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
     let mut buffer = [0_u8; 64 * 1024];
+    let mut hashed = 0_u64;
     loop {
+        let remaining = max_bytes.saturating_sub(hashed);
+        let read_cap = usize::try_from(remaining.saturating_add(1))
+            .unwrap_or(usize::MAX)
+            .min(buffer.len());
         let read = file
-            .read(&mut buffer)
+            .read(&mut buffer[..read_cap])
             .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
         if read == 0 {
             break;
         }
+        hashed = hashed.checked_add(read as u64).ok_or_else(|| {
+            format!(
+                "native cache hash byte count overflow at {}",
+                path.display()
+            )
+        })?;
+        if hashed > max_bytes {
+            return Err(format!(
+                "native cache input exceeded approved byte limit of {max_bytes} while hashing {}",
+                path.display()
+            ));
+        }
         digest.update(&buffer[..read]);
     }
-    Ok(())
+    Ok(hashed)
 }
 
 fn verified_cached_library(entry: &Path, crate_name: &str) -> Result<Option<PathBuf>, String> {
@@ -590,6 +638,27 @@ mod tests {
             }
         }
         panic!("interface snippet declared no function");
+    }
+
+    #[test]
+    fn streaming_hash_rejects_bytes_beyond_scanned_size() {
+        let root = std::env::temp_dir().join(format!(
+            "rss-native-hash-growth-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join("growing.rs");
+        fs::write(&path, b"12345").expect("fixture file");
+        let mut digest = Sha256::new();
+
+        let error = hash_file_streaming_bounded(&path, &mut digest, 4)
+            .expect_err("hashing beyond scanned size must fail");
+        let _ = fs::remove_dir_all(&root);
+        assert!(
+            error.contains("approved byte limit of 4"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

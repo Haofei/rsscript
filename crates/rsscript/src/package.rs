@@ -30,6 +30,7 @@ mod vendor;
 pub const PACKAGE_REVIEW_METADATA_SCHEMA: &str = "rss.review.package.v1";
 
 const PACKAGE_TREE_MAX_FILES: usize = 20_000;
+const PACKAGE_TREE_MAX_ENTRIES: usize = 40_000;
 const PACKAGE_TREE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const PACKAGE_TREE_MAX_DEPTH: usize = 64;
 pub(crate) const CARGO_OUTPUT_MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -116,12 +117,7 @@ fn collect_regular_files_inner(
     if !metadata.is_dir() {
         return Ok(());
     }
-    let entries = fs::read_dir(path)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    let mut entries = entries
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
-    entries.sort_by_key(|entry| entry.file_name());
+    let entries = read_bounded_sorted_entries(path, "package file scan", budget)?;
     for entry in entries {
         let path = entry.path();
         let name = entry.file_name();
@@ -174,12 +170,7 @@ fn copy_package_directory_inner(
     }
     fs::create_dir_all(destination)
         .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
-    let entries = fs::read_dir(source)
-        .map_err(|error| format!("failed to read {}: {error}", source.display()))?;
-    let mut entries = entries
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|error| format!("failed to read entry in {}: {error}", source.display()))?;
-    entries.sort_by_key(|entry| entry.file_name());
+    let entries = read_bounded_sorted_entries(source, "package copy", budget)?;
     for entry in entries {
         let path = entry.path();
         let name = entry.file_name();
@@ -195,6 +186,7 @@ fn copy_package_directory_inner(
 #[derive(Debug, Clone)]
 pub(crate) struct TreeLimits {
     pub max_files: usize,
+    pub max_entries: usize,
     pub max_bytes: u64,
     pub max_depth: usize,
 }
@@ -203,6 +195,7 @@ impl Default for TreeLimits {
     fn default() -> Self {
         Self {
             max_files: PACKAGE_TREE_MAX_FILES,
+            max_entries: PACKAGE_TREE_MAX_ENTRIES,
             max_bytes: PACKAGE_TREE_MAX_BYTES,
             max_depth: PACKAGE_TREE_MAX_DEPTH,
         }
@@ -213,6 +206,7 @@ impl Default for TreeLimits {
 struct TreeBudget {
     limits: TreeLimits,
     files: usize,
+    entries: usize,
     bytes: u64,
 }
 
@@ -221,6 +215,7 @@ impl TreeBudget {
         Self {
             limits,
             files: 0,
+            entries: 0,
             bytes: 0,
         }
     }
@@ -265,6 +260,41 @@ impl TreeBudget {
         }
         Ok(())
     }
+
+    fn add_entry(&mut self, operation: &str, path: &Path) -> Result<(), String> {
+        self.entries = self.entries.checked_add(1).ok_or_else(|| {
+            format!(
+                "{operation} directory entry count overflow while visiting {}",
+                path.display()
+            )
+        })?;
+        if self.entries > self.limits.max_entries {
+            return Err(format!(
+                "{operation} exceeded directory entry limit of {} at {}",
+                self.limits.max_entries,
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn read_bounded_sorted_entries(
+    path: &Path,
+    operation: &str,
+    budget: &mut TreeBudget,
+) -> Result<Vec<fs::DirEntry>, String> {
+    let entries = fs::read_dir(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let mut bounded = Vec::new();
+    for entry in entries {
+        let entry = entry
+            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
+        budget.add_entry(operation, &entry.path())?;
+        bounded.push(entry);
+    }
+    bounded.sort_by_key(|entry| entry.file_name());
+    Ok(bounded)
 }
 
 fn copy_regular_file_bounded(
@@ -302,12 +332,18 @@ fn copy_regular_file_bounded(
     })
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BoundedRegularFile {
+    pub path: PathBuf,
+    pub bytes: u64,
+}
+
 pub(crate) fn collect_bounded_regular_files(
     path: &Path,
     limits: TreeLimits,
     operation: &str,
     skip: impl Fn(&Path, &fs::DirEntry) -> bool,
-) -> Result<Vec<PathBuf>, String> {
+) -> Result<Vec<BoundedRegularFile>, String> {
     fn visit(
         root: &Path,
         path: &Path,
@@ -315,14 +351,17 @@ pub(crate) fn collect_bounded_regular_files(
         operation: &str,
         skip: &impl Fn(&Path, &fs::DirEntry) -> bool,
         budget: &mut TreeBudget,
-        files: &mut Vec<PathBuf>,
+        files: &mut Vec<BoundedRegularFile>,
     ) -> Result<(), String> {
         budget.check_depth(depth, operation, path)?;
         let metadata = package_path_metadata(path, operation)?;
         ensure_package_path_within_root(root, path, operation)?;
         if metadata.is_file() {
             budget.add_file(metadata.len(), operation, path)?;
-            files.push(path.to_path_buf());
+            files.push(BoundedRegularFile {
+                path: path.to_path_buf(),
+                bytes: metadata.len(),
+            });
             return Ok(());
         }
         if !metadata.is_dir() {
@@ -331,11 +370,7 @@ pub(crate) fn collect_bounded_regular_files(
                 path.display()
             ));
         }
-        let mut entries = fs::read_dir(path)
-            .map_err(|error| format!("failed to read {}: {error}", path.display()))?
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
-        entries.sort_by_key(|entry| entry.file_name());
+        let entries = read_bounded_sorted_entries(path, operation, budget)?;
         for entry in entries {
             if skip(path, &entry) {
                 continue;
@@ -547,6 +582,51 @@ pub(super) fn package_path_metadata(path: &Path, operation: &str) -> Result<fs::
     Ok(metadata)
 }
 
+pub(crate) fn read_utf8_file_bounded(
+    path: &Path,
+    max_bytes: u64,
+    operation: &str,
+) -> Result<String, String> {
+    let metadata = package_path_metadata(path, operation)?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "{operation} requires a regular file: {}",
+            path.display()
+        ));
+    }
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "{operation} exceeded byte limit of {max_bytes} at {}",
+            path.display()
+        ));
+    }
+
+    let file =
+        File::open(path).map_err(|error| format!("failed to open {}: {error}", path.display()))?;
+    let capacity = usize::try_from(metadata.len()).map_err(|_| {
+        format!(
+            "{operation} file is too large for this platform: {}",
+            path.display()
+        )
+    })?;
+    let mut bytes = Vec::with_capacity(capacity);
+    Read::take(file, max_bytes.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!(
+            "{operation} exceeded byte limit of {max_bytes} while reading {}",
+            path.display()
+        ));
+    }
+    String::from_utf8(bytes).map_err(|error| {
+        format!(
+            "{operation} is not valid UTF-8 at {}: {error}",
+            path.display()
+        )
+    })
+}
+
 pub(super) fn ensure_package_path_within_root(
     root: &Path,
     path: &Path,
@@ -737,6 +817,7 @@ mod preparation_limit_tests {
             &root,
             TreeLimits {
                 max_files: 2,
+                max_entries: 10,
                 max_bytes: 100,
                 max_depth: 10,
             },
@@ -750,6 +831,7 @@ mod preparation_limit_tests {
             &root,
             TreeLimits {
                 max_files: 10,
+                max_entries: 10,
                 max_bytes: 7,
                 max_depth: 10,
             },
@@ -763,6 +845,7 @@ mod preparation_limit_tests {
             &root,
             TreeLimits {
                 max_files: 10,
+                max_entries: 10,
                 max_bytes: 100,
                 max_depth: 1,
             },
@@ -778,6 +861,42 @@ mod preparation_limit_tests {
     }
 
     #[test]
+    fn bounded_tree_scan_counts_directory_entries_before_sorting() {
+        let root = test_dir("entry-limits");
+        fs::create_dir_all(root.join("z")).expect("first directory");
+        fs::create_dir_all(root.join("a")).expect("second directory");
+        fs::create_dir_all(root.join("m")).expect("third directory");
+
+        let error = collect_bounded_regular_files(
+            &root,
+            TreeLimits {
+                max_files: 10,
+                max_entries: 2,
+                max_bytes: 100,
+                max_depth: 10,
+            },
+            "test scan",
+            |_, _| false,
+        )
+        .expect_err("third directory entry must exceed entry budget");
+        assert!(error.contains("directory entry limit"), "{error}");
+        fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn bounded_utf8_read_rejects_oversized_input_before_reading_it_whole() {
+        let root = test_dir("bounded-text");
+        fs::create_dir_all(&root).expect("fixture directory");
+        let path = root.join("Cargo.toml");
+        fs::write(&path, b"12345").expect("fixture file");
+
+        let error = read_utf8_file_bounded(&path, 4, "test manifest read")
+            .expect_err("oversized manifest must be rejected");
+        assert!(error.contains("byte limit of 4"), "{error}");
+        fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
     fn package_copy_fails_before_copying_file_beyond_budget() {
         let source = test_dir("copy-source");
         let destination = test_dir("copy-destination");
@@ -789,6 +908,7 @@ mod preparation_limit_tests {
             &destination,
             TreeLimits {
                 max_files: 10,
+                max_entries: 10,
                 max_bytes: 4,
                 max_depth: 10,
             },
