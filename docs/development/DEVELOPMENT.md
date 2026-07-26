@@ -158,6 +158,15 @@ it runs the unignored workspace test suite, generated-package compile checks,
 and RSScript lint checks without executing every example, release demo, or
 self-hosted tool as a behavior test.
 
+Tagged releases use that same locked full manifest as a required
+`release-validation` job, then add the native-JIT suite, full generated-Rust
+backend parity, and the release self-host lexer/parser/checker corpus. The
+artifact job cannot start until this gate passes. The Linux release runner
+compiles and tests the portable Metal surface and the SQLite/SQLx adapters, but
+does not claim real Metal-device coverage or a live PostgreSQL integration
+test. Tests requiring those devices/services, and ignored soak tests that launch
+servers or native demos, remain explicit dedicated-environment checks.
+
 Generated Rust package targets and temporary generated packages are disposable.
 Default local development uses a memory-backed workspace. On macOS, `rss`
 automatically creates or reuses `/Volumes/RSScriptRAMDisk` and derives
