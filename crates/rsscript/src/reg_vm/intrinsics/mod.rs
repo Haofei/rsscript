@@ -811,7 +811,7 @@ impl RegVm {
             RegIntrinsic::ConfigLoad => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(
-                    std::fs::read_to_string(path)
+                    rsscript_runtime::file_read_string(path)
                         .map(|text| config_value(config_name_from_text(&text)))
                         .map_err(|error| config_error_value(error.to_string())),
                 ))
@@ -992,7 +992,7 @@ impl RegVm {
             RegIntrinsic::DirectoryReadString => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(
-                    std::fs::read_to_string(path)
+                    rsscript_runtime::file_read_string(path)
                         .map(VmValue::string)
                         .map_err(|error| file_error_value(error.to_string())),
                 ))
@@ -1181,7 +1181,7 @@ impl RegVm {
             RegIntrinsic::FileReadAllAsync => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(
-                    std::fs::read(path)
+                    rsscript_runtime::file_read_bytes(path)
                         .map(|bytes| VmValue::Bytes(Rc::new(bytes)))
                         .map_err(|error| file_error_value(error.to_string())),
                 ))
@@ -1216,7 +1216,7 @@ impl RegVm {
             RegIntrinsic::FileReadAllStringAsync => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(
-                    std::fs::read_to_string(path)
+                    rsscript_runtime::file_read_string(path)
                         .map(VmValue::string)
                         .map_err(|error| file_error_value(error.to_string())),
                 ))
@@ -1224,7 +1224,7 @@ impl RegVm {
             RegIntrinsic::FileReadBytes => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(
-                    std::fs::read(path)
+                    rsscript_runtime::file_read_bytes(path)
                         .map(|bytes| VmValue::Bytes(Rc::new(bytes)))
                         .map_err(|error| file_error_value(error.to_string())),
                 ))
@@ -1255,7 +1255,7 @@ impl RegVm {
             RegIntrinsic::FileReadString => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(
-                    std::fs::read_to_string(path)
+                    rsscript_runtime::file_read_string(path)
                         .map(VmValue::string)
                         .map_err(|error| file_error_value(error.to_string())),
                 ))
@@ -1418,7 +1418,7 @@ impl RegVm {
             RegIntrinsic::HashSha256File => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(
-                    std::fs::read(path)
+                    rsscript_runtime::file_read_bytes(path)
                         .map(|bytes| VmValue::string(sha256_digest(&bytes)))
                         .map_err(|error| file_error_value(error.to_string())),
                 ))
@@ -1640,7 +1640,7 @@ impl RegVm {
             RegIntrinsic::ImageLoad => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(
-                    std::fs::read(path)
+                    rsscript_runtime::file_read_bytes(path)
                         .map(|bytes| image_value(bytes, None, None, vec!["load".to_string()]))
                         .map_err(|error| image_error_value(error.to_string())),
                 ))
@@ -1972,18 +1972,20 @@ impl RegVm {
             RegIntrinsic::ProcessRunTimeout | RegIntrinsic::ProcessRunTimeoutAsync => {
                 let command = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let argv = expect_string_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let _timeout = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                let timeout = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
                 Ok(json_result(
-                    process_run_output(command, &argv).map(process_output_value),
+                    process_run_output_timeout(command, &argv, timeout).map(process_output_value),
                 ))
             }
             RegIntrinsic::ProcessRunStdoutTimeout | RegIntrinsic::ProcessRunStdoutTimeoutAsync => {
                 let command = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let argv = expect_string_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let _timeout = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                Ok(json_result(process_run_output(command, &argv).and_then(
-                    |output| process_stdout_result(command, output).map(VmValue::string),
-                )))
+                let timeout = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
+                Ok(json_result(
+                    process_run_output_timeout(command, &argv, timeout).and_then(|output| {
+                        process_stdout_result(command, output).map(VmValue::string)
+                    }),
+                ))
             }
             RegIntrinsic::ProcessRunManyStdout | RegIntrinsic::ProcessRunManyStdoutAsync => {
                 let command = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -1991,7 +1993,7 @@ impl RegVm {
                 let appended = expect_string_list_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
                 let _jobs = expect_int_ref(intrinsic_arg(&self.stack, base, args, 3)?)?;
                 Ok(json_result(
-                    process_run_many_stdout(command, &argv, &appended).map(|items| {
+                    process_run_many_stdout(command, &argv, &appended, None).map(|items| {
                         VmValue::List(Rc::new(RefCell::new(
                             items.into_iter().map(VmValue::string).collect(),
                         )))
@@ -2004,13 +2006,15 @@ impl RegVm {
                 let argv = expect_string_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let appended = expect_string_list_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
                 let _jobs = expect_int_ref(intrinsic_arg(&self.stack, base, args, 3)?)?;
-                let _timeout = expect_int_ref(intrinsic_arg(&self.stack, base, args, 4)?)?;
+                let timeout = expect_int_ref(intrinsic_arg(&self.stack, base, args, 4)?)?;
                 Ok(json_result(
-                    process_run_many_stdout(command, &argv, &appended).map(|items| {
-                        VmValue::List(Rc::new(RefCell::new(
-                            items.into_iter().map(VmValue::string).collect(),
-                        )))
-                    }),
+                    process_run_many_stdout(command, &argv, &appended, Some(timeout)).map(
+                        |items| {
+                            VmValue::List(Rc::new(RefCell::new(
+                                items.into_iter().map(VmValue::string).collect(),
+                            )))
+                        },
+                    ),
                 ))
             }
             RegIntrinsic::ProcessRunRequest
@@ -2329,7 +2333,7 @@ impl RegVm {
             RegIntrinsic::RuleLoaderLoadRules => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(
-                    std::fs::read_to_string(path)
+                    rsscript_runtime::file_read_string(path)
                         .map(|text| {
                             VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
                                 rules_from_text(&text),
@@ -2599,7 +2603,7 @@ impl RegVm {
             RegIntrinsic::YamlParseFile => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(
-                    std::fs::read_to_string(path)
+                    rsscript_runtime::file_read_string(path)
                         .map_err(|error| json_error_value(error.to_string()))
                         .and_then(|text| yaml_parse_json_value(&text)),
                 ))

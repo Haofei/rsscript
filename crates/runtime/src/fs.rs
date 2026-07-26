@@ -1,4 +1,4 @@
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
 use crate::async_runtime::{NativeAsyncPending, spawn_tokio_native};
@@ -6,7 +6,10 @@ use crate::channel::{ChannelError, RssStream, stream_from_iterator};
 use crate::diagnostics::Resource;
 use tokio::io::AsyncReadExt;
 
-const RUNTIME_READ_CEILING_BYTES: usize = 64 * 1024 * 1024;
+pub const RUNTIME_READ_CEILING_BYTES: usize = 64 * 1024 * 1024;
+pub const RUNTIME_DIRECTORY_MAX_DEPTH: usize = 64;
+pub const RUNTIME_DIRECTORY_MAX_ENTRIES: usize = 100_000;
+pub const RUNTIME_DIRECTORY_MAX_PATH_BYTES: usize = 16 * 1024 * 1024;
 
 pub struct File {
     pub(crate) inner: std::fs::File,
@@ -245,6 +248,15 @@ pub fn file_read_bytes<P: RuntimePath + ?Sized>(path: &P) -> Result<Vec<u8>, Fil
     read_path_bounded(path.as_path())
 }
 
+pub fn file_read_bytes_from_offset<P: RuntimePath + ?Sized>(
+    path: &P,
+    offset: u64,
+) -> Result<Vec<u8>, FileError> {
+    let mut file = std::fs::File::open(path.as_path())?;
+    file.seek(SeekFrom::Start(offset))?;
+    read_file_remaining_bounded(&mut file)
+}
+
 pub fn file_read_string<P: RuntimePath + ?Sized>(path: &P) -> Result<String, FileError> {
     bytes_to_string(read_path_bounded(path.as_path())?)
 }
@@ -321,8 +333,14 @@ pub fn file_remove<P: RuntimePath + ?Sized>(path: &P) -> Result<(), FileError> {
 }
 
 pub fn file_read_all(file: &mut File) -> Result<Vec<u8>, FileError> {
-    let metadata_len = file.inner.metadata().ok().map(|metadata| metadata.len());
-    read_bounded(&mut file.inner, metadata_len, RUNTIME_READ_CEILING_BYTES)
+    let original_position = file.inner.stream_position()?;
+    match read_file_remaining_bounded(&mut file.inner) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) => {
+            let _ = file.inner.seek(SeekFrom::Start(original_position));
+            Err(error)
+        }
+    }
 }
 
 pub fn file_read_all_string(file: &mut File) -> Result<String, FileError> {
@@ -445,15 +463,18 @@ pub fn file_write_string_async<P: RuntimePath + ?Sized>(
 pub fn directory_list_files<P: RuntimePath + ?Sized>(path: &P) -> Result<Vec<String>, FileError> {
     let root = path.as_path();
     let mut files = Vec::new();
-    collect_directory_files(root, root, &mut files)?;
+    collect_directory_files(root, &mut files)?;
     files.sort();
     Ok(files)
 }
 
 pub fn directory_list_paths<P: RuntimePath + ?Sized>(path: &P) -> Result<Vec<PathBuf>, FileError> {
     let mut paths = Vec::new();
+    let mut path_bytes = 0_usize;
     for entry in std::fs::read_dir(path.as_path())? {
-        paths.push(entry?.path());
+        let path = entry?.path();
+        ensure_directory_budget(paths.len() + 1, 1, &mut path_bytes, &path)?;
+        paths.push(path);
     }
     paths.sort();
     Ok(paths)
@@ -481,22 +502,85 @@ pub fn directory_create<P: RuntimePath + ?Sized>(path: &P) -> Result<(), FileErr
 
 fn collect_directory_files(
     root: &std::path::Path,
-    current: &std::path::Path,
     files: &mut Vec<String>,
 ) -> Result<(), FileError> {
-    if current.is_file() {
-        files.push(relative_runtime_path(root, current));
+    let root_metadata = std::fs::symlink_metadata(root)?;
+    if root_metadata.file_type().is_symlink() {
+        return Err(directory_symlink_error(root));
+    }
+    if root_metadata.is_file() {
+        files.push(relative_runtime_path(root, root));
         return Ok(());
     }
-    for entry in std::fs::read_dir(current)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            collect_directory_files(root, &path, files)?;
-        } else if path.is_file() {
-            files.push(relative_runtime_path(root, &path));
+    if !root_metadata.is_dir() {
+        return Ok(());
+    }
+
+    let mut stack = vec![(root.to_path_buf(), 0_usize)];
+    let mut entries = 0_usize;
+    let mut path_bytes = 0_usize;
+    while let Some((current, depth)) = stack.pop() {
+        if depth >= RUNTIME_DIRECTORY_MAX_DEPTH {
+            return Err(directory_budget_error("depth", RUNTIME_DIRECTORY_MAX_DEPTH));
+        }
+        for entry in std::fs::read_dir(&current)? {
+            let path = entry?.path();
+            entries = entries.saturating_add(1);
+            ensure_directory_budget(entries, depth + 1, &mut path_bytes, &path)?;
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() {
+                return Err(directory_symlink_error(&path));
+            }
+            if metadata.is_dir() {
+                stack.push((path, depth + 1));
+            } else if metadata.is_file() {
+                files.push(relative_runtime_path(root, &path));
+            }
         }
     }
     Ok(())
+}
+
+fn ensure_directory_budget(
+    entries: usize,
+    depth: usize,
+    path_bytes: &mut usize,
+    path: &std::path::Path,
+) -> Result<(), FileError> {
+    if entries > RUNTIME_DIRECTORY_MAX_ENTRIES {
+        return Err(directory_budget_error(
+            "entry count",
+            RUNTIME_DIRECTORY_MAX_ENTRIES,
+        ));
+    }
+    if depth > RUNTIME_DIRECTORY_MAX_DEPTH {
+        return Err(directory_budget_error("depth", RUNTIME_DIRECTORY_MAX_DEPTH));
+    }
+    *path_bytes = path_bytes.saturating_add(path.as_os_str().len());
+    if *path_bytes > RUNTIME_DIRECTORY_MAX_PATH_BYTES {
+        return Err(directory_budget_error(
+            "path bytes",
+            RUNTIME_DIRECTORY_MAX_PATH_BYTES,
+        ));
+    }
+    Ok(())
+}
+
+fn directory_budget_error(kind: &str, limit: usize) -> FileError {
+    FileError::new(
+        "DirectoryLimitExceeded",
+        &format!("directory traversal {kind} exceeds runtime limit of {limit}"),
+    )
+}
+
+fn directory_symlink_error(path: &std::path::Path) -> FileError {
+    FileError::new(
+        "DirectorySymlink",
+        &format!(
+            "directory traversal does not follow symbolic link `{}`",
+            path.display()
+        ),
+    )
 }
 
 fn relative_runtime_path(root: &std::path::Path, path: &std::path::Path) -> String {
@@ -550,8 +634,16 @@ pub fn directory_read_string<P: RuntimePath + ?Sized>(path: &P) -> Result<String
 
 fn read_path_bounded(path: &std::path::Path) -> Result<Vec<u8>, FileError> {
     let mut file = std::fs::File::open(path)?;
-    let metadata_len = file.metadata().ok().map(|metadata| metadata.len());
-    read_bounded(&mut file, metadata_len, RUNTIME_READ_CEILING_BYTES)
+    read_file_remaining_bounded(&mut file)
+}
+
+fn read_file_remaining_bounded(file: &mut std::fs::File) -> Result<Vec<u8>, FileError> {
+    let position = file.stream_position()?;
+    let metadata_len = file
+        .metadata()
+        .ok()
+        .map(|metadata| metadata.len().saturating_sub(position));
+    read_bounded(file, metadata_len, RUNTIME_READ_CEILING_BYTES)
 }
 
 fn read_bounded(
@@ -561,25 +653,44 @@ fn read_bounded(
 ) -> Result<Vec<u8>, FileError> {
     let capacity = checked_read_capacity(metadata_len, ceiling)?;
     let mut bytes = Vec::with_capacity(capacity);
-    reader
-        .take(ceiling.saturating_add(1) as u64)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > ceiling {
-        return Err(read_ceiling_error(bytes.len(), ceiling));
+    let mut buffer = [0_u8; 8192];
+    while bytes.len() < ceiling {
+        let remaining = ceiling - bytes.len();
+        let read_len = remaining.min(buffer.len());
+        let read = reader.read(&mut buffer[..read_len])?;
+        if read == 0 {
+            return Ok(bytes);
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    let mut overflow_probe = [0_u8; 1];
+    if reader.read(&mut overflow_probe)? != 0 {
+        return Err(read_ceiling_error(ceiling.saturating_add(1), ceiling));
     }
     Ok(bytes)
 }
 
 async fn read_path_bounded_async(path: PathBuf) -> Result<Vec<u8>, FileError> {
-    let file = tokio::fs::File::open(path).await?;
+    let mut file = tokio::fs::File::open(path).await?;
     let metadata_len = file.metadata().await.ok().map(|metadata| metadata.len());
     let capacity = checked_read_capacity(metadata_len, RUNTIME_READ_CEILING_BYTES)?;
     let mut bytes = Vec::with_capacity(capacity);
-    file.take(RUNTIME_READ_CEILING_BYTES.saturating_add(1) as u64)
-        .read_to_end(&mut bytes)
-        .await?;
-    if bytes.len() > RUNTIME_READ_CEILING_BYTES {
-        return Err(read_ceiling_error(bytes.len(), RUNTIME_READ_CEILING_BYTES));
+    let mut buffer = [0_u8; 8192];
+    while bytes.len() < RUNTIME_READ_CEILING_BYTES {
+        let remaining = RUNTIME_READ_CEILING_BYTES - bytes.len();
+        let read_len = remaining.min(buffer.len());
+        let read = file.read(&mut buffer[..read_len]).await?;
+        if read == 0 {
+            return Ok(bytes);
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+    }
+    let mut overflow_probe = [0_u8; 1];
+    if file.read(&mut overflow_probe).await? != 0 {
+        return Err(read_ceiling_error(
+            RUNTIME_READ_CEILING_BYTES.saturating_add(1),
+            RUNTIME_READ_CEILING_BYTES,
+        ));
     }
     Ok(bytes)
 }
@@ -707,6 +818,33 @@ mod tests {
     }
 
     #[test]
+    fn failed_open_file_read_restores_cursor() {
+        let path =
+            std::env::temp_dir().join(format!("rsscript-cursor-file-{}", std::process::id()));
+        let file = std::fs::File::create(&path).expect("test file should be created");
+        file.set_len(RUNTIME_READ_CEILING_BYTES as u64 + 1)
+            .expect("sparse test file should be sized");
+        drop(file);
+        let mut file = file_open_read(&path).expect("file should open");
+
+        file_read_all(&mut file).expect_err("oversized read should fail");
+
+        assert_eq!(
+            file.inner
+                .stream_position()
+                .expect("cursor should be readable"),
+            0
+        );
+        assert_eq!(
+            file_read_bytes_from_offset(&path, RUNTIME_READ_CEILING_BYTES as u64)
+                .expect("bounded tail should be readable")
+                .len(),
+            1
+        );
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
     fn bounded_reader_rejects_data_beyond_reported_size() {
         let mut reader = std::io::Cursor::new(b"12345");
 
@@ -728,5 +866,39 @@ mod tests {
 
         assert!(message.contains("chunk size"));
         assert!(message.contains("runtime read ceiling"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn recursive_directory_listing_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let root =
+            std::env::temp_dir().join(format!("rsscript-directory-cycle-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("child")).expect("directory should be created");
+        symlink(&root, root.join("child").join("cycle")).expect("symlink should be created");
+
+        let error = directory_list_files(&root).expect_err("symlink traversal should be rejected");
+
+        assert_eq!(error.kind(), "DirectorySymlink");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn recursive_directory_listing_enforces_depth_budget() {
+        let root =
+            std::env::temp_dir().join(format!("rsscript-directory-depth-{}", std::process::id()));
+        let mut current = root.clone();
+        for _ in 0..=RUNTIME_DIRECTORY_MAX_DEPTH {
+            current.push("d");
+            std::fs::create_dir_all(&current).expect("nested directory should be created");
+        }
+
+        let error =
+            directory_list_files(&root).expect_err("deep traversal should exceed the budget");
+
+        assert_eq!(error.kind(), "DirectoryLimitExceeded");
+        assert!(error.message().contains("depth"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

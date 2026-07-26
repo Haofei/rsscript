@@ -7594,167 +7594,51 @@ fn websocket_read_frame(stream: &mut TcpStream) -> Result<WebSocketFrame, VmValu
 }
 
 fn process_run_output(command: &str, args: &[String]) -> Result<VmProcessOutput, VmValue> {
-    std::process::Command::new(command)
-        .args(args)
-        .output()
-        .map(process_output_state)
-        .map_err(|error| VmValue::string(error.to_string()))
+    rsscript_runtime::process_run(command, args)
+        .map(vm_process_output)
+        .map_err(VmValue::string)
+}
+
+fn process_run_output_timeout(
+    command: &str,
+    args: &[String],
+    timeout_ms: i64,
+) -> Result<VmProcessOutput, VmValue> {
+    rsscript_runtime::process_run_timeout(command, args, timeout_ms)
+        .map(vm_process_output)
+        .map_err(VmValue::string)
 }
 
 fn process_run_request(request: &VmProcessRequest) -> Result<VmProcessOutput, VmValue> {
-    if request.command.trim().is_empty() {
-        return Err(VmValue::string("process command must not be empty"));
-    }
-    let mut command = std::process::Command::new(&request.command);
-    command
-        .args(&request.args)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-    if request.stdin.is_some() {
-        command.stdin(std::process::Stdio::piped());
-    }
-    if let Some(cwd) = &request.cwd {
-        command.current_dir(cwd);
-    }
-    for (name, value) in &request.env {
-        command.env(name, value);
-    }
-    let mut child = command.spawn().map_err(|error| {
-        VmValue::string(format!("failed to run `{}`: {error}", request.command))
-    })?;
-    if let Some(stdin) = &request.stdin
-        && let Some(mut child_stdin) = child.stdin.take()
-    {
-        child_stdin.write_all(stdin.as_bytes()).map_err(|error| {
-            VmValue::string(format!(
-                "failed to write stdin for `{}`: {error}",
-                request.command
-            ))
-        })?;
-    }
-
-    // With a positive deadline, mirror the runtime: read the pipes on background
-    // threads (so they can't deadlock the child) while polling for exit, and kill
-    // the child once the deadline passes — returning a `timed out` error.
-    if request.timeout_ms > 0 {
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_millis(request.timeout_ms as u64);
-        let read_pipe = |pipe: Option<std::process::ChildStdout>| {
-            pipe.map(|mut reader| {
-                std::thread::spawn(move || {
-                    let mut buf = Vec::new();
-                    let _ = reader.read_to_end(&mut buf);
-                    buf
-                })
+    let request = rsscript_runtime::ProcessRequest {
+        command: request.command.clone(),
+        args: request.args.clone(),
+        cwd: request.cwd.clone(),
+        stdin: request.stdin.clone(),
+        env: request
+            .env
+            .iter()
+            .map(|(name, value)| rsscript_runtime::ProcessEnv {
+                name: name.clone(),
+                value: value.clone(),
             })
-        };
-        let stdout_thread = read_pipe(child.stdout.take());
-        let stderr_thread = child.stderr.take().map(|mut reader| {
-            std::thread::spawn(move || {
-                let mut buf = Vec::new();
-                let _ = reader.read_to_end(&mut buf);
-                buf
-            })
-        });
-        let mut timed_out = false;
-        loop {
-            match child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) => {
-                    if std::time::Instant::now() >= deadline {
-                        timed_out = true;
-                        let _ = child.kill();
-                        break;
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-                Err(error) => {
-                    return Err(VmValue::string(format!(
-                        "failed to poll `{}`: {error}",
-                        request.command
-                    )));
-                }
-            }
-        }
-        let status = child.wait().map_err(|error| {
-            VmValue::string(format!("failed to wait for `{}`: {error}", request.command))
-        })?;
-        let stdout = stdout_thread
-            .and_then(|t| t.join().ok())
-            .unwrap_or_default();
-        let stderr = stderr_thread
-            .and_then(|t| t.join().ok())
-            .unwrap_or_default();
-        let state = process_output_state_from_parts(
-            status.code().unwrap_or(-1) as i64,
-            &stdout,
-            &stderr,
-            request.output_cap_bytes,
-            request.merge_stderr,
-        );
-        if timed_out {
-            return Err(VmValue::string(format!(
-                "`{}` timed out after {}ms: {}",
-                request.command,
-                request.timeout_ms,
-                process_output_details(&state.stdout, &state.stderr)
-            )));
-        }
-        return Ok(state);
-    }
-
-    let output = child.wait_with_output().map_err(|error| {
-        VmValue::string(format!("failed to wait for `{}`: {error}", request.command))
-    })?;
-    Ok(process_output_state_with_capture(
-        output,
-        request.output_cap_bytes,
-        request.merge_stderr,
-    ))
+            .collect(),
+        timeout_ms: request.timeout_ms,
+        merge_stderr: request.merge_stderr,
+        output_cap_bytes: request.output_cap_bytes,
+    };
+    rsscript_runtime::process_run_request(&request)
+        .map(vm_process_output)
+        .map_err(VmValue::string)
 }
 
-fn process_output_state(output: std::process::Output) -> VmProcessOutput {
-    process_output_state_with_capture(output, 0, false)
-}
-
-fn process_output_state_with_capture(
-    output: std::process::Output,
-    output_cap_bytes: i64,
-    merge_stderr: bool,
-) -> VmProcessOutput {
-    process_output_state_from_parts(
-        output.status.code().unwrap_or(-1) as i64,
-        &output.stdout,
-        &output.stderr,
-        output_cap_bytes,
-        merge_stderr,
-    )
-}
-
-/// Build a process output from already-captured stdout/stderr bytes and a status
-/// code (used by the timeout path, which reads the pipes on background threads).
-fn process_output_state_from_parts(
-    status: i64,
-    stdout_bytes: &[u8],
-    stderr_bytes: &[u8],
-    output_cap_bytes: i64,
-    merge_stderr: bool,
-) -> VmProcessOutput {
-    let cap = usize::try_from(output_cap_bytes)
-        .ok()
-        .filter(|value| *value > 0);
-    let mut capture = VmProcessCapture::new(cap, merge_stderr);
-    capture.push(false, stdout_bytes);
-    capture.push(true, stderr_bytes);
-    let stdout = String::from_utf8_lossy(&capture.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&capture.stderr).to_string();
-    let merged = String::from_utf8_lossy(&capture.merged).to_string();
+fn vm_process_output(output: rsscript_runtime::ProcessOutput) -> VmProcessOutput {
     VmProcessOutput {
-        status,
-        stdout,
-        stderr,
-        merged,
-        truncated: capture.truncated,
+        status: output.status,
+        stdout: output.stdout,
+        stderr: output.stderr,
+        merged: output.merged,
+        truncated: output.truncated,
     }
 }
 
@@ -7774,12 +7658,16 @@ fn process_run_many_stdout(
     command: &str,
     args: &[String],
     appended: &[String],
+    timeout_ms: Option<i64>,
 ) -> Result<Vec<String>, VmValue> {
     let mut values = Vec::with_capacity(appended.len());
     for item in appended {
         let mut command_args = args.to_vec();
         command_args.push(item.clone());
-        let output = process_run_output(command, &command_args)?;
+        let output = match timeout_ms {
+            Some(timeout_ms) => process_run_output_timeout(command, &command_args, timeout_ms)?,
+            None => process_run_output(command, &command_args)?,
+        };
         values.push(process_stdout_result(command, output)?);
     }
     Ok(values)
@@ -7795,18 +7683,14 @@ fn process_output_details(stdout: &str, stderr: &str) -> String {
 }
 
 fn file_read_remaining(file: &mut VmFileState) -> std::io::Result<Vec<u8>> {
-    use std::io::{Read, Seek, SeekFrom};
-
     if file.mode != "read" {
         return Err(std::io::Error::new(
             std::io::ErrorKind::PermissionDenied,
             "file is not open for reading",
         ));
     }
-    let mut handle = std::fs::File::open(&file.path)?;
-    handle.seek(SeekFrom::Start(file.cursor))?;
-    let mut bytes = Vec::new();
-    handle.read_to_end(&mut bytes)?;
+    let bytes = rsscript_runtime::file_read_bytes_from_offset(&file.path, file.cursor)
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
     file.cursor = file.cursor.saturating_add(bytes.len() as u64);
     Ok(bytes)
 }
@@ -7883,46 +7767,13 @@ fn file_append(path: &str, data: &[u8]) -> std::io::Result<()> {
 }
 
 fn directory_list_files(root: &Path) -> std::io::Result<Vec<String>> {
-    let mut files = Vec::new();
-    collect_directory_files(root, root, &mut files)?;
-    files.sort();
-    Ok(files)
-}
-
-fn collect_directory_files(
-    root: &Path,
-    current: &Path,
-    files: &mut Vec<String>,
-) -> std::io::Result<()> {
-    if current.is_file() {
-        files.push(relative_runtime_path(root, current));
-        return Ok(());
-    }
-    for entry in std::fs::read_dir(current)? {
-        let path = entry?.path();
-        if path.is_dir() {
-            collect_directory_files(root, &path, files)?;
-        } else if path.is_file() {
-            files.push(relative_runtime_path(root, &path));
-        }
-    }
-    Ok(())
+    rsscript_runtime::directory_list_files(root)
+        .map_err(|error| std::io::Error::other(error.to_string()))
 }
 
 fn directory_list_paths(root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    for entry in std::fs::read_dir(root)? {
-        paths.push(entry?.path());
-    }
-    paths.sort();
-    Ok(paths)
-}
-
-fn relative_runtime_path(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
+    rsscript_runtime::directory_list_paths(root)
+        .map_err(|error| std::io::Error::other(error.to_string()))
 }
 
 #[cfg(test)]

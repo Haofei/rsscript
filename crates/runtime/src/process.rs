@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::{Duration, Instant};
 
@@ -10,6 +10,8 @@ use crate::channel::stream_from_external_receiver_with_drop;
 use crate::{ChannelError, NativeAsyncPending, RssStream, spawn_tokio_native};
 use crate::{JsonValue, json_to_string};
 use crate::{RssCancellationToken, cancellation_token_is_cancelled};
+
+pub const RUNTIME_PROCESS_OUTPUT_CEILING_BYTES: usize = 64 * 1024 * 1024;
 
 pub fn os_close(fd: i64) {
     let _ = fd;
@@ -75,14 +77,7 @@ pub struct ProcessRequest {
 }
 
 pub fn process_run(command: &str, args: &[String]) -> Result<ProcessOutput, String> {
-    let mut child = std::process::Command::new(command);
-    child.args(args);
-    apply_default_ramdisk_env(&mut child);
-
-    let output = child
-        .output()
-        .map_err(|error| format!("failed to run `{command}`: {error}"))?;
-    Ok(process_output(command, output))
+    process_run_request(&simple_process_request(command, args, 0))
 }
 
 pub fn process_run_async(
@@ -99,14 +94,7 @@ pub fn process_run_async(
 }
 
 pub fn process_run_stdout(command: &str, args: &[String]) -> Result<String, String> {
-    let mut child = std::process::Command::new(command);
-    child.args(args);
-    apply_default_ramdisk_env(&mut child);
-
-    let output = child
-        .output()
-        .map_err(|error| format!("failed to run `{command}`: {error}"))?;
-    process_output_result(command, output)
+    process_run(command, args).and_then(|output| process_stdout_result(command, output))
 }
 
 pub fn process_run_stdout_async(
@@ -163,11 +151,13 @@ pub fn process_run_timeout(
     args: &[String],
     timeout_ms: i64,
 ) -> Result<ProcessOutput, String> {
-    if timeout_ms <= 0 {
-        return process_run(command, args);
-    }
+    let request = simple_process_request(command, args, timeout_ms);
+    let output = process_run_request(&request)?;
+    Ok(output)
+}
 
-    let request = ProcessRequest {
+fn simple_process_request(command: &str, args: &[String], timeout_ms: i64) -> ProcessRequest {
+    ProcessRequest {
         command: command.to_string(),
         args: args.to_vec(),
         cwd: None,
@@ -175,13 +165,8 @@ pub fn process_run_timeout(
         env: Vec::new(),
         timeout_ms,
         merge_stderr: false,
-        output_cap_bytes: 0,
-    };
-    let output = process_run_request(&request)?;
-    if output.status == -1 && output.merged.contains("timed out") {
-        return Err(output.merged);
+        output_cap_bytes: RUNTIME_PROCESS_OUTPUT_CEILING_BYTES as i64,
     }
-    Ok(output)
 }
 
 pub fn process_run_timeout_async(
@@ -237,9 +222,7 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
         .ok()
         .filter(|value| *value > 0)
         .map(Duration::from_millis);
-    let cap = usize::try_from(request.output_cap_bytes)
-        .ok()
-        .filter(|value| *value > 0);
+    let cap = normalized_process_output_cap(request.output_cap_bytes);
     let mut command = std::process::Command::new(&request.command);
     command
         .args(&request.args)
@@ -357,9 +340,7 @@ fn process_run_request_with_cancellation(
         .filter(|value| *value > 0)
         .map(Duration::from_millis);
     let deadline = timeout.map(|duration| Instant::now() + duration);
-    let cap = usize::try_from(request.output_cap_bytes)
-        .ok()
-        .filter(|value| *value > 0);
+    let cap = normalized_process_output_cap(request.output_cap_bytes);
     let mut command = std::process::Command::new(&request.command);
     command
         .args(&request.args)
@@ -389,17 +370,29 @@ fn process_run_request_with_cancellation(
     });
 
     let (sender, receiver) = mpsc::channel();
-    let stdout_thread = child
-        .stdout
-        .take()
-        .map(|stdout| spawn_process_reader(stdout, false, sender.clone()));
-    let stderr_thread = child
-        .stderr
-        .take()
-        .map(|stderr| spawn_process_reader(stderr, true, sender.clone()));
+    let capture_budget = Arc::new(AtomicUsize::new(cap));
+    let capture_truncated = Arc::new(AtomicBool::new(false));
+    let stdout_thread = child.stdout.take().map(|stdout| {
+        spawn_process_reader(
+            stdout,
+            false,
+            sender.clone(),
+            Arc::clone(&capture_budget),
+            Arc::clone(&capture_truncated),
+        )
+    });
+    let stderr_thread = child.stderr.take().map(|stderr| {
+        spawn_process_reader(
+            stderr,
+            true,
+            sender.clone(),
+            Arc::clone(&capture_budget),
+            Arc::clone(&capture_truncated),
+        )
+    });
     drop(sender);
 
-    let mut captured = ProcessCapture::new(cap, request.merge_stderr);
+    let mut captured = ProcessCapture::new(Some(cap), request.merge_stderr);
     let mut timed_out = false;
     let mut cancelled = false;
     loop {
@@ -435,6 +428,7 @@ fn process_run_request_with_cancellation(
     while let Ok(chunk) = receiver.try_recv() {
         captured.push(chunk);
     }
+    captured.truncated |= capture_truncated.load(Ordering::Acquire);
 
     let output = ProcessOutput {
         status: status.code().map(i64::from).unwrap_or(-1),
@@ -476,16 +470,17 @@ fn process_run_request_with_cancellation(
 struct ProcessChunk {
     stderr: bool,
     bytes: Vec<u8>,
+    truncated: bool,
 }
 
 struct ProcessStreamLimit {
-    cap: Option<usize>,
+    cap: usize,
     used: usize,
     truncated_sent: bool,
 }
 
 impl ProcessStreamLimit {
-    fn new(cap: Option<usize>) -> Self {
+    fn new(cap: usize) -> Self {
         Self {
             cap,
             used: 0,
@@ -494,9 +489,7 @@ impl ProcessStreamLimit {
     }
 
     fn take(&mut self, bytes: &[u8]) -> (Vec<u8>, bool) {
-        let Some(cap) = self.cap else {
-            return (bytes.to_vec(), false);
-        };
+        let cap = self.cap;
         if self.used >= cap {
             if !self.truncated_sent {
                 self.truncated_sent = true;
@@ -541,6 +534,7 @@ impl ProcessCapture {
     }
 
     fn push(&mut self, chunk: ProcessChunk) {
+        self.truncated |= chunk.truncated;
         let bytes = self.capped_bytes(&chunk.bytes);
         if bytes.is_empty() {
             return;
@@ -579,6 +573,8 @@ fn spawn_process_reader<R>(
     mut reader: R,
     stderr: bool,
     sender: mpsc::Sender<ProcessChunk>,
+    remaining: Arc<AtomicUsize>,
+    truncated: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<std::io::Result<()>>
 where
     R: Read + Send + 'static,
@@ -590,10 +586,18 @@ where
             if bytes == 0 {
                 return Ok(());
             }
+            let retained = reserve_process_output_bytes(&remaining, bytes);
+            if retained < bytes {
+                truncated.store(true, Ordering::Release);
+            }
+            if retained == 0 {
+                continue;
+            }
             if sender
                 .send(ProcessChunk {
                     stderr,
-                    bytes: buffer[..bytes].to_vec(),
+                    bytes: buffer[..retained].to_vec(),
+                    truncated: retained < bytes,
                 })
                 .is_err()
             {
@@ -601,6 +605,30 @@ where
             }
         }
     })
+}
+
+fn normalized_process_output_cap(requested: i64) -> usize {
+    usize::try_from(requested)
+        .ok()
+        .filter(|value| *value > 0)
+        .unwrap_or(RUNTIME_PROCESS_OUTPUT_CEILING_BYTES)
+        .min(RUNTIME_PROCESS_OUTPUT_CEILING_BYTES)
+}
+
+fn reserve_process_output_bytes(remaining: &AtomicUsize, requested: usize) -> usize {
+    let mut available = remaining.load(Ordering::Acquire);
+    loop {
+        let retained = requested.min(available);
+        match remaining.compare_exchange_weak(
+            available,
+            available - retained,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => return retained,
+            Err(actual) => available = actual,
+        }
+    }
 }
 
 fn spawn_process_event_reader<R>(
@@ -705,50 +733,15 @@ fn terminate_process_child(child: &mut std::process::Child) {
     let _ = child.kill();
 }
 
-fn process_output(command: &str, output: std::process::Output) -> ProcessOutput {
-    let status = output.status.code().map(i64::from).unwrap_or(-1);
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    let merged = process_output_details(&output);
-    let _ = command;
-    ProcessOutput {
-        status,
-        stdout,
-        stderr,
-        merged,
-        truncated: false,
+fn process_stdout_result(command: &str, output: ProcessOutput) -> Result<String, String> {
+    if output.status == 0 {
+        return Ok(output.stdout);
     }
-}
-
-fn process_output_result(command: &str, output: std::process::Output) -> Result<String, String> {
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    if output.status.success() {
-        return Ok(stdout);
-    }
-
-    let code = output
-        .status
-        .code()
-        .map(|code| code.to_string())
-        .unwrap_or_else(|| "signal".to_string());
     Err(format!(
-        "`{command}` exited with {code}: {}",
-        process_output_details(&output)
+        "`{command}` exited with {}: {}",
+        output.status,
+        process_output_details_from_strings(&output.stdout, &output.stderr)
     ))
-}
-
-fn process_output_details(output: &std::process::Output) -> String {
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    let stdout = stdout.trim();
-    let stderr = stderr.trim();
-    if stdout.is_empty() {
-        stderr.to_string()
-    } else if stderr.is_empty() {
-        stdout.to_string()
-    } else {
-        format!("{stdout}\n{stderr}")
-    }
 }
 
 fn process_output_details_from_strings(stdout: &str, stderr: &str) -> String {
@@ -1008,6 +1001,23 @@ pub fn log_trace(event: &str, message: &str) {
 #[cfg(test)]
 mod tests {
     use crate::Executor;
+
+    #[test]
+    fn zero_and_oversized_process_caps_use_the_runtime_ceiling() {
+        assert_eq!(
+            super::normalized_process_output_cap(0),
+            super::RUNTIME_PROCESS_OUTPUT_CEILING_BYTES
+        );
+        assert_eq!(
+            super::normalized_process_output_cap(-1),
+            super::RUNTIME_PROCESS_OUTPUT_CEILING_BYTES
+        );
+        assert_eq!(
+            super::normalized_process_output_cap(i64::MAX),
+            super::RUNTIME_PROCESS_OUTPUT_CEILING_BYTES
+        );
+        assert_eq!(super::normalized_process_output_cap(17), 17);
+    }
 
     #[test]
     fn process_run_stdout_async_completes_on_native_runtime() {
