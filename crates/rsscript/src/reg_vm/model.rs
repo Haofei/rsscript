@@ -484,6 +484,7 @@ pub(crate) struct RegFunction {
     pub(crate) osr_state: std::cell::Cell<OsrTrigger>,
 }
 
+#[cfg(feature = "native-jit")]
 pub(crate) const MAX_OSR_REGIONS_PER_FUNCTION: usize = 4;
 
 /// Stable identity for one OSR region. A function can own several independently

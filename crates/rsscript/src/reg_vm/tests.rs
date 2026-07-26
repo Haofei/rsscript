@@ -3261,7 +3261,7 @@ fn main() -> Unit {
 
     #[cfg(feature = "native-jit")]
     #[test]
-    fn native_translation_does_not_memoize_nested_loop_activation_values() {
+    fn native_translation_scopes_nested_loop_memoization_to_each_activation() {
         let source = r#"
 fn hot(outer_limit: Int, inner_limit: Int) -> Int {
     let mut outer = 0
@@ -3292,15 +3292,23 @@ fn main() -> Unit {
             .expect("nested loop should translate");
 
         assert!(
-            !jit.code.iter().any(|instr| matches!(
+            jit.code.iter().any(|instr| matches!(
                 instr,
                 vm_jit::JitInstr::MemoizedHostCall {
                     helper: vm_jit::HostHelper::StringLen,
+                    memo_slot: 0,
                     ..
                 }
             )),
-            "an inner-loop cache must not survive outer-loop re-entry: {:#?}",
+            "the invariant helper should be memoized inside the inner loop: {:#?}",
             jit.code,
+        );
+        assert!(
+            jit.memo_scopes
+                .iter()
+                .any(|scope| scope.memo_slots.as_slice() == [0]),
+            "the memo slot must be reset on each dynamic inner-loop activation: {:#?}",
+            jit.memo_scopes,
         );
     }
 
