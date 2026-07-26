@@ -455,9 +455,11 @@ pub(crate) struct RegFunction {
     ///   record the i64-representable return kind so the dispatcher wraps the result.
     pub(crate) jit_self_recursion_kind: std::cell::Cell<Option<SelfRecursionKind>>,
     /// Cached native-tier verdict, an invariant property of the function:
-    /// `0` unknown, `1` known not native-eligible. Lets `try_native` skip all
-    /// per-call tiering/cache/name-hash work once a function is known to never
-    /// compile (so `jit-native` isn't slower than the VM on uncompilable code).
+    /// `0` unknown, `1` known not native-eligible, `2` waiting for bounded
+    /// closure-profile sampling. Lets `try_native` skip all per-call
+    /// tiering/cache/name-hash work once a function is known to never compile,
+    /// while a profile-pending function retries exactly once after its sample
+    /// window freezes.
     #[cfg_attr(not(feature = "native-jit"), allow(dead_code))]
     pub(crate) native_status: std::cell::Cell<u8>,
     /// J1 dynamic-call counter, bumped ONLY inside [`record_call_site`] (the

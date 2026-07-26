@@ -10485,6 +10485,7 @@ fn native_inline_leaf_calls_inner(
 /// `RegFunction::native_status` value: the function is known not native-eligible.
 #[cfg(feature = "native-jit")]
 pub(in crate::reg_vm) const NATIVE_STATUS_NOT_ELIGIBLE: u8 = 1;
+pub(in crate::reg_vm) const NATIVE_STATUS_PROFILE_PENDING: u8 = 2;
 
 /// Consecutive runtime-bail count at which the native tier gives up on a
 /// structurally-eligible function (predict-and-skip, like a JSC/V8 deopt count).

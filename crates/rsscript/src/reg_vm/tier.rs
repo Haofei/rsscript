@@ -1243,8 +1243,18 @@ impl RegVm {
         // so skip all per-call tiering/cache/name-hash work and fall straight back
         // to the interpreter (keeps `jit-native` from being slower than the VM on
         // code the native tier can't take).
-        if func.native_status.get() == NATIVE_STATUS_NOT_ELIGIBLE {
+        let native_status = func.native_status.get();
+        if native_status == NATIVE_STATUS_NOT_ELIGIBLE {
             return NativeAttempt::Fallback;
+        }
+        if native_status == NATIVE_STATUS_PROFILE_PENDING {
+            if func.call_count.get() < PROFILE_RECORD_LIMIT {
+                return NativeAttempt::Fallback;
+            }
+            // The bounded profile is now immutable. Re-open translation once;
+            // the result will become either a compiled cache entry or a stable
+            // negative verdict.
+            func.native_status.set(0);
         }
         // The unit is needed to resolve inlinable callees; clone the `Rc` so the
         // mutable `self.native` borrow below doesn't conflict.
@@ -1323,6 +1333,15 @@ impl RegVm {
                                 "whole-fn",
                                 &func.name,
                             ) {
+                                // Profitability is a property of the translated
+                                // function body, not of the runtime ABI shape.
+                                // Keep the existing per-version `None` entry for
+                                // diagnostics, but also enable the function-level
+                                // negative fast path. Otherwise every future call
+                                // still builds/hashes a ShapeKey only to rediscover
+                                // the same decline (notably tiny closure dispatchers
+                                // invoked from an interpreted loop).
+                                func.native_status.set(NATIVE_STATUS_NOT_ELIGIBLE);
                                 None
                             } else {
                                 let Some(admission) = begin_native_compile(native, 1) else {
@@ -1420,6 +1439,9 @@ impl RegVm {
                             // re-attempt on a later (warmer) call. Don't cache and
                             // don't mark NOT_ELIGIBLE; just fall back this once.
                             if native_translation_pending_on_profile(&unit, func) {
+                                if matches!(effective_cost_mode(), CostMode::Enforce) {
+                                    func.native_status.set(NATIVE_STATUS_PROFILE_PENDING);
+                                }
                                 return NativeAttempt::Fallback;
                             }
                             if native.collect_stats {
@@ -1550,6 +1572,11 @@ impl RegVm {
                     native.optimized_cache.remove(&version_key);
                     native.optimization_sources.remove(&version_key);
                     native.noamortize_counts.remove(&version_key);
+                    // `has_backedge` and the bounded O(1) body cost are
+                    // function properties. Once repeated dispatch proves that
+                    // native entry cannot amortize for one ABI shape, avoid
+                    // rebuilding/hashing shape keys for every later call.
+                    func.native_status.set(NATIVE_STATUS_NOT_ELIGIBLE);
                     return NativeAttempt::Fallback;
                 }
             }
