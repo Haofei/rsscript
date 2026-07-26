@@ -235,14 +235,21 @@ mod intrinsic_registry_tests {
 mod resource_boundary_tests {
     use super::super::*;
 
-    #[test]
-    fn vm_file_cursor_does_not_advance_after_oversized_read() {
-        let path =
-            std::env::temp_dir().join(format!("rsscript-vm-file-limit-{}", std::process::id()));
+    fn oversized_sparse_file(name: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!(
+            "rsscript-vm-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
         let file = std::fs::File::create(&path).expect("test file should be created");
         file.set_len(rsscript_runtime::RUNTIME_READ_CEILING_BYTES as u64 + 1)
             .expect("sparse test file should be sized");
-        drop(file);
+        path
+    }
+
+    #[test]
+    fn vm_file_cursor_does_not_advance_after_oversized_read() {
+        let path = oversized_sparse_file("file-limit");
         let mut state = VmFileState {
             path: path.to_string_lossy().into_owned(),
             mode: "read".to_string(),
@@ -252,6 +259,18 @@ mod resource_boundary_tests {
         file_read_remaining(&mut state).expect_err("oversized VM read should fail");
 
         assert_eq!(state.cursor, 0);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn vm_file_backed_intrinsics_reject_oversized_inputs_before_parsing() {
+        let path = oversized_sparse_file("intrinsic-file-limit");
+        let path_text = path.to_string_lossy();
+
+        assert!(file_bytes_stream_value(&path_text, 4096).is_err());
+        assert!(csv_rows_stream_value(&path_text).is_err());
+        assert!(toml_parse_file_value(&path_text).is_err());
+
         let _ = std::fs::remove_file(path);
     }
 

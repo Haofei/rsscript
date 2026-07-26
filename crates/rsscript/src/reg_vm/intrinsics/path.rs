@@ -106,11 +106,7 @@ impl RegVm {
             }
             RegIntrinsic::PathReadString => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let result = json_result(
-                    std::fs::read_to_string(path)
-                        .map(VmValue::string)
-                        .map_err(|error| file_error_value(error.to_string())),
-                );
+                let result = json_result(path_read_string_value(path));
                 self.account_fresh_value_storage(&result)?;
                 Ok(result)
             }
@@ -156,5 +152,31 @@ impl RegVm {
             }
             other => unreachable!("exec_path_intrinsics called with non-path intrinsic: {other:?}"),
         }
+    }
+}
+
+fn path_read_string_value(path: &str) -> Result<VmValue, VmValue> {
+    rsscript_runtime::file_read_string(path)
+        .map(VmValue::string)
+        .map_err(|error| file_error_value(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_string_rejects_oversized_file() {
+        let path = std::env::temp_dir().join(format!(
+            "rsscript-vm-path-read-limit-{}",
+            std::process::id()
+        ));
+        let file = std::fs::File::create(&path).expect("test file should be created");
+        file.set_len(rsscript_runtime::RUNTIME_READ_CEILING_BYTES as u64 + 1)
+            .expect("sparse test file should be sized");
+
+        assert!(path_read_string_value(&path.to_string_lossy()).is_err());
+
+        let _ = std::fs::remove_file(path);
     }
 }
