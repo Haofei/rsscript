@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tokio::sync::Semaphore;
 
 use rsscript::{
     Definition, Diagnostic as RsDiagnostic, PackageReviewFileKind, Reference, RssDocumentSymbol,
@@ -37,7 +38,7 @@ struct Document {
 struct DocumentStore {
     documents: HashMap<Url, Document>,
     next_revision: u64,
-    generation: u64,
+    generations: HashMap<AnalysisKey, u64>,
 }
 
 impl DocumentStore {
@@ -45,15 +46,19 @@ impl DocumentStore {
         Self {
             documents: HashMap::new(),
             next_revision: 1,
-            generation: 0,
+            generations: HashMap::new(),
         }
     }
 
-    fn allocate_revision(&mut self) -> u64 {
+    fn allocate_revision(&mut self, analysis_key: &AnalysisKey) -> u64 {
         let revision = self.next_revision;
         self.next_revision += 1;
-        self.generation = revision;
+        self.generations.insert(analysis_key.clone(), revision);
         revision
+    }
+
+    fn generation(&self, analysis_key: &AnalysisKey) -> u64 {
+        self.generations.get(analysis_key).copied().unwrap_or(0)
     }
 }
 
@@ -131,15 +136,26 @@ struct PendingAnalysis {
     cancellation: Arc<AnalysisCancellation>,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum AnalysisKey {
+    Package(PathBuf),
+    Workspace,
+    Uri(Url),
+}
+
+const MAX_BLOCKING_ANALYSES: usize = 2;
+
 struct Backend {
     client: Client,
     documents: Arc<tokio::sync::Mutex<DocumentStore>>,
     diagnostics_publication: Arc<tokio::sync::Mutex<()>>,
-    pending_analysis: tokio::sync::Mutex<HashMap<Url, PendingAnalysis>>,
+    pending_analysis: tokio::sync::Mutex<HashMap<AnalysisKey, PendingAnalysis>>,
     package_inputs: Arc<PackageInputCache>,
+    blocking_analysis_permits: Arc<Semaphore>,
 }
 
 struct AnalysisJob {
+    analysis_key: AnalysisKey,
     uri: Url,
     revision: u64,
     version: i32,
@@ -171,38 +187,29 @@ fn commit_diagnostics_if_current(
 }
 
 fn analysis_job(documents: &DocumentStore, uri: Url, revision: u64, version: i32) -> AnalysisJob {
-    let package_root = package_root_for_uri(&uri);
+    let analysis_key = analysis_key_for_uri(&uri);
     let open_documents = documents
         .iter()
-        .filter(|(candidate, _)| {
-            if **candidate == uri {
-                return true;
-            }
-            package_root.as_ref().is_some_and(|root| {
-                candidate
-                    .to_file_path()
-                    .ok()
-                    .is_some_and(|path| path.starts_with(root))
-            })
-        })
+        .filter(|(candidate, _)| analysis_key_for_uri(candidate) == analysis_key)
         .map(|(uri, document)| (uri.clone(), document.clone()))
         .collect();
     AnalysisJob {
+        analysis_key: analysis_key.clone(),
         uri,
         revision,
         version,
-        generation: documents.generation,
+        generation: documents.generation(&analysis_key),
         open_documents: Arc::new(open_documents),
         cancellation: Arc::new(AnalysisCancellation::default()),
     }
 }
 
 fn replace_pending_analysis(
-    pending: &mut HashMap<Url, PendingAnalysis>,
-    uri: Url,
+    pending: &mut HashMap<AnalysisKey, PendingAnalysis>,
+    analysis_key: AnalysisKey,
     task: PendingAnalysis,
 ) {
-    if let Some(previous) = pending.insert(uri, task) {
+    if let Some(previous) = pending.insert(analysis_key, task) {
         previous.cancellation.cancel();
         previous.task.abort();
     }
@@ -221,7 +228,8 @@ fn open_document(
         return None;
     }
 
-    let revision = documents.allocate_revision();
+    let analysis_key = analysis_key_for_uri(&uri);
+    let revision = documents.allocate_revision(&analysis_key);
     documents.insert(
         uri.clone(),
         Document {
@@ -250,7 +258,8 @@ fn change_document(
         apply_change(&mut text, change);
     }
 
-    let revision = documents.allocate_revision();
+    let analysis_key = analysis_key_for_uri(&uri);
+    let revision = documents.allocate_revision(&analysis_key);
     let document = documents
         .get_mut(&uri)
         .expect("document remains present while the store is locked");
@@ -263,7 +272,8 @@ fn change_document(
 
 fn save_document(documents: &mut DocumentStore, uri: Url, text: String) -> Option<AnalysisJob> {
     let version = documents.get(&uri)?.version;
-    let revision = documents.allocate_revision();
+    let analysis_key = analysis_key_for_uri(&uri);
+    let revision = documents.allocate_revision(&analysis_key);
     let document = documents
         .get_mut(&uri)
         .expect("document remains present while the store is locked");
@@ -281,23 +291,25 @@ impl Backend {
             diagnostics_publication: Arc::new(tokio::sync::Mutex::new(())),
             pending_analysis: tokio::sync::Mutex::new(HashMap::new()),
             package_inputs: Arc::new(PackageInputCache::default()),
+            blocking_analysis_permits: Arc::new(Semaphore::new(MAX_BLOCKING_ANALYSES)),
         }
     }
 
-    async fn cancel_pending_analysis(&self, uri: &Url) {
-        if let Some(pending) = self.pending_analysis.lock().await.remove(uri) {
+    async fn cancel_pending_analysis(&self, analysis_key: &AnalysisKey) {
+        if let Some(pending) = self.pending_analysis.lock().await.remove(analysis_key) {
             pending.cancellation.cancel();
             pending.task.abort();
         }
     }
 
-    /// Debounce analysis for one document and cancel any superseded task.
+    /// Debounce analysis for one package/workspace and cancel any superseded task.
     async fn schedule_analysis(&self, job: AnalysisJob) {
-        let uri = job.uri.clone();
+        let analysis_key = job.analysis_key.clone();
         let client = self.client.clone();
         let documents = Arc::clone(&self.documents);
         let diagnostics_publication = Arc::clone(&self.diagnostics_publication);
         let package_inputs = Arc::clone(&self.package_inputs);
+        let blocking_analysis_permits = Arc::clone(&self.blocking_analysis_permits);
         let cancellation = Arc::clone(&job.cancellation);
         let task = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(150)).await;
@@ -306,6 +318,7 @@ impl Backend {
                 documents,
                 diagnostics_publication,
                 package_inputs,
+                blocking_analysis_permits,
                 job,
             )
             .await;
@@ -313,7 +326,7 @@ impl Backend {
         let mut pending = self.pending_analysis.lock().await;
         replace_pending_analysis(
             &mut pending,
-            uri,
+            analysis_key,
             PendingAnalysis {
                 task: task.abort_handle(),
                 cancellation,
@@ -328,9 +341,11 @@ impl Backend {
         documents: Arc<tokio::sync::Mutex<DocumentStore>>,
         diagnostics_publication: Arc<tokio::sync::Mutex<()>>,
         package_inputs: Arc<PackageInputCache>,
+        blocking_analysis_permits: Arc<Semaphore>,
         job: AnalysisJob,
     ) {
         let AnalysisJob {
+            analysis_key,
             uri,
             revision,
             version,
@@ -343,7 +358,10 @@ impl Backend {
         }
         let analysis_uri = uri.clone();
         let analysis_cancellation = Arc::clone(&cancellation);
-        let analysis = tokio::task::spawn_blocking(move || {
+        let analysis = run_bounded_blocking(blocking_analysis_permits, move || {
+            if analysis_cancellation.is_cancelled() {
+                return None;
+            }
             let diagnostics = diagnostics_for_uri_cancellable(
                 &analysis_uri,
                 &open_documents,
@@ -377,7 +395,7 @@ impl Backend {
         }
         {
             let mut documents = documents.lock().await;
-            let current_generation = documents.generation;
+            let current_generation = documents.generation(&analysis_key);
             if !commit_diagnostics_if_current(
                 &mut documents,
                 &uri,
@@ -394,6 +412,31 @@ impl Backend {
             .publish_diagnostics(uri, lsp_diagnostics, Some(version))
             .await;
     }
+}
+
+async fn snapshot_documents(
+    documents: &tokio::sync::Mutex<DocumentStore>,
+) -> HashMap<Url, Document> {
+    documents.lock().await.documents.clone()
+}
+
+async fn run_bounded_blocking<T, F>(
+    permits: Arc<Semaphore>,
+    work: F,
+) -> std::result::Result<T, tokio::task::JoinError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let permit = permits
+        .acquire_owned()
+        .await
+        .expect("blocking analysis semaphore closed");
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        work()
+    })
+    .await
 }
 
 #[tower_lsp::async_trait]
@@ -464,8 +507,9 @@ impl LanguageServer for Backend {
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let doc = params.text_document;
+        let analysis_key = analysis_key_for_uri(&doc.uri);
         let _publication = self.diagnostics_publication.lock().await;
-        self.cancel_pending_analysis(&doc.uri).await;
+        self.cancel_pending_analysis(&analysis_key).await;
         let job = {
             let mut documents = self.documents.lock().await;
             open_document(&mut documents, doc.uri, doc.text, doc.version)
@@ -476,9 +520,9 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        let analysis_key = analysis_key_for_uri(&params.text_document.uri);
         let _publication = self.diagnostics_publication.lock().await;
-        self.cancel_pending_analysis(&params.text_document.uri)
-            .await;
+        self.cancel_pending_analysis(&analysis_key).await;
         let job = {
             let mut documents = self.documents.lock().await;
             change_document(
@@ -494,9 +538,9 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let analysis_key = analysis_key_for_uri(&params.text_document.uri);
         let _publication = self.diagnostics_publication.lock().await;
-        self.cancel_pending_analysis(&params.text_document.uri)
-            .await;
+        self.cancel_pending_analysis(&analysis_key).await;
         if let Some(package_root) = package_root_for_uri(&params.text_document.uri) {
             self.package_inputs.invalidate(&package_root);
         }
@@ -512,12 +556,12 @@ impl LanguageServer for Backend {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        let analysis_key = analysis_key_for_uri(&params.text_document.uri);
         let _publication = self.diagnostics_publication.lock().await;
-        self.cancel_pending_analysis(&params.text_document.uri)
-            .await;
+        self.cancel_pending_analysis(&analysis_key).await;
         {
             let mut documents = self.documents.lock().await;
-            documents.allocate_revision();
+            documents.allocate_revision(&analysis_key);
             documents.remove(&params.text_document.uri);
         }
         self.client
@@ -526,7 +570,7 @@ impl LanguageServer for Backend {
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         let Some(document) = documents.get(&params.text_document.uri) else {
             return Ok(None);
         };
@@ -544,7 +588,7 @@ impl LanguageServer for Backend {
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
         let position = params.text_document_position_params.position;
         let uri = params.text_document_position_params.text_document.uri;
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         let Some(document) = documents.get(&uri) else {
             return Ok(None);
         };
@@ -590,7 +634,7 @@ impl LanguageServer for Backend {
     ) -> Result<Option<GotoDefinitionResponse>> {
         let position = params.text_document_position_params.position;
         let uri = params.text_document_position_params.text_document.uri;
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         let Some(document) = documents.get(&uri) else {
             return Ok(None);
         };
@@ -617,7 +661,7 @@ impl LanguageServer for Backend {
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let position = params.text_document_position.position;
         let uri = params.text_document_position.text_document.uri;
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         let locations = reference_locations_for_position(
             &uri,
             position,
@@ -635,7 +679,7 @@ impl LanguageServer for Backend {
         params: DocumentDiagnosticParams,
     ) -> Result<DocumentDiagnosticReportResult> {
         let uri = params.text_document.uri;
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         let items = documents
             .get(&uri)
             .map(|document| {
@@ -659,7 +703,7 @@ impl LanguageServer for Backend {
     ) -> Result<Option<Vec<DocumentHighlight>>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         let Some(document) = documents.get(&uri) else {
             return Ok(None);
         };
@@ -692,7 +736,7 @@ impl LanguageServer for Backend {
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri;
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         let Some(document) = documents.get(&uri) else {
             return Ok(None);
         };
@@ -709,7 +753,7 @@ impl LanguageServer for Backend {
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
         let uri = params.text_document.uri;
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         let Some(document) = documents.get(&uri) else {
             return Ok(None);
         };
@@ -724,7 +768,7 @@ impl LanguageServer for Backend {
     ) -> Result<Option<Vec<CallHierarchyItem>>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         let workspace_documents = workspace_documents_for_uri(&uri, &documents);
         let Some(item) = call_hierarchy_item_at(&uri, position, &documents, &workspace_documents)
         else {
@@ -737,7 +781,7 @@ impl LanguageServer for Backend {
         &self,
         params: CallHierarchyIncomingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         let workspace_documents = workspace_documents_for_uri(&params.item.uri, &documents);
         let calls = incoming_call_hierarchy(&workspace_documents, &params.item);
         if calls.is_empty() {
@@ -750,7 +794,7 @@ impl LanguageServer for Backend {
         &self,
         params: CallHierarchyOutgoingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>> {
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         let workspace_documents = workspace_documents_for_uri(&params.item.uri, &documents);
         let calls = outgoing_call_hierarchy(&workspace_documents, &params.item);
         if calls.is_empty() {
@@ -764,7 +808,7 @@ impl LanguageServer for Backend {
         params: WorkspaceSymbolParams,
     ) -> Result<Option<Vec<SymbolInformation>>> {
         let query = params.query.trim().to_lowercase();
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         let mut symbols = Vec::new();
         for document in workspace_documents(&documents) {
             let index = symbol_index(document.uri.path(), &document.text);
@@ -785,7 +829,7 @@ impl LanguageServer for Backend {
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         let Some(document) = documents.get(&uri) else {
             return Ok(None);
         };
@@ -810,7 +854,7 @@ impl LanguageServer for Backend {
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
         let uri = params.text_document_position.text_document.uri;
         let position = params.text_document_position.position;
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         if !documents.contains_key(&uri) || !valid_rename_name(&params.new_name) {
             return Ok(None);
         }
@@ -828,7 +872,7 @@ impl LanguageServer for Backend {
     ) -> Result<Option<PrepareRenameResponse>> {
         let uri = params.text_document.uri;
         let position = params.position;
-        let documents = self.documents.lock().await;
+        let documents = snapshot_documents(&self.documents).await;
         let Some((range, placeholder)) = rename_target(&uri, position, &documents) else {
             return Ok(None);
         };
@@ -1624,6 +1668,16 @@ fn infer_document_kind(uri: &Url) -> Option<PackageReviewFileKind> {
     }
 }
 
+fn analysis_key_for_uri(uri: &Url) -> AnalysisKey {
+    if let Some(package_root) = package_root_for_uri(uri) {
+        return AnalysisKey::Package(package_root);
+    }
+    if uri.to_file_path().is_ok() {
+        return AnalysisKey::Workspace;
+    }
+    AnalysisKey::Uri(uri.clone())
+}
+
 fn package_root_for_uri(uri: &Url) -> Option<PathBuf> {
     let path = uri.to_file_path().ok()?;
     find_package_root(&path)
@@ -2190,6 +2244,7 @@ mod tests {
     use super::*;
     use std::fs;
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
     use std::time::{SystemTime, UNIX_EPOCH};
     use tokio::sync::oneshot;
 
@@ -2245,6 +2300,7 @@ mod tests {
     #[tokio::test]
     async fn replacing_pending_analysis_aborts_superseded_task() {
         let uri = file_url("debounce.rss");
+        let analysis_key = analysis_key_for_uri(&uri);
         let mut pending = HashMap::new();
         let first_cancellation = Arc::new(AnalysisCancellation::default());
         let first = tokio::spawn(async {
@@ -2252,7 +2308,7 @@ mod tests {
         });
         replace_pending_analysis(
             &mut pending,
-            uri.clone(),
+            analysis_key.clone(),
             PendingAnalysis {
                 task: first.abort_handle(),
                 cancellation: Arc::clone(&first_cancellation),
@@ -2263,7 +2319,7 @@ mod tests {
         let second = tokio::spawn(async {});
         replace_pending_analysis(
             &mut pending,
-            uri,
+            analysis_key,
             PendingAnalysis {
                 task: second.abort_handle(),
                 cancellation: Arc::clone(&second_cancellation),
@@ -2279,6 +2335,163 @@ mod tests {
                 .is_cancelled()
         );
         second.await.expect("latest task should complete");
+    }
+
+    #[tokio::test]
+    async fn package_edits_cancel_superseded_jobs_and_keep_latest_generation() {
+        let package_dir = unique_temp_dir("rss-lsp-package-generation");
+        fs::create_dir_all(package_dir.join("src")).expect("create package src");
+        fs::write(
+            package_dir.join("rsspkg.toml"),
+            "[package]\nname = \"generation\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("write package manifest");
+
+        let mut documents = DocumentStore::new();
+        let mut pending = HashMap::new();
+        let mut cancellations = Vec::new();
+        let mut tasks = Vec::new();
+        let mut first_job_state = None;
+        let mut latest_job_state = None;
+
+        for index in 0..32 {
+            let uri = Url::from_file_path(package_dir.join("src").join(format!("{index}.rss")))
+                .expect("source URL");
+            let job = open_document(
+                &mut documents,
+                uri.clone(),
+                format!("fn value_{index}() -> Int {{ return {index} }}\n"),
+                1,
+            )
+            .expect("new package document should schedule analysis");
+            if index == 0 {
+                first_job_state = Some((
+                    uri.clone(),
+                    job.revision,
+                    job.version,
+                    job.generation,
+                    job.analysis_key.clone(),
+                ));
+            }
+            latest_job_state = Some((
+                uri,
+                job.revision,
+                job.version,
+                job.generation,
+                job.analysis_key.clone(),
+            ));
+            cancellations.push(Arc::clone(&job.cancellation));
+            let task = tokio::spawn(async {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            });
+            replace_pending_analysis(
+                &mut pending,
+                job.analysis_key,
+                PendingAnalysis {
+                    task: task.abort_handle(),
+                    cancellation: job.cancellation,
+                },
+            );
+            tasks.push(task);
+        }
+
+        assert_eq!(pending.len(), 1);
+        assert!(cancellations[..31].iter().all(|item| item.is_cancelled()));
+        assert!(!cancellations[31].is_cancelled());
+
+        let (first_uri, first_revision, first_version, first_generation, analysis_key) =
+            first_job_state.expect("first job state");
+        let (latest_uri, latest_revision, latest_version, latest_generation, latest_key) =
+            latest_job_state.expect("latest job state");
+        assert_eq!(analysis_key, latest_key);
+        assert!(latest_generation > first_generation);
+        let current_generation = documents.generation(&analysis_key);
+        assert!(!commit_diagnostics_if_current(
+            &mut documents,
+            &first_uri,
+            first_revision,
+            first_version,
+            first_generation,
+            current_generation,
+            Vec::new(),
+        ));
+        assert!(commit_diagnostics_if_current(
+            &mut documents,
+            &latest_uri,
+            latest_revision,
+            latest_version,
+            latest_generation,
+            current_generation,
+            Vec::new(),
+        ));
+
+        for task in &tasks {
+            task.abort();
+        }
+        for task in tasks {
+            let _ = task.await;
+        }
+        fs::remove_dir_all(package_dir).expect("cleanup package");
+    }
+
+    #[tokio::test]
+    async fn blocking_work_is_bounded_under_stress() {
+        let permits = Arc::new(Semaphore::new(MAX_BLOCKING_ANALYSES));
+        let active = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let mut tasks = Vec::new();
+
+        for _ in 0..16 {
+            let permits = Arc::clone(&permits);
+            let active = Arc::clone(&active);
+            let peak = Arc::clone(&peak);
+            tasks.push(tokio::spawn(async move {
+                run_bounded_blocking(permits, move || {
+                    let current = active.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+                    peak.fetch_max(current, AtomicOrdering::SeqCst);
+                    std::thread::sleep(Duration::from_millis(20));
+                    active.fetch_sub(1, AtomicOrdering::SeqCst);
+                })
+                .await
+                .expect("blocking task should finish");
+            }));
+        }
+
+        for task in tasks {
+            task.await.expect("bounded task should finish");
+        }
+        assert_eq!(peak.load(AtomicOrdering::SeqCst), MAX_BLOCKING_ANALYSES);
+    }
+
+    #[tokio::test]
+    async fn feature_snapshot_releases_document_lock_during_symbol_scans() {
+        let uri = file_url("lock-release.rss");
+        let source = (0..512)
+            .map(|index| format!("fn value_{index}() -> Int {{ return {index} }}\n"))
+            .collect::<String>();
+        let mut initial = DocumentStore::new();
+        open_document(&mut initial, uri.clone(), source, 1).expect("document should open");
+        let documents = Arc::new(tokio::sync::Mutex::new(initial));
+        let snapshot = snapshot_documents(&documents).await;
+        let scan = tokio::task::spawn_blocking(move || {
+            for _ in 0..16 {
+                let document = snapshot.get(&uri).expect("snapshot document");
+                assert!(
+                    !symbol_index(uri.path(), &document.text)
+                        .definitions()
+                        .is_empty()
+                );
+            }
+        });
+
+        for _ in 0..32 {
+            let guard = tokio::time::timeout(Duration::from_millis(100), documents.lock())
+                .await
+                .expect("feature scan must not retain the document lock");
+            drop(guard);
+            tokio::task::yield_now().await;
+        }
+        scan.await.expect("symbol scan should finish");
     }
 
     #[test]

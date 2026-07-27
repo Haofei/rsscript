@@ -8,6 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::{Arc, Condvar, Mutex, mpsc as std_mpsc};
+use std::time::Duration;
 
 use crate::async_runtime::{
     AsyncPoll, Context, Pending, RssCancellationToken, WakeHandle, cancellation_token_register_wake,
@@ -77,8 +78,12 @@ struct ExternalStream<T> {
 struct ExternalStreamState<T> {
     items: VecDeque<Result<T, ChannelError>>,
     disconnected: bool,
+    stopped: bool,
     wake: Option<WakeHandle>,
 }
+
+const EXTERNAL_STREAM_CAPACITY: usize = 64;
+const EXTERNAL_STREAM_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 // A `Sender` clone is another producer with its own closed flag and its own slot
 // in the `senders` count; the receiver drains and returns `None` only once every
@@ -202,18 +207,43 @@ pub(crate) fn stream_from_external_receiver_with_drop<T: Send + 'static>(
         state: Mutex::new(ExternalStreamState {
             items: VecDeque::new(),
             disconnected: false,
+            stopped: false,
             wake: None,
         }),
         ready: Condvar::new(),
     });
     let producer = Arc::clone(&external);
     std::thread::spawn(move || {
-        while let Ok(item) = receiver.recv() {
+        loop {
+            let item = match receiver.recv_timeout(EXTERNAL_STREAM_POLL_INTERVAL) {
+                Ok(item) => item,
+                Err(std_mpsc::RecvTimeoutError::Timeout) => {
+                    if producer
+                        .state
+                        .lock()
+                        .expect("external stream lock poisoned")
+                        .stopped
+                    {
+                        return;
+                    }
+                    continue;
+                }
+                Err(std_mpsc::RecvTimeoutError::Disconnected) => break,
+            };
             let wake = {
                 let mut state = producer
                     .state
                     .lock()
                     .expect("external stream lock poisoned");
+                while state.items.len() >= EXTERNAL_STREAM_CAPACITY && !state.stopped {
+                    state = producer
+                        .ready
+                        .wait(state)
+                        .expect("external stream condvar wait poisoned");
+                }
+                if state.stopped {
+                    return;
+                }
                 state.items.push_back(item);
                 producer.ready.notify_all();
                 state.wake.take()
@@ -243,6 +273,21 @@ pub(crate) fn stream_from_external_receiver_with_drop<T: Send + 'static>(
 
 impl<T> Drop for RssStream<T> {
     fn drop(&mut self) {
+        if let RssStreamBackend::External(external) = self.backend.get_mut() {
+            let wake = {
+                let mut state = external
+                    .state
+                    .lock()
+                    .expect("external stream lock poisoned");
+                state.stopped = true;
+                state.items.clear();
+                external.ready.notify_all();
+                state.wake.take()
+            };
+            if let Some(wake) = wake {
+                wake.wake();
+            }
+        }
         if let Some(on_drop) = self.on_drop.take() {
             on_drop();
         }
@@ -371,6 +416,7 @@ impl<T> Pending<Result<Option<T>, ChannelError>> for StreamNextPending<'_, T> {
                     .lock()
                     .expect("external stream lock poisoned");
                 if let Some(item) = state.items.pop_front() {
+                    external.ready.notify_all();
                     AsyncPoll::Ready(item.map(Some))
                 } else if state.disconnected {
                     AsyncPoll::Ready(Ok(None))
@@ -413,6 +459,7 @@ pub fn stream_collect_list<T>(stream: &RssStream<T>) -> Result<Vec<T>, ChannelEr
                 .expect("external stream lock poisoned");
             loop {
                 while let Some(item) = state.items.pop_front() {
+                    external.ready.notify_all();
                     values.push(item?);
                 }
                 if state.disconnected {
@@ -463,6 +510,36 @@ mod tests {
             .run_pending(stream_next(&stream))
             .expect("external stream should not fail");
         assert_eq!(value, Some(7));
+    }
+
+    #[test]
+    fn external_stream_bridge_is_bounded_and_drop_cancellable() {
+        let (sender, receiver) = std_mpsc::sync_channel(EXTERNAL_STREAM_CAPACITY * 2);
+        let stream = stream_from_external_receiver(receiver);
+        let producer = std::thread::spawn(move || {
+            for value in 0..EXTERNAL_STREAM_CAPACITY * 4 {
+                if sender.send(Ok(value)).is_err() {
+                    return;
+                }
+            }
+        });
+
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        let queued = match &*stream.backend.borrow() {
+            RssStreamBackend::External(external) => external
+                .state
+                .lock()
+                .expect("external stream lock should not be poisoned")
+                .items
+                .len(),
+            _ => panic!("expected external stream backend"),
+        };
+        assert_eq!(queued, EXTERNAL_STREAM_CAPACITY);
+
+        drop(stream);
+        producer
+            .join()
+            .expect("dropping stream should unblock the source producer");
     }
 
     #[test]

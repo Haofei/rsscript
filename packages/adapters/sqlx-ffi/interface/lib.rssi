@@ -8,10 +8,12 @@ features: native
 // or `postgres:`). Queries read the first column of each row as text and are
 // capped at 10,000 rows and 16 MiB by default. RSS_SQLX_MAX_RESULT_ROWS,
 // RSS_SQLX_MAX_RESULT_BYTES, and RSS_SQLX_MAX_CACHED_POOLS can set positive
-// per-process overrides. The pool limit defaults to 32 URLs; a new URL is
-// rejected at capacity until close or close_all releases entries. Parameter
-// placeholders follow the selected backend (`?` for SQLite and `$1`, `$2`, ...
-// for Postgres); all bind values are strings.
+// per-process overrides. The pool limit defaults to 32 hashed URLs, with idle
+// and least-recently-used eviction. RSS_SQLX_CONNECT_TIMEOUT_MS,
+// RSS_SQLX_QUERY_TIMEOUT_MS, and RSS_SQLX_POOL_IDLE_TIMEOUT_MS control the
+// default 5-second connect, 30-second total query, and 5-minute idle deadlines.
+// Parameter placeholders follow the selected backend (`?` for SQLite and `$1`,
+// `$2`, ... for Postgres); all bind values are strings.
 native fn SqlxFfi.execute(url: String, sql: String) -> Result<Unit, String>
     effects(native)
 

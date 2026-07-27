@@ -33,6 +33,12 @@ impl PoolError {
         }
     }
 
+    pub fn factory_reentrant() -> Self {
+        Self {
+            message: "resource pool factory re-entered the same pool".to_string(),
+        }
+    }
+
     pub fn message(&self) -> &str {
         &self.message
     }
@@ -90,6 +96,10 @@ struct PoolState<T: Resource> {
     max_size: usize,
     /// Present iff the pool creates resources on demand (lazy).
     factory: Option<LazyFactory<T>>,
+    /// True only while the lazy factory is executing outside the `RefCell`
+    /// borrow. A recursive borrow is rejected instead of panicking or creating
+    /// past the pool cap.
+    factory_active: bool,
     /// Set when a lazy pool was constructed with a non-positive `max_size`: such a
     /// pool can never hand out a resource, so `try_borrow` reports this explicitly
     /// (`PoolError::invalid_capacity`) rather than masquerading as "exhausted".
@@ -116,6 +126,7 @@ impl<T: Resource> ResourcePool<T> {
             created,
             max_size: created,
             factory: None,
+            factory_active: false,
             invalid_capacity: None,
         })
     }
@@ -156,6 +167,7 @@ impl<T: Resource> ResourcePool<T> {
             created: 0,
             max_size: max_size.max(0) as usize,
             factory: Some(factory),
+            factory_active: false,
             invalid_capacity: (max_size <= 0).then_some(max_size),
         })
     }
@@ -172,6 +184,7 @@ impl<T: Resource> ResourcePool<T> {
             created: 0,
             max_size: max_size.max(0) as usize,
             factory: Some(Box::new(create)),
+            factory_active: false,
             invalid_capacity: (max_size <= 0).then_some(max_size),
         })
     }
@@ -184,25 +197,43 @@ impl<T: Resource> ResourcePool<T> {
     /// `max_size`, else report exhaustion. The accounting supports several live
     /// leases, though the language currently gates pools to one active lease (RS0709).
     pub fn try_borrow(&self) -> Result<ResourceLease<'_, T>, PoolError> {
-        let value = {
+        let mut factory = {
             let mut state = self.state.borrow_mut();
             if let Some(max_size) = state.invalid_capacity {
                 return Err(PoolError::invalid_capacity(max_size));
             }
+            if state.factory_active {
+                return Err(PoolError::factory_reentrant());
+            }
             if let Some(value) = state.idle.pop() {
-                value
-            } else if state.created < state.max_size {
-                let Some(factory) = state.factory.as_mut() else {
-                    return Err(PoolError::exhausted());
-                };
-                let value = factory()?;
-                state.created += 1;
-                value
-            } else {
+                state.in_use += 1;
+                return Ok(ResourceLease {
+                    pool: self,
+                    value: Some(value),
+                    discarded: false,
+                });
+            }
+            if state.created >= state.max_size {
                 return Err(PoolError::exhausted());
             }
+            let Some(factory) = state.factory.take() else {
+                return Err(PoolError::exhausted());
+            };
+            state.factory_active = true;
+            factory
         };
-        self.state.borrow_mut().in_use += 1;
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut factory));
+        let mut state = self.state.borrow_mut();
+        state.factory = Some(factory);
+        state.factory_active = false;
+        let value = match result {
+            Ok(result) => result?,
+            Err(payload) => std::panic::resume_unwind(payload),
+        };
+        state.created += 1;
+        state.in_use += 1;
+        drop(state);
         Ok(ResourceLease {
             pool: self,
             value: Some(value),
@@ -551,6 +582,49 @@ mod tests {
             "{}",
             error.message()
         );
+    }
+
+    #[test]
+    fn resource_pool_lazy_factory_can_inspect_stats_without_borrow_panic() {
+        let holder: std::rc::Rc<std::cell::RefCell<Option<std::rc::Rc<ResourcePool<FileHandle>>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let factory_holder = std::rc::Rc::clone(&holder);
+        let pool = std::rc::Rc::new(ResourcePool::lazy_from_factory(1, move || {
+            let pool = factory_holder.borrow();
+            let stats = pool
+                .as_ref()
+                .expect("pool should be installed before borrowing")
+                .stats();
+            assert_eq!(pool_stats_created(&stats), 0);
+            FileHandle(9)
+        }));
+        *holder.borrow_mut() = Some(std::rc::Rc::clone(&pool));
+
+        let lease = pool.try_borrow().expect("factory should create a resource");
+        assert_eq!(lease.0, 9);
+    }
+
+    #[test]
+    fn resource_pool_reentrant_factory_borrow_is_fallible() {
+        let holder: std::rc::Rc<std::cell::RefCell<Option<std::rc::Rc<ResourcePool<FileHandle>>>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(None));
+        let factory_holder = std::rc::Rc::clone(&holder);
+        let pool = std::rc::Rc::new(ResourcePool::try_lazy_from_factory(1, move || {
+            let pool = factory_holder.borrow();
+            let error = pool
+                .as_ref()
+                .expect("pool should be installed before borrowing")
+                .try_borrow()
+                .expect_err("factory reentrancy should be rejected");
+            assert!(error.message().contains("re-entered"));
+            Ok(FileHandle(11))
+        }));
+        *holder.borrow_mut() = Some(std::rc::Rc::clone(&pool));
+
+        let lease = pool
+            .try_borrow()
+            .expect("outer borrow should still succeed");
+        assert_eq!(lease.0, 11);
     }
 
     #[test]

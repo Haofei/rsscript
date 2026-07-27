@@ -1733,8 +1733,14 @@ fn main() -> Unit {
     List.push(list: mut values, value: read 1)
     List.push(list: mut values, value: read 2)
     List.push(list: mut values, value: read 3)
-    let sum = Rayon.sum_squares(values: read values)
-    Assert.equal_int(left: sum, right: 14)
+    match Rayon.sum_squares(values: read values) {
+        Ok(sum) => {
+            Assert.equal_int(left: sum, right: 14)
+        }
+        Err(_) => {
+            Assert.equal_bool(left: false, right: true)
+        }
+    }
     return Unit
 }
 "#,

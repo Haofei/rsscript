@@ -16,6 +16,7 @@ const ADAPTER_VERSION: &str = "0.1";
 const PRODUCER_SOURCE: &str = "terraform_iac";
 const SOURCE_EVIDENCE_REASON: &str =
     "Terraform source scan is not proof of rendered, planned, or deployed authorization";
+const MAX_TERRAFORM_PARSE_DIAGNOSTICS: usize = 1_024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerraformSourceLimits {
@@ -864,11 +865,13 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
         .map_err(|e| format!("failed to parse terraform plan JSON: {e}"))?;
 
     let mut facts = Vec::new();
+    let mut diagnostics = Vec::new();
+    let mut omitted_diagnostics = 0_usize;
 
     // Handle both `terraform show -json` (has .values.root_module.resources)
     // and `terraform plan -json` (has .resource_changes)
     if let Some(changes) = plan.get("resource_changes").and_then(|v| v.as_array()) {
-        for change in changes {
+        for (change_index, change) in changes.iter().enumerate() {
             let resource_type = change.get("type").and_then(|v| v.as_str()).unwrap_or("");
             let name = change.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let address = change.get("address").and_then(|v| v.as_str()).unwrap_or("");
@@ -890,15 +893,33 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
                 .unwrap_or(&Value::Null);
 
             if let Some(policy_str) = after.get("policy").and_then(|v| v.as_str()) {
-                if let Ok(policy) = serde_json::from_str::<Value>(policy_str) {
-                    let block = TerraformResourceBlock {
-                        file: "terraform-plan".to_owned(),
-                        resource_type: resource_type.to_owned(),
-                        name: name.to_owned(),
-                        body: principal_body(resource_type, after),
-                        line: 0,
-                    };
-                    facts.extend(policy_grant_facts_with_address(&block, &policy, address));
+                match serde_json::from_str::<Value>(policy_str) {
+                    Ok(policy) => {
+                        let block = TerraformResourceBlock {
+                            file: "terraform-plan".to_owned(),
+                            resource_type: resource_type.to_owned(),
+                            name: name.to_owned(),
+                            body: principal_body(resource_type, after),
+                            line: 0,
+                        };
+                        facts.extend(policy_grant_facts_with_address(&block, &policy, address));
+                    }
+                    Err(error) => push_terraform_parse_diagnostic(
+                        &mut diagnostics,
+                        &mut omitted_diagnostics,
+                        TerraformParseDiagnostic {
+                            source: "terraform-plan",
+                            acquisition_mode: AcquisitionMode::TerraformPlan,
+                            evidence_kind: EvidenceKind::TerraformPlanPointer,
+                            resource_type,
+                            name,
+                            address,
+                            json_pointer: Some(format!(
+                                "/resource_changes/{change_index}/change/after/policy"
+                            )),
+                            error: &error,
+                        },
+                    ),
                 }
             }
         }
@@ -932,19 +953,39 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
 
             let values_obj = resource.get("values").unwrap_or(&Value::Null);
             if let Some(policy_str) = values_obj.get("policy").and_then(|v| v.as_str()) {
-                if let Ok(policy) = serde_json::from_str::<Value>(policy_str) {
-                    let block = TerraformResourceBlock {
-                        file: "terraform-state".to_owned(),
-                        resource_type: resource_type.to_owned(),
-                        name: name.to_owned(),
-                        body: principal_body(resource_type, values_obj),
-                        line: 0,
-                    };
-                    facts.extend(policy_grant_facts_with_address(&block, &policy, address));
+                match serde_json::from_str::<Value>(policy_str) {
+                    Ok(policy) => {
+                        let block = TerraformResourceBlock {
+                            file: "terraform-state".to_owned(),
+                            resource_type: resource_type.to_owned(),
+                            name: name.to_owned(),
+                            body: principal_body(resource_type, values_obj),
+                            line: 0,
+                        };
+                        facts.extend(policy_grant_facts_with_address(&block, &policy, address));
+                    }
+                    Err(error) => push_terraform_parse_diagnostic(
+                        &mut diagnostics,
+                        &mut omitted_diagnostics,
+                        TerraformParseDiagnostic {
+                            source: "terraform-state",
+                            acquisition_mode: AcquisitionMode::TerraformState,
+                            evidence_kind: EvidenceKind::TerraformStatePointer,
+                            resource_type,
+                            name,
+                            address,
+                            json_pointer: Some("/values/root_module".to_owned()),
+                            error: &error,
+                        },
+                    ),
                 }
             }
         }
     }
+    if omitted_diagnostics > 0 {
+        diagnostics.push(terraform_diagnostic_budget_fact(omitted_diagnostics));
+    }
+    facts.extend(diagnostics);
 
     let mut bundle = Bundle::new();
     bundle.producers.push(crate::subject::Producer {
@@ -962,6 +1003,133 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
         .collect();
     bundle.slices = crate::slice_by_kind(&bundle);
     Ok(bundle)
+}
+
+struct TerraformParseDiagnostic<'a> {
+    source: &'a str,
+    acquisition_mode: AcquisitionMode,
+    evidence_kind: EvidenceKind,
+    resource_type: &'a str,
+    name: &'a str,
+    address: &'a str,
+    json_pointer: Option<String>,
+    error: &'a serde_json::Error,
+}
+
+fn push_terraform_parse_diagnostic(
+    diagnostics: &mut Vec<Fact>,
+    omitted: &mut usize,
+    input: TerraformParseDiagnostic<'_>,
+) {
+    if diagnostics.len() >= MAX_TERRAFORM_PARSE_DIAGNOSTICS - 1 {
+        *omitted += 1;
+        return;
+    }
+    let resource_id = if input.address.is_empty() {
+        format!("{}.{}", input.resource_type, input.name)
+    } else {
+        input.address.to_owned()
+    };
+    let reason = format!(
+        "failed to parse embedded IAM policy JSON for {}: {}",
+        resource_id, input.error
+    );
+    diagnostics.push(Fact {
+        schema: FACT_SCHEMA.to_owned(),
+        id: format!(
+            "fact.terraform.diagnostic.policy_parse.{}.{}",
+            sanitize_id(&resource_id),
+            diagnostics.len()
+        ),
+        kind: FactKind::Diagnostic,
+        role: None,
+        subject: Subject {
+            kind: SubjectKind::TerraformResource,
+            id: format!("terraform::{resource_id}"),
+            name: Some(resource_id.clone()),
+            package: Some("terraform".to_owned()),
+        },
+        capability: None,
+        value: FactValue::Unknown,
+        confidence: Confidence {
+            level: ConfidenceLevel::Authoritative,
+            source: Some("terraform_plan_json".to_owned()),
+        },
+        acquisition_mode: input.acquisition_mode,
+        precision: Precision::Exact,
+        evidence: vec![Evidence {
+            kind: input.evidence_kind,
+            file: Some(input.source.to_owned()),
+            line: None,
+            column: None,
+            length: None,
+            symbol: Some(resource_id),
+            reason: Some(reason.clone()),
+            json_pointer: input.json_pointer,
+            resource: Some(input.address.to_owned()),
+            provider: Some("terraform".to_owned()),
+            value: Some("invalid_json".to_owned()),
+            event_id: None,
+            time: None,
+            source: Some("terraform_plan_json".to_owned()),
+            event_name: None,
+            principal: None,
+            account: None,
+            policy_arn: None,
+            statement_index: None,
+            action: None,
+        }],
+        unknown_reason: Some(reason),
+    });
+}
+
+fn terraform_diagnostic_budget_fact(omitted: usize) -> Fact {
+    let reason = format!(
+        "Terraform embedded policy parse diagnostics exceeded the {MAX_TERRAFORM_PARSE_DIAGNOSTICS} item budget; {omitted} additional failure(s) were omitted"
+    );
+    Fact {
+        schema: FACT_SCHEMA.to_owned(),
+        id: "fact.terraform.diagnostic.policy_parse_budget".to_owned(),
+        kind: FactKind::Diagnostic,
+        role: None,
+        subject: Subject {
+            kind: SubjectKind::TerraformWorkspace,
+            id: "terraform::workspace".to_owned(),
+            name: Some("terraform workspace".to_owned()),
+            package: Some("terraform".to_owned()),
+        },
+        capability: None,
+        value: FactValue::Unknown,
+        confidence: Confidence {
+            level: ConfidenceLevel::Authoritative,
+            source: Some("terraform_plan_json".to_owned()),
+        },
+        acquisition_mode: AcquisitionMode::TerraformPlan,
+        precision: Precision::Exact,
+        evidence: vec![Evidence {
+            kind: EvidenceKind::UnknownReason,
+            file: None,
+            line: None,
+            column: None,
+            length: None,
+            symbol: Some("terraform_policy_parse_diagnostic_budget".to_owned()),
+            reason: Some(reason.clone()),
+            json_pointer: None,
+            resource: None,
+            provider: Some("terraform".to_owned()),
+            value: Some(omitted.to_string()),
+            event_id: None,
+            time: None,
+            source: Some("terraform_plan_json".to_owned()),
+            event_name: None,
+            principal: None,
+            account: None,
+            policy_arn: None,
+            statement_index: None,
+            action: None,
+        }],
+        unknown_reason: Some(reason),
+    }
 }
 
 fn policy_grant_facts_with_address(
@@ -1495,5 +1663,79 @@ POLICY
 
         let _ = std::fs::remove_dir_all(&temp_dir);
         assert!(error.contains("maximum depth"), "{error}");
+    }
+
+    #[test]
+    fn terraform_plan_surfaces_embedded_policy_parse_failure_as_diagnostic() {
+        let bundle = terraform_plan_json_to_bundle(
+            r#"{
+                "resource_changes": [{
+                    "address": "aws_iam_role_policy.invalid",
+                    "type": "aws_iam_role_policy",
+                    "name": "invalid",
+                    "change": {
+                        "after": {
+                            "role": "role.prod",
+                            "policy": "{not-json"
+                        }
+                    }
+                }]
+            }"#,
+        )
+        .expect("outer plan JSON should parse");
+
+        let diagnostic = bundle
+            .facts
+            .iter()
+            .find(|fact| fact.kind == FactKind::Diagnostic)
+            .expect("embedded policy failure should be retained");
+        assert_eq!(diagnostic.value, FactValue::Unknown);
+        assert!(diagnostic.unknown_reason.is_some());
+        assert_eq!(
+            diagnostic.evidence[0].kind,
+            EvidenceKind::TerraformPlanPointer
+        );
+        assert_eq!(
+            diagnostic.evidence[0].json_pointer.as_deref(),
+            Some("/resource_changes/0/change/after/policy")
+        );
+        let decision =
+            crate::decide_validated_gate(&[], &bundle.facts, &[], crate::GatePolicy::production());
+        assert_eq!(decision.status, crate::GateStatus::Fail);
+        assert!(decision.blockers.iter().any(|blocker| {
+            blocker.fact_id.as_deref() == Some(diagnostic.id.as_str())
+                && blocker.kind == crate::GateIssueKind::InvalidEvidence
+        }));
+    }
+
+    #[test]
+    fn terraform_state_surfaces_embedded_policy_parse_failure_as_diagnostic() {
+        let bundle = terraform_plan_json_to_bundle(
+            r#"{
+                "values": {
+                    "root_module": {
+                        "resources": [{
+                            "address": "aws_s3_bucket_policy.invalid",
+                            "type": "aws_s3_bucket_policy",
+                            "name": "invalid",
+                            "values": { "policy": "[" }
+                        }]
+                    }
+                }
+            }"#,
+        )
+        .expect("outer state JSON should parse");
+
+        let diagnostic = bundle
+            .facts
+            .iter()
+            .find(|fact| fact.kind == FactKind::Diagnostic)
+            .expect("embedded policy failure should be retained");
+        assert_eq!(diagnostic.acquisition_mode, AcquisitionMode::TerraformState);
+        assert_eq!(
+            diagnostic.evidence[0].kind,
+            EvidenceKind::TerraformStatePointer
+        );
+        assert!(diagnostic.unknown_reason.is_some());
     }
 }

@@ -575,7 +575,7 @@ impl RegVm {
         }
         self.stdout.push_str(text);
         if self.stream_stdout {
-            self.flush_stdout_stream();
+            self.flush_stdout_stream()?;
         }
         Ok(())
     }
@@ -583,15 +583,17 @@ impl RegVm {
     /// Write every complete (newline-terminated) line appended since the last
     /// flush to the real process stdout, then advance the streamed cursor. A
     /// partial trailing line is left buffered until its newline arrives.
-    pub(super) fn flush_stdout_stream(&mut self) {
+    pub(super) fn flush_stdout_stream(&mut self) -> Result<(), EvalError> {
         if let Some(offset) = self.stdout[self.stream_flushed..].rfind('\n') {
             let end = self.stream_flushed + offset + 1;
             let chunk = &self.stdout[self.stream_flushed..end];
             let mut out = std::io::stdout();
-            let _ = out.write_all(chunk.as_bytes());
-            let _ = out.flush();
+            out.write_all(chunk.as_bytes())
+                .and_then(|()| out.flush())
+                .map_err(|error| EvalError::Runtime(format!("failed to stream stdout: {error}")))?;
             self.stream_flushed = end;
         }
+        Ok(())
     }
 
     /// Whether `func` should run on the tier-0 JIT. Reads the analysis cached on

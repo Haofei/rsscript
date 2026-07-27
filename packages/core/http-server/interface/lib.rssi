@@ -1,6 +1,7 @@
 features: native
 
-// A blocking, static-route HTTP server. Each `paths[i]` is answered with
+// Demo-only blocking static-route HTTP server. It is not a production server.
+// Each `paths[i]` is answered with
 // `bodies[i]` (HTTP 200, `text/plain`); any other path returns 404, and a
 // non-GET request to a known path returns 405. `paths` and `bodies` must have
 // equal length, and paths must be unique. The call binds `address` and serves

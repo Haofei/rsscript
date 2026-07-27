@@ -218,6 +218,12 @@ fn check_block(
     block: &HirBlock,
     context: &CallCheckContext<'_>,
 ) {
+    let Some(_recursion) = analyzer.budget.enter_recursion() else {
+        return;
+    };
+    if !analyzer.budget.consume_nodes(block.statements.len().max(1)) {
+        return;
+    }
     let noescape_bindings = context.noescape_bindings;
     let local_closure_bindings = context.local_closure_bindings;
     for statement in &block.statements {
@@ -554,6 +560,12 @@ fn check_expr(
     expr: &HirExpr,
     context: &CallCheckContext<'_>,
 ) {
+    let Some(_recursion) = analyzer.budget.enter_recursion() else {
+        return;
+    };
+    if !analyzer.budget.consume_nodes(1) {
+        return;
+    }
     match expr {
         HirExpr::Call {
             callee,
@@ -1199,8 +1211,11 @@ fn check_call_args(
         &resolved_names,
     );
 
-    let type_param_substitutions =
-        call_type_param_substitutions(analyzer, Some(function), callee, args, signature);
+    let Some(type_param_substitutions) =
+        call_type_param_substitutions(analyzer, Some(function), callee, args, signature)
+    else {
+        return;
+    };
     check_generic_call_bounds(
         analyzer,
         function,
@@ -1412,8 +1427,13 @@ fn check_argument_types(
         let Some(expected_param) = signature.params.iter().find(|param| param.name == name) else {
             continue;
         };
-        let expected_type =
-            substitute_type_params(&expected_param.type_name, type_param_substitutions);
+        let Ok(expected_type) = substitute_type_params(
+            &analyzer.budget,
+            &expected_param.type_name,
+            type_param_substitutions,
+        ) else {
+            return;
+        };
         if check_fn_closure_contract(
             analyzer,
             call_name,
@@ -2216,7 +2236,7 @@ fn call_type_param_substitutions(
     callee: &Callee,
     args: &[HirCallArg],
     signature: &FunctionSig,
-) -> HashMap<String, String> {
+) -> Option<HashMap<String, String>> {
     let mut substitutions = HashMap::new();
     let generic_params = signature
         .type_params
@@ -2224,7 +2244,7 @@ fn call_type_param_substitutions(
         .map(String::as_str)
         .collect::<HashSet<_>>();
     if generic_params.is_empty() {
-        return substitutions;
+        return Some(substitutions);
     }
     if let Some(explicit_args) = explicit_callee_type_args(callee) {
         for (param, actual) in signature.type_params.iter().zip(explicit_args) {
@@ -2261,21 +2281,26 @@ fn call_type_param_substitutions(
     {
         let pattern_type = analyzer.expand_type_alias(&receiver_param.type_name);
         let actual_type = analyzer.expand_type_alias(&actual_type);
-        collect_type_param_substitutions(
+        if !collect_type_param_substitutions(
+            &analyzer.budget,
             &pattern_type,
             &actual_type,
             &generic_params,
             &mut substitutions,
-        );
+        ) {
+            return None;
+        }
     }
-    collect_call_arg_type_param_substitutions(
+    if !collect_call_arg_type_param_substitutions(
         analyzer,
         args,
         signature,
         &generic_params,
         &mut substitutions,
-    );
-    substitutions
+    ) {
+        return None;
+    }
+    Some(substitutions)
 }
 
 fn explicit_callee_type_args(callee: &Callee) -> Option<Vec<&str>> {
@@ -2291,7 +2316,7 @@ fn collect_call_arg_type_param_substitutions(
     signature: &FunctionSig,
     generic_params: &HashSet<&str>,
     substitutions: &mut HashMap<String, String>,
-) {
+) -> bool {
     for (index, arg) in args.iter().enumerate() {
         let Some(param) = arg
             .name
@@ -2310,13 +2335,17 @@ fn collect_call_arg_type_param_substitutions(
         };
         let pattern_type = analyzer.expand_type_alias(&param.type_name);
         let actual_type = analyzer.expand_type_alias(actual_type);
-        collect_type_param_substitutions(
+        if !collect_type_param_substitutions(
+            &analyzer.budget,
             &pattern_type,
             &actual_type,
             generic_params,
             substitutions,
-        );
+        ) {
+            return false;
+        }
     }
+    true
 }
 
 fn constructor_or_named_shorthand_arg_name(arg: &HirCallArg) -> Option<&str> {
@@ -2367,150 +2396,160 @@ fn infer_receiver_expr_type(
 }
 
 fn collect_type_param_substitutions(
+    budget: &crate::checks::budget::AnalysisBudget,
     pattern: &str,
     actual: &str,
     generic_params: &HashSet<&str>,
     substitutions: &mut HashMap<String, String>,
-) {
-    collect_type_param_substitutions_bounded(pattern, actual, generic_params, substitutions, 0);
+) -> bool {
+    collect_type_param_substitutions_bounded(
+        budget,
+        pattern,
+        actual,
+        generic_params,
+        substitutions,
+        0,
+    )
 }
 
 fn collect_type_param_substitutions_bounded(
+    budget: &crate::checks::budget::AnalysisBudget,
     pattern: &str,
     actual: &str,
     generic_params: &HashSet<&str>,
     substitutions: &mut HashMap<String, String>,
     depth: usize,
-) {
-    // Bound the recursion for the same reason as `substitute_type_params` (RSS-11):
-    // pathological deeply-nested generics would otherwise re-parse type strings at
-    // every level. Real types never approach this depth.
-    if depth >= TYPE_SUBSTITUTION_DEPTH_LIMIT {
-        return;
+) -> bool {
+    if !budget.check_recursion(depth) || !budget.consume_substitution() {
+        return false;
     }
     let pattern = pattern.trim();
     let actual = actual.trim();
     if actual == "?" {
-        return;
+        return true;
     }
     if let Some(pattern) = fresh_type_target(pattern) {
         let actual = fresh_type_target(actual).unwrap_or(actual);
-        collect_type_param_substitutions_bounded(
+        return collect_type_param_substitutions_bounded(
+            budget,
             pattern,
             actual,
             generic_params,
             substitutions,
             depth + 1,
         );
-        return;
     }
     if generic_params.contains(pattern) {
         substitutions
             .entry(pattern.to_string())
             .or_insert_with(|| actual.to_string());
-        return;
+        return true;
     }
     if is_fn_type(pattern) && is_fn_type(actual) {
         for (pattern_param, actual_param) in fn_param_types(pattern)
             .into_iter()
             .zip(fn_param_types(actual))
         {
-            collect_type_param_substitutions_bounded(
+            if !collect_type_param_substitutions_bounded(
+                budget,
                 pattern_param,
                 actual_param,
                 generic_params,
                 substitutions,
                 depth + 1,
-            );
+            ) {
+                return false;
+            }
         }
         if let (Some(pattern_return), Some(actual_return)) =
             (fn_return_type(pattern), fn_return_type(actual))
         {
-            collect_type_param_substitutions_bounded(
+            if !collect_type_param_substitutions_bounded(
+                budget,
                 pattern_return,
                 actual_return,
                 generic_params,
                 substitutions,
                 depth + 1,
-            );
+            ) {
+                return false;
+            }
         }
-        return;
+        return true;
     }
     let Some(pattern_args) = type_arg_names(pattern) else {
-        return;
+        return true;
     };
     let Some(actual_args) = type_arg_names(actual) else {
-        return;
+        return true;
     };
     if type_root_name(pattern) != type_root_name(actual) || pattern_args.len() != actual_args.len()
     {
-        return;
+        return true;
     }
     for (pattern_arg, actual_arg) in pattern_args.into_iter().zip(actual_args) {
-        collect_type_param_substitutions_bounded(
+        if !collect_type_param_substitutions_bounded(
+            budget,
             pattern_arg,
             actual_arg,
             generic_params,
             substitutions,
             depth + 1,
-        );
+        ) {
+            return false;
+        }
     }
+    true
 }
 
-/// Bound on the nesting depth that generic type-parameter substitution will
-/// recurse through. Real types are shallow (the public-signature lint warns past
-/// depth 4); this limit is far above any legitimate type, and exists only to cap
-/// the per-string work so a pathological, adversarial deeply-nested type
-/// (`List<List<…<Int>>>` thousands deep) can't drive `check` into its ~O(n³)
-/// substitution blowup — the compile-time-DoS surface tracked as RSS-11. Behavior
-/// is unchanged for every type at or below the limit. (A from-scratch single-pass
-/// type parser would remove the asymptotic entirely but is a larger, separately-
-/// validated change; bounding the depth is the safe, behavior-preserving fix.)
-const TYPE_SUBSTITUTION_DEPTH_LIMIT: usize = 100;
-
-fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, String>) -> String {
-    substitute_type_params_bounded(type_name, substitutions, 0)
+fn substitute_type_params(
+    budget: &crate::checks::budget::AnalysisBudget,
+    type_name: &str,
+    substitutions: &HashMap<String, String>,
+) -> Result<String, ()> {
+    substitute_type_params_bounded(budget, type_name, substitutions, 0)
 }
 
 fn substitute_type_params_bounded(
+    budget: &crate::checks::budget::AnalysisBudget,
     type_name: &str,
     substitutions: &HashMap<String, String>,
     depth: usize,
-) -> String {
-    if depth >= TYPE_SUBSTITUTION_DEPTH_LIMIT {
-        return type_name.to_string();
+) -> Result<String, ()> {
+    if !budget.check_recursion(depth) || !budget.consume_substitution() {
+        return Err(());
     }
     if let Some(replacement) = substitutions.get(type_name) {
-        return replacement.clone();
+        return Ok(replacement.clone());
     }
     if let Some(target) = fresh_type_target(type_name) {
-        return format!(
+        return Ok(format!(
             "fresh {}",
-            substitute_type_params_bounded(target, substitutions, depth + 1)
-        );
+            substitute_type_params_bounded(budget, target, substitutions, depth + 1)?
+        ));
     }
     if let Some(return_ty) = fn_return_type(type_name) {
         let prefix = fn_type_prefix(type_name);
         let params = fn_param_types(type_name)
             .into_iter()
-            .map(|param| substitute_type_params_bounded(param, substitutions, depth + 1))
-            .collect::<Vec<_>>()
+            .map(|param| substitute_type_params_bounded(budget, param, substitutions, depth + 1))
+            .collect::<Result<Vec<_>, _>>()?
             .join(", ");
-        return format!(
+        return Ok(format!(
             "{prefix}Fn({params}) -> {}",
-            substitute_type_params_bounded(return_ty, substitutions, depth + 1)
-        );
+            substitute_type_params_bounded(budget, return_ty, substitutions, depth + 1)?
+        ));
     }
     let Some(args) = type_arg_names(type_name) else {
-        return type_name.to_string();
+        return Ok(type_name.to_string());
     };
     let root = type_root_name(type_name);
     let args = args
         .into_iter()
-        .map(|arg| substitute_type_params_bounded(arg, substitutions, depth + 1))
-        .collect::<Vec<_>>()
+        .map(|arg| substitute_type_params_bounded(budget, arg, substitutions, depth + 1))
+        .collect::<Result<Vec<_>, _>>()?
         .join(", ");
-    format!("{root}<{args}>")
+    Ok(format!("{root}<{args}>"))
 }
 
 fn check_fn_closure_contract(
@@ -3236,8 +3275,11 @@ fn check_callback_resolved_call_argument_types(
     contract: &CallbackContract<'_>,
 ) {
     let call_name = callee_display(callee);
-    let type_param_substitutions =
-        call_type_param_substitutions(analyzer, None, callee, args, signature);
+    let Some(type_param_substitutions) =
+        call_type_param_substitutions(analyzer, None, callee, args, signature)
+    else {
+        return;
+    };
     for arg in args {
         let Some(name) = &arg.name else {
             continue;
@@ -3245,8 +3287,13 @@ fn check_callback_resolved_call_argument_types(
         let Some(expected_param) = signature.params.iter().find(|param| param.name == *name) else {
             continue;
         };
-        let expected_type =
-            substitute_type_params(&expected_param.type_name, &type_param_substitutions);
+        let Ok(expected_type) = substitute_type_params(
+            &analyzer.budget,
+            &expected_param.type_name,
+            &type_param_substitutions,
+        ) else {
+            return;
+        };
         if type_contains_unresolved_generic(&expected_type, &signature.type_params) {
             continue;
         }
@@ -4964,40 +5011,66 @@ fn hir_expr_span(expr: &HirExpr) -> &Span {
 #[cfg(test)]
 mod substitution_tests {
     use super::*;
+    use crate::checks::budget::{AnalysisBudget, AnalysisBudgetLimits};
+    use crate::diagnostic::Span;
     use std::collections::HashMap;
 
-    #[test]
-    fn substitute_type_params_substitutes_within_limit() {
-        // Real (shallow) types substitute fully — unchanged by the depth bound.
-        let mut subs = HashMap::new();
-        subs.insert("T".to_string(), "Int".to_string());
-        subs.insert("E".to_string(), "String".to_string());
-        assert_eq!(substitute_type_params("T", &subs), "Int");
-        assert_eq!(substitute_type_params("List<T>", &subs), "List<Int>");
-        assert_eq!(
-            substitute_type_params("Result<T, E>", &subs),
-            "Result<Int, String>"
-        );
-        assert_eq!(
-            substitute_type_params("Map<T, List<E>>", &subs),
-            "Map<Int, List<String>>"
-        );
-        assert_eq!(substitute_type_params("fresh T", &subs), "fresh Int");
+    fn budget() -> std::rc::Rc<AnalysisBudget> {
+        AnalysisBudget::new(AnalysisBudgetLimits::default(), Span::default())
     }
 
     #[test]
-    fn substitute_type_params_is_bounded_on_deep_nesting() {
-        // RSS-11: a pathological deeply-nested generic must not drive substitution
-        // into its ~O(n^3) blowup (or overflow the stack). Far past the depth limit,
-        // the call still completes promptly and preserves the shallow structure.
+    fn substitute_type_params_substitutes_normal_types() {
+        let mut subs = HashMap::new();
+        subs.insert("T".to_string(), "Int".to_string());
+        subs.insert("E".to_string(), "String".to_string());
+        let budget = budget();
+        assert_eq!(
+            substitute_type_params(&budget, "T", &subs),
+            Ok("Int".into())
+        );
+        assert_eq!(
+            substitute_type_params(&budget, "List<T>", &subs),
+            Ok("List<Int>".into())
+        );
+        assert_eq!(
+            substitute_type_params(&budget, "Result<T, E>", &subs),
+            Ok("Result<Int, String>".into())
+        );
+        assert_eq!(
+            substitute_type_params(&budget, "Map<T, List<E>>", &subs),
+            Ok("Map<Int, List<String>>".into())
+        );
+        assert_eq!(
+            substitute_type_params(&budget, "fresh T", &subs),
+            Ok("fresh Int".into())
+        );
+    }
+
+    #[test]
+    fn deep_substitution_fails_explicitly_and_marks_analysis_incomplete() {
         let mut ty = "T".to_string();
-        for _ in 0..5000 {
+        for _ in 0..300 {
             ty = format!("List<{ty}>");
         }
         let mut subs = HashMap::new();
         subs.insert("T".to_string(), "Int".to_string());
-        let out = substitute_type_params(&ty, &subs);
-        assert!(out.starts_with("List<List<"));
+        let budget = budget();
+
+        assert_eq!(substitute_type_params(&budget, &ty, &subs), Err(()));
+        let diagnostic = budget
+            .incomplete_diagnostic()
+            .expect("deep substitution should exhaust recursion budget");
+        assert_eq!(
+            diagnostic.code,
+            crate::diagnostic::code::ANALYSIS_INCOMPLETE
+        );
+        assert!(
+            diagnostic
+                .causes
+                .iter()
+                .any(|cause| cause.contains("recursion"))
+        );
     }
 
     #[test]

@@ -1,71 +1,548 @@
 //! Native Metal GPU compute FFI.
 //!
-//! This is the real device-dispatch layer the tinygrad port's `METAL` backend was
-//! missing: `MTLDevice` acquisition, MSL source compilation, shared buffers,
-//! compute-pipeline creation, kernel dispatch, and readback. It lives in its own
-//! crate (not `rsscript-runtime`, which is `#![forbid(unsafe_code)]`) because
-//! reading a `MTLBuffer`'s `contents()` pointer is inherently `unsafe`.
-//!
-//! Everything Metal-specific is behind `#[cfg(target_os = "macos")]`; other targets
-//! get a stub that reports the GPU as unavailable and errors from any dispatch, so
-//! dependents still build on Linux CI. Bit-for-bit equality with CPU kernels is NOT
-//! expected — GPU reductions accumulate in a different order — so callers validate
-//! within an f32 tolerance, exactly as tinygrad's own METAL vs CPU results differ.
+//! Metal-specific code is behind `#[cfg(target_os = "macos")]`. Validation and
+//! resource accounting stay platform-neutral so overflow behavior is identical
+//! and testable on every target.
+
+use std::fmt;
+
+#[cfg(any(test, target_os = "macos"))]
+use std::collections::VecDeque;
+
+const FLOAT_BYTES: usize = std::mem::size_of::<f32>();
+#[cfg(target_os = "macos")]
+const FLOAT_BYTES_U64: u64 = 4;
+const MAX_MSL_SOURCE_BYTES: usize = 1024 * 1024;
+const MAX_FUNCTION_NAME_BYTES: usize = 256;
+const MAX_INPUT_BUFFERS: usize = 30;
+const MAX_RAW_BUFFER_BYTES: u64 = 1024 * 1024 * 1024;
+const MAX_RAW_TOTAL_INPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_RAW_DISPATCH_THREADS: u64 = 4_294_967_295;
+#[cfg(target_os = "macos")]
+const PIPELINE_CACHE_CAPACITY: usize = 32;
+
+/// A validation, resource, compilation, or dispatch failure from the Metal path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MetalError {
+    DimensionOverflow {
+        expression: &'static str,
+        lhs: usize,
+        rhs: usize,
+    },
+    DimensionTooLarge {
+        dimension: &'static str,
+        value: usize,
+        max: u32,
+    },
+    ByteSizeOverflow {
+        elements: usize,
+        element_size: usize,
+    },
+    TotalByteSizeOverflow,
+    BufferTooLarge {
+        buffer: String,
+        bytes: u64,
+        max_bytes: u64,
+    },
+    InvalidBufferLength {
+        buffer: &'static str,
+        actual: usize,
+        expected: usize,
+    },
+    DispatchTooLarge {
+        threads: usize,
+    },
+    ResourceLimit {
+        resource: &'static str,
+        actual: usize,
+        limit: usize,
+    },
+    InvalidFunctionName,
+    DeviceUnavailable,
+    Compilation(String),
+    FunctionNotFound {
+        function: String,
+        message: String,
+    },
+    PipelineCreation(String),
+    InvalidThreadgroup {
+        width: u64,
+        height: u64,
+        max_threads: u64,
+        max_width: u64,
+        max_height: u64,
+    },
+    CommandExecution,
+    UnsupportedPlatform,
+}
+
+impl fmt::Display for MetalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DimensionOverflow {
+                expression,
+                lhs,
+                rhs,
+            } => write!(
+                f,
+                "metal: dimension calculation {expression} overflowed ({lhs} * {rhs})"
+            ),
+            Self::DimensionTooLarge {
+                dimension,
+                value,
+                max,
+            } => write!(
+                f,
+                "metal: dimension {dimension}={value} exceeds kernel uint limit {max}"
+            ),
+            Self::ByteSizeOverflow {
+                elements,
+                element_size,
+            } => write!(
+                f,
+                "metal: byte size overflow for {elements} elements of {element_size} bytes"
+            ),
+            Self::TotalByteSizeOverflow => {
+                write!(f, "metal: total input buffer byte size overflow")
+            }
+            Self::BufferTooLarge {
+                buffer,
+                bytes,
+                max_bytes,
+            } => write!(
+                f,
+                "metal: {buffer} buffer requires {bytes} bytes, limit is {max_bytes}"
+            ),
+            Self::InvalidBufferLength {
+                buffer,
+                actual,
+                expected,
+            } => write!(
+                f,
+                "metal matmul: {buffer} len {actual} != expected {expected}"
+            ),
+            Self::DispatchTooLarge { threads } => {
+                write!(f, "metal: dispatch width {threads} does not fit in u64")
+            }
+            Self::ResourceLimit {
+                resource,
+                actual,
+                limit,
+            } => write!(
+                f,
+                "metal: {resource} size/count {actual} exceeds limit {limit}"
+            ),
+            Self::InvalidFunctionName => write!(f, "metal: kernel function name must not be empty"),
+            Self::DeviceUnavailable => write!(f, "metal: no system default device"),
+            Self::Compilation(message) => write!(f, "metal: MSL compile failed: {message}"),
+            Self::FunctionNotFound { function, message } => {
+                write!(f, "metal: kernel '{function}' not found: {message}")
+            }
+            Self::PipelineCreation(message) => {
+                write!(f, "metal: pipeline creation failed: {message}")
+            }
+            Self::InvalidThreadgroup {
+                width,
+                height,
+                max_threads,
+                max_width,
+                max_height,
+            } => write!(
+                f,
+                "metal: invalid threadgroup {width}x{height}; limits are \
+                 {max_width}x{max_height} and {max_threads} total threads"
+            ),
+            Self::CommandExecution => {
+                write!(f, "metal: command buffer finished in Error status")
+            }
+            Self::UnsupportedPlatform => {
+                write!(f, "metal: GPU compute is only available on macOS")
+            }
+        }
+    }
+}
+
+impl std::error::Error for MetalError {}
+
+// Keeps existing callers that accept an `Into<String>` error source-compatible.
+impl From<MetalError> for String {
+    fn from(error: MetalError) -> Self {
+        error.to_string()
+    }
+}
+
+#[derive(Debug)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+struct MatmulRequest {
+    a_bytes: u64,
+    b_bytes: u64,
+    c_elements: usize,
+    c_bytes: u64,
+    dimensions: [u32; 3],
+    grid: [u64; 2],
+}
+
+#[derive(Debug)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+struct Run1dRequest {
+    input_bytes: Vec<u64>,
+    output_bytes: u64,
+    grid_width: u64,
+}
+
+fn checked_elements(lhs: usize, rhs: usize, expression: &'static str) -> Result<usize, MetalError> {
+    lhs.checked_mul(rhs).ok_or(MetalError::DimensionOverflow {
+        expression,
+        lhs,
+        rhs,
+    })
+}
+
+fn checked_bytes(elements: usize) -> Result<u64, MetalError> {
+    let bytes = elements
+        .checked_mul(FLOAT_BYTES)
+        .ok_or(MetalError::ByteSizeOverflow {
+            elements,
+            element_size: FLOAT_BYTES,
+        })?;
+    u64::try_from(bytes).map_err(|_| MetalError::ByteSizeOverflow {
+        elements,
+        element_size: FLOAT_BYTES,
+    })
+}
+
+fn checked_dimension(dimension: &'static str, value: usize) -> Result<u32, MetalError> {
+    u32::try_from(value).map_err(|_| MetalError::DimensionTooLarge {
+        dimension,
+        value,
+        max: u32::MAX,
+    })
+}
+
+fn checked_dispatch_width(threads: usize) -> Result<u64, MetalError> {
+    u64::try_from(threads).map_err(|_| MetalError::DispatchTooLarge { threads })
+}
+
+fn validate_matmul(
+    a_len: usize,
+    b_len: usize,
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Result<MatmulRequest, MetalError> {
+    let a_elements = checked_elements(m, k, "m*k")?;
+    let b_elements = checked_elements(k, n, "k*n")?;
+    let c_elements = checked_elements(m, n, "m*n")?;
+
+    if a_len != a_elements {
+        return Err(MetalError::InvalidBufferLength {
+            buffer: "lhs",
+            actual: a_len,
+            expected: a_elements,
+        });
+    }
+    if b_len != b_elements {
+        return Err(MetalError::InvalidBufferLength {
+            buffer: "rhs",
+            actual: b_len,
+            expected: b_elements,
+        });
+    }
+
+    let dimensions = [
+        checked_dimension("m", m)?,
+        checked_dimension("k", k)?,
+        checked_dimension("n", n)?,
+    ];
+    Ok(MatmulRequest {
+        a_bytes: checked_bytes(a_elements)?,
+        b_bytes: checked_bytes(b_elements)?,
+        c_elements,
+        c_bytes: checked_bytes(c_elements)?,
+        dimensions,
+        grid: [checked_dispatch_width(n)?, checked_dispatch_width(m)?],
+    })
+}
+
+fn validate_run_1d(
+    source: &str,
+    fn_name: &str,
+    inputs: &[&[f32]],
+    out_len: usize,
+    threads: usize,
+) -> Result<Run1dRequest, MetalError> {
+    if source.len() > MAX_MSL_SOURCE_BYTES {
+        return Err(MetalError::ResourceLimit {
+            resource: "MSL source",
+            actual: source.len(),
+            limit: MAX_MSL_SOURCE_BYTES,
+        });
+    }
+    if fn_name.is_empty() {
+        return Err(MetalError::InvalidFunctionName);
+    }
+    if fn_name.len() > MAX_FUNCTION_NAME_BYTES {
+        return Err(MetalError::ResourceLimit {
+            resource: "function name",
+            actual: fn_name.len(),
+            limit: MAX_FUNCTION_NAME_BYTES,
+        });
+    }
+    if inputs.len() > MAX_INPUT_BUFFERS {
+        return Err(MetalError::ResourceLimit {
+            resource: "input buffer count",
+            actual: inputs.len(),
+            limit: MAX_INPUT_BUFFERS,
+        });
+    }
+
+    let input_bytes = inputs
+        .iter()
+        .map(|input| checked_bytes(input.len()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut total_input_bytes = 0_u64;
+    for (index, &bytes) in input_bytes.iter().enumerate() {
+        validate_buffer_limit(format!("input {index}"), bytes, MAX_RAW_BUFFER_BYTES)?;
+        total_input_bytes = total_input_bytes
+            .checked_add(bytes)
+            .ok_or(MetalError::TotalByteSizeOverflow)?;
+    }
+    validate_buffer_limit(
+        "total input payload".into(),
+        total_input_bytes,
+        MAX_RAW_TOTAL_INPUT_BYTES,
+    )?;
+    let output_bytes = checked_bytes(out_len)?;
+    validate_buffer_limit("output".into(), output_bytes, MAX_RAW_BUFFER_BYTES)?;
+    let grid_width = checked_dispatch_width(threads)?;
+    if grid_width > MAX_RAW_DISPATCH_THREADS {
+        return Err(MetalError::ResourceLimit {
+            resource: "dispatch thread count",
+            actual: threads,
+            limit: usize::try_from(MAX_RAW_DISPATCH_THREADS).unwrap_or(usize::MAX),
+        });
+    }
+    Ok(Run1dRequest {
+        input_bytes,
+        output_bytes,
+        grid_width,
+    })
+}
+
+fn validate_buffer_limit(buffer: String, bytes: u64, max_bytes: u64) -> Result<(), MetalError> {
+    if bytes > max_bytes {
+        Err(MetalError::BufferTooLarge {
+            buffer,
+            bytes,
+            max_bytes,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_threadgroup(
+    width: u64,
+    height: u64,
+    max_threads: u64,
+    max_width: u64,
+    max_height: u64,
+) -> Result<(), MetalError> {
+    let total = width.checked_mul(height);
+    if width == 0
+        || height == 0
+        || width > max_width
+        || height > max_height
+        || total.is_none_or(|total| total > max_threads)
+    {
+        Err(MetalError::InvalidThreadgroup {
+            width,
+            height,
+            max_threads,
+            max_width,
+            max_height,
+        })
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+#[cfg(any(test, target_os = "macos"))]
+struct BoundedLru<K, V> {
+    capacity: usize,
+    entries: VecDeque<(K, V)>,
+}
+
+#[cfg(any(test, target_os = "macos"))]
+impl<K: Eq, V: Clone> BoundedLru<K, V> {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            entries: VecDeque::with_capacity(capacity),
+        }
+    }
+
+    fn get(&mut self, key: &K) -> Option<V> {
+        let index = self.entries.iter().position(|(entry, _)| entry == key)?;
+        let entry = self.entries.remove(index)?;
+        let value = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(value)
+    }
+
+    fn insert(&mut self, key: K, value: V) {
+        if self.capacity == 0 {
+            return;
+        }
+        if let Some(index) = self.entries.iter().position(|(entry, _)| entry == &key) {
+            self.entries.remove(index);
+        } else if self.entries.len() == self.capacity {
+            self.entries.pop_front();
+        }
+        self.entries.push_back((key, value));
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.entries.len()
+    }
+}
 
 /// Whether a Metal device is available in this process (always false off macOS).
 pub fn metal_available() -> bool {
     imp::metal_available()
 }
 
-/// The system default Metal device's name (e.g. "Apple M1 Pro"), or an empty
-/// string when no device is available.
+/// The system default Metal device's name, or an empty string when unavailable.
 pub fn metal_device_name() -> String {
     imp::metal_device_name()
 }
 
-/// GPU matrix multiply `(m, k) x (k, n) -> (m, n)`, row-major f32. Uploads `a`/`b`
-/// to shared buffers, runs an MSL kernel, and reads the result back. Returns an
-/// error string if no device is available or compilation/dispatch fails.
-pub fn gpu_matmul(a: &[f32], b: &[f32], m: usize, k: usize, n: usize) -> Result<Vec<f32>, String> {
-    imp::gpu_matmul(a, b, m, k, n)
+/// GPU matrix multiply `(m, k) x (k, n) -> (m, n)`, row-major f32.
+pub fn gpu_matmul(
+    a: &[f32],
+    b: &[f32],
+    m: usize,
+    k: usize,
+    n: usize,
+) -> Result<Vec<f32>, MetalError> {
+    let request = validate_matmul(a.len(), b.len(), m, k, n)?;
+    imp::gpu_matmul(a, b, request)
 }
 
-/// Compile `source` and dispatch the kernel `fn_name` over `threads` linear
-/// threads, binding `inputs[i]` to `buffer(i)` and returning `buffer(inputs.len())`
-/// sized `out_len`. A general escape hatch (used by the tests) to prove the FFI runs
-/// arbitrary MSL on the GPU; tensor ops use the specialized helpers above.
+/// Compile `source` and dispatch `fn_name` over a one-dimensional grid.
 pub fn gpu_run_1d(
     source: &str,
     fn_name: &str,
     inputs: &[&[f32]],
     out_len: usize,
     threads: usize,
-) -> Result<Vec<f32>, String> {
-    imp::gpu_run_1d(source, fn_name, inputs, out_len, threads)
+) -> Result<Vec<f32>, MetalError> {
+    let request = validate_run_1d(source, fn_name, inputs, out_len, threads)?;
+    imp::gpu_run_1d(source, fn_name, inputs, out_len, request)
 }
 
 #[cfg(target_os = "macos")]
 mod imp {
+    use super::*;
     use metal::{Device, MTLCommandBufferStatus, MTLResourceOptions, MTLSize};
     use objc::rc::autoreleasepool;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::sync::{Mutex, OnceLock};
+
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    struct PipelineOptions {
+        fast_math: bool,
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct PipelineKey {
+        device_registry_id: u64,
+        source_hash: u64,
+        source: Box<str>,
+        function_name: Box<str>,
+        options: PipelineOptions,
+    }
+
+    impl PipelineKey {
+        fn new(
+            device_registry_id: u64,
+            source: &str,
+            function_name: &str,
+            options: PipelineOptions,
+        ) -> Self {
+            let mut hasher = DefaultHasher::new();
+            source.hash(&mut hasher);
+            Self {
+                device_registry_id,
+                source_hash: hasher.finish(),
+                source: source.into(),
+                function_name: function_name.into(),
+                options,
+            }
+        }
+    }
+
+    struct MetalState {
+        device: Device,
+        queue: metal::CommandQueue,
+        pipelines: Mutex<BoundedLru<PipelineKey, metal::ComputePipelineState>>,
+    }
+
+    static STATE: OnceLock<Option<MetalState>> = OnceLock::new();
+
+    fn state() -> Result<&'static MetalState, MetalError> {
+        STATE
+            .get_or_init(|| {
+                Device::system_default().map(|device| MetalState {
+                    queue: device.new_command_queue(),
+                    device,
+                    pipelines: Mutex::new(BoundedLru::new(PIPELINE_CACHE_CAPACITY)),
+                })
+            })
+            .as_ref()
+            .ok_or(MetalError::DeviceUnavailable)
+    }
 
     pub fn metal_available() -> bool {
-        Device::system_default().is_some()
+        state().is_ok()
     }
 
     pub fn metal_device_name() -> String {
-        Device::system_default()
-            .map(|d| d.name().to_string())
+        state()
+            .map(|state| state.device.name().to_string())
             .unwrap_or_default()
     }
 
-    /// Upload an f32 slice into a shared-storage Metal buffer.
-    fn upload(device: &Device, data: &[f32]) -> metal::Buffer {
-        let byte_len = std::mem::size_of_val(data) as u64;
-        // A zero-length buffer is invalid; round up to one element so empty inputs
-        // still produce a usable handle.
-        let len = byte_len.max(std::mem::size_of::<f32>() as u64);
-        let buffer = device.new_buffer(len, MTLResourceOptions::StorageModeShared);
+    fn allocated_bytes(bytes: u64) -> u64 {
+        bytes.max(FLOAT_BYTES_U64)
+    }
+
+    fn validate_device_buffer(
+        state: &MetalState,
+        buffer: impl Into<String>,
+        bytes: u64,
+    ) -> Result<(), MetalError> {
+        validate_buffer_limit(
+            buffer.into(),
+            allocated_bytes(bytes),
+            state.device.max_buffer_length(),
+        )
+    }
+
+    fn upload(
+        state: &MetalState,
+        name: impl Into<String>,
+        data: &[f32],
+        byte_len: u64,
+    ) -> Result<metal::Buffer, MetalError> {
+        validate_device_buffer(state, name, byte_len)?;
+        let buffer = state.device.new_buffer(
+            allocated_bytes(byte_len),
+            MTLResourceOptions::StorageModeShared,
+        );
         if !data.is_empty() {
             unsafe {
                 std::ptr::copy_nonoverlapping(
@@ -75,10 +552,17 @@ mod imp {
                 );
             }
         }
-        buffer
+        Ok(buffer)
     }
 
-    /// Read `len` f32s back out of a shared buffer.
+    fn new_output_buffer(state: &MetalState, byte_len: u64) -> Result<metal::Buffer, MetalError> {
+        validate_device_buffer(state, "output", byte_len)?;
+        Ok(state.device.new_buffer(
+            allocated_bytes(byte_len),
+            MTLResourceOptions::StorageModeShared,
+        ))
+    }
+
     fn download(buffer: &metal::Buffer, len: usize) -> Vec<f32> {
         let mut out = vec![0.0f32; len];
         if len > 0 {
@@ -93,23 +577,51 @@ mod imp {
         out
     }
 
-    /// Compile MSL `source`, build a compute pipeline for `fn_name`, returning it.
-    /// Errors surface as the Metal compiler's message.
     fn make_pipeline(
-        device: &Device,
+        state: &MetalState,
         source: &str,
         fn_name: &str,
-    ) -> Result<metal::ComputePipelineState, String> {
+    ) -> Result<metal::ComputePipelineState, MetalError> {
+        let pipeline_options = PipelineOptions::default();
+        let key = PipelineKey::new(
+            state.device.registry_id(),
+            source,
+            fn_name,
+            pipeline_options,
+        );
+        if let Some(pipeline) = state
+            .pipelines
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&key)
+        {
+            return Ok(pipeline);
+        }
+
+        // Compile outside the cache lock; concurrent misses may duplicate work but
+        // do not serialize unrelated shader compilation.
         let options = metal::CompileOptions::new();
-        let library = device
+        options.set_fast_math_enabled(pipeline_options.fast_math);
+        let library = state
+            .device
             .new_library_with_source(source, &options)
-            .map_err(|e| format!("metal: MSL compile failed: {e}"))?;
-        let function = library
-            .get_function(fn_name, None)
-            .map_err(|e| format!("metal: kernel '{fn_name}' not found: {e}"))?;
-        device
+            .map_err(MetalError::Compilation)?;
+        let function = library.get_function(fn_name, None).map_err(|message| {
+            MetalError::FunctionNotFound {
+                function: fn_name.to_string(),
+                message,
+            }
+        })?;
+        let pipeline = state
+            .device
             .new_compute_pipeline_state_with_function(&function)
-            .map_err(|e| format!("metal: pipeline creation failed: {e}"))
+            .map_err(MetalError::PipelineCreation)?;
+        state
+            .pipelines
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(key, pipeline.clone());
+        Ok(pipeline)
     }
 
     const MATMUL_SRC: &str = r#"
@@ -138,56 +650,52 @@ kernel void rss_matmul(
     pub fn gpu_matmul(
         a: &[f32],
         b: &[f32],
-        m: usize,
-        k: usize,
-        n: usize,
-    ) -> Result<Vec<f32>, String> {
-        if a.len() != m * k {
-            return Err(format!("metal matmul: lhs len {} != {m}*{k}", a.len()));
-        }
-        if b.len() != k * n {
-            return Err(format!("metal matmul: rhs len {} != {k}*{n}", b.len()));
+        request: MatmulRequest,
+    ) -> Result<Vec<f32>, MetalError> {
+        if request.c_elements == 0 {
+            return Ok(Vec::new());
         }
         autoreleasepool(|| {
-            let device = Device::system_default()
-                .ok_or_else(|| "metal: no system default device".to_string())?;
-            let pipeline = make_pipeline(&device, MATMUL_SRC, "rss_matmul")?;
-            let queue = device.new_command_queue();
+            let state = state()?;
+            let pipeline = make_pipeline(state, MATMUL_SRC, "rss_matmul")?;
+            let a_buf = upload(state, "lhs", a, request.a_bytes)?;
+            let b_buf = upload(state, "rhs", b, request.b_bytes)?;
+            let c_buf = new_output_buffer(state, request.c_bytes)?;
 
-            let a_buf = upload(&device, a);
-            let b_buf = upload(&device, b);
-            let c_len = m * n;
-            let c_buf = device.new_buffer(
-                (c_len.max(1) * std::mem::size_of::<f32>()) as u64,
-                MTLResourceOptions::StorageModeShared,
-            );
-            let dims = [m as u32, k as u32, n as u32];
-
-            let command_buffer = queue.new_command_buffer();
+            let command_buffer = state.queue.new_command_buffer();
             let encoder = command_buffer.new_compute_command_encoder();
             encoder.set_compute_pipeline_state(&pipeline);
             encoder.set_buffer(0, Some(&a_buf), 0);
             encoder.set_buffer(1, Some(&b_buf), 0);
             encoder.set_buffer(2, Some(&c_buf), 0);
-            encoder.set_bytes(3, 4, (&dims[0] as *const u32).cast());
-            encoder.set_bytes(4, 4, (&dims[1] as *const u32).cast());
-            encoder.set_bytes(5, 4, (&dims[2] as *const u32).cast());
+            encoder.set_bytes(
+                3,
+                FLOAT_BYTES_U64,
+                (&request.dimensions[0] as *const u32).cast(),
+            );
+            encoder.set_bytes(
+                4,
+                FLOAT_BYTES_U64,
+                (&request.dimensions[1] as *const u32).cast(),
+            );
+            encoder.set_bytes(
+                5,
+                FLOAT_BYTES_U64,
+                (&request.dimensions[2] as *const u32).cast(),
+            );
 
-            // One thread per output element; let Metal pick the threadgroup shape.
-            let grid = MTLSize::new(n as u64, m as u64, 1);
+            let grid = MTLSize::new(request.grid[0], request.grid[1], 1);
             let tew = pipeline.thread_execution_width();
             let max_threads = pipeline.max_total_threads_per_threadgroup();
-            let tg_h = (max_threads / tew).max(1);
-            let threadgroup = MTLSize::new(tew, tg_h, 1);
-            encoder.dispatch_threads(grid, threadgroup);
+            let tg_h = max_threads.checked_div(tew).unwrap_or(0);
+            let device_max = state.device.max_threads_per_threadgroup();
+            validate_threadgroup(tew, tg_h, max_threads, device_max.width, device_max.height)?;
+            encoder.dispatch_threads(grid, MTLSize::new(tew, tg_h, 1));
             encoder.end_encoding();
             command_buffer.commit();
             command_buffer.wait_until_completed();
-
-            if let Some(err) = command_buffer_error(command_buffer) {
-                return Err(err);
-            }
-            Ok(download(&c_buf, c_len))
+            command_buffer_result(command_buffer)?;
+            Ok(download(&c_buf, request.c_elements))
         })
     }
 
@@ -196,56 +704,70 @@ kernel void rss_matmul(
         fn_name: &str,
         inputs: &[&[f32]],
         out_len: usize,
-        threads: usize,
-    ) -> Result<Vec<f32>, String> {
+        request: Run1dRequest,
+    ) -> Result<Vec<f32>, MetalError> {
+        if request.grid_width == 0 {
+            return Ok(vec![0.0; out_len]);
+        }
         autoreleasepool(|| {
-            let device = Device::system_default()
-                .ok_or_else(|| "metal: no system default device".to_string())?;
-            let pipeline = make_pipeline(&device, source, fn_name)?;
-            let queue = device.new_command_queue();
+            let state = state()?;
+            let pipeline = make_pipeline(state, source, fn_name)?;
+            let in_bufs = inputs
+                .iter()
+                .zip(&request.input_bytes)
+                .enumerate()
+                .map(|(index, (data, &bytes))| upload(state, format!("input {index}"), data, bytes))
+                .collect::<Result<Vec<_>, _>>()?;
+            let out_buf = new_output_buffer(state, request.output_bytes)?;
 
-            let in_bufs: Vec<metal::Buffer> = inputs.iter().map(|d| upload(&device, d)).collect();
-            let out_buf = device.new_buffer(
-                (out_len.max(1) * std::mem::size_of::<f32>()) as u64,
-                MTLResourceOptions::StorageModeShared,
-            );
-
-            let command_buffer = queue.new_command_buffer();
+            let command_buffer = state.queue.new_command_buffer();
             let encoder = command_buffer.new_compute_command_encoder();
             encoder.set_compute_pipeline_state(&pipeline);
-            for (i, buf) in in_bufs.iter().enumerate() {
-                encoder.set_buffer(i as u64, Some(buf), 0);
+            for (index, buffer) in in_bufs.iter().enumerate() {
+                let binding = u64::try_from(index).map_err(|_| MetalError::ResourceLimit {
+                    resource: "buffer binding index",
+                    actual: index,
+                    limit: MAX_INPUT_BUFFERS,
+                })?;
+                encoder.set_buffer(binding, Some(buffer), 0);
             }
-            encoder.set_buffer(in_bufs.len() as u64, Some(&out_buf), 0);
+            let output_binding =
+                u64::try_from(in_bufs.len()).map_err(|_| MetalError::ResourceLimit {
+                    resource: "buffer binding index",
+                    actual: in_bufs.len(),
+                    limit: MAX_INPUT_BUFFERS,
+                })?;
+            encoder.set_buffer(output_binding, Some(&out_buf), 0);
 
             let tew = pipeline.thread_execution_width();
-            let threadgroup = MTLSize::new(tew, 1, 1);
-            let grid = MTLSize::new(threads as u64, 1, 1);
-            encoder.dispatch_threads(grid, threadgroup);
+            let max_threads = pipeline.max_total_threads_per_threadgroup();
+            let device_max = state.device.max_threads_per_threadgroup();
+            validate_threadgroup(tew, 1, max_threads, device_max.width, device_max.height)?;
+            encoder.dispatch_threads(
+                MTLSize::new(request.grid_width, 1, 1),
+                MTLSize::new(tew, 1, 1),
+            );
             encoder.end_encoding();
             command_buffer.commit();
             command_buffer.wait_until_completed();
-
-            if let Some(err) = command_buffer_error(command_buffer) {
-                return Err(err);
-            }
+            command_buffer_result(command_buffer)?;
             Ok(download(&out_buf, out_len))
         })
     }
 
-    /// Surface a GPU-side execution failure as a message (the command buffer ends in
-    /// the `Error` status when the kernel faults).
-    fn command_buffer_error(cb: &metal::CommandBufferRef) -> Option<String> {
+    fn command_buffer_result(cb: &metal::CommandBufferRef) -> Result<(), MetalError> {
         if cb.status() == MTLCommandBufferStatus::Error {
-            Some("metal: command buffer finished in Error status".to_string())
+            Err(MetalError::CommandExecution)
         } else {
-            None
+            Ok(())
         }
     }
 }
 
 #[cfg(not(target_os = "macos"))]
 mod imp {
+    use super::*;
+
     pub fn metal_available() -> bool {
         false
     }
@@ -257,11 +779,9 @@ mod imp {
     pub fn gpu_matmul(
         _a: &[f32],
         _b: &[f32],
-        _m: usize,
-        _k: usize,
-        _n: usize,
-    ) -> Result<Vec<f32>, String> {
-        Err("metal: GPU compute is only available on macOS".to_string())
+        _request: MatmulRequest,
+    ) -> Result<Vec<f32>, MetalError> {
+        Err(MetalError::UnsupportedPlatform)
     }
 
     pub fn gpu_run_1d(
@@ -269,16 +789,151 @@ mod imp {
         _fn_name: &str,
         _inputs: &[&[f32]],
         _out_len: usize,
-        _threads: usize,
-    ) -> Result<Vec<f32>, String> {
-        Err("metal: GPU compute is only available on macOS".to_string())
+        _request: Run1dRequest,
+    ) -> Result<Vec<f32>, MetalError> {
+        Err(MetalError::UnsupportedPlatform)
     }
 }
 
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn matmul_rejects_dimension_product_overflow() {
+        let error = validate_matmul(0, 0, usize::MAX, 2, 1).unwrap_err();
+        assert!(matches!(
+            error,
+            MetalError::DimensionOverflow {
+                expression: "m*k",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn matmul_rejects_dimensions_beyond_kernel_uint() {
+        if usize::BITS <= 32 {
+            return;
+        }
+        let too_large = (u32::MAX as usize) + 1;
+        let error = validate_matmul(0, 0, too_large, 0, 0).unwrap_err();
+        assert_eq!(
+            error,
+            MetalError::DimensionTooLarge {
+                dimension: "m",
+                value: too_large,
+                max: u32::MAX,
+            }
+        );
+    }
+
+    #[test]
+    fn matmul_accepts_empty_dimensions_without_overflow() {
+        let request = validate_matmul(0, 0, 0, usize::try_from(u32::MAX).unwrap(), 0).unwrap();
+        assert_eq!(request.c_elements, 0);
+        assert_eq!(request.c_bytes, 0);
+        assert_eq!(request.grid, [0, 0]);
+    }
+
+    #[test]
+    fn byte_size_checks_usize_boundary() {
+        let largest = usize::MAX / FLOAT_BYTES;
+        if usize::BITS <= 64 {
+            assert_eq!(
+                checked_bytes(largest).unwrap(),
+                largest as u64 * FLOAT_BYTES as u64
+            );
+        }
+        assert!(matches!(
+            checked_bytes(largest + 1),
+            Err(MetalError::ByteSizeOverflow { .. })
+        ));
+    }
+
+    #[test]
+    fn buffer_limit_accepts_boundary_and_rejects_next_byte() {
+        assert_eq!(validate_buffer_limit("test".into(), 4096, 4096), Ok(()));
+        assert_eq!(
+            validate_buffer_limit("test".into(), 4097, 4096),
+            Err(MetalError::BufferTooLarge {
+                buffer: "test".into(),
+                bytes: 4097,
+                max_bytes: 4096,
+            })
+        );
+    }
+
+    #[test]
+    fn threadgroup_limits_accept_boundaries_and_reject_excess() {
+        assert_eq!(validate_threadgroup(32, 8, 256, 32, 8), Ok(()));
+        assert!(matches!(
+            validate_threadgroup(33, 1, 256, 32, 8),
+            Err(MetalError::InvalidThreadgroup { .. })
+        ));
+        assert!(matches!(
+            validate_threadgroup(32, 9, 256, 32, 9),
+            Err(MetalError::InvalidThreadgroup { .. })
+        ));
+        assert!(matches!(
+            validate_threadgroup(u64::MAX, 2, u64::MAX, u64::MAX, 2),
+            Err(MetalError::InvalidThreadgroup { .. })
+        ));
+    }
+
+    #[test]
+    fn raw_dispatch_enforces_source_and_buffer_quotas() {
+        let oversized_source = "x".repeat(MAX_MSL_SOURCE_BYTES + 1);
+        assert!(matches!(
+            validate_run_1d(&oversized_source, "kernel", &[], 0, 0),
+            Err(MetalError::ResourceLimit {
+                resource: "MSL source",
+                ..
+            })
+        ));
+
+        let empty: &[f32] = &[];
+        let inputs = vec![empty; MAX_INPUT_BUFFERS + 1];
+        assert!(matches!(
+            validate_run_1d("", "kernel", &inputs, 0, 0),
+            Err(MetalError::ResourceLimit {
+                resource: "input buffer count",
+                ..
+            })
+        ));
+
+        let oversized_output = (MAX_RAW_BUFFER_BYTES as usize / FLOAT_BYTES) + 1;
+        assert!(matches!(
+            validate_run_1d("", "kernel", &[], oversized_output, 0),
+            Err(MetalError::BufferTooLarge { buffer, .. }) if buffer == "output"
+        ));
+
+        if usize::BITS > 32 {
+            let too_many_threads = (u32::MAX as usize) + 1;
+            assert!(matches!(
+                validate_run_1d("", "kernel", &[], 0, too_many_threads),
+                Err(MetalError::ResourceLimit {
+                    resource: "dispatch thread count",
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[test]
+    fn bounded_lru_promotes_hits_and_evicts_oldest() {
+        let mut cache = BoundedLru::new(2);
+        cache.insert("a", 1);
+        cache.insert("b", 2);
+        assert_eq!(cache.get(&"a"), Some(1));
+        cache.insert("c", 3);
+        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.get(&"b"), None);
+        assert_eq!(cache.get(&"a"), Some(1));
+        assert_eq!(cache.get(&"c"), Some(3));
+    }
+
+    #[cfg(target_os = "macos")]
     #[test]
     fn device_is_present_on_mac() {
         if metal_available() {
@@ -286,22 +941,24 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn gpu_matmul_matches_cpu() {
+    fn gpu_matmul_matches_cpu_and_reuses_pipeline() {
         if !metal_available() {
             return;
         }
-        // (2x3) x (3x2) -> (2x2): [[1,2,3],[4,5,6]] x [[7,8],[9,10],[11,12]].
         let a = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0];
         let b = [7.0, 8.0, 9.0, 10.0, 11.0, 12.0];
-        let out = gpu_matmul(&a, &b, 2, 3, 2).unwrap();
-        // Expected: [[58,64],[139,154]].
-        let expected = [58.0, 64.0, 139.0, 154.0];
-        for (g, e) in out.iter().zip(expected.iter()) {
-            assert!((g - e).abs() < 1e-3, "gpu {g} vs cpu {e}");
+        for _ in 0..2 {
+            let out = gpu_matmul(&a, &b, 2, 3, 2).unwrap();
+            let expected = [58.0, 64.0, 139.0, 154.0];
+            for (got, expected) in out.iter().zip(expected.iter()) {
+                assert!((got - expected).abs() < 1e-3);
+            }
         }
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn gpu_run_1d_elementwise_add() {
         if !metal_available() {

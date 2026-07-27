@@ -1,5 +1,6 @@
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
+use subtle::ConstantTimeEq;
 
 pub fn sha256_hex_string(value: &str) -> String {
     sha256_hex_bytes(value.as_bytes())
@@ -18,16 +19,7 @@ pub fn hmac_sha256_hex(key: &str, message: &str) -> String {
 }
 
 pub fn constant_time_equal(left: &str, right: &str) -> bool {
-    let left = left.as_bytes();
-    let right = right.as_bytes();
-    let mut diff = left.len() ^ right.len();
-    let max_len = left.len().max(right.len());
-    for index in 0..max_len {
-        let left_byte = left.get(index).copied().unwrap_or(0);
-        let right_byte = right.get(index).copied().unwrap_or(0);
-        diff |= (left_byte ^ right_byte) as usize;
-    }
-    diff == 0
+    bool::from(left.as_bytes().ct_eq(right.as_bytes()))
 }
 
 #[cfg(test)]
@@ -40,5 +32,7 @@ mod tests {
         );
         assert!(super::constant_time_equal("same", "same"));
         assert!(!super::constant_time_equal("same", "different"));
+        assert!(super::constant_time_equal("", ""));
+        assert!(!super::constant_time_equal("", "x"));
     }
 }

@@ -72,7 +72,9 @@ reviewing and eventually implementing its own core tooling.
 ## Testing Loop
 
 Use Docker Compose directly for development. The public Cargo-facing rsscript
-test target names are `static`, `runtime`, `differential`, and `soak`.
+test target names are `static`, `runtime`, `differential`, `soak`,
+`jit_cost_model`, and `jit_env`. The last two are process-isolated because they
+set process-wide JIT configuration.
 
 ```sh
 docker compose run --rm dev cargo test -p rsscript --no-run
@@ -84,7 +86,7 @@ docker compose run --rm dev cargo test -p rsscript --features native-jit --no-ru
 If a broad target fails, run the specific failing test while editing. After the
 fix, return to the broad target instead of stacking many single-test passes.
 
-Focused integration tests should target one of the four public Cargo targets and
+Focused integration tests should target one of the six public Cargo targets and
 filter by module path:
 
 ```sh

@@ -348,7 +348,6 @@ fn compute_jit_eligibility(functions: &[RegFunction]) -> Vec<bool> {
             for instr in &functions[index].code {
                 if let RegInstr::CallKnown { function, .. } = instr
                     && non_suspending[*function]
-                    && !targets.contains(function)
                 {
                     targets.push(*function);
                 }
@@ -357,34 +356,133 @@ fn compute_jit_eligibility(functions: &[RegFunction]) -> Vec<bool> {
         })
         .collect();
 
-    // Nodes reachable from `start` via >= 1 edge.
-    let reachable = |start: usize| -> Vec<bool> {
-        let mut seen = vec![false; n];
-        let mut stack = edges[start].clone();
-        while let Some(node) = stack.pop() {
-            if seen[node] {
-                continue;
-            }
-            seen[node] = true;
-            for &next in &edges[node] {
-                if !seen[next] {
-                    stack.push(next);
-                }
-            }
-        }
-        seen
-    };
-    let reach: Vec<Vec<bool>> = (0..n).map(reachable).collect();
-    // A node is on a cycle iff it can reach itself.
-    let cyclic: Vec<bool> = (0..n).map(|node| reach[node][node]).collect();
+    let reaches_cycle = functions_reaching_call_cycle(&edges);
 
     (0..n)
-        .map(|index| {
-            non_suspending[index]
-                && !cyclic[index]
-                && !(0..n).any(|other| cyclic[other] && reach[index][other])
-        })
+        .map(|index| non_suspending[index] && !reaches_cycle[index])
         .collect()
+}
+
+/// Classify nodes that are cyclic or can reach a cycle in `O(V + E)` space and
+/// time. Repeatedly removing sinks is equivalent to pruning the acyclic portion
+/// of the call graph: in a finite graph, every node left afterward has a path to
+/// a cycle, and no removed node does.
+fn functions_reaching_call_cycle(edges: &[Vec<usize>]) -> Vec<bool> {
+    let n = edges.len();
+    let mut reverse_edges = vec![Vec::new(); n];
+    let mut remaining_out_degree = vec![0usize; n];
+
+    for (source, targets) in edges.iter().enumerate() {
+        remaining_out_degree[source] = targets.len();
+        for &target in targets {
+            debug_assert!(target < n);
+            reverse_edges[target].push(source);
+        }
+    }
+
+    let mut reaches_cycle = vec![true; n];
+    let mut sinks = VecDeque::new();
+    for (node, &degree) in remaining_out_degree.iter().enumerate() {
+        if degree == 0 {
+            reaches_cycle[node] = false;
+            sinks.push_back(node);
+        }
+    }
+
+    while let Some(removed) = sinks.pop_front() {
+        for &caller in &reverse_edges[removed] {
+            if !reaches_cycle[caller] {
+                continue;
+            }
+            remaining_out_degree[caller] -= 1;
+            if remaining_out_degree[caller] == 0 {
+                reaches_cycle[caller] = false;
+                sinks.push_back(caller);
+            }
+        }
+    }
+
+    reaches_cycle
+}
+
+#[cfg(test)]
+mod jit_eligibility_tests {
+    use super::*;
+
+    fn function(callees: impl IntoIterator<Item = usize>) -> RegFunction {
+        let mut function = RegFunction::placeholder(String::new());
+        function.code = callees
+            .into_iter()
+            .map(|callee| RegInstr::CallKnown {
+                dst: 0,
+                function: callee,
+                args: Vec::new(),
+                mut_args: Vec::new(),
+            })
+            .collect();
+        function
+    }
+
+    #[test]
+    fn jit_eligibility_accepts_an_acyclic_call_chain() {
+        let functions = vec![function([1]), function([2]), function([3]), function([])];
+
+        assert_eq!(
+            compute_jit_eligibility(&functions),
+            vec![true, true, true, true]
+        );
+    }
+
+    #[test]
+    fn jit_eligibility_rejects_only_star_nodes_that_reach_a_cycle() {
+        let functions = vec![
+            function([1, 2, 3]),
+            function([]),
+            function([2]),
+            function([]),
+        ];
+
+        assert_eq!(
+            compute_jit_eligibility(&functions),
+            vec![false, true, false, true]
+        );
+    }
+
+    #[test]
+    fn jit_eligibility_handles_sccs_and_shared_callees() {
+        let functions = vec![
+            function([1]),
+            function([0]),
+            function([0, 3]),
+            function([]),
+            function([3]),
+            function([3]),
+        ];
+
+        assert_eq!(
+            compute_jit_eligibility(&functions),
+            vec![false, false, false, true, true, true]
+        );
+    }
+
+    #[test]
+    fn call_cycle_classification_scales_with_a_large_chain() {
+        const NODE_COUNT: usize = 100_000;
+        let mut edges = Vec::with_capacity(NODE_COUNT);
+        for node in 0..NODE_COUNT {
+            edges.push(if node + 1 == NODE_COUNT {
+                Vec::new()
+            } else {
+                vec![node + 1]
+            });
+        }
+
+        assert!(
+            functions_reaching_call_cycle(&edges)
+                .into_iter()
+                .all(|reaches_cycle| !reaches_cycle)
+        );
+    }
 }
 
 /// Instructions reachable from `ip == 0` along the control-flow graph
@@ -1885,6 +1983,20 @@ impl RegVmExecutable {
         args: impl IntoIterator<Item = impl Into<String>>,
         native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
     ) -> Result<EvalOutput, EvalError> {
+        self.eval_main_with_args_and_native_bindings_streaming_stdout_with_limits(
+            args,
+            native_bindings,
+            VmLimits::safe_default(),
+        )
+    }
+
+    /// Streaming variant with an explicit output/resource budget.
+    pub fn eval_main_with_args_and_native_bindings_streaming_stdout_with_limits(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+        limits: VmLimits,
+    ) -> Result<EvalOutput, EvalError> {
         let mut vm = RegVm::new(
             Rc::clone(&self.unit),
             args.into_iter().map(Into::into).collect(),
@@ -1893,16 +2005,20 @@ impl RegVmExecutable {
                 .map(|(key, function)| (key.into(), function))
                 .collect(),
         );
+        vm.set_limits(limits);
         vm.stream_stdout = true;
         let result = vm.run_program("main");
         // Flush any final line that lacks a trailing newline so no output is lost.
-        if vm.stream_flushed < vm.stdout.len() {
+        let flush_result = if vm.stream_flushed < vm.stdout.len() {
             let mut out = std::io::stdout();
-            let _ = out.write_all(&vm.stdout.as_bytes()[vm.stream_flushed..]);
-            let _ = out.flush();
-            vm.stream_flushed = vm.stdout.len();
-        }
+            out.write_all(&vm.stdout.as_bytes()[vm.stream_flushed..])
+                .and_then(|()| out.flush())
+                .map_err(|error| EvalError::Runtime(format!("failed to stream stdout: {error}")))
+        } else {
+            Ok(())
+        };
         let value = result?;
+        flush_result?;
         let display_value = value.display();
         let native_value = value.native_value();
         Ok(EvalOutput {

@@ -5,6 +5,39 @@
 
 use std::io;
 use std::process::{Child, Command};
+#[cfg(windows)]
+use std::{fs::File, path::Path};
+
+#[cfg(windows)]
+pub fn same_file_identity(path: &Path, open_file: &File) -> io::Result<bool> {
+    use std::mem::MaybeUninit;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+        GetFileInformationByHandle,
+    };
+
+    let path_file = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(path)?;
+
+    fn identity(file: &File) -> io::Result<BY_HANDLE_FILE_INFORMATION> {
+        let mut info = MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::zeroed();
+        let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(unsafe { info.assume_init() })
+    }
+
+    let left = identity(&path_file)?;
+    let right = identity(open_file)?;
+    Ok(left.dwVolumeSerialNumber == right.dwVolumeSerialNumber
+        && left.nFileIndexHigh == right.nFileIndexHigh
+        && left.nFileIndexLow == right.nFileIndexLow)
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProcessLimits {

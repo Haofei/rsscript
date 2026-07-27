@@ -34,6 +34,7 @@ sha3 = "0.10"
 regex = "1"
 semver = "1"
 toml = "0.8"
+toml_edit = "0.22"
 serde_yaml_ng = "0.10"
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
@@ -46,6 +47,7 @@ hmac = "0.12"
 percent-encoding = "2"
 rand = "0.8"
 uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
 vm-jit = { path = "../vm-jit", optional = true }
 
 [features]

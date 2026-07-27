@@ -6,7 +6,9 @@ use std::path::{Component, Path, PathBuf};
 
 use fs2::FileExt;
 
-use super::canonical_checked_root;
+#[cfg(not(unix))]
+use super::open_regular_file_no_follow;
+use super::{canonical_checked_root, is_package_link_like};
 
 const MUTATION_LOCK: &str = ".rsscript-artifacts.lock";
 const ARTIFACT_READ_MAX_BYTES: u64 = 16 * 1024 * 1024;
@@ -31,7 +33,7 @@ impl ArtifactStore {
         let root = canonical_checked_root(package_root, "package artifact store")?;
         let metadata = fs::symlink_metadata(&root)
             .map_err(|error| format!("failed to inspect {}: {error}", root.display()))?;
-        if !metadata.is_dir() || is_link_like(&metadata) {
+        if !metadata.is_dir() || is_package_link_like(&metadata) {
             return Err(format!(
                 "package artifact root must be a real directory: {}",
                 root.display()
@@ -107,11 +109,7 @@ impl ArtifactStore {
             use std::io::Read;
 
             let path = self.checked_portable_path(relative, label, true)?;
-            let file = File::open(&path)
-                .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-            let metadata = file
-                .metadata()
-                .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+            let (file, metadata) = open_regular_file_no_follow(&path, label)?;
             if metadata.len() > max_bytes {
                 return Err(format!("{label} exceeded byte limit of {max_bytes}"));
             }
@@ -145,7 +143,7 @@ impl ArtifactStore {
                 };
                 current.push(component);
                 match fs::symlink_metadata(&current) {
-                    Ok(metadata) if metadata.is_dir() && !is_link_like(&metadata) => {}
+                    Ok(metadata) if metadata.is_dir() && !is_package_link_like(&metadata) => {}
                     Ok(_) => {
                         return Err(format!(
                             "{label} must be a real directory: {}",
@@ -213,13 +211,22 @@ impl ArtifactStore {
 
         fs::create_dir(&staging)
             .map_err(|error| format!("failed to create staged {label}: {error}"))?;
+        #[cfg(unix)]
+        let staging_handle = open_unix_directory(&staging, label)?;
+        #[cfg(not(unix))]
+        let staging_handle = open_portable_directory(&staging, label)?;
         let result = (|| {
             populate(&staging)?;
+            ensure_path_matches_handle(&staging, &staging_handle, label)?;
+            #[cfg(unix)]
+            sync_unix_directory_tree(&staging_handle, &staging)?;
+            #[cfg(not(unix))]
             sync_directory_tree(&staging)?;
+            ensure_path_matches_handle(&staging, &staging_handle, label)?;
 
             let had_destination = match fs::symlink_metadata(&destination) {
                 Ok(metadata) => {
-                    if !metadata.is_dir() || is_link_like(&metadata) {
+                    if !metadata.is_dir() || is_package_link_like(&metadata) {
                         return Err(format!(
                             "{label} destination must be a real directory: {}",
                             destination.display()
@@ -271,7 +278,7 @@ impl ArtifactStore {
         ensure_real_directories(&self.root, parent, label)?;
         match fs::symlink_metadata(&destination) {
             Ok(metadata) => {
-                if is_link_like(&metadata) {
+                if is_package_link_like(&metadata) {
                     return if require_file {
                         Err(format!(
                             "{label} destination must be a real file, not a symlink: {}",
@@ -566,19 +573,34 @@ fn open_unix_child_file(
 fn open_portable_lock(root: &Path) -> Result<File, String> {
     let path = root.join(MUTATION_LOCK);
     if let Ok(metadata) = fs::symlink_metadata(&path)
-        && (is_link_like(&metadata) || !metadata.is_file())
+        && (is_package_link_like(&metadata) || !metadata.is_file())
     {
         return Err(format!(
             "package mutation lock must be a regular file: {}",
             path.display()
         ));
     }
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
+    let mut options = OpenOptions::new();
+    options.read(true).write(true).create(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options
         .open(&path)
-        .map_err(|error| format!("failed to open {}: {error}", path.display()))
+        .map_err(|error| format!("failed to open {}: {error}", path.display()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if !metadata.is_file() || is_package_link_like(&metadata) {
+        return Err(format!(
+            "package mutation lock must be a regular file: {}",
+            path.display()
+        ));
+    }
+    Ok(file)
 }
 
 fn ensure_real_directories(root: &Path, directory: &Path, label: &str) -> Result<(), String> {
@@ -590,7 +612,7 @@ fn ensure_real_directories(root: &Path, directory: &Path, label: &str) -> Result
         current.push(component);
         let metadata = fs::symlink_metadata(&current)
             .map_err(|error| format!("failed to inspect {}: {error}", current.display()))?;
-        if !metadata.is_dir() || is_link_like(&metadata) {
+        if !metadata.is_dir() || is_package_link_like(&metadata) {
             return Err(format!(
                 "{label} directory must be a real directory: {}",
                 current.display()
@@ -600,6 +622,148 @@ fn ensure_real_directories(root: &Path, directory: &Path, label: &str) -> Result
     Ok(())
 }
 
+#[cfg(not(unix))]
+fn open_portable_directory(path: &Path, label: &str) -> Result<File, String> {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options
+        .open(path)
+        .map_err(|error| format!("failed to open staged {label}: {error}"))?;
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect staged {label}: {error}"))?;
+    if !metadata.is_dir() || is_package_link_like(&metadata) {
+        return Err(format!(
+            "staged {label} must be a real directory: {}",
+            path.display()
+        ));
+    }
+    Ok(file)
+}
+
+fn ensure_path_matches_handle(path: &Path, handle: &File, label: &str) -> Result<(), String> {
+    let path_metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect staged {label}: {error}"))?;
+    let handle_metadata = handle
+        .metadata()
+        .map_err(|error| format!("failed to inspect staged {label} handle: {error}"))?;
+    let identity_matches = same_file_identity(path, handle, &path_metadata, &handle_metadata)?;
+    if !path_metadata.is_dir() || is_package_link_like(&path_metadata) || !identity_matches {
+        return Err(format!(
+            "staged {label} changed during population: {}",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn same_file_identity(
+    _path: &Path,
+    _handle: &File,
+    left: &fs::Metadata,
+    right: &fs::Metadata,
+) -> Result<bool, String> {
+    use std::os::unix::fs::MetadataExt;
+
+    Ok(left.dev() == right.dev() && left.ino() == right.ino())
+}
+
+#[cfg(windows)]
+fn same_file_identity(
+    path: &Path,
+    handle: &File,
+    _left: &fs::Metadata,
+    _right: &fs::Metadata,
+) -> Result<bool, String> {
+    rss_process_guard::same_file_identity(path, handle)
+        .map_err(|error| format!("failed to compare staged directory identity: {error}"))
+}
+
+#[cfg(not(any(unix, windows)))]
+fn same_file_identity(
+    _path: &Path,
+    _handle: &File,
+    left: &fs::Metadata,
+    right: &fs::Metadata,
+) -> Result<bool, String> {
+    Ok(left.file_type() == right.file_type()
+        && left.len() == right.len()
+        && left.modified().ok() == right.modified().ok())
+}
+
+#[cfg(unix)]
+fn sync_unix_directory_tree(directory: &File, path: &Path) -> Result<(), String> {
+    use rustix::fs::{AtFlags, FileType, Mode, OFlags, statat};
+
+    ensure_path_matches_handle(path, directory, "package artifact directory")?;
+    let entries = fs::read_dir(path).map_err(|error| {
+        format!(
+            "failed to read staged directory {}: {error}",
+            path.display()
+        )
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| format!("failed to read staged entry: {error}"))?;
+        let name = entry.file_name();
+        let entry_path = path.join(&name);
+        let stat = statat(directory, &name, AtFlags::SYMLINK_NOFOLLOW)
+            .map_err(|error| format!("failed to inspect {}: {error}", entry_path.display()))?;
+        match FileType::from_raw_mode(stat.st_mode) {
+            FileType::Directory => {
+                let child = rustix::fs::openat(
+                    directory,
+                    &name,
+                    OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map(File::from)
+                .map_err(|error| {
+                    format!(
+                        "failed to open staged directory {}: {error}",
+                        entry_path.display()
+                    )
+                })?;
+                sync_unix_directory_tree(&child, &entry_path)?;
+            }
+            FileType::RegularFile => {
+                let file = rustix::fs::openat(
+                    directory,
+                    &name,
+                    OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                    Mode::empty(),
+                )
+                .map(File::from)
+                .map_err(|error| {
+                    format!(
+                        "failed to open staged artifact {}: {error}",
+                        entry_path.display()
+                    )
+                })?;
+                file.sync_all()
+                    .map_err(|error| format!("failed to sync staged artifact: {error}"))?;
+            }
+            _ => {
+                return Err(format!(
+                    "staged package artifact is not a regular file or directory: {}",
+                    entry_path.display()
+                ));
+            }
+        }
+    }
+    ensure_path_matches_handle(path, directory, "package artifact directory")?;
+    rustix::fs::fsync(directory)
+        .map_err(|error| format!("failed to sync directory {}: {error}", path.display()))
+}
+
+#[cfg(not(unix))]
 fn sync_directory_tree(path: &Path) -> Result<(), String> {
     for entry in fs::read_dir(path).map_err(|error| {
         format!(
@@ -608,10 +772,9 @@ fn sync_directory_tree(path: &Path) -> Result<(), String> {
         )
     })? {
         let entry = entry.map_err(|error| format!("failed to read staged entry: {error}"))?;
-        let metadata = entry
-            .file_type()
+        let metadata = fs::symlink_metadata(entry.path())
             .map_err(|error| format!("failed to inspect staged entry: {error}"))?;
-        if metadata.is_symlink() {
+        if is_package_link_like(&metadata) {
             return Err(format!(
                 "staged package artifact contains a symlink: {}",
                 entry.path().display()
@@ -620,8 +783,8 @@ fn sync_directory_tree(path: &Path) -> Result<(), String> {
         if metadata.is_dir() {
             sync_directory_tree(&entry.path())?;
         } else if metadata.is_file() {
-            File::open(entry.path())
-                .and_then(|file| file.sync_all())
+            let (file, _) = open_regular_file_no_follow(&entry.path(), "staged package artifact")?;
+            file.sync_all()
                 .map_err(|error| format!("failed to sync staged artifact: {error}"))?;
         } else {
             return Err(format!(
@@ -637,20 +800,6 @@ fn sync_directory(path: &Path) -> Result<(), String> {
     File::open(path)
         .and_then(|file| file.sync_all())
         .map_err(|error| format!("failed to sync directory {}: {error}", path.display()))
-}
-
-fn is_link_like(metadata: &fs::Metadata) -> bool {
-    if metadata.file_type().is_symlink() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
-        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
-    }
-    #[cfg(not(windows))]
-    false
 }
 
 #[cfg(test)]
@@ -816,6 +965,59 @@ mod tests {
         );
         drop(store);
         fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_replacement_detects_staging_directory_substitution() {
+        let root = test_dir("directory-race");
+        fs::create_dir_all(&root).expect("fixture root");
+        let store = ArtifactStore::open(&root).expect("artifact store");
+        let mut moved = None;
+
+        let error = store
+            .replace_directory("vendor", "vendor directory", |staging| {
+                let original = staging.with_extension("moved");
+                fs::rename(staging, &original).map_err(|error| error.to_string())?;
+                fs::create_dir(staging).map_err(|error| error.to_string())?;
+                fs::write(staging.join("substitute"), b"bad").map_err(|error| error.to_string())?;
+                moved = Some(original);
+                Ok(())
+            })
+            .expect_err("a substituted staging directory must not publish");
+
+        assert!(error.contains("changed during population"), "{error}");
+        assert!(!root.join("vendor").exists());
+        if let Some(moved) = moved {
+            fs::remove_dir_all(moved).expect("moved staging cleanup");
+        }
+        drop(store);
+        fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_replacement_rejects_links_in_staged_tree() {
+        use std::os::unix::fs::symlink;
+
+        let root = test_dir("directory-staged-link");
+        let outside = test_dir("directory-staged-link-outside");
+        fs::create_dir_all(&root).expect("fixture root");
+        fs::write(&outside, b"outside").expect("outside fixture");
+        let store = ArtifactStore::open(&root).expect("artifact store");
+
+        let error = store
+            .replace_directory("vendor", "vendor directory", |staging| {
+                symlink(&outside, staging.join("linked")).map_err(|error| error.to_string())
+            })
+            .expect_err("a staged symlink must not publish");
+
+        assert!(error.contains("not a regular file or directory"), "{error}");
+        assert_eq!(fs::read(&outside).expect("outside read"), b"outside");
+        assert!(!root.join("vendor").exists());
+        drop(store);
+        fs::remove_dir_all(root).expect("fixture cleanup");
+        fs::remove_file(outside).expect("outside cleanup");
     }
 
     #[test]

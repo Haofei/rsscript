@@ -1,9 +1,9 @@
 features: native
 
-native fn Rayon.sum_int(values: List<Int>) -> Int
+native fn Rayon.sum_int(values: List<Int>) -> Result<Int, String>
     effects(native, parallel)
 
-native fn Rayon.sum_squares(values: List<Int>) -> Int
+native fn Rayon.sum_squares(values: List<Int>) -> Result<Int, String>
     effects(native, parallel)
 
 native fn Rayon.count_positive_int(values: List<Int>) -> Int

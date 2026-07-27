@@ -297,30 +297,28 @@ pub fn file_write_bytes<P: RuntimePath + ?Sized, B: RuntimeBytes + ?Sized>(
     path: &P,
     data: &B,
 ) -> Result<(), FileError> {
-    std::fs::write(path.as_path(), data.as_bytes_slice()).map_err(FileError::from)
+    write_path_atomic(path.as_path(), data.as_bytes_slice())
 }
 
 pub fn file_append_bytes<P: RuntimePath + ?Sized, B: RuntimeBytes + ?Sized>(
     path: &P,
     data: &B,
 ) -> Result<(), FileError> {
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path.as_path())?;
-    file.write_all(data.as_bytes_slice())
-        .map_err(FileError::from)
+    append_path_durable(path.as_path(), data.as_bytes_slice())
 }
 
 pub fn file_write_string_to_path<P: RuntimePath + ?Sized>(
     path: &P,
     text: &str,
 ) -> Result<(), FileError> {
-    std::fs::write(path.as_path(), text.as_bytes()).map_err(FileError::from)
+    write_path_atomic(path.as_path(), text.as_bytes())
 }
 
 pub fn file_write_atomic<P: RuntimePath + ?Sized>(path: &P, text: &str) -> Result<(), FileError> {
-    let path = path.as_path();
+    write_path_atomic(path.as_path(), text.as_bytes())
+}
+
+fn write_path_atomic(path: &std::path::Path, data: &[u8]) -> Result<(), FileError> {
     let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
     std::fs::create_dir_all(parent)?;
     let file_name = path
@@ -335,16 +333,21 @@ pub fn file_write_atomic<P: RuntimePath + ?Sized>(path: &P, text: &str) -> Resul
             .map(|duration| duration.as_nanos())
             .unwrap_or(0)
     ));
-    {
+    let write_result = (|| -> Result<(), std::io::Error> {
         let mut file = std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(&temp_path)?;
-        file.write_all(text.as_bytes())?;
+        file.write_all(data)?;
         file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(error) = write_result {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(error.into());
     }
     match std::fs::rename(&temp_path, path) {
-        Ok(()) => Ok(()),
+        Ok(()) => sync_parent_directory(parent).map_err(FileError::from),
         Err(error) => {
             let _ = std::fs::remove_file(&temp_path);
             Err(error.into())
@@ -353,11 +356,32 @@ pub fn file_write_atomic<P: RuntimePath + ?Sized>(path: &P, text: &str) -> Resul
 }
 
 pub fn file_append_string<P: RuntimePath + ?Sized>(path: &P, text: &str) -> Result<(), FileError> {
+    append_path_durable(path.as_path(), text.as_bytes())
+}
+
+fn append_path_durable(path: &std::path::Path, data: &[u8]) -> Result<(), FileError> {
+    let existed = path.exists();
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
-        .open(path.as_path())?;
-    file.write_all(text.as_bytes()).map_err(FileError::from)
+        .open(path)?;
+    file.write_all(data)?;
+    file.sync_data()?;
+    if !existed {
+        let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+        sync_parent_directory(parent)?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_parent_directory(parent: &std::path::Path) -> std::io::Result<()> {
+    std::fs::File::open(parent)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_parent: &std::path::Path) -> std::io::Result<()> {
+    Ok(())
 }
 
 pub fn file_remove<P: RuntimePath + ?Sized>(path: &P) -> Result<(), FileError> {
@@ -506,7 +530,13 @@ pub fn file_write_async<P: RuntimePath + ?Sized, B: RuntimeBytes + ?Sized>(
 ) -> NativeAsyncPending<Result<(), FileError>> {
     let path = path.as_path().to_path_buf();
     let bytes = data.as_bytes_slice().to_vec();
-    spawn_tokio_native(async move { tokio::fs::write(path, bytes).await.map_err(FileError::from) })
+    spawn_tokio_native(async move {
+        tokio::task::spawn_blocking(move || write_path_atomic(&path, &bytes))
+            .await
+            .map_err(|error| {
+                FileError::new("JoinError", &format!("file write task failed: {error}"))
+            })?
+    })
 }
 
 pub fn file_write_string_async<P: RuntimePath + ?Sized>(
@@ -515,7 +545,13 @@ pub fn file_write_string_async<P: RuntimePath + ?Sized>(
 ) -> NativeAsyncPending<Result<(), FileError>> {
     let path = path.as_path().to_path_buf();
     let text = text.to_string();
-    spawn_tokio_native(async move { tokio::fs::write(path, text).await.map_err(FileError::from) })
+    spawn_tokio_native(async move {
+        tokio::task::spawn_blocking(move || write_path_atomic(&path, text.as_bytes()))
+            .await
+            .map_err(|error| {
+                FileError::new("JoinError", &format!("file write task failed: {error}"))
+            })?
+    })
 }
 
 pub fn directory_list_files<P: RuntimePath + ?Sized>(path: &P) -> Result<Vec<String>, FileError> {
@@ -819,7 +855,7 @@ pub fn directory_write_string<P: RuntimePath + ?Sized>(
     path: &P,
     content: &str,
 ) -> Result<(), FileError> {
-    std::fs::write(path.as_path(), content.as_bytes()).map_err(FileError::from)
+    write_path_atomic(path.as_path(), content.as_bytes())
 }
 
 #[cfg(test)]
@@ -878,6 +914,26 @@ mod tests {
         assert!(path_is_absolute(&path));
 
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn atomic_write_replaces_content_without_leaving_temp_files() {
+        let root =
+            std::env::temp_dir().join(format!("rsscript-atomic-write-test-{}", std::process::id()));
+        let path = root.join("state.txt");
+        std::fs::create_dir_all(&root).expect("test directory should be created");
+
+        file_write_atomic(&path, "first").expect("first write should succeed");
+        file_write_string_to_path(&path, "second").expect("replacement should succeed");
+
+        assert_eq!(file_read_string(&path).unwrap(), "second");
+        assert_eq!(
+            std::fs::read_dir(&root)
+                .expect("test directory should be readable")
+                .count(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

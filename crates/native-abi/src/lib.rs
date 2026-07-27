@@ -232,21 +232,11 @@ pub fn load_registry(
 
 #[cfg(feature = "host")]
 fn load_library_once(path: &std::path::Path) -> Result<Arc<libloading::Library>, String> {
-    use sha2::{Digest, Sha256};
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock, Weak};
 
     static LIBRARIES: OnceLock<Mutex<HashMap<String, Weak<libloading::Library>>>> = OnceLock::new();
-    let canonical = path
-        .canonicalize()
-        .map_err(|error| format!("failed to canonicalize native library: {error}"))?;
-    let bytes = std::fs::read(&canonical)
-        .map_err(|error| format!("failed to hash native library: {error}"))?;
-    let key = format!(
-        "{}:{}",
-        canonical.display(),
-        hex_digest(Sha256::digest(bytes))
-    );
+    let (verified_path, key) = stage_verified_library(path)?;
     let cache = LIBRARIES.get_or_init(|| Mutex::new(HashMap::new()));
     let mut cache = cache
         .lock()
@@ -257,11 +247,104 @@ fn load_library_once(path: &std::path::Path) -> Result<Arc<libloading::Library>,
     }
     // SAFETY: symbols and registry metadata are validated before use.
     let library = Arc::new(
-        unsafe { libloading::Library::new(&canonical) }
+        unsafe { libloading::Library::new(&verified_path) }
             .map_err(|error| format!("failed to load native shim library: {error}"))?,
     );
     cache.insert(key, Arc::downgrade(&library));
     Ok(library)
+}
+
+#[cfg(feature = "host")]
+fn stage_verified_library(path: &std::path::Path) -> Result<(std::path::PathBuf, String), String> {
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Write};
+    use std::sync::OnceLock;
+
+    const MAX_LIBRARY_BYTES: u64 = 1024 * 1024 * 1024;
+    static STORE: OnceLock<Result<tempfile::TempDir, String>> = OnceLock::new();
+
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("failed to canonicalize native library: {error}"))?;
+    let mut source = std::fs::File::open(&canonical)
+        .map_err(|error| format!("failed to open native library: {error}"))?;
+    let metadata = source
+        .metadata()
+        .map_err(|error| format!("failed to inspect native library: {error}"))?;
+    if !metadata.is_file() {
+        return Err("native library must be a regular file".to_string());
+    }
+    if metadata.len() > MAX_LIBRARY_BYTES {
+        return Err(format!(
+            "native library exceeds the {} byte limit",
+            MAX_LIBRARY_BYTES
+        ));
+    }
+
+    let store = STORE
+        .get_or_init(|| {
+            tempfile::Builder::new()
+                .prefix("rsscript-native-abi-")
+                .tempdir()
+                .map_err(|error| format!("failed to create native ABI content store: {error}"))
+        })
+        .as_ref()
+        .map_err(Clone::clone)?;
+    let mut staged = tempfile::NamedTempFile::new_in(store.path())
+        .map_err(|error| format!("failed to stage native library: {error}"))?;
+    let mut hasher = Sha256::new();
+    let mut copied = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = source
+            .read(&mut buffer)
+            .map_err(|error| format!("failed to read native library: {error}"))?;
+        if read == 0 {
+            break;
+        }
+        copied = copied
+            .checked_add(read as u64)
+            .ok_or_else(|| "native library byte count overflow".to_string())?;
+        if copied > MAX_LIBRARY_BYTES {
+            return Err(format!(
+                "native library exceeds the {} byte limit",
+                MAX_LIBRARY_BYTES
+            ));
+        }
+        hasher.update(&buffer[..read]);
+        staged
+            .write_all(&buffer[..read])
+            .map_err(|error| format!("failed to stage native library: {error}"))?;
+    }
+    staged
+        .as_file()
+        .sync_all()
+        .map_err(|error| format!("failed to sync staged native library: {error}"))?;
+
+    let digest = hex_digest(hasher.finalize());
+    let extension = canonical
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|value| value.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+        .unwrap_or("library");
+    let key = format!(
+        "abi{}-{}-{}-{digest}",
+        ABI_VERSION,
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    let verified_path = store.path().join(format!("{key}.{extension}"));
+    match staged.persist_noclobber(&verified_path) {
+        Ok(_) => {}
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => {
+            return Err(format!(
+                "failed to publish verified native library: {}",
+                error.error
+            ));
+        }
+    }
+    Ok((verified_path, key))
 }
 
 #[cfg(feature = "host")]

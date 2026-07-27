@@ -43,9 +43,9 @@ pub fn websocket_connect(url: &str) -> NativeAsyncPending<Result<RssWebSocket, W
             .max_frame_size(Some(MAX_WEBSOCKET_MESSAGE_BYTES));
         let (stream, _) = tokio_tungstenite::connect_async_with_config(&url, Some(config), false)
             .await
-            .map_err(|error| {
-                WebSocketError::new(format!("WebSocket connect to `{url}` failed: {error}"))
-            })?;
+            // Connection errors can echo the request URI, including credentials
+            // or query tokens. Keep the user-supplied URL out of diagnostics.
+            .map_err(|_| WebSocketError::new("WebSocket connection failed"))?;
         let (writer, reader) = stream.split();
         Ok(RssWebSocket {
             reader: Arc::new(tokio::sync::Mutex::new(reader)),
@@ -383,5 +383,20 @@ mod tests {
         tokio_native_runtime()
             .block_on(server)
             .expect("server task should finish");
+    }
+
+    #[test]
+    fn websocket_connect_errors_do_not_expose_url_secrets() {
+        let url = "not-websocket://user:password@example.invalid/socket?token=secret";
+        let error = match Executor::new().run_pending(super::websocket_connect(url)) {
+            Ok(_) => panic!("invalid WebSocket scheme should fail"),
+            Err(error) => error,
+        };
+        let message = super::websocket_error_message(&error);
+
+        assert_eq!(message, "WebSocket connection failed");
+        assert!(!message.contains("password"));
+        assert!(!message.contains("secret"));
+        assert!(!message.contains(url));
     }
 }

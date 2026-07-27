@@ -95,10 +95,13 @@ impl<T> WeakManaged<T> {
 impl<T: fmt::Debug> fmt::Debug for WeakManaged<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.upgrade() {
-            Some(value) => formatter
-                .debug_tuple("WeakManaged")
-                .field(&value.read())
-                .finish(),
+            Some(value) => match value.try_read() {
+                Ok(read) => formatter.debug_tuple("WeakManaged").field(&read).finish(),
+                Err(_) => formatter
+                    .debug_tuple("WeakManaged")
+                    .field(&"<borrow conflict>")
+                    .finish(),
+            },
             None => formatter.write_str("WeakManaged(<dropped>)"),
         }
     }
@@ -106,10 +109,13 @@ impl<T: fmt::Debug> fmt::Debug for WeakManaged<T> {
 
 impl<T: fmt::Debug> fmt::Debug for Managed<T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_tuple("Managed")
-            .field(&self.read())
-            .finish()
+        match self.try_read() {
+            Ok(read) => formatter.debug_tuple("Managed").field(&read).finish(),
+            Err(_) => formatter
+                .debug_tuple("Managed")
+                .field(&"<borrow conflict>")
+                .finish(),
+        }
     }
 }
 
@@ -170,5 +176,20 @@ impl<T> DerefMut for ManagedWrite<'_, T> {
 impl<T: fmt::Debug> fmt::Debug for ManagedWrite<'_, T> {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, formatter)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn debug_formatting_does_not_panic_during_write_borrow() {
+        let value = manage(String::from("value"));
+        let weak_value = weak(&value);
+        let _write = value.try_write().expect("write borrow should succeed");
+
+        assert!(format!("{value:?}").contains("borrow conflict"));
+        assert!(format!("{weak_value:?}").contains("borrow conflict"));
     }
 }

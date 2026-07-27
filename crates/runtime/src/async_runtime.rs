@@ -1,5 +1,6 @@
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::{Duration, Instant};
 
@@ -153,13 +154,16 @@ struct WakeSignal {
 struct WakeState {
     woken: bool,
     ready_keys: Vec<usize>,
+    ready_key_set: HashSet<usize>,
 }
 
 impl WakeHandle {
     pub fn wake(&self) {
         let mut state = self.signal.state.lock().expect("wake signal lock poisoned");
         state.woken = true;
-        if let Some(key) = self.key {
+        if let Some(key) = self.key
+            && state.ready_key_set.insert(key)
+        {
             state.ready_keys.push(key);
         }
         self.signal.ready.notify_all();
@@ -202,6 +206,7 @@ impl WakeHandle {
 
     fn drain_ready_keys(&self) -> Vec<usize> {
         let mut state = self.signal.state.lock().expect("wake signal lock poisoned");
+        state.ready_key_set.clear();
         std::mem::take(&mut state.ready_keys)
     }
 }
@@ -545,12 +550,14 @@ pub struct NativeAsyncPending<T> {
     result: Arc<Mutex<Option<T>>>,
     wake: Arc<Mutex<Option<WakeHandle>>>,
     abort_handle: Option<tokio::task::AbortHandle>,
+    cancellation_registration: Arc<Mutex<Option<AbortRegistration>>>,
 }
 
 #[derive(Clone)]
 pub struct NativeAsyncCompleter<T> {
     result: Arc<Mutex<Option<T>>>,
     wake: Arc<Mutex<Option<WakeHandle>>>,
+    cancellation_registration: Arc<Mutex<Option<AbortRegistration>>>,
 }
 
 pub fn native_async_pending<T>(
@@ -558,23 +565,49 @@ pub fn native_async_pending<T>(
 ) -> (NativeAsyncPending<T>, NativeAsyncCompleter<T>) {
     let result = Arc::new(Mutex::new(None));
     let wake = Arc::new(Mutex::new(None));
+    let cancellation_registration = Arc::new(Mutex::new(None));
     (
         NativeAsyncPending {
             result: result.clone(),
             wake: wake.clone(),
             abort_handle: None,
+            cancellation_registration: cancellation_registration.clone(),
         },
-        NativeAsyncCompleter { result, wake },
+        NativeAsyncCompleter {
+            result,
+            wake,
+            cancellation_registration,
+        },
     )
 }
 
 static TOKIO_NATIVE_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> =
     std::sync::OnceLock::new();
 
+const DEFAULT_MAX_TOKIO_WORKERS: usize = 32;
+const TOKIO_WORKER_THREADS_ENV: &str = "RSSCRIPT_TOKIO_WORKER_THREADS";
+
+fn bounded_worker_threads(configured: Option<&str>, available: usize) -> usize {
+    configured
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(available)
+        .clamp(1, DEFAULT_MAX_TOKIO_WORKERS)
+}
+
+pub fn tokio_native_runtime_worker_threads() -> usize {
+    let available = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1);
+    bounded_worker_threads(
+        std::env::var(TOKIO_WORKER_THREADS_ENV).ok().as_deref(),
+        available,
+    )
+}
+
 pub fn tokio_native_runtime() -> &'static tokio::runtime::Runtime {
     TOKIO_NATIVE_RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(4)
+            .worker_threads(tokio_native_runtime_worker_threads())
             .thread_name("rsscript-runtime-tokio")
             .enable_all()
             .build()
@@ -599,13 +632,20 @@ where
     F: Future<Output = T> + Send + 'static,
 {
     let (mut pending, completer) = native_async_pending(cancellation.clone());
+    let (start_sender, start_receiver) = tokio::sync::oneshot::channel();
     let task = tokio_native_runtime().spawn(async move {
+        let _ = start_receiver.await;
         let value = future.await;
         completer.complete(value);
     });
     let abort_handle = task.abort_handle();
-    cancellation.register_abort(abort_handle.clone());
+    let registration = cancellation.register_abort(abort_handle.clone());
+    *pending
+        .cancellation_registration
+        .lock()
+        .expect("cancellation registration lock poisoned") = registration;
     pending.abort_handle = Some(abort_handle);
+    let _ = start_sender.send(());
     pending
 }
 
@@ -628,6 +668,10 @@ impl<T> NativeAsyncCompleter<T> {
         {
             wake.wake();
         }
+        self.cancellation_registration
+            .lock()
+            .expect("cancellation registration lock poisoned")
+            .take();
         true
     }
 }
@@ -648,6 +692,10 @@ impl<T> Pending<T> for NativeAsyncPending<T> {
 
 impl<T> Drop for NativeAsyncPending<T> {
     fn drop(&mut self) {
+        self.cancellation_registration
+            .lock()
+            .expect("cancellation registration lock poisoned")
+            .take();
         if let Some(abort_handle) = self.abort_handle.take() {
             abort_handle.abort();
         }
@@ -663,8 +711,25 @@ pub struct TaskGroup<T> {
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
     waiters: Arc<Mutex<Vec<WeakWakeHandle>>>,
-    abort_handles: Arc<Mutex<Vec<tokio::task::AbortHandle>>>,
+    abort_handles: Arc<Mutex<HashMap<usize, tokio::task::AbortHandle>>>,
+    next_abort_id: Arc<AtomicUsize>,
     notification: Arc<tokio::sync::Notify>,
+}
+
+struct AbortRegistration {
+    abort_handles: Weak<Mutex<HashMap<usize, tokio::task::AbortHandle>>>,
+    id: usize,
+}
+
+impl Drop for AbortRegistration {
+    fn drop(&mut self) {
+        if let Some(abort_handles) = self.abort_handles.upgrade() {
+            abort_handles
+                .lock()
+                .expect("cancellation abort handle lock poisoned")
+                .remove(&self.id);
+        }
+    }
 }
 
 impl CancellationToken {
@@ -685,12 +750,13 @@ impl CancellationToken {
         for waiter in waiters {
             waiter.wake();
         }
-        for abort_handle in std::mem::take(
+        let abort_handles = std::mem::take(
             &mut *self
                 .abort_handles
                 .lock()
                 .expect("cancellation abort handle lock poisoned"),
-        ) {
+        );
+        for abort_handle in abort_handles.into_values() {
             abort_handle.abort();
         }
         self.notification.notify_waiters();
@@ -723,10 +789,10 @@ impl CancellationToken {
         }
     }
 
-    fn register_abort(&self, abort_handle: tokio::task::AbortHandle) {
+    fn register_abort(&self, abort_handle: tokio::task::AbortHandle) -> Option<AbortRegistration> {
         if self.is_cancelled() {
             abort_handle.abort();
-            return;
+            return None;
         }
         let mut abort_handles = self
             .abort_handles
@@ -735,9 +801,14 @@ impl CancellationToken {
         if self.is_cancelled() {
             drop(abort_handles);
             abort_handle.abort();
-            return;
+            return None;
         }
-        abort_handles.push(abort_handle);
+        let id = self.next_abort_id.fetch_add(1, Ordering::Relaxed);
+        abort_handles.insert(id, abort_handle);
+        Some(AbortRegistration {
+            abort_handles: Arc::downgrade(&self.abort_handles),
+            id,
+        })
     }
 
     async fn cancelled(&self) {
@@ -898,9 +969,9 @@ impl<T> TaskGroup<T> {
         let task_count = tasks.len();
         let mut outputs = (0..tasks.len()).map(|_| None).collect::<Vec<_>>();
         let mut remaining = tasks.len();
+        let mut poll_indices = (0..tasks.len()).collect::<Vec<_>>();
         while remaining > 0 {
-            let mut made_progress = false;
-            for (index, task) in tasks.iter_mut().enumerate() {
+            for index in std::mem::take(&mut poll_indices) {
                 if outputs[index].is_some() {
                     continue;
                 }
@@ -910,16 +981,27 @@ impl<T> TaskGroup<T> {
                         executor,
                         wake_key: Some(index),
                     };
-                    task.poll(&mut cx)
+                    tasks[index].poll(&mut cx)
                 };
                 if let AsyncPoll::Ready(value) = poll {
                     outputs[index] = Some(value);
                     remaining -= 1;
-                    made_progress = true;
                 }
             }
-            if remaining > 0 && !made_progress {
+            if remaining > 0 {
                 executor.park_or_yield(None);
+                poll_indices = executor.drain_ready_wake_keys();
+                if poll_indices.is_empty() {
+                    poll_indices.extend(
+                        outputs
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, output)| output.is_none().then_some(index)),
+                    );
+                } else {
+                    poll_indices
+                        .retain(|index| *index < outputs.len() && outputs[*index].is_none());
+                }
             }
         }
         info!(
@@ -945,6 +1027,7 @@ impl<T> TaskGroup<T> {
         let task_count = tasks.len();
         let mut outputs = (0..tasks.len()).map(|_| None).collect::<Vec<_>>();
         let mut remaining = tasks.len();
+        let mut poll_indices = (0..tasks.len()).collect::<Vec<_>>();
         while remaining > 0 {
             if Instant::now() >= deadline {
                 cancellation.cancel();
@@ -962,8 +1045,7 @@ impl<T> TaskGroup<T> {
                     pending: remaining,
                 };
             }
-            let mut made_progress = false;
-            for (index, task) in tasks.iter_mut().enumerate() {
+            for index in std::mem::take(&mut poll_indices) {
                 if outputs[index].is_some() {
                     continue;
                 }
@@ -973,16 +1055,27 @@ impl<T> TaskGroup<T> {
                         executor,
                         wake_key: Some(index),
                     };
-                    task.poll(&mut cx)
+                    tasks[index].poll(&mut cx)
                 };
                 if let AsyncPoll::Ready(value) = poll {
                     outputs[index] = Some(value);
                     remaining -= 1;
-                    made_progress = true;
                 }
             }
-            if remaining > 0 && !made_progress {
+            if remaining > 0 {
                 executor.park_or_yield(Some(deadline));
+                poll_indices = executor.drain_ready_wake_keys();
+                if poll_indices.is_empty() {
+                    poll_indices.extend(
+                        outputs
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, output)| output.is_none().then_some(index)),
+                    );
+                } else {
+                    poll_indices
+                        .retain(|index| *index < outputs.len() && outputs[*index].is_none());
+                }
             }
         }
         info!(
@@ -1152,6 +1245,77 @@ mod tests {
     }
 
     #[test]
+    fn completed_native_tasks_deregister_cancellation_abort_handles() {
+        let cancellation = CancellationToken::new();
+        let mut group = TaskGroup::new();
+        for value in 0..256 {
+            group.spawn_pending(spawn_tokio_native_with_cancellation(
+                cancellation.clone(),
+                async move { value },
+            ));
+        }
+
+        let mut executor = Executor::new();
+        assert_eq!(group.join(&mut executor).len(), 256);
+        assert!(
+            cancellation
+                .abort_handles
+                .lock()
+                .expect("cancellation abort handle lock poisoned")
+                .is_empty(),
+            "completed tasks must not remain registered for cancellation"
+        );
+    }
+
+    #[test]
+    fn dropping_native_tasks_deregisters_cancellation_abort_handles() {
+        let cancellation = CancellationToken::new();
+        let pending = spawn_tokio_native_with_cancellation(cancellation.clone(), async {
+            std::future::pending::<()>().await
+        });
+        assert_eq!(
+            cancellation
+                .abort_handles
+                .lock()
+                .expect("cancellation abort handle lock poisoned")
+                .len(),
+            1
+        );
+
+        drop(pending);
+
+        assert!(
+            cancellation
+                .abort_handles
+                .lock()
+                .expect("cancellation abort handle lock poisoned")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn ready_wake_keys_are_deduplicated() {
+        let mut executor = Executor::new();
+        let wake = executor.wake_handle().with_key(Some(17));
+        for _ in 0..10_000 {
+            wake.wake();
+        }
+
+        assert_eq!(executor.drain_ready_wake_keys(), vec![17]);
+        assert!(executor.drain_ready_wake_keys().is_empty());
+    }
+
+    #[test]
+    fn runtime_worker_count_is_configurable_and_bounded() {
+        assert_eq!(bounded_worker_threads(None, 0), 1);
+        assert_eq!(bounded_worker_threads(None, usize::MAX), 32);
+        assert_eq!(bounded_worker_threads(Some("8"), 1), 8);
+        assert_eq!(bounded_worker_threads(Some("0"), 8), 1);
+        assert_eq!(bounded_worker_threads(Some("1000"), 8), 32);
+        assert_eq!(bounded_worker_threads(Some("invalid"), 6), 6);
+    }
+
+    #[test]
     fn cancellation_token_observes_source_cancel() {
         let mut source = cancellation_source_new();
         let token = cancellation_source_token(&source);
@@ -1295,6 +1459,32 @@ mod tests {
         for timer in timers {
             assert!(executor.run_pending(timer).is_ok());
         }
+    }
+
+    #[test]
+    fn high_count_native_timers_use_keyed_task_group_wakes() {
+        const TASKS: usize = 1_000;
+
+        let mut group = TaskGroup::new();
+        for value in 0..TASKS {
+            group.spawn_pending(pending_then(timer_sleep_native_start(5), move |result| {
+                assert!(result.is_ok());
+                pending_ready(value)
+            }));
+        }
+
+        let mut executor = Executor::new();
+        let outputs = group.join(&mut executor);
+
+        assert_eq!(outputs.len(), TASKS);
+        assert_eq!(outputs[0], 0);
+        assert_eq!(outputs[TASKS - 1], TASKS - 1);
+        assert!(
+            executor.poll_count() <= TASKS * 4,
+            "{} timers required {} polls",
+            TASKS,
+            executor.poll_count()
+        );
     }
 
     #[test]

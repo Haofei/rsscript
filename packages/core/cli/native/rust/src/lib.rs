@@ -29,6 +29,14 @@ pub fn option(args: &[String], name: &str) -> Option<String> {
 }
 
 pub fn positionals(args: &[String]) -> Vec<String> {
+    positionals_with_value_options(args, &[])
+}
+
+pub fn positionals_with_value_options(args: &[String], value_options: &[String]) -> Vec<String> {
+    let value_options = value_options
+        .iter()
+        .map(|name| normalized_flag(name))
+        .collect::<std::collections::BTreeSet<_>>();
     let mut values = Vec::new();
     let mut skip_next = false;
     let mut after_separator = false;
@@ -46,7 +54,7 @@ pub fn positionals(args: &[String]) -> Vec<String> {
             continue;
         }
         if arg.starts_with("--") {
-            if !arg.contains('=') {
+            if !arg.contains('=') && value_options.contains(arg) {
                 skip_next = true;
             }
             continue;
@@ -74,6 +82,15 @@ mod tests {
         assert!(super::flag(&args, "verbose"));
         assert_eq!(super::option(&args, "out"), Some("target.txt".to_string()));
         assert_eq!(super::option(&args, "mode"), Some("fast".to_string()));
+        assert_eq!(
+            super::positionals_with_value_options(&args, &["mode".to_string()]),
+            vec!["input.txt".to_string()]
+        );
+    }
+
+    #[test]
+    fn boolean_flag_does_not_hide_following_positional() {
+        let args = vec!["--verbose".to_string(), "input.txt".to_string()];
         assert_eq!(super::positionals(&args), vec!["input.txt".to_string()]);
     }
 
@@ -89,7 +106,7 @@ mod tests {
         ];
 
         assert_eq!(
-            super::positionals(&args),
+            super::positionals_with_value_options(&args, &["mode".to_string()]),
             vec![
                 "input.txt".to_string(),
                 "-x".to_string(),

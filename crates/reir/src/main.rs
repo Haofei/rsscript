@@ -11,8 +11,15 @@ use reir::{
 };
 use std::collections::BTreeMap;
 use std::env;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
+use std::path::Path;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+const MAX_CLI_INPUT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_CLI_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+static OUTPUT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 const USAGE: &str = "Usage:
   reir collect --producer rsscript [--review-map review-map.json] [--package-review package-review.json] [--package-check check.json] [--package-lock lock.json] [--lock-update lock-diff.json] [--package-tree tree.json] [--package-publish publish.json] [--package-metadata metadata.json] [--package-vendor vendor.json] [--package-name name] [--out bundle.json] [--json]
@@ -198,8 +205,7 @@ fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
     if producer == "terraform-plan" {
         let from_path = from
             .ok_or_else(|| CliError::usage("terraform-plan collect requires --from <plan.json>"))?;
-        let plan_json = fs::read_to_string(&from_path)
-            .map_err(|error| CliError::runtime(format!("failed to read {from_path}: {error}")))?;
+        let plan_json = read_bounded_text(&from_path)?;
         let bundle = terraform_plan_json_to_bundle(&plan_json).map_err(|error| {
             CliError::runtime(format!(
                 "failed to collect Terraform plan JSON evidence: {error}"
@@ -359,8 +365,9 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
     // Resolve the gate policy: optional policy file for the target, then CLI overrides.
     let policy_config = match &policy_file {
         Some(path) => {
-            let text = std::fs::read_to_string(path)
-                .map_err(|error| CliError::usage(format!("failed to read {path}: {error}")))?;
+            let text = read_bounded_text(path).map_err(|error| match error {
+                CliError::Usage(message) | CliError::Runtime(message) => CliError::usage(message),
+            })?;
             Some(reir::GatePolicyFile::parse(&text).map_err(CliError::usage)?)
         }
         None => None,
@@ -737,18 +744,78 @@ fn wants_help(args: &[String]) -> bool {
 }
 
 fn read_bundle(path: &str) -> Result<Bundle, CliError> {
-    let json = fs::read_to_string(path)
-        .map_err(|error| CliError::runtime(format!("failed to read {path}: {error}")))?;
+    let json = read_bounded_text(path)?;
     Bundle::from_json(&json)
         .map_err(|error| CliError::runtime(format!("failed to parse {path}: {error}")))
 }
 
 fn read_optional_text(path: Option<&str>) -> Result<Option<String>, CliError> {
-    path.map(|path| {
-        fs::read_to_string(path)
-            .map_err(|error| CliError::runtime(format!("failed to read {path}: {error}")))
+    path.map(read_bounded_text).transpose()
+}
+
+fn read_bounded_text(path: &str) -> Result<String, CliError> {
+    read_bounded_text_with_limit(Path::new(path), MAX_CLI_INPUT_BYTES)
+}
+
+fn read_bounded_text_with_limit(path: &Path, limit: u64) -> Result<String, CliError> {
+    let metadata = fs::symlink_metadata(path).map_err(|error| {
+        CliError::runtime(format!("failed to inspect {}: {error}", path.display()))
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(CliError::runtime(format!(
+            "refusing to read symlink input {}",
+            path.display()
+        )));
+    }
+    if !metadata.is_file() {
+        return Err(CliError::runtime(format!(
+            "input is not a regular file: {}",
+            path.display()
+        )));
+    }
+    if metadata.len() > limit {
+        return Err(CliError::runtime(format!(
+            "input {} is {} bytes, exceeding the {limit} byte limit",
+            path.display(),
+            metadata.len()
+        )));
+    }
+
+    let mut options = OpenOptions::new();
+    options.read(true);
+    set_no_follow(&mut options);
+    let file = options.open(path).map_err(|error| {
+        CliError::runtime(format!("failed to read {}: {error}", path.display()))
+    })?;
+    let opened_metadata = file.metadata().map_err(|error| {
+        CliError::runtime(format!("failed to inspect {}: {error}", path.display()))
+    })?;
+    if !opened_metadata.is_file() || !same_file(&metadata, &opened_metadata) {
+        return Err(CliError::runtime(format!(
+            "input changed while opening or is not a regular file: {}",
+            path.display()
+        )));
+    }
+
+    let mut bytes =
+        Vec::with_capacity(usize::try_from(opened_metadata.len().min(limit)).unwrap_or(usize::MAX));
+    file.take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| {
+            CliError::runtime(format!("failed to read {}: {error}", path.display()))
+        })?;
+    if bytes.len() as u64 > limit {
+        return Err(CliError::runtime(format!(
+            "input {} exceeded the {limit} byte limit while reading",
+            path.display()
+        )));
+    }
+    String::from_utf8(bytes).map_err(|error| {
+        CliError::runtime(format!(
+            "failed to decode {} as UTF-8: {error}",
+            path.display()
+        ))
     })
-    .transpose()
 }
 
 struct RsscriptCollectInputs<'a> {
@@ -862,8 +929,121 @@ fn package_lock_json_with_path(json: &str, path: Option<&str>) -> Result<String,
 fn write_json_file(path: &str, bundle: &Bundle) -> Result<(), CliError> {
     let json = serde_json::to_string_pretty(bundle)
         .map_err(|error| CliError::runtime(format!("failed to serialize bundle: {error}")))?;
-    fs::write(path, format!("{json}\n"))
-        .map_err(|error| CliError::runtime(format!("failed to write {path}: {error}")))
+    if json.len() >= MAX_CLI_OUTPUT_BYTES {
+        return Err(CliError::runtime(format!(
+            "serialized bundle is too large to write within the {MAX_CLI_OUTPUT_BYTES} byte limit"
+        )));
+    }
+    let mut output = json.into_bytes();
+    output.push(b'\n');
+    atomic_write_no_follow(Path::new(path), &output)
+}
+
+fn atomic_write_no_follow(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
+    reject_symlink_output(path)?;
+    let parent = path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let file_name = path.file_name().ok_or_else(|| {
+        CliError::runtime(format!("output path has no file name: {}", path.display()))
+    })?;
+    let mut temp_path = None;
+    let mut temp_file = None;
+    for _ in 0..128 {
+        let sequence = OUTPUT_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let candidate = parent.join(format!(
+            ".{}.reir-tmp-{}-{sequence}",
+            file_name.to_string_lossy(),
+            std::process::id()
+        ));
+        let mut options = OpenOptions::new();
+        options.write(true).create_new(true);
+        set_no_follow(&mut options);
+        match options.open(&candidate) {
+            Ok(file) => {
+                temp_path = Some(candidate);
+                temp_file = Some(file);
+                break;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(CliError::runtime(format!(
+                    "failed to stage output {}: {error}",
+                    path.display()
+                )));
+            }
+        }
+    }
+    let temp_path = temp_path.ok_or_else(|| {
+        CliError::runtime(format!(
+            "failed to allocate a staging file for {}",
+            path.display()
+        ))
+    })?;
+    let mut temp_file = temp_file.expect("staging path and file are set together");
+    let write_result = (|| {
+        temp_file.write_all(bytes)?;
+        temp_file.sync_all()?;
+        drop(temp_file);
+        reject_symlink_output(path).map_err(|error| match error {
+            CliError::Usage(message) | CliError::Runtime(message) => std::io::Error::other(message),
+        })?;
+        fs::rename(&temp_path, path)?;
+        if let Ok(directory) = File::open(parent) {
+            let _ = directory.sync_all();
+        }
+        Ok::<(), std::io::Error>(())
+    })();
+    if let Err(error) = write_result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(CliError::runtime(format!(
+            "failed to atomically write {}: {error}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+fn reject_symlink_output(path: &Path) -> Result<(), CliError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(CliError::runtime(format!(
+            "refusing to replace symlink output {}",
+            path.display()
+        ))),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(CliError::runtime(format!(
+            "failed to inspect output {}: {error}",
+            path.display()
+        ))),
+    }
+}
+
+#[cfg(unix)]
+fn set_no_follow(options: &mut OpenOptions) {
+    use std::os::unix::fs::OpenOptionsExt;
+
+    #[cfg(any(target_os = "macos", target_os = "ios", target_os = "freebsd"))]
+    const O_NOFOLLOW: i32 = 0x100;
+    #[cfg(not(any(target_os = "macos", target_os = "ios", target_os = "freebsd")))]
+    const O_NOFOLLOW: i32 = 0x20000;
+    options.custom_flags(O_NOFOLLOW);
+}
+
+#[cfg(not(unix))]
+fn set_no_follow(_options: &mut OpenOptions) {}
+
+#[cfg(unix)]
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    left.dev() == right.dev() && left.ino() == right.ino()
+}
+
+#[cfg(not(unix))]
+fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+    left.len() == right.len()
 }
 
 fn print_json<T: serde::Serialize>(value: &T) -> Result<(), CliError> {
@@ -2032,5 +2212,70 @@ POLICY
         assert_eq!(exit_for_diff(&unchanged, true), ExitCode::SUCCESS);
         assert_eq!(exit_for_diff(&changed, false), ExitCode::SUCCESS);
         assert_eq!(exit_for_diff(&changed, true), ExitCode::from(1));
+    }
+
+    #[test]
+    fn cli_text_reads_enforce_the_byte_limit() {
+        let temp_dir = unique_temp_dir("bounded-read");
+        let input = temp_dir.join("input.json");
+        std::fs::write(&input, b"12345").expect("fixture should be written");
+
+        let error =
+            read_bounded_text_with_limit(&input, 4).expect_err("oversized input should fail");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        assert!(
+            matches!(error, CliError::Runtime(message) if message.contains("exceeding the 4 byte limit"))
+        );
+    }
+
+    #[test]
+    fn atomic_output_replaces_regular_file() {
+        let temp_dir = unique_temp_dir("atomic-output");
+        let output = temp_dir.join("bundle.json");
+        std::fs::write(&output, b"old").expect("fixture should be written");
+
+        atomic_write_no_follow(&output, b"new").expect("regular output should be replaced");
+
+        assert_eq!(std::fs::read(&output).expect("output should exist"), b"new");
+        assert!(
+            std::fs::read_dir(&temp_dir)
+                .expect("directory should be readable")
+                .all(|entry| !entry
+                    .expect("entry should be readable")
+                    .file_name()
+                    .to_string_lossy()
+                    .contains("reir-tmp"))
+        );
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cli_reads_and_outputs_reject_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = unique_temp_dir("no-follow");
+        let target = temp_dir.join("target.json");
+        let link = temp_dir.join("link.json");
+        std::fs::write(&target, b"unchanged").expect("fixture should be written");
+        symlink(&target, &link).expect("symlink should be created");
+
+        let read_error =
+            read_bounded_text_with_limit(&link, 64).expect_err("symlink input should be rejected");
+        let write_error = atomic_write_no_follow(&link, b"replacement")
+            .expect_err("symlink output should be rejected");
+
+        assert!(
+            matches!(read_error, CliError::Runtime(message) if message.contains("symlink input"))
+        );
+        assert!(
+            matches!(write_error, CliError::Runtime(message) if message.contains("symlink output"))
+        );
+        assert_eq!(
+            std::fs::read(&target).expect("target should remain readable"),
+            b"unchanged"
+        );
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

@@ -8,3 +8,11 @@ native fn Cli.option(args: List<String>, name: String) -> Option<String>
 
 native fn Cli.positionals(args: List<String>) -> fresh List<String>
     effects(native)
+
+// Extract positionals while treating the named long options as value-taking.
+// Other long options are boolean flags and never consume the next argument.
+native fn Cli.positionals_with_value_options(
+    args: List<String>,
+    value_options: List<String>,
+) -> fresh List<String>
+    effects(native)

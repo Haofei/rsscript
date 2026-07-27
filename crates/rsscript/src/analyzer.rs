@@ -2,6 +2,7 @@ use crate::text_util::{split_top_level_type_args, type_arg_names, type_root_name
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::checks;
+use crate::checks::budget::{AnalysisBudget, AnalysisBudgetLimits, AnalysisDiagnostics};
 use crate::diagnostic::{Diagnostic, code};
 use crate::hir::{
     CallResolution, DuplicateSymbolKind, FieldInfo, FunctionSig, Hir, HirBlock, HirExpr,
@@ -271,10 +272,12 @@ pub fn analyze_sources_with_interfaces_without_core(
 mod entrypoint_tests {
     use super::{
         AnalysisFlavor, AnalysisInput, AnalysisSources, PreparedAnalysis,
-        analyze_source_with_interfaces, analyze_source_with_interfaces_without_core,
-        analyze_sources_with_interfaces, analyze_sources_with_interfaces_without_core,
-        prepare_analysis, render_type_ref,
+        analyze_program_with_budget, analyze_source_with_interfaces,
+        analyze_source_with_interfaces_without_core, analyze_sources_with_interfaces,
+        analyze_sources_with_interfaces_without_core, prepare_analysis, render_type_ref,
     };
+    use crate::checks::budget::AnalysisBudgetLimits;
+    use crate::diagnostic::code;
 
     const SOURCE: &str = "fn helper(value: read Int) -> Int { return value }\n\
         fn main() -> Int { return helper(value: 1) }\n";
@@ -419,9 +422,88 @@ mod entrypoint_tests {
             "owned Fn(Int) -> String"
         );
     }
+
+    #[test]
+    fn wide_program_reports_incomplete_analysis_when_node_budget_is_exhausted() {
+        let source = (0..200)
+            .map(|index| format!("fn f{index}() -> Unit {{ return Unit }}\n"))
+            .collect::<String>();
+        let prepared = prepare_analysis(AnalysisInput {
+            sources: AnalysisSources::Single {
+                file: "wide.rss",
+                source: &source,
+            },
+            interfaces: &[],
+            flavor: AnalysisFlavor::FullWithoutBuiltinInterfaces,
+        });
+        let two_passes = prepared.tokens.len() * 2;
+
+        let diagnostics = analyze_program_with_budget(
+            prepared,
+            AnalysisBudgetLimits {
+                nodes: two_passes,
+                ..AnalysisBudgetLimits::default()
+            },
+        );
+
+        let incomplete = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code::ANALYSIS_INCOMPLETE)
+            .expect("wide analysis should stop at the shared node budget");
+        assert!(
+            incomplete
+                .causes
+                .iter()
+                .any(|cause| cause.contains("nodes"))
+        );
+    }
+
+    #[test]
+    fn wide_error_set_is_capped_and_reports_incomplete_analysis() {
+        let feature_names = (0..100)
+            .map(|index| format!("unknown_feature_{index}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let source = format!("features: {feature_names}\nfn main() -> Unit {{ return Unit }}\n");
+        let prepared = prepare_analysis(AnalysisInput {
+            sources: AnalysisSources::Single {
+                file: "many-errors.rss",
+                source: &source,
+            },
+            interfaces: &[],
+            flavor: AnalysisFlavor::FullWithoutBuiltinInterfaces,
+        });
+
+        let diagnostics = analyze_program_with_budget(
+            prepared,
+            AnalysisBudgetLimits {
+                diagnostics: 8,
+                ..AnalysisBudgetLimits::default()
+            },
+        );
+
+        assert_eq!(diagnostics.len(), 9);
+        let incomplete = diagnostics
+            .last()
+            .expect("incomplete diagnostic should be retained beyond the cap");
+        assert_eq!(incomplete.code, code::ANALYSIS_INCOMPLETE);
+        assert!(
+            incomplete
+                .causes
+                .iter()
+                .any(|cause| cause.contains("diagnostics"))
+        );
+    }
 }
 
 fn analyze_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
+    analyze_program_with_budget(prepared, AnalysisBudgetLimits::default())
+}
+
+fn analyze_program_with_budget(
+    prepared: PreparedAnalysis,
+    budget_limits: AnalysisBudgetLimits,
+) -> Vec<Diagnostic> {
     let PreparedAnalysis {
         tokens,
         syntax_program,
@@ -429,20 +511,28 @@ fn analyze_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
         hir,
         type_aliases,
     } = prepared;
+    let budget = AnalysisBudget::new(
+        budget_limits,
+        tokens
+            .first()
+            .map(|token| token.span.clone())
+            .unwrap_or_default(),
+    );
     let mut analyzer = Analyzer {
         tokens: &tokens,
         syntax_program,
         interface_programs,
         hir,
-        diagnostics: Vec::new(),
+        diagnostics: AnalysisDiagnostics::new(budget.clone()),
+        budget,
         type_aliases,
         in_task_group: false,
         async_let_names: Vec::new(),
     };
     analyzer.run();
-    let mut diagnostics = analyzer.diagnostics;
-    crate::syntax::demangle_diagnostics(&analyzer.syntax_program, &mut diagnostics);
-    diagnostics
+    analyzer.diagnostics.push_incomplete();
+    crate::syntax::demangle_diagnostics(&analyzer.syntax_program, &mut analyzer.diagnostics);
+    analyzer.diagnostics.into_vec()
 }
 
 /// Namespaces that the compiler generates and a user declaration must not claim:
@@ -487,20 +577,28 @@ fn analyze_syntax_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
         hir,
         type_aliases,
     } = prepared;
+    let budget = AnalysisBudget::new(
+        AnalysisBudgetLimits::default(),
+        tokens
+            .first()
+            .map(|token| token.span.clone())
+            .unwrap_or_default(),
+    );
     let mut analyzer = Analyzer {
         tokens: &tokens,
         syntax_program,
         interface_programs,
         hir,
-        diagnostics: Vec::new(),
+        diagnostics: AnalysisDiagnostics::new(budget.clone()),
+        budget,
         type_aliases,
         in_task_group: false,
         async_let_names: Vec::new(),
     };
     analyzer.run_syntax_only();
-    let mut diagnostics = analyzer.diagnostics;
-    crate::syntax::demangle_diagnostics(&analyzer.syntax_program, &mut diagnostics);
-    diagnostics
+    analyzer.diagnostics.push_incomplete();
+    crate::syntax::demangle_diagnostics(&analyzer.syntax_program, &mut analyzer.diagnostics);
+    analyzer.diagnostics.into_vec()
 }
 
 pub(crate) struct Analyzer<'a> {
@@ -508,7 +606,8 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) syntax_program: crate::syntax::ast::Program,
     pub(crate) interface_programs: Vec<crate::syntax::ast::Program>,
     pub(crate) hir: Hir,
-    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) diagnostics: AnalysisDiagnostics,
+    pub(crate) budget: std::rc::Rc<AnalysisBudget>,
     pub(crate) type_aliases: std::collections::BTreeMap<String, AliasDefinition>,
     in_task_group: bool,
     pub(crate) async_let_names: Vec<String>,
@@ -1408,28 +1507,43 @@ impl Analyzer<'_> {
     }
 
     fn run(&mut self) {
-        self.check_single_feature_declaration();
-        self.check_unknown_file_features();
-        self.check_duplicate_file_features();
-        self.check_removed_profile_declarations();
-        self.check_unsupported_syntax();
-        self.check_derive_field_requirements();
-        self.check_assignments();
-        self.check_async_fn_lowerable();
-        self.check_match_exhaustiveness();
-        checks::declarations::check(self);
-        checks::types::check_names(self);
-        checks::declarations::check_generic_constraints(self);
-        self.check_runtime_guarantee_bodies();
-        self.check_try_operator_result_returns();
-        checks::types::check_resource_shapes(self);
-        checks::features::check(self);
-        checks::calls::check(self);
-        checks::body::check(self);
-        checks::forbidden::check(self);
+        macro_rules! run_pass {
+            ($pass:expr) => {
+                if !self.budget.consume_nodes(self.tokens.len().max(1)) {
+                    return;
+                }
+                $pass;
+                if self.budget.is_exhausted() {
+                    return;
+                }
+            };
+        }
+
+        run_pass!(self.check_single_feature_declaration());
+        run_pass!(self.check_unknown_file_features());
+        run_pass!(self.check_duplicate_file_features());
+        run_pass!(self.check_removed_profile_declarations());
+        run_pass!(self.check_unsupported_syntax());
+        run_pass!(self.check_derive_field_requirements());
+        run_pass!(self.check_assignments());
+        run_pass!(self.check_async_fn_lowerable());
+        run_pass!(self.check_match_exhaustiveness());
+        run_pass!(checks::declarations::check(self));
+        run_pass!(checks::types::check_names(self));
+        run_pass!(checks::declarations::check_generic_constraints(self));
+        run_pass!(self.check_runtime_guarantee_bodies());
+        run_pass!(self.check_try_operator_result_returns());
+        run_pass!(checks::types::check_resource_shapes(self));
+        run_pass!(checks::features::check(self));
+        run_pass!(checks::calls::check(self));
+        run_pass!(checks::body::check(self));
+        run_pass!(checks::forbidden::check(self));
     }
 
     fn run_syntax_only(&mut self) {
+        if !self.budget.consume_nodes(self.tokens.len().max(1)) {
+            return;
+        }
         self.check_single_feature_declaration();
         self.check_unknown_file_features();
         self.check_duplicate_file_features();

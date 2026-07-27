@@ -7,6 +7,20 @@ on:
     branches: [main]
 
 jobs:
+  supply-chain:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      - name: Audit Cargo.lock
+        uses: rustsec/audit-check@69366f33c96575abad1ee0dba8212993eecbe998 # v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
   rust:
     runs-on: ubuntu-latest
 
@@ -22,6 +36,8 @@ jobs:
 
       - name: Install nextest
         uses: taiki-e/install-action@6d9ce389421e24f7b73aff5e841bbe5a6b4c974c # nextest
+        with:
+          tool: nextest@0.9.140
 
       - name: Check
         run: cargo run --locked --quiet -p rsscript --bin rss -- test --all
@@ -44,6 +60,8 @@ jobs:
 
       - name: Install nextest
         uses: taiki-e/install-action@6d9ce389421e24f7b73aff5e841bbe5a6b4c974c # nextest
+        with:
+          tool: nextest@0.9.140
 
       - name: Test (native-jit)
         run: cargo nextest run --locked -p rsscript --features native-jit --no-fail-fast

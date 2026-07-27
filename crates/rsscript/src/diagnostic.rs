@@ -43,6 +43,7 @@ pub mod code {
     pub const VARIANT_PATTERN_ARITY_MISMATCH: &str = "RS0037";
     pub const CHAR_LITERAL_NOT_SINGLE_SCALAR: &str = "RS0038";
     pub const CYCLIC_TYPE_ALIAS: &str = "RS0039";
+    pub const ANALYSIS_INCOMPLETE: &str = "RS0040";
     pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
@@ -505,6 +506,11 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::UNINFERABLE_BINDING_TYPE,
         title: "binding type cannot be inferred",
         explanation: "A `let` binding whose value is a bare `Ok(...)`, `Err(...)`, or `None` leaves a type parameter open (the `Result` error type, the `Result` ok type, or the `Option` value type). RSScript normally resolves that parameter from how the binding is later used; when the binding is never used, nothing can constrain it, so the type is genuinely ambiguous and the program would not lower to valid Rust. The checker reports this in RSScript — instead of letting it surface as a backend `type annotations needed` error — and the fix is to add a type annotation (e.g. `let v: Result<Int, String> = Ok(value)`) or to remove the unused binding.",
+    },
+    DiagnosticExplanation {
+        code: code::ANALYSIS_INCOMPLETE,
+        title: "semantic analysis incomplete",
+        explanation: "The analyzer stopped after exhausting a shared work budget for visited nodes, generic substitutions, emitted diagnostics, or recursion depth. Other diagnostics from this run may be incomplete; reduce generated breadth or type nesting before relying on the result.",
     },
     DiagnosticExplanation {
         code: code::UNKNOWN_EFFECT,

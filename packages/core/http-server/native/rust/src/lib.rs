@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use tiny_http::{Header, Method, Request, Response, Server};
 
-/// Serve a fixed set of static routes over HTTP, blocking until a fatal error.
+/// Demo-only: serve a fixed set of static routes over HTTP until a fatal error.
 ///
 /// `paths[i]` is answered with `bodies[i]` (HTTP 200, `text/plain`); any other
 /// path returns 404, and a non-GET request to a known path returns 405. `paths`
@@ -12,7 +12,7 @@ pub fn serve_static(address: &str, paths: &[String], bodies: &[String]) -> Resul
     let routes = build_routes(paths, bodies)?;
     let server = Server::http(address).map_err(|error| error.to_string())?;
     for request in server.incoming_requests() {
-        respond(request, &routes);
+        respond(request, &routes)?;
     }
     Ok(())
 }
@@ -36,13 +36,15 @@ fn build_routes(paths: &[String], bodies: &[String]) -> Result<HashMap<String, S
     Ok(routes)
 }
 
-fn respond(request: Request, routes: &HashMap<String, String>) {
+fn respond(request: Request, routes: &HashMap<String, String>) -> Result<(), String> {
     let is_get = request.method() == &Method::Get;
     let (status, body) = resolve_route(routes, request.url(), is_get);
     let response = Response::from_string(body)
         .with_status_code(status)
         .with_header(text_plain_header());
-    let _ = request.respond(response);
+    request
+        .respond(response)
+        .map_err(|error| format!("http-server: failed to send response: {error}"))
 }
 
 /// Decide the `(status, body)` for a request. Split out from socket handling so
@@ -122,7 +124,7 @@ mod tests {
         thread::spawn(move || {
             // Serve exactly the one request this test issues, then stop.
             if let Ok(request) = server.recv() {
-                respond(request, &table);
+                respond(request, &table).expect("test response should send");
             }
         });
 

@@ -13,8 +13,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 libloading = { version = "0.8", optional = true }
+tempfile = { version = "3", optional = true }
 
 [features]
 # Enabled by the host (interpreter) to pull in the cdylib loader. Plugins depend
 # on this crate without the feature, so they don't compile libloading.
-host = ["dep:libloading"]
+host = ["dep:libloading", "dep:tempfile"]

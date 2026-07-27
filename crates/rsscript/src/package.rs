@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
-use std::fs::{self, File};
+use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, ExitStatus, Stdio};
@@ -115,7 +115,9 @@ fn collect_regular_files_inner(
     let metadata = package_path_metadata(path, "package file scan")?;
     ensure_package_path_within_root(root, path, "package file scan")?;
     if metadata.is_file() {
-        budget.add_file(metadata.len(), "package file scan", path)?;
+        let (_file, opened_metadata) =
+            open_regular_file_within_root(root, path, "package file scan")?;
+        budget.add_file(opened_metadata.len(), "package file scan", path)?;
         files.push(path.to_path_buf());
         return Ok(());
     }
@@ -162,12 +164,13 @@ fn copy_package_directory_inner(
     let metadata = package_path_metadata(source, "package copy")?;
     ensure_package_path_within_root(root, source, "package copy")?;
     if metadata.is_file() {
-        budget.add_file(metadata.len(), "package copy", source)?;
+        let (input, opened_metadata) = open_regular_file_within_root(root, source, "package copy")?;
+        budget.add_file(opened_metadata.len(), "package copy", source)?;
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)
                 .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
         }
-        copy_regular_file_bounded(source, destination, metadata.len())?;
+        copy_regular_file_bounded(input, source, destination, opened_metadata.len())?;
         return Ok(());
     }
     if !metadata.is_dir() {
@@ -303,14 +306,37 @@ fn read_bounded_sorted_entries(
 }
 
 fn copy_regular_file_bounded(
+    mut input: File,
     source: &Path,
     destination: &Path,
     expected: u64,
 ) -> Result<(), String> {
-    let mut input = File::open(source)
-        .map_err(|error| format!("failed to open {}: {error}", source.display()))?;
-    let mut output = File::create(destination)
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let mut output = options
+        .open(destination)
         .map_err(|error| format!("failed to create {}: {error}", destination.display()))?;
+    let output_metadata = output
+        .metadata()
+        .map_err(|error| format!("failed to inspect {}: {error}", destination.display()))?;
+    if !output_metadata.is_file() || is_package_link_like(&output_metadata) {
+        let _ = fs::remove_file(destination);
+        return Err(format!(
+            "package copy destination is not a regular file: {}",
+            destination.display()
+        ));
+    }
     let copied = std::io::copy(
         &mut Read::by_ref(&mut input).take(expected.saturating_add(1)),
         &mut output,
@@ -362,10 +388,11 @@ pub(crate) fn collect_bounded_regular_files(
         let metadata = package_path_metadata(path, operation)?;
         ensure_package_path_within_root(root, path, operation)?;
         if metadata.is_file() {
-            budget.add_file(metadata.len(), operation, path)?;
+            let (_file, opened_metadata) = open_regular_file_within_root(root, path, operation)?;
+            budget.add_file(opened_metadata.len(), operation, path)?;
             files.push(BoundedRegularFile {
                 path: path.to_path_buf(),
-                bytes: metadata.len(),
+                bytes: opened_metadata.len(),
             });
             return Ok(());
         }
@@ -599,13 +626,175 @@ pub fn write_package_artifact_atomic(
 pub(super) fn package_path_metadata(path: &Path, operation: &str) -> Result<fs::Metadata, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
-    if metadata.file_type().is_symlink() {
+    if is_package_link_like(&metadata) {
         return Err(format!(
-            "{operation} rejects symlinks inside package input: {}",
+            "{operation} rejects symlinks or reparse points inside package input: {}",
             path.display()
         ));
     }
     Ok(metadata)
+}
+
+pub(super) fn open_regular_file_no_follow(
+    path: &Path,
+    operation: &str,
+) -> Result<(File, fs::Metadata), String> {
+    #[cfg(unix)]
+    let file = {
+        use rustix::fs::{Mode, OFlags};
+
+        let fd = rustix::fs::open(
+            path,
+            OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| {
+            format!(
+                "failed to open {} without following links: {error}",
+                path.display()
+            )
+        })?;
+        File::from(fd)
+    };
+    #[cfg(not(unix))]
+    let file = {
+        let mut options = OpenOptions::new();
+        options.read(true);
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        options.open(path).map_err(|error| {
+            format!(
+                "failed to open {} without following links: {error}",
+                path.display()
+            )
+        })?
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("failed to inspect opened {}: {error}", path.display()))?;
+    if !metadata.is_file() || is_package_link_like(&metadata) {
+        return Err(format!(
+            "{operation} requires a regular file and rejects symlinks or reparse points: {}",
+            path.display()
+        ));
+    }
+    Ok((file, metadata))
+}
+
+pub(super) fn open_regular_file_within_root(
+    root: &Path,
+    path: &Path,
+    operation: &str,
+) -> Result<(File, fs::Metadata), String> {
+    let relative = confined_relative_path(root, path, operation)?;
+    if relative.as_os_str().is_empty() {
+        return open_regular_file_no_follow(path, operation);
+    }
+    #[cfg(unix)]
+    {
+        use rustix::fs::{Mode, OFlags};
+
+        let root_fd = rustix::fs::open(
+            root,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        )
+        .map_err(|error| format!("failed to open package root {}: {error}", root.display()))?;
+        let mut current = File::from(root_fd);
+        let mut components = relative.components().peekable();
+        while let Some(component) = components.next() {
+            let Component::Normal(component) = component else {
+                return Err(format!(
+                    "{operation} path is not confined: {}",
+                    path.display()
+                ));
+            };
+            let flags = if components.peek().is_some() {
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
+            } else {
+                OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC
+            };
+            let fd =
+                rustix::fs::openat(&current, component, flags, Mode::empty()).map_err(|error| {
+                    format!(
+                        "failed to open confined {operation} path {}: {error}",
+                        path.display()
+                    )
+                })?;
+            current = File::from(fd);
+        }
+        let metadata = current
+            .metadata()
+            .map_err(|error| format!("failed to inspect opened {}: {error}", path.display()))?;
+        if !metadata.is_file() {
+            return Err(format!(
+                "{operation} requires a regular file: {}",
+                path.display()
+            ));
+        }
+        Ok((current, metadata))
+    }
+    #[cfg(not(unix))]
+    {
+        ensure_package_path_components(root, path, operation)?;
+        let opened = open_regular_file_no_follow(path, operation)?;
+        ensure_package_path_components(root, path, operation)?;
+        Ok(opened)
+    }
+}
+
+fn confined_relative_path(root: &Path, path: &Path, operation: &str) -> Result<PathBuf, String> {
+    if let Ok(relative) = path.strip_prefix(root) {
+        return Ok(relative.to_path_buf());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("{operation} path has no parent: {}", path.display()))?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| format!("{operation} path has no file name: {}", path.display()))?;
+    let canonical_parent = fs::canonicalize(parent)
+        .map_err(|error| format!("failed to canonicalize {}: {error}", parent.display()))?;
+    canonical_parent
+        .join(name)
+        .strip_prefix(root)
+        .map(Path::to_path_buf)
+        .map_err(|_| format!("{operation} path escapes package root: {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn ensure_package_path_components(root: &Path, path: &Path, operation: &str) -> Result<(), String> {
+    let relative = confined_relative_path(root, path, operation)?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let Component::Normal(component) = component else {
+            return Err(format!(
+                "{operation} path is not confined: {}",
+                path.display()
+            ));
+        };
+        current.push(component);
+        package_path_metadata(&current, operation)?;
+    }
+    ensure_package_path_within_root(root, path, operation)
+}
+
+pub(super) fn is_package_link_like(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+        return metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0;
+    }
+    #[cfg(not(windows))]
+    false
 }
 
 pub(crate) fn read_utf8_file_bounded(
@@ -613,13 +802,7 @@ pub(crate) fn read_utf8_file_bounded(
     max_bytes: u64,
     operation: &str,
 ) -> Result<String, String> {
-    let metadata = package_path_metadata(path, operation)?;
-    if !metadata.is_file() {
-        return Err(format!(
-            "{operation} requires a regular file: {}",
-            path.display()
-        ));
-    }
+    let (file, metadata) = open_regular_file_no_follow(path, operation)?;
     if metadata.len() > max_bytes {
         return Err(format!(
             "{operation} exceeded byte limit of {max_bytes} at {}",
@@ -627,8 +810,6 @@ pub(crate) fn read_utf8_file_bounded(
         ));
     }
 
-    let file =
-        File::open(path).map_err(|error| format!("failed to open {}: {error}", path.display()))?;
     let capacity = usize::try_from(metadata.len()).map_err(|_| {
         format!(
             "{operation} file is too large for this platform: {}",
@@ -982,6 +1163,28 @@ mod preparation_limit_tests {
         assert!(!destination.join("large").exists());
         let _ = fs::remove_dir_all(source);
         let _ = fs::remove_dir_all(destination);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_copy_does_not_follow_substituted_destination_file() {
+        use std::os::unix::fs::symlink;
+
+        let source = test_dir("copy-link-source");
+        let destination = test_dir("copy-link-destination");
+        let outside = test_dir("copy-link-outside");
+        fs::create_dir_all(&source).expect("source directory");
+        fs::create_dir_all(&destination).expect("destination directory");
+        fs::write(source.join("file"), b"inside").expect("source file");
+        fs::write(&outside, b"outside").expect("outside file");
+        symlink(&outside, destination.join("file")).expect("destination symlink");
+
+        copy_package_directory(&source, &destination)
+            .expect_err("copy destination symlink must be rejected");
+        assert_eq!(fs::read(&outside).expect("outside read"), b"outside");
+        let _ = fs::remove_dir_all(source);
+        let _ = fs::remove_dir_all(destination);
+        let _ = fs::remove_file(outside);
     }
 
     #[cfg(unix)]

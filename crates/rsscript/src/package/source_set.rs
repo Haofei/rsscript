@@ -313,9 +313,14 @@ pub(super) fn load_package_with_features(
     package_dir: &Path,
     selected_features: Option<&[String]>,
 ) -> Result<LoadedPackage, String> {
+    let package_root = canonical_package_root(package_dir)?;
     let manifest_path = package_dir.join("rsspkg.toml");
-    let manifest_source =
-        read_bounded_utf8_file(&manifest_path, MANIFEST_MAX_BYTES, "package manifest")?;
+    let (manifest_source, _) = read_bounded_utf8_file(
+        &package_root,
+        &package_root.join("rsspkg.toml"),
+        MANIFEST_MAX_BYTES,
+        "package manifest",
+    )?;
     let manifest: Manifest = toml::from_str(&manifest_source)
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
 
@@ -368,9 +373,14 @@ pub(super) fn load_package_with_features(
 }
 
 pub(super) fn load_package_manifest(package_dir: &Path) -> Result<Manifest, String> {
+    let package_root = canonical_package_root(package_dir)?;
     let manifest_path = package_dir.join("rsspkg.toml");
-    let manifest_source =
-        read_bounded_utf8_file(&manifest_path, MANIFEST_MAX_BYTES, "package manifest")?;
+    let (manifest_source, _) = read_bounded_utf8_file(
+        &package_root,
+        &package_root.join("rsspkg.toml"),
+        MANIFEST_MAX_BYTES,
+        "package manifest",
+    )?;
     toml::from_str(&manifest_source)
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))
 }
@@ -476,7 +486,13 @@ fn read_package_sources_excluding(
         collect_rsscript_files_excluding(&root_path, &excluded_roots, &mut files, 0, budget)?;
         files.sort();
         for file in files {
-            let contents = read_bounded_utf8_file(&file, SOURCE_FILE_MAX_BYTES, "package source")?;
+            let (contents, bytes) = read_bounded_utf8_file(
+                &package_root,
+                &file,
+                SOURCE_FILE_MAX_BYTES,
+                "package source",
+            )?;
+            budget.add_file(bytes, &file)?;
             let relative_path = super::relative_path(&package_root, &file);
             let display_path = package_dir.join(&relative_path).display().to_string();
             sources.push(PackageSource {
@@ -518,13 +534,13 @@ pub(super) fn validate_manifest_relative_path(value: &str, label: &str) -> Resul
 }
 
 pub(super) fn confined_manifest_path(
-    package_dir: &Path,
+    _package_dir: &Path,
     package_root: &Path,
     value: &str,
     label: &str,
 ) -> Result<PathBuf, String> {
     validate_manifest_relative_path(value, label)?;
-    let path = package_dir.join(value);
+    let path = package_root.join(value);
     if !path.exists() {
         return Ok(path);
     }
@@ -537,7 +553,15 @@ pub(super) fn confined_manifest_path(
             package_root.display()
         )
     })?;
-    Ok(canonical)
+    let mut current = package_root.to_path_buf();
+    for component in Path::new(value).components() {
+        let Component::Normal(component) = component else {
+            continue;
+        };
+        current.push(component);
+        super::package_path_metadata(&current, label)?;
+    }
+    Ok(path)
 }
 
 fn collect_rsscript_files_excluding(
@@ -551,14 +575,18 @@ fn collect_rsscript_files_excluding(
     if excluded_roots.iter().any(|root| path == root) {
         return Ok(());
     }
-    if path.is_file() {
+    let metadata = super::package_path_metadata(path, "package source tree")?;
+    if metadata.is_file() {
         if super::is_rsscript_source_path(path) {
-            let metadata = fs::metadata(path)
-                .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
-            budget.add_file(metadata.len(), path)?;
             files.push(path.to_path_buf());
         }
         return Ok(());
+    }
+    if !metadata.is_dir() {
+        return Err(format!(
+            "package source tree only accepts regular files or directories: {}",
+            path.display()
+        ));
     }
     let entries = fs::read_dir(path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
@@ -568,23 +596,12 @@ fn collect_rsscript_files_excluding(
         // `file_type()` does NOT follow symlinks (unlike `Path::is_dir`/`is_file`).
         // Reject symlinked entries so a package cannot point review/lock/metadata
         // at files outside its own root (symlink escape).
-        let file_type = entry
-            .file_type()
-            .map_err(|error| format!("failed to stat entry in {}: {error}", path.display()))?;
-        if file_type.is_symlink() {
-            return Err(format!(
-                "refusing to follow symlink in package source tree: {}",
-                entry.path().display()
-            ));
-        }
         let path = entry.path();
+        let metadata = super::package_path_metadata(&path, "package source tree")?;
+        let file_type = metadata.file_type();
         if file_type.is_dir() {
             collect_rsscript_files_excluding(&path, excluded_roots, files, depth + 1, budget)?;
         } else if file_type.is_file() && super::is_rsscript_source_path(&path) {
-            let metadata = entry
-                .metadata()
-                .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
-            budget.add_file(metadata.len(), &path)?;
             files.push(path);
         }
     }
@@ -634,23 +651,25 @@ impl SourceBudget {
     }
 }
 
-fn read_bounded_utf8_file(path: &Path, max_bytes: u64, label: &str) -> Result<String, String> {
-    let metadata = fs::metadata(path)
-        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
-    if !metadata.is_file() {
-        return Err(format!(
-            "{label} must be a regular file: {}",
-            path.display()
-        ));
-    }
+fn read_bounded_utf8_file(
+    package_root: &Path,
+    path: &Path,
+    max_bytes: u64,
+    label: &str,
+) -> Result<(String, u64), String> {
+    let (file, metadata) = super::open_regular_file_within_root(package_root, path, label)?;
     if metadata.len() > max_bytes {
+        if label == "package source" {
+            return Err(format!(
+                "{label} {} exceeded per-file byte limit of {max_bytes}",
+                path.display()
+            ));
+        }
         return Err(format!(
             "{label} {} exceeded byte limit of {max_bytes}",
             path.display()
         ));
     }
-    let file = fs::File::open(path)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
     let mut bytes = Vec::with_capacity(metadata.len().min(max_bytes) as usize);
     file.take(max_bytes + 1)
         .read_to_end(&mut bytes)
@@ -661,7 +680,9 @@ fn read_bounded_utf8_file(path: &Path, max_bytes: u64, label: &str) -> Result<St
             path.display()
         ));
     }
+    let actual = bytes.len() as u64;
     String::from_utf8(bytes)
+        .map(|contents| (contents, actual))
         .map_err(|error| format!("failed to read {} as UTF-8: {error}", path.display()))
 }
 
@@ -698,6 +719,26 @@ mod tests {
         let error = load_package_manifest(&root).expect_err("manifest must be bounded");
         assert!(error.contains("exceeded byte limit"), "{error}");
         fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_symlinked_manifest_without_reading_target() {
+        use std::os::unix::fs::symlink;
+
+        let root = fixture("manifest-symlink");
+        let outside = fixture("manifest-symlink-outside");
+        fs::create_dir_all(&root).expect("root");
+        fs::write(
+            &outside,
+            "[package]\nname = \"outside\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+        )
+        .expect("outside manifest");
+        symlink(&outside, root.join("rsspkg.toml")).expect("manifest symlink");
+
+        load_package_manifest(&root).expect_err("manifest symlink must be rejected");
+        fs::remove_dir_all(root).expect("cleanup");
+        fs::remove_file(outside).expect("outside cleanup");
     }
 
     #[test]

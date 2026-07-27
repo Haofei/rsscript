@@ -1,6 +1,13 @@
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
-use crate::{Capability, Evidence, Fact, FactRole, FactValue, GateFactDomain};
+use crate::{
+    Capability, CapabilityCategory, Evidence, EvidenceKind, Fact, FactRole, FactValue,
+    GateFactDomain,
+};
+
+const MAX_RECONCILIATION_EVIDENCE: usize = 256;
 
 /// Compares facts with compatible capability keys and subject chains.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,6 +145,9 @@ fn reconcile_capabilities_impl(
                 && fact.value == FactValue::True
         })
         .collect();
+    let required_by_category = index_capabilities_by_category(&required_with_capability);
+    let granted_by_category = index_capabilities_by_category(&granted_with_capability);
+    let denied_by_category = index_capabilities_by_category(&denied_with_capability);
 
     for required_fact in &required_with_capability {
         let required_capability = required_fact
@@ -151,7 +161,16 @@ fn reconcile_capabilities_impl(
             || required_fact
                 .validate_for_gate(FactRole::Required, GateFactDomain::Requirement)
                 .is_empty();
-        let matching_denies: Vec<&Fact> = denied_with_capability
+        let category = capability_category_key(&required_capability.category);
+        let category_denies = denied_by_category
+            .get(category.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let category_grants = granted_by_category
+            .get(category.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let matching_denies: Vec<&Fact> = category_denies
             .iter()
             .copied()
             .filter(|denied_fact| {
@@ -170,7 +189,7 @@ fn reconcile_capabilities_impl(
                         .is_some_and(|denied| capability_intersects(denied, required_capability))
             })
             .collect();
-        let matching_grants: Vec<&Fact> = granted_with_capability
+        let matching_grants: Vec<&Fact> = category_grants
             .iter()
             .copied()
             .filter(|granted_fact| {
@@ -192,7 +211,7 @@ fn reconcile_capabilities_impl(
 
         let has_unknown_coverage = !required_valid
             || required_fact.is_unknown_for_gate()
-            || granted_with_capability.iter().any(|granted_fact| {
+            || category_grants.iter().any(|granted_fact| {
                 principal.is_none_or(|id| granted_fact.matches_gate_principal(id))
                     && granted_fact
                         .capability
@@ -214,9 +233,10 @@ fn reconcile_capabilities_impl(
                 .is_some_and(|denied| capability_covers(denied, required_capability))
         });
         if !matching_grants.is_empty() && !matching_denies.is_empty() && !deny_covers_requirement {
-            let mut evidence = required_fact.evidence.clone();
+            let mut evidence = Vec::new();
+            append_evidence(&mut evidence, &required_fact.evidence);
             for fact in matching_grants.iter().chain(matching_denies.iter()) {
-                evidence.extend(fact.evidence.clone());
+                append_evidence(&mut evidence, &fact.evidence);
             }
             results.push(Reconciliation {
                 schema: "reir.reconciliation.v0.1".to_string(),
@@ -267,7 +287,7 @@ fn reconcile_capabilities_impl(
                     severity: RiskSeverity::Unknown,
                     reason: Some("gate_input_cannot_prove_capability_coverage".to_string()),
                 }),
-                evidence: required_fact.evidence.clone(),
+                evidence: budget_evidence(&required_fact.evidence),
             });
         } else if matching_grants.is_empty() || deny_covers_requirement {
             results.push(Reconciliation {
@@ -288,12 +308,13 @@ fn reconcile_capabilities_impl(
                         "deployment_target_does_not_grant_required_capability".to_string(),
                     ),
                 }),
-                evidence: required_fact.evidence.clone(),
+                evidence: budget_evidence(&required_fact.evidence),
             });
         } else {
-            let mut evidence = required_fact.evidence.clone();
+            let mut evidence = Vec::new();
+            append_evidence(&mut evidence, &required_fact.evidence);
             for grant in &matching_grants {
-                evidence.extend(grant.evidence.clone());
+                append_evidence(&mut evidence, &grant.evidence);
             }
 
             results.push(Reconciliation {
@@ -328,7 +349,12 @@ fn reconcile_capabilities_impl(
             .capability
             .as_ref()
             .expect("filtered granted fact should have capability");
-        let matches_any_required = required_with_capability.iter().any(|required_fact| {
+        let category = capability_category_key(&granted_capability.category);
+        let category_requirements = required_by_category
+            .get(category.as_str())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let matches_any_required = category_requirements.iter().any(|required_fact| {
             required_fact.value == FactValue::True
                 && required_fact
                     .capability
@@ -355,12 +381,90 @@ fn reconcile_capabilities_impl(
                     severity: RiskSeverity::High,
                     reason: Some("granted_capability_has_no_matching_requirement".to_string()),
                 }),
-                evidence: granted_fact.evidence.clone(),
+                evidence: budget_evidence(&granted_fact.evidence),
             });
         }
     }
 
     results
+}
+
+fn index_capabilities_by_category<'a>(facts: &[&'a Fact]) -> HashMap<String, Vec<&'a Fact>> {
+    let mut index = HashMap::new();
+    for fact in facts {
+        let capability = fact
+            .capability
+            .as_ref()
+            .expect("indexed fact should have capability");
+        index
+            .entry(capability_category_key(&capability.category))
+            .or_insert_with(Vec::new)
+            .push(*fact);
+    }
+    index
+}
+
+fn capability_category_key(category: &CapabilityCategory) -> String {
+    category.clone().into()
+}
+
+fn budget_evidence(evidence: &[Evidence]) -> Vec<Evidence> {
+    let mut budgeted = Vec::new();
+    append_evidence(&mut budgeted, evidence);
+    budgeted
+}
+
+fn append_evidence(output: &mut Vec<Evidence>, evidence: &[Evidence]) {
+    if evidence.is_empty() {
+        return;
+    }
+    if output.len() >= MAX_RECONCILIATION_EVIDENCE {
+        if output
+            .last()
+            .is_some_and(|entry| entry.value.as_deref() != Some("truncated"))
+        {
+            output.pop();
+            output.push(evidence_budget_marker());
+        }
+        return;
+    }
+    let available = MAX_RECONCILIATION_EVIDENCE - output.len();
+    if evidence.len() <= available {
+        output.extend_from_slice(evidence);
+        return;
+    }
+
+    if available > 1 {
+        output.extend_from_slice(&evidence[..available - 1]);
+    }
+    output.push(evidence_budget_marker());
+}
+
+fn evidence_budget_marker() -> Evidence {
+    Evidence {
+        kind: EvidenceKind::UnknownReason,
+        file: None,
+        line: None,
+        column: None,
+        length: None,
+        symbol: Some("reconciliation_evidence_budget".to_owned()),
+        reason: Some(format!(
+            "reconciliation evidence exceeded the {MAX_RECONCILIATION_EVIDENCE} item budget; additional evidence was omitted"
+        )),
+        json_pointer: None,
+        resource: None,
+        provider: None,
+        value: Some("truncated".to_owned()),
+        event_id: None,
+        time: None,
+        source: Some("reir.reconciliation".to_owned()),
+        event_name: None,
+        principal: None,
+        account: None,
+        policy_arn: None,
+        statement_index: None,
+        action: None,
+    }
 }
 
 fn capability_covers(granted: &Capability, required: &Capability) -> bool {
@@ -879,6 +983,83 @@ mod tests {
             fact.validate_for_gate(FactRole::Granted, GateFactDomain::DeploymentGrant)
                 .iter()
                 .all(|error| !error.reason.contains("deployment identity"))
+        );
+    }
+
+    #[test]
+    fn reconciliation_caps_aggregated_evidence_and_marks_truncation() {
+        let mut required = Fact {
+            schema: "reir.fact.v0.1".to_owned(),
+            id: "required".to_owned(),
+            kind: FactKind::Capability,
+            role: Some(FactRole::Required),
+            subject: Subject {
+                kind: SubjectKind::CodeFunction,
+                id: "code::run".to_owned(),
+                name: None,
+                package: None,
+            },
+            capability: Some(capability("s3")),
+            value: FactValue::True,
+            confidence: Confidence {
+                level: ConfidenceLevel::Computed,
+                source: Some("test".to_owned()),
+            },
+            acquisition_mode: AcquisitionMode::SourceScan,
+            precision: Precision::ResourceScoped,
+            evidence: Vec::new(),
+            unknown_reason: None,
+        };
+        required.evidence = (0..MAX_RECONCILIATION_EVIDENCE)
+            .map(|line| Evidence {
+                kind: EvidenceKind::SourceSpan,
+                file: Some("src/lib.rs".to_owned()),
+                line: Some(line),
+                column: None,
+                length: None,
+                symbol: None,
+                reason: None,
+                json_pointer: None,
+                resource: None,
+                provider: None,
+                value: None,
+                event_id: None,
+                time: None,
+                source: None,
+                event_name: None,
+                principal: None,
+                account: None,
+                policy_arn: None,
+                statement_index: None,
+                action: None,
+            })
+            .collect();
+        let grant = Fact {
+            id: "grant".to_owned(),
+            role: Some(FactRole::Granted),
+            subject: Subject {
+                kind: SubjectKind::CloudRole,
+                id: "role.prod".to_owned(),
+                name: None,
+                package: None,
+            },
+            evidence: vec![required.evidence[0].clone()],
+            ..required.clone()
+        };
+
+        let results = reconcile_capabilities(&[required], &[grant]);
+        let covered = results
+            .iter()
+            .find(|result| result.kind == ReconciliationKind::Covered)
+            .expect("coverage result");
+
+        assert_eq!(covered.evidence.len(), MAX_RECONCILIATION_EVIDENCE);
+        assert_eq!(
+            covered
+                .evidence
+                .last()
+                .and_then(|entry| entry.value.as_deref()),
+            Some("truncated")
         );
     }
 }

@@ -438,10 +438,21 @@ fn finish_failed_aot_build(
 }
 
 fn exit_code(status: std::process::ExitStatus) -> ExitCode {
-    status
-        .code()
-        .map(|code| ExitCode::from(code as u8))
-        .unwrap_or_else(|| ExitCode::from(1))
+    if let Some(code) = status.code() {
+        return ExitCode::from(portable_exit_code(code));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return ExitCode::from(portable_exit_code(128_i32.saturating_add(signal)));
+        }
+    }
+    ExitCode::from(1)
+}
+
+fn portable_exit_code(code: i32) -> u8 {
+    u8::try_from(code).unwrap_or(1)
 }
 
 fn cargo_build_args(package_dir: &Path, release: bool) -> Vec<String> {
@@ -522,6 +533,14 @@ fn print_run_dry_run(
 mod tests {
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
+    }
+
+    #[test]
+    fn portable_exit_code_rejects_values_that_exit_code_cannot_represent() {
+        assert_eq!(super::portable_exit_code(0), 0);
+        assert_eq!(super::portable_exit_code(255), 255);
+        assert_eq!(super::portable_exit_code(-1), 1);
+        assert_eq!(super::portable_exit_code(256), 1);
     }
 
     #[test]

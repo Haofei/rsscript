@@ -8,6 +8,12 @@ pub(super) fn check_block(
     check_resource_contexts: bool,
     continuation_uses: &HashSet<String>,
 ) -> Flow {
+    let Some(_recursion) = analyzer.budget.enter_recursion() else {
+        return Flow::Fallthrough;
+    };
+    if !analyzer.budget.consume_nodes(block.statements.len().max(1)) {
+        return Flow::Fallthrough;
+    }
     let live_after_statements = block_live_after_statements(block, continuation_uses);
     for (index, statement) in block.statements.iter().enumerate() {
         // Track async let names so await checks can recognize pending bindings

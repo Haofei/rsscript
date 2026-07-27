@@ -35,6 +35,8 @@ jobs:
 
       - name: Install nextest
         uses: taiki-e/install-action@6d9ce389421e24f7b73aff5e841bbe5a6b4c974c # nextest
+        with:
+          tool: nextest@0.9.140
 
       - name: Validate release identity
         if: startsWith(github.ref, 'refs/tags/')

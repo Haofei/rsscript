@@ -202,13 +202,20 @@ runs:
 
         # SARIF for GitHub code scanning / inline PR annotations.
         SARIF_FILE="$TEMP_DIR/rsscript-review.sarif"
+        set +e
         "$REIR_BIN" report-pr \
           --required "$REQUIRED_REIR_JSON" \
           --granted "$TRUSTED_GRANTS" \
           --target "$INPUT_TARGET" \
           --principal "$INPUT_PRINCIPAL" \
           "${REPORT_FLAGS[@]}" \
-          --sarif > "$SARIF_FILE" 2>/dev/null || true
+          --sarif > "$SARIF_FILE"
+        SARIF_EXIT_CODE=$?
+        set -e
+        if [ $SARIF_EXIT_CODE -ne 0 ] && [ ! -s "$SARIF_FILE" ]; then
+          echo "::error::reir report-pr --sarif failed without producing SARIF"
+          exit $SARIF_EXIT_CODE
+        fi
         if [ -s "$SARIF_FILE" ]; then
           echo "sarif=$SARIF_FILE" >> "$GITHUB_OUTPUT"
         fi

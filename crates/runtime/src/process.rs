@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, mpsc};
+use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
 use crate::channel::stream_from_external_receiver_with_drop;
@@ -12,6 +12,62 @@ use crate::{JsonValue, json_to_string};
 use crate::{RssCancellationToken, cancellation_token_is_cancelled};
 
 pub const RUNTIME_PROCESS_OUTPUT_CEILING_BYTES: usize = 64 * 1024 * 1024;
+pub const RUNTIME_PROCESS_CONCURRENCY_CEILING: usize = 32;
+const PROCESS_STREAM_CHANNEL_CAPACITY: usize = 64;
+
+struct ProcessConcurrency {
+    active: Mutex<usize>,
+    ready: Condvar,
+}
+
+struct ProcessPermit {
+    concurrency: &'static ProcessConcurrency,
+}
+
+impl Drop for ProcessPermit {
+    fn drop(&mut self) {
+        let mut active = self
+            .concurrency
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *active = active.saturating_sub(1);
+        self.concurrency.ready.notify_one();
+    }
+}
+
+fn process_concurrency_limit() -> usize {
+    std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(4)
+        .clamp(1, RUNTIME_PROCESS_CONCURRENCY_CEILING)
+}
+
+fn acquire_process_permit(
+    cancellation: Option<&RssCancellationToken>,
+) -> Result<ProcessPermit, String> {
+    static CONCURRENCY: OnceLock<ProcessConcurrency> = OnceLock::new();
+    let concurrency = CONCURRENCY.get_or_init(|| ProcessConcurrency {
+        active: Mutex::new(0),
+        ready: Condvar::new(),
+    });
+    let mut active = concurrency
+        .active
+        .lock()
+        .map_err(|_| "process concurrency lock poisoned".to_string())?;
+    while *active >= process_concurrency_limit() {
+        if cancellation.is_some_and(cancellation_token_is_cancelled) {
+            return Err("process cancelled while waiting for a concurrency slot".to_string());
+        }
+        let (next, _) = concurrency
+            .ready
+            .wait_timeout(active, Duration::from_millis(25))
+            .map_err(|_| "process concurrency lock poisoned".to_string())?;
+        active = next;
+    }
+    *active += 1;
+    Ok(ProcessPermit { concurrency })
+}
 
 pub fn os_close(fd: i64) {
     let _ = fd;
@@ -217,6 +273,7 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
     if request.command.trim().is_empty() {
         return Err("process command must not be empty".to_string());
     }
+    let process_permit = acquire_process_permit(None)?;
 
     let timeout = u64::try_from(request.timeout_ms)
         .ok()
@@ -253,7 +310,8 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
     let stream_dropped = Arc::new(AtomicBool::new(false));
     let monitor_dropped = Arc::clone(&stream_dropped);
     let limit = Arc::new(Mutex::new(ProcessStreamLimit::new(cap)));
-    let (sender, receiver) = mpsc::channel::<Result<ProcessEvent, ChannelError>>();
+    let (sender, receiver) =
+        mpsc::sync_channel::<Result<ProcessEvent, ChannelError>>(PROCESS_STREAM_CHANNEL_CAPACITY);
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
     if let Some(stdout) = stdout {
@@ -278,6 +336,7 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
         });
     }
     std::thread::spawn(move || {
+        let _process_permit = process_permit;
         let started = Instant::now();
         loop {
             if monitor_dropped.load(Ordering::Acquire) {
@@ -339,6 +398,7 @@ fn process_run_request_with_cancellation(
     if request.command.trim().is_empty() {
         return Err("process command must not be empty".to_string());
     }
+    let _process_permit = acquire_process_permit(cancellation)?;
 
     let timeout = u64::try_from(request.timeout_ms)
         .ok()
@@ -645,7 +705,7 @@ fn spawn_process_event_reader<R>(
     mut reader: R,
     kind: &'static str,
     limit: Arc<Mutex<ProcessStreamLimit>>,
-    sender: mpsc::Sender<Result<ProcessEvent, ChannelError>>,
+    sender: mpsc::SyncSender<Result<ProcessEvent, ChannelError>>,
 ) -> std::thread::JoinHandle<()>
 where
     R: Read + Send + 'static,
@@ -892,12 +952,11 @@ fn process_run_many_stdout_with_runner(
 
 fn process_worker_count(jobs: i64) -> usize {
     if jobs > 0 {
-        return jobs as usize;
+        return usize::try_from(jobs)
+            .unwrap_or(RUNTIME_PROCESS_CONCURRENCY_CEILING)
+            .min(process_concurrency_limit());
     }
-    std::thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(4)
-        .max(1)
+    process_concurrency_limit()
 }
 
 fn apply_default_ramdisk_env(command: &mut std::process::Command) {
@@ -1018,6 +1077,16 @@ mod tests {
             super::RUNTIME_PROCESS_OUTPUT_CEILING_BYTES
         );
         assert_eq!(super::normalized_process_output_cap(17), 17);
+    }
+
+    #[test]
+    fn process_worker_count_is_hard_capped() {
+        assert_eq!(
+            super::process_worker_count(i64::MAX),
+            super::process_concurrency_limit()
+        );
+        assert!(super::process_worker_count(0) <= super::RUNTIME_PROCESS_CONCURRENCY_CEILING);
+        assert_eq!(super::process_worker_count(1), 1);
     }
 
     #[test]

@@ -3,6 +3,7 @@ use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
+#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Deserialize;
@@ -48,6 +49,7 @@ struct CargoMetadataTarget {
 }
 
 #[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct NativeBindingsManifest {
     #[serde(default)]
     bindings: BTreeMap<String, String>,
@@ -61,6 +63,7 @@ struct NativeBindingsManifest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct AdapterBinding {
     /// The Rust wrapper crate that owns every method in this boundary.
     #[serde(rename = "crate")]
@@ -1017,12 +1020,9 @@ fn scan_native_cargo_metadata(
     let native_root = cargo_toml
         .parent()
         .ok_or_else(|| format!("native Cargo.toml has no parent: {}", cargo_toml.display()))?;
-    let scan_root = native_cargo_metadata_temp_dir(cargo_toml);
-    if scan_root.exists() {
-        let _ = fs::remove_dir_all(&scan_root);
-    }
-    super::copy_package_directory(native_root, &scan_root)?;
-    let scan_cargo_toml = scan_root.join("Cargo.toml");
+    let scan_root = native_cargo_metadata_temp_dir(cargo_toml)?;
+    super::copy_package_directory(native_root, scan_root.path())?;
+    let scan_cargo_toml = scan_root.path().join("Cargo.toml");
     isolate_cargo_manifest_from_parent_workspace(&scan_cargo_toml)?;
     let mut command = Command::new("cargo");
     command
@@ -1039,7 +1039,6 @@ fn scan_native_cargo_metadata(
         CARGO_METADATA_TIMEOUT,
         CARGO_OUTPUT_MAX_BYTES,
     );
-    let _ = fs::remove_dir_all(&scan_root);
     let output = output.map_err(|error| {
         format!(
             "failed to run bounded cargo metadata for {}: {error}",
@@ -1115,20 +1114,16 @@ fn isolate_cargo_manifest_from_parent_workspace(cargo_toml: &Path) -> Result<(),
         .map_err(|error| format!("failed to write {}: {error}", cargo_toml.display()))
 }
 
-fn native_cargo_metadata_temp_dir(cargo_toml: &Path) -> PathBuf {
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or_default();
+fn native_cargo_metadata_temp_dir(cargo_toml: &Path) -> Result<tempfile::TempDir, String> {
     let name = cargo_toml
         .parent()
         .and_then(|path| path.file_name())
         .and_then(|name| name.to_str())
         .unwrap_or("native");
-    temp_root_dir().join(format!(
-        "rsscript-native-metadata-{name}-{}-{now}",
-        std::process::id()
-    ))
+    tempfile::Builder::new()
+        .prefix(&format!("rsscript-native-metadata-{name}-"))
+        .tempdir_in(temp_root_dir())
+        .map_err(|error| format!("failed to create native metadata staging directory: {error}"))
 }
 
 fn temp_root_dir() -> PathBuf {

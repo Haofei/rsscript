@@ -290,9 +290,19 @@ fn create_new_package(path: &Path, name: &str) -> Result<(), String> {
     if path.exists() {
         return Err(format!("package path already exists: {}", path.display()));
     }
-    fs::create_dir_all(path.join("src"))
-        .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
-    let store = ArtifactStore::open(path)?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    fs::create_dir_all(parent)
+        .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+    let staging = tempfile::Builder::new()
+        .prefix(".rsscript-package-")
+        .tempdir_in(parent)
+        .map_err(|error| format!("failed to stage package in {}: {error}", parent.display()))?;
+    fs::create_dir_all(staging.path().join("src"))
+        .map_err(|error| format!("failed to create staged package: {error}"))?;
+    let store = ArtifactStore::open(staging.path())?;
     store.write_atomic(
         "rsspkg.toml",
         package_manifest_template(name).as_bytes(),
@@ -303,12 +313,20 @@ fn create_new_package(path: &Path, name: &str) -> Result<(), String> {
         package_main_template(name).as_bytes(),
         "package main source",
     )?;
-    let lock = lock_package_dir(path)?;
+    let lock = lock_package_dir(staging.path())?;
     store.write_atomic(
         "rsspkg.lock",
         format_package_lock_toml(&lock).as_bytes(),
         "package lock",
     )?;
+    let staging_path = staging.keep();
+    if let Err(error) = fs::rename(&staging_path, path) {
+        let _ = fs::remove_dir_all(&staging_path);
+        return Err(format!(
+            "failed to commit package {}: {error}",
+            path.display()
+        ));
+    }
     Ok(())
 }
 
@@ -568,35 +586,32 @@ fn add_dependency_to_package(package_dir: &Path, dependency: &str) -> Result<Str
                 manifest_path.display()
             )
         })?;
-    let mut manifest: toml::Value = toml::from_str(&source)
+    let mut manifest: toml_edit::DocumentMut = source
+        .parse()
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
     let (name, value) = dependency_value(package_dir, dependency)?;
-    let table = manifest
-        .as_table_mut()
-        .ok_or_else(|| "rsspkg.toml must be a TOML table.".to_string())?;
-    let dependencies = table
+    let dependencies = manifest
         .entry("dependencies")
-        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
-        .as_table_mut()
+        .or_insert_with(|| toml_edit::Item::Table(toml_edit::Table::new()))
+        .as_table_like_mut()
         .ok_or_else(|| "`[dependencies]` must be a TOML table.".to_string())?;
-    dependencies.insert(name.clone(), value);
-    let rendered = toml::to_string_pretty(&manifest)
-        .map_err(|error| format!("failed to render {}: {error}", manifest_path.display()))?;
+    dependencies.insert(&name, value);
+    let rendered = manifest.to_string();
     store.write_atomic("rsspkg.toml", rendered.as_bytes(), "package manifest")?;
     Ok(name)
 }
 
-fn dependency_value(package_dir: &Path, dependency: &str) -> Result<(String, toml::Value), String> {
+fn dependency_value(
+    package_dir: &Path,
+    dependency: &str,
+) -> Result<(String, toml_edit::Item), String> {
     let candidate_path = dependency_path(package_dir, dependency);
     if candidate_path.join("rsspkg.toml").is_file() {
         let name = package_name_from_manifest(&candidate_path.join("rsspkg.toml"))?;
         validate_package_name(&name)?;
-        let mut table = toml::map::Map::new();
-        table.insert(
-            "path".to_string(),
-            toml::Value::String(normalized_path_text(dependency)),
-        );
-        return Ok((name, toml::Value::Table(table)));
+        let mut table = toml_edit::Table::new();
+        table.insert("path", toml_edit::value(normalized_path_text(dependency)));
+        return Ok((name, toml_edit::Item::Table(table)));
     }
 
     if let Some((name, version)) = dependency.split_once('@') {
@@ -604,11 +619,11 @@ fn dependency_value(package_dir: &Path, dependency: &str) -> Result<(String, tom
         if version.is_empty() {
             return Err("dependency version cannot be empty.".to_string());
         }
-        return Ok((name.to_string(), toml::Value::String(version.to_string())));
+        return Ok((name.to_string(), toml_edit::value(version)));
     }
 
     validate_package_name(dependency)?;
-    Ok((dependency.to_string(), toml::Value::String("*".to_string())))
+    Ok((dependency.to_string(), toml_edit::value("*")))
 }
 
 fn dependency_path(package_dir: &Path, dependency: &str) -> PathBuf {
