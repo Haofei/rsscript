@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use rusqlite::{Connection, OptionalExtension, params_from_iter};
+use rusqlite::{Connection, params_from_iter};
 
 pub const DEFAULT_MAX_RESULT_ROWS: usize = 10_000;
 pub const DEFAULT_MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
@@ -68,9 +68,10 @@ fn query_strings_with_limits(
     let mut values = Vec::new();
     let mut bytes = 0;
     while let Some(row) = rows.next().map_err(|error| error.to_string())? {
-        let value: String = row.get(0).map_err(|error| error.to_string())?;
-        account_value(&value, values.len(), &mut bytes, limits)?;
-        values.push(value);
+        let raw = row.get_ref(0).map_err(|error| error.to_string())?;
+        let value = raw.as_str().map_err(|error| error.to_string())?;
+        account_value(value, values.len(), &mut bytes, limits)?;
+        values.push(value.to_string());
     }
     Ok(values)
 }
@@ -83,15 +84,17 @@ fn query_one_string_with_limits(
 ) -> Result<Option<String>, String> {
     let conn = Connection::open(path).map_err(|error| error.to_string())?;
     let mut statement = conn.prepare(sql).map_err(|error| error.to_string())?;
-    let value = statement
-        .query_row(params_from_iter(params), |row| row.get::<_, String>(0))
-        .optional()
+    let mut rows = statement
+        .query(params_from_iter(params))
         .map_err(|error| error.to_string())?;
-    if let Some(value) = &value {
-        let mut bytes = 0;
-        account_value(value, 0, &mut bytes, limits)?;
-    }
-    Ok(value)
+    let Some(row) = rows.next().map_err(|error| error.to_string())? else {
+        return Ok(None);
+    };
+    let raw = row.get_ref(0).map_err(|error| error.to_string())?;
+    let value = raw.as_str().map_err(|error| error.to_string())?;
+    let mut bytes = 0;
+    account_value(value, 0, &mut bytes, limits)?;
+    Ok(Some(value.to_string()))
 }
 
 /// Run one or more SQL statements without bind parameters.

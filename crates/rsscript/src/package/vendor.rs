@@ -7,15 +7,20 @@ use sha2::{Digest, Sha256};
 use super::lock::{package_checksum, package_native_hash};
 use super::source_set::load_package;
 use super::{
-    PackageIdentity, PackageRisk, PackageVendorEntry, PackageVendorReport, PackageVendorUnresolved,
-    canonical_checked_root, canonical_path_label, copy_package_directory, package_dependency_spec,
-    package_identity, sanitize_vendor_path_component, write_package_artifact_atomic,
+    ArtifactStore, PackageIdentity, PackageRisk, PackageVendorEntry, PackageVendorReport,
+    PackageVendorUnresolved, canonical_checked_root, canonical_path_label, copy_package_directory,
+    package_dependency_spec, package_identity, sanitize_vendor_path_component,
 };
 
 pub fn vendor_package_dir(
     package_dir: &Path,
     dry_run: bool,
 ) -> Result<PackageVendorReport, String> {
+    let store = if dry_run {
+        None
+    } else {
+        Some(ArtifactStore::open(package_dir)?)
+    };
     let package = load_package(package_dir)?;
     let package_root = canonical_checked_root(package_dir, "package vendor write")?;
     let vendor_dir = package_root.join("vendor");
@@ -47,51 +52,23 @@ pub fn vendor_package_dir(
     unresolved.sort_by(|left, right| left.name.cmp(&right.name));
 
     if !dry_run {
-        match fs::symlink_metadata(&vendor_dir) {
-            Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-                return Err(format!(
-                    "vendor directory must be a real directory, not a symlink: {}",
-                    vendor_dir.display()
-                ));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                fs::create_dir(&vendor_dir).map_err(|error| {
-                    format!("failed to create {}: {error}", vendor_dir.display())
-                })?;
-            }
-            Err(error) => {
-                return Err(format!(
-                    "failed to inspect {}: {error}",
-                    vendor_dir.display()
-                ));
-            }
-        }
-        for entry in &entries {
-            let source_path = Path::new(&entry.source_path);
-            let vendor_path = Path::new(&entry.vendor_path);
-            if let Ok(metadata) = fs::symlink_metadata(vendor_path) {
-                if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                    return Err(format!(
-                        "vendor destination must be a real directory, not a symlink: {}",
-                        vendor_path.display()
-                    ));
-                }
-                fs::remove_dir_all(vendor_path).map_err(|error| {
-                    format!("failed to remove {}: {error}", vendor_path.display())
-                })?;
-            }
-            copy_package_directory(source_path, vendor_path)?;
-        }
-        let metadata_path = vendor_dir.join("rss-vendor.json");
         let metadata = serde_json::to_string_pretty(&entries)
             .expect("vendor metadata JSON serialization should not fail");
-        write_package_artifact_atomic(
-            &package_root,
-            &metadata_path,
-            metadata.as_bytes(),
-            "vendor metadata",
-        )?;
+        store
+            .as_ref()
+            .expect("non-dry vendor operation has an artifact store")
+            .replace_directory("vendor", "vendor directory", |staging| {
+                for entry in &entries {
+                    let source_path = Path::new(&entry.source_path);
+                    let destination_name =
+                        Path::new(&entry.vendor_path).file_name().ok_or_else(|| {
+                            format!("vendor destination has no name: {}", entry.vendor_path)
+                        })?;
+                    copy_package_directory(source_path, &staging.join(destination_name))?;
+                }
+                fs::write(staging.join("rss-vendor.json"), metadata.as_bytes())
+                    .map_err(|error| format!("failed to stage vendor metadata: {error}"))
+            })?;
     }
 
     let ok = unresolved.is_empty();

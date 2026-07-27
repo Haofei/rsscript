@@ -1,6 +1,28 @@
 use super::*;
 
 impl RegVm {
+    fn ensure_network_allocation(
+        &mut self,
+        bytes: usize,
+        error: fn(String) -> VmValue,
+        operation: &str,
+    ) -> Result<(), VmValue> {
+        if bytes > MAX_NETWORK_IO_BYTES {
+            return Err(error(format!(
+                "{operation} exceeds the {MAX_NETWORK_IO_BYTES}-byte limit"
+            )));
+        }
+        self.account_bytes(bytes).map_err(|limit| {
+            let message = match limit {
+                EvalError::Runtime(message) => message,
+                EvalError::Diagnostics(_) => {
+                    "network allocation rejected by VM diagnostics".to_string()
+                }
+            };
+            error(message)
+        })
+    }
+
     pub(super) fn run_resource_drop(
         &mut self,
         unit: &RegUnit,
@@ -65,7 +87,13 @@ impl RegVm {
         if max_bytes <= 0 {
             return Err(tcp_error_value("TCP read max_bytes must be positive"));
         }
-        let mut buffer = vec![0; max_bytes as usize];
+        let max_bytes = usize::try_from(max_bytes)
+            .map_err(|_| tcp_error_value("TCP read max_bytes is too large"))?;
+        self.ensure_network_allocation(max_bytes, tcp_error_value, "TCP read max_bytes")?;
+        if !self.tcp_streams.contains_key(&id) {
+            return Err(tcp_error_value(format!("unknown TcpStream id `{id}`")));
+        }
+        let mut buffer = vec![0; max_bytes];
         let read = self
             .tcp_stream_mut(id)?
             .read(&mut buffer)
@@ -88,7 +116,11 @@ impl RegVm {
     }
 
     pub(super) fn tcp_stream_shutdown(&mut self, id: i64) -> Result<(), VmValue> {
-        self.tcp_stream_mut(id)?
+        let stream = self
+            .tcp_streams
+            .remove(&id)
+            .ok_or_else(|| tcp_error_value(format!("unknown TcpStream id `{id}`")))?;
+        stream
             .shutdown(Shutdown::Both)
             .map_err(|error| tcp_error_value(format!("TCP shutdown failed: {error}")))
     }
@@ -157,7 +189,11 @@ impl RegVm {
         expected: WebSocketExpectedFrame,
     ) -> Result<Option<Vec<u8>>, VmValue> {
         loop {
-            let frame = websocket_read_frame(self.websocket_stream_mut(id)?)?;
+            let header = websocket_read_frame_header(self.websocket_stream_mut(id)?)?;
+            let len = usize::try_from(header.len)
+                .map_err(|_| websocket_error_value("WebSocket frame payload is too large"))?;
+            self.ensure_network_allocation(len, websocket_error_value, "WebSocket frame payload")?;
+            let frame = websocket_read_frame_payload(self.websocket_stream_mut(id)?, header, len)?;
             match frame.opcode {
                 0x1 if matches!(expected, WebSocketExpectedFrame::Text) => {
                     return Ok(Some(frame.payload));
@@ -165,7 +201,10 @@ impl RegVm {
                 0x2 if matches!(expected, WebSocketExpectedFrame::Binary) => {
                     return Ok(Some(frame.payload));
                 }
-                0x8 => return Ok(None),
+                0x8 => {
+                    self.websockets.remove(&id);
+                    return Ok(None);
+                }
                 0x9 => {
                     websocket_write_frame(self.websocket_stream_mut(id)?, 0xA, &frame.payload)?;
                 }
@@ -190,7 +229,15 @@ impl RegVm {
     }
 
     pub(super) fn websocket_close(&mut self, id: i64) -> Result<(), VmValue> {
-        websocket_write_frame(self.websocket_stream_mut(id)?, 0x8, &[])
+        let mut stream = self
+            .websockets
+            .remove(&id)
+            .ok_or_else(|| websocket_error_value(format!("unknown WebSocket id `{id}`")))?;
+        let write_result = websocket_write_frame(&mut stream, 0x8, &[]);
+        let shutdown_result = stream.shutdown(Shutdown::Both);
+        write_result?;
+        shutdown_result
+            .map_err(|error| websocket_error_value(format!("WebSocket shutdown failed: {error}")))
     }
 
     pub(super) fn resource_pool_new(

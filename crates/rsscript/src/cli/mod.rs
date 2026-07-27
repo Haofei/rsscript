@@ -7,7 +7,7 @@ use std::process::ExitCode;
 
 use rsscript::{
     Diagnostic, format_diagnostics_human, format_diagnostics_json, lower_source_to_rust_package,
-    lower_sources_to_rust_package_with_options, package_lowering_input,
+    lower_sources_to_rust_package_with_options, package_lowering_input, prepare_authorized_package,
 };
 use sha2::{Digest, Sha256};
 
@@ -158,7 +158,7 @@ pub(crate) fn lower_cli_input_to_rust_package(
 ) -> Result<rsscript::GeneratedRustPackage, ExitCode> {
     let runtime_path = runtime_path.display().to_string();
     if is_package_directory(path) {
-        let input = package_lowering_input(Path::new(path)).map_err(|error| {
+        let input = package_execution_lowering_input(Path::new(path)).map_err(|error| {
             eprintln!("{error}");
             ExitCode::from(2)
         })?;
@@ -187,6 +187,19 @@ pub(crate) fn lower_cli_input_to_rust_package(
         },
     )
 }
+
+fn package_execution_lowering_input(
+    package_dir: &Path,
+) -> Result<rsscript::PackageLoweringInput, String> {
+    let input = package_lowering_input(package_dir)?;
+    if input.native_dependencies.is_empty() {
+        return Ok(input);
+    }
+
+    let package = prepare_authorized_package(package_dir)?;
+    Ok(package.lowering_input().clone())
+}
+
 pub(crate) fn default_runtime_path() -> Result<PathBuf, String> {
     let current_dir =
         env::current_dir().map_err(|error| format!("failed to read current directory: {error}"))?;
@@ -227,7 +240,7 @@ pub(crate) fn select_runtime_path(
 /// manifest can't be read (the caller then falls back to lowering).
 pub(crate) fn cli_input_package_name(input_path: &str) -> Option<String> {
     if is_package_directory(input_path) {
-        package_lowering_input(Path::new(input_path))
+        package_execution_lowering_input(Path::new(input_path))
             .ok()
             .map(|input| input.package.name)
     } else {
@@ -265,7 +278,7 @@ pub(crate) fn run_input_fingerprint(
     parts.push(format!("release:{release}"));
 
     if is_package_directory(input_path) {
-        let input = package_lowering_input(Path::new(input_path)).ok()?;
+        let input = package_execution_lowering_input(Path::new(input_path)).ok()?;
         parts.push(format!("package:{}", input.package.name));
         // Sources/interfaces already carry their contents; include the native
         // dependency identity (path + features + bindings) since it changes the
@@ -521,6 +534,73 @@ mod tests {
         let error = super::read_cli_source(&source).expect_err("oversized source must fail");
         assert!(error.contains("CLI limit"), "{error}");
         fs::remove_dir_all(root).expect("temp directory should clean up");
+    }
+
+    #[test]
+    fn aot_execution_input_preserves_unlocked_pure_package_compatibility() {
+        let root = package_fixture("aot-pure-package", "");
+
+        let input = super::package_execution_lowering_input(&root)
+            .expect("pure package should not require native authorization");
+        assert!(input.native_dependencies.is_empty());
+
+        fs::remove_dir_all(root).expect("temp directory should clean up");
+    }
+
+    #[test]
+    fn aot_execution_input_rejects_unreviewed_native_package() {
+        let native = r#"
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "aot_native_fixture"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"
+"#;
+        let root = package_fixture("aot-native-package", native);
+        fs::create_dir_all(root.join("native/rust/src")).expect("native source directory");
+        fs::write(
+            root.join("native/rust/Cargo.toml"),
+            "[package]\nname = \"aot_native_fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("native Cargo manifest");
+        fs::write(root.join("native/rust/src/lib.rs"), "pub fn unused() {}\n")
+            .expect("native source");
+
+        let root_text = root.to_string_lossy();
+        assert!(
+            super::cli_input_package_name(&root_text).is_none(),
+            "unauthorized native packages must not enter the cached-run fast path"
+        );
+        assert!(
+            super::run_input_fingerprint(&root_text, &root.join("runtime"), false).is_none(),
+            "unauthorized native packages must not reuse a generated Cargo package"
+        );
+        let error = super::package_execution_lowering_input(&root)
+            .expect_err("native AOT input without an approved lock must be rejected");
+        assert!(error.contains("native build/load denied"), "{error}");
+        assert!(error.contains("rsspkg.lock missing"), "{error}");
+
+        fs::remove_dir_all(root).expect("temp directory should clean up");
+    }
+
+    fn package_fixture(name: &str, extra_manifest: &str) -> PathBuf {
+        let root = unique_temp_dir(name);
+        fs::create_dir_all(root.join("src")).expect("package source directory");
+        fs::write(
+            root.join("rsspkg.toml"),
+            format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n{extra_manifest}"
+            ),
+        )
+        .expect("package manifest");
+        fs::write(
+            root.join("src/main.rss"),
+            "fn main() -> Unit { return Unit }\n",
+        )
+        .expect("package source");
+        root
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

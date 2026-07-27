@@ -238,11 +238,16 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
         command.env(&env.name, &env.value);
     }
     apply_default_ramdisk_env(&mut command);
-    configure_process_child(&mut command);
+    configure_process_child(&mut command)?;
 
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to run `{}`: {error}", request.command))?;
+    let process_guard = rss_process_guard::ProcessGuard::attach(
+        &child,
+        rss_process_guard::ProcessLimits::generated_program(),
+    )
+    .map_err(|error| format!("failed to guard `{}`: {error}", request.command))?;
     let stdin = request.stdin.clone();
     let command_name = request.command.clone();
     let stream_dropped = Arc::new(AtomicBool::new(false));
@@ -276,7 +281,7 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
         let started = Instant::now();
         loop {
             if monitor_dropped.load(Ordering::Acquire) {
-                terminate_process_child(&mut child);
+                terminate_process_child(&mut child, &process_guard);
                 let _ = child.wait();
                 break;
             }
@@ -293,7 +298,7 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
                     if let Some(timeout) = timeout
                         && started.elapsed() >= timeout
                     {
-                        terminate_process_child(&mut child);
+                        terminate_process_child(&mut child, &process_guard);
                         let _ = sender.send(Ok(ProcessEvent {
                             kind: "timeout".to_string(),
                             data: format!(
@@ -356,11 +361,16 @@ fn process_run_request_with_cancellation(
         command.env(&env.name, &env.value);
     }
     apply_default_ramdisk_env(&mut command);
-    configure_process_child(&mut command);
+    configure_process_child(&mut command)?;
 
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to run `{}`: {error}", request.command))?;
+    let process_guard = rss_process_guard::ProcessGuard::attach(
+        &child,
+        rss_process_guard::ProcessLimits::generated_program(),
+    )
+    .map_err(|error| format!("failed to guard `{}`: {error}", request.command))?;
 
     let stdin_thread = request.stdin.as_ref().and_then(|stdin| {
         child.stdin.take().map(|mut child_stdin| {
@@ -406,14 +416,14 @@ fn process_run_request_with_cancellation(
         }
         if cancellation.is_some_and(cancellation_token_is_cancelled) {
             cancelled = true;
-            terminate_process_child(&mut child);
+            terminate_process_child(&mut child, &process_guard);
             break;
         }
         if let Some(deadline) = deadline
             && Instant::now() >= deadline
         {
             timed_out = true;
-            terminate_process_child(&mut child);
+            terminate_process_child(&mut child, &process_guard);
             break;
         }
         std::thread::sleep(Duration::from_millis(5));
@@ -698,38 +708,29 @@ fn join_process_reader(
     }
 }
 
-fn configure_process_child(command: &mut std::process::Command) {
+fn configure_process_child(command: &mut std::process::Command) -> Result<(), String> {
     #[cfg(unix)]
     {
         command.process_group(0);
     }
     #[cfg(not(unix))]
     {
-        // Descendant-tree termination on Windows needs a job object and
-        // platform-specific bindings; until then the fallback below kills only
-        // the direct child.
+        // ProcessGuard installs the post-spawn Windows Job Object. Other
+        // unsupported platforms fail guard setup rather than running unbounded.
         let _ = command;
     }
+    rss_process_guard::configure(
+        command,
+        rss_process_guard::ProcessLimits::generated_program(),
+    )
+    .map_err(|error| format!("failed to configure child process resource limits: {error}"))
 }
 
-fn terminate_process_child(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        let group = format!("-{}", child.id());
-        let _ = std::process::Command::new("kill")
-            .arg("-TERM")
-            .arg("--")
-            .arg(&group)
-            .status();
-        std::thread::sleep(Duration::from_millis(25));
-        if child.try_wait().ok().flatten().is_none() {
-            let _ = std::process::Command::new("kill")
-                .arg("-KILL")
-                .arg("--")
-                .arg(&group)
-                .status();
-        }
-    }
+fn terminate_process_child(
+    child: &mut std::process::Child,
+    guard: &rss_process_guard::ProcessGuard,
+) {
+    let _ = guard.terminate();
     let _ = child.kill();
 }
 
@@ -1030,6 +1031,25 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    fn process_children_receive_generated_program_limits() {
+        let request = super::ProcessRequest {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "ulimit -n".to_string()],
+            cwd: None,
+            stdin: None,
+            env: Vec::new(),
+            timeout_ms: 10_000,
+            merge_stderr: false,
+            output_cap_bytes: 1024,
+        };
+
+        let output = super::process_run_request(&request).expect("limited child should run");
+        assert_eq!(output.status, 0);
+        assert_eq!(output.stdout.trim(), "256");
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn process_run_request_supports_agent_controls() {
         let cwd =
             std::env::temp_dir().join(format!("rsscript-process-request-{}", std::process::id()));
@@ -1306,6 +1326,8 @@ mod tests {
         while alive && std::time::Instant::now() < deadline {
             alive = std::process::Command::new("kill")
                 .args(["-0", &pid])
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .status()
                 .is_ok_and(|status| status.success());
             if alive {

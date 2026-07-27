@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use rsscript::{
     EvalError, EvalOutput, NativeValue, VmLimits, check_generated_rust_package,
-    eval_package_main_with_args_and_native_bindings,
+    configure_reduced_build_environment, eval_package_main_with_args_and_native_bindings,
     eval_package_main_with_args_and_native_bindings_and_limits, format_diagnostics_human,
     format_diagnostics_json, load_package_native_bindings, parse_runtime_diagnostics,
     reg_vm_eval_source_main_with_args, reg_vm_eval_source_main_with_limits,
@@ -19,7 +19,7 @@ use super::{
     read_cached_fingerprint, read_cli_source, required_flag_value, run_cache_dir,
     run_input_fingerprint, write_cached_fingerprint,
 };
-use crate::cli::process::run_bounded;
+use crate::cli::process::{run_bounded, run_bounded_with_limits};
 
 const CLI_VM_WALL_TIME: Duration = Duration::from_secs(60);
 const CLI_AOT_WALL_TIME: Duration = Duration::from_secs(10 * 60);
@@ -331,10 +331,9 @@ fn run_cached_package(
     build_and_run_package(cache_dir, release, program_args, json)
 }
 
-/// Invokes `cargo run` for the generated package in `package_dir` and translates
-/// its result into an [`ExitCode`], remapping backend diagnostics for the
-/// captured (non-streaming) path. Shared by the full lower+write path and the
-/// cached fast path so both behave identically.
+/// Build in a reduced environment, then execute the emitted binary as a
+/// separately bounded child. Build scripts never inherit the program's ambient
+/// environment.
 fn build_and_run_package(
     package_dir: &Path,
     release: bool,
@@ -342,41 +341,78 @@ fn build_and_run_package(
     json: bool,
 ) -> ExitCode {
     let mut cargo = Command::new("cargo");
-    for arg in cargo_run_args(package_dir, release, program_args) {
+    for arg in cargo_build_args(package_dir, release) {
         cargo.arg(arg);
     }
+    configure_reduced_build_environment(&mut cargo);
     if let Some(target_dir) = generated_target_dir_from_env() {
         cargo.env("CARGO_TARGET_DIR", target_dir);
     }
+    let build_output = match run_bounded_with_limits(
+        &mut cargo,
+        "generated Rust build",
+        CLI_AOT_WALL_TIME,
+        CLI_AOT_OUTPUT_MAX_BYTES,
+        rss_process_guard::ProcessLimits::compiler_worker(),
+    ) {
+        Ok(output) => output,
+        Err(error) => {
+            eprintln!("failed to build generated Rust: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let build_stderr = String::from_utf8_lossy(&build_output.stderr);
+    if !build_output.status.success() {
+        return finish_failed_aot_build(package_dir, json, &build_stderr, build_output.status);
+    }
+    let executable = match cargo_artifact_executable(&build_output.stdout) {
+        Ok(executable) => executable,
+        Err(error) => {
+            eprintln!("failed to locate generated Rust executable: {error}");
+            return ExitCode::from(2);
+        }
+    };
+
+    let mut program = Command::new(executable);
+    program.args(program_args);
     if let Ok(current_dir) = std::env::current_dir() {
-        cargo.env("RSS_RUN_WORKSPACE_ROOT", current_dir);
+        program.env("RSS_RUN_WORKSPACE_ROOT", current_dir);
     }
     let output = match run_bounded(
-        &mut cargo,
-        "generated Rust build and execution",
+        &mut program,
+        "generated Rust program",
         CLI_AOT_WALL_TIME,
         CLI_AOT_OUTPUT_MAX_BYTES,
     ) {
         Ok(output) => output,
         Err(error) => {
-            eprintln!("failed to run cargo: {error}");
+            eprintln!("failed to run generated Rust: {error}");
             return ExitCode::from(2);
         }
     };
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if !stdout.is_empty() {
-        print!("{stdout}");
-    }
+    print!("{}", String::from_utf8_lossy(&output.stdout));
+    let stderr = String::from_utf8_lossy(&output.stderr);
     if output.status.success() {
+        eprint!("{stderr}");
         return ExitCode::SUCCESS;
     }
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
     let diagnostics = parse_runtime_diagnostics(&stderr);
     if !diagnostics.is_empty() {
         print_diagnostics(json, &diagnostics);
         return ExitCode::from(1);
     }
+    if !stderr.trim().is_empty() {
+        eprintln!("{}", stderr.trim());
+    }
+    exit_code(output.status)
+}
+
+fn finish_failed_aot_build(
+    package_dir: &Path,
+    json: bool,
+    stderr: &str,
+    status: std::process::ExitStatus,
+) -> ExitCode {
     match check_generated_rust_package(package_dir) {
         Ok(result) if !result.diagnostics.is_empty() => {
             print_diagnostics(json, &result.diagnostics);
@@ -398,23 +434,43 @@ fn build_and_run_package(
     if !stderr.trim().is_empty() {
         eprintln!("{}", stderr.trim());
     }
-    output
-        .status
+    exit_code(status)
+}
+
+fn exit_code(status: std::process::ExitStatus) -> ExitCode {
+    status
         .code()
         .map(|code| ExitCode::from(code as u8))
         .unwrap_or_else(|| ExitCode::from(1))
 }
 
-fn cargo_run_args(package_dir: &Path, release: bool, program_args: &[&str]) -> Vec<String> {
-    let mut args = vec!["run".to_string(), "--quiet".to_string()];
+fn cargo_build_args(package_dir: &Path, release: bool) -> Vec<String> {
+    let mut args = vec![
+        "build".to_string(),
+        "--quiet".to_string(),
+        "--message-format=json-render-diagnostics".to_string(),
+    ];
     if release {
         args.push("--release".to_string());
     }
     args.push("--manifest-path".to_string());
     args.push(package_dir.join("Cargo.toml").display().to_string());
-    args.push("--".to_string());
-    args.extend(program_args.iter().map(|arg| (*arg).to_string()));
     args
+}
+
+fn cargo_artifact_executable(stdout: &[u8]) -> Result<PathBuf, String> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter(|message| message["reason"] == "compiler-artifact")
+        .filter(|message| {
+            message["target"]["kind"]
+                .as_array()
+                .is_some_and(|kinds| kinds.iter().any(|kind| kind == "bin"))
+        })
+        .filter_map(|message| message["executable"].as_str().map(PathBuf::from))
+        .next_back()
+        .ok_or_else(|| "Cargo emitted no executable compiler artifact".to_string())
 }
 
 fn print_run_dry_run(
@@ -429,9 +485,11 @@ fn print_run_dry_run(
     let command_dir = package_dir
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("<dry-run>"));
-    let cargo_args = cargo_run_args(&command_dir, release, program_args);
-    println!("## cargo invocation");
+    let cargo_args = cargo_build_args(&command_dir, release);
+    println!("## cargo build invocation");
     println!("cargo {}", cargo_args.join(" "));
+    println!("## generated program invocation");
+    println!("<cargo-artifact> {}", program_args.join(" "));
     println!();
     println!("## Cargo.toml ({manifest_path})");
     print!("{}", package.cargo_toml);
@@ -532,22 +590,32 @@ mod tests {
     }
 
     #[test]
-    fn cargo_run_args_include_manifest_release_and_program_args() {
+    fn cargo_build_args_include_manifest_release_and_json_messages() {
         let package_dir = std::path::Path::new("/tmp/rss-generated");
-        let args = super::cargo_run_args(package_dir, true, &["one", "two"]);
+        let args = super::cargo_build_args(package_dir, true);
 
         assert_eq!(
             args,
             vec![
-                "run",
+                "build",
                 "--quiet",
+                "--message-format=json-render-diagnostics",
                 "--release",
                 "--manifest-path",
                 "/tmp/rss-generated/Cargo.toml",
-                "--",
-                "one",
-                "two"
             ]
+        );
+    }
+
+    #[test]
+    fn cargo_artifact_parser_selects_binary_executable() {
+        let messages = br#"{"reason":"compiler-artifact","target":{"kind":["lib"]},"executable":null}
+{"reason":"compiler-artifact","target":{"kind":["bin"]},"executable":"/tmp/rss-generated/target/debug/demo"}
+"#;
+
+        assert_eq!(
+            super::cargo_artifact_executable(messages).expect("binary artifact"),
+            std::path::PathBuf::from("/tmp/rss-generated/target/debug/demo")
         );
     }
 

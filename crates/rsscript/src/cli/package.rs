@@ -3,16 +3,16 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use rsscript::{
-    check_package_dir, diff_package_dirs, format_diagnostics_human, format_package_check_human,
-    format_package_check_json, format_package_diff_human, format_package_diff_json,
-    format_package_lock_json, format_package_lock_reir_json, format_package_lock_toml,
-    format_package_metadata_human, format_package_metadata_json, format_package_metadata_reir_json,
-    format_package_publish_human, format_package_publish_json, format_package_review_human,
-    format_package_review_json, format_package_review_markdown, format_package_tree_human,
-    format_package_tree_json, format_package_tree_reir_json, format_package_vendor_human,
-    format_package_vendor_json, format_package_vendor_reir_json, lock_package_dir,
-    package_metadata, package_metadata_verify, package_tree, publish_package_dry_run_with_registry,
-    review_package_dir, vendor_package_dir, write_package_artifact_atomic,
+    ArtifactStore, check_package_dir, diff_package_dirs, format_diagnostics_human,
+    format_package_check_human, format_package_check_json, format_package_diff_human,
+    format_package_diff_json, format_package_lock_json, format_package_lock_reir_json,
+    format_package_lock_toml, format_package_metadata_human, format_package_metadata_json,
+    format_package_metadata_reir_json, format_package_publish_human, format_package_publish_json,
+    format_package_review_human, format_package_review_json, format_package_review_markdown,
+    format_package_tree_human, format_package_tree_json, format_package_tree_reir_json,
+    format_package_vendor_human, format_package_vendor_json, format_package_vendor_reir_json,
+    lock_package_dir, package_metadata, package_metadata_verify, package_tree,
+    publish_package_dry_run_with_registry, review_package_dir, vendor_package_dir,
 };
 
 use super::{print_usage, required_flag_value};
@@ -292,22 +292,20 @@ fn create_new_package(path: &Path, name: &str) -> Result<(), String> {
     }
     fs::create_dir_all(path.join("src"))
         .map_err(|error| format!("failed to create {}: {error}", path.display()))?;
-    write_package_artifact_atomic(
-        path,
-        &path.join("rsspkg.toml"),
+    let store = ArtifactStore::open(path)?;
+    store.write_atomic(
+        "rsspkg.toml",
         package_manifest_template(name).as_bytes(),
         "package manifest",
     )?;
-    write_package_artifact_atomic(
-        path,
-        &path.join("src/main.rss"),
+    store.write_atomic(
+        "src/main.rss",
         package_main_template(name).as_bytes(),
         "package main source",
     )?;
     let lock = lock_package_dir(path)?;
-    write_package_artifact_atomic(
-        path,
-        &path.join("rsspkg.lock"),
+    store.write_atomic(
+        "rsspkg.lock",
         format_package_lock_toml(&lock).as_bytes(),
         "package lock",
     )?;
@@ -438,6 +436,13 @@ fn run_package_publish(json: bool, dry_run: bool, path: &str, registry: Option<&
 }
 
 fn run_package_lock(json: bool, reir: bool, path: &str) -> ExitCode {
+    let store = match ArtifactStore::open(Path::new(path)) {
+        Ok(store) => store,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
     let lock = match lock_package_dir(Path::new(path)) {
         Ok(lock) => lock,
         Err(error) => {
@@ -447,10 +452,7 @@ fn run_package_lock(json: bool, reir: bool, path: &str) -> ExitCode {
     };
 
     let toml = format_package_lock_toml(&lock);
-    let lock_path = Path::new(path).join("rsspkg.lock");
-    if let Err(error) =
-        write_package_artifact_atomic(Path::new(path), &lock_path, toml.as_bytes(), "package lock")
-    {
+    if let Err(error) = store.write_atomic("rsspkg.lock", toml.as_bytes(), "package lock") {
         eprintln!("{error}");
         return ExitCode::from(2);
     }
@@ -557,9 +559,15 @@ fn run_package_add(dependency: &str) -> ExitCode {
 }
 
 fn add_dependency_to_package(package_dir: &Path, dependency: &str) -> Result<String, String> {
-    let manifest_path = package_dir.join("rsspkg.toml");
-    let source = fs::read_to_string(&manifest_path)
-        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
+    let store = ArtifactStore::open(package_dir)?;
+    let manifest_path = store.path("rsspkg.toml")?;
+    let source =
+        String::from_utf8(store.read("rsspkg.toml", "package manifest")?).map_err(|error| {
+            format!(
+                "failed to decode {} as UTF-8: {error}",
+                manifest_path.display()
+            )
+        })?;
     let mut manifest: toml::Value = toml::from_str(&source)
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
     let (name, value) = dependency_value(package_dir, dependency)?;
@@ -574,12 +582,7 @@ fn add_dependency_to_package(package_dir: &Path, dependency: &str) -> Result<Str
     dependencies.insert(name.clone(), value);
     let rendered = toml::to_string_pretty(&manifest)
         .map_err(|error| format!("failed to render {}: {error}", manifest_path.display()))?;
-    write_package_artifact_atomic(
-        package_dir,
-        &manifest_path,
-        rendered.as_bytes(),
-        "package manifest",
-    )?;
+    store.write_atomic("rsspkg.toml", rendered.as_bytes(), "package manifest")?;
     Ok(name)
 }
 

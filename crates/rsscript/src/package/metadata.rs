@@ -10,10 +10,10 @@ use super::native::{
 };
 use super::source_set::load_package;
 use super::{
-    PACKAGE_REVIEW_METADATA_SCHEMA, PackageIdentity, PackageLoweringInput, PackageMetadataMismatch,
-    PackageMetadataReport, PackageReview, PackageReviewFileKind, PackageReviewMetadata,
-    PackageRisk, collect_dependency_interface_sources, collect_dependency_lowering_sources,
-    review_package_dir,
+    ArtifactStore, PACKAGE_REVIEW_METADATA_SCHEMA, PackageIdentity, PackageLoweringInput,
+    PackageMetadataMismatch, PackageMetadataReport, PackageReview, PackageReviewFileKind,
+    PackageReviewMetadata, PackageRisk, collect_dependency_interface_sources,
+    collect_dependency_lowering_sources, review_package_dir,
 };
 
 pub fn package_metadata(
@@ -32,6 +32,11 @@ fn package_metadata_inner(
     dry_run: bool,
     verify: bool,
 ) -> Result<PackageMetadataReport, String> {
+    let store = if !dry_run && !verify {
+        Some(ArtifactStore::open(package_dir)?)
+    } else {
+        None
+    };
     let review = review_package_dir(package_dir)?;
     let metadata_path = package_dir.join("review").join("package-review.json");
     let reir_path = package_dir
@@ -59,12 +64,20 @@ fn package_metadata_inner(
         );
         verify_artifact("reir_bundle", &reir_path, &reir_json, &mut mismatches);
     } else if !dry_run && !blocked_by_errors {
-        create_parent_dir(&metadata_path, "metadata path")?;
-        create_parent_dir(&reir_path, "REIR path")?;
-        fs::write(&metadata_path, metadata_json)
-            .map_err(|error| format!("failed to write {}: {error}", metadata_path.display()))?;
-        fs::write(&reir_path, reir_json)
-            .map_err(|error| format!("failed to write {}: {error}", reir_path.display()))?;
+        let store = store
+            .as_ref()
+            .expect("non-dry metadata generation has an artifact store");
+        store.create_directory_all("review/reir", "package review artifact directory")?;
+        store.write_atomic(
+            "review/package-review.json",
+            metadata_json.as_bytes(),
+            "package review metadata",
+        )?;
+        store.write_atomic(
+            "review/reir/rsscript.json",
+            reir_json.as_bytes(),
+            "package review REIR",
+        )?;
     }
 
     let wrote = !dry_run && !verify && !blocked_by_errors;
@@ -142,14 +155,6 @@ fn sha256_label(bytes: &[u8]) -> String {
         output.push_str(&format!("{byte:02x}"));
     }
     output
-}
-
-fn create_parent_dir(path: &Path, label: &str) -> Result<(), String> {
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("{label} has no parent: {}", path.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|error| format!("failed to create {}: {error}", parent.display()))
 }
 
 pub fn package_lowering_input(package_dir: &Path) -> Result<PackageLoweringInput, String> {

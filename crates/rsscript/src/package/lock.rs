@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
@@ -17,6 +18,16 @@ use super::{
     package_feature_may_change_boundary_risk, package_path_metadata, package_risk_label,
     relative_path,
 };
+
+const PACKAGE_LOCK_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const ARCHIVE_MAX_FILES: usize = 20_000;
+const ARCHIVE_MAX_ENTRIES: usize = 40_000;
+const ARCHIVE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+const ARCHIVE_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+const ARCHIVE_MAX_DEPTH: usize = 64;
+const NATIVE_HASH_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+const NATIVE_HASH_MAX_BYTES: u64 = 512 * 1024 * 1024;
+const BINDING_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 
 pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
     let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
@@ -98,8 +109,7 @@ pub fn diff_package_locks(old_path: &Path, new_path: &Path) -> Result<PackageLoc
 }
 
 pub(super) fn read_package_lock(path: &Path) -> Result<PackageLock, String> {
-    let source = fs::read_to_string(path)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let source = read_bounded_utf8(path, PACKAGE_LOCK_MAX_BYTES, "package lock")?;
     let lock: PackageLock = toml::from_str(&source)
         .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
     validate_locked_package_identities(&lock.packages)
@@ -426,11 +436,20 @@ pub(super) fn package_archive_files(package_dir: &Path) -> Result<Vec<PackageArc
     let mut paths = Vec::new();
     let root = std::fs::canonicalize(package_dir)
         .map_err(|error| format!("failed to canonicalize {}: {error}", package_dir.display()))?;
-    collect_package_archive_paths(package_dir, &root, package_dir, &mut paths)?;
+    let mut traversal_budget = ArchiveBudget::default();
+    collect_package_archive_paths(
+        package_dir,
+        &root,
+        package_dir,
+        &mut paths,
+        0,
+        &mut traversal_budget,
+    )?;
     paths.sort();
+    let mut read_bytes = 0_u64;
     paths
         .into_iter()
-        .map(|path| package_archive_file(package_dir, &path))
+        .map(|path| package_archive_file(package_dir, &path, &mut read_bytes))
         .collect()
 }
 
@@ -439,10 +458,14 @@ fn collect_package_archive_paths(
     canonical_root: &Path,
     path: &Path,
     files: &mut Vec<PathBuf>,
+    depth: usize,
+    budget: &mut ArchiveBudget,
 ) -> Result<(), String> {
+    budget.check_depth(depth, path)?;
     let metadata = package_path_metadata(path, "package archive")?;
     ensure_package_path_within_root(canonical_root, path, "package archive")?;
     if metadata.is_file() {
+        budget.add_file(metadata.len(), path)?;
         files.push(path.to_path_buf());
         return Ok(());
     }
@@ -454,18 +477,22 @@ fn collect_package_archive_paths(
     for entry in entries {
         let entry = entry
             .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
+        budget.add_entry(path)?;
         let path = entry.path();
         let name = entry.file_name();
         if should_skip_archive_entry(root, &path, &name.to_string_lossy()) {
             continue;
         }
-        collect_package_archive_paths(root, canonical_root, &path, files)?;
+        collect_package_archive_paths(root, canonical_root, &path, files, depth + 1, budget)?;
     }
     Ok(())
 }
 
 fn should_skip_archive_entry(root: &Path, path: &Path, name: &str) -> bool {
-    if matches!(name, ".git" | "target" | "vendor" | ".DS_Store") {
+    if matches!(
+        name,
+        ".git" | "target" | "vendor" | ".DS_Store" | ".rsscript-artifacts.lock"
+    ) {
         return true;
     }
     let relative = relative_path(root, path);
@@ -475,14 +502,78 @@ fn should_skip_archive_entry(root: &Path, path: &Path, name: &str) -> bool {
     ) || relative.starts_with("review/reir/")
 }
 
-fn package_archive_file(root: &Path, path: &Path) -> Result<PackageArchiveFile, String> {
-    let contents =
-        fs::read(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+fn package_archive_file(
+    root: &Path,
+    path: &Path,
+    read_bytes: &mut u64,
+) -> Result<PackageArchiveFile, String> {
+    let (size, sha256) = hash_file_streaming(
+        path,
+        ARCHIVE_MAX_FILE_BYTES,
+        read_bytes,
+        ARCHIVE_MAX_BYTES,
+        "package archive",
+    )?;
     Ok(PackageArchiveFile {
         path: relative_path(root, path),
-        size: contents.len() as u64,
-        sha256: sha256_label(&contents),
+        size,
+        sha256,
     })
+}
+
+#[derive(Debug, Default)]
+struct ArchiveBudget {
+    files: usize,
+    entries: usize,
+    bytes: u64,
+}
+
+impl ArchiveBudget {
+    fn check_depth(&self, depth: usize, path: &Path) -> Result<(), String> {
+        if depth > ARCHIVE_MAX_DEPTH {
+            return Err(format!(
+                "package archive exceeded depth limit of {ARCHIVE_MAX_DEPTH} at {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn add_entry(&mut self, path: &Path) -> Result<(), String> {
+        self.entries = self.entries.saturating_add(1);
+        if self.entries > ARCHIVE_MAX_ENTRIES {
+            return Err(format!(
+                "package archive exceeded entry limit of {ARCHIVE_MAX_ENTRIES} below {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn add_file(&mut self, size: u64, path: &Path) -> Result<(), String> {
+        if size > ARCHIVE_MAX_FILE_BYTES {
+            return Err(format!(
+                "package archive file {} exceeded byte limit of {ARCHIVE_MAX_FILE_BYTES}",
+                path.display()
+            ));
+        }
+        self.files = self.files.saturating_add(1);
+        if self.files > ARCHIVE_MAX_FILES {
+            return Err(format!(
+                "package archive exceeded file limit of {ARCHIVE_MAX_FILES}"
+            ));
+        }
+        self.bytes = self
+            .bytes
+            .checked_add(size)
+            .ok_or_else(|| "package archive byte accounting overflowed".to_string())?;
+        if self.bytes > ARCHIVE_MAX_BYTES {
+            return Err(format!(
+                "package archive exceeded total byte limit of {ARCHIVE_MAX_BYTES}"
+            ));
+        }
+        Ok(())
+    }
 }
 
 pub(super) fn package_archive_hash(files: &[PackageArchiveFile]) -> String {
@@ -746,12 +837,18 @@ pub(super) fn package_native_hash(
         let mut files = Vec::new();
         collect_regular_files(&native_root, &mut files)?;
         files.sort();
+        let mut hashed_bytes = 0_u64;
         for file in files {
             input.push_str(&relative_path(package_dir, &file));
             input.push('\n');
-            let contents = fs::read(&file)
-                .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
-            input.push_str(&sha256_label(&contents));
+            let (_, hash) = hash_file_streaming(
+                &file,
+                NATIVE_HASH_MAX_FILE_BYTES,
+                &mut hashed_bytes,
+                NATIVE_HASH_MAX_BYTES,
+                "native source hash",
+            )?;
+            input.push_str(&hash);
             input.push('\n');
         }
     }
@@ -759,9 +856,15 @@ pub(super) fn package_native_hash(
     if binding_manifest.exists() {
         input.push_str(&relative_path(package_dir, &binding_manifest));
         input.push('\n');
-        let contents = fs::read(&binding_manifest)
-            .map_err(|error| format!("failed to read {}: {error}", binding_manifest.display()))?;
-        input.push_str(&sha256_label(&contents));
+        let mut binding_bytes = 0;
+        let (_, hash) = hash_file_streaming(
+            &binding_manifest,
+            BINDING_MANIFEST_MAX_BYTES,
+            &mut binding_bytes,
+            BINDING_MANIFEST_MAX_BYTES,
+            "native binding manifest hash",
+        )?;
+        input.push_str(&hash);
         input.push('\n');
     }
 
@@ -777,9 +880,114 @@ fn sha256_label(bytes: &[u8]) -> String {
     output
 }
 
+fn read_bounded_utf8(path: &Path, max_bytes: u64, label: &str) -> Result<String, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "{label} must be a regular file: {}",
+            path.display()
+        ));
+    }
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "{label} {} exceeded byte limit of {max_bytes}",
+            path.display()
+        ));
+    }
+    let file = fs::File::open(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    file.take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!(
+            "{label} {} exceeded byte limit of {max_bytes}",
+            path.display()
+        ));
+    }
+    String::from_utf8(bytes)
+        .map_err(|error| format!("failed to read {} as UTF-8: {error}", path.display()))
+}
+
+fn hash_file_streaming(
+    path: &Path,
+    max_file_bytes: u64,
+    total_bytes: &mut u64,
+    max_total_bytes: u64,
+    label: &str,
+) -> Result<(u64, String), String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "{label} must be a regular file: {}",
+            path.display()
+        ));
+    }
+    if metadata.len() > max_file_bytes {
+        return Err(format!(
+            "{label} file {} exceeded byte limit of {max_file_bytes}",
+            path.display()
+        ));
+    }
+
+    let mut file = fs::File::open(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut size = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        size = size
+            .checked_add(read as u64)
+            .ok_or_else(|| format!("{label} file size overflowed"))?;
+        if size > max_file_bytes {
+            return Err(format!(
+                "{label} file {} exceeded byte limit of {max_file_bytes}",
+                path.display()
+            ));
+        }
+        *total_bytes = total_bytes
+            .checked_add(read as u64)
+            .ok_or_else(|| format!("{label} total byte accounting overflowed"))?;
+        if *total_bytes > max_total_bytes {
+            return Err(format!(
+                "{label} exceeded total byte limit of {max_total_bytes}"
+            ));
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok((size, digest_label(digest.finalize())))
+}
+
+fn digest_label(digest: impl IntoIterator<Item = u8>) -> String {
+    let mut output = String::from("sha256:");
+    for byte in digest {
+        output.push_str(&format!("{byte:02x}"));
+    }
+    output
+}
+
 #[cfg(test)]
 mod tests {
+    use std::fs::OpenOptions;
+
     use super::*;
+
+    fn test_dir(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "rsscript-package-lock-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ))
+    }
 
     fn locked(name: &str, version: &str, source: &str) -> PackageLockPackage {
         PackageLockPackage {
@@ -926,5 +1134,84 @@ mod tests {
             locked("shared", "1.0.0", "path+/second"),
         ])
         .expect("source is part of the exact lock identity");
+    }
+
+    #[test]
+    fn archive_rejects_oversized_file_without_loading_it() {
+        let root = test_dir("archive-size");
+        fs::create_dir_all(&root).expect("fixture root");
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(root.join("large.bin"))
+            .expect("fixture file");
+        file.set_len(ARCHIVE_MAX_FILE_BYTES + 1)
+            .expect("sparse oversized file");
+
+        let error = package_archive_files(&root).expect_err("archive file must be bounded");
+
+        assert!(error.contains("exceeded byte limit"), "{error}");
+        fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn archive_rejects_excessive_directory_depth() {
+        let root = test_dir("archive-depth");
+        let mut directory = root.clone();
+        for _ in 0..=ARCHIVE_MAX_DEPTH {
+            directory.push("nested");
+        }
+        fs::create_dir_all(&directory).expect("deep fixture");
+        fs::write(directory.join("file.txt"), b"content").expect("fixture file");
+
+        let error = package_archive_files(&root).expect_err("archive depth must be bounded");
+
+        assert!(error.contains("exceeded depth limit"), "{error}");
+        fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn streaming_hash_matches_in_memory_hash() {
+        let root = test_dir("streaming-hash");
+        fs::create_dir_all(&root).expect("fixture root");
+        let path = root.join("source.bin");
+        let contents = vec![0x5a; 256 * 1024];
+        fs::write(&path, &contents).expect("fixture file");
+        let mut total = 0;
+
+        let (size, hash) = hash_file_streaming(
+            &path,
+            ARCHIVE_MAX_FILE_BYTES,
+            &mut total,
+            ARCHIVE_MAX_BYTES,
+            "test hash",
+        )
+        .expect("streaming hash");
+
+        assert_eq!(size, contents.len() as u64);
+        assert_eq!(total, contents.len() as u64);
+        assert_eq!(hash, sha256_label(&contents));
+        fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn lock_reader_rejects_oversized_file_before_parsing() {
+        let root = test_dir("lock-size");
+        fs::create_dir_all(&root).expect("fixture root");
+        let path = root.join("rsspkg.lock");
+        let file = OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&path)
+            .expect("fixture lock");
+        file.set_len(PACKAGE_LOCK_MAX_BYTES + 1)
+            .expect("sparse oversized lock");
+
+        let error = read_package_lock(&path).expect_err("lock must be bounded");
+
+        assert!(error.contains("exceeded byte limit"), "{error}");
+        fs::remove_dir_all(root).expect("fixture cleanup");
     }
 }

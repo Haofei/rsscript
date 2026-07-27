@@ -4,8 +4,8 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
-use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -16,6 +16,7 @@ use serde::Serialize;
 use std::os::unix::process::CommandExt;
 
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
+const TEST_COMMAND_OUTPUT_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 /// `rss test` is the native productized entry point over `.rsstest.toml`
 /// manifests. It mirrors the self-hosted `packages/test-runner` semantics so the
@@ -431,11 +432,12 @@ fn run_command_os(
     args: &[String],
     timeout_ms: u64,
 ) -> Result<CommandOutcome, String> {
-    let mut child = spawn_with_fallback(command, args)?;
+    let (mut child, guard) = spawn_with_fallback(command, args)?;
 
     // Drain stdout/stderr on threads so a full pipe cannot deadlock the wait.
-    let stdout_reader = spawn_reader(child.stdout.take());
-    let stderr_reader = spawn_reader(child.stderr.take());
+    let output_exceeded = Arc::new(AtomicBool::new(false));
+    let stdout_reader = spawn_reader(child.stdout.take(), Arc::clone(&output_exceeded));
+    let stderr_reader = spawn_reader(child.stderr.take(), Arc::clone(&output_exceeded));
 
     // `timeout_ms == 0` disables the timeout, matching the runtime's
     // `process_run_stdout_timeout` (`timeout_ms <= 0` runs without a deadline).
@@ -445,8 +447,13 @@ fn run_command_os(
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
             Ok(None) => {
+                if output_exceeded.load(Ordering::Acquire) {
+                    terminate_process_tree(&mut child, &guard);
+                    let _ = child.wait();
+                    break None;
+                }
                 if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                    terminate_process_tree(&mut child);
+                    terminate_process_tree(&mut child, &guard);
                     let _ = child.wait();
                     timed_out = true;
                     break None;
@@ -459,6 +466,11 @@ fn run_command_os(
 
     let stdout = stdout_reader.join().unwrap_or_default();
     let stderr = stderr_reader.join().unwrap_or_default();
+    if output_exceeded.load(Ordering::Acquire) {
+        return Err(format!(
+            "test command exceeded output limit of {TEST_COMMAND_OUTPUT_MAX_BYTES} bytes per stream"
+        ));
+    }
 
     Ok(CommandOutcome {
         success: status.is_some_and(|status| status.success()),
@@ -472,7 +484,10 @@ fn run_command_os(
 /// Spawn `command`, falling back to `command + ".exe"` if the first spawn fails,
 /// matching the self-hosted runner's Windows fallback. The original error is
 /// preserved if the fallback also fails.
-fn spawn_with_fallback(command: &OsString, args: &[String]) -> Result<std::process::Child, String> {
+fn spawn_with_fallback(
+    command: &OsString,
+    args: &[String],
+) -> Result<(std::process::Child, rss_process_guard::ProcessGuard), String> {
     match spawn_piped(command, args) {
         Ok(child) => Ok(child),
         Err(first_error) => {
@@ -494,44 +509,62 @@ fn spawn_with_fallback(command: &OsString, args: &[String]) -> Result<std::proce
     }
 }
 
-fn spawn_piped(command: &OsString, args: &[String]) -> std::io::Result<std::process::Child> {
+fn spawn_piped(
+    command: &OsString,
+    args: &[String],
+) -> std::io::Result<(std::process::Child, rss_process_guard::ProcessGuard)> {
     let mut command = Command::new(command);
     command
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    rss_process_guard::configure(
+        &mut command,
+        rss_process_guard::ProcessLimits::generated_program(),
+    )?;
     #[cfg(unix)]
     command.process_group(0);
-    command.spawn()
+    let child = command.spawn()?;
+    let guard = rss_process_guard::ProcessGuard::attach(
+        &child,
+        rss_process_guard::ProcessLimits::generated_program(),
+    )?;
+    Ok((child, guard))
 }
 
-fn terminate_process_tree(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        let group = format!("-{}", child.id());
-        let _ = Command::new("kill").args(["-TERM", "--", &group]).status();
-        thread::sleep(Duration::from_millis(25));
-        if child.try_wait().ok().flatten().is_none() {
-            let _ = Command::new("kill").args(["-KILL", "--", &group]).status();
-        }
-    }
-    #[cfg(windows)]
-    {
-        let _ = Command::new("taskkill")
-            .args(["/T", "/F", "/PID", &child.id().to_string()])
-            .status();
-    }
+fn terminate_process_tree(
+    child: &mut std::process::Child,
+    guard: &rss_process_guard::ProcessGuard,
+) {
+    let _ = guard.terminate();
     let _ = child.kill();
 }
 
-fn spawn_reader<R: Read + Send + 'static>(stream: Option<R>) -> thread::JoinHandle<String> {
+fn spawn_reader<R: Read + Send + 'static>(
+    stream: Option<R>,
+    output_exceeded: Arc<AtomicBool>,
+) -> thread::JoinHandle<String> {
     thread::spawn(move || {
-        let mut buffer = String::new();
+        let mut bytes = Vec::new();
         if let Some(mut stream) = stream {
-            let _ = stream.read_to_string(&mut buffer);
+            let mut chunk = [0_u8; 8192];
+            loop {
+                match stream.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => {
+                        let remaining = TEST_COMMAND_OUTPUT_MAX_BYTES.saturating_sub(bytes.len());
+                        if read > remaining {
+                            bytes.extend_from_slice(&chunk[..remaining]);
+                            output_exceeded.store(true, Ordering::Release);
+                            break;
+                        }
+                        bytes.extend_from_slice(&chunk[..read]);
+                    }
+                }
+            }
         }
-        buffer
+        String::from_utf8_lossy(&bytes).into_owned()
     })
 }
 
@@ -974,6 +1007,17 @@ mod tests {
         assert!(result);
 
         fs::remove_dir_all(root).expect("clean up temp dir");
+    }
+
+    #[test]
+    fn command_output_reader_stops_at_the_capture_limit() {
+        let exceeded = Arc::new(AtomicBool::new(false));
+        let input = std::io::Cursor::new(vec![b'x'; TEST_COMMAND_OUTPUT_MAX_BYTES + 1]);
+        let reader = spawn_reader(Some(input), Arc::clone(&exceeded));
+        let output = reader.join().expect("reader thread should complete");
+
+        assert_eq!(output.len(), TEST_COMMAND_OUTPUT_MAX_BYTES);
+        assert!(exceeded.load(Ordering::Acquire));
     }
 
     fn unique_temp_dir(name: &str) -> std::path::PathBuf {

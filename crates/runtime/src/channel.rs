@@ -106,12 +106,20 @@ impl<T> Drop for RssSender<T> {
 }
 
 pub fn channel_bounded<T>(capacity: i64) -> Result<RssChannel<T>, ChannelError> {
+    const MAX_CHANNEL_CAPACITY: usize = 1_000_000;
     if capacity <= 0 {
         return Err(ChannelError::new("channel capacity must be positive"));
     }
+    let capacity = usize::try_from(capacity)
+        .map_err(|_| ChannelError::new("channel capacity does not fit this platform"))?;
+    if capacity > MAX_CHANNEL_CAPACITY {
+        return Err(ChannelError::new(&format!(
+            "channel capacity {capacity} exceeds runtime ceiling of {MAX_CHANNEL_CAPACITY} items"
+        )));
+    }
     Ok(RssChannel {
         state: Rc::new(RefCell::new(ChannelState {
-            capacity: capacity as usize,
+            capacity,
             queue: VecDeque::new(),
             senders: 0,
             receiver_taken: false,
@@ -429,6 +437,15 @@ mod tests {
         assert!(channel_bounded::<i64>(0).is_err());
         assert!(channel_bounded::<i64>(-1).is_err());
         assert!(channel_bounded::<i64>(1).is_ok());
+    }
+
+    #[test]
+    fn bounded_rejects_capacity_above_runtime_ceiling() {
+        let error = channel_bounded::<i64>(1_000_001)
+            .err()
+            .expect("oversized capacity should fail");
+        assert!(channel_error_message(&error).contains("runtime ceiling"));
+        assert!(channel_bounded::<i64>(i64::MAX).is_err());
     }
 
     #[test]

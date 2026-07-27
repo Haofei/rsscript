@@ -8,7 +8,8 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rsscript::{
@@ -34,21 +35,24 @@ struct Document {
 }
 
 struct DocumentStore {
-    documents: Arc<HashMap<Url, Document>>,
+    documents: HashMap<Url, Document>,
     next_revision: u64,
+    generation: u64,
 }
 
 impl DocumentStore {
     fn new() -> Self {
         Self {
-            documents: Arc::new(HashMap::new()),
+            documents: HashMap::new(),
             next_revision: 1,
+            generation: 0,
         }
     }
 
     fn allocate_revision(&mut self) -> u64 {
         let revision = self.next_revision;
         self.next_revision += 1;
+        self.generation = revision;
         revision
     }
 }
@@ -63,29 +67,85 @@ impl Deref for DocumentStore {
 
 impl DerefMut for DocumentStore {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        Arc::make_mut(&mut self.documents)
+        &mut self.documents
     }
 }
 
 #[derive(Clone)]
 struct WorkspaceDocument {
     uri: Url,
-    text: String,
+    text: Arc<str>,
     kind: Option<PackageReviewFileKind>,
+}
+
+#[derive(Default)]
+struct PackageInputCache {
+    documents: Mutex<HashMap<PathBuf, Arc<HashMap<Url, WorkspaceDocument>>>>,
+}
+
+impl PackageInputCache {
+    fn documents_for_root(&self, package_root: &Path) -> Arc<HashMap<Url, WorkspaceDocument>> {
+        if let Some(documents) = self
+            .documents
+            .lock()
+            .expect("package input cache lock poisoned")
+            .get(package_root)
+            .cloned()
+        {
+            return documents;
+        }
+
+        let documents = Arc::new(load_package_documents(package_root));
+        let mut cache = self
+            .documents
+            .lock()
+            .expect("package input cache lock poisoned");
+        Arc::clone(cache.entry(package_root.to_path_buf()).or_insert(documents))
+    }
+
+    fn invalidate(&self, package_root: &Path) {
+        self.documents
+            .lock()
+            .expect("package input cache lock poisoned")
+            .remove(package_root);
+    }
+}
+
+#[derive(Default)]
+struct AnalysisCancellation {
+    cancelled: AtomicBool,
+}
+
+impl AnalysisCancellation {
+    fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+struct PendingAnalysis {
+    task: tokio::task::AbortHandle,
+    cancellation: Arc<AnalysisCancellation>,
 }
 
 struct Backend {
     client: Client,
     documents: Arc<tokio::sync::Mutex<DocumentStore>>,
     diagnostics_publication: Arc<tokio::sync::Mutex<()>>,
-    pending_analysis: tokio::sync::Mutex<HashMap<Url, tokio::task::AbortHandle>>,
+    pending_analysis: tokio::sync::Mutex<HashMap<Url, PendingAnalysis>>,
+    package_inputs: Arc<PackageInputCache>,
 }
 
 struct AnalysisJob {
     uri: Url,
     revision: u64,
     version: i32,
+    generation: u64,
     open_documents: Arc<HashMap<Url, Document>>,
+    cancellation: Arc<AnalysisCancellation>,
 }
 
 fn commit_diagnostics_if_current(
@@ -93,8 +153,13 @@ fn commit_diagnostics_if_current(
     uri: &Url,
     revision: u64,
     version: i32,
+    generation: u64,
+    current_generation: u64,
     diagnostics: Vec<RsDiagnostic>,
 ) -> bool {
+    if generation != current_generation {
+        return false;
+    }
     let Some(document) = documents.get_mut(uri) else {
         return false;
     };
@@ -106,21 +171,40 @@ fn commit_diagnostics_if_current(
 }
 
 fn analysis_job(documents: &DocumentStore, uri: Url, revision: u64, version: i32) -> AnalysisJob {
+    let package_root = package_root_for_uri(&uri);
+    let open_documents = documents
+        .iter()
+        .filter(|(candidate, _)| {
+            if **candidate == uri {
+                return true;
+            }
+            package_root.as_ref().is_some_and(|root| {
+                candidate
+                    .to_file_path()
+                    .ok()
+                    .is_some_and(|path| path.starts_with(root))
+            })
+        })
+        .map(|(uri, document)| (uri.clone(), document.clone()))
+        .collect();
     AnalysisJob {
         uri,
         revision,
         version,
-        open_documents: Arc::clone(&documents.documents),
+        generation: documents.generation,
+        open_documents: Arc::new(open_documents),
+        cancellation: Arc::new(AnalysisCancellation::default()),
     }
 }
 
 fn replace_pending_analysis(
-    pending: &mut HashMap<Url, tokio::task::AbortHandle>,
+    pending: &mut HashMap<Url, PendingAnalysis>,
     uri: Url,
-    task: tokio::task::AbortHandle,
+    task: PendingAnalysis,
 ) {
     if let Some(previous) = pending.insert(uri, task) {
-        previous.abort();
+        previous.cancellation.cancel();
+        previous.task.abort();
     }
 }
 
@@ -196,6 +280,14 @@ impl Backend {
             documents: Arc::new(tokio::sync::Mutex::new(DocumentStore::new())),
             diagnostics_publication: Arc::new(tokio::sync::Mutex::new(())),
             pending_analysis: tokio::sync::Mutex::new(HashMap::new()),
+            package_inputs: Arc::new(PackageInputCache::default()),
+        }
+    }
+
+    async fn cancel_pending_analysis(&self, uri: &Url) {
+        if let Some(pending) = self.pending_analysis.lock().await.remove(uri) {
+            pending.cancellation.cancel();
+            pending.task.abort();
         }
     }
 
@@ -205,12 +297,28 @@ impl Backend {
         let client = self.client.clone();
         let documents = Arc::clone(&self.documents);
         let diagnostics_publication = Arc::clone(&self.diagnostics_publication);
+        let package_inputs = Arc::clone(&self.package_inputs);
+        let cancellation = Arc::clone(&job.cancellation);
         let task = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(150)).await;
-            Self::analyze_and_publish(client, documents, diagnostics_publication, job).await;
+            Self::analyze_and_publish(
+                client,
+                documents,
+                diagnostics_publication,
+                package_inputs,
+                job,
+            )
+            .await;
         });
         let mut pending = self.pending_analysis.lock().await;
-        replace_pending_analysis(&mut pending, uri, task.abort_handle());
+        replace_pending_analysis(
+            &mut pending,
+            uri,
+            PendingAnalysis {
+                task: task.abort_handle(),
+                cancellation,
+            },
+        );
     }
 
     /// Run the checker over a stable document snapshot and publish if it is
@@ -219,34 +327,66 @@ impl Backend {
         client: Client,
         documents: Arc<tokio::sync::Mutex<DocumentStore>>,
         diagnostics_publication: Arc<tokio::sync::Mutex<()>>,
+        package_inputs: Arc<PackageInputCache>,
         job: AnalysisJob,
     ) {
         let AnalysisJob {
             uri,
             revision,
             version,
+            generation,
             open_documents,
+            cancellation,
         } = job;
+        if cancellation.is_cancelled() {
+            return;
+        }
         let analysis_uri = uri.clone();
+        let analysis_cancellation = Arc::clone(&cancellation);
         let analysis = tokio::task::spawn_blocking(move || {
-            let diagnostics = diagnostics_for_uri(&analysis_uri, &open_documents);
+            let diagnostics = diagnostics_for_uri_cancellable(
+                &analysis_uri,
+                &open_documents,
+                &package_inputs,
+                || analysis_cancellation.is_cancelled(),
+            )?;
+            if analysis_cancellation.is_cancelled() {
+                return None;
+            }
             let lsp_diagnostics =
                 lsp_diagnostics_from_diagnostics(&analysis_uri, &open_documents, &diagnostics);
-            (diagnostics, lsp_diagnostics)
+            Some((diagnostics, lsp_diagnostics))
         })
         .await;
-        let Ok((diagnostics, lsp_diagnostics)) = analysis else {
+        let Ok(Some((diagnostics, lsp_diagnostics))) = analysis else {
+            if cancellation.is_cancelled() {
+                return;
+            }
             client
                 .log_message(MessageType::ERROR, "RSScript analysis task failed")
                 .await;
             return;
         };
 
+        if cancellation.is_cancelled() {
+            return;
+        }
         let _publication = diagnostics_publication.lock().await;
+        if cancellation.is_cancelled() {
+            return;
+        }
         {
             let mut documents = documents.lock().await;
-            if !commit_diagnostics_if_current(&mut documents, &uri, revision, version, diagnostics)
-            {
+            let current_generation = documents.generation;
+            if !commit_diagnostics_if_current(
+                &mut documents,
+                &uri,
+                revision,
+                version,
+                generation,
+                current_generation,
+                diagnostics,
+            ) {
                 return;
             }
         }
@@ -314,11 +454,18 @@ impl LanguageServer for Backend {
     }
 
     async fn shutdown(&self) -> Result<()> {
+        let mut pending = self.pending_analysis.lock().await;
+        for (_, analysis) in pending.drain() {
+            analysis.cancellation.cancel();
+            analysis.task.abort();
+        }
         Ok(())
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let doc = params.text_document;
+        let _publication = self.diagnostics_publication.lock().await;
+        self.cancel_pending_analysis(&doc.uri).await;
         let job = {
             let mut documents = self.documents.lock().await;
             open_document(&mut documents, doc.uri, doc.text, doc.version)
@@ -329,6 +476,9 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
+        let _publication = self.diagnostics_publication.lock().await;
+        self.cancel_pending_analysis(&params.text_document.uri)
+            .await;
         let job = {
             let mut documents = self.documents.lock().await;
             change_document(
@@ -344,6 +494,12 @@ impl LanguageServer for Backend {
     }
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
+        let _publication = self.diagnostics_publication.lock().await;
+        self.cancel_pending_analysis(&params.text_document.uri)
+            .await;
+        if let Some(package_root) = package_root_for_uri(&params.text_document.uri) {
+            self.package_inputs.invalidate(&package_root);
+        }
         if let Some(text) = params.text {
             let job = {
                 let mut documents = self.documents.lock().await;
@@ -356,20 +512,13 @@ impl LanguageServer for Backend {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
-        if let Some(pending) = self
-            .pending_analysis
-            .lock()
-            .await
-            .remove(&params.text_document.uri)
-        {
-            pending.abort();
-        }
         let _publication = self.diagnostics_publication.lock().await;
+        self.cancel_pending_analysis(&params.text_document.uri)
+            .await;
         {
-            self.documents
-                .lock()
-                .await
-                .remove(&params.text_document.uri);
+            let mut documents = self.documents.lock().await;
+            documents.allocate_revision();
+            documents.remove(&params.text_document.uri);
         }
         self.client
             .publish_diagnostics(params.text_document.uri, Vec::new(), None)
@@ -487,7 +636,12 @@ impl LanguageServer for Backend {
     ) -> Result<DocumentDiagnosticReportResult> {
         let uri = params.text_document.uri;
         let documents = self.documents.lock().await;
-        let items = lsp_diagnostics_for_uri(&uri, &documents);
+        let items = documents
+            .get(&uri)
+            .map(|document| {
+                lsp_diagnostics_from_diagnostics(&uri, &documents, &document.diagnostics)
+            })
+            .unwrap_or_default();
         Ok(DocumentDiagnosticReportResult::Report(
             DocumentDiagnosticReport::Full(RelatedFullDocumentDiagnosticReport {
                 related_documents: None,
@@ -1257,19 +1411,43 @@ fn valid_rename_name(name: &str) -> bool {
         && chars.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
+#[cfg(test)]
 fn diagnostics_for_uri(uri: &Url, open_documents: &HashMap<Url, Document>) -> Vec<RsDiagnostic> {
-    let Some(document) = open_documents.get(uri) else {
-        return Vec::new();
-    };
-    if package_root_for_uri(uri).is_none() {
-        return single_file_diagnostics(uri.path(), &document.text);
-    }
-    let workspace_documents = workspace_documents_for_uri(uri, open_documents);
-    let mut diagnostics = package_frontend_diagnostics(&workspace_documents);
-    diagnostics.retain(|diagnostic| diagnostic.span.file == uri.path());
-    diagnostics
+    diagnostics_for_uri_cancellable(uri, open_documents, &PackageInputCache::default(), || false)
+        .unwrap_or_default()
 }
 
+fn diagnostics_for_uri_cancellable(
+    uri: &Url,
+    open_documents: &HashMap<Url, Document>,
+    package_inputs: &PackageInputCache,
+    mut cancelled: impl FnMut() -> bool,
+) -> Option<Vec<RsDiagnostic>> {
+    let document = open_documents.get(uri)?;
+    if cancelled() {
+        return None;
+    }
+    let Some(package_root) = package_root_for_uri(uri) else {
+        let mut diagnostics = analyze_source_with_core(uri.path(), &document.text);
+        if cancelled() {
+            return None;
+        }
+        diagnostics.extend(lint_source(uri.path(), &document.text));
+        return (!cancelled()).then_some(diagnostics);
+    };
+
+    let package_documents = package_inputs.documents_for_root(&package_root);
+    if cancelled() {
+        return None;
+    }
+    let workspace_documents = workspace_documents_from_base(&package_documents, open_documents);
+    let mut diagnostics =
+        package_frontend_diagnostics_cancellable(&workspace_documents, &mut cancelled)?;
+    diagnostics.retain(|diagnostic| diagnostic.span.file == uri.path());
+    Some(diagnostics)
+}
+
+#[cfg(test)]
 fn lsp_diagnostics_for_uri(uri: &Url, open_documents: &HashMap<Url, Document>) -> Vec<Diagnostic> {
     let diagnostics = diagnostics_for_uri(uri, open_documents);
     lsp_diagnostics_from_diagnostics(uri, open_documents, &diagnostics)
@@ -1290,41 +1468,62 @@ fn lsp_diagnostics_from_diagnostics(
         .collect()
 }
 
+#[cfg(test)]
 fn single_file_diagnostics(path: &str, text: &str) -> Vec<RsDiagnostic> {
     let mut diagnostics = analyze_source_with_core(path, text);
     diagnostics.extend(lint_source(path, text));
     diagnostics
 }
 
-fn package_frontend_diagnostics(documents: &[WorkspaceDocument]) -> Vec<RsDiagnostic> {
+fn package_frontend_diagnostics_cancellable(
+    documents: &[WorkspaceDocument],
+    cancelled: &mut impl FnMut() -> bool,
+) -> Option<Vec<RsDiagnostic>> {
+    if cancelled() {
+        return None;
+    }
     let interfaces = documents
         .iter()
         .filter(|document| document.kind == Some(PackageReviewFileKind::Interface))
-        .map(|document| (document.uri.path(), document.text.as_str()))
+        .map(|document| (document.uri.path(), document.text.as_ref()))
         .collect::<Vec<_>>();
     let sources = documents
         .iter()
         .filter(|document| document.kind == Some(PackageReviewFileKind::Source))
-        .map(|document| (document.uri.path(), document.text.as_str()))
+        .map(|document| (document.uri.path(), document.text.as_ref()))
         .collect::<Vec<_>>();
 
     let mut diagnostics = Vec::new();
-    diagnostics.extend(interfaces.iter().flat_map(|(path, contents)| {
+    for (path, contents) in &interfaces {
+        if cancelled() {
+            return None;
+        }
         let visible_interfaces = interfaces
             .iter()
             .filter(|(interface_path, _)| interface_path != path)
             .map(|(interface_path, interface_contents)| (*interface_path, *interface_contents))
             .collect::<Vec<_>>();
-        analyze_source_with_interfaces(path, contents, &visible_interfaces)
-    }));
+        diagnostics.extend(analyze_source_with_interfaces(
+            path,
+            contents,
+            &visible_interfaces,
+        ));
+    }
+    if cancelled() {
+        return None;
+    }
     diagnostics.extend(analyze_sources_with_interfaces(&sources, &interfaces));
-    diagnostics.extend(
-        documents
-            .iter()
-            .flat_map(|document| lint_source(document.uri.path(), &document.text)),
-    );
+    for document in documents {
+        if cancelled() {
+            return None;
+        }
+        diagnostics.extend(lint_source(document.uri.path(), &document.text));
+    }
+    if cancelled() {
+        return None;
+    }
     dedup_diagnostics(&mut diagnostics);
-    diagnostics
+    Some(diagnostics)
 }
 
 fn dedup_diagnostics(diagnostics: &mut Vec<RsDiagnostic>) {
@@ -1350,6 +1549,15 @@ fn workspace_documents_for_uri(
     documents.into_values().collect()
 }
 
+fn workspace_documents_from_base(
+    base: &HashMap<Url, WorkspaceDocument>,
+    open_documents: &HashMap<Url, Document>,
+) -> Vec<WorkspaceDocument> {
+    let mut documents = base.clone();
+    overlay_open_documents(&mut documents, open_documents);
+    documents.into_values().collect()
+}
+
 fn workspace_documents(open_documents: &HashMap<Url, Document>) -> Vec<WorkspaceDocument> {
     let mut documents = HashMap::new();
     for uri in open_documents.keys() {
@@ -1368,7 +1576,7 @@ fn overlay_open_documents(
             uri.clone(),
             WorkspaceDocument {
                 uri: uri.clone(),
-                text: document.text.to_string(),
+                text: Arc::clone(&document.text),
                 kind: infer_document_kind(uri),
             },
         );
@@ -1379,7 +1587,11 @@ fn package_documents_for_uri(uri: &Url) -> HashMap<Url, WorkspaceDocument> {
     let Some(package_dir) = package_root_for_uri(uri) else {
         return HashMap::new();
     };
-    let Ok(sources) = package_sources_with_dependency_interfaces(&package_dir) else {
+    load_package_documents(&package_dir)
+}
+
+fn load_package_documents(package_dir: &Path) -> HashMap<Url, WorkspaceDocument> {
+    let Ok(sources) = package_sources_with_dependency_interfaces(package_dir) else {
         return HashMap::new();
     };
     sources
@@ -1392,7 +1604,7 @@ fn package_documents_for_uri(uri: &Url) -> HashMap<Url, WorkspaceDocument> {
                         uri.clone(),
                         WorkspaceDocument {
                             uri,
-                            text: source.contents,
+                            text: Arc::from(source.contents),
                             kind: Some(source.kind),
                         },
                     )
@@ -2034,14 +2246,32 @@ mod tests {
     async fn replacing_pending_analysis_aborts_superseded_task() {
         let uri = file_url("debounce.rss");
         let mut pending = HashMap::new();
+        let first_cancellation = Arc::new(AnalysisCancellation::default());
         let first = tokio::spawn(async {
             tokio::time::sleep(Duration::from_secs(60)).await;
         });
-        replace_pending_analysis(&mut pending, uri.clone(), first.abort_handle());
+        replace_pending_analysis(
+            &mut pending,
+            uri.clone(),
+            PendingAnalysis {
+                task: first.abort_handle(),
+                cancellation: Arc::clone(&first_cancellation),
+            },
+        );
 
+        let second_cancellation = Arc::new(AnalysisCancellation::default());
         let second = tokio::spawn(async {});
-        replace_pending_analysis(&mut pending, uri, second.abort_handle());
+        replace_pending_analysis(
+            &mut pending,
+            uri,
+            PendingAnalysis {
+                task: second.abort_handle(),
+                cancellation: Arc::clone(&second_cancellation),
+            },
+        );
 
+        assert!(first_cancellation.is_cancelled());
+        assert!(!second_cancellation.is_cancelled());
         assert!(
             first
                 .await
@@ -2049,6 +2279,65 @@ mod tests {
                 .is_cancelled()
         );
         second.await.expect("latest task should complete");
+    }
+
+    #[test]
+    fn blocking_analysis_stops_at_cooperative_checkpoint() {
+        let documents = (0..8)
+            .map(|index| WorkspaceDocument {
+                uri: file_url(&format!("cancel-{index}.rss")),
+                text: Arc::from("fn broken( -> Unit {}\n"),
+                kind: Some(PackageReviewFileKind::Source),
+            })
+            .collect::<Vec<_>>();
+        let mut checkpoints = 0;
+
+        let diagnostics = package_frontend_diagnostics_cancellable(&documents, &mut || {
+            checkpoints += 1;
+            checkpoints >= 3
+        });
+
+        assert!(diagnostics.is_none());
+        assert_eq!(checkpoints, 3);
+    }
+
+    #[test]
+    fn cancelled_snapshot_cannot_replace_existing_diagnostics() {
+        let uri = file_url("cancelled-stale.rss");
+        let mut current = document("fn current() -> Unit {}\n");
+        current.revision = 2;
+        current.version = 2;
+        let mut documents = HashMap::from([(uri.clone(), current)]);
+        let snapshot = HashMap::from([(
+            uri.clone(),
+            Document {
+                text: Arc::from("fn stale( -> Unit {}\n"),
+                diagnostics: Arc::new(Vec::new()),
+                revision: 1,
+                version: 1,
+            },
+        )]);
+        let cancellation = AnalysisCancellation::default();
+        cancellation.cancel();
+
+        let result =
+            diagnostics_for_uri_cancellable(&uri, &snapshot, &PackageInputCache::default(), || {
+                cancellation.is_cancelled()
+            });
+
+        assert!(result.is_none());
+        assert!(!commit_diagnostics_if_current(
+            &mut documents,
+            &uri,
+            1,
+            1,
+            1,
+            2,
+            Vec::new(),
+        ));
+        let current = documents.get(&uri).expect("current document remains");
+        assert_eq!(current.revision, 2);
+        assert_eq!(current.version, 2);
     }
 
     #[test]
@@ -2065,6 +2354,8 @@ mod tests {
             &uri,
             1,
             0,
+            1,
+            2,
             Vec::new(),
         ));
         assert_eq!(
@@ -2089,11 +2380,36 @@ mod tests {
             &uri,
             2,
             2,
+            2,
+            2,
             Vec::new(),
         ));
         assert_eq!(
             documents.get(&uri).expect("document should remain").version,
             3
+        );
+    }
+
+    #[test]
+    fn workspace_generation_prevents_cross_document_stale_publish() {
+        let uri = file_url("generation.rss");
+        let mut documents = HashMap::from([(uri.clone(), document("unchanged target"))]);
+
+        assert!(!commit_diagnostics_if_current(
+            &mut documents,
+            &uri,
+            0,
+            0,
+            4,
+            5,
+            Vec::new(),
+        ));
+        assert!(
+            documents
+                .get(&uri)
+                .expect("target remains open")
+                .diagnostics
+                .is_empty()
         );
     }
 
@@ -2370,7 +2686,7 @@ mod tests {
         );
         let workspace = vec![WorkspaceDocument {
             uri: uri.clone(),
-            text: source.to_string(),
+            text: Arc::from(source),
             kind: Some(PackageReviewFileKind::Source),
         }];
         let (_, leaf_definition) =
@@ -2421,6 +2737,48 @@ mod tests {
             workspace_definition_location(&workspace, &lookup).expect("package definition");
 
         assert_eq!(location.uri, helper_uri);
+
+        fs::remove_dir_all(package_dir).expect("cleanup package");
+    }
+
+    #[test]
+    fn package_input_cache_reuses_and_invalidates_immutable_inputs() {
+        let package_dir = unique_temp_dir("rss-lsp-package-input-cache");
+        fs::create_dir_all(package_dir.join("src")).expect("create src");
+        fs::write(
+            package_dir.join("rsspkg.toml"),
+            "[package]\nname = \"cache\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("write manifest");
+        let source_path = package_dir.join("src/main.rss");
+        fs::write(&source_path, "fn old() -> Unit {}\n").expect("write source");
+        let source_uri = Url::from_file_path(&source_path).expect("source URL");
+        let cache = PackageInputCache::default();
+
+        let first = cache.documents_for_root(&package_dir);
+        fs::write(&source_path, "fn new() -> Unit {}\n").expect("rewrite source");
+        let cached = cache.documents_for_root(&package_dir);
+        assert!(Arc::ptr_eq(&first, &cached));
+        assert_eq!(
+            cached
+                .get(&source_uri)
+                .expect("cached source")
+                .text
+                .as_ref(),
+            "fn old() -> Unit {}\n"
+        );
+
+        cache.invalidate(&package_dir);
+        let refreshed = cache.documents_for_root(&package_dir);
+        assert!(!Arc::ptr_eq(&cached, &refreshed));
+        assert_eq!(
+            refreshed
+                .get(&source_uri)
+                .expect("refreshed source")
+                .text
+                .as_ref(),
+            "fn new() -> Unit {}\n"
+        );
 
         fs::remove_dir_all(package_dir).expect("cleanup package");
     }

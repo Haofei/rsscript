@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::{NativeAsyncPending, spawn_tokio_native};
+use crate::{
+    NativeAsyncPending, ResourceBudget, RssCancellationToken, RssDeadline,
+    cancellation_token_cancelled, deadline_remaining_duration, spawn_tokio_native,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 const MAX_TCP_READ_BYTES: i64 = 16 * 1024 * 1024;
@@ -52,23 +55,65 @@ pub fn tcp_stream_read(
 ) -> NativeAsyncPending<Result<Vec<u8>, TcpError>> {
     let reader = Arc::clone(&stream.reader);
     spawn_tokio_native(async move {
-        if max_bytes <= 0 {
-            return Err(TcpError::new("TCP read max_bytes must be positive"));
-        }
-        if max_bytes > MAX_TCP_READ_BYTES {
-            return Err(TcpError::new(format!(
-                "TCP read max_bytes must not exceed {MAX_TCP_READ_BYTES}"
-            )));
-        }
-        let mut buffer = vec![0; max_bytes as usize];
-        let mut reader = reader.lock().await;
-        let read = reader
-            .read(&mut buffer)
-            .await
-            .map_err(|error| TcpError::new(format!("TCP read failed: {error}")))?;
-        buffer.truncate(read);
-        Ok(buffer)
+        let budget = ResourceBudget::new(MAX_TCP_READ_BYTES as u64);
+        tcp_stream_read_inner(reader, max_bytes, &budget).await
     })
+}
+
+pub fn tcp_stream_read_with_resources(
+    stream: &RssTcpStream,
+    max_bytes: i64,
+    budget: ResourceBudget,
+    cancellation: RssCancellationToken,
+    deadline: RssDeadline,
+) -> NativeAsyncPending<Result<Vec<u8>, TcpError>> {
+    let reader = Arc::clone(&stream.reader);
+    spawn_tokio_native(async move {
+        let remaining = deadline_remaining_duration(&deadline);
+        if remaining.is_zero() {
+            return Err(TcpError::new("TCP read deadline expired"));
+        }
+        tokio::select! {
+            biased;
+            _ = cancellation_token_cancelled(&cancellation) => {
+                Err(TcpError::new("TCP read was cancelled"))
+            }
+            result = tokio::time::timeout(
+                remaining,
+                tcp_stream_read_inner(reader, max_bytes, &budget),
+            ) => result
+                .map_err(|_| TcpError::new("TCP read deadline expired"))?,
+        }
+    })
+}
+
+async fn tcp_stream_read_inner(
+    reader: Arc<tokio::sync::Mutex<tokio::net::tcp::OwnedReadHalf>>,
+    max_bytes: i64,
+    budget: &ResourceBudget,
+) -> Result<Vec<u8>, TcpError> {
+    if max_bytes <= 0 {
+        return Err(TcpError::new("TCP read max_bytes must be positive"));
+    }
+    if max_bytes > MAX_TCP_READ_BYTES {
+        return Err(TcpError::new(format!(
+            "TCP read max_bytes must not exceed {MAX_TCP_READ_BYTES}"
+        )));
+    }
+    let capacity = usize::try_from(max_bytes)
+        .map_err(|_| TcpError::new("TCP read max_bytes does not fit this platform"))?;
+    let reservation = budget
+        .try_reserve(capacity)
+        .map_err(|error| TcpError::new(format!("TCP read byte budget exhausted: {error}")))?;
+    let mut buffer = vec![0; capacity];
+    let mut reader = reader.lock().await;
+    let read = reader
+        .read(&mut buffer)
+        .await
+        .map_err(|error| TcpError::new(format!("TCP read failed: {error}")))?;
+    buffer.truncate(read);
+    reservation.commit(read);
+    Ok(buffer)
 }
 
 pub fn tcp_stream_write(
@@ -185,6 +230,73 @@ mod tests {
             .run_pending(read)
             .expect("pending read should complete");
         assert_eq!(response, b"pong");
+        server.join().expect("server thread should finish");
+    }
+
+    #[test]
+    fn tcp_read_rejects_allocation_beyond_shared_budget() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("listener should have addr")
+            .port();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("client should connect");
+            socket.write_all(b"data").expect("server should write");
+        });
+
+        let mut executor = Executor::new();
+        let stream = executor
+            .run_pending(super::tcp_connect("127.0.0.1", i64::from(port)))
+            .expect("TCP connect should succeed");
+        let error = executor
+            .run_pending(super::tcp_stream_read_with_resources(
+                &stream,
+                4,
+                crate::ResourceBudget::new(2),
+                crate::cancellation_never(),
+                crate::deadline_after_ms(1_000),
+            ))
+            .expect_err("read allocation should exceed the budget");
+        assert!(error.message.contains("byte budget exhausted"));
+        server.join().expect("server thread should finish");
+    }
+
+    #[test]
+    fn pending_tcp_read_completes_when_cancelled() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("listener should have addr")
+            .port();
+        let server = std::thread::spawn(move || {
+            let (_socket, _) = listener.accept().expect("client should connect");
+            std::thread::sleep(Duration::from_millis(200));
+        });
+
+        let mut executor = Executor::new();
+        let stream = executor
+            .run_pending(super::tcp_connect("127.0.0.1", i64::from(port)))
+            .expect("TCP connect should succeed");
+        let mut source = crate::cancellation_source_new();
+        let token = crate::cancellation_source_token(&source);
+        let cancel = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            crate::cancellation_source_cancel(&mut source);
+        });
+        let started = std::time::Instant::now();
+        let error = executor
+            .run_pending(super::tcp_stream_read_with_resources(
+                &stream,
+                4,
+                crate::ResourceBudget::new(4),
+                token,
+                crate::deadline_after_ms(1_000),
+            ))
+            .expect_err("cancelled read should complete with an error");
+        assert!(error.message.contains("cancelled"));
+        assert!(started.elapsed() < Duration::from_millis(150));
+        cancel.join().expect("cancellation thread should finish");
         server.join().expect("server thread should finish");
     }
 }

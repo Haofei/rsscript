@@ -22,9 +22,9 @@ use rss_native_abi::NativeInterpreterFn;
 use sha2::{Digest, Sha256};
 
 use crate::package::{
-    BoundedRegularFile, CARGO_BUILD_TIMEOUT, CARGO_OUTPUT_MAX_BYTES, TreeLimits, check_package_dir,
-    collect_bounded_regular_files, configure_reduced_build_environment, package_lowering_input,
-    package_native_plugin_build_dependencies, run_bounded_command,
+    AuthorizedPackage, BoundedRegularFile, CARGO_BUILD_TIMEOUT, CARGO_OUTPUT_MAX_BYTES, TreeLimits,
+    collect_bounded_regular_files, configure_reduced_build_environment, prepare_authorized_package,
+    run_bounded_command,
 };
 use crate::syntax::ast::{DataEffect, Item, Param, TypeRef};
 use crate::syntax::parse_source;
@@ -39,11 +39,26 @@ use super::shim_gen::{ShimBinding, ShimDependency, ShimReturn, ShimType, generat
 pub fn load_package_native_bindings(
     package_dir: &Path,
 ) -> Result<Vec<(String, NativeInterpreterFn)>, String> {
-    let input = package_lowering_input(package_dir)?;
+    let input = crate::package::package_lowering_input(package_dir)?;
     if input.native_dependencies.is_empty() {
         return Ok(Vec::new());
     }
-    authorize_native_package(package_dir)?;
+    let package = prepare_authorized_package(package_dir)?;
+    load_authorized_package_native_bindings(&package)
+}
+
+/// Build and load native bindings for a previously reviewed package.
+///
+/// This is the only entry point that can reach Cargo or `dlopen`; its argument
+/// cannot be constructed outside the package authorization service.
+pub fn load_authorized_package_native_bindings(
+    package: &AuthorizedPackage,
+) -> Result<Vec<(String, NativeInterpreterFn)>, String> {
+    let input = package.lowering_input();
+    if input.native_dependencies.is_empty() {
+        return Ok(Vec::new());
+    }
+    let package_dir = package.package_dir();
 
     // Collect the native-fn signatures declared across the package interfaces.
     let mut signatures: BTreeMap<String, (Vec<Param>, Option<TypeRef>)> = BTreeMap::new();
@@ -61,9 +76,8 @@ pub fn load_package_native_bindings(
 
     // Build the shim binding specs plus the set of native crate deps to link.
     let mut bindings = Vec::new();
-    let native_build_dependencies = package_native_plugin_build_dependencies(package_dir)?;
     let mut native_deps = Vec::new();
-    for dependency in &native_build_dependencies {
+    for dependency in package.native_build_dependencies() {
         native_deps.push(ShimDependency {
             crate_name: dependency.crate_name.clone(),
             path: dependency.path.clone(),
@@ -94,21 +108,6 @@ pub fn load_package_native_bindings(
 
     let library_path = build_shim_library(package_dir, &native_deps, &bindings)?;
     rss_native_abi::load_registry(&library_path)
-}
-
-fn authorize_native_package(package_dir: &Path) -> Result<(), String> {
-    let check = check_package_dir(package_dir)?;
-    if check.ok {
-        return Ok(());
-    }
-    let reasons = if check.reasons.is_empty() {
-        "package check did not authorize native execution".to_string()
-    } else {
-        check.reasons.join("; ")
-    };
-    Err(format!(
-        "native build/load denied because package review or policy did not authorize execution: {reasons}"
-    ))
 }
 
 /// Build a shim binding spec. `mut` parameters are supported: their positions are
@@ -496,7 +495,10 @@ fn create_private_dir(path: &Path) -> Result<(), String> {
 }
 
 fn validate_private_dir(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
     let metadata = validate_owned_dir(path)?;
+    #[cfg(not(unix))]
+    validate_owned_dir(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -690,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn native_authorization_rejects_package_without_successful_check() {
+    fn path_loader_rejects_package_before_reaching_native_loading() {
         let root = std::env::temp_dir().join(format!(
             "rss-native-authorization-test-{}-{}",
             std::process::id(),
@@ -699,7 +701,7 @@ mod tests {
         fs::create_dir_all(root.join("src")).expect("fixture source directory");
         fs::write(
             root.join("rsspkg.toml"),
-            "[package]\nname = \"authorization-test\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n",
+            "[package]\nname = \"authorization-test\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n\n[native.rust]\nenabled = true\npath = \"native/rust\"\ncrate = \"authorization_test_native\"\nbuild_scripts = \"forbid\"\nproc_macros = \"forbid\"\nunsafe = \"forbid\"\n",
         )
         .expect("fixture manifest");
         fs::write(
@@ -707,9 +709,21 @@ mod tests {
             "fn main() -> Unit { return Unit }\n",
         )
         .expect("fixture source");
+        fs::create_dir_all(root.join("native/rust/src")).expect("fixture native source directory");
+        fs::write(
+            root.join("native/rust/Cargo.toml"),
+            "[package]\nname = \"authorization_test_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )
+        .expect("fixture native manifest");
+        fs::write(root.join("native/rust/src/lib.rs"), "pub fn unused() {}\n")
+            .expect("fixture native source");
 
-        let error = authorize_native_package(&root)
-            .expect_err("a package without an approved lock/check must not authorize native load");
+        let error = match load_package_native_bindings(&root) {
+            Ok(_) => {
+                panic!("a package without an approved lock/check must not authorize native load")
+            }
+            Err(error) => error,
+        };
         let _ = fs::remove_dir_all(&root);
 
         assert!(error.contains("native build/load denied"), "{error}");

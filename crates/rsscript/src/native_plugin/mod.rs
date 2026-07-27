@@ -19,8 +19,12 @@
 //! Bindings whose parameter or return *types* aren't in the supported set are
 //! **skipped** (not registered) rather than fatal — a program only fails
 //! (`no host binding for ...`) if it actually calls one.
+//!
+//! Cargo build and dynamic loading are type-state guarded: executable native
+//! inputs are captured by `package::prepare_authorized_package`, and the
+//! execution entry point requires the resulting `AuthorizedPackage`.
 
 mod loader;
 mod shim_gen;
 
-pub use loader::load_package_native_bindings;
+pub use loader::{load_authorized_package_native_bindings, load_package_native_bindings};

@@ -2039,6 +2039,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rss-process-guard"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "rss-testgen"
 version = "0.1.0"
 dependencies = [
@@ -2104,8 +2112,10 @@ dependencies = [
  "regex",
  "reir",
  "rss-native-abi",
+ "rss-process-guard",
  "rss-testgen",
  "rsscript-runtime",
+ "rustix",
  "semver",
  "serde",
  "serde_json",
@@ -2134,6 +2144,7 @@ dependencies = [
  "regex",
  "reqwest",
  "rss-metal-compute",
+ "rss-process-guard",
  "serde",
  "serde_json",
  "serde_yaml_ng",

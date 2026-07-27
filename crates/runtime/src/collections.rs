@@ -875,7 +875,10 @@ pub fn set_is_subset<T: Eq + Hash>(left: &HashSet<T>, right: &HashSet<T>) -> boo
 }
 
 pub fn buffer_new(size: i64) -> Vec<u8> {
-    Vec::with_capacity(size.max(0) as usize)
+    Vec::with_capacity(crate::resource_budget::bounded_allocation_size(
+        size,
+        "buffer allocation",
+    ))
 }
 
 pub fn buffer_len(buffer: &[u8]) -> i64 {
@@ -1114,5 +1117,18 @@ mod view_tests {
             .or_else(|| panic.downcast_ref::<&str>().copied())
             .unwrap_or_default();
         assert!(message.contains("integer_overflow"), "{message}");
+    }
+
+    #[test]
+    fn buffer_allocation_rejects_sizes_above_runtime_ceiling() {
+        let oversized = crate::RUNTIME_ALLOCATION_CEILING_BYTES as i64 + 1;
+        let panic = std::panic::catch_unwind(|| buffer_new(oversized))
+            .expect_err("oversized buffer should be rejected before allocation");
+        let message = panic
+            .downcast_ref::<String>()
+            .map(String::as_str)
+            .or_else(|| panic.downcast_ref::<&str>().copied())
+            .unwrap_or_default();
+        assert!(message.contains("runtime allocation ceiling"), "{message}");
     }
 }

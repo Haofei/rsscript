@@ -789,6 +789,11 @@ pub(crate) fn cancellation_token_register_wake(token: &RssCancellationToken, wak
     token.token.register_wake(wake);
 }
 
+#[cfg(feature = "net")]
+pub(crate) async fn cancellation_token_cancelled(token: &RssCancellationToken) {
+    token.token.cancelled().await;
+}
+
 pub fn trace_async_runtime_phase(
     phase: &str,
     elapsed_us: u128,

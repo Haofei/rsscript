@@ -1,6 +1,7 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 
+use crate::ResourceBudget;
 use crate::async_runtime::{NativeAsyncPending, spawn_tokio_native};
 use crate::channel::{ChannelError, RssStream, stream_from_iterator};
 use crate::diagnostics::Resource;
@@ -254,6 +255,14 @@ pub fn file_read_bytes<P: RuntimePath + ?Sized>(path: &P) -> Result<Vec<u8>, Fil
     read_path_bounded(path.as_path())
 }
 
+pub fn file_read_bytes_with_budget<P: RuntimePath + ?Sized>(
+    path: &P,
+    budget: &ResourceBudget,
+) -> Result<Vec<u8>, FileError> {
+    let mut file = std::fs::File::open(path.as_path())?;
+    read_file_remaining_with_budget(&mut file, budget)
+}
+
 pub fn file_read_bytes_from_offset<P: RuntimePath + ?Sized>(
     path: &P,
     offset: u64,
@@ -263,8 +272,25 @@ pub fn file_read_bytes_from_offset<P: RuntimePath + ?Sized>(
     read_file_remaining_bounded(&mut file)
 }
 
+pub fn file_read_bytes_from_offset_with_budget<P: RuntimePath + ?Sized>(
+    path: &P,
+    offset: u64,
+    budget: &ResourceBudget,
+) -> Result<Vec<u8>, FileError> {
+    let mut file = std::fs::File::open(path.as_path())?;
+    file.seek(SeekFrom::Start(offset))?;
+    read_file_remaining_with_budget(&mut file, budget)
+}
+
 pub fn file_read_string<P: RuntimePath + ?Sized>(path: &P) -> Result<String, FileError> {
     bytes_to_string(read_path_bounded(path.as_path())?)
+}
+
+pub fn file_read_string_with_budget<P: RuntimePath + ?Sized>(
+    path: &P,
+    budget: &ResourceBudget,
+) -> Result<String, FileError> {
+    bytes_to_string(file_read_bytes_with_budget(path, budget)?)
 }
 
 pub fn file_write_bytes<P: RuntimePath + ?Sized, B: RuntimeBytes + ?Sized>(
@@ -339,8 +365,18 @@ pub fn file_remove<P: RuntimePath + ?Sized>(path: &P) -> Result<(), FileError> {
 }
 
 pub fn file_read_all(file: &mut File) -> Result<Vec<u8>, FileError> {
+    file_read_all_with_budget(
+        file,
+        &ResourceBudget::new(RUNTIME_READ_CEILING_BYTES as u64),
+    )
+}
+
+pub fn file_read_all_with_budget(
+    file: &mut File,
+    budget: &ResourceBudget,
+) -> Result<Vec<u8>, FileError> {
     let original_position = file.inner.stream_position()?;
-    match read_file_remaining_bounded(&mut file.inner) {
+    match read_file_remaining_with_budget(&mut file.inner, budget) {
         Ok(bytes) => Ok(bytes),
         Err(error) => {
             let _ = file.inner.seek(SeekFrom::Start(original_position));
@@ -354,14 +390,30 @@ pub fn file_read_all_string(file: &mut File) -> Result<String, FileError> {
 }
 
 pub fn file_read_into(file: &mut File, buffer: &mut Vec<u8>) -> Result<bool, FileError> {
+    let budget = ResourceBudget::new(buffer.capacity() as u64);
+    file_read_into_with_budget(file, buffer, &budget)
+}
+
+pub fn file_read_into_with_budget(
+    file: &mut File,
+    buffer: &mut Vec<u8>,
+    budget: &ResourceBudget,
+) -> Result<bool, FileError> {
     let limit = buffer.capacity();
     buffer.clear();
     if limit == 0 {
         return Ok(false);
     }
+    let reservation = budget.try_reserve(limit).map_err(|error| {
+        FileError::new(
+            "ResourceBudget",
+            &format!("file read byte budget exhausted: {error}"),
+        )
+    })?;
     let bytes_read = Read::by_ref(&mut file.inner)
         .take(limit as u64)
         .read_to_end(buffer)?;
+    reservation.commit(bytes_read);
     Ok(bytes_read > 0)
 }
 
@@ -644,20 +696,41 @@ fn read_path_bounded(path: &std::path::Path) -> Result<Vec<u8>, FileError> {
 }
 
 fn read_file_remaining_bounded(file: &mut std::fs::File) -> Result<Vec<u8>, FileError> {
+    read_file_remaining_with_budget(
+        file,
+        &ResourceBudget::new(RUNTIME_READ_CEILING_BYTES as u64),
+    )
+}
+
+fn read_file_remaining_with_budget(
+    file: &mut std::fs::File,
+    budget: &ResourceBudget,
+) -> Result<Vec<u8>, FileError> {
     let position = file.stream_position()?;
     let metadata_len = file
         .metadata()
         .ok()
         .map(|metadata| metadata.len().saturating_sub(position));
-    read_bounded(file, metadata_len, RUNTIME_READ_CEILING_BYTES)
+    read_bounded_with_budget(file, metadata_len, RUNTIME_READ_CEILING_BYTES, budget)
 }
 
-fn read_bounded(
+fn read_bounded_with_budget(
     reader: &mut impl Read,
     metadata_len: Option<u64>,
     ceiling: usize,
+    budget: &ResourceBudget,
 ) -> Result<Vec<u8>, FileError> {
     let capacity = checked_read_capacity(metadata_len, ceiling)?;
+    let capacity_reservation = if capacity == 0 {
+        None
+    } else {
+        Some(budget.try_reserve(capacity).map_err(|error| {
+            FileError::new(
+                "ResourceBudget",
+                &format!("file read byte budget exhausted: {error}"),
+            )
+        })?)
+    };
     let mut bytes = Vec::with_capacity(capacity);
     let mut buffer = [0_u8; 8192];
     while bytes.len() < ceiling {
@@ -665,13 +738,27 @@ fn read_bounded(
         let read_len = remaining.min(buffer.len());
         let read = reader.read(&mut buffer[..read_len])?;
         if read == 0 {
+            if let Some(reservation) = capacity_reservation {
+                reservation.commit(bytes.len());
+            }
             return Ok(bytes);
+        }
+        if capacity_reservation.is_none() {
+            budget.try_consume(read).map_err(|error| {
+                FileError::new(
+                    "ResourceBudget",
+                    &format!("file read byte budget exhausted: {error}"),
+                )
+            })?;
         }
         bytes.extend_from_slice(&buffer[..read]);
     }
     let mut overflow_probe = [0_u8; 1];
     if reader.read(&mut overflow_probe)? != 0 {
         return Err(read_ceiling_error(ceiling.saturating_add(1), ceiling));
+    }
+    if let Some(reservation) = capacity_reservation {
+        reservation.commit(bytes.len());
     }
     Ok(bytes)
 }
@@ -854,10 +941,29 @@ mod tests {
     fn bounded_reader_rejects_data_beyond_reported_size() {
         let mut reader = std::io::Cursor::new(b"12345");
 
-        let error = read_bounded(&mut reader, Some(4), 4)
+        let error = read_bounded_with_budget(&mut reader, Some(4), 4, &ResourceBudget::new(4))
             .expect_err("reader growth beyond metadata should be rejected");
 
         assert_eq!(error.kind(), "FileTooLarge");
+    }
+
+    #[test]
+    fn file_reads_share_a_cumulative_byte_budget() {
+        let path =
+            std::env::temp_dir().join(format!("rsscript-budget-file-{}", std::process::id()));
+        file_write_string_to_path(&path, "1234").expect("test file should write");
+        let budget = ResourceBudget::new(6);
+
+        assert_eq!(
+            file_read_bytes_with_budget(&path, &budget).expect("first read should fit"),
+            b"1234"
+        );
+        let error = file_read_bytes_with_budget(&path, &budget)
+            .expect_err("second read should exceed the shared budget");
+        assert_eq!(error.kind(), "ResourceBudget");
+        assert!(error.message().contains("byte budget exhausted"));
+        assert_eq!(budget.bytes_used(), 4);
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! Terraform/OpenTofu IaC producer adapter for REIR.
 //! Converts rendered `.tf` IAM policy resources into granted capability facts.
 
-use std::collections::HashMap;
-use std::fs::{self, File};
+use std::collections::{HashMap, HashSet};
+use std::fs::{self, File, Metadata};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -50,16 +50,36 @@ pub fn terraform_dir_to_bundle_with_limits(
     root: &Path,
     limits: TerraformSourceLimits,
 ) -> Result<Bundle, String> {
+    let root = canonical_terraform_root(root)?;
     let mut files = Vec::new();
     let mut budget = TerraformSourceBudget::default();
-    collect_tf_files(root, 0, limits, &mut budget, &mut files)?;
+    let mut visited = HashSet::new();
+    collect_tf_files(
+        &root,
+        &root,
+        0,
+        limits,
+        &mut budget,
+        &mut visited,
+        &mut files,
+    )?;
     files.sort();
 
     let mut facts = Vec::new();
+    let mut actual_bytes = 0_u64;
     for file in files {
-        let text = read_tf_file(&file, limits.max_file_bytes)?;
+        let text = read_tf_file(&root, &file, limits.max_file_bytes)?;
+        actual_bytes = actual_bytes
+            .checked_add(text.len() as u64)
+            .ok_or_else(|| "Terraform source byte count overflow".to_owned())?;
+        if actual_bytes > limits.max_total_bytes {
+            return Err(format!(
+                "Terraform source traversal exceeded the {} byte limit while reading",
+                limits.max_total_bytes
+            ));
+        }
         let relative = file
-            .strip_prefix(root)
+            .strip_prefix(&root)
             .unwrap_or(&file)
             .to_string_lossy()
             .replace('\\', "/");
@@ -136,11 +156,26 @@ struct TerraformResourceBlock {
     line: usize,
 }
 
+fn canonical_terraform_root(root: &Path) -> Result<PathBuf, String> {
+    let metadata = fs::symlink_metadata(root)
+        .map_err(|error| format!("failed to inspect {}: {error}", root.display()))?;
+    if is_link_or_reparse_point(&metadata) {
+        return Err(format!(
+            "refusing Terraform source root that is a symlink or reparse point: {}",
+            root.display()
+        ));
+    }
+    fs::canonicalize(root)
+        .map_err(|error| format!("failed to canonicalize {}: {error}", root.display()))
+}
+
 fn collect_tf_files(
+    canonical_root: &Path,
     root: &Path,
     depth: usize,
     limits: TerraformSourceLimits,
     budget: &mut TerraformSourceBudget,
+    visited: &mut HashSet<PathBuf>,
     files: &mut Vec<PathBuf>,
 ) -> Result<(), String> {
     if depth > limits.max_depth {
@@ -152,16 +187,22 @@ fn collect_tf_files(
     }
     let metadata = fs::symlink_metadata(root)
         .map_err(|error| format!("failed to inspect {}: {error}", root.display()))?;
-    if metadata.file_type().is_symlink() {
+    if is_link_or_reparse_point(&metadata) {
         return Err(format!(
-            "refusing to follow symlink in Terraform source tree: {}",
+            "refusing to follow symlink or reparse point in Terraform source tree: {}",
             root.display()
         ));
     }
+    let canonical = fs::canonicalize(root)
+        .map_err(|error| format!("failed to canonicalize {}: {error}", root.display()))?;
+    ensure_beneath_root(canonical_root, &canonical)?;
     if metadata.is_file() {
-        if root.extension().is_some_and(|extension| extension == "tf") {
-            account_tf_file(root, metadata.len(), limits, budget)?;
-            files.push(root.to_path_buf());
+        if canonical
+            .extension()
+            .is_some_and(|extension| extension == "tf")
+        {
+            account_tf_file(&canonical, metadata.len(), limits, budget)?;
+            files.push(canonical);
         }
         return Ok(());
     }
@@ -171,11 +212,17 @@ fn collect_tf_files(
             root.display()
         ));
     }
+    if !visited.insert(canonical.clone()) {
+        return Err(format!(
+            "Terraform source traversal encountered a directory more than once: {}",
+            canonical.display()
+        ));
+    }
 
-    let entries = fs::read_dir(root).map_err(|error| {
+    let entries = fs::read_dir(&canonical).map_err(|error| {
         format!(
             "failed to read Terraform directory {}: {error}",
-            root.display()
+            canonical.display()
         )
     })?;
     for entry in entries {
@@ -184,21 +231,59 @@ fn collect_tf_files(
         let path = entry.path();
         let metadata = fs::symlink_metadata(&path)
             .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
-        if metadata.file_type().is_symlink() {
+        if is_link_or_reparse_point(&metadata) {
             return Err(format!(
-                "refusing to follow symlink in Terraform source tree: {}",
+                "refusing to follow symlink or reparse point in Terraform source tree: {}",
                 path.display()
             ));
         }
         if metadata.is_dir() {
-            collect_tf_files(&path, depth + 1, limits, budget, files)?;
+            collect_tf_files(
+                canonical_root,
+                &path,
+                depth + 1,
+                limits,
+                budget,
+                visited,
+                files,
+            )?;
         } else if metadata.is_file() && path.extension().is_some_and(|extension| extension == "tf")
         {
-            account_tf_file(&path, metadata.len(), limits, budget)?;
-            files.push(path);
+            let canonical = fs::canonicalize(&path)
+                .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))?;
+            ensure_beneath_root(canonical_root, &canonical)?;
+            account_tf_file(&canonical, metadata.len(), limits, budget)?;
+            files.push(canonical);
         }
     }
     Ok(())
+}
+
+fn ensure_beneath_root(root: &Path, path: &Path) -> Result<(), String> {
+    if path == root || path.starts_with(root) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Terraform source path escapes canonical root {}: {}",
+            root.display(),
+            path.display()
+        ))
+    }
+}
+
+fn is_link_or_reparse_point(metadata: &Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x0400;
+        if metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            return true;
+        }
+    }
+    false
 }
 
 fn account_tf_file(
@@ -237,33 +322,50 @@ fn account_tf_file(
     Ok(())
 }
 
-fn read_tf_file(path: &Path, max_bytes: u64) -> Result<String, String> {
-    let mut file =
-        File::open(path).map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+fn read_tf_file(canonical_root: &Path, path: &Path, max_bytes: u64) -> Result<String, String> {
+    let link_metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if is_link_or_reparse_point(&link_metadata) || !link_metadata.is_file() {
+        return Err(format!(
+            "Terraform source path changed to an unsupported file type: {}",
+            path.display()
+        ));
+    }
+    let canonical = fs::canonicalize(path)
+        .map_err(|error| format!("failed to canonicalize {}: {error}", path.display()))?;
+    ensure_beneath_root(canonical_root, &canonical)?;
+    let mut file = File::open(&canonical)
+        .map_err(|error| format!("failed to read {}: {error}", canonical.display()))?;
     let metadata = file
         .metadata()
-        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+        .map_err(|error| format!("failed to inspect {}: {error}", canonical.display()))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "Terraform source path is not a regular file: {}",
+            canonical.display()
+        ));
+    }
     if metadata.len() > max_bytes {
         return Err(format!(
             "Terraform source file {} exceeds the {max_bytes} byte limit",
-            path.display()
+            canonical.display()
         ));
     }
     let mut bytes = Vec::with_capacity(metadata.len() as usize);
     file.by_ref()
         .take(max_bytes.saturating_add(1))
         .read_to_end(&mut bytes)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+        .map_err(|error| format!("failed to read {}: {error}", canonical.display()))?;
     if bytes.len() as u64 > max_bytes {
         return Err(format!(
             "Terraform source file {} grew beyond the {max_bytes} byte limit while reading",
-            path.display()
+            canonical.display()
         ));
     }
     String::from_utf8(bytes).map_err(|error| {
         format!(
             "Terraform source file {} is not UTF-8: {error}",
-            path.display()
+            canonical.display()
         )
     })
 }
@@ -1014,6 +1116,26 @@ POLICY
                             .is_some_and(|reason| reason.contains("not proof"))
                 })
         }));
+
+        let mut required = bundle.facts[0].clone();
+        required.id = "required.s3.get".to_owned();
+        required.role = Some(FactRole::Required);
+        required.value = FactValue::True;
+        required.unknown_reason = None;
+        required.confidence.level = ConfidenceLevel::Declared;
+        required.acquisition_mode = AcquisitionMode::CompilerContract;
+        let reconciliation = crate::reconcile_capabilities(&[required], &bundle.facts);
+        assert!(
+            reconciliation
+                .iter()
+                .all(|item| item.kind != ReconciliationKind::Covered),
+            "source-template evidence must never prove deployed authorization"
+        );
+        assert!(
+            reconciliation
+                .iter()
+                .any(|item| item.kind == ReconciliationKind::UnknownCoverage)
+        );
     }
 
     #[test]
@@ -1286,6 +1408,25 @@ POLICY
         assert!(error.contains("refusing to follow symlink"), "{error}");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn terraform_source_traversal_rejects_symlink_loops() {
+        use std::os::unix::fs::symlink;
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "reir-terraform-symlink-loop-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(temp_dir.join("nested")).unwrap();
+        symlink(&temp_dir, temp_dir.join("nested/loop")).unwrap();
+
+        let error = terraform_dir_to_bundle(&temp_dir).expect_err("symlink loop must be rejected");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        assert!(error.contains("refusing to follow symlink"), "{error}");
+    }
+
     #[test]
     fn terraform_source_traversal_enforces_file_and_byte_budgets() {
         let temp_dir =
@@ -1315,10 +1456,21 @@ POLICY
             },
         )
         .expect_err("individual file bytes must be bounded");
+        let total_error = terraform_dir_to_bundle_with_limits(
+            &temp_dir,
+            TerraformSourceLimits {
+                max_files: 4,
+                max_depth: 4,
+                max_file_bytes: 16,
+                max_total_bytes: 7,
+            },
+        )
+        .expect_err("aggregate bytes must be bounded");
 
         let _ = std::fs::remove_dir_all(&temp_dir);
         assert!(file_error.contains("file limit"), "{file_error}");
         assert!(byte_error.contains("exceeding"), "{byte_error}");
+        assert!(total_error.contains("byte limit"), "{total_error}");
     }
 
     #[test]

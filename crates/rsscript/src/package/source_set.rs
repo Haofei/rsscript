@@ -1,10 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Deserialize;
 
 use crate::package::PackageReviewFileKind;
+
+const MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
+const SOURCE_FILE_MAX_BYTES: u64 = 4 * 1024 * 1024;
+const PACKAGE_SOURCE_MAX_FILES: usize = 20_000;
+const PACKAGE_SOURCE_MAX_BYTES: u64 = 512 * 1024 * 1024;
+const PACKAGE_SOURCE_MAX_DEPTH: usize = 64;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -307,8 +314,8 @@ pub(super) fn load_package_with_features(
     selected_features: Option<&[String]>,
 ) -> Result<LoadedPackage, String> {
     let manifest_path = package_dir.join("rsspkg.toml");
-    let manifest_source = fs::read_to_string(&manifest_path)
-        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
+    let manifest_source =
+        read_bounded_utf8_file(&manifest_path, MANIFEST_MAX_BYTES, "package manifest")?;
     let manifest: Manifest = toml::from_str(&manifest_source)
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
 
@@ -321,27 +328,35 @@ pub(super) fn load_package_with_features(
     let excluded_feature_interface_roots = all_interface_feature_paths(&manifest);
     let source_roots = default_paths(&manifest.sources.paths, "src");
     let test_roots = manifest.tests.paths.clone();
+    let mut budget = SourceBudget::default();
     let mut sources = Vec::new();
     sources.extend(read_package_sources_excluding(
         package_dir,
         &base_interface_roots,
         &excluded_feature_interface_roots,
         PackageReviewFileKind::Interface,
+        &mut budget,
     )?);
-    sources.extend(read_package_sources(
+    sources.extend(read_package_sources_excluding(
         package_dir,
         &selected_feature_interface_roots,
+        &[],
         PackageReviewFileKind::Interface,
+        &mut budget,
     )?);
-    sources.extend(read_package_sources(
+    sources.extend(read_package_sources_excluding(
         package_dir,
         &source_roots,
+        &[],
         PackageReviewFileKind::Source,
+        &mut budget,
     )?);
-    sources.extend(read_package_sources(
+    sources.extend(read_package_sources_excluding(
         package_dir,
         &test_roots,
+        &[],
         PackageReviewFileKind::Test,
+        &mut budget,
     )?);
     sources.sort_by(|left, right| left.path.cmp(&right.path));
     Ok(LoadedPackage {
@@ -354,8 +369,8 @@ pub(super) fn load_package_with_features(
 
 pub(super) fn load_package_manifest(package_dir: &Path) -> Result<Manifest, String> {
     let manifest_path = package_dir.join("rsspkg.toml");
-    let manifest_source = fs::read_to_string(&manifest_path)
-        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
+    let manifest_source =
+        read_bounded_utf8_file(&manifest_path, MANIFEST_MAX_BYTES, "package manifest")?;
     toml::from_str(&manifest_source)
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))
 }
@@ -439,19 +454,12 @@ fn default_paths(paths: &[String], default: &str) -> Vec<String> {
     }
 }
 
-fn read_package_sources(
-    package_dir: &Path,
-    roots: &[String],
-    kind: PackageReviewFileKind,
-) -> Result<Vec<PackageSource>, String> {
-    read_package_sources_excluding(package_dir, roots, &[], kind)
-}
-
 fn read_package_sources_excluding(
     package_dir: &Path,
     roots: &[String],
     excluded_roots: &[String],
     kind: PackageReviewFileKind,
+    budget: &mut SourceBudget,
 ) -> Result<Vec<PackageSource>, String> {
     let mut sources = Vec::new();
     let package_root = canonical_package_root(package_dir)?;
@@ -465,11 +473,10 @@ fn read_package_sources_excluding(
             continue;
         }
         let mut files = Vec::new();
-        collect_rsscript_files_excluding(&root_path, &excluded_roots, &mut files)?;
+        collect_rsscript_files_excluding(&root_path, &excluded_roots, &mut files, 0, budget)?;
         files.sort();
         for file in files {
-            let contents = fs::read_to_string(&file)
-                .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
+            let contents = read_bounded_utf8_file(&file, SOURCE_FILE_MAX_BYTES, "package source")?;
             let relative_path = super::relative_path(&package_root, &file);
             let display_path = package_dir.join(&relative_path).display().to_string();
             sources.push(PackageSource {
@@ -537,12 +544,18 @@ fn collect_rsscript_files_excluding(
     path: &Path,
     excluded_roots: &[PathBuf],
     files: &mut Vec<PathBuf>,
+    depth: usize,
+    budget: &mut SourceBudget,
 ) -> Result<(), String> {
+    budget.check_depth(depth, path)?;
     if excluded_roots.iter().any(|root| path == root) {
         return Ok(());
     }
     if path.is_file() {
         if super::is_rsscript_source_path(path) {
+            let metadata = fs::metadata(path)
+                .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+            budget.add_file(metadata.len(), path)?;
             files.push(path.to_path_buf());
         }
         return Ok(());
@@ -566,10 +579,167 @@ fn collect_rsscript_files_excluding(
         }
         let path = entry.path();
         if file_type.is_dir() {
-            collect_rsscript_files_excluding(&path, excluded_roots, files)?;
+            collect_rsscript_files_excluding(&path, excluded_roots, files, depth + 1, budget)?;
         } else if file_type.is_file() && super::is_rsscript_source_path(&path) {
+            let metadata = entry
+                .metadata()
+                .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+            budget.add_file(metadata.len(), &path)?;
             files.push(path);
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Default)]
+struct SourceBudget {
+    files: usize,
+    bytes: u64,
+}
+
+impl SourceBudget {
+    fn check_depth(&self, depth: usize, path: &Path) -> Result<(), String> {
+        if depth > PACKAGE_SOURCE_MAX_DEPTH {
+            return Err(format!(
+                "package source tree exceeded depth limit of {PACKAGE_SOURCE_MAX_DEPTH} at {}",
+                path.display()
+            ));
+        }
+        Ok(())
+    }
+
+    fn add_file(&mut self, size: u64, path: &Path) -> Result<(), String> {
+        if size > SOURCE_FILE_MAX_BYTES {
+            return Err(format!(
+                "package source {} exceeded per-file byte limit of {SOURCE_FILE_MAX_BYTES}",
+                path.display()
+            ));
+        }
+        self.files = self.files.saturating_add(1);
+        if self.files > PACKAGE_SOURCE_MAX_FILES {
+            return Err(format!(
+                "package source tree exceeded file limit of {PACKAGE_SOURCE_MAX_FILES}"
+            ));
+        }
+        self.bytes = self
+            .bytes
+            .checked_add(size)
+            .ok_or_else(|| "package source byte accounting overflowed".to_string())?;
+        if self.bytes > PACKAGE_SOURCE_MAX_BYTES {
+            return Err(format!(
+                "package source tree exceeded total byte limit of {PACKAGE_SOURCE_MAX_BYTES}"
+            ));
+        }
+        Ok(())
+    }
+}
+
+fn read_bounded_utf8_file(path: &Path, max_bytes: u64, label: &str) -> Result<String, String> {
+    let metadata = fs::metadata(path)
+        .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
+    if !metadata.is_file() {
+        return Err(format!(
+            "{label} must be a regular file: {}",
+            path.display()
+        ));
+    }
+    if metadata.len() > max_bytes {
+        return Err(format!(
+            "{label} {} exceeded byte limit of {max_bytes}",
+            path.display()
+        ));
+    }
+    let file = fs::File::open(path)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let mut bytes = Vec::with_capacity(metadata.len().min(max_bytes) as usize);
+    file.take(max_bytes + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!(
+            "{label} {} exceeded byte limit of {max_bytes}",
+            path.display()
+        ));
+    }
+    String::from_utf8(bytes)
+        .map_err(|error| format!("failed to read {} as UTF-8: {error}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "rsscript-source-budget-{label}-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ))
+    }
+
+    fn write_manifest(root: &Path) {
+        fs::write(
+            root.join("rsspkg.toml"),
+            "[package]\nname = \"budget\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+        )
+        .expect("manifest");
+    }
+
+    #[test]
+    fn rejects_oversized_manifest_before_parsing() {
+        let root = fixture("manifest");
+        fs::create_dir_all(&root).expect("root");
+        fs::write(
+            root.join("rsspkg.toml"),
+            vec![b'x'; MANIFEST_MAX_BYTES as usize + 1],
+        )
+        .expect("oversized manifest");
+
+        let error = load_package_manifest(&root).expect_err("manifest must be bounded");
+        assert!(error.contains("exceeded byte limit"), "{error}");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rejects_oversized_source_before_loading_contents() {
+        let root = fixture("source");
+        fs::create_dir_all(root.join("src")).expect("source root");
+        write_manifest(&root);
+        fs::write(
+            root.join("src/large.rss"),
+            vec![b'x'; SOURCE_FILE_MAX_BYTES as usize + 1],
+        )
+        .expect("oversized source");
+
+        let error = match load_package(&root) {
+            Ok(_) => panic!("source must be bounded"),
+            Err(error) => error,
+        };
+        assert!(error.contains("per-file byte limit"), "{error}");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
+
+    #[test]
+    fn rejects_source_tree_beyond_depth_limit() {
+        let root = fixture("depth");
+        let mut directory = root.join("src");
+        fs::create_dir_all(&directory).expect("source root");
+        write_manifest(&root);
+        for _ in 0..=PACKAGE_SOURCE_MAX_DEPTH {
+            directory.push("nested");
+        }
+        fs::create_dir_all(&directory).expect("deep source tree");
+        fs::write(
+            directory.join("main.rss"),
+            "fn main() -> Unit { return Unit }\n",
+        )
+        .expect("source");
+
+        let error = match load_package(&root) {
+            Ok(_) => panic!("depth must be bounded"),
+            Err(error) => error,
+        };
+        assert!(error.contains("exceeded depth limit"), "{error}");
+        fs::remove_dir_all(root).expect("cleanup");
+    }
 }

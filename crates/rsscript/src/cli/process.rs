@@ -18,6 +18,24 @@ pub(crate) fn run_bounded(
     timeout: Duration,
     output_cap: usize,
 ) -> Result<BoundedOutput, String> {
+    run_bounded_with_limits(
+        command,
+        operation,
+        timeout,
+        output_cap,
+        rss_process_guard::ProcessLimits::generated_program(),
+    )
+}
+
+pub(crate) fn run_bounded_with_limits(
+    command: &mut Command,
+    operation: &str,
+    timeout: Duration,
+    output_cap: usize,
+    limits: rss_process_guard::ProcessLimits,
+) -> Result<BoundedOutput, String> {
+    rss_process_guard::configure(command, limits)
+        .map_err(|error| format!("failed to configure {operation} resource limits: {error}"))?;
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     {
@@ -28,6 +46,8 @@ pub(crate) fn run_bounded(
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to start {operation}: {error}"))?;
+    let guard = rss_process_guard::ProcessGuard::attach(&child, limits)
+        .map_err(|error| format!("failed to guard {operation}: {error}"))?;
     let stdout = child
         .stdout
         .take()
@@ -51,7 +71,7 @@ pub(crate) fn run_bounded(
             break status;
         }
         if exceeded.load(Ordering::Acquire) {
-            terminate(&mut child);
+            terminate(&mut child, &guard);
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
             return Err(format!(
@@ -59,7 +79,7 @@ pub(crate) fn run_bounded(
             ));
         }
         if Instant::now() >= deadline {
-            terminate(&mut child);
+            terminate(&mut child, &guard);
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
             return Err(format!(
@@ -113,16 +133,8 @@ fn read_bounded(
     Ok((output, overflow))
 }
 
-fn terminate(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        let _ = Command::new("kill")
-            .arg("-KILL")
-            .arg(format!("-{}", child.id()))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
+fn terminate(child: &mut std::process::Child, guard: &rss_process_guard::ProcessGuard) {
+    let _ = guard.terminate();
     let _ = child.kill();
     let _ = child.wait();
 }

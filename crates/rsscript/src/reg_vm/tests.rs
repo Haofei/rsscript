@@ -339,6 +339,113 @@ mod register_window_tests {
         RegVm::new(Rc::new(unit), Vec::new(), HashMap::new())
     }
 
+    fn connected_tcp_pair() -> (TcpStream, TcpStream) {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("listener should bind");
+        let address = listener.local_addr().expect("listener address");
+        let client = TcpStream::connect(address).expect("client should connect");
+        let (server, _) = listener.accept().expect("server should accept");
+        (client, server)
+    }
+
+    #[test]
+    fn tcp_read_rejects_oversized_request_before_stream_lookup() {
+        let mut vm = empty_vm();
+        let error = vm
+            .tcp_stream_read(999, MAX_NETWORK_IO_BYTES as i64 + 1)
+            .expect_err("oversized reads must be rejected before allocation");
+
+        let rendered = error.display();
+        assert!(rendered.contains("exceeds"), "{rendered}");
+        assert!(!rendered.contains("unknown TcpStream"), "{rendered}");
+    }
+
+    #[test]
+    fn tcp_read_preflights_vm_memory_budget() {
+        let mut vm = empty_vm();
+        let (client, _server) = connected_tcp_pair();
+        vm.tcp_streams.insert(5, client);
+        vm.set_limits(VmLimits {
+            mem_budget: Some(8),
+            ..VmLimits::default()
+        });
+
+        let error = vm
+            .tcp_stream_read(5, 9)
+            .expect_err("read allocation must respect the VM memory budget");
+
+        assert!(error.display().contains("memory limit exceeded"));
+        assert_eq!(vm.live_bytes, 0);
+    }
+
+    #[test]
+    fn tcp_shutdown_removes_the_stream_handle() {
+        let mut vm = empty_vm();
+        let (client, _server) = connected_tcp_pair();
+        vm.tcp_streams.insert(7, client);
+
+        vm.tcp_stream_shutdown(7)
+            .expect("first shutdown should succeed");
+
+        assert!(!vm.tcp_streams.contains_key(&7));
+        let error = vm
+            .tcp_stream_shutdown(7)
+            .expect_err("closed handle must not remain usable");
+        assert!(error.display().contains("unknown TcpStream id `7`"));
+    }
+
+    #[test]
+    fn websocket_rejects_oversized_declared_payload_before_reading_it() {
+        let mut vm = empty_vm();
+        let (client, mut server) = connected_tcp_pair();
+        vm.websockets.insert(11, client);
+        let oversized = (MAX_NETWORK_IO_BYTES as u64 + 1).to_be_bytes();
+        server
+            .write_all(&[0x82, 127])
+            .expect("frame header should write");
+        server
+            .write_all(&oversized)
+            .expect("extended length should write");
+
+        let error = vm
+            .websocket_recv(11, WebSocketExpectedFrame::Binary)
+            .expect_err("oversized frame must be rejected from its header");
+
+        assert!(error.display().contains("16777216-byte limit"));
+    }
+
+    #[test]
+    fn websocket_close_removes_the_stream_handle() {
+        let mut vm = empty_vm();
+        let (client, _server) = connected_tcp_pair();
+        vm.websockets.insert(13, client);
+
+        vm.websocket_close(13)
+            .expect("first close should send a close frame");
+
+        assert!(!vm.websockets.contains_key(&13));
+        let error = vm
+            .websocket_close(13)
+            .expect_err("closed handle must not remain usable");
+        assert!(error.display().contains("unknown WebSocket id `13`"));
+    }
+
+    #[test]
+    fn websocket_peer_close_removes_the_stream_handle() {
+        let mut vm = empty_vm();
+        let (client, mut server) = connected_tcp_pair();
+        vm.websockets.insert(17, client);
+        server
+            .write_all(&[0x88, 0])
+            .expect("close frame should write");
+
+        let result = vm
+            .websocket_recv(17, WebSocketExpectedFrame::Binary)
+            .expect("close frame should be accepted");
+
+        assert!(result.is_none());
+        assert!(!vm.websockets.contains_key(&17));
+    }
+
     fn run_budgeted_instruction(
         code: Vec<RegInstr>,
         args: Vec<VmValue>,

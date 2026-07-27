@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 
 use crate::diagnostic::Diagnostic;
 
+mod artifact_store;
+mod authorization;
 mod check;
 mod contract;
 mod dependency;
@@ -37,6 +39,8 @@ pub(crate) const CARGO_OUTPUT_MAX_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const CARGO_METADATA_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
+pub use artifact_store::ArtifactStore;
+pub use authorization::{AuthorizedPackage, prepare_authorized_package};
 pub use check::check_package_dir;
 use dependency::{
     PackageDependencySpec, collect_dependency_interface_sources,
@@ -410,7 +414,8 @@ pub(crate) struct BoundedCommandOutput {
     pub stderr: Vec<u8>,
 }
 
-pub(crate) fn configure_reduced_build_environment(command: &mut Command) {
+#[doc(hidden)]
+pub fn configure_reduced_build_environment(command: &mut Command) {
     const ALLOWED: &[&str] = &[
         "PATH",
         "HOME",
@@ -451,6 +456,8 @@ pub(crate) fn run_bounded_command(
     timeout: Duration,
     output_cap: usize,
 ) -> Result<BoundedCommandOutput, String> {
+    rss_process_guard::configure(command, rss_process_guard::ProcessLimits::compiler_worker())
+        .map_err(|error| format!("failed to configure {operation} resource limits: {error}"))?;
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
     #[cfg(unix)]
     {
@@ -460,6 +467,11 @@ pub(crate) fn run_bounded_command(
     let mut child = command
         .spawn()
         .map_err(|error| format!("failed to start {operation}: {error}"))?;
+    let guard = rss_process_guard::ProcessGuard::attach(
+        &child,
+        rss_process_guard::ProcessLimits::compiler_worker(),
+    )
+    .map_err(|error| format!("failed to guard {operation}: {error}"))?;
     let stdout = child
         .stdout
         .take()
@@ -484,7 +496,7 @@ pub(crate) fn run_bounded_command(
             break status;
         }
         if output_exceeded.load(Ordering::Acquire) {
-            terminate_bounded_child(&mut child);
+            terminate_bounded_child(&mut child, &guard);
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
             return Err(format!(
@@ -492,7 +504,7 @@ pub(crate) fn run_bounded_command(
             ));
         }
         if Instant::now() >= deadline {
-            terminate_bounded_child(&mut child);
+            terminate_bounded_child(&mut child, &guard);
             let _ = stdout_reader.join();
             let _ = stderr_reader.join();
             return Err(format!(
@@ -520,16 +532,11 @@ pub(crate) fn run_bounded_command(
     })
 }
 
-fn terminate_bounded_child(child: &mut std::process::Child) {
-    #[cfg(unix)]
-    {
-        let _ = Command::new("kill")
-            .arg("-KILL")
-            .arg(format!("-{}", child.id()))
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
+fn terminate_bounded_child(
+    child: &mut std::process::Child,
+    guard: &rss_process_guard::ProcessGuard,
+) {
+    let _ = guard.terminate();
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -579,103 +586,14 @@ pub fn write_package_artifact_atomic(
     contents: &[u8],
     label: &str,
 ) -> Result<(), String> {
-    let canonical_root = canonical_checked_root(package_root, label)?;
+    let store = ArtifactStore::open(package_root)?;
     let relative = destination.strip_prefix(package_root).map_err(|_| {
         format!(
             "{label} destination escapes package root: {}",
             destination.display()
         )
     })?;
-    if relative.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    }) {
-        return Err(format!(
-            "{label} destination escapes package root: {}",
-            destination.display()
-        ));
-    }
-    let destination = canonical_root.join(relative);
-    let parent = destination.parent().ok_or_else(|| {
-        format!(
-            "{label} destination has no parent: {}",
-            destination.display()
-        )
-    })?;
-    ensure_real_package_directory(&canonical_root, parent, label)?;
-    if let Ok(metadata) = fs::symlink_metadata(&destination)
-        && (metadata.file_type().is_symlink() || !metadata.is_file())
-    {
-        return Err(format!(
-            "{label} destination must be a regular file, not a symlink: {}",
-            destination.display()
-        ));
-    }
-
-    let file_name = destination
-        .file_name()
-        .ok_or_else(|| format!("{label} destination has no file name"))?;
-    let temporary = parent.join(format!(
-        ".{}.{}.{}.tmp",
-        file_name.to_string_lossy(),
-        std::process::id(),
-        uuid::Uuid::new_v4()
-    ));
-    let result = (|| {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&temporary)
-            .map_err(|error| {
-                format!(
-                    "failed to create temporary {label} file {}: {error}",
-                    temporary.display()
-                )
-            })?;
-        file.write_all(contents)
-            .map_err(|error| format!("failed to write {label}: {error}"))?;
-        file.sync_all()
-            .map_err(|error| format!("failed to sync {label}: {error}"))?;
-        drop(file);
-        fs::rename(&temporary, &destination)
-            .map_err(|error| format!("failed to atomically publish {label}: {error}"))?;
-        if let Ok(parent_file) = File::open(parent) {
-            let _ = parent_file.sync_all();
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temporary);
-    }
-    result
-}
-
-fn ensure_real_package_directory(root: &Path, directory: &Path, label: &str) -> Result<(), String> {
-    let relative = directory.strip_prefix(root).map_err(|_| {
-        format!(
-            "{label} directory escapes package root: {}",
-            directory.display()
-        )
-    })?;
-    let mut current = root.to_path_buf();
-    for component in relative.components() {
-        current.push(component);
-        let metadata = fs::symlink_metadata(&current).map_err(|error| {
-            format!(
-                "failed to inspect {label} directory {}: {error}",
-                current.display()
-            )
-        })?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            return Err(format!(
-                "{label} directory must be a real directory, not a symlink: {}",
-                current.display()
-            ));
-        }
-    }
-    Ok(())
+    store.write_atomic(relative, contents, label)
 }
 
 pub(super) fn package_path_metadata(path: &Path, operation: &str) -> Result<fs::Metadata, String> {
@@ -753,7 +671,10 @@ pub(super) fn ensure_package_path_within_root(
 }
 
 fn should_skip_vendor_copy_entry(name: &str) -> bool {
-    matches!(name, ".git" | "target" | "vendor")
+    matches!(
+        name,
+        ".git" | "target" | "vendor" | ".rsscript-artifacts.lock"
+    )
 }
 
 pub(super) fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {

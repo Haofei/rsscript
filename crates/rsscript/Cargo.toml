@@ -21,6 +21,7 @@ test = false
 [dependencies]
 reir = { path = "../reir" }
 rss-native-abi = { path = "../native-abi", features = ["host"] }
+rss-process-guard = { path = "../process-guard" }
 # The reg-VM's native tensor intrinsics call the exact same `tensor_*` kernels
 # the AOT backend lowers to, so VM<->compiled results are bit-identical (the
 # slice-1 parity guarantee). That requires the compiler crate to link the
@@ -38,6 +39,7 @@ base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 flate2 = "1"
 fs2 = "0.4"
+rustix = { version = "1.1", features = ["fs"] }
 libc = "0.2"
 hex = "0.4"
 hmac = "0.12"

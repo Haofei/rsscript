@@ -19,6 +19,7 @@ mod metal;
 mod process;
 mod random;
 mod regex;
+mod resource_budget;
 mod resource_pool;
 #[cfg(feature = "net")]
 mod socket;
@@ -48,6 +49,7 @@ pub use math::*;
 pub use metal::*;
 pub use process::*;
 pub use random::*;
+pub use resource_budget::*;
 pub use resource_pool::*;
 #[cfg(feature = "net")]
 pub use socket::*;

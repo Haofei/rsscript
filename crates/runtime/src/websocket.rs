@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use crate::{NativeAsyncPending, spawn_tokio_native};
+use crate::{
+    NativeAsyncPending, ResourceBudget, RssCancellationToken, RssDeadline,
+    cancellation_token_cancelled, deadline_remaining_duration, spawn_tokio_native,
+};
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -8,6 +11,7 @@ type WebSocketStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 type WebSocketWriter = futures_util::stream::SplitSink<WebSocketStream, Message>;
 type WebSocketReader = futures_util::stream::SplitStream<WebSocketStream>;
+const MAX_WEBSOCKET_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebSocketError {
@@ -34,7 +38,10 @@ pub struct RssWebSocket {
 pub fn websocket_connect(url: &str) -> NativeAsyncPending<Result<RssWebSocket, WebSocketError>> {
     let url = url.to_string();
     spawn_tokio_native(async move {
-        let (stream, _) = tokio_tungstenite::connect_async(&url)
+        let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+            .max_message_size(Some(MAX_WEBSOCKET_MESSAGE_BYTES))
+            .max_frame_size(Some(MAX_WEBSOCKET_MESSAGE_BYTES));
+        let (stream, _) = tokio_tungstenite::connect_async_with_config(&url, Some(config), false)
             .await
             .map_err(|error| {
                 WebSocketError::new(format!("WebSocket connect to `{url}` failed: {error}"))
@@ -86,29 +93,62 @@ pub fn websocket_recv_text(
 ) -> NativeAsyncPending<Result<Option<String>, WebSocketError>> {
     let reader = Arc::clone(&socket.reader);
     spawn_tokio_native(async move {
-        loop {
-            let next = {
-                let mut reader = reader.lock().await;
-                reader.next().await
-            };
-            match next {
-                Some(Ok(Message::Text(text))) => return Ok(Some(text.to_string())),
-                Some(Ok(Message::Close(_))) | None => return Ok(None),
-                Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
-                Some(Ok(Message::Binary(_))) => {
-                    return Err(WebSocketError::new(
-                        "WebSocket received binary frame while waiting for text",
-                    ));
-                }
-                Some(Ok(Message::Frame(_))) => {}
-                Some(Err(error)) => {
-                    return Err(WebSocketError::new(format!(
-                        "WebSocket receive text failed: {error}"
-                    )));
-                }
+        let budget = ResourceBudget::new(MAX_WEBSOCKET_MESSAGE_BYTES as u64);
+        websocket_recv_text_inner(reader, &budget).await
+    })
+}
+
+pub fn websocket_recv_text_with_resources(
+    socket: &RssWebSocket,
+    budget: ResourceBudget,
+    cancellation: RssCancellationToken,
+    deadline: RssDeadline,
+) -> NativeAsyncPending<Result<Option<String>, WebSocketError>> {
+    let reader = Arc::clone(&socket.reader);
+    spawn_tokio_native(async move {
+        websocket_with_controls(
+            websocket_recv_text_inner(reader, &budget),
+            &cancellation,
+            &deadline,
+            "receive text",
+        )
+        .await
+    })
+}
+
+async fn websocket_recv_text_inner(
+    reader: Arc<tokio::sync::Mutex<WebSocketReader>>,
+    budget: &ResourceBudget,
+) -> Result<Option<String>, WebSocketError> {
+    loop {
+        let next = {
+            let mut reader = reader.lock().await;
+            reader.next().await
+        };
+        match next {
+            Some(Ok(Message::Text(text))) => {
+                budget.try_consume(text.len()).map_err(|error| {
+                    WebSocketError::new(format!(
+                        "WebSocket receive text byte budget exhausted: {error}"
+                    ))
+                })?;
+                return Ok(Some(text.to_string()));
+            }
+            Some(Ok(Message::Close(_))) | None => return Ok(None),
+            Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
+            Some(Ok(Message::Binary(_))) => {
+                return Err(WebSocketError::new(
+                    "WebSocket received binary frame while waiting for text",
+                ));
+            }
+            Some(Ok(Message::Frame(_))) => {}
+            Some(Err(error)) => {
+                return Err(WebSocketError::new(format!(
+                    "WebSocket receive text failed: {error}"
+                )));
             }
         }
-    })
+    }
 }
 
 pub fn websocket_recv_bytes(
@@ -116,29 +156,87 @@ pub fn websocket_recv_bytes(
 ) -> NativeAsyncPending<Result<Option<Vec<u8>>, WebSocketError>> {
     let reader = Arc::clone(&socket.reader);
     spawn_tokio_native(async move {
-        loop {
-            let next = {
-                let mut reader = reader.lock().await;
-                reader.next().await
-            };
-            match next {
-                Some(Ok(Message::Binary(bytes))) => return Ok(Some(bytes.to_vec())),
-                Some(Ok(Message::Close(_))) | None => return Ok(None),
-                Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
-                Some(Ok(Message::Text(_))) => {
-                    return Err(WebSocketError::new(
-                        "WebSocket received text frame while waiting for bytes",
-                    ));
-                }
-                Some(Ok(Message::Frame(_))) => {}
-                Some(Err(error)) => {
-                    return Err(WebSocketError::new(format!(
-                        "WebSocket receive bytes failed: {error}"
-                    )));
-                }
+        let budget = ResourceBudget::new(MAX_WEBSOCKET_MESSAGE_BYTES as u64);
+        websocket_recv_bytes_inner(reader, &budget).await
+    })
+}
+
+pub fn websocket_recv_bytes_with_resources(
+    socket: &RssWebSocket,
+    budget: ResourceBudget,
+    cancellation: RssCancellationToken,
+    deadline: RssDeadline,
+) -> NativeAsyncPending<Result<Option<Vec<u8>>, WebSocketError>> {
+    let reader = Arc::clone(&socket.reader);
+    spawn_tokio_native(async move {
+        websocket_with_controls(
+            websocket_recv_bytes_inner(reader, &budget),
+            &cancellation,
+            &deadline,
+            "receive bytes",
+        )
+        .await
+    })
+}
+
+async fn websocket_recv_bytes_inner(
+    reader: Arc<tokio::sync::Mutex<WebSocketReader>>,
+    budget: &ResourceBudget,
+) -> Result<Option<Vec<u8>>, WebSocketError> {
+    loop {
+        let next = {
+            let mut reader = reader.lock().await;
+            reader.next().await
+        };
+        match next {
+            Some(Ok(Message::Binary(bytes))) => {
+                budget.try_consume(bytes.len()).map_err(|error| {
+                    WebSocketError::new(format!(
+                        "WebSocket receive bytes byte budget exhausted: {error}"
+                    ))
+                })?;
+                return Ok(Some(bytes.to_vec()));
+            }
+            Some(Ok(Message::Close(_))) | None => return Ok(None),
+            Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
+            Some(Ok(Message::Text(_))) => {
+                return Err(WebSocketError::new(
+                    "WebSocket received text frame while waiting for bytes",
+                ));
+            }
+            Some(Ok(Message::Frame(_))) => {}
+            Some(Err(error)) => {
+                return Err(WebSocketError::new(format!(
+                    "WebSocket receive bytes failed: {error}"
+                )));
             }
         }
-    })
+    }
+}
+
+async fn websocket_with_controls<T>(
+    future: impl std::future::Future<Output = Result<T, WebSocketError>>,
+    cancellation: &RssCancellationToken,
+    deadline: &RssDeadline,
+    operation: &str,
+) -> Result<T, WebSocketError> {
+    let remaining = deadline_remaining_duration(deadline);
+    if remaining.is_zero() {
+        return Err(WebSocketError::new(format!(
+            "WebSocket {operation} deadline expired"
+        )));
+    }
+    tokio::select! {
+        biased;
+        _ = cancellation_token_cancelled(cancellation) => {
+            Err(WebSocketError::new(format!("WebSocket {operation} was cancelled")))
+        }
+        result = tokio::time::timeout(remaining, future) => {
+            result.map_err(|_| {
+                WebSocketError::new(format!("WebSocket {operation} deadline expired"))
+            })?
+        }
+    }
 }
 
 pub fn websocket_close(socket: &RssWebSocket) -> NativeAsyncPending<Result<(), WebSocketError>> {
@@ -244,6 +342,44 @@ mod tests {
                 .expect("pending receive should complete"),
             Some("pong".to_string())
         );
+        tokio_native_runtime()
+            .block_on(server)
+            .expect("server task should finish");
+    }
+
+    #[test]
+    fn websocket_receive_consumes_shared_budget() {
+        let listener = tokio_native_runtime()
+            .block_on(async { tokio::net::TcpListener::bind("127.0.0.1:0").await })
+            .expect("test listener should bind");
+        let port = listener
+            .local_addr()
+            .expect("listener should have addr")
+            .port();
+        let server = tokio_native_runtime().spawn(async move {
+            let (stream, _) = listener.accept().await.expect("client should connect");
+            let mut websocket = tokio_tungstenite::accept_async(stream)
+                .await
+                .expect("server websocket should accept");
+            websocket
+                .send(Message::Binary(vec![1, 2, 3, 4].into()))
+                .await
+                .expect("server should send");
+        });
+
+        let mut executor = Executor::new();
+        let socket = executor
+            .run_pending(super::websocket_connect(&format!("ws://127.0.0.1:{port}")))
+            .expect("websocket connect should succeed");
+        let error = executor
+            .run_pending(super::websocket_recv_bytes_with_resources(
+                &socket,
+                crate::ResourceBudget::new(2),
+                crate::cancellation_never(),
+                crate::deadline_after_ms(1_000),
+            ))
+            .expect_err("message should exceed shared budget");
+        assert!(error.message.contains("byte budget exhausted"));
         tokio_native_runtime()
             .block_on(server)
             .expect("server task should finish");

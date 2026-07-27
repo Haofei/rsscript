@@ -1,9 +1,15 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::ResourceBudget;
 #[cfg(feature = "net")]
 use crate::async_runtime::{NativeAsyncPending, run_pending, spawn_tokio_native};
 use crate::channel::{ChannelError, RssStream, stream_from_iterator};
+#[cfg(feature = "net")]
+use crate::{
+    RssCancellationToken, RssDeadline, cancellation_never, cancellation_token_cancelled,
+    deadline_after_ms, deadline_remaining_duration,
+};
 use std::io::{BufRead, Read};
 use std::str::Utf8Error;
 
@@ -502,6 +508,17 @@ pub fn http_get_async(url: &str) -> NativeAsyncPending<Result<Response, HttpErro
     spawn_tokio_native(async move { http_request_async("GET", &url, Vec::new(), None, None).await })
 }
 
+#[cfg(feature = "net")]
+pub fn http_get_async_with_resources(
+    url: &str,
+    budget: ResourceBudget,
+    cancellation: RssCancellationToken,
+    deadline: RssDeadline,
+) -> NativeAsyncPending<Result<Response, HttpError>> {
+    let request = http_request_new("GET", url, None, None);
+    http_send_async_with_resources(request, budget, cancellation, deadline)
+}
+
 pub fn http_request_json(url: &str, body: &str) -> HttpRequest {
     http_request_new(
         "POST",
@@ -551,7 +568,22 @@ pub fn http_request_with_header(mut request: HttpRequest, name: &str, value: &st
 
 #[cfg(feature = "net")]
 pub fn http_send_async(request: HttpRequest) -> NativeAsyncPending<Result<Response, HttpError>> {
-    spawn_tokio_native(async move { http_request_retry_async(request).await })
+    let budget = default_http_budget(&request);
+    let cancellation = cancellation_never();
+    let deadline = deadline_after_ms(normalized_http_timeout_ms(request.timeout_ms));
+    http_send_async_with_resources(request, budget, cancellation, deadline)
+}
+
+#[cfg(feature = "net")]
+pub fn http_send_async_with_resources(
+    request: HttpRequest,
+    budget: ResourceBudget,
+    cancellation: RssCancellationToken,
+    deadline: RssDeadline,
+) -> NativeAsyncPending<Result<Response, HttpError>> {
+    spawn_tokio_native(async move {
+        http_request_retry_with_resources(request, budget, cancellation, deadline).await
+    })
 }
 
 #[cfg(feature = "net")]
@@ -733,19 +765,21 @@ async fn http_request_once_async(
     headers: Vec<(String, String)>,
     content_type: Option<&str>,
     body: Option<String>,
+    budget: &ResourceBudget,
 ) -> Result<Response, HttpError> {
     let client = shared_http_client();
     let display_url = redact_http_url(url);
-    if body
-        .as_ref()
-        .is_some_and(|body| body.len() > MAX_HTTP_REQUEST_BYTES)
-    {
+    let body_len = body.as_ref().map_or(0, String::len);
+    if body_len > MAX_HTTP_REQUEST_BYTES {
         return Err(HttpError {
             message: format!(
                 "HTTP request body for {display_url} exceeds {MAX_HTTP_REQUEST_BYTES} bytes"
             ),
         });
     }
+    budget.try_consume(body_len).map_err(|error| HttpError {
+        message: format!("HTTP request byte budget exhausted for {display_url}: {error}"),
+    })?;
     let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| HttpError {
         message: format!("invalid HTTP method `{method}`: {error}"),
     })?;
@@ -792,6 +826,9 @@ async fn http_request_once_async(
                 ),
             });
         }
+        budget.try_consume(chunk.len()).map_err(|error| HttpError {
+            message: format!("HTTP response byte budget exhausted for {display_url}: {error}"),
+        })?;
         body_bytes.extend_from_slice(&chunk);
     }
     Ok(Response {
@@ -811,15 +848,25 @@ async fn http_request_timeout_async(
     timeout_ms: i64,
 ) -> Result<Response, HttpError> {
     let timeout_ms = normalized_http_timeout_ms(timeout_ms);
-    let display_url = redact_http_url(url);
-    tokio::time::timeout(
-        std::time::Duration::from_millis(timeout_ms as u64),
-        http_request_once_async(method, url, headers, content_type, body),
+    let request_bytes = body.as_ref().map_or(0, String::len);
+    let budget = ResourceBudget::new(
+        u64::try_from(request_bytes.saturating_add(MAX_HTTP_RESPONSE_BYTES)).unwrap_or(u64::MAX),
+    );
+    let cancellation = cancellation_never();
+    let deadline = deadline_after_ms(timeout_ms);
+    http_request_once_with_controls(
+        method,
+        url,
+        headers,
+        content_type,
+        body,
+        HttpControls {
+            budget: &budget,
+            cancellation: &cancellation,
+            deadline: &deadline,
+        },
     )
     .await
-    .map_err(|_| HttpError {
-        message: format!("HTTP request to {display_url} timed out after {timeout_ms}ms"),
-    })?
 }
 
 #[cfg(feature = "net")]
@@ -833,25 +880,89 @@ fn normalized_http_timeout_ms(timeout_ms: i64) -> i64 {
 
 #[cfg(feature = "net")]
 async fn http_request_retry_async(request: HttpRequest) -> Result<Response, HttpError> {
+    let budget = default_http_budget(&request);
+    let cancellation = cancellation_never();
+    let deadline = deadline_after_ms(normalized_http_timeout_ms(request.timeout_ms));
+    http_request_retry_with_resources(request, budget, cancellation, deadline).await
+}
+
+#[cfg(feature = "net")]
+fn default_http_budget(request: &HttpRequest) -> ResourceBudget {
+    let attempts = usize::try_from(request.attempts.clamp(1, MAX_HTTP_ATTEMPTS)).unwrap_or(1);
+    let per_attempt = request
+        .body
+        .as_ref()
+        .map_or(0, String::len)
+        .saturating_add(MAX_HTTP_RESPONSE_BYTES);
+    ResourceBudget::new(u64::try_from(per_attempt.saturating_mul(attempts)).unwrap_or(u64::MAX))
+}
+
+#[cfg(feature = "net")]
+async fn http_request_once_with_controls(
+    method: &str,
+    url: &str,
+    headers: Vec<(String, String)>,
+    content_type: Option<&str>,
+    body: Option<String>,
+    controls: HttpControls<'_>,
+) -> Result<Response, HttpError> {
+    let display_url = redact_http_url(url);
+    let remaining = deadline_remaining_duration(controls.deadline);
+    if remaining.is_zero() {
+        return Err(HttpError {
+            message: format!("HTTP request to {display_url} timed out"),
+        });
+    }
+    tokio::select! {
+        biased;
+        _ = cancellation_token_cancelled(controls.cancellation) => Err(HttpError {
+            message: format!("HTTP request to {display_url} was cancelled"),
+        }),
+        result = tokio::time::timeout(
+            remaining,
+            http_request_once_async(method, url, headers, content_type, body, controls.budget),
+        ) => result.map_err(|_| HttpError {
+            message: format!("HTTP request to {display_url} timed out"),
+        })?,
+    }
+}
+
+#[cfg(feature = "net")]
+#[derive(Clone, Copy)]
+struct HttpControls<'a> {
+    budget: &'a ResourceBudget,
+    cancellation: &'a RssCancellationToken,
+    deadline: &'a RssDeadline,
+}
+
+#[cfg(feature = "net")]
+async fn http_request_retry_with_resources(
+    request: HttpRequest,
+    budget: ResourceBudget,
+    cancellation: RssCancellationToken,
+    deadline: RssDeadline,
+) -> Result<Response, HttpError> {
     let attempts = request.attempts.clamp(1, MAX_HTTP_ATTEMPTS);
     let backoff_ms = request.backoff_ms.max(0) as u64;
     let total_timeout_ms = normalized_http_timeout_ms(request.timeout_ms);
-    let deadline =
-        tokio::time::Instant::now() + std::time::Duration::from_millis(total_timeout_ms as u64);
     let mut last_error = None;
     let mut last_response = None;
     for attempt in 0..attempts {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        let remaining = deadline_remaining_duration(&deadline);
         if remaining.is_zero() {
             break;
         }
-        match http_request_timeout_async(
+        match http_request_once_with_controls(
             &request.method,
             &request.url,
             request.headers.clone(),
             request.content_type.as_deref(),
             request.body.clone(),
-            i64::try_from(remaining.as_millis()).unwrap_or(i64::MAX),
+            HttpControls {
+                budget: &budget,
+                cancellation: &cancellation,
+                deadline: &deadline,
+            },
         )
         .await
         {
@@ -864,11 +975,23 @@ async fn http_request_retry_async(request: HttpRequest) -> Result<Response, Http
             Err(error) => last_error = Some(error),
         }
         if attempt + 1 < attempts && backoff_ms > 0 {
-            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let remaining = deadline_remaining_duration(&deadline);
             if remaining.is_zero() {
                 break;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms).min(remaining)).await;
+            let sleep = std::time::Duration::from_millis(backoff_ms).min(remaining);
+            tokio::select! {
+                biased;
+                _ = cancellation_token_cancelled(&cancellation) => {
+                    return Err(HttpError {
+                        message: format!(
+                            "HTTP request to {} was cancelled",
+                            redact_http_url(&request.url)
+                        ),
+                    });
+                }
+                _ = tokio::time::sleep(sleep) => {}
+            }
         }
     }
     if let Some(response) = last_response {
@@ -903,7 +1026,8 @@ pub fn http_response_is_success(response: &Response) -> bool {
 }
 
 pub fn config_load<P: RuntimePath + ?Sized>(path: &P) -> Result<ConfigValue, ConfigError> {
-    let text = std::fs::read_to_string(path.as_path())?;
+    let text =
+        crate::fs::file_read_string(path).map_err(|error| ConfigError::new(error.to_string()))?;
     let name = text
         .lines()
         .map(str::trim)
@@ -932,7 +1056,8 @@ pub fn config_store_name(store: &ConfigStore) -> String {
 }
 
 pub fn rule_loader_load_rules<P: RuntimePath + ?Sized>(path: &P) -> Result<Vec<Rule>, ConfigError> {
-    let text = std::fs::read_to_string(path.as_path())?;
+    let text =
+        crate::fs::file_read_string(path).map_err(|error| ConfigError::new(error.to_string()))?;
     let rules = text
         .lines()
         .map(str::trim)
@@ -1147,7 +1272,8 @@ pub fn db_close(fd: i64) {
 }
 
 pub fn image_load<P: RuntimePath + ?Sized>(path: &P) -> Result<Image, ImageError> {
-    let bytes = std::fs::read(path.as_path())?;
+    let bytes =
+        crate::fs::file_read_bytes(path).map_err(|error| ImageError::new(error.to_string()))?;
     Ok(Image {
         bytes,
         width: None,
@@ -1235,7 +1361,8 @@ where
 }
 
 pub fn json_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
-    let text = std::fs::read_to_string(path.as_path())?;
+    let text =
+        crate::fs::file_read_string(path).map_err(|error| JsonError::new(error.to_string()))?;
     json_parse(&text)
 }
 
@@ -1297,7 +1424,8 @@ pub fn json_values(items: &[JsonValue]) -> JsonValue {
 }
 
 pub fn toml_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
-    let text = std::fs::read_to_string(path.as_path())?;
+    let text =
+        crate::fs::file_read_string(path).map_err(|error| JsonError::new(error.to_string()))?;
     let value = text
         .parse::<toml::Value>()
         .map_err(|error| JsonError::new(error.to_string()))?;
@@ -1313,7 +1441,8 @@ pub fn yaml_parse(text: &str) -> Result<JsonValue, JsonError> {
 }
 
 pub fn yaml_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
-    let text = std::fs::read_to_string(path.as_path())?;
+    let text =
+        crate::fs::file_read_string(path).map_err(|error| JsonError::new(error.to_string()))?;
     yaml_parse(&text)
 }
 
@@ -1825,13 +1954,25 @@ pub fn json_array_fold<T: Clone>(
 
 pub fn row_buffer_new(size: i64) -> RowBuffer {
     RowBuffer {
-        bytes: Vec::with_capacity(size.max(0) as usize),
+        bytes: Vec::with_capacity(crate::resource_budget::bounded_allocation_size(
+            size,
+            "CSV row buffer allocation",
+        )),
     }
 }
 
 pub fn csv_read_into(file: &mut File, buffer: &mut RowBuffer) -> Result<(), CsvError> {
-    buffer.bytes.clear();
-    file.inner.read_to_end(&mut buffer.bytes)?;
+    let budget = ResourceBudget::new(crate::RUNTIME_READ_CEILING_BYTES as u64);
+    csv_read_into_with_budget(file, buffer, &budget)
+}
+
+pub fn csv_read_into_with_budget(
+    file: &mut File,
+    buffer: &mut RowBuffer,
+    budget: &ResourceBudget,
+) -> Result<(), CsvError> {
+    let bytes = crate::file_read_all_with_budget(file, budget)?;
+    buffer.bytes = bytes;
     Ok(())
 }
 
@@ -1843,12 +1984,20 @@ pub fn csv_rows<P: RuntimePath + ?Sized>(
     path: &P,
     buffer_size: i64,
 ) -> Result<RssStream<Row>, ChannelError> {
+    let capacity = usize::try_from(buffer_size.max(1))
+        .map_err(|_| ChannelError::new("CSV buffer size does not fit this platform"))?;
+    if capacity > crate::RUNTIME_READ_CEILING_BYTES {
+        return Err(ChannelError::new(&format!(
+            "CSV buffer size {capacity} exceeds runtime read ceiling of {} bytes",
+            crate::RUNTIME_READ_CEILING_BYTES
+        )));
+    }
     let file = std::fs::File::open(path.as_path())
         .map_err(|error| ChannelError::new(&format!("CSV row stream open failed: {error}")))?;
-    let capacity = buffer_size.max(1) as usize;
     Ok(stream_from_iterator(CsvRowsIterator {
         reader: std::io::BufReader::with_capacity(capacity, file),
         line: String::new(),
+        line_limit: crate::RUNTIME_READ_CEILING_BYTES,
         skipped_header: false,
         done: false,
     }))
@@ -1876,6 +2025,7 @@ pub fn csv_parse_row(buffer: &RowBuffer) -> Result<Row, CsvError> {
 struct CsvRowsIterator {
     reader: std::io::BufReader<std::fs::File>,
     line: String,
+    line_limit: usize,
     skipped_header: bool,
     done: bool,
 }
@@ -1889,12 +2039,24 @@ impl Iterator for CsvRowsIterator {
         }
         loop {
             self.line.clear();
-            match self.reader.read_line(&mut self.line) {
+            match self
+                .reader
+                .by_ref()
+                .take(self.line_limit.saturating_add(1) as u64)
+                .read_line(&mut self.line)
+            {
                 Ok(0) => {
                     self.done = true;
                     return None;
                 }
-                Ok(_) => {
+                Ok(read) => {
+                    if read > self.line_limit {
+                        self.done = true;
+                        return Some(Err(ChannelError::new(&format!(
+                            "CSV row exceeds runtime read ceiling of {} bytes",
+                            self.line_limit
+                        ))));
+                    }
                     let line = self.line.trim();
                     if line.is_empty() {
                         continue;
@@ -2142,6 +2304,77 @@ mod tests {
     }
 
     #[test]
+    fn http_streaming_response_consumes_shared_budget() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let addr = listener.local_addr().expect("listener addr should exist");
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("client should connect");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).expect("request should read");
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n\
+                      4\r\nabcd\r\n4\r\nefgh\r\n0\r\n\r\n",
+                )
+                .expect("chunked response should write");
+        });
+
+        let budget = ResourceBudget::new(6);
+        let mut executor = Executor::new();
+        let error = executor
+            .run_pending(http_get_async_with_resources(
+                &format!("http://{addr}/budget"),
+                budget.clone(),
+                cancellation_never(),
+                deadline_after_ms(1_000),
+            ))
+            .expect_err("response should exhaust the shared byte budget");
+        assert!(error.message.contains("byte budget exhausted"), "{error:?}");
+        assert!(budget.bytes_used() <= 6);
+        handle.join().expect("server thread should finish");
+    }
+
+    #[test]
+    fn http_wait_is_woken_by_cancellation() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        use std::time::Duration;
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("test listener should bind");
+        let addr = listener.local_addr().expect("listener addr should exist");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("client should connect");
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).expect("request should read");
+            std::thread::sleep(Duration::from_millis(200));
+        });
+        let mut source = crate::cancellation_source_new();
+        let token = crate::cancellation_source_token(&source);
+        let cancel = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            crate::cancellation_source_cancel(&mut source);
+        });
+
+        let started = std::time::Instant::now();
+        let mut executor = Executor::new();
+        let error = executor
+            .run_pending(http_get_async_with_resources(
+                &format!("http://{addr}/cancel"),
+                ResourceBudget::new(1024),
+                token,
+                deadline_after_ms(1_000),
+            ))
+            .expect_err("cancelled request should complete with an error");
+        assert!(error.message.contains("cancelled"), "{error:?}");
+        assert!(started.elapsed() < Duration::from_millis(150));
+        cancel.join().expect("cancellation thread should finish");
+        server.join().expect("server thread should finish");
+    }
+
+    #[test]
     fn http_retry_attempts_are_capped() {
         use std::io::{Read, Write};
         use std::net::TcpListener;
@@ -2214,6 +2447,34 @@ mod tests {
         assert!(started.elapsed() < Duration::from_millis(90));
         handle.join().expect("server thread should finish");
         assert_eq!(accepted.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn csv_read_into_uses_shared_byte_budget() {
+        let path = std::env::temp_dir().join(format!("rsscript-csv-budget-{}", std::process::id()));
+        std::fs::write(&path, b"name\nvalue\n").expect("CSV fixture should write");
+        let mut file = csv_open_read(&path).expect("CSV fixture should open");
+        let mut buffer = row_buffer_new(16);
+        let budget = ResourceBudget::new(4);
+
+        let error = csv_read_into_with_budget(&mut file, &mut buffer, &budget)
+            .expect_err("CSV read should exceed shared budget");
+        assert!(error.message.contains("byte budget exhausted"));
+        assert_eq!(budget.bytes_used(), 0);
+        assert!(buffer.bytes.is_empty());
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn csv_allocations_reject_sizes_above_runtime_ceiling() {
+        let oversized = crate::RUNTIME_READ_CEILING_BYTES as i64 + 1;
+        assert!(std::panic::catch_unwind(|| row_buffer_new(oversized)).is_err());
+        let missing = std::env::temp_dir().join("rsscript-csv-buffer-limit-missing");
+        let error = match csv_rows(&missing, oversized) {
+            Ok(_) => panic!("oversized CSV reader buffer should fail"),
+            Err(error) => error,
+        };
+        assert!(crate::channel_error_message(&error).contains("runtime read ceiling"));
     }
 
     #[test]
@@ -2304,5 +2565,38 @@ mod tests {
             !json_error_message(&error).is_empty(),
             "YAML parse error should carry a message"
         );
+    }
+
+    #[test]
+    fn domain_file_loaders_reject_oversized_inputs_before_reading() {
+        let path = std::env::temp_dir().join(format!(
+            "rsscript-domain-oversized-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let file = std::fs::File::create(&path).expect("oversized fixture should be created");
+        file.set_len(crate::fs::RUNTIME_READ_CEILING_BYTES as u64 + 1)
+            .expect("sparse oversized fixture should be sized");
+
+        assert!(
+            config_load(&path)
+                .expect_err("config must be bounded")
+                .to_string()
+                .contains("exceeds")
+        );
+        assert!(
+            image_load(&path)
+                .expect_err("image must be bounded")
+                .to_string()
+                .contains("exceeds")
+        );
+        assert!(
+            json_parse_file(&path)
+                .expect_err("JSON must be bounded")
+                .to_string()
+                .contains("exceeds")
+        );
+
+        let _ = std::fs::remove_file(path);
     }
 }

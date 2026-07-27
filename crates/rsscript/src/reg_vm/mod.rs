@@ -2226,6 +2226,7 @@ const CANCEL_POLL_INTERVAL: u64 = 1024;
 /// bookkeeping folded into the key term as a rough fudge factor.
 const MAP_ENTRY_BYTES: usize = std::mem::size_of::<VmValue>() * 2;
 const MAX_INTRINSIC_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_NETWORK_IO_BYTES: usize = 16 * 1024 * 1024;
 
 impl Default for VmLimits {
     fn default() -> Self {
@@ -7517,6 +7518,13 @@ enum WebSocketExpectedFrame {
     Binary,
 }
 
+struct WebSocketFrameHeader {
+    opcode: u8,
+    masked: bool,
+    len: u64,
+    mask: [u8; 4],
+}
+
 fn parse_ws_url(url: &str) -> Result<(String, String), VmValue> {
     let Some(rest) = url.strip_prefix("ws://") else {
         return Err(websocket_error_value(format!(
@@ -7540,6 +7548,11 @@ fn websocket_write_frame(
     opcode: u8,
     payload: &[u8],
 ) -> Result<(), VmValue> {
+    if payload.len() > MAX_NETWORK_IO_BYTES {
+        return Err(websocket_error_value(format!(
+            "WebSocket frame payload exceeds the {MAX_NETWORK_IO_BYTES}-byte limit"
+        )));
+    }
     let mut frame = Vec::new();
     frame.push(0x80 | (opcode & 0x0F));
     let mask_bit = 0x80;
@@ -7560,7 +7573,7 @@ fn websocket_write_frame(
         .map_err(|error| websocket_error_value(format!("WebSocket send failed: {error}")))
 }
 
-fn websocket_read_frame(stream: &mut TcpStream) -> Result<WebSocketFrame, VmValue> {
+fn websocket_read_frame_header(stream: &mut TcpStream) -> Result<WebSocketFrameHeader, VmValue> {
     let mut header = [0; 2];
     stream
         .read_exact(&mut header)
@@ -7587,18 +7600,32 @@ fn websocket_read_frame(stream: &mut TcpStream) -> Result<WebSocketFrame, VmValu
             websocket_error_value(format!("WebSocket frame mask read failed: {error}"))
         })?;
     }
-    let len = usize::try_from(len)
-        .map_err(|_| websocket_error_value("WebSocket frame payload is too large"))?;
+    Ok(WebSocketFrameHeader {
+        opcode,
+        masked,
+        len,
+        mask,
+    })
+}
+
+fn websocket_read_frame_payload(
+    stream: &mut TcpStream,
+    header: WebSocketFrameHeader,
+    len: usize,
+) -> Result<WebSocketFrame, VmValue> {
     let mut payload = vec![0; len];
     stream.read_exact(&mut payload).map_err(|error| {
         websocket_error_value(format!("WebSocket frame payload read failed: {error}"))
     })?;
-    if masked {
+    if header.masked {
         for (index, byte) in payload.iter_mut().enumerate() {
-            *byte ^= mask[index % 4];
+            *byte ^= header.mask[index % 4];
         }
     }
-    Ok(WebSocketFrame { opcode, payload })
+    Ok(WebSocketFrame {
+        opcode: header.opcode,
+        payload,
+    })
 }
 
 fn process_run_output(command: &str, args: &[String]) -> Result<VmProcessOutput, VmValue> {

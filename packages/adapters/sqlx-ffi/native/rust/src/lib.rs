@@ -213,9 +213,9 @@ fn query_strings_with_limits(
         while let Some(row) = std::future::poll_fn(|context| rows.as_mut().poll_next(context)).await
         {
             let row = row.map_err(|error| error.to_string())?;
-            let value: String = row.try_get(0).map_err(|error| error.to_string())?;
-            account_value(&value, values.len(), &mut bytes, limits)?;
-            values.push(value);
+            let value: &str = row.try_get(0).map_err(|error| error.to_string())?;
+            account_value(value, values.len(), &mut bytes, limits)?;
+            values.push(value.to_string());
         }
         Ok(values)
     })
@@ -250,15 +250,13 @@ fn query_one_string_with_limits(
             .fetch_optional(&pool)
             .await
             .map_err(|error| error.to_string())?;
-        let value = row
-            .map(|row| row.try_get::<String, _>(0))
-            .transpose()
-            .map_err(|error| error.to_string())?;
-        if let Some(value) = &value {
-            let mut bytes = 0;
-            account_value(value, 0, &mut bytes, limits)?;
-        }
-        Ok(value)
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let value: &str = row.try_get(0).map_err(|error| error.to_string())?;
+        let mut bytes = 0;
+        account_value(value, 0, &mut bytes, limits)?;
+        Ok(Some(value.to_string()))
     })
 }
 
