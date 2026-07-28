@@ -11,8 +11,14 @@ use std::sync::{Arc, Condvar, Mutex, mpsc as std_mpsc};
 use std::time::Duration;
 
 use crate::async_runtime::{
-    AsyncPoll, Context, Pending, RssCancellationToken, WakeHandle, cancellation_token_register_wake,
+    AsyncPoll, Context, Pending, RssCancellationToken, WakeHandle, cancellation_token_is_cancelled,
+    cancellation_token_register_wake,
 };
+use crate::{RssDeadline, cancellation_never, deadline_after_ms, deadline_remaining_duration};
+
+const DEFAULT_STREAM_COLLECT_MAX_ITEMS: usize = 1_000_000;
+const DEFAULT_STREAM_COLLECT_TIMEOUT_MS: i64 = 60_000;
+const STREAM_COLLECT_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
 /// Opaque channel error surfaced to RSScript. (Variant matching — `Closed` vs
 /// `Cancelled` vs `InvalidCapacity` — is deferred; for now the message
@@ -430,19 +436,38 @@ impl<T> Pending<Result<Option<T>, ChannelError>> for StreamNextPending<'_, T> {
 }
 
 pub fn stream_collect_list<T>(stream: &RssStream<T>) -> Result<Vec<T>, ChannelError> {
+    stream_collect_list_with_limits(
+        stream,
+        DEFAULT_STREAM_COLLECT_MAX_ITEMS,
+        &cancellation_never(),
+        &deadline_after_ms(DEFAULT_STREAM_COLLECT_TIMEOUT_MS),
+    )
+}
+
+pub fn stream_collect_list_with_limits<T>(
+    stream: &RssStream<T>,
+    max_items: usize,
+    cancellation: &RssCancellationToken,
+    deadline: &RssDeadline,
+) -> Result<Vec<T>, ChannelError> {
+    if max_items == 0 {
+        return Err(ChannelError::new(
+            "stream collect_list max_items must be positive",
+        ));
+    }
     let mut values = Vec::new();
     let mut backend = stream.backend.borrow_mut();
     match &mut *backend {
         RssStreamBackend::Iterator(iterator) => {
             for item in iterator {
-                values.push(item?);
+                collect_push(&mut values, item?, max_items)?;
             }
             Ok(values)
         }
         RssStreamBackend::Receiver(receiver) => {
             let mut state = receiver.state.borrow_mut();
             while let Some(value) = state.queue.pop_front() {
-                values.push(value);
+                collect_push(&mut values, value, max_items)?;
             }
             if state.senders == 0 {
                 Ok(values)
@@ -458,20 +483,39 @@ pub fn stream_collect_list<T>(stream: &RssStream<T>) -> Result<Vec<T>, ChannelEr
                 .lock()
                 .expect("external stream lock poisoned");
             loop {
+                if cancellation_token_is_cancelled(cancellation) {
+                    return Err(ChannelError::new("stream collect_list was cancelled"));
+                }
                 while let Some(item) = state.items.pop_front() {
                     external.ready.notify_all();
-                    values.push(item?);
+                    collect_push(&mut values, item?, max_items)?;
                 }
                 if state.disconnected {
                     return Ok(values);
                 }
-                state = external
+                let remaining = deadline_remaining_duration(deadline);
+                if remaining.is_zero() {
+                    return Err(ChannelError::new("stream collect_list deadline expired"));
+                }
+                let wait = remaining.min(STREAM_COLLECT_POLL_INTERVAL);
+                let (next, _) = external
                     .ready
-                    .wait(state)
+                    .wait_timeout(state, wait)
                     .expect("external stream condvar wait poisoned");
+                state = next;
             }
         }
     }
+}
+
+fn collect_push<T>(values: &mut Vec<T>, value: T, max_items: usize) -> Result<(), ChannelError> {
+    if values.len() >= max_items {
+        return Err(ChannelError::new(
+            "stream collect_list item budget exhausted",
+        ));
+    }
+    values.push(value);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -690,5 +734,30 @@ mod tests {
 
         assert_eq!(executor.run_pending(stream_next(&stream)).unwrap(), Some(1));
         assert_eq!(stream_collect_list(&stream).unwrap(), vec![2, 3]);
+    }
+
+    #[test]
+    fn stream_collect_enforces_item_budget() {
+        let stream = stream_from_list(vec![1_i64, 2, 3]);
+        let error = stream_collect_list_with_limits(
+            &stream,
+            2,
+            &cancellation_never(),
+            &deadline_after_ms(1_000),
+        )
+        .expect_err("third item should exceed the budget");
+        assert!(channel_error_message(&error).contains("item budget"));
+    }
+
+    #[test]
+    fn stream_collect_observes_cancellation() {
+        let (_sender, receiver) = std_mpsc::sync_channel::<Result<i64, ChannelError>>(1);
+        let stream = stream_from_external_receiver(receiver);
+        let mut source = crate::cancellation_source_new();
+        let token = crate::cancellation_source_token(&source);
+        crate::cancellation_source_cancel(&mut source);
+        let error = stream_collect_list_with_limits(&stream, 10, &token, &deadline_after_ms(1_000))
+            .expect_err("cancelled collection should stop");
+        assert!(channel_error_message(&error).contains("cancelled"));
     }
 }

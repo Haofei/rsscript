@@ -28,6 +28,15 @@ pub struct ArtifactStore {
     root_dir: File,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DirectoryCommitOutcome {
+    Committed,
+    CommittedWithCleanupWarning {
+        backup: Option<PathBuf>,
+        warnings: Vec<String>,
+    },
+}
+
 impl ArtifactStore {
     pub fn open(package_root: &Path) -> Result<Self, String> {
         let root = canonical_checked_root(package_root, "package artifact store")?;
@@ -182,8 +191,10 @@ impl ArtifactStore {
     }
 
     /// Build a complete directory in a private sibling and publish it while
-    /// holding the package mutation lock. If publication fails after moving the
-    /// previous tree aside, the old tree is restored.
+    /// holding the package mutation lock. Before the staging rename, failures
+    /// are `Err` and the old tree is restored. Once staging is renamed to the
+    /// destination, the operation is committed; later durability or backup
+    /// cleanup failures are returned as `CommittedWithCleanupWarning`.
     ///
     /// Tree population uses portable path-based copy APIs after rejecting
     /// links. Unlike Unix file publication, it cannot hold every descendant by
@@ -195,7 +206,7 @@ impl ArtifactStore {
         relative: impl AsRef<Path>,
         label: &str,
         populate: impl FnOnce(&Path) -> Result<(), String>,
-    ) -> Result<(), String> {
+    ) -> Result<DirectoryCommitOutcome, String> {
         let relative = checked_relative(relative.as_ref(), label)?;
         let destination = self.checked_portable_path(relative, label, false)?;
         let parent = destination
@@ -251,13 +262,13 @@ impl ArtifactStore {
                 }
                 return Err(format!("failed to publish {label}: {error}"));
             }
-            sync_directory(parent)?;
-            if had_destination {
-                fs::remove_dir_all(&backup)
-                    .map_err(|error| format!("failed to remove old {label}: {error}"))?;
-                sync_directory(parent)?;
-            }
-            Ok(())
+            Ok(finish_committed_directory(
+                parent,
+                had_destination.then_some(backup.as_path()),
+                label,
+                sync_directory,
+                |path| fs::remove_dir_all(path),
+            ))
         })();
         if result.is_err() {
             let _ = fs::remove_dir_all(&staging);
@@ -406,6 +417,42 @@ impl ArtifactStore {
             let _ = fs::remove_file(&temporary);
         }
         result
+    }
+}
+
+fn finish_committed_directory(
+    parent: &Path,
+    backup: Option<&Path>,
+    label: &str,
+    mut sync: impl FnMut(&Path) -> Result<(), String>,
+    mut remove: impl FnMut(&Path) -> std::io::Result<()>,
+) -> DirectoryCommitOutcome {
+    let mut warnings = Vec::new();
+    if let Err(error) = sync(parent) {
+        warnings.push(format!(
+            "{label} was published but its parent directory could not be synchronized: {error}"
+        ));
+    }
+    let mut retained_backup = None;
+    if let Some(backup) = backup {
+        if let Err(error) = remove(backup) {
+            retained_backup = Some(backup.to_path_buf());
+            warnings.push(format!(
+                "{label} was published but the old backup could not be removed: {error}"
+            ));
+        } else if let Err(error) = sync(parent) {
+            warnings.push(format!(
+                "{label} was published and its backup removed, but the parent directory could not be synchronized: {error}"
+            ));
+        }
+    }
+    if warnings.is_empty() {
+        DirectoryCommitOutcome::Committed
+    } else {
+        DirectoryCommitOutcome::CommittedWithCleanupWarning {
+            backup: retained_backup,
+            warnings,
+        }
     }
 }
 
@@ -847,6 +894,47 @@ mod tests {
         assert!(error.contains("byte limit of 4"), "{error}");
         drop(store);
         fs::remove_dir_all(root).expect("fixture cleanup");
+    }
+
+    #[test]
+    fn post_publish_cleanup_failure_reports_committed_warning() {
+        let parent = Path::new("/virtual/store");
+        let backup = parent.join("old.backup");
+        let outcome = finish_committed_directory(
+            parent,
+            Some(&backup),
+            "vendor directory",
+            |_| Ok(()),
+            |_| Err(std::io::Error::other("injected cleanup failure")),
+        );
+
+        assert_eq!(
+            outcome,
+            DirectoryCommitOutcome::CommittedWithCleanupWarning {
+                backup: Some(backup),
+                warnings: vec![
+                    "vendor directory was published but the old backup could not be removed: injected cleanup failure"
+                        .to_string()
+                ],
+            }
+        );
+    }
+
+    #[test]
+    fn post_publish_sync_failure_does_not_report_not_committed() {
+        let parent = Path::new("/virtual/store");
+        let outcome = finish_committed_directory(
+            parent,
+            None,
+            "vendor directory",
+            |_| Err("injected sync failure".to_string()),
+            |_| Ok(()),
+        );
+
+        assert!(matches!(
+            outcome,
+            DirectoryCommitOutcome::CommittedWithCleanupWarning { backup: None, .. }
+        ));
     }
 
     #[cfg(unix)]

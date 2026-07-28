@@ -7,9 +7,10 @@ use sha2::{Digest, Sha256};
 use super::lock::{package_checksum, package_native_hash};
 use super::source_set::load_package;
 use super::{
-    ArtifactStore, PackageIdentity, PackageRisk, PackageVendorEntry, PackageVendorReport,
-    PackageVendorUnresolved, canonical_checked_root, canonical_path_label, copy_package_directory,
-    package_dependency_spec, package_identity, sanitize_vendor_path_component,
+    ArtifactStore, DirectoryCommitOutcome, PackageIdentity, PackageRisk, PackageVendorEntry,
+    PackageVendorReport, PackageVendorUnresolved, canonical_checked_root, canonical_path_label,
+    copy_package_directory, package_dependency_spec, package_identity,
+    sanitize_vendor_path_component,
 };
 
 pub fn vendor_package_dir(
@@ -51,10 +52,11 @@ pub fn vendor_package_dir(
     });
     unresolved.sort_by(|left, right| left.name.cmp(&right.name));
 
+    let mut commit_warnings = Vec::new();
     if !dry_run {
         let metadata = serde_json::to_string_pretty(&entries)
             .expect("vendor metadata JSON serialization should not fail");
-        store
+        let outcome = store
             .as_ref()
             .expect("non-dry vendor operation has an artifact store")
             .replace_directory("vendor", "vendor directory", |staging| {
@@ -69,18 +71,24 @@ pub fn vendor_package_dir(
                 fs::write(staging.join("rss-vendor.json"), metadata.as_bytes())
                     .map_err(|error| format!("failed to stage vendor metadata: {error}"))
             })?;
+        if let DirectoryCommitOutcome::CommittedWithCleanupWarning { warnings, .. } = outcome {
+            commit_warnings = warnings;
+        }
     }
 
     let ok = unresolved.is_empty();
-    let risk = if ok {
+    let risk = if !commit_warnings.is_empty() {
+        PackageRisk::Elevated
+    } else if ok {
         PackageRisk::Low
     } else {
         PackageRisk::Unknown
     };
-    let reasons = unresolved
+    let mut reasons = unresolved
         .iter()
         .map(|dependency| format!("{} unresolved: {}", dependency.name, dependency.reason))
         .collect::<Vec<_>>();
+    reasons.extend(commit_warnings);
 
     Ok(PackageVendorReport {
         package: package_identity(&package.manifest),

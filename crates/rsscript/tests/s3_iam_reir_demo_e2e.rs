@@ -332,7 +332,7 @@ fn s3_iam_reir_demo_pr_review_comment_matches_golden_output() {
         &required,
         &grants,
         &reconciliations,
-        reir::GatePolicy::default(),
+        reir::GatePolicy::development(),
     );
     let comment = reir::format_pr_review_comment(&decision, &required, &grants, &reconciliations);
     assert_eq!(comment, read_demo_text(&demo_dir, "expected/pr-comment.md"));

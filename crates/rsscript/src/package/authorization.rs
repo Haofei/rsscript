@@ -415,8 +415,11 @@ fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn set_private_directory_permissions(_path: &Path) -> Result<(), String> {
-    Ok(())
+fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
+    Err(format!(
+        "native authorization snapshots require verifiable private directory ownership and ACLs; this platform backend is unavailable for {}",
+        path.display()
+    ))
 }
 
 fn make_tree_read_only(root: &Path) -> Result<(), String> {
@@ -548,6 +551,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
     #[test]
     fn successful_native_authorization_captures_checked_build_inputs() {
         let root = pure_package_fixture();
@@ -572,6 +576,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
     #[test]
     fn authorized_native_snapshot_is_stable_after_source_mutation() {
         let root = pure_package_fixture();
@@ -598,6 +603,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
     #[test]
     fn cloned_aot_lowering_input_keeps_stable_snapshotted_native_paths() {
         let root = pure_package_fixture();
@@ -627,6 +633,7 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[cfg(unix)]
     #[test]
     fn identical_authorizations_reuse_content_addressed_snapshot_paths() {
         let root = pure_package_fixture();
@@ -644,6 +651,26 @@ mod tests {
         assert_eq!(
             first.lowering_input().native_dependencies[0].path,
             second.lowering_input().native_dependencies[0].path
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn native_authorization_fails_closed_without_private_acl_enforcement() {
+        let root = pure_package_fixture();
+        add_native_dependency(&root);
+        let lock = lock_package_dir(&root).expect("fixture lock");
+        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+            .expect("fixture lockfile");
+
+        let error = prepare_authorized_package(&root)
+            .expect_err("native authorization must require private cache enforcement");
+        assert!(
+            error.contains("private owner and ACL enforcement")
+                || error.contains("platform backend is unavailable"),
+            "{error}"
         );
 
         let _ = fs::remove_dir_all(root);

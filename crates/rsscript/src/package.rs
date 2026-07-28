@@ -40,7 +40,7 @@ pub(crate) const CARGO_OUTPUT_MAX_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const CARGO_METADATA_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
-pub use artifact_store::ArtifactStore;
+pub use artifact_store::{ArtifactStore, DirectoryCommitOutcome};
 pub use authorization::{AuthorizedPackage, prepare_authorized_package};
 pub use check::check_package_dir;
 use dependency::{

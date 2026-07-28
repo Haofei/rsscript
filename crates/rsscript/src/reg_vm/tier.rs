@@ -382,9 +382,11 @@ fn finish_native_compile_failure(native: &mut NativeState, admission: NativeComp
     }
 }
 
-/// Atomically admits all emitted ids or none. Cranelift has already allocated
-/// rejected output in `NativeModule`; omitting it from dispatch caches bounds
-/// admitted code but does not reclaim executable memory.
+/// Admit successfully emitted ids. Baseline and optimized modules reserve fixed
+/// Cranelift arenas from one shared hard budget; codegen cannot grow beyond those
+/// mappings. Compile-time exhaustion stops subsequent attempts; it does not
+/// discard the current successfully emitted function and leave unreachable code
+/// resident.
 #[cfg(feature = "native-jit")]
 fn finish_native_compile(
     native: &mut NativeState,

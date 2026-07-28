@@ -24,6 +24,12 @@ pub struct GatePolicy {
 
 impl Default for GatePolicy {
     fn default() -> Self {
+        Self::production()
+    }
+}
+
+impl GatePolicy {
+    pub fn development() -> Self {
         Self {
             fail_on_missing: true,
             fail_on_unknown: false,
@@ -31,9 +37,7 @@ impl Default for GatePolicy {
             require_verified_capabilities: false,
         }
     }
-}
 
-impl GatePolicy {
     pub fn production() -> Self {
         Self {
             fail_on_missing: true,
@@ -41,6 +45,17 @@ impl GatePolicy {
             fail_on_excess: true,
             require_verified_capabilities: true,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GatePolicy;
+
+    #[test]
+    fn default_policy_is_fail_closed() {
+        assert_eq!(GatePolicy::default(), GatePolicy::production());
+        assert_ne!(GatePolicy::development(), GatePolicy::production());
     }
 }
 

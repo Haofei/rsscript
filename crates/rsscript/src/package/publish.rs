@@ -303,8 +303,11 @@ fn package_index_unsafe_boundary(
         .native
         .as_ref()
         .and_then(|native| native.rust.as_ref())
-        .and_then(|native| native.effective_unsafe_policy())
-        .is_some_and(|policy| policy != "forbid")
+        .is_some_and(|native| {
+            native
+                .effective_unsafe_policies()
+                .has_non_forbidden_boundary()
+        })
         || native_check.is_some_and(|native| native.unsafe_detected)
 }
 

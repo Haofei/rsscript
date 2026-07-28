@@ -19,6 +19,34 @@ const SOURCE_EVIDENCE_REASON: &str =
 const MAX_TERRAFORM_PARSE_DIAGNOSTICS: usize = 1_024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerraformPlanLimits {
+    pub max_input_bytes: usize,
+    pub max_json_depth: usize,
+    pub max_json_nodes: usize,
+    pub max_resources: usize,
+    pub max_facts: usize,
+}
+
+impl Default for TerraformPlanLimits {
+    fn default() -> Self {
+        Self {
+            max_input_bytes: 32 * 1024 * 1024,
+            max_json_depth: 64,
+            max_json_nodes: 1_000_000,
+            max_resources: 100_000,
+            max_facts: 250_000,
+        }
+    }
+}
+
+#[derive(Default)]
+struct TerraformPlanBudget {
+    json_nodes: usize,
+    resources: usize,
+    facts: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TerraformSourceLimits {
     pub max_files: usize,
     pub max_depth: usize,
@@ -861,8 +889,24 @@ fn line_for_offset(text: &str, offset: usize) -> usize {
 /// Parse `terraform plan -json` (or `terraform show -json`) output into REIR grant facts.
 /// This handles the structured JSON plan format (resource_changes with after values).
 pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> {
+    terraform_plan_json_to_bundle_with_limits(plan_json, TerraformPlanLimits::default())
+}
+
+pub fn terraform_plan_json_to_bundle_with_limits(
+    plan_json: &str,
+    limits: TerraformPlanLimits,
+) -> Result<Bundle, String> {
+    if plan_json.len() > limits.max_input_bytes {
+        return Err(format!(
+            "Terraform plan JSON is {} bytes, exceeding the {} byte limit",
+            plan_json.len(),
+            limits.max_input_bytes
+        ));
+    }
     let plan: Value = serde_json::from_str(plan_json)
         .map_err(|e| format!("failed to parse terraform plan JSON: {e}"))?;
+    let mut budget = TerraformPlanBudget::default();
+    account_json_value(&plan, limits, &mut budget)?;
 
     let mut facts = Vec::new();
     let mut diagnostics = Vec::new();
@@ -872,6 +916,7 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
     // and `terraform plan -json` (has .resource_changes)
     if let Some(changes) = plan.get("resource_changes").and_then(|v| v.as_array()) {
         for (change_index, change) in changes.iter().enumerate() {
+            account_terraform_resource(limits, &mut budget)?;
             let resource_type = change.get("type").and_then(|v| v.as_str()).unwrap_or("");
             let name = change.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let address = change.get("address").and_then(|v| v.as_str()).unwrap_or("");
@@ -881,12 +926,13 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
                 .unwrap_or(&Value::Null);
 
             if resource_type == "postgresql_grant" {
-                facts.extend(postgresql_grant_plan_facts(
-                    name,
-                    address,
-                    after,
-                    change_index,
-                ));
+                ensure_fact_capacity(postgresql_grant_fact_upper_bound(after), limits, &budget)?;
+                append_terraform_facts(
+                    &mut facts,
+                    postgresql_grant_plan_facts(name, address, after, change_index),
+                    limits,
+                    &mut budget,
+                )?;
                 continue;
             }
 
@@ -904,6 +950,12 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
             if let Some(policy_str) = after.get("policy").and_then(|v| v.as_str()) {
                 match serde_json::from_str::<Value>(policy_str) {
                     Ok(policy) => {
+                        account_json_value(&policy, limits, &mut budget)?;
+                        ensure_fact_capacity(
+                            iam_policy_fact_upper_bound(&policy),
+                            limits,
+                            &budget,
+                        )?;
                         let block = TerraformResourceBlock {
                             file: "terraform-plan".to_owned(),
                             resource_type: resource_type.to_owned(),
@@ -911,7 +963,12 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
                             body: principal_body(resource_type, after),
                             line: 0,
                         };
-                        facts.extend(policy_grant_facts_with_address(&block, &policy, address));
+                        append_terraform_facts(
+                            &mut facts,
+                            policy_grant_facts_with_address(&block, &policy, address),
+                            limits,
+                            &mut budget,
+                        )?;
                     }
                     Err(error) => push_terraform_parse_diagnostic(
                         &mut diagnostics,
@@ -940,7 +997,7 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
         .and_then(|values| values.get("root_module"))
     {
         let mut resources = Vec::new();
-        collect_state_resources(root_module, &mut resources);
+        collect_state_resources(root_module, &mut resources, limits, &mut budget)?;
         for resource in resources {
             let resource_type = resource.get("type").and_then(|v| v.as_str()).unwrap_or("");
             let name = resource.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -964,6 +1021,12 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
             if let Some(policy_str) = values_obj.get("policy").and_then(|v| v.as_str()) {
                 match serde_json::from_str::<Value>(policy_str) {
                     Ok(policy) => {
+                        account_json_value(&policy, limits, &mut budget)?;
+                        ensure_fact_capacity(
+                            iam_policy_fact_upper_bound(&policy),
+                            limits,
+                            &budget,
+                        )?;
                         let block = TerraformResourceBlock {
                             file: "terraform-state".to_owned(),
                             resource_type: resource_type.to_owned(),
@@ -971,7 +1034,12 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
                             body: principal_body(resource_type, values_obj),
                             line: 0,
                         };
-                        facts.extend(policy_grant_facts_with_address(&block, &policy, address));
+                        append_terraform_facts(
+                            &mut facts,
+                            policy_grant_facts_with_address(&block, &policy, address),
+                            limits,
+                            &mut budget,
+                        )?;
                     }
                     Err(error) => push_terraform_parse_diagnostic(
                         &mut diagnostics,
@@ -994,7 +1062,7 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
     if omitted_diagnostics > 0 {
         diagnostics.push(terraform_diagnostic_budget_fact(omitted_diagnostics));
     }
-    facts.extend(diagnostics);
+    append_terraform_facts(&mut facts, diagnostics, limits, &mut budget)?;
 
     let mut bundle = Bundle::new();
     bundle.producers.push(crate::subject::Producer {
@@ -1012,6 +1080,127 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
         .collect();
     bundle.slices = crate::slice_by_kind(&bundle);
     Ok(bundle)
+}
+
+fn account_json_value(
+    root: &Value,
+    limits: TerraformPlanLimits,
+    budget: &mut TerraformPlanBudget,
+) -> Result<(), String> {
+    let mut stack = vec![(root, 1_usize)];
+    while let Some((value, depth)) = stack.pop() {
+        if depth > limits.max_json_depth {
+            return Err(format!(
+                "Terraform JSON exceeds the {} level depth limit",
+                limits.max_json_depth
+            ));
+        }
+        budget.json_nodes = budget
+            .json_nodes
+            .checked_add(1)
+            .ok_or_else(|| "Terraform JSON node count overflow".to_owned())?;
+        if budget.json_nodes > limits.max_json_nodes {
+            return Err(format!(
+                "Terraform JSON exceeds the {} node limit",
+                limits.max_json_nodes
+            ));
+        }
+        match value {
+            Value::Array(values) => {
+                stack.extend(values.iter().map(|value| (value, depth + 1)));
+            }
+            Value::Object(values) => {
+                stack.extend(values.values().map(|value| (value, depth + 1)));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn account_terraform_resource(
+    limits: TerraformPlanLimits,
+    budget: &mut TerraformPlanBudget,
+) -> Result<(), String> {
+    budget.resources = budget
+        .resources
+        .checked_add(1)
+        .ok_or_else(|| "Terraform resource count overflow".to_owned())?;
+    if budget.resources > limits.max_resources {
+        return Err(format!(
+            "Terraform JSON exceeds the {} resource limit",
+            limits.max_resources
+        ));
+    }
+    Ok(())
+}
+
+fn append_terraform_facts(
+    destination: &mut Vec<Fact>,
+    facts: Vec<Fact>,
+    limits: TerraformPlanLimits,
+    budget: &mut TerraformPlanBudget,
+) -> Result<(), String> {
+    budget.facts = budget
+        .facts
+        .checked_add(facts.len())
+        .ok_or_else(|| "Terraform fact count overflow".to_owned())?;
+    if budget.facts > limits.max_facts {
+        return Err(format!(
+            "Terraform plan conversion exceeds the {} fact limit",
+            limits.max_facts
+        ));
+    }
+    destination.extend(facts);
+    Ok(())
+}
+
+fn ensure_fact_capacity(
+    additional: usize,
+    limits: TerraformPlanLimits,
+    budget: &TerraformPlanBudget,
+) -> Result<(), String> {
+    let total = budget
+        .facts
+        .checked_add(additional)
+        .ok_or_else(|| "Terraform fact count overflow".to_owned())?;
+    if total > limits.max_facts {
+        return Err(format!(
+            "Terraform plan conversion exceeds the {} fact limit",
+            limits.max_facts
+        ));
+    }
+    Ok(())
+}
+
+fn iam_policy_fact_upper_bound(policy: &Value) -> usize {
+    statements(policy)
+        .into_iter()
+        .fold(0_usize, |total, statement| {
+            let actions = json_value_string_count(statement.get("Action"));
+            let resources = json_value_string_count(statement.get("Resource"));
+            total.saturating_add(actions.saturating_mul(resources))
+        })
+}
+
+fn postgresql_grant_fact_upper_bound(values: &Value) -> usize {
+    let objects = values
+        .get("objects")
+        .and_then(Value::as_array)
+        .map_or(1, |items| items.len().max(1));
+    let privileges = values
+        .get("privileges")
+        .and_then(Value::as_array)
+        .map_or(0, Vec::len);
+    objects.saturating_mul(privileges)
+}
+
+fn json_value_string_count(value: Option<&Value>) -> usize {
+    match value {
+        Some(Value::String(_)) => 1,
+        Some(Value::Array(values)) => values.iter().filter(|value| value.is_string()).count(),
+        _ => 0,
+    }
 }
 
 fn postgresql_grant_plan_facts(
@@ -1322,15 +1511,31 @@ fn principal_body(resource_type: &str, values: &Value) -> String {
         .unwrap_or_default()
 }
 
-fn collect_state_resources<'a>(module: &'a Value, resources: &mut Vec<&'a Value>) {
-    if let Some(items) = module.get("resources").and_then(Value::as_array) {
-        resources.extend(items);
-    }
-    if let Some(children) = module.get("child_modules").and_then(Value::as_array) {
-        for child in children {
-            collect_state_resources(child, resources);
+fn collect_state_resources<'a>(
+    root: &'a Value,
+    resources: &mut Vec<&'a Value>,
+    limits: TerraformPlanLimits,
+    budget: &mut TerraformPlanBudget,
+) -> Result<(), String> {
+    let mut modules = vec![(root, 1_usize)];
+    while let Some((module, depth)) = modules.pop() {
+        if depth > limits.max_json_depth {
+            return Err(format!(
+                "Terraform module tree exceeds the {} level depth limit",
+                limits.max_json_depth
+            ));
+        }
+        if let Some(items) = module.get("resources").and_then(Value::as_array) {
+            for resource in items {
+                account_terraform_resource(limits, budget)?;
+                resources.push(resource);
+            }
+        }
+        if let Some(children) = module.get("child_modules").and_then(Value::as_array) {
+            modules.extend(children.iter().map(|child| (child, depth + 1)));
         }
     }
+    Ok(())
 }
 
 fn json_string_or_array(obj: &Value, key: &str) -> Vec<String> {
@@ -1566,6 +1771,81 @@ POLICY
             bundle.facts[0].evidence[0].principal.as_deref(),
             Some("prod-reader")
         );
+    }
+
+    #[test]
+    fn terraform_plan_rejects_input_over_byte_budget_before_parsing() {
+        let limits = TerraformPlanLimits {
+            max_input_bytes: 8,
+            ..TerraformPlanLimits::default()
+        };
+        let error = terraform_plan_json_to_bundle_with_limits(r#"{"resource_changes":[]}"#, limits)
+            .expect_err("oversized plan must be rejected");
+        assert!(error.contains("byte limit"));
+    }
+
+    #[test]
+    fn terraform_plan_rejects_excessive_json_depth_and_nodes() {
+        let depth_limits = TerraformPlanLimits {
+            max_json_depth: 3,
+            ..TerraformPlanLimits::default()
+        };
+        let error = terraform_plan_json_to_bundle_with_limits(
+            r#"{"values":{"root_module":{"child_modules":[]}}}"#,
+            depth_limits,
+        )
+        .expect_err("deep JSON must be rejected");
+        assert!(error.contains("depth limit"));
+
+        let node_limits = TerraformPlanLimits {
+            max_json_nodes: 3,
+            ..TerraformPlanLimits::default()
+        };
+        let error = terraform_plan_json_to_bundle_with_limits(
+            r#"{"resource_changes":[null,null,null]}"#,
+            node_limits,
+        )
+        .expect_err("node-heavy JSON must be rejected");
+        assert!(error.contains("node limit"));
+    }
+
+    #[test]
+    fn terraform_plan_rejects_resource_and_fact_budget_overflow() {
+        let plan = serde_json::json!({
+            "resource_changes": [{
+                "type": "postgresql_grant",
+                "name": "reader",
+                "address": "postgresql_grant.reader",
+                "change": {"after": {
+                    "database": "app",
+                    "schema": "public",
+                    "role": "reader",
+                    "objects": ["first", "second"],
+                    "privileges": ["SELECT"]
+                }}
+            }]
+        })
+        .to_string();
+
+        let resource_error = terraform_plan_json_to_bundle_with_limits(
+            &plan,
+            TerraformPlanLimits {
+                max_resources: 0,
+                ..TerraformPlanLimits::default()
+            },
+        )
+        .expect_err("resource budget must be enforced");
+        assert!(resource_error.contains("resource limit"));
+
+        let fact_error = terraform_plan_json_to_bundle_with_limits(
+            &plan,
+            TerraformPlanLimits {
+                max_facts: 1,
+                ..TerraformPlanLimits::default()
+            },
+        )
+        .expect_err("fact budget must be enforced");
+        assert!(fact_error.contains("fact limit"));
     }
 
     #[test]

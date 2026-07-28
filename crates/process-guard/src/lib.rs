@@ -4,7 +4,7 @@
 //! boundary so the compiler and runtime crates can remain safe Rust.
 
 use std::io;
-use std::process::{Child, Command};
+use std::process::{Child, Command, ExitStatus};
 #[cfg(windows)]
 use std::{fs::File, path::Path};
 
@@ -94,8 +94,129 @@ pub const fn memory_limit_kind() -> MemoryLimitKind {
     MemoryLimitKind::DataSegmentBestEffort
 }
 
-fn configure(command: &mut Command, limits: ProcessLimits) -> io::Result<()> {
-    configure_platform(command, limits)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitSupport {
+    Enforced,
+    BestEffort,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppliedProcessLimits {
+    pub cpu: LimitSupport,
+    pub address_space: LimitSupport,
+    pub open_files: LimitSupport,
+    pub file_size: LimitSupport,
+    /// Whether the process is constrained before any user code can execute.
+    pub atomic_process_tree_containment: LimitSupport,
+}
+
+impl AppliedProcessLimits {
+    fn validate_requested(self, limits: ProcessLimits) -> io::Result<()> {
+        let requested = [
+            ("CPU", limits.cpu_seconds, self.cpu),
+            (
+                "address-space",
+                limits.address_space_bytes,
+                self.address_space,
+            ),
+            ("open-file", limits.open_files, self.open_files),
+            ("file-size", limits.file_size_bytes, self.file_size),
+        ];
+        for (name, value, support) in requested {
+            if value > 0 && support == LimitSupport::Unsupported {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    format!("required {name} process limit is unsupported on this platform"),
+                ));
+            }
+        }
+        if self.atomic_process_tree_containment == LimitSupport::Unsupported {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "atomic process-tree containment is unsupported on this platform",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn require_fully_enforced(self, limits: ProcessLimits) -> io::Result<()> {
+        self.validate_requested(limits)?;
+        let requested = [
+            ("CPU", limits.cpu_seconds, self.cpu),
+            (
+                "address-space",
+                limits.address_space_bytes,
+                self.address_space,
+            ),
+            ("open-file", limits.open_files, self.open_files),
+            ("file-size", limits.file_size_bytes, self.file_size),
+        ];
+        for (name, value, support) in requested {
+            if value > 0 && support != LimitSupport::Enforced {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    format!("required {name} process limit is not fully enforced on this platform"),
+                ));
+            }
+        }
+        if self.atomic_process_tree_containment != LimitSupport::Enforced {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "atomic process-tree containment is not fully enforced on this platform",
+            ));
+        }
+        Ok(())
+    }
+}
+
+pub const fn platform_limit_support() -> AppliedProcessLimits {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        return AppliedProcessLimits {
+            cpu: LimitSupport::Enforced,
+            address_space: LimitSupport::Enforced,
+            open_files: LimitSupport::Enforced,
+            file_size: LimitSupport::Enforced,
+            atomic_process_tree_containment: LimitSupport::Enforced,
+        };
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return AppliedProcessLimits {
+            cpu: LimitSupport::Enforced,
+            address_space: LimitSupport::BestEffort,
+            open_files: LimitSupport::Enforced,
+            file_size: LimitSupport::Enforced,
+            atomic_process_tree_containment: LimitSupport::Enforced,
+        };
+    }
+    #[cfg(windows)]
+    {
+        return AppliedProcessLimits {
+            cpu: LimitSupport::Unsupported,
+            address_space: LimitSupport::Enforced,
+            open_files: LimitSupport::Unsupported,
+            file_size: LimitSupport::Unsupported,
+            // std::process cannot create suspended and assign a Job Object
+            // before user code starts. Refuse strict guarded execution.
+            atomic_process_tree_containment: LimitSupport::Unsupported,
+        };
+    }
+    #[allow(unreachable_code)]
+    AppliedProcessLimits {
+        cpu: LimitSupport::Unsupported,
+        address_space: LimitSupport::Unsupported,
+        open_files: LimitSupport::Unsupported,
+        file_size: LimitSupport::Unsupported,
+        atomic_process_tree_containment: LimitSupport::Unsupported,
+    }
+}
+
+fn configure(command: &mut Command, limits: ProcessLimits) -> io::Result<AppliedProcessLimits> {
+    let applied = platform_limit_support();
+    applied.validate_requested(limits)?;
+    configure_platform(command, limits).map(|()| applied)
 }
 
 /// Configure, spawn, and attach the platform process-tree guard as one
@@ -108,22 +229,124 @@ pub fn spawn_guarded(
     limits: ProcessLimits,
 ) -> io::Result<(Child, ProcessGuard)> {
     spawn_guarded_with(command, limits, ProcessGuard::attach)
+        .map(|(child, guard, _)| (child, guard))
+}
+
+/// Spawn a child whose root process and descendants have one RAII owner.
+///
+/// Dropping the returned value terminates the process tree and reaps the root
+/// child. Normal completion also terminates descendants before returning.
+pub fn spawn_guarded_child(
+    command: &mut Command,
+    limits: ProcessLimits,
+) -> io::Result<GuardedChild> {
+    let (child, guard, applied_limits) = spawn_guarded_with(command, limits, ProcessGuard::attach)?;
+    Ok(GuardedChild {
+        child: Some(child),
+        guard,
+        applied_limits,
+        finished: false,
+        tree_terminated: false,
+    })
+}
+
+/// Strict variant that rejects both unsupported and best-effort limits.
+pub fn spawn_guarded_child_strict(
+    command: &mut Command,
+    limits: ProcessLimits,
+) -> io::Result<GuardedChild> {
+    platform_limit_support().require_fully_enforced(limits)?;
+    spawn_guarded_child(command, limits)
 }
 
 fn spawn_guarded_with(
     command: &mut Command,
     limits: ProcessLimits,
     attach: impl FnOnce(&Child, ProcessLimits) -> io::Result<ProcessGuard>,
-) -> io::Result<(Child, ProcessGuard)> {
-    configure(command, limits)?;
+) -> io::Result<(Child, ProcessGuard, AppliedProcessLimits)> {
+    let applied_limits = configure(command, limits)?;
     let mut child = command.spawn()?;
     match attach(&child, limits) {
-        Ok(guard) => Ok((child, guard)),
+        Ok(guard) => Ok((child, guard, applied_limits)),
         Err(error) => {
             let _ = child.kill();
             let _ = child.wait();
             Err(error)
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct GuardedChild {
+    child: Option<Child>,
+    guard: ProcessGuard,
+    applied_limits: AppliedProcessLimits,
+    finished: bool,
+    tree_terminated: bool,
+}
+
+impl GuardedChild {
+    pub fn child_mut(&mut self) -> &mut Child {
+        self.child.as_mut().expect("guarded child is still owned")
+    }
+
+    pub fn applied_limits(&self) -> AppliedProcessLimits {
+        self.applied_limits
+    }
+
+    pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        self.child_mut().try_wait()
+    }
+
+    pub fn terminate(&mut self) -> io::Result<()> {
+        let tree_result = if self.tree_terminated {
+            Ok(())
+        } else {
+            self.guard.terminate()
+        };
+        if tree_result.is_ok() {
+            self.tree_terminated = true;
+        }
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+        }
+        tree_result
+    }
+
+    pub fn wait(mut self) -> io::Result<ExitStatus> {
+        let status = self.child_mut().wait()?;
+        // The root may exit after starting background descendants. The process
+        // group/job remains the ownership boundary until all descendants are
+        // explicitly terminated.
+        let tree_result = if self.tree_terminated {
+            Ok(())
+        } else {
+            self.guard.terminate()
+        };
+        if tree_result.is_ok() {
+            self.tree_terminated = true;
+        }
+        self.finished = true;
+        self.child.take();
+        tree_result?;
+        Ok(status)
+    }
+}
+
+impl Drop for GuardedChild {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        if !self.tree_terminated {
+            let _ = self.guard.terminate();
+            self.tree_terminated = true;
+        }
+        if let Some(child) = &mut self.child {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        self.finished = true;
     }
 }
 
@@ -519,5 +742,47 @@ mod tests {
         assert_eq!(memory_limit_kind(), MemoryLimitKind::AddressSpace);
         #[cfg(target_os = "macos")]
         assert_eq!(memory_limit_kind(), MemoryLimitKind::DataSegmentBestEffort);
+    }
+
+    #[test]
+    fn guarded_child_terminates_descendants_after_root_exit() {
+        let marker = std::env::temp_dir().join(format!(
+            "rss-process-guard-descendant-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&marker);
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            &format!("(sleep 1; touch '{}') & exit 0", marker.display()),
+        ]);
+        let child = spawn_guarded_child(&mut command, ProcessLimits::generated_program())
+            .expect("guarded child should spawn");
+        assert!(child.wait().expect("root should finish").success());
+        std::thread::sleep(std::time::Duration::from_millis(1_200));
+        assert!(!marker.exists(), "background descendant escaped the guard");
+    }
+
+    #[test]
+    fn applied_limits_are_queryable() {
+        let applied = platform_limit_support();
+        assert_eq!(applied.cpu, LimitSupport::Enforced);
+        assert_eq!(applied.open_files, LimitSupport::Enforced);
+        assert_eq!(applied.file_size, LimitSupport::Enforced);
+    }
+
+    #[test]
+    fn strict_limits_reject_best_effort_memory_boundaries() {
+        let applied = platform_limit_support();
+        let result = applied.require_fully_enforced(ProcessLimits {
+            cpu_seconds: 0,
+            address_space_bytes: 1024,
+            open_files: 0,
+            file_size_bytes: 0,
+        });
+        #[cfg(any(target_os = "linux", target_os = "android"))]
+        assert!(result.is_ok());
+        #[cfg(target_os = "macos")]
+        assert!(result.is_err());
     }
 }

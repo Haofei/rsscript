@@ -336,9 +336,23 @@ fn compare_native_rust(
         changes,
     );
     compare_optional_native_field(
-        "unsafe",
-        old.and_then(|native| native.effective_unsafe_policy()),
-        new.and_then(|native| native.effective_unsafe_policy()),
+        "rss_unsafe_apis",
+        old.and_then(|native| native.effective_unsafe_policies().rss_unsafe_apis),
+        new.and_then(|native| native.effective_unsafe_policies().rss_unsafe_apis),
+        PackageRisk::High,
+        changes,
+    );
+    compare_optional_native_field(
+        "wrapper_unsafe_blocks",
+        old.and_then(|native| native.effective_unsafe_policies().wrapper_unsafe_blocks),
+        new.and_then(|native| native.effective_unsafe_policies().wrapper_unsafe_blocks),
+        PackageRisk::High,
+        changes,
+    );
+    compare_optional_native_field(
+        "transitive_unsafe_blocks",
+        old.and_then(|native| native.effective_unsafe_policies().transitive_unsafe_blocks),
+        new.and_then(|native| native.effective_unsafe_policies().transitive_unsafe_blocks),
         PackageRisk::High,
         changes,
     );

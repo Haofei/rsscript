@@ -2641,8 +2641,8 @@ struct NativeState {
     /// `RSS_JIT_BASELINE` baseline-only mode.
     optimized_module: Option<vm_jit::NativeModule>,
     /// Process-local JIT work admission. This bounds code made available for
-    /// dispatch across both modules; rejected Cranelift output remains owned by
-    /// its module until the VM is dropped and is not executable-memory reclamation.
+    /// dispatch across both modules. The provider-level budget above is the hard
+    /// allocation boundary; this counter remains useful for telemetry.
     admission: NativeAdmissionBudget,
     // `None` = known not native-eligible; `Some((id, ret, params, has_backedge, scalar_leaf_callable, literals, precise_resume_safe))`
     // = compiled handle, return type (to box the 64-bit result), parameter types
@@ -7242,18 +7242,33 @@ impl NativeState {
         // baseline and optimized copies on every fresh evaluation doubles cold
         // compile cost and can make helper-heavy kernels run in baseline code.
         let eager_optimized = tier_up_threshold == 0 && !baseline;
+        let executable_memory_budget = vm_jit::ExecutableMemoryBudget::new(max_code_bytes);
+        let has_optimized_module = !baseline && !eager_optimized;
+        let baseline_arena_bytes = if has_optimized_module {
+            max_code_bytes / 2
+        } else {
+            max_code_bytes
+        };
+        let optimized_arena_bytes = max_code_bytes.saturating_sub(baseline_arena_bytes);
         Ok(Self {
-            baseline_module: vm_jit::NativeModule::new_with_opt(
+            baseline_module: vm_jit::NativeModule::new_with_opt_and_memory_budget(
                 jit_host_helpers(),
                 !eager_optimized,
+                executable_memory_budget.clone(),
+                baseline_arena_bytes,
             )
             .map_err(|e| EvalError::Runtime(e.to_string()))?,
             optimized_module: if baseline || eager_optimized {
                 None
             } else {
                 Some(
-                    vm_jit::NativeModule::new_with_opt(jit_host_helpers(), false)
-                        .map_err(|e| EvalError::Runtime(e.to_string()))?,
+                    vm_jit::NativeModule::new_with_opt_and_memory_budget(
+                        jit_host_helpers(),
+                        false,
+                        executable_memory_budget.clone(),
+                        optimized_arena_bytes,
+                    )
+                    .map_err(|e| EvalError::Runtime(e.to_string()))?,
                 )
             },
             admission: NativeAdmissionBudget {

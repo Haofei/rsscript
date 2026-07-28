@@ -83,7 +83,6 @@ pub fn deadline_remaining_ms(deadline: &RssDeadline) -> i64 {
     }
 }
 
-#[cfg(feature = "net")]
 pub(crate) fn deadline_remaining_duration(deadline: &RssDeadline) -> Duration {
     deadline.deadline.saturating_duration_since(Instant::now())
 }

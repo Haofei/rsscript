@@ -33,6 +33,42 @@ struct Document {
     diagnostics: Arc<Vec<RsDiagnostic>>,
     revision: u64,
     version: i32,
+    sync_state: DocumentSyncState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DocumentSyncState {
+    Synchronized,
+    Desynchronized,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ChangeFailure {
+    MissingDocument,
+    InvalidRange,
+    OversizedDocument,
+    FullSyncRequired,
+}
+
+enum ChangeOutcome {
+    Applied(Box<AnalysisJob>),
+    IgnoredStale,
+    Desynchronized(ChangeFailure),
+}
+
+#[cfg(test)]
+impl ChangeOutcome {
+    fn expect_applied(self, message: &str) -> AnalysisJob {
+        match self {
+            Self::Applied(job) => *job,
+            Self::IgnoredStale => panic!("{message}: stale change"),
+            Self::Desynchronized(reason) => panic!("{message}: {reason:?}"),
+        }
+    }
+
+    fn is_applied(&self) -> bool {
+        matches!(self, Self::Applied(_))
+    }
 }
 
 struct DocumentStore {
@@ -89,30 +125,38 @@ struct PackageInputCache {
 }
 
 impl PackageInputCache {
-    fn documents_for_root(&self, package_root: &Path) -> Arc<HashMap<Url, WorkspaceDocument>> {
-        if let Some(documents) = self
-            .documents
+    fn lock_documents(
+        &self,
+    ) -> std::sync::MutexGuard<'_, HashMap<PathBuf, Arc<HashMap<Url, WorkspaceDocument>>>> {
+        self.documents
             .lock()
-            .expect("package input cache lock poisoned")
-            .get(package_root)
-            .cloned()
-        {
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn documents_for_root(&self, package_root: &Path) -> Arc<HashMap<Url, WorkspaceDocument>> {
+        if let Some(documents) = self.lock_documents().get(package_root).cloned() {
             return documents;
         }
 
         let documents = Arc::new(load_package_documents(package_root));
-        let mut cache = self
-            .documents
-            .lock()
-            .expect("package input cache lock poisoned");
+        let mut cache = self.lock_documents();
         Arc::clone(cache.entry(package_root.to_path_buf()).or_insert(documents))
     }
 
     fn invalidate(&self, package_root: &Path) {
-        self.documents
-            .lock()
-            .expect("package input cache lock poisoned")
-            .remove(package_root);
+        self.lock_documents().remove(package_root);
+    }
+
+    fn invalidate_path(&self, changed_path: &Path) -> Vec<PathBuf> {
+        let mut invalidated = Vec::new();
+        self.lock_documents().retain(|package_root, _| {
+            let affected = changed_path.starts_with(package_root);
+            if affected {
+                invalidated.push(package_root.clone());
+            }
+            !affected
+        });
+        invalidated
     }
 }
 
@@ -183,6 +227,9 @@ fn commit_diagnostics_if_current(
     if document.revision != revision || document.version != version {
         return false;
     }
+    if document.sync_state != DocumentSyncState::Synchronized {
+        return false;
+    }
     document.diagnostics = Arc::new(diagnostics);
     true
 }
@@ -191,7 +238,10 @@ fn analysis_job(documents: &DocumentStore, uri: Url, revision: u64, version: i32
     let analysis_key = analysis_key_for_uri(&uri);
     let open_documents = documents
         .iter()
-        .filter(|(candidate, _)| analysis_key_for_uri(candidate) == analysis_key)
+        .filter(|(candidate, document)| {
+            document.sync_state == DocumentSyncState::Synchronized
+                && analysis_key_for_uri(candidate) == analysis_key
+        })
         .map(|(uri, document)| (uri.clone(), document.clone()))
         .collect();
     AnalysisJob {
@@ -241,6 +291,7 @@ fn open_document(
             diagnostics: Arc::new(Vec::new()),
             revision,
             version,
+            sync_state: DocumentSyncState::Synchronized,
         },
     );
     Some(analysis_job(documents, uri, revision, version))
@@ -251,16 +302,29 @@ fn change_document(
     uri: Url,
     version: i32,
     changes: &[TextDocumentContentChangeEvent],
-) -> Option<AnalysisJob> {
-    let document = documents.get(&uri)?;
+) -> ChangeOutcome {
+    let Some(document) = documents.get(&uri) else {
+        return ChangeOutcome::Desynchronized(ChangeFailure::MissingDocument);
+    };
     if version <= document.version {
-        return None;
+        return ChangeOutcome::IgnoredStale;
+    }
+    if document.sync_state == DocumentSyncState::Desynchronized
+        && changes.first().is_none_or(|change| change.range.is_some())
+    {
+        mark_document_desynchronized(documents, &uri, version);
+        return ChangeOutcome::Desynchronized(ChangeFailure::FullSyncRequired);
     }
 
     let mut text = document.text.to_string();
     for change in changes {
-        if !apply_change(&mut text, change) || text.len() > MAX_DOCUMENT_BYTES {
-            return None;
+        if !apply_change(&mut text, change) {
+            mark_document_desynchronized(documents, &uri, version);
+            return ChangeOutcome::Desynchronized(ChangeFailure::InvalidRange);
+        }
+        if text.len() > MAX_DOCUMENT_BYTES {
+            mark_document_desynchronized(documents, &uri, version);
+            return ChangeOutcome::Desynchronized(ChangeFailure::OversizedDocument);
         }
     }
 
@@ -273,7 +337,19 @@ fn change_document(
     document.diagnostics = Arc::new(Vec::new());
     document.revision = revision;
     document.version = version;
-    Some(analysis_job(documents, uri, revision, version))
+    document.sync_state = DocumentSyncState::Synchronized;
+    ChangeOutcome::Applied(Box::new(analysis_job(documents, uri, revision, version)))
+}
+
+fn mark_document_desynchronized(documents: &mut DocumentStore, uri: &Url, version: i32) {
+    let analysis_key = analysis_key_for_uri(uri);
+    let revision = documents.allocate_revision(&analysis_key);
+    if let Some(document) = documents.get_mut(uri) {
+        document.diagnostics = Arc::new(Vec::new());
+        document.revision = revision;
+        document.version = version;
+        document.sync_state = DocumentSyncState::Desynchronized;
+    }
 }
 
 fn save_document(documents: &mut DocumentStore, uri: Url, text: String) -> Option<AnalysisJob> {
@@ -289,6 +365,7 @@ fn save_document(documents: &mut DocumentStore, uri: Url, text: String) -> Optio
     document.text = Arc::from(text);
     document.diagnostics = Arc::new(Vec::new());
     document.revision = revision;
+    document.sync_state = DocumentSyncState::Synchronized;
     Some(analysis_job(documents, uri, revision, version))
 }
 
@@ -426,7 +503,14 @@ impl Backend {
 async fn snapshot_documents(
     documents: &tokio::sync::Mutex<DocumentStore>,
 ) -> HashMap<Url, Document> {
-    documents.lock().await.documents.clone()
+    documents
+        .lock()
+        .await
+        .documents
+        .iter()
+        .filter(|(_, document)| document.sync_state == DocumentSyncState::Synchronized)
+        .map(|(uri, document)| (uri.clone(), document.clone()))
+        .collect()
 }
 
 async fn run_bounded_blocking<T, F>(
@@ -500,6 +584,26 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
+        if let Err(error) = self
+            .client
+            .register_capability(vec![Registration {
+                id: "rsscript-package-input-watcher".to_owned(),
+                method: "workspace/didChangeWatchedFiles".to_owned(),
+                register_options: Some(json!({
+                    "watchers": [{
+                        "globPattern": "**/{rsspkg.toml,rsspkg.lock,*.rss,*.rssi}"
+                    }]
+                })),
+            }])
+            .await
+        {
+            self.client
+                .log_message(
+                    MessageType::WARNING,
+                    format!("RSScript package file watching unavailable: {error}"),
+                )
+                .await;
+        }
         self.client
             .log_message(MessageType::INFO, "rss-lsp ready")
             .await;
@@ -529,20 +633,40 @@ impl LanguageServer for Backend {
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
-        let analysis_key = analysis_key_for_uri(&params.text_document.uri);
+        let uri = params.text_document.uri;
+        let version = params.text_document.version;
+        let analysis_key = analysis_key_for_uri(&uri);
         let _publication = self.diagnostics_publication.lock().await;
-        self.cancel_pending_analysis(&analysis_key).await;
-        let job = {
+        let outcome = {
             let mut documents = self.documents.lock().await;
             change_document(
                 &mut documents,
-                params.text_document.uri,
-                params.text_document.version,
+                uri.clone(),
+                version,
                 &params.content_changes,
             )
         };
-        if let Some(job) = job {
-            self.schedule_analysis(job).await;
+        match outcome {
+            ChangeOutcome::Applied(job) => {
+                self.cancel_pending_analysis(&analysis_key).await;
+                self.schedule_analysis(*job).await;
+            }
+            ChangeOutcome::IgnoredStale => {}
+            ChangeOutcome::Desynchronized(reason) => {
+                self.cancel_pending_analysis(&analysis_key).await;
+                self.client
+                    .publish_diagnostics(uri, Vec::new(), Some(version))
+                    .await;
+                self.client
+                    .log_message(
+                        MessageType::WARNING,
+                        format!(
+                            "RSScript document synchronization lost ({reason:?}); \
+                             semantic results are suspended until a full-text change"
+                        ),
+                    )
+                    .await;
+            }
         }
     }
 
@@ -576,6 +700,52 @@ impl LanguageServer for Backend {
         self.client
             .publish_diagnostics(params.text_document.uri, Vec::new(), None)
             .await;
+    }
+
+    async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
+        let mut affected_roots = HashSet::new();
+        for change in params.changes {
+            let Ok(path) = change.uri.to_file_path() else {
+                continue;
+            };
+            affected_roots.extend(self.package_inputs.invalidate_path(&path));
+            if let Some(package_root) = package_root_for_path(&path) {
+                affected_roots.insert(package_root);
+            }
+        }
+
+        if affected_roots.is_empty() {
+            return;
+        }
+
+        let jobs = {
+            let mut documents = self.documents.lock().await;
+            let uris = documents
+                .iter()
+                .filter(|(uri, document)| {
+                    document.sync_state == DocumentSyncState::Synchronized
+                        && package_root_for_uri(uri)
+                            .is_some_and(|root| affected_roots.contains(&root))
+                })
+                .map(|(uri, _)| uri.clone())
+                .collect::<Vec<_>>();
+            uris.into_iter()
+                .filter_map(|uri| {
+                    let document = documents.get(&uri)?.clone();
+                    let analysis_key = analysis_key_for_uri(&uri);
+                    let revision = documents.allocate_revision(&analysis_key);
+                    let current = documents.get_mut(&uri)?;
+                    current.revision = revision;
+                    current.diagnostics = Arc::new(Vec::new());
+                    Some(analysis_job(&documents, uri, revision, document.version))
+                })
+                .collect::<Vec<_>>()
+        };
+
+        for job in jobs {
+            self.cancel_pending_analysis(&job.analysis_key).await;
+            self.schedule_analysis(job).await;
+        }
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
@@ -1689,7 +1859,11 @@ fn analysis_key_for_uri(uri: &Url) -> AnalysisKey {
 
 fn package_root_for_uri(uri: &Url) -> Option<PathBuf> {
     let path = uri.to_file_path().ok()?;
-    find_package_root(&path)
+    package_root_for_path(&path)
+}
+
+fn package_root_for_path(path: &Path) -> Option<PathBuf> {
+    find_package_root(path)
 }
 
 fn find_package_root(path: &Path) -> Option<PathBuf> {
@@ -2300,6 +2474,7 @@ mod tests {
             diagnostics: Arc::new(Vec::new()),
             revision: 0,
             version: 0,
+            sync_state: DocumentSyncState::Synchronized,
         }
     }
 
@@ -2344,10 +2519,108 @@ mod tests {
             range_length: None,
             text: "x".repeat(MAX_DOCUMENT_BYTES + 1),
         };
-        assert!(change_document(&mut documents, uri.clone(), 2, &[replacement]).is_none());
+        assert!(matches!(
+            change_document(&mut documents, uri.clone(), 2, &[replacement]),
+            ChangeOutcome::Desynchronized(ChangeFailure::OversizedDocument)
+        ));
         assert_eq!(
             documents.get(&uri).expect("document remains").text.as_ref(),
             "small"
+        );
+        assert_eq!(
+            documents.get(&uri).expect("document remains").sync_state,
+            DocumentSyncState::Desynchronized
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_change_suspends_semantics_until_full_sync() {
+        let uri = file_url("desynchronized.rss");
+        let mut documents = DocumentStore::new();
+        open_document(
+            &mut documents,
+            uri.clone(),
+            "fn current() -> Unit {}\n".to_owned(),
+            1,
+        )
+        .expect("document should open");
+
+        let reversed = TextDocumentContentChangeEvent {
+            range: Some(Range::new(Position::new(0, 8), Position::new(0, 3))),
+            range_length: None,
+            text: "broken".to_owned(),
+        };
+        assert!(matches!(
+            change_document(&mut documents, uri.clone(), 2, &[reversed]),
+            ChangeOutcome::Desynchronized(ChangeFailure::InvalidRange)
+        ));
+        let document = documents.get(&uri).expect("document remains");
+        assert_eq!(document.sync_state, DocumentSyncState::Desynchronized);
+        assert_eq!(document.version, 2);
+        let revision = document.revision;
+        let generation = documents.generation(&analysis_key_for_uri(&uri));
+        assert!(!commit_diagnostics_if_current(
+            &mut documents,
+            &uri,
+            revision,
+            2,
+            generation,
+            generation,
+            Vec::new(),
+        ));
+
+        let shared = tokio::sync::Mutex::new(documents);
+        assert!(
+            !snapshot_documents(&shared).await.contains_key(&uri),
+            "desynchronized text must not serve semantic requests"
+        );
+
+        let mut documents = shared.into_inner();
+        let incremental = TextDocumentContentChangeEvent {
+            range: Some(Range::new(Position::new(0, 0), Position::new(0, 0))),
+            range_length: None,
+            text: "x".to_owned(),
+        };
+        assert!(matches!(
+            change_document(&mut documents, uri.clone(), 3, &[incremental]),
+            ChangeOutcome::Desynchronized(ChangeFailure::FullSyncRequired)
+        ));
+        assert!(matches!(
+            change_document(&mut documents, uri.clone(), 2, &[]),
+            ChangeOutcome::IgnoredStale
+        ));
+
+        let full_sync = TextDocumentContentChangeEvent {
+            range: None,
+            range_length: None,
+            text: "fn recovered() -> Unit {}\n".to_owned(),
+        };
+        let job = change_document(&mut documents, uri.clone(), 4, &[full_sync])
+            .expect_applied("full sync should recover the document");
+        assert!(job.open_documents.contains_key(&uri));
+        let document = documents.get(&uri).expect("document remains");
+        assert_eq!(document.sync_state, DocumentSyncState::Synchronized);
+        assert_eq!(document.text.as_ref(), "fn recovered() -> Unit {}\n");
+    }
+
+    #[test]
+    fn invalid_utf16_change_marks_document_desynchronized() {
+        let uri = file_url("invalid-utf16.rss");
+        let mut documents = DocumentStore::new();
+        open_document(&mut documents, uri.clone(), "a😀b\n".to_owned(), 1)
+            .expect("document should open");
+        let split_surrogate = TextDocumentContentChangeEvent {
+            range: Some(Range::new(Position::new(0, 2), Position::new(0, 2))),
+            range_length: None,
+            text: "x".to_owned(),
+        };
+        assert!(matches!(
+            change_document(&mut documents, uri.clone(), 2, &[split_surrogate]),
+            ChangeOutcome::Desynchronized(ChangeFailure::InvalidRange)
+        ));
+        assert_eq!(
+            documents.get(&uri).expect("document remains").sync_state,
+            DocumentSyncState::Desynchronized
         );
     }
 
@@ -2371,7 +2644,7 @@ mod tests {
             text: "second".to_owned(),
         };
         let second = change_document(&mut documents, uri.clone(), 2, &[replacement])
-            .expect("new version should produce a job");
+            .expect_applied("new version should produce a job");
 
         assert_eq!(
             first.open_documents.get(&uri).unwrap().text.as_ref(),
@@ -2618,6 +2891,7 @@ mod tests {
                 diagnostics: Arc::new(Vec::new()),
                 revision: 1,
                 version: 1,
+                sync_state: DocumentSyncState::Synchronized,
             },
         )]);
         let cancellation = AnalysisCancellation::default();
@@ -2762,13 +3036,13 @@ mod tests {
             version_two
                 .await
                 .expect("version two task should finish")
-                .is_some()
+                .is_applied()
         );
         assert!(
             version_three
                 .await
                 .expect("version three task should finish")
-                .is_some()
+                .is_applied()
         );
 
         let documents = documents.lock().await;
@@ -2819,13 +3093,17 @@ mod tests {
             change_document(&mut documents, older_uri, 2, &[change])
         });
 
-        assert!(newer.await.expect("newer task should finish").is_some());
-        assert!(older.await.expect("older task should finish").is_none());
+        assert!(newer.await.expect("newer task should finish").is_applied());
+        assert!(matches!(
+            older.await.expect("older task should finish"),
+            ChangeOutcome::IgnoredStale
+        ));
 
         let documents = documents.lock().await;
         let document = documents.get(&uri).expect("document should remain open");
         assert_eq!(document.text.as_ref(), "newest");
         assert_eq!(document.version, 3);
+        assert_eq!(document.sync_state, DocumentSyncState::Synchronized);
         assert_eq!(document.revision, 2);
         assert_eq!(documents.next_revision, 3);
     }
@@ -3083,7 +3361,31 @@ mod tests {
             "fn new() -> Unit {}\n"
         );
 
+        assert_eq!(
+            cache.invalidate_path(&source_path),
+            vec![package_dir.clone()]
+        );
+        let invalidated = cache.documents_for_root(&package_dir);
+        assert!(!Arc::ptr_eq(&refreshed, &invalidated));
+
         fs::remove_dir_all(package_dir).expect("cleanup package");
+    }
+
+    #[test]
+    fn package_input_cache_recovers_from_mutex_poisoning() {
+        let cache = Arc::new(PackageInputCache::default());
+        let poisoning_cache = Arc::clone(&cache);
+        let _ = std::thread::spawn(move || {
+            let _guard = poisoning_cache
+                .documents
+                .lock()
+                .expect("cache initially unlocked");
+            panic!("poison package input cache for recovery test");
+        })
+        .join();
+
+        cache.invalidate(Path::new("/workspace"));
+        assert!(cache.lock_documents().is_empty());
     }
 
     #[test]

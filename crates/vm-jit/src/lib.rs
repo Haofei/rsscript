@@ -43,12 +43,100 @@ use cranelift_codegen::ir::{
 };
 use cranelift_codegen::settings::{self, Configurable};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
-use cranelift_jit::{JITBuilder, JITModule};
+use cranelift_jit::{ArenaMemoryProvider, JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module, default_libcall_names};
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 /// Opaque VM-owned native helper context. The JIT never interprets this value; it
 /// just forwards it from [`NativeModule::call`] to every imported host helper.
 pub type HostCtx = i64;
+
+const DEFAULT_STANDALONE_JIT_ARENA_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_JIT_PAGE_BYTES: u64 = 64 * 1024;
+
+fn arena_allocation_charge(bytes: u64) -> Result<u64, JitError> {
+    bytes
+        .checked_add(MAX_JIT_PAGE_BYTES - 1)
+        .map(|rounded| rounded / MAX_JIT_PAGE_BYTES * MAX_JIT_PAGE_BYTES)
+        .ok_or_else(|| JitError("JIT arena allocation charge overflow".into()))
+}
+
+/// Shared hard limit for executable-memory allocations made by one or more
+/// [`NativeModule`]s.
+///
+/// Budgeted modules reserve a fixed Cranelift arena before codegen. The arena is
+/// the allocation boundary for code and JIT-owned data and is unmapped when its
+/// module is dropped. Reserving the whole arena makes the configured limit an
+/// address-space hard bound rather than a post-codegen admission counter.
+#[derive(Clone, Debug)]
+pub struct ExecutableMemoryBudget {
+    inner: Arc<ExecutableMemoryBudgetInner>,
+}
+
+#[derive(Debug)]
+struct ExecutableMemoryBudgetInner {
+    limit: u64,
+    allocated: AtomicU64,
+}
+
+impl ExecutableMemoryBudget {
+    pub fn new(limit: u64) -> Self {
+        Self {
+            inner: Arc::new(ExecutableMemoryBudgetInner {
+                limit,
+                allocated: AtomicU64::new(0),
+            }),
+        }
+    }
+
+    pub fn limit(&self) -> u64 {
+        self.inner.limit
+    }
+
+    pub fn allocated(&self) -> u64 {
+        self.inner.allocated.load(Ordering::Acquire)
+    }
+
+    fn reserve(&self, bytes: u64) -> Result<ExecutableMemoryReservation, JitError> {
+        self.inner
+            .allocated
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |allocated| {
+                allocated
+                    .checked_add(bytes)
+                    .filter(|total| *total <= self.inner.limit)
+            })
+            .map(|_| ExecutableMemoryReservation {
+                budget: self.clone(),
+                bytes,
+            })
+            .map_err(|_| {
+                JitError(format!(
+                    "JIT executable-memory budget exceeded: requested {bytes} bytes with {} of {} bytes allocated",
+                    self.allocated(),
+                    self.limit()
+                ))
+            })
+    }
+
+    fn release(&self, bytes: u64) {
+        let previous = self.inner.allocated.fetch_sub(bytes, Ordering::AcqRel);
+        debug_assert!(previous >= bytes, "JIT memory accounting underflow");
+    }
+}
+
+struct ExecutableMemoryReservation {
+    budget: ExecutableMemoryBudget,
+    bytes: u64,
+}
+
+impl Drop for ExecutableMemoryReservation {
+    fn drop(&mut self) {
+        self.budget.release(self.bytes);
+    }
+}
 
 /// Borrow proof for one unique flat buffer passed to generated code. One proof may
 /// validate multiple ABI entries that intentionally alias the same buffer. Safe
@@ -1934,6 +2022,8 @@ pub struct NativeModule {
     id: u64,
     /// Declared host-helper imports (see [`HostHelpers`]).
     imports: HostFuncs,
+    /// Keeps the shared hard-budget reservation alive for the arena's lifetime.
+    _memory_reservation: ExecutableMemoryReservation,
 }
 
 /// `FuncId`s of the declared host helpers, resolved into per-function `FuncRef`s
@@ -2220,6 +2310,39 @@ impl NativeModule {
     ///
     /// `baseline == false` keeps the optimizing hot-path tier (`opt_level="speed"`).
     pub fn new_with_opt(helpers: HostHelpers, baseline: bool) -> Result<Self, JitError> {
+        let budget = ExecutableMemoryBudget::new(DEFAULT_STANDALONE_JIT_ARENA_BYTES);
+        Self::new_with_opt_and_memory_budget(
+            helpers,
+            baseline,
+            budget,
+            DEFAULT_STANDALONE_JIT_ARENA_BYTES,
+        )
+    }
+
+    /// Build a native module whose executable mappings are charged to `budget`.
+    ///
+    /// Multiple modules may share one budget, which is how the embedding VM
+    /// enforces one hard allocation boundary across baseline and optimized tiers.
+    pub fn new_with_opt_and_memory_budget(
+        helpers: HostHelpers,
+        baseline: bool,
+        budget: ExecutableMemoryBudget,
+        arena_bytes: u64,
+    ) -> Result<Self, JitError> {
+        let reservation = budget.reserve(arena_allocation_charge(arena_bytes)?)?;
+        let arena_bytes = usize::try_from(arena_bytes)
+            .map_err(|_| JitError("JIT arena size does not fit in usize".into()))?;
+        let arena = ArenaMemoryProvider::new_with_size(arena_bytes)
+            .map_err(|error| JitError(format!("JIT arena allocation: {error}")))?;
+        Self::new_with_opt_inner(helpers, baseline, arena, reservation)
+    }
+
+    fn new_with_opt_inner(
+        helpers: HostHelpers,
+        baseline: bool,
+        arena: ArenaMemoryProvider,
+        memory_reservation: ExecutableMemoryReservation,
+    ) -> Result<Self, JitError> {
         let mut flags = settings::builder();
         // Plain JIT: no PIC. Optimize for speed on the hot path, or skip
         // optimization entirely in baseline mode to minimize compile latency.
@@ -2240,6 +2363,7 @@ impl NativeModule {
             .finish(flags)
             .map_err(|e| err("isa finish", e))?;
         let mut builder = JITBuilder::with_isa(isa, default_libcall_names());
+        builder.memory_provider(Box::new(arena));
         // Register the host helper addresses so imported calls link to them.
         // The typed `extern "C"` pointers become the `*const u8` Cranelift's symbol
         // table wants here, where this crate owns the obligation that the address
@@ -2266,6 +2390,7 @@ impl NativeModule {
             counter: 0,
             id: NEXT_MODULE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             imports,
+            _memory_reservation: memory_reservation,
         })
     }
 
@@ -8880,6 +9005,102 @@ mod tests {
             None,
             "compiled ids from another module must not expose local code metadata"
         );
+    }
+
+    #[test]
+    fn executable_memory_budget_is_hard_shared_and_released_on_drop() {
+        const ARENA_BYTES: u64 = 64 * 1024;
+        let budget = ExecutableMemoryBudget::new(ARENA_BYTES * 2);
+        {
+            let mut first = NativeModule::new_with_opt_and_memory_budget(
+                host_helpers(),
+                false,
+                budget.clone(),
+                ARENA_BYTES,
+            )
+            .unwrap();
+            first
+                .compile(&f(
+                    0,
+                    1,
+                    vec![
+                        JitInstr::LoadInt { dst: 0, value: 1 },
+                        JitInstr::Return { src: 0 },
+                    ],
+                ))
+                .unwrap();
+            assert_eq!(budget.allocated(), ARENA_BYTES);
+
+            let second = NativeModule::new_with_opt_and_memory_budget(
+                host_helpers(),
+                true,
+                budget.clone(),
+                ARENA_BYTES,
+            )
+            .unwrap();
+            assert_eq!(budget.allocated(), ARENA_BYTES * 2);
+
+            let error = match NativeModule::new_with_opt_and_memory_budget(
+                host_helpers(),
+                false,
+                budget.clone(),
+                ARENA_BYTES,
+            ) {
+                Ok(_) => panic!("a third module cannot reserve beyond the shared hard budget"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("executable-memory budget exceeded")
+            );
+            assert_eq!(
+                budget.allocated(),
+                ARENA_BYTES * 2,
+                "a rejected allocation must roll its reservation back"
+            );
+            drop(second);
+            assert_eq!(budget.allocated(), ARENA_BYTES);
+        }
+        assert_eq!(
+            budget.allocated(),
+            0,
+            "dropping modules must unmap code and return their shared budget"
+        );
+    }
+
+    #[test]
+    fn failed_compile_cannot_grow_fixed_arena_and_drop_releases_it() {
+        const ARENA_BYTES: u64 = 64 * 1024;
+        let budget = ExecutableMemoryBudget::new(ARENA_BYTES);
+        {
+            let mut module = NativeModule::new_with_opt_and_memory_budget(
+                host_helpers(),
+                true,
+                budget.clone(),
+                ARENA_BYTES,
+            )
+            .unwrap();
+            let mut code = Vec::with_capacity(10_002);
+            code.push(JitInstr::LoadInt { dst: 1, value: 1 });
+            for _ in 0..10_000 {
+                code.push(JitInstr::Add {
+                    dst: 0,
+                    lhs: 0,
+                    rhs: 1,
+                });
+            }
+            code.push(JitInstr::Return { src: 0 });
+            module
+                .compile(&f(1, 2, code))
+                .expect_err("machine code larger than the fixed arena must be rejected");
+            assert_eq!(
+                budget.allocated(),
+                ARENA_BYTES,
+                "failed codegen cannot allocate beyond the module's fixed arena"
+            );
+        }
+        assert_eq!(budget.allocated(), 0);
     }
 
     #[test]

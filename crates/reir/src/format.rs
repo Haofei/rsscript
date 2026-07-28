@@ -301,8 +301,7 @@ fn is_author_declared(fact: &Fact) -> bool {
     )
 }
 
-/// Produce CI gate JSON output from reconciliation results, failing only on
-/// missing capabilities (the default policy).
+/// Produce CI gate JSON output using the fail-closed default policy.
 pub fn format_ci_gate_output(
     required_facts: &[Fact],
     granted_facts: &[Fact],
@@ -1518,25 +1517,22 @@ mod tests {
             evidence: vec![],
         };
 
-        // Default policy: an excess (over-privilege) grant does not fail the gate.
+        // Default policy is fail-closed and blocks over-privilege.
         let default_out = format_ci_gate_output(
             &[],
             std::slice::from_ref(&granted),
             std::slice::from_ref(&excess),
         );
-        assert_ne!(default_out.status, CiGateStatus::Fail);
+        assert_eq!(default_out.status, CiGateStatus::Fail);
 
-        // With fail_on_excess, over-privilege blocks.
-        let strict = format_ci_gate_output_with_policy(
+        // Development policy must be selected explicitly to tolerate it.
+        let development = format_ci_gate_output_with_policy(
             &[],
             std::slice::from_ref(&granted),
             std::slice::from_ref(&excess),
-            CiGatePolicy {
-                fail_on_excess: true,
-                ..Default::default()
-            },
+            CiGatePolicy::development(),
         );
-        assert_eq!(strict.status, CiGateStatus::Fail);
+        assert_ne!(development.status, CiGateStatus::Fail);
         let decision = decide_gate(
             &[],
             std::slice::from_ref(&granted),
@@ -1610,26 +1606,23 @@ mod tests {
             std::slice::from_ref(&granted),
         );
 
-        // Default policy accepts author-declared evidence (but counts it).
+        // Default policy rejects author-declared evidence (and counts it).
         let default_out = format_ci_gate_output(
             std::slice::from_ref(&required),
             std::slice::from_ref(&granted),
             &recon,
         );
-        assert_ne!(default_out.status, CiGateStatus::Fail);
+        assert_eq!(default_out.status, CiGateStatus::Fail);
         assert_eq!(default_out.summary.total_unverified, 1);
 
-        // require_verified_capabilities blocks it.
-        let strict = format_ci_gate_output_with_policy(
+        // Development policy must be selected explicitly to accept it.
+        let development = format_ci_gate_output_with_policy(
             std::slice::from_ref(&required),
             std::slice::from_ref(&granted),
             &recon,
-            CiGatePolicy {
-                require_verified_capabilities: true,
-                ..Default::default()
-            },
+            CiGatePolicy::development(),
         );
-        assert_eq!(strict.status, CiGateStatus::Fail);
+        assert_ne!(development.status, CiGateStatus::Fail);
         let decision = decide_gate(
             std::slice::from_ref(&required),
             std::slice::from_ref(&granted),

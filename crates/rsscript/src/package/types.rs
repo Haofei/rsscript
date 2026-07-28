@@ -608,12 +608,22 @@ pub struct PackageNativeRustReview {
     pub crate_name: Option<String>,
     pub build_scripts: Option<String>,
     pub proc_macros: Option<String>,
+    /// Legacy aggregate retained for report compatibility. Enforcement uses
+    /// `unsafe_policies`, which preserves all three independent boundaries.
     pub unsafe_policy: Option<String>,
+    pub unsafe_policies: PackageNativeRustUnsafePolicies,
     pub native_links_policy: Option<String>,
     pub ffi_policy: Option<String>,
     pub links: Vec<String>,
     pub cargo_features: Vec<String>,
     pub semantic: PackageNativeRustSemanticReview,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageNativeRustUnsafePolicies {
+    pub rss_unsafe_apis: Option<String>,
+    pub wrapper_unsafe_blocks: Option<String>,
+    pub transitive_unsafe_blocks: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -640,4 +650,7 @@ pub struct PackageNativeRustSourceScan {
     pub filesystem_detected: bool,
     pub network_detected: bool,
     pub build_script_present: bool,
+    pub complete: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub errors: Vec<String>,
 }

@@ -306,7 +306,7 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
         command.env(&env.name, &env.value);
     }
     apply_default_ramdisk_env(&mut command);
-    let (mut child, process_guard) = rss_process_guard::spawn_guarded(
+    let mut child = rss_process_guard::spawn_guarded_child(
         &mut command,
         rss_process_guard::ProcessLimits::generated_program(),
     )
@@ -318,8 +318,8 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
     let limit = Arc::new(Mutex::new(ProcessStreamLimit::new(cap)));
     let (sender, receiver) =
         mpsc::sync_channel::<Result<ProcessEvent, ChannelError>>(PROCESS_STREAM_CHANNEL_CAPACITY);
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
+    let stdout = child.child_mut().stdout.take();
+    let stderr = child.child_mut().stderr.take();
     if let Some(stdout) = stdout {
         spawn_process_event_reader(stdout, "stdout", Arc::clone(&limit), sender.clone());
     }
@@ -327,7 +327,7 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
         spawn_process_event_reader(stderr, "stderr", Arc::clone(&limit), sender.clone());
     }
     if let Some(stdin) = stdin
-        && let Some(mut child_stdin) = child.stdin.take()
+        && let Some(mut child_stdin) = child.child_mut().stdin.take()
     {
         let stdin_sender = sender.clone();
         let stdin_command = command_name.clone();
@@ -346,12 +346,13 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
         let started = Instant::now();
         loop {
             if monitor_dropped.load(Ordering::Acquire) {
-                terminate_process_child(&mut child, &process_guard);
+                let _ = child.terminate();
                 let _ = child.wait();
                 break;
             }
             match child.try_wait() {
                 Ok(Some(status)) => {
+                    let status = child.wait().unwrap_or(status);
                     let _ = sender.send(Ok(ProcessEvent {
                         kind: "exit".to_string(),
                         data: String::new(),
@@ -363,7 +364,7 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
                     if let Some(timeout) = timeout
                         && started.elapsed() >= timeout
                     {
-                        terminate_process_child(&mut child, &process_guard);
+                        let _ = child.terminate();
                         let _ = sender.send(Ok(ProcessEvent {
                             kind: "timeout".to_string(),
                             data: format!(
@@ -378,6 +379,8 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
                     std::thread::sleep(Duration::from_millis(5));
                 }
                 Err(error) => {
+                    let _ = child.terminate();
+                    let _ = child.wait();
                     let _ = sender.send(Ok(ProcessEvent {
                         kind: "error".to_string(),
                         data: format!("failed to poll `{command_name}`: {error}"),
@@ -427,14 +430,14 @@ fn process_run_request_with_cancellation(
         command.env(&env.name, &env.value);
     }
     apply_default_ramdisk_env(&mut command);
-    let (mut child, process_guard) = rss_process_guard::spawn_guarded(
+    let mut child = rss_process_guard::spawn_guarded_child(
         &mut command,
         rss_process_guard::ProcessLimits::generated_program(),
     )
     .map_err(|error| format!("failed to run `{}`: {error}", request.command))?;
 
     let stdin_thread = request.stdin.as_ref().and_then(|stdin| {
-        child.stdin.take().map(|mut child_stdin| {
+        child.child_mut().stdin.take().map(|mut child_stdin| {
             let stdin = stdin.clone();
             std::thread::spawn(move || child_stdin.write_all(stdin.as_bytes()))
         })
@@ -443,7 +446,7 @@ fn process_run_request_with_cancellation(
     let (sender, receiver) = mpsc::channel();
     let capture_budget = Arc::new(AtomicUsize::new(cap));
     let capture_truncated = Arc::new(AtomicBool::new(false));
-    let stdout_thread = child.stdout.take().map(|stdout| {
+    let stdout_thread = child.child_mut().stdout.take().map(|stdout| {
         spawn_process_reader(
             stdout,
             false,
@@ -452,7 +455,7 @@ fn process_run_request_with_cancellation(
             Arc::clone(&capture_truncated),
         )
     });
-    let stderr_thread = child.stderr.take().map(|stderr| {
+    let stderr_thread = child.child_mut().stderr.take().map(|stderr| {
         spawn_process_reader(
             stderr,
             true,
@@ -477,14 +480,14 @@ fn process_run_request_with_cancellation(
         }
         if cancellation.is_some_and(cancellation_token_is_cancelled) {
             cancelled = true;
-            terminate_process_child(&mut child, &process_guard);
+            let _ = child.terminate();
             break;
         }
         if let Some(deadline) = deadline
             && Instant::now() >= deadline
         {
             timed_out = true;
-            terminate_process_child(&mut child, &process_guard);
+            let _ = child.terminate();
             break;
         }
         std::thread::sleep(Duration::from_millis(5));
@@ -767,14 +770,6 @@ fn join_process_reader(
         Ok(Err(error)) => Err(format!("failed to read {stream} for `{command}`: {error}")),
         Err(_) => Err(format!("{stream} reader panicked for `{command}`")),
     }
-}
-
-fn terminate_process_child(
-    child: &mut std::process::Child,
-    guard: &rss_process_guard::ProcessGuard,
-) {
-    let _ = guard.terminate();
-    let _ = child.kill();
 }
 
 fn process_stdout_result(command: &str, output: ProcessOutput) -> Result<String, String> {
@@ -1102,6 +1097,33 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
+    fn normal_root_exit_terminates_background_descendants() {
+        let marker = std::env::temp_dir().join(format!(
+            "rsscript-runtime-descendant-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&marker);
+        let request = super::ProcessRequest {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                format!("(sleep 1; touch '{}') & exit 0", marker.display()),
+            ],
+            cwd: None,
+            stdin: None,
+            env: Vec::new(),
+            timeout_ms: 10_000,
+            merge_stderr: false,
+            output_cap_bytes: 1024,
+        };
+        let output = super::process_run_request(&request).expect("root process should finish");
+        assert_eq!(output.status, 0);
+        std::thread::sleep(std::time::Duration::from_millis(1_200));
+        assert!(!marker.exists(), "background descendant escaped runtime");
+    }
+
+    #[test]
+    #[cfg(unix)]
     fn process_run_request_supports_agent_controls() {
         let cwd =
             std::env::temp_dir().join(format!("rsscript-process-request-{}", std::process::id()));
@@ -1216,7 +1238,7 @@ mod tests {
             ))
             .expect_err("process should be cancelled");
 
-        assert!(error.contains("cancelled"));
+        assert!(error.contains("cancelled"), "unexpected error: {error}");
     }
 
     #[test]

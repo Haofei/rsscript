@@ -100,7 +100,10 @@ pub fn path_join<P: RuntimePath + ?Sized>(base: &P, child: &str) -> PathBuf {
     base.as_path().join(child)
 }
 
-pub fn path_safe_relative(value: &str) -> Result<PathBuf, String> {
+/// Validate and normalize a relative path lexically.
+///
+/// This does not resolve symlinks or provide filesystem confinement.
+pub fn path_lexically_safe_relative(value: &str) -> Result<PathBuf, String> {
     let path = std::path::Path::new(value);
     if value.is_empty() {
         return Err("path must be non-empty".to_string());
@@ -127,17 +130,34 @@ pub fn path_safe_relative(value: &str) -> Result<PathBuf, String> {
     Ok(normalized)
 }
 
-pub fn path_resolve_relative<P: RuntimePath + ?Sized>(
+/// Resolve a relative path using lexical components only.
+///
+/// Security-sensitive callers must use handle-relative filesystem APIs that
+/// reject symlinks and reparse points.
+pub fn path_lexically_resolve_relative<P: RuntimePath + ?Sized>(
     root: &P,
     relative: &str,
 ) -> Result<PathBuf, String> {
-    let relative = path_safe_relative(relative)?;
+    let relative = path_lexically_safe_relative(relative)?;
     let root = root.as_path();
     let resolved = path_normalize(&root.join(relative));
     if !resolved.starts_with(root) {
         return Err("resolved path escapes the workspace root".to_string());
     }
     Ok(resolved)
+}
+
+#[deprecated(note = "use path_lexically_safe_relative; this API is not a sandbox")]
+pub fn path_safe_relative(value: &str) -> Result<PathBuf, String> {
+    path_lexically_safe_relative(value)
+}
+
+#[deprecated(note = "use path_lexically_resolve_relative; this API is not a sandbox")]
+pub fn path_resolve_relative<P: RuntimePath + ?Sized>(
+    root: &P,
+    relative: &str,
+) -> Result<PathBuf, String> {
+    path_lexically_resolve_relative(root, relative)
 }
 
 pub fn path_normalize<P: RuntimePath + ?Sized>(path: &P) -> PathBuf {
@@ -575,6 +595,10 @@ pub fn directory_list_paths<P: RuntimePath + ?Sized>(path: &P) -> Result<Vec<Pat
 }
 
 pub fn directory_exists<P: RuntimePath + ?Sized>(path: &P) -> bool {
+    path.as_path().is_dir()
+}
+
+pub fn path_exists<P: RuntimePath + ?Sized>(path: &P) -> bool {
     path.as_path().exists()
 }
 
@@ -865,15 +889,28 @@ mod tests {
 
     #[test]
     fn safe_relative_paths_reject_absolute_and_parent_traversal() {
-        assert!(path_safe_relative("stdlib/json/json.rssi").is_ok());
-        assert!(path_safe_relative("/tmp/file").is_err());
-        assert!(path_safe_relative("../secret").is_err());
-        assert!(path_safe_relative("stdlib/../secret").is_err());
+        assert!(path_lexically_safe_relative("stdlib/json/json.rssi").is_ok());
+        assert!(path_lexically_safe_relative("/tmp/file").is_err());
+        assert!(path_lexically_safe_relative("../secret").is_err());
+        assert!(path_lexically_safe_relative("stdlib/../secret").is_err());
 
         let root = std::env::temp_dir();
-        let resolved = path_resolve_relative(&root, "rsscript-safe-path.txt")
+        let resolved = path_lexically_resolve_relative(&root, "rsscript-safe-path.txt")
             .expect("relative path should resolve under root");
         assert!(resolved.starts_with(root));
+    }
+
+    #[test]
+    fn directory_exists_only_accepts_directories() {
+        let root =
+            std::env::temp_dir().join(format!("rsscript-directory-exists-{}", std::process::id()));
+        let file = root.join("file");
+        std::fs::create_dir_all(&root).expect("directory should be created");
+        std::fs::write(&file, "data").expect("file should be written");
+        assert!(directory_exists(&root));
+        assert!(!directory_exists(&file));
+        assert!(path_exists(&file));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

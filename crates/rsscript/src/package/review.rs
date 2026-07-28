@@ -523,12 +523,31 @@ fn collect_native_reasons(native: Option<&PackageNativeRustReview>, reasons: &mu
     {
         reasons.push("native Rust proc macros require review".to_string());
     }
-    if native
-        .unsafe_policy
-        .as_deref()
-        .is_some_and(|policy| policy != "forbid")
-    {
+    let mut unsafe_review_required = false;
+    for (boundary, policy) in [
+        (
+            "RSS unsafe APIs",
+            native.unsafe_policies.rss_unsafe_apis.as_deref(),
+        ),
+        (
+            "wrapper unsafe blocks",
+            native.unsafe_policies.wrapper_unsafe_blocks.as_deref(),
+        ),
+        (
+            "transitive unsafe blocks",
+            native.unsafe_policies.transitive_unsafe_blocks.as_deref(),
+        ),
+    ] {
+        if policy.is_some_and(|policy| policy != "forbid") {
+            unsafe_review_required = true;
+            reasons.push(format!("native Rust {boundary} require review"));
+        }
+    }
+    if unsafe_review_required {
         reasons.push("native Rust unsafe policy requires review".to_string());
+    }
+    if !native.semantic.source_scan_best_effort.complete {
+        reasons.push("native Rust semantic source scan is incomplete".to_string());
     }
     if !native.links.is_empty()
         && native
@@ -1104,6 +1123,9 @@ fn package_risk(
     native_apis: usize,
     unknown_capability_bindings: usize,
 ) -> PackageRisk {
+    if native.is_some_and(|native| !native.semantic.source_scan_best_effort.complete) {
+        return PackageRisk::Unknown;
+    }
     if manifest
         .review
         .as_ref()
@@ -1136,10 +1158,14 @@ fn package_risk(
                 .proc_macros
                 .as_deref()
                 .is_some_and(|policy| policy != "forbid")
-            || native
-                .unsafe_policy
-                .as_deref()
-                .is_some_and(|policy| policy != "forbid")
+            || [
+                native.unsafe_policies.rss_unsafe_apis.as_deref(),
+                native.unsafe_policies.wrapper_unsafe_blocks.as_deref(),
+                native.unsafe_policies.transitive_unsafe_blocks.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            .any(|policy| policy != "forbid")
             || (!native.links.is_empty()
                 && native
                     .native_links_policy

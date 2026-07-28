@@ -190,6 +190,15 @@ fn native_rust_policy_value_diagnostics(
             ));
         }
     }
+    if native.has_mixed_legacy_and_granular_unsafe_policy() {
+        diagnostics.push(package_review_policy_diagnostic(
+            package_dir,
+            "unsafe",
+            "legacy and granular native unsafe policies cannot be mixed.",
+            "unsafe",
+            "Remove `[native.rust].unsafe` or remove all three granular unsafe policy fields.",
+        ));
+    }
 
     diagnostics
 }

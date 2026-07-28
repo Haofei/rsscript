@@ -596,7 +596,7 @@ wrapper_unsafe_blocks = "audited"
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(!check.ok);
-    assert_eq!(json["summary"]["errors"], 5);
+    assert_eq!(json["summary"]["errors"], 6);
     assert!(json["diagnostics"].as_array().is_some_and(|diagnostics| {
         diagnostics.iter().any(|diagnostic| {
             diagnostic["code"] == "PKG0501" && diagnostic["label"] == "build_scripts"
@@ -748,6 +748,12 @@ native fn Native.parse(text: read String) -> String
     assert_eq!(json["native_rust"]["build_scripts"], "review");
     assert_eq!(json["native_rust"]["proc_macros"], "forbid");
     assert_eq!(json["native_rust"]["unsafe_policy"], "review");
+    assert_eq!(
+        json["native_rust"]["unsafe_policies"]["wrapper_unsafe_blocks"],
+        "review"
+    );
+    assert!(json["native_rust"]["unsafe_policies"]["rss_unsafe_apis"].is_null());
+    assert!(json["native_rust"]["unsafe_policies"]["transitive_unsafe_blocks"].is_null());
     assert!(json["reasons"].as_array().is_some_and(|reasons| {
         reasons
             .iter()
@@ -756,6 +762,92 @@ native fn Native.parse(text: read String) -> String
                 .iter()
                 .any(|reason| reason == "native Rust unsafe policy requires review")
     }));
+}
+
+#[test]
+fn package_review_preserves_all_native_unsafe_policy_dimensions() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-granular-native-policy");
+    common::write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+
+[native.rust.policy]
+rss_unsafe_apis = "allow"
+wrapper_unsafe_blocks = "forbid"
+transitive_unsafe_blocks = "review"
+"#,
+        r#"features: native
+
+native fn Native.parse(text: read String) -> String
+    effects(native)
+"#,
+    );
+
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(
+        json["native_rust"]["unsafe_policies"]["rss_unsafe_apis"],
+        "allow"
+    );
+    assert_eq!(
+        json["native_rust"]["unsafe_policies"]["wrapper_unsafe_blocks"],
+        "forbid"
+    );
+    assert_eq!(
+        json["native_rust"]["unsafe_policies"]["transitive_unsafe_blocks"],
+        "review"
+    );
+}
+
+#[test]
+fn package_review_marks_unreadable_native_source_scan_incomplete() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-incomplete-native-scan");
+    common::write_package_fixture(
+        &temp_dir,
+        "0.1.0",
+        r#"[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_json_native"
+unsafe = "forbid"
+"#,
+        r#"features: native
+
+native fn Native.parse(text: read String) -> String
+    effects(native)
+"#,
+    );
+    fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native source directory");
+    fs::write(
+        temp_dir.join("native/rust/Cargo.toml"),
+        "[package]\nname = \"rss_json_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+    )
+    .expect("native Cargo.toml");
+    fs::write(temp_dir.join("native/rust/src/lib.rs"), [0xff, 0xfe])
+        .expect("invalid UTF-8 native source");
+
+    let review = review_package_dir(&temp_dir).expect("incomplete scan should remain reportable");
+    let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["risk"], "unknown");
+    assert_eq!(
+        json["native_rust"]["semantic"]["source_scan_best_effort"]["complete"],
+        false
+    );
+    assert!(
+        json["native_rust"]["semantic"]["source_scan_best_effort"]["errors"]
+            .as_array()
+            .is_some_and(|errors| !errors.is_empty())
+    );
 }
 
 #[test]
@@ -1234,7 +1326,11 @@ path = "native/rust"
 crate = "rss_json_native"
 build_scripts = "forbid"
 proc_macros = "forbid"
-unsafe = "forbid"
+
+[native.rust.policy]
+rss_unsafe_apis = "allow"
+wrapper_unsafe_blocks = "forbid"
+transitive_unsafe_blocks = "review"
 "#,
         r#"features: native
 

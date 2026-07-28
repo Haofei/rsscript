@@ -2094,6 +2094,7 @@ dependencies = [
 name = "rss_sqlx_native"
 version = "0.1.0"
 dependencies = [
+ "sha2",
  "sqlx",
  "tokio",
 ]

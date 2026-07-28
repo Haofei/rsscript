@@ -732,7 +732,8 @@ mod tests {
         assert!(crate::directory_exists(&root));
         assert!(crate::directory_is_dir(&root));
         assert!(!crate::directory_is_file(&root));
-        assert!(crate::directory_exists(&file));
+        assert!(!crate::directory_exists(&file));
+        assert!(crate::path_exists(&file));
         assert!(crate::directory_is_file(&file));
         assert!(!crate::directory_is_dir(&file));
         assert_eq!(

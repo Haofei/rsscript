@@ -1,13 +1,14 @@
 use std::collections::HashMap;
 use std::future::Future;
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::sync::mpsc::{self, SyncSender};
-use std::sync::{Mutex, Once, OnceLock};
+use std::sync::mpsc;
+use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
 
+use sha2::{Digest, Sha256};
 use sqlx::any::AnyPoolOptions;
 use sqlx::{AnyPool, Row};
 use tokio::runtime::{Builder, Runtime};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 static INSTALL_DRIVERS: Once = Once::new();
 
@@ -18,6 +19,8 @@ pub const DEFAULT_QUERY_TIMEOUT_MS: u64 = 30_000;
 pub const DEFAULT_POOL_IDLE_TIMEOUT_MS: u64 = 300_000;
 pub const DEFAULT_MAX_RESULT_ROWS: usize = 10_000;
 pub const DEFAULT_MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
+pub const DEFAULT_MAX_IN_FLIGHT: usize = 64;
+pub const DEFAULT_MAX_IN_FLIGHT_PER_POOL: usize = DEFAULT_MAX_CONNECTIONS as usize;
 
 const MAX_CACHED_POOLS_ENV: &str = "RSS_SQLX_MAX_CACHED_POOLS";
 const CONNECT_TIMEOUT_MS_ENV: &str = "RSS_SQLX_CONNECT_TIMEOUT_MS";
@@ -25,7 +28,8 @@ const QUERY_TIMEOUT_MS_ENV: &str = "RSS_SQLX_QUERY_TIMEOUT_MS";
 const POOL_IDLE_TIMEOUT_MS_ENV: &str = "RSS_SQLX_POOL_IDLE_TIMEOUT_MS";
 const MAX_RESULT_ROWS_ENV: &str = "RSS_SQLX_MAX_RESULT_ROWS";
 const MAX_RESULT_BYTES_ENV: &str = "RSS_SQLX_MAX_RESULT_BYTES";
-const RUNTIME_QUEUE_CAPACITY: usize = 64;
+const MAX_IN_FLIGHT_ENV: &str = "RSS_SQLX_MAX_IN_FLIGHT";
+const MAX_IN_FLIGHT_PER_POOL_ENV: &str = "RSS_SQLX_MAX_IN_FLIGHT_PER_POOL";
 
 #[derive(Clone, Copy)]
 struct QueryLimits {
@@ -39,13 +43,19 @@ struct SqlxConfig {
     connect_timeout: Duration,
     query_timeout: Duration,
     pool_idle_timeout: Duration,
+    max_in_flight_per_pool: usize,
 }
 
 type PoolKey = String;
-type RuntimeJob = Box<dyn FnOnce(&Runtime) + Send + 'static>;
+
+#[derive(Clone)]
+struct PoolHandle {
+    pool: AnyPool,
+    permits: Arc<Semaphore>,
+}
 
 struct PoolEntry {
-    pool: AnyPool,
+    handle: PoolHandle,
     last_used: Instant,
     sequence: u64,
 }
@@ -84,6 +94,10 @@ fn configured_sqlx() -> Result<SqlxConfig, String> {
             POOL_IDLE_TIMEOUT_MS_ENV,
             DEFAULT_POOL_IDLE_TIMEOUT_MS,
         )?,
+        max_in_flight_per_pool: configured_limit(
+            MAX_IN_FLIGHT_PER_POOL_ENV,
+            DEFAULT_MAX_IN_FLIGHT_PER_POOL,
+        )?,
     })
 }
 
@@ -118,28 +132,7 @@ fn normalize_database_url(url: &str) -> String {
         format!("{userinfo}@{host_port}")
     };
 
-    let (before_fragment, fragment) = suffix
-        .split_once('#')
-        .map_or((suffix, None), |(value, fragment)| (value, Some(fragment)));
-    let (path, query) = before_fragment
-        .split_once('?')
-        .map_or((before_fragment, None), |(path, query)| (path, Some(query)));
-    let query = query.map(|query| {
-        let mut fields = query.split('&').collect::<Vec<_>>();
-        fields.sort_unstable();
-        fields.join("&")
-    });
-
-    let mut normalized = format!("{scheme}://{authority}{path}");
-    if let Some(query) = query {
-        normalized.push('?');
-        normalized.push_str(&query);
-    }
-    if let Some(fragment) = fragment {
-        normalized.push('#');
-        normalized.push_str(fragment);
-    }
-    normalized
+    format!("{scheme}://{authority}{suffix}")
 }
 
 fn normalize_host_port(scheme: &str, host_port: &str) -> String {
@@ -171,9 +164,9 @@ fn normalize_host_port(scheme: &str, host_port: &str) -> String {
 }
 
 fn url_fingerprint(url: &str) -> String {
-    let mut hasher = DefaultHasher::new();
-    pool_key(url).hash(&mut hasher);
-    format!("{:016x}", hasher.finish())
+    let endpoint = redacted_database_endpoint(url);
+    let digest = Sha256::digest(endpoint.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 fn redact_error(url: &str, error: impl std::fmt::Display) -> String {
@@ -193,24 +186,96 @@ fn database_url_secrets(url: &str) -> Vec<String> {
     let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
     let (authority, suffix) = rest.split_at(authority_end);
     let mut secrets = Vec::new();
-    if let Some((userinfo, _)) = authority.rsplit_once('@')
-        && let Some((_, password)) = userinfo.split_once(':')
-        && !password.is_empty()
-    {
-        secrets.push(password.to_owned());
+    if let Some((userinfo, _)) = authority.rsplit_once('@') {
+        if let Some((_, password)) = userinfo.split_once(':')
+            && !password.is_empty()
+        {
+            secrets.push(password.to_owned());
+            if let Some(decoded) = percent_decode(password)
+                && decoded != password
+            {
+                secrets.push(decoded);
+            }
+        }
+        if !userinfo.is_empty() {
+            secrets.push(userinfo.to_owned());
+        }
     }
     if let Some((query, _)) = suffix
         .split_once('?')
         .map(|(_, query)| query.split_once('#').unwrap_or((query, "")))
     {
-        secrets.extend(query.split('&').filter_map(|field| {
-            let (_, value) = field.split_once('=')?;
-            (!value.is_empty()).then(|| value.to_owned())
-        }));
+        for value in query.split('&').filter_map(|field| {
+            let (key, value) = field.split_once('=')?;
+            (is_sensitive_query_key(key) && !value.is_empty()).then(|| value.to_owned())
+        }) {
+            if let Some(decoded) = percent_decode(&value)
+                && decoded != value
+            {
+                secrets.push(decoded);
+            }
+            secrets.push(value);
+        }
     }
     secrets.sort_by_key(|secret| std::cmp::Reverse(secret.len()));
     secrets.dedup();
     secrets
+}
+
+fn redacted_database_endpoint(url: &str) -> String {
+    let normalized = normalize_database_url(url);
+    let Some((scheme, rest)) = normalized.split_once("://") else {
+        return "<invalid-database-url>".to_owned();
+    };
+    let authority_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let authority = &rest[..authority_end];
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let path = &rest[authority_end..];
+    let path_end = path.find(['?', '#']).unwrap_or(path.len());
+    format!("{scheme}://{host}{}", &path[..path_end])
+}
+
+fn is_sensitive_query_key(key: &str) -> bool {
+    matches!(
+        key.to_ascii_lowercase().as_str(),
+        "access_token"
+            | "api_key"
+            | "apikey"
+            | "auth"
+            | "credential"
+            | "password"
+            | "secret"
+            | "token"
+    )
+}
+
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' && index + 2 < bytes.len() {
+            let high = hex_value(bytes[index + 1])?;
+            let low = hex_value(bytes[index + 2])?;
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn account_value(
@@ -232,41 +297,36 @@ fn account_value(
     Ok(())
 }
 
-/// Shared Tokio runtime that drives SQLx futures outside a caller's runtime.
-fn runtime() -> &'static Runtime {
-    static RUNTIME: OnceLock<Runtime> = OnceLock::new();
-    RUNTIME.get_or_init(|| {
-        Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("tokio runtime for sqlx pool")
-    })
+struct RuntimeService {
+    runtime: Runtime,
+    permits: Arc<Semaphore>,
 }
 
-fn runtime_jobs() -> &'static SyncSender<RuntimeJob> {
-    static JOBS: OnceLock<SyncSender<RuntimeJob>> = OnceLock::new();
-    JOBS.get_or_init(|| {
-        let (sender, receiver) = mpsc::sync_channel::<RuntimeJob>(RUNTIME_QUEUE_CAPACITY);
-        std::thread::Builder::new()
-            .name("rss-sqlx-runtime".to_owned())
-            .spawn(move || {
-                while let Ok(job) = receiver.recv() {
-                    job(runtime());
-                }
+/// Shared multi-thread runtime. Work is admitted with a global semaphore and
+/// then scheduled independently, so one slow pool cannot serialize all others.
+fn runtime_service() -> Result<&'static RuntimeService, String> {
+    static SERVICE: OnceLock<Result<RuntimeService, String>> = OnceLock::new();
+    SERVICE
+        .get_or_init(|| {
+            let max_in_flight = configured_limit(MAX_IN_FLIGHT_ENV, DEFAULT_MAX_IN_FLIGHT)?;
+            let runtime = Builder::new_multi_thread()
+                .thread_name("rss-sqlx-runtime")
+                .enable_all()
+                .build()
+                .map_err(|error| format!("failed to create SQLx runtime: {error}"))?;
+            Ok(RuntimeService {
+                runtime,
+                permits: Arc::new(Semaphore::new(max_in_flight)),
             })
-            .expect("SQLx runtime worker");
-        sender
-    })
+        })
+        .as_ref()
+        .map_err(Clone::clone)
 }
 
-fn submit_runtime_job(sender: &SyncSender<RuntimeJob>, job: RuntimeJob) -> Result<(), String> {
-    match sender.try_send(job) {
-        Ok(()) => Ok(()),
-        Err(mpsc::TrySendError::Full(_)) => Err(format!(
-            "SQLx runtime queue is full (capacity {RUNTIME_QUEUE_CAPACITY})"
-        )),
-        Err(mpsc::TrySendError::Disconnected(_)) => Err("SQLx runtime worker stopped".to_string()),
-    }
+fn try_acquire(permits: &Arc<Semaphore>, scope: &str) -> Result<OwnedSemaphorePermit, String> {
+    Arc::clone(permits)
+        .try_acquire_owned()
+        .map_err(|_| format!("SQLx {scope} concurrency limit reached"))
 }
 
 fn run_on_runtime<F, T>(future: F) -> Result<T, String>
@@ -274,19 +334,19 @@ where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
+    let service = runtime_service()?;
+    let global_permit = try_acquire(&service.permits, "global")?;
     let (sender, receiver) = mpsc::sync_channel(1);
-    submit_runtime_job(
-        runtime_jobs(),
-        Box::new(move |runtime| {
-            let result =
-                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runtime.block_on(future)))
-                    .map_err(|_| "SQLx runtime worker panicked".to_string());
-            let _ = sender.send(result);
-        }),
-    )?;
+    service.runtime.spawn(async move {
+        let result = tokio::spawn(future)
+            .await
+            .map_err(|_| "SQLx runtime task panicked".to_string());
+        drop(global_permit);
+        let _ = sender.send(result);
+    });
     receiver
         .recv()
-        .map_err(|_| "SQLx runtime worker stopped".to_string())?
+        .map_err(|_| "SQLx runtime task stopped".to_string())?
 }
 
 fn run_with_deadline<F, T>(
@@ -316,6 +376,25 @@ where
     }
 }
 
+fn run_pool_with_deadline<F, T>(
+    url: &str,
+    operation: &'static str,
+    timeout: Duration,
+    permits: Arc<Semaphore>,
+    future: F,
+) -> Result<T, String>
+where
+    F: Future<Output = Result<T, String>> + Send + 'static,
+    T: Send + 'static,
+{
+    let pool_permit = try_acquire(&permits, "per-pool")?;
+    run_with_deadline(url, operation, timeout, async move {
+        let result = future.await;
+        drop(pool_permit);
+        result
+    })
+}
+
 fn pools() -> &'static Mutex<PoolRegistry> {
     static POOLS: OnceLock<Mutex<PoolRegistry>> = OnceLock::new();
     POOLS.get_or_init(|| Mutex::new(PoolRegistry::default()))
@@ -335,9 +414,13 @@ fn pool_for_with_config(
     max_cached_pools: usize,
     idle_timeout: Duration,
     connect_timeout: Duration,
-) -> Result<AnyPool, String> {
+    max_in_flight_per_pool: usize,
+) -> Result<PoolHandle, String> {
     if max_cached_pools == 0 {
         return Err("maximum cached SQLx pools must be positive".to_string());
+    }
+    if max_in_flight_per_pool == 0 {
+        return Err("maximum in-flight SQLx operations per pool must be positive".to_string());
     }
 
     INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
@@ -352,7 +435,7 @@ fn pool_for_with_config(
     if let Some(entry) = registry.entries.get_mut(&key) {
         entry.last_used = now;
         entry.sequence = sequence;
-        return Ok(entry.pool.clone());
+        return Ok(entry.handle.clone());
     }
 
     while registry.entries.len() >= max_cached_pools {
@@ -368,7 +451,7 @@ fn pool_for_with_config(
     // Creating the lazy pool while holding the registry lock prevents duplicate
     // entries when native calls arrive concurrently.
     let pool = {
-        let _enter = runtime().enter();
+        let _enter = runtime_service()?.runtime.enter();
         AnyPoolOptions::new()
             .max_connections(DEFAULT_MAX_CONNECTIONS)
             .acquire_timeout(connect_timeout)
@@ -382,23 +465,28 @@ fn pool_for_with_config(
                 )
             })?
     };
+    let handle = PoolHandle {
+        pool,
+        permits: Arc::new(Semaphore::new(max_in_flight_per_pool)),
+    };
     registry.entries.insert(
         key,
         PoolEntry {
-            pool: pool.clone(),
+            handle: handle.clone(),
             last_used: now,
             sequence,
         },
     );
-    Ok(pool)
+    Ok(handle)
 }
 
-fn pool_for(url: &str, config: SqlxConfig) -> Result<AnyPool, String> {
+fn pool_for(url: &str, config: SqlxConfig) -> Result<PoolHandle, String> {
     pool_for_with_config(
         url,
         config.max_cached_pools,
         config.pool_idle_timeout,
         config.connect_timeout,
+        config.max_in_flight_per_pool,
     )
 }
 
@@ -411,7 +499,7 @@ pub fn close(url: &str) -> Result<(), String> {
         .map_err(|error| error.to_string())?
         .entries
         .remove(&key)
-        .map(|entry| (key, entry.pool));
+        .map(|entry| (key, entry.handle.pool));
     if let Some(pool) = removed {
         close_pools(vec![pool])?;
     }
@@ -425,7 +513,7 @@ pub fn close_all() -> Result<(), String> {
         registry
             .entries
             .drain()
-            .map(|(key, entry)| (key, entry.pool))
+            .map(|(key, entry)| (key, entry.handle.pool))
             .collect()
     };
     close_pools(removed)
@@ -434,34 +522,48 @@ pub fn close_all() -> Result<(), String> {
 /// Run one or more SQL statements that produce no rows (DDL, `INSERT`, ...).
 pub fn execute(url: &str, sql: &str) -> Result<(), String> {
     let config = configured_sqlx()?;
-    let pool = pool_for(url, config)?;
+    let handle = pool_for(url, config)?;
+    let pool = handle.pool.clone();
     let sql = sql.to_owned();
-    run_with_deadline(url, "query", config.query_timeout, async move {
-        sqlx::raw_sql(&sql)
-            .execute(&pool)
-            .await
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    })
+    run_pool_with_deadline(
+        url,
+        "query",
+        config.query_timeout,
+        handle.permits,
+        async move {
+            sqlx::raw_sql(&sql)
+                .execute(&pool)
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        },
+    )
 }
 
 /// Run one SQL statement with positional string bind parameters.
 pub fn execute_params(url: &str, sql: &str, params: &[String]) -> Result<(), String> {
     let config = configured_sqlx()?;
-    let pool = pool_for(url, config)?;
+    let handle = pool_for(url, config)?;
+    let pool = handle.pool.clone();
     let sql = sql.to_owned();
     let params = params.to_vec();
-    run_with_deadline(url, "query", config.query_timeout, async move {
-        let mut query = sqlx::query(&sql);
-        for param in &params {
-            query = query.bind(param);
-        }
-        query
-            .execute(&pool)
-            .await
-            .map(|_| ())
-            .map_err(|error| error.to_string())
-    })
+    run_pool_with_deadline(
+        url,
+        "query",
+        config.query_timeout,
+        handle.permits,
+        async move {
+            let mut query = sqlx::query(&sql);
+            for param in &params {
+                query = query.bind(param);
+            }
+            query
+                .execute(&pool)
+                .await
+                .map(|_| ())
+                .map_err(|error| error.to_string())
+        },
+    )
 }
 
 fn query_strings_with_limits(
@@ -471,26 +573,34 @@ fn query_strings_with_limits(
     limits: QueryLimits,
 ) -> Result<Vec<String>, String> {
     let config = configured_sqlx()?;
-    let pool = pool_for(url, config)?;
+    let handle = pool_for(url, config)?;
+    let pool = handle.pool.clone();
     let sql = sql.to_owned();
     let params = params.to_vec();
-    run_with_deadline(url, "query", config.query_timeout, async move {
-        let mut query = sqlx::query(&sql);
-        for param in &params {
-            query = query.bind(param);
-        }
-        let mut rows = query.fetch(&pool);
-        let mut values = Vec::new();
-        let mut bytes = 0;
-        while let Some(row) = std::future::poll_fn(|context| rows.as_mut().poll_next(context)).await
-        {
-            let row = row.map_err(|error| error.to_string())?;
-            let value: &str = row.try_get(0).map_err(|error| error.to_string())?;
-            account_value(value, values.len(), &mut bytes, limits)?;
-            values.push(value.to_string());
-        }
-        Ok(values)
-    })
+    run_pool_with_deadline(
+        url,
+        "query",
+        config.query_timeout,
+        handle.permits,
+        async move {
+            let mut query = sqlx::query(&sql);
+            for param in &params {
+                query = query.bind(param);
+            }
+            let mut rows = query.fetch(&pool);
+            let mut values = Vec::new();
+            let mut bytes = 0;
+            while let Some(row) =
+                std::future::poll_fn(|context| rows.as_mut().poll_next(context)).await
+            {
+                let row = row.map_err(|error| error.to_string())?;
+                let value: &str = row.try_get(0).map_err(|error| error.to_string())?;
+                account_value(value, values.len(), &mut bytes, limits)?;
+                values.push(value.to_string());
+            }
+            Ok(values)
+        },
+    )
 }
 
 pub fn query_strings(url: &str, sql: &str) -> Result<Vec<String>, String> {
@@ -513,26 +623,33 @@ fn query_one_string_with_limits(
     limits: QueryLimits,
 ) -> Result<Option<String>, String> {
     let config = configured_sqlx()?;
-    let pool = pool_for(url, config)?;
+    let handle = pool_for(url, config)?;
+    let pool = handle.pool.clone();
     let sql = sql.to_owned();
     let params = params.to_vec();
-    run_with_deadline(url, "query", config.query_timeout, async move {
-        let mut query = sqlx::query(&sql);
-        for param in &params {
-            query = query.bind(param);
-        }
-        let row = query
-            .fetch_optional(&pool)
-            .await
-            .map_err(|error| error.to_string())?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-        let value: &str = row.try_get(0).map_err(|error| error.to_string())?;
-        let mut bytes = 0;
-        account_value(value, 0, &mut bytes, limits)?;
-        Ok(Some(value.to_string()))
-    })
+    run_pool_with_deadline(
+        url,
+        "query",
+        config.query_timeout,
+        handle.permits,
+        async move {
+            let mut query = sqlx::query(&sql);
+            for param in &params {
+                query = query.bind(param);
+            }
+            let row = query
+                .fetch_optional(&pool)
+                .await
+                .map_err(|error| error.to_string())?;
+            let Some(row) = row else {
+                return Ok(None);
+            };
+            let value: &str = row.try_get(0).map_err(|error| error.to_string())?;
+            let mut bytes = 0;
+            account_value(value, 0, &mut bytes, limits)?;
+            Ok(Some(value.to_string()))
+        },
+    )
 }
 
 pub fn query_one_string(url: &str, sql: &str) -> Result<Option<String>, String> {
@@ -660,16 +777,20 @@ mod tests {
     }
 
     #[test]
-    fn pool_identity_uses_the_normalized_url_not_only_its_fingerprint() {
+    fn pool_identity_preserves_query_order_and_uses_full_normalized_url() {
         let first =
             "POSTGRESQL://user:password@DB.EXAMPLE:5432/app?sslmode=require&application_name=rss";
-        let second = "postgres://user:password@db.example/app?application_name=rss&sslmode=require";
+        let equivalent =
+            "postgres://user:password@db.example/app?sslmode=require&application_name=rss";
+        let reordered =
+            "postgres://user:password@db.example/app?application_name=rss&sslmode=require";
 
-        assert_eq!(super::pool_key(first), super::pool_key(second));
+        assert_eq!(super::pool_key(first), super::pool_key(equivalent));
+        assert_ne!(super::pool_key(first), super::pool_key(reordered));
         assert!(super::pool_key(first).contains("user:password"));
         assert_eq!(
             super::url_fingerprint(first),
-            super::url_fingerprint(second)
+            super::url_fingerprint(reordered)
         );
     }
 
@@ -684,42 +805,54 @@ mod tests {
 
         assert!(!error.contains("private-password"));
         assert!(!error.contains("secret"));
-        assert!(!error.contains("require"));
+        assert!(error.contains("mode require"));
         assert!(error.contains("<redacted>"));
     }
 
     #[test]
-    fn runtime_work_is_reused_on_one_fixed_worker() {
-        let thread_ids = (0..8)
-            .map(|_| {
-                super::run_on_runtime(async { std::thread::current().id() })
-                    .expect("runtime job should run")
-            })
-            .collect::<Vec<_>>();
+    fn redacts_percent_decoded_passwords_without_hiding_nonsecret_options() {
+        let url = "postgres://user:p%40ssword@db.example/app?sslmode=require&token=secret";
+        let error = super::redact_error(
+            url,
+            "authentication rejected p@ssword; token secret; sslmode require",
+        );
 
-        assert!(thread_ids.windows(2).all(|ids| ids[0] == ids[1]));
+        assert!(!error.contains("p@ssword"));
+        assert!(!error.contains("secret"));
+        assert!(error.contains("sslmode require"));
     }
 
     #[test]
-    fn runtime_queue_full_fails_fast_with_a_clear_error() {
-        let (sender, _receiver): (
-            std::sync::mpsc::SyncSender<super::RuntimeJob>,
-            std::sync::mpsc::Receiver<super::RuntimeJob>,
-        ) = std::sync::mpsc::sync_channel(1);
-        sender
-            .try_send(Box::new(|_| {}))
-            .expect("first job fills the queue");
+    fn runtime_executes_independent_jobs_concurrently() {
+        let started = std::time::Instant::now();
+        let jobs = (0..2)
+            .map(|_| {
+                std::thread::spawn(|| {
+                    super::run_on_runtime(async {
+                        tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+                    })
+                    .expect("runtime job should run");
+                })
+            })
+            .collect::<Vec<_>>();
+        for job in jobs {
+            job.join().expect("caller thread");
+        }
 
-        let error = super::submit_runtime_job(&sender, Box::new(|_| {}))
-            .expect_err("a full queue must reject work");
-
-        assert_eq!(
-            error,
-            format!(
-                "SQLx runtime queue is full (capacity {})",
-                super::RUNTIME_QUEUE_CAPACITY
-            )
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(145),
+            "independent jobs should overlap instead of running serially"
         );
+    }
+
+    #[test]
+    fn concurrency_limits_fail_fast_with_a_clear_scope() {
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let held = super::try_acquire(&permits, "per-pool").expect("first permit");
+        let error =
+            super::try_acquire(&permits, "per-pool").expect_err("second permit must be rejected");
+        assert_eq!(error, "SQLx per-pool concurrency limit reached");
+        drop(held);
     }
 
     #[test]
@@ -732,11 +865,13 @@ mod tests {
 
         let idle_timeout = std::time::Duration::from_secs(60);
         let connect_timeout = std::time::Duration::from_secs(1);
-        super::pool_for_with_config(&url_a, 2, idle_timeout, connect_timeout).expect("first pool");
-        super::pool_for_with_config(&url_b, 2, idle_timeout, connect_timeout).expect("second pool");
-        super::pool_for_with_config(&url_a, 2, idle_timeout, connect_timeout)
+        super::pool_for_with_config(&url_a, 2, idle_timeout, connect_timeout, 2)
+            .expect("first pool");
+        super::pool_for_with_config(&url_b, 2, idle_timeout, connect_timeout, 2)
+            .expect("second pool");
+        super::pool_for_with_config(&url_a, 2, idle_timeout, connect_timeout, 2)
             .expect("existing pool remains available");
-        super::pool_for_with_config(&url_c, 2, idle_timeout, connect_timeout)
+        super::pool_for_with_config(&url_c, 2, idle_timeout, connect_timeout, 2)
             .expect("third pool should evict the least recently used pool");
 
         {
@@ -775,14 +910,14 @@ mod tests {
         let idle_timeout = std::time::Duration::from_millis(1);
         let connect_timeout = std::time::Duration::from_secs(1);
 
-        let expired = super::pool_for_with_config(&url_a, 2, idle_timeout, connect_timeout)
+        let expired = super::pool_for_with_config(&url_a, 2, idle_timeout, connect_timeout, 2)
             .expect("first pool");
         std::thread::sleep(std::time::Duration::from_millis(5));
-        let replacement = super::pool_for_with_config(&url_a, 2, idle_timeout, connect_timeout)
+        let replacement = super::pool_for_with_config(&url_a, 2, idle_timeout, connect_timeout, 2)
             .expect("expired pool should be replaced");
-        super::run_on_runtime(async move { expired.close().await })
+        super::run_on_runtime(async move { expired.pool.close().await })
             .expect("expired pool should close");
-        assert!(!replacement.is_closed());
+        assert!(!replacement.pool.is_closed());
 
         let registry = super::pools().lock().expect("pool registry lock");
         assert_eq!(registry.entries.len(), 1);

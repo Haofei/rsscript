@@ -25,9 +25,9 @@ use super::source_set::{
 use super::{
     CARGO_METADATA_TIMEOUT, CARGO_OUTPUT_MAX_BYTES, Manifest, ManifestNativeRust,
     PackageNativeRustAuthorDeclaration, PackageNativeRustCheck, PackageNativeRustReview,
-    PackageNativeRustSemanticReview, PackageNativeRustSourceScan, PackageReviewFileKind,
-    PackageRisk, PackageSource, canonical_path_label, configure_reduced_build_environment,
-    read_utf8_file_bounded, run_bounded_command,
+    PackageNativeRustSemanticReview, PackageNativeRustSourceScan, PackageNativeRustUnsafePolicies,
+    PackageReviewFileKind, PackageRisk, PackageSource, canonical_path_label,
+    configure_reduced_build_environment, read_utf8_file_bounded, run_bounded_command,
 };
 
 const NATIVE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
@@ -698,12 +698,25 @@ pub(super) fn check_package_native_rust(
     let cargo_toml = native_root.join("Cargo.toml");
     let cargo_toml_present = cargo_toml.exists();
     let mut files = Vec::new();
-    if native_root.exists() {
-        super::collect_regular_files(&native_root, &mut files)?;
-    }
-    let unsafe_detected = native_rust_unsafe_detected(&files)?;
-    let build_risk = native_build_script_risks(&files)?;
     let mut reasons = Vec::new();
+    let mut scan_complete = native.semantic.source_scan_best_effort.complete;
+    if native_root.exists() {
+        if let Err(error) = super::collect_regular_files(&native_root, &mut files) {
+            scan_complete = false;
+            reasons.push(format!(
+                "native Rust source enumeration incomplete: {error}"
+            ));
+        }
+    }
+    let unsafe_detected = native.semantic.source_scan_best_effort.unsafe_detected;
+    let build_risk = match native_build_script_risks(&files) {
+        Ok(risk) => risk,
+        Err(error) => {
+            scan_complete = false;
+            reasons.push(format!("native Rust build-script scan incomplete: {error}"));
+            NativeBuildScriptRisk::default()
+        }
+    };
     if !native_root.exists() {
         reasons.push("native Rust path missing".to_string());
     }
@@ -721,8 +734,12 @@ pub(super) fn check_package_native_rust(
     if files.is_empty() {
         reasons.push("native Rust source files missing".to_string());
     }
-    if unsafe_detected && native.unsafe_policy.as_deref() == Some("forbid") {
+    if unsafe_detected && native.unsafe_policies.wrapper_unsafe_blocks.as_deref() == Some("forbid")
+    {
         reasons.push("native Rust unsafe usage detected".to_string());
+    }
+    if !scan_complete {
+        reasons.push("native Rust semantic source scan incomplete".to_string());
     }
     if native.build_scripts.as_deref() == Some("forbid") {
         if build_risk.env_detected {
@@ -738,7 +755,9 @@ pub(super) fn check_package_native_rust(
         NativeCargoMetadataScan::default()
     };
     let ok = reasons.is_empty();
-    let risk = if ok {
+    let risk = if !scan_complete {
+        PackageRisk::Unknown
+    } else if ok {
         PackageRisk::Elevated
     } else {
         PackageRisk::High
@@ -784,6 +803,7 @@ pub(super) fn package_native_rust_review(
     };
     let cargo_features = selected_native_cargo_features(manifest, native);
     let scan = scan_native_rust_semantics(&native_root, &cargo_source);
+    let unsafe_policies = native.effective_unsafe_policies();
     let author_parallel = package_declares_parallel_native_api(sources);
     let backend = scan.native_parallel_backends.first().cloned();
     let mut risk_reasons = Vec::new();
@@ -802,7 +822,18 @@ pub(super) fn package_native_rust_review(
         crate_name: native.crate_name.clone(),
         build_scripts: native_effective_build_policy(manifest, native.effective_build_scripts()),
         proc_macros: native_effective_build_policy(manifest, native.effective_proc_macros()),
-        unsafe_policy: native.effective_unsafe_policy().map(str::to_string),
+        unsafe_policy: native
+            .unsafe_policy
+            .as_deref()
+            .or(unsafe_policies.wrapper_unsafe_blocks)
+            .or(unsafe_policies.rss_unsafe_apis)
+            .or(unsafe_policies.transitive_unsafe_blocks)
+            .map(str::to_string),
+        unsafe_policies: PackageNativeRustUnsafePolicies {
+            rss_unsafe_apis: unsafe_policies.rss_unsafe_apis.map(str::to_string),
+            wrapper_unsafe_blocks: unsafe_policies.wrapper_unsafe_blocks.map(str::to_string),
+            transitive_unsafe_blocks: unsafe_policies.transitive_unsafe_blocks.map(str::to_string),
+        },
         native_links_policy: native.effective_native_links().map(str::to_string),
         ffi_policy: native.effective_ffi().map(str::to_string),
         links: native.links.clone(),
@@ -905,8 +936,11 @@ fn scan_native_rust_semantics(
     cargo_source: &str,
 ) -> PackageNativeRustSourceScan {
     let mut files = Vec::new();
+    let mut errors = Vec::new();
     if native_root.exists() {
-        let _ = super::collect_regular_files(native_root, &mut files);
+        if let Err(error) = super::collect_regular_files(native_root, &mut files) {
+            errors.push(format!("failed to enumerate native Rust sources: {error}"));
+        }
     }
     let mut scan = NativeSemanticScanAccumulator {
         native_parallel_backends: native_parallel_backends_from_cargo(cargo_source),
@@ -916,10 +950,16 @@ fn scan_native_rust_semantics(
         ..NativeSemanticScanAccumulator::default()
     };
     for file in files {
-        let Ok(source) = fs::read_to_string(&file) else {
+        if file.extension().and_then(|extension| extension.to_str()) != Some("rs") {
             continue;
-        };
-        scan_source_semantics(&source, &mut scan);
+        }
+        match fs::read_to_string(&file) {
+            Ok(source) => scan_source_semantics(&source, &mut scan),
+            Err(error) => errors.push(format!(
+                "failed to read native Rust source {}: {error}",
+                file.display()
+            )),
+        }
     }
     scan.native_parallel_backends.sort();
     scan.native_parallel_backends.dedup();
@@ -936,6 +976,8 @@ fn scan_native_rust_semantics(
         filesystem_detected: scan.filesystem_detected,
         network_detected: scan.network_detected,
         build_script_present: scan.build_script_present,
+        complete: errors.is_empty(),
+        errors,
     }
 }
 
@@ -1253,20 +1295,6 @@ fn ramdisk_root_dir() -> Option<PathBuf> {
         .map(PathBuf::from)
 }
 
-fn native_rust_unsafe_detected(files: &[PathBuf]) -> Result<bool, String> {
-    for file in files {
-        if file.extension().and_then(|extension| extension.to_str()) != Some("rs") {
-            continue;
-        }
-        let source = fs::read_to_string(file)
-            .map_err(|error| format!("failed to read {}: {error}", file.display()))?;
-        if source_contains_rust_unsafe_keyword(&source) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
 #[derive(Debug, Default)]
 struct NativeBuildScriptRisk {
     env_detected: bool,
@@ -1449,8 +1477,11 @@ pub(super) fn manifest_native_unsafe_boundary(manifest: &Manifest) -> bool {
         .native
         .as_ref()
         .and_then(|native| native.rust.as_ref())
-        .and_then(|native| native.effective_unsafe_policy())
-        .is_some_and(|policy| policy != "forbid")
+        .is_some_and(|native| {
+            native
+                .effective_unsafe_policies()
+                .has_non_forbidden_boundary()
+        })
 }
 
 #[cfg(test)]

@@ -74,6 +74,19 @@ fn connection_for_with_config(
         return Err("maximum cached SQLite connections must be positive".to_string());
     }
 
+    if path.as_os_str().is_empty() || path == Path::new(":memory:") {
+        let connection = if path == Path::new(":memory:") {
+            Connection::open_in_memory()
+        } else {
+            Connection::open(path)
+        }
+        .map_err(|error| error.to_string())?;
+        connection
+            .busy_timeout(busy_timeout)
+            .map_err(|error| error.to_string())?;
+        return Ok(Arc::new(Mutex::new(connection)));
+    }
+
     let identity = normalized_database_path(path)?;
     let mut registry = connections().lock().map_err(|error| error.to_string())?;
     registry.clock = registry.clock.wrapping_add(1);
@@ -466,6 +479,53 @@ mod tests {
             .entries
             .clear();
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn memory_databases_are_isolated_and_not_cached() {
+        let _guard = test_guard();
+        super::connections()
+            .lock()
+            .expect("connection registry")
+            .entries
+            .clear();
+
+        let first = super::connection_for_with_config(
+            std::path::Path::new(":memory:"),
+            2,
+            Duration::from_secs(1),
+        )
+        .expect("first memory connection");
+        let second = super::connection_for_with_config(
+            std::path::Path::new(":memory:"),
+            2,
+            Duration::from_secs(1),
+        )
+        .expect("second memory connection");
+
+        assert!(!std::sync::Arc::ptr_eq(&first, &second));
+        first
+            .lock()
+            .expect("first connection lock")
+            .execute_batch("create table private_value(value text); insert into private_value values ('first');")
+            .expect("first memory database setup");
+        let second_has_table = second
+            .lock()
+            .expect("second connection lock")
+            .query_row(
+                "select count(*) from sqlite_master where type = 'table' and name = 'private_value'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("second memory database metadata");
+        assert_eq!(second_has_table, 0);
+        assert!(
+            super::connections()
+                .lock()
+                .expect("connection registry")
+                .entries
+                .is_empty()
+        );
     }
 
     #[test]

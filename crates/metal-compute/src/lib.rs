@@ -219,6 +219,26 @@ pub fn shader_sha256(source: &str) -> String {
     format!("{:x}", Sha256::digest(source.as_bytes()))
 }
 
+/// Explicit capability wrapper for MSL source that the host has chosen to trust.
+///
+/// Constructing this value is a review boundary, not a sandbox. A shader can
+/// still run indefinitely, so dynamic or tenant-provided source belongs in a
+/// killable worker process.
+#[derive(Debug, Clone, Copy)]
+pub struct TrustedShader<'a> {
+    source: &'a str,
+}
+
+impl<'a> TrustedShader<'a> {
+    pub fn new(source: &'a str) -> Self {
+        Self { source }
+    }
+
+    fn source(self) -> &'a str {
+        self.source
+    }
+}
+
 // Keeps existing callers that accept an `Into<String>` error source-compatible.
 impl From<MetalError> for String {
     fn from(error: MetalError) -> Self {
@@ -486,11 +506,26 @@ pub fn gpu_matmul(
     imp::gpu_matmul(a, b, request)
 }
 
-/// Compile trusted `source` and dispatch `fn_name` over a one-dimensional grid.
+/// Compile an explicitly trusted shader and dispatch `fn_name`.
+pub fn gpu_run_1d_trusted(
+    shader: TrustedShader<'_>,
+    fn_name: &str,
+    inputs: &[&[f32]],
+    out_len: usize,
+    threads: usize,
+) -> Result<Vec<f32>, MetalError> {
+    let source = shader.source();
+    let request = validate_run_1d(source, fn_name, inputs, out_len, threads)?;
+    imp::gpu_run_1d(source, fn_name, inputs, out_len, request)
+}
+
+/// Legacy compatibility entry for trusted in-process callers.
 ///
-/// This compatibility API accepts arbitrary MSL and must only be used with
-/// trusted source. Policy-enforced callers should use
-/// [`gpu_run_1d_with_policy`].
+/// New code should make the trust transition visible with [`TrustedShader`] and
+/// [`gpu_run_1d_trusted`], or use [`gpu_run_1d_with_policy`]. This function is
+/// hidden from generated documentation so arbitrary-source execution is not the
+/// discoverable default.
+#[doc(hidden)]
 pub fn gpu_run_1d(
     source: &str,
     fn_name: &str,
@@ -498,8 +533,13 @@ pub fn gpu_run_1d(
     out_len: usize,
     threads: usize,
 ) -> Result<Vec<f32>, MetalError> {
-    let request = validate_run_1d(source, fn_name, inputs, out_len, threads)?;
-    imp::gpu_run_1d(source, fn_name, inputs, out_len, request)
+    gpu_run_1d_trusted(
+        TrustedShader::new(source),
+        fn_name,
+        inputs,
+        out_len,
+        threads,
+    )
 }
 
 /// Dispatch caller-provided MSL only when its digest is explicitly allowed.
@@ -512,7 +552,8 @@ pub fn gpu_run_1d_with_policy(
     threads: usize,
 ) -> Result<Vec<f32>, MetalError> {
     policy.authorize(source)?;
-    gpu_run_1d(source, fn_name, inputs, out_len, threads)
+    let request = validate_run_1d(source, fn_name, inputs, out_len, threads)?;
+    imp::gpu_run_1d(source, fn_name, inputs, out_len, request)
 }
 
 #[cfg(target_os = "macos")]
@@ -1067,7 +1108,7 @@ kernel void add(device const float* a [[buffer(0)]],
 "#;
         let a = [1.0, 2.0, 3.0, 4.0];
         let b = [10.0, 20.0, 30.0, 40.0];
-        let out = gpu_run_1d(src, "add", &[&a, &b], 4, 4).unwrap();
+        let out = gpu_run_1d_trusted(TrustedShader::new(src), "add", &[&a, &b], 4, 4).unwrap();
         assert_eq!(out, vec![11.0, 22.0, 33.0, 44.0]);
     }
 }

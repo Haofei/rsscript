@@ -6,6 +6,10 @@
 //! `(symbol, NativeInterpreterFn)` table the VM can call. Nothing is hard-coded
 //! per package: the shim is derived entirely from the package's interface and
 //! `bindings.rssbind.toml`.
+//!
+//! Cache use is fail-closed on platforms where this crate cannot verify private
+//! owner/ACL enforcement. Such platforms need a dedicated secure-cache backend
+//! before native shim loading can be enabled.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -512,6 +516,7 @@ fn file_sha256(path: &Path) -> Result<String, String> {
 }
 
 fn create_private_dir(path: &Path) -> Result<(), String> {
+    ensure_private_cache_security_supported(path)?;
     match fs::symlink_metadata(path) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
             return Err(format!(
@@ -538,6 +543,19 @@ fn create_private_dir(path: &Path) -> Result<(), String> {
             .map_err(|error| format!("failed to secure {}: {error}", path.display()))?;
     }
     validate_private_dir(path)
+}
+
+#[cfg(unix)]
+fn ensure_private_cache_security_supported(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_private_cache_security_supported(path: &Path) -> Result<(), String> {
+    Err(format!(
+        "native shim cache requires verifiable private owner and ACL enforcement; this platform backend is unavailable for {}",
+        path.display()
+    ))
 }
 
 fn validate_private_dir(path: &Path) -> Result<(), String> {
@@ -634,8 +652,11 @@ fn current_process_uid() -> Result<u32, String> {
 }
 
 #[cfg(not(unix))]
-fn validate_cache_owner(_path: &Path, _metadata: &fs::Metadata) -> Result<(), String> {
-    Ok(())
+fn validate_cache_owner(path: &Path, _metadata: &fs::Metadata) -> Result<(), String> {
+    Err(format!(
+        "native shim cache owner verification is unavailable on this platform: {}",
+        path.display()
+    ))
 }
 
 fn open_private_lock(path: &Path) -> Result<fs::File, String> {
@@ -897,6 +918,25 @@ mod tests {
         assert!(error.contains("regular file, not a symlink"));
     }
 
+    #[cfg(not(unix))]
+    #[test]
+    fn private_cache_fails_closed_without_acl_backend() {
+        let root = std::env::temp_dir().join(format!(
+            "rss-native-cache-platform-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+
+        let error = create_private_dir(&root)
+            .expect_err("private cache must require a supported ACL backend");
+        assert!(
+            error.contains("private owner and ACL enforcement")
+                || error.contains("platform backend is unavailable"),
+            "{error}"
+        );
+    }
+
+    #[cfg(unix)]
     #[test]
     fn shim_build_is_atomic_and_uses_versioned_byte_abi() {
         let root = std::env::temp_dir().join(format!(
