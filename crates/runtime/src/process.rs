@@ -1,6 +1,4 @@
 use std::io::{Read, Write};
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock, mpsc};
@@ -13,7 +11,23 @@ use crate::{RssCancellationToken, cancellation_token_is_cancelled};
 
 pub const RUNTIME_PROCESS_OUTPUT_CEILING_BYTES: usize = 64 * 1024 * 1024;
 pub const RUNTIME_PROCESS_CONCURRENCY_CEILING: usize = 32;
+pub const RUNTIME_PROCESS_TIMEOUT_CEILING_MS: u64 = 24 * 60 * 60 * 1_000;
 const PROCESS_STREAM_CHANNEL_CAPACITY: usize = 64;
+
+fn process_timeout(timeout_ms: i64) -> Result<Option<Duration>, String> {
+    if timeout_ms <= 0 {
+        return Ok(None);
+    }
+    let timeout_ms = u64::try_from(timeout_ms)
+        .map_err(|_| "process timeout must be a positive integer".to_string())?;
+    if timeout_ms > RUNTIME_PROCESS_TIMEOUT_CEILING_MS {
+        return Err(format!(
+            "process timeout exceeds the {}ms runtime ceiling",
+            RUNTIME_PROCESS_TIMEOUT_CEILING_MS
+        ));
+    }
+    Ok(Some(Duration::from_millis(timeout_ms)))
+}
 
 struct ProcessConcurrency {
     active: Mutex<usize>,
@@ -275,10 +289,7 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
     }
     let process_permit = acquire_process_permit(None)?;
 
-    let timeout = u64::try_from(request.timeout_ms)
-        .ok()
-        .filter(|value| *value > 0)
-        .map(Duration::from_millis);
+    let timeout = process_timeout(request.timeout_ms)?;
     let cap = normalized_process_output_cap(request.output_cap_bytes);
     let mut command = std::process::Command::new(&request.command);
     command
@@ -295,16 +306,11 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
         command.env(&env.name, &env.value);
     }
     apply_default_ramdisk_env(&mut command);
-    configure_process_child(&mut command)?;
-
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("failed to run `{}`: {error}", request.command))?;
-    let process_guard = rss_process_guard::ProcessGuard::attach(
-        &child,
+    let (mut child, process_guard) = rss_process_guard::spawn_guarded(
+        &mut command,
         rss_process_guard::ProcessLimits::generated_program(),
     )
-    .map_err(|error| format!("failed to guard `{}`: {error}", request.command))?;
+    .map_err(|error| format!("failed to run `{}`: {error}", request.command))?;
     let stdin = request.stdin.clone();
     let command_name = request.command.clone();
     let stream_dropped = Arc::new(AtomicBool::new(false));
@@ -400,11 +406,11 @@ fn process_run_request_with_cancellation(
     }
     let _process_permit = acquire_process_permit(cancellation)?;
 
-    let timeout = u64::try_from(request.timeout_ms)
-        .ok()
-        .filter(|value| *value > 0)
-        .map(Duration::from_millis);
-    let deadline = timeout.map(|duration| Instant::now() + duration);
+    let timeout = process_timeout(request.timeout_ms)?;
+    let deadline = timeout.and_then(|duration| Instant::now().checked_add(duration));
+    if timeout.is_some() && deadline.is_none() {
+        return Err("process timeout cannot be represented by the platform clock".to_string());
+    }
     let cap = normalized_process_output_cap(request.output_cap_bytes);
     let mut command = std::process::Command::new(&request.command);
     command
@@ -421,16 +427,11 @@ fn process_run_request_with_cancellation(
         command.env(&env.name, &env.value);
     }
     apply_default_ramdisk_env(&mut command);
-    configure_process_child(&mut command)?;
-
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("failed to run `{}`: {error}", request.command))?;
-    let process_guard = rss_process_guard::ProcessGuard::attach(
-        &child,
+    let (mut child, process_guard) = rss_process_guard::spawn_guarded(
+        &mut command,
         rss_process_guard::ProcessLimits::generated_program(),
     )
-    .map_err(|error| format!("failed to guard `{}`: {error}", request.command))?;
+    .map_err(|error| format!("failed to run `{}`: {error}", request.command))?;
 
     let stdin_thread = request.stdin.as_ref().and_then(|stdin| {
         child.stdin.take().map(|mut child_stdin| {
@@ -766,24 +767,6 @@ fn join_process_reader(
         Ok(Err(error)) => Err(format!("failed to read {stream} for `{command}`: {error}")),
         Err(_) => Err(format!("{stream} reader panicked for `{command}`")),
     }
-}
-
-fn configure_process_child(command: &mut std::process::Command) -> Result<(), String> {
-    #[cfg(unix)]
-    {
-        command.process_group(0);
-    }
-    #[cfg(not(unix))]
-    {
-        // ProcessGuard installs the post-spawn Windows Job Object. Other
-        // unsupported platforms fail guard setup rather than running unbounded.
-        let _ = command;
-    }
-    rss_process_guard::configure(
-        command,
-        rss_process_guard::ProcessLimits::generated_program(),
-    )
-    .map_err(|error| format!("failed to configure child process resource limits: {error}"))
 }
 
 fn terminate_process_child(

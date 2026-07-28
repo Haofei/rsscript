@@ -38,3 +38,10 @@ panic = "unwind"
 [profile.test]
 debug = 0
 incremental = false
+
+# Opt-in diagnostic profile for sanitizer reproduction and platform
+# postmortems without making the normal test loop pay full debug-info costs.
+[profile.test-debug]
+inherits = "test"
+debug = 1
+incremental = false

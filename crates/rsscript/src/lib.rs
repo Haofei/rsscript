@@ -100,8 +100,8 @@ pub use package::{
 };
 pub use reg_vm::{
     JitPlan, RegVmExecutable, RegVmExecutable as VmExecutable, VmLimits, reg_vm_compile_package,
-    reg_vm_compile_source as vm_compile_source, reg_vm_compile_source,
-    reg_vm_eval_package_main_with_args as eval_package_main_with_args,
+    reg_vm_compile_package_input, reg_vm_compile_source as vm_compile_source,
+    reg_vm_compile_source, reg_vm_eval_package_main_with_args as eval_package_main_with_args,
     reg_vm_eval_package_main_with_args_and_native_bindings as eval_package_main_with_args_and_native_bindings,
     reg_vm_eval_package_main_with_args_and_native_bindings_and_limits as eval_package_main_with_args_and_native_bindings_and_limits,
     reg_vm_eval_package_main_with_args_and_native_bindings_streaming_stdout as eval_package_main_with_args_and_native_bindings_streaming_stdout,

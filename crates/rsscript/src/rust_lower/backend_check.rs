@@ -23,10 +23,11 @@ pub fn check_generated_rust_package(package_dir: &Path) -> Result<RustBackendChe
     let mut cargo = Command::new("cargo");
     cargo
         .arg("check")
+        .arg("--offline")
         .arg("--manifest-path")
         .arg(&manifest_path)
         .arg("--message-format=json");
-    if let Some(target_dir) = generated_target_dir_from_env() {
+    if let Some(target_dir) = generated_target_dir_from_env()? {
         cargo.env("CARGO_TARGET_DIR", target_dir);
     }
     let output = run_bounded_command(
@@ -50,14 +51,22 @@ pub fn check_generated_rust_package(package_dir: &Path) -> Result<RustBackendChe
     })
 }
 
-fn generated_target_dir_from_env() -> Option<PathBuf> {
+fn generated_target_dir_from_env() -> Result<Option<PathBuf>, String> {
     let path = env::var_os("RSSCRIPT_GENERATED_TARGET_DIR")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-        .or_else(|| ramdisk_root_dir().map(|root| root.join("rsscript-generated-target")))?;
-    let _ = fs::create_dir_all(&path);
+        .or_else(|| ramdisk_root_dir().map(|root| root.join("rsscript-generated-target")));
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    fs::create_dir_all(&path).map_err(|error| {
+        format!(
+            "failed to create generated Rust target directory {}: {error}",
+            path.display()
+        )
+    })?;
 
-    Some(path)
+    Ok(Some(path))
 }
 
 fn ramdisk_root_dir() -> Option<PathBuf> {

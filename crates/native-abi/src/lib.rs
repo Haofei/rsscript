@@ -4,6 +4,15 @@
 //! JSON bytes over a versioned C ABI; each side allocates and frees its own
 //! buffers. The host retains the loaded library for as long as any callable
 //! binding exists.
+//!
+//! # Trust boundary
+//!
+//! In-process native plugins are trusted-only. The host validates buffer
+//! nullness, lengths, capacities, and configured byte limits before reading
+//! plugin memory, but an address that is non-null and numerically well-formed
+//! can still be dangling or otherwise unreadable. Safely containing arbitrary
+//! native pointers requires process isolation and IPC, not additional checks in
+//! this ABI.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -12,10 +21,56 @@ use serde::{Deserialize, Serialize};
 
 pub const ABI_MAGIC: u64 = 0x5253_534E_4154_4956;
 pub const ABI_VERSION: u32 = 1;
+pub const MAX_NATIVE_REQUEST_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_NATIVE_RESULT_BYTES: usize = 16 * 1024 * 1024;
 #[cfg(feature = "host")]
-const MAX_REGISTRY_ENTRIES: usize = 1_000_000;
+const MAX_REGISTRY_ENTRIES: usize = 16 * 1024;
 #[cfg(feature = "host")]
-const MAX_BINDING_NAME_BYTES: usize = 1024 * 1024;
+const MAX_BINDING_NAME_BYTES: usize = 1024;
+
+enum BoundedJsonError {
+    LimitExceeded,
+    Serialize(serde_json::Error),
+}
+
+struct BoundedJsonWriter {
+    bytes: Vec<u8>,
+    max_bytes: usize,
+    limit_exceeded: bool,
+}
+
+impl std::io::Write for BoundedJsonWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .is_none_or(|next_len| next_len > self.max_bytes)
+        {
+            self.limit_exceeded = true;
+            return Err(std::io::Error::other("JSON byte limit exceeded"));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn to_json_bounded<T: Serialize>(value: &T, max_bytes: usize) -> Result<Vec<u8>, BoundedJsonError> {
+    let mut writer = BoundedJsonWriter {
+        bytes: Vec::new(),
+        max_bytes,
+        limit_exceeded: false,
+    };
+    match serde_json::to_writer(&mut writer, value) {
+        Ok(()) => Ok(writer.bytes),
+        Err(_) if writer.limit_exceeded => Err(BoundedJsonError::LimitExceeded),
+        Err(error) => Err(BoundedJsonError::Serialize(error)),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum NativeValue {
@@ -93,10 +148,35 @@ impl NativeBuffer {
     }
 }
 
+#[cfg(feature = "host")]
+fn validate_native_buffer(buffer: &NativeBuffer, max_bytes: usize) -> Result<(), String> {
+    if buffer.ptr.is_null() {
+        if buffer.len == 0 && buffer.capacity == 0 {
+            return Ok(());
+        }
+        return Err(
+            "native ABI returned a null buffer with non-zero length or capacity".to_string(),
+        );
+    }
+    if buffer.capacity == 0 {
+        return Err("native ABI returned a non-null buffer with zero capacity".to_string());
+    }
+    if buffer.len > buffer.capacity {
+        return Err("native ABI returned a buffer whose length exceeds its capacity".to_string());
+    }
+    if buffer.len > max_bytes || buffer.capacity > max_bytes {
+        return Err(format!(
+            "native ABI returned a buffer exceeding the {max_bytes} byte limit"
+        ));
+    }
+    Ok(())
+}
+
 pub type NativeAbiFn = unsafe extern "C" fn(*const u8, usize, *mut NativeBuffer) -> i32;
 pub type NativeFreeBufferFn = unsafe extern "C" fn(NativeBuffer);
 
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct NativeBindingEntry {
     pub name: *const u8,
     pub name_len: usize,
@@ -130,6 +210,12 @@ pub unsafe fn dispatch_serialized(
     if output.is_null() || (input.is_null() && input_len != 0) {
         return 2;
     }
+    // Keep every failure path deterministic for callers that release output
+    // unconditionally.
+    unsafe { output.write(NativeBuffer::empty()) };
+    if input_len > MAX_NATIVE_REQUEST_BYTES {
+        return 4;
+    }
     let input = if input_len == 0 {
         &[]
     } else {
@@ -142,10 +228,20 @@ pub unsafe fn dispatch_serialized(
             .and_then(function)
     })
     .unwrap_or_else(|_| Err("native binding panicked".to_string()));
-    let mut bytes = match serde_json::to_vec(&result) {
+    let mut bytes = match to_json_bounded(&result, MAX_NATIVE_RESULT_BYTES) {
         Ok(bytes) => bytes,
-        Err(_) => return 3,
+        Err(BoundedJsonError::LimitExceeded) => return 4,
+        Err(BoundedJsonError::Serialize(error)) => {
+            drop(error);
+            return 3;
+        }
     };
+    if bytes.capacity() > MAX_NATIVE_RESULT_BYTES {
+        bytes.shrink_to_fit();
+        if bytes.capacity() > MAX_NATIVE_RESULT_BYTES {
+            return 4;
+        }
+    }
     let buffer = NativeBuffer {
         ptr: bytes.as_mut_ptr(),
         len: bytes.len(),
@@ -167,11 +263,87 @@ pub unsafe extern "C" fn rss_native_free_buffer(buffer: NativeBuffer) {
     if buffer.ptr.is_null() {
         return;
     }
+    if buffer.capacity == 0 || buffer.len > buffer.capacity || buffer.capacity > isize::MAX as usize
+    {
+        return;
+    }
     // SAFETY: guaranteed by the function contract.
     drop(unsafe { Vec::from_raw_parts(buffer.ptr, buffer.len, buffer.capacity) });
 }
 
 #[cfg(feature = "host")]
+struct OwnedNativeBuffer {
+    buffer: Option<NativeBuffer>,
+    free_buffer: NativeFreeBufferFn,
+}
+
+#[cfg(feature = "host")]
+impl OwnedNativeBuffer {
+    fn new(buffer: NativeBuffer, free_buffer: NativeFreeBufferFn) -> Self {
+        Self {
+            buffer: Some(buffer),
+            free_buffer,
+        }
+    }
+
+    fn validated_bytes(&self) -> Result<&[u8], String> {
+        let buffer = self.buffer.as_ref().expect("owned buffer is present");
+        validate_native_buffer(buffer, MAX_NATIVE_RESULT_BYTES)?;
+        if buffer.len == 0 {
+            return Ok(&[]);
+        }
+        // SAFETY: the trusted plugin owns this allocation until `Drop`, and
+        // its structural metadata was validated above.
+        Ok(unsafe { std::slice::from_raw_parts(buffer.ptr, buffer.len) })
+    }
+}
+
+#[cfg(feature = "host")]
+impl Drop for OwnedNativeBuffer {
+    fn drop(&mut self) {
+        let Some(buffer) = self.buffer.take() else {
+            return;
+        };
+        // SAFETY: the plugin supplied both the buffer and its matching release
+        // function. The library owner outlives this guard.
+        unsafe { (self.free_buffer)(buffer) };
+    }
+}
+
+#[cfg(feature = "host")]
+fn call_native(
+    function: NativeAbiFn,
+    free_buffer: NativeFreeBufferFn,
+    args: Vec<NativeValue>,
+) -> Result<NativeValue, String> {
+    let input = match to_json_bounded(&args, MAX_NATIVE_REQUEST_BYTES) {
+        Ok(input) => input,
+        Err(BoundedJsonError::LimitExceeded) => {
+            return Err(format!(
+                "native ABI request exceeds the {MAX_NATIVE_REQUEST_BYTES} byte limit"
+            ));
+        }
+        Err(BoundedJsonError::Serialize(error)) => {
+            return Err(format!("failed to encode native arguments: {error}"));
+        }
+    };
+    let mut output = NativeBuffer::empty();
+    // SAFETY: input and output pointers remain valid for the call.
+    let status = unsafe { function(input.as_ptr(), input.len(), &mut output) };
+    let output = OwnedNativeBuffer::new(output, free_buffer);
+    if status != 0 {
+        return Err(format!("native ABI call failed with status {status}"));
+    }
+    serde_json::from_slice::<Result<NativeValue, String>>(output.validated_bytes()?)
+        .map_err(|error| format!("invalid native result payload: {error}"))?
+}
+
+#[cfg(feature = "host")]
+/// Load callable bindings from a trusted in-process native plugin.
+///
+/// Registry and buffer metadata are bounded and validated, but this function
+/// cannot prove that plugin-provided pointers are readable. Untrusted native
+/// code must run behind a process boundary.
 pub fn load_registry(
     library_path: &std::path::Path,
 ) -> Result<Vec<(String, NativeInterpreterFn)>, String> {
@@ -189,45 +361,30 @@ pub fn load_registry(
     let entries = unsafe { std::slice::from_raw_parts(registry.entries, registry.len) };
     let mut bindings = Vec::with_capacity(entries.len());
     for entry in entries {
-        if entry.name.is_null() || entry.name_len > MAX_BINDING_NAME_BYTES {
-            return Err("native shim contains an invalid binding name".to_string());
-        }
-        // SAFETY: generated entries point to static UTF-8 bytes in the library.
-        let name = unsafe { std::slice::from_raw_parts(entry.name, entry.name_len) };
-        let name = std::str::from_utf8(name)
-            .map_err(|error| format!("native shim binding name was not UTF-8: {error}"))?
-            .to_string();
+        let name = decode_binding_name(entry)?;
         let function = entry.func;
         let free_buffer = registry.free_buffer;
         let owner = Arc::clone(&library);
         let callable = NativeInterpreterFn::new(move |args| {
             let _owner = &owner;
-            let input = serde_json::to_vec(&args)
-                .map_err(|error| format!("failed to encode native arguments: {error}"))?;
-            let mut output = NativeBuffer::empty();
-            // SAFETY: input and output pointers remain valid for the call and the
-            // function belongs to the retained library.
-            let status = unsafe { function(input.as_ptr(), input.len(), &mut output) };
-            if status != 0 {
-                return Err(format!("native ABI call failed with status {status}"));
-            }
-            if output.ptr.is_null() && output.len != 0 {
-                return Err("native ABI returned an invalid output buffer".to_string());
-            }
-            let bytes = if output.len == 0 {
-                Vec::new()
-            } else {
-                // SAFETY: output belongs to the plugin until `free_buffer` below.
-                unsafe { std::slice::from_raw_parts(output.ptr, output.len) }.to_vec()
-            };
-            // SAFETY: this is the matching allocator-side release function.
-            unsafe { free_buffer(output) };
-            serde_json::from_slice::<Result<NativeValue, String>>(&bytes)
-                .map_err(|error| format!("invalid native result payload: {error}"))?
+            call_native(function, free_buffer, args)
         });
         bindings.push((name, callable));
     }
     Ok(bindings)
+}
+
+#[cfg(feature = "host")]
+fn decode_binding_name(entry: &NativeBindingEntry) -> Result<String, String> {
+    if entry.name.is_null() || entry.name_len == 0 || entry.name_len > MAX_BINDING_NAME_BYTES {
+        return Err("native shim contains an invalid binding name".to_string());
+    }
+    // SAFETY: in-process plugins are trusted to provide readable static memory;
+    // the host can validate only nullness and the bounded length first.
+    let name = unsafe { std::slice::from_raw_parts(entry.name, entry.name_len) };
+    std::str::from_utf8(name)
+        .map_err(|error| format!("native shim binding name was not UTF-8: {error}"))
+        .map(str::to_owned)
 }
 
 #[cfg(feature = "host")]
@@ -379,6 +536,140 @@ fn validate_registry(registry: &NativeRegistry) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "host")]
+    use std::sync::Mutex;
+    #[cfg(feature = "host")]
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[cfg(feature = "host")]
+    static PLUGIN_MODE: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(feature = "host")]
+    static PLUGIN_CALLS: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(feature = "host")]
+    static PLUGIN_FREES: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(feature = "host")]
+    static PLUGIN_ALLOCATIONS: Mutex<Vec<Box<[u8]>>> = Mutex::new(Vec::new());
+    #[cfg(feature = "host")]
+    static PLUGIN_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[cfg(feature = "host")]
+    unsafe fn write_test_output(
+        output: *mut NativeBuffer,
+        bytes: &[u8],
+        reported_len: usize,
+        reported_capacity: usize,
+    ) {
+        let mut allocation = bytes.to_vec().into_boxed_slice();
+        let ptr = allocation.as_mut_ptr();
+        PLUGIN_ALLOCATIONS
+            .lock()
+            .expect("allocation lock")
+            .push(allocation);
+        // SAFETY: the test host passes a live output slot.
+        unsafe {
+            output.write(NativeBuffer {
+                ptr,
+                len: reported_len,
+                capacity: reported_capacity,
+            })
+        };
+    }
+
+    #[cfg(feature = "host")]
+    unsafe extern "C" fn state_machine_plugin(
+        _: *const u8,
+        _: usize,
+        output: *mut NativeBuffer,
+    ) -> i32 {
+        PLUGIN_CALLS.fetch_add(1, Ordering::SeqCst);
+        match PLUGIN_MODE.load(Ordering::SeqCst) {
+            1 => {
+                // SAFETY: the test host passes a live output slot.
+                unsafe { write_test_output(output, b"{}", 2, 2) };
+                17
+            }
+            2 => {
+                // SAFETY: the test host passes a live output slot.
+                unsafe {
+                    output.write(NativeBuffer {
+                        ptr: std::ptr::null_mut(),
+                        len: 1,
+                        capacity: 1,
+                    })
+                };
+                0
+            }
+            3 => {
+                // SAFETY: the test host passes a live output slot.
+                unsafe { write_test_output(output, b"x", 2, 1) };
+                0
+            }
+            4 => {
+                // SAFETY: the test host passes a live output slot.
+                unsafe {
+                    output.write(NativeBuffer {
+                        ptr: std::ptr::NonNull::<u8>::dangling().as_ptr(),
+                        len: 0,
+                        capacity: 0,
+                    })
+                };
+                0
+            }
+            5 => {
+                // The test allocator tracks the real one-byte allocation, so
+                // the fake oversized capacity is never passed to Vec.
+                unsafe {
+                    write_test_output(output, b"x", 1, MAX_NATIVE_RESULT_BYTES.saturating_add(1))
+                };
+                0
+            }
+            6 => {
+                // SAFETY: the test host passes a live output slot.
+                unsafe { write_test_output(output, &[0xff], 1, 1) };
+                0
+            }
+            7 => {
+                // SAFETY: the test host passes a live output slot.
+                unsafe { write_test_output(output, b"{", 1, 1) };
+                0
+            }
+            8 => {
+                // Valid JSON with the wrong result schema.
+                unsafe { write_test_output(output, b"null", 4, 4) };
+                0
+            }
+            9 => {
+                let bytes =
+                    serde_json::to_vec(&Err::<NativeValue, _>("plugin rejected".to_string()))
+                        .expect("serialize");
+                let len = bytes.len();
+                // SAFETY: the test host passes a live output slot.
+                unsafe { write_test_output(output, &bytes, len, len) };
+                0
+            }
+            10 => {
+                let bytes =
+                    serde_json::to_vec(&Ok::<_, String>(NativeValue::Unit)).expect("serialize");
+                let len = bytes.len();
+                // SAFETY: the test host passes a live output slot.
+                unsafe { write_test_output(output, &bytes, len, len) };
+                0
+            }
+            _ => 99,
+        }
+    }
+
+    #[cfg(feature = "host")]
+    unsafe extern "C" fn state_machine_free(buffer: NativeBuffer) {
+        PLUGIN_FREES.fetch_add(1, Ordering::SeqCst);
+        let mut allocations = PLUGIN_ALLOCATIONS.lock().expect("allocation lock");
+        if let Some(index) = allocations
+            .iter()
+            .position(|allocation| std::ptr::eq(allocation.as_ptr(), buffer.ptr))
+        {
+            allocations.swap_remove(index);
+        }
+    }
 
     #[test]
     fn registry_symbol_and_version_are_stable() {
@@ -437,6 +728,103 @@ mod tests {
         unsafe { rss_native_free_buffer(output) };
     }
 
+    #[test]
+    fn serialized_dispatch_rejects_oversized_request_before_reading_it() {
+        let mut output = NativeBuffer {
+            ptr: std::ptr::NonNull::<u8>::dangling().as_ptr(),
+            len: 1,
+            capacity: 1,
+        };
+        // SAFETY: the oversized length is rejected before the dangling input is
+        // read, and output points to a live slot.
+        let status = unsafe {
+            dispatch_serialized(
+                std::ptr::NonNull::<u8>::dangling().as_ptr(),
+                MAX_NATIVE_REQUEST_BYTES + 1,
+                &mut output,
+                |_| Ok(NativeValue::Unit),
+            )
+        };
+        assert_eq!(status, 4);
+        assert!(output.ptr.is_null());
+        assert_eq!(output.len, 0);
+        assert_eq!(output.capacity, 0);
+    }
+
+    #[test]
+    fn serialized_dispatch_rejects_oversized_result() {
+        fn oversized(_: Vec<NativeValue>) -> Result<NativeValue, String> {
+            Ok(NativeValue::String("x".repeat(MAX_NATIVE_RESULT_BYTES)))
+        }
+
+        let input = b"[]";
+        let mut output = NativeBuffer::empty();
+        // SAFETY: pointers refer to live input/output values for the call.
+        let status =
+            unsafe { dispatch_serialized(input.as_ptr(), input.len(), &mut output, oversized) };
+        assert_eq!(status, 4);
+        assert!(output.ptr.is_null());
+        assert_eq!(output.len, 0);
+        assert_eq!(output.capacity, 0);
+    }
+
+    #[cfg(feature = "host")]
+    #[test]
+    fn host_releases_every_plugin_output_state_exactly_once() {
+        let _test_lock = PLUGIN_TEST_LOCK.lock().expect("plugin test lock");
+        PLUGIN_CALLS.store(0, Ordering::SeqCst);
+        PLUGIN_FREES.store(0, Ordering::SeqCst);
+        PLUGIN_ALLOCATIONS.lock().expect("allocation lock").clear();
+
+        let cases = [
+            (1, "status 17"),
+            (2, "null buffer"),
+            (3, "length exceeds"),
+            (4, "zero capacity"),
+            (5, "byte limit"),
+            (6, "invalid native result payload"),
+            (7, "invalid native result payload"),
+            (8, "invalid native result payload"),
+            (9, "plugin rejected"),
+        ];
+        for (expected_frees, (mode, expected_error)) in cases.into_iter().enumerate() {
+            PLUGIN_MODE.store(mode, Ordering::SeqCst);
+            let error = call_native(state_machine_plugin, state_machine_free, vec![])
+                .expect_err("malicious output must fail");
+            assert!(
+                error.contains(expected_error),
+                "unexpected mode {mode} error: {error}"
+            );
+            assert_eq!(PLUGIN_FREES.load(Ordering::SeqCst), expected_frees + 1);
+        }
+
+        PLUGIN_MODE.store(10, Ordering::SeqCst);
+        assert_eq!(
+            call_native(state_machine_plugin, state_machine_free, vec![]),
+            Ok(NativeValue::Unit)
+        );
+        assert_eq!(PLUGIN_CALLS.load(Ordering::SeqCst), 10);
+        assert_eq!(PLUGIN_FREES.load(Ordering::SeqCst), 10);
+        assert!(
+            PLUGIN_ALLOCATIONS
+                .lock()
+                .expect("allocation lock")
+                .is_empty()
+        );
+    }
+
+    #[cfg(feature = "host")]
+    #[test]
+    fn host_rejects_oversized_request_without_calling_plugin() {
+        let _test_lock = PLUGIN_TEST_LOCK.lock().expect("plugin test lock");
+        PLUGIN_CALLS.store(0, Ordering::SeqCst);
+        let args = vec![NativeValue::String("x".repeat(MAX_NATIVE_REQUEST_BYTES))];
+        let error = call_native(state_machine_plugin, state_machine_free, args)
+            .expect_err("oversized request must fail");
+        assert!(error.contains("request exceeds"));
+        assert_eq!(PLUGIN_CALLS.load(Ordering::SeqCst), 0);
+    }
+
     #[cfg(feature = "host")]
     #[test]
     fn registry_validation_rejects_magic_version_and_size_mismatch() {
@@ -462,5 +850,52 @@ mod tests {
             ..valid
         };
         assert!(validate_registry(&wrong_size).is_err());
+        let too_many_entries = NativeRegistry {
+            entries: std::ptr::NonNull::<NativeBindingEntry>::dangling().as_ptr(),
+            len: MAX_REGISTRY_ENTRIES + 1,
+            ..valid
+        };
+        assert!(validate_registry(&too_many_entries).is_err());
+    }
+
+    #[cfg(feature = "host")]
+    #[test]
+    fn binding_name_validation_enforces_length_and_utf8_limits() {
+        unsafe extern "C" fn binding(_: *const u8, _: usize, _: *mut NativeBuffer) -> i32 {
+            0
+        }
+
+        let valid_name = b"module.function";
+        let valid = NativeBindingEntry {
+            name: valid_name.as_ptr(),
+            name_len: valid_name.len(),
+            func: binding,
+        };
+        assert_eq!(
+            decode_binding_name(&valid),
+            Ok("module.function".to_string())
+        );
+
+        let empty = NativeBindingEntry {
+            name_len: 0,
+            ..valid
+        };
+        assert!(decode_binding_name(&empty).is_err());
+
+        let invalid_utf8 = [0xff];
+        let invalid = NativeBindingEntry {
+            name: invalid_utf8.as_ptr(),
+            name_len: invalid_utf8.len(),
+            ..valid
+        };
+        assert!(decode_binding_name(&invalid).is_err());
+
+        let oversized_name = vec![b'x'; MAX_BINDING_NAME_BYTES + 1];
+        let oversized = NativeBindingEntry {
+            name: oversized_name.as_ptr(),
+            name_len: oversized_name.len(),
+            ..valid
+        };
+        assert!(decode_binding_name(&oversized).is_err());
     }
 }

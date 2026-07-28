@@ -185,6 +185,7 @@ pub(super) fn parse_match_pattern(
     start: usize,
     end: usize,
 ) -> Option<MatchPattern> {
+    let _parse = enter_parse()?;
     // A tuple pattern `(p0, p1, ..)` desugars to the synthetic `__TupleN` struct
     // pattern `__TupleN { item0: p0, item1: p1, .. }`. Checked before `trim_outer`
     // strips the parens as grouping.

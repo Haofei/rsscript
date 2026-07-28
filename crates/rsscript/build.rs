@@ -157,7 +157,13 @@ fn write_compiled_cache_fingerprint() -> Result<(), String> {
                 .map_err(|error| format!("failed to read {}: {error}", path.display()))?,
         );
     }
-    for name in ["TARGET", "HOST", "PROFILE", "RUSTC"] {
+    for name in [
+        "TARGET",
+        "HOST",
+        "PROFILE",
+        "RUSTC",
+        "RSSCRIPT_SOURCE_REVISION",
+    ] {
         println!("cargo:rerun-if-env-changed={name}");
         hasher.update(name.as_bytes());
         hasher.update([0]);
@@ -180,7 +186,42 @@ fn write_compiled_cache_fingerprint() -> Result<(), String> {
     if !rustc_version.status.success() {
         return Err("rustc -Vv failed while computing compiler fingerprint".to_string());
     }
-    hasher.update(rustc_version.stdout);
+    hasher.update(&rustc_version.stdout);
+    let rustc_version_text = String::from_utf8_lossy(&rustc_version.stdout);
+    let rustc_release = rustc_version_text
+        .lines()
+        .find_map(|line| line.strip_prefix("release: "))
+        .unwrap_or("unknown");
+    println!("cargo:rustc-env=RSSCRIPT_RUSTC_VERSION={rustc_release}");
+    println!(
+        "cargo:rustc-env=RSSCRIPT_BUILD_TARGET={}",
+        env::var("TARGET").unwrap_or_else(|_| "unknown".to_string())
+    );
+    let source_revision = env::var("RSSCRIPT_SOURCE_REVISION").unwrap_or_else(|_| {
+        let git_head = workspace_root.join(".git/HEAD");
+        if git_head.is_file() {
+            println!("cargo:rerun-if-changed={}", git_head.display());
+            if let Ok(head) = fs::read_to_string(&git_head)
+                && let Some(reference) = head.trim().strip_prefix("ref: ")
+            {
+                let reference_path = workspace_root.join(".git").join(reference);
+                if reference_path.is_file() {
+                    println!("cargo:rerun-if-changed={}", reference_path.display());
+                }
+            }
+        }
+        std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&workspace_root)
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .and_then(|output| String::from_utf8(output.stdout).ok())
+            .map(|revision| revision.trim().to_string())
+            .filter(|revision| !revision.is_empty())
+            .unwrap_or_else(|| "unknown".to_string())
+    });
+    println!("cargo:rustc-env=RSSCRIPT_SOURCE_REVISION={source_revision}");
     let fingerprint = hasher
         .finalize()
         .iter()

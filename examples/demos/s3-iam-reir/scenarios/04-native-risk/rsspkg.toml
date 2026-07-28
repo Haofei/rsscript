@@ -11,7 +11,7 @@ paths = ["interface"]
 
 [native.rust]
 enabled = true
-path = "../../native/rust"
+path = "native/rust"
 crate = "rss_s3_demo_native"
 build_scripts = "review"
 proc_macros = "forbid"

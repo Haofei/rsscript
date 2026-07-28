@@ -64,7 +64,9 @@ runs:
       run: |
         echo "::group::Building RSScript from the pinned action checkout"
         RSSCRIPT_ACTION_ROOT="$(cd "$GITHUB_ACTION_PATH/../../.." && pwd)"
-        cargo build --quiet --locked --release \
+        cargo fetch --quiet --locked \
+          --manifest-path "$RSSCRIPT_ACTION_ROOT/Cargo.toml"
+        cargo build --quiet --frozen --release \
           --manifest-path "$RSSCRIPT_ACTION_ROOT/Cargo.toml" \
           --bin rss -p rsscript --bin reir -p reir
         echo "RSS_BIN=$RSSCRIPT_ACTION_ROOT/target/release/rss" >> "$GITHUB_ENV"

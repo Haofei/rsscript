@@ -50,18 +50,37 @@ impl<T> Managed<T> {
         self.try_write().map_err(|error| error.with_span(span))
     }
 
-    pub fn read(&self) -> ManagedRead<'_, T> {
+    /// Borrow the managed value, panicking with an RSScript runtime error on conflict.
+    ///
+    /// Runtime and embedding code should normally use [`Self::try_read`]. This
+    /// compatibility wrapper exists for generated code that has already
+    /// established the borrow invariant.
+    pub fn read_or_panic(&self) -> ManagedRead<'_, T> {
         match self.try_read() {
             Ok(value) => value,
             Err(error) => panic_runtime_error(error),
         }
     }
 
-    pub fn write(&self) -> ManagedWrite<'_, T> {
+    /// Mutably borrow the managed value, panicking with an RSScript runtime
+    /// error on conflict.
+    ///
+    /// Runtime and embedding code should normally use [`Self::try_write`].
+    pub fn write_or_panic(&self) -> ManagedWrite<'_, T> {
         match self.try_write() {
             Ok(value) => value,
             Err(error) => panic_runtime_error(error),
         }
+    }
+
+    /// Compatibility alias for generated code. Prefer [`Self::try_read`].
+    pub fn read(&self) -> ManagedRead<'_, T> {
+        self.read_or_panic()
+    }
+
+    /// Compatibility alias for generated code. Prefer [`Self::try_write`].
+    pub fn write(&self) -> ManagedWrite<'_, T> {
+        self.write_or_panic()
     }
 
     pub fn ptr_eq(left: &Self, right: &Self) -> bool {
@@ -134,11 +153,22 @@ pub fn weak<T>(value: &Managed<T>) -> WeakManaged<T> {
     }
 }
 
-pub fn unwrap_runtime<T>(result: Result<T, RuntimeError>) -> T {
+/// Convert a checked runtime result into the generated-code panic boundary.
+///
+/// Host and embedding APIs should propagate `RuntimeError` instead. This is
+/// intentionally named as a panic operation so new handwritten code does not
+/// mistake it for a fallible conversion.
+pub fn unwrap_runtime_or_panic<T>(result: Result<T, RuntimeError>) -> T {
     match result {
         Ok(value) => value,
         Err(error) => panic_runtime_error(error),
     }
+}
+
+/// Compatibility alias used by generated Rust. Prefer propagating the result
+/// or calling [`unwrap_runtime_or_panic`] at an explicit panic boundary.
+pub fn unwrap_runtime<T>(result: Result<T, RuntimeError>) -> T {
+    unwrap_runtime_or_panic(result)
 }
 
 pub struct ManagedRead<'a, T>(Ref<'a, T>);

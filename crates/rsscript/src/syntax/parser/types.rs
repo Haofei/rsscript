@@ -41,6 +41,7 @@ fn parse_tuple_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<Ty
 }
 
 pub(super) fn parse_type_ref(tokens: &[Token], start: usize, end: usize) -> Option<TypeRef> {
+    let _parse = enter_parse()?;
     if let Some(tuple) = parse_tuple_type_ref(tokens, start, end) {
         return Some(tuple);
     }

@@ -8,6 +8,9 @@ on:
     # every pull request pay the nightly/cargo-fuzz install cost.
     - cron: "17 10 * * 6"
 
+permissions:
+  contents: read
+
 concurrency:
   group: jit-hardening-${{ github.ref }}
   cancel-in-progress: true

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use reir::adapters::terraform::terraform_dir_to_bundle;
+use reir::adapters::terraform::terraform_plan_json_to_bundle;
 use reir::{
     AcquisitionMode, Capability, CapabilityCategory, Confidence, ConfidenceLevel, Evidence,
     EvidenceKind, Fact, FactKind, FactRole, FactValue, Precision, ReconciliationKind, Subject,
@@ -229,12 +229,11 @@ fn s3_iam_reir_demo_preflight_reports_missing_fixed_and_excess() {
         })
         .expect("excess fixture should warn on unused S3 DeleteObject grant");
     assert!(
-        excess
-            .evidence
-            .iter()
-            .any(|evidence| evidence.file.as_deref() == Some("main.tf")
-                && evidence.kind == EvidenceKind::TerraformPlanPointer
-                && evidence.action.as_deref() == Some("s3:DeleteObject")),
+        excess.evidence.iter().any(
+            |evidence| evidence.file.as_deref() == Some("terraform-plan")
+                && evidence.kind == EvidenceKind::Extension("terraform_plan_resource".to_owned())
+                && evidence.action.as_deref() == Some("s3:DeleteObject")
+        ),
         "excess capability should point back to the Terraform/OpenTofu IAM policy: {excess:#?}"
     );
 
@@ -322,7 +321,12 @@ fn s3_iam_reir_demo_pr_review_comment_matches_golden_output() {
     let adds_delete_dir = demo_dir.join("scenarios/03-code-adds-delete");
 
     let required = review_facts_for_demo(&adds_delete_dir);
-    let grants = terraform_grants_from_fixture(&demo_dir, "fixed");
+    let mut grants = terraform_grants_from_fixture(&demo_dir, "fixed");
+    grants.retain(|fact| {
+        fact.capability
+            .as_ref()
+            .is_none_or(|capability| capability.category != CapabilityCategory::NetworkClient)
+    });
     let reconciliations = reir::reconcile_capabilities_for_target(&required, &grants, Some("prod"));
     let decision = reir::decide_gate(
         &required,
@@ -583,9 +587,14 @@ fn required_actions(required_facts: &[Fact]) -> std::collections::BTreeSet<&str>
 }
 
 fn terraform_grants_from_fixture(demo_dir: &Path, fixture: &str) -> Vec<Fact> {
-    let terraform_dir = demo_dir.join("infra/terraform").join(fixture);
-    let mut facts = terraform_dir_to_bundle(&terraform_dir)
-        .unwrap_or_else(|error| panic!("Terraform fixture {fixture} should collect: {error}"))
+    let plan_path = demo_dir
+        .join("infra/terraform")
+        .join(fixture)
+        .join("plan.json");
+    let plan = fs::read_to_string(&plan_path)
+        .unwrap_or_else(|error| panic!("Terraform fixture {fixture} should read: {error}"));
+    let mut facts = terraform_plan_json_to_bundle(&plan)
+        .unwrap_or_else(|error| panic!("Terraform plan fixture {fixture} should collect: {error}"))
         .facts;
     facts.extend(runtime_grants());
     facts

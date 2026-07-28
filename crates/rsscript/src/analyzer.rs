@@ -1,21 +1,23 @@
 use crate::text_util::{split_top_level_type_args, type_arg_names, type_root_name};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use crate::checks;
-use crate::checks::budget::{AnalysisBudget, AnalysisBudgetLimits, AnalysisDiagnostics};
-use crate::diagnostic::{Diagnostic, code};
+use crate::checks::budget::{AnalysisDiagnostics, FrontendBudget, FrontendBudgetLimits};
+use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
     CallResolution, DuplicateSymbolKind, FieldInfo, FunctionSig, Hir, HirBlock, HirExpr,
     HirMatchArm, HirStmt, HirTypeKind, ParamSig, ResolvedCalleeKind,
 };
 use crate::interfaces::CORE_INTERFACES;
-use crate::lexer::{Token, lex};
+use crate::lexer::{Token, lex_with_budget};
 use crate::syntax::ast::merge_programs;
 use crate::syntax::ast::{
     AssignStmt, Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, GenericBound,
     GenericParam, Item, MatchPattern, Stmt, TypeKind, TypeRef,
 };
-use crate::syntax::parse_source;
 
 mod assign;
 mod derives;
@@ -58,6 +60,23 @@ enum AnalysisSources<'a> {
     Many(&'a [(&'a str, &'a str)]),
 }
 
+impl AnalysisInput<'_> {
+    fn start_span(&self) -> Span {
+        let (file, source) = match self.sources {
+            AnalysisSources::Single { file, source } => (file, source),
+            AnalysisSources::Many(sources) => {
+                sources.first().copied().unwrap_or(("unknown.rss", ""))
+            }
+        };
+        Span {
+            file: file.to_string(),
+            line: 1,
+            column: 1,
+            length: source.len(),
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 enum AnalysisFlavor {
     FullWithStandardPackages,
@@ -78,6 +97,7 @@ struct PreparedAnalysis {
     interface_programs: Vec<crate::syntax::ast::Program>,
     hir: Hir,
     type_aliases: BTreeMap<String, AliasDefinition>,
+    budget: Rc<FrontendBudget>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -88,21 +108,27 @@ pub(crate) struct AliasDefinition {
 
 /// Own the analyzer front-end protocol in one place. Public entrypoints select
 /// only their historical input shape and HIR interface policy.
-fn prepare_analysis(input: AnalysisInput<'_>) -> PreparedAnalysis {
-    let tokens = match input.sources {
-        AnalysisSources::Single { file, source } => lex(file, source),
-        AnalysisSources::Many(sources) => sources
-            .iter()
-            .flat_map(|(file, source)| lex(file, source))
-            .collect(),
-    };
-    let mut syntax_program = match input.sources {
-        AnalysisSources::Single { file, source } => parse_source(file, source),
-        AnalysisSources::Many(sources) => merge_programs(
-            sources
-                .iter()
-                .map(|(file, source)| parse_source(file, source)),
-        ),
+fn prepare_analysis(input: AnalysisInput<'_>, budget: Rc<FrontendBudget>) -> PreparedAnalysis {
+    let (tokens, mut syntax_program) = match input.sources {
+        AnalysisSources::Single { file, source } => {
+            let tokens = lex_with_budget(file, source, budget.clone());
+            let program = crate::syntax::ast::Program::parse_tokens(file, &tokens, budget.clone());
+            (tokens, program)
+        }
+        AnalysisSources::Many(sources) => {
+            let mut tokens = Vec::new();
+            let mut programs = Vec::new();
+            for (file, source) in sources {
+                let source_tokens = lex_with_budget(file, source, budget.clone());
+                programs.push(crate::syntax::ast::Program::parse_tokens(
+                    file,
+                    &source_tokens,
+                    budget.clone(),
+                ));
+                tokens.extend(source_tokens);
+            }
+            (tokens, merge_programs(programs))
+        }
     };
     crate::syntax::isolate_module_namespaces(&mut syntax_program);
 
@@ -114,18 +140,25 @@ fn prepare_analysis(input: AnalysisInput<'_>) -> PreparedAnalysis {
             interface_programs: Vec::new(),
             hir,
             type_aliases: BTreeMap::new(),
+            budget,
         };
     }
 
     // Alias lookup historically includes core and standard-package aliases for
     // every full analysis flavor, even when HIR builtin interfaces are disabled.
     let default_interface_programs = crate::interfaces::default_interfaces()
-        .map(|(file, source)| parse_source(file, source))
+        .map(|(file, source)| {
+            let tokens = lex_with_budget(file, source, budget.clone());
+            crate::syntax::ast::Program::parse_tokens(file, &tokens, budget.clone())
+        })
         .collect::<Vec<_>>();
     let supplied_interface_programs = input
         .interfaces
         .iter()
-        .map(|(file, source)| parse_source(file, source))
+        .map(|(file, source)| {
+            let tokens = lex_with_budget(file, source, budget.clone());
+            crate::syntax::ast::Program::parse_tokens(file, &tokens, budget.clone())
+        })
         .collect::<Vec<_>>();
     let hir = match input.flavor {
         AnalysisFlavor::FullWithStandardPackages => Hir::from_syntax_with_prepared_interfaces(
@@ -172,12 +205,22 @@ fn prepare_analysis(input: AnalysisInput<'_>) -> PreparedAnalysis {
         interface_programs,
         hir,
         type_aliases,
+        budget,
     }
 }
 
 fn analyze_input(input: AnalysisInput<'_>) -> Vec<Diagnostic> {
+    analyze_input_with_budget(input, FrontendBudgetLimits::default(), None)
+}
+
+fn analyze_input_with_budget(
+    input: AnalysisInput<'_>,
+    limits: FrontendBudgetLimits,
+    cancel: Option<Arc<AtomicBool>>,
+) -> Vec<Diagnostic> {
     let flavor = input.flavor;
-    let prepared = prepare_analysis(input);
+    let budget = FrontendBudget::with_cancellation(limits, input.start_span(), cancel);
+    let prepared = prepare_analysis(input, budget);
     match flavor {
         AnalysisFlavor::SyntaxOnly => analyze_syntax_program(prepared),
         AnalysisFlavor::FullWithStandardPackages
@@ -272,12 +315,14 @@ pub fn analyze_sources_with_interfaces_without_core(
 mod entrypoint_tests {
     use super::{
         AnalysisFlavor, AnalysisInput, AnalysisSources, PreparedAnalysis,
-        analyze_program_with_budget, analyze_source_with_interfaces,
+        analyze_input_with_budget, analyze_source_with_interfaces,
         analyze_source_with_interfaces_without_core, analyze_sources_with_interfaces,
         analyze_sources_with_interfaces_without_core, prepare_analysis, render_type_ref,
     };
-    use crate::checks::budget::AnalysisBudgetLimits;
+    use crate::checks::budget::{FrontendBudget, FrontendBudgetLimits};
     use crate::diagnostic::code;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
 
     const SOURCE: &str = "fn helper(value: read Int) -> Int { return value }\n\
         fn main() -> Int { return helper(value: 1) }\n";
@@ -292,14 +337,16 @@ mod entrypoint_tests {
         source: &'static str,
         interfaces: &'static [(&'static str, &'static str)],
     ) -> PreparedAnalysis {
-        prepare_analysis(AnalysisInput {
+        let input = AnalysisInput {
             sources: AnalysisSources::Single {
                 file: "main.rss",
                 source,
             },
             interfaces,
             flavor,
-        })
+        };
+        let budget = FrontendBudget::new(FrontendBudgetLimits::default(), input.start_span());
+        prepare_analysis(input, budget)
     }
 
     #[test]
@@ -428,22 +475,23 @@ mod entrypoint_tests {
         let source = (0..200)
             .map(|index| format!("fn f{index}() -> Unit {{ return Unit }}\n"))
             .collect::<String>();
-        let prepared = prepare_analysis(AnalysisInput {
+        let input = AnalysisInput {
             sources: AnalysisSources::Single {
                 file: "wide.rss",
                 source: &source,
             },
             interfaces: &[],
             flavor: AnalysisFlavor::FullWithoutBuiltinInterfaces,
-        });
-        let two_passes = prepared.tokens.len() * 2;
+        };
+        let token_count = crate::lexer::lex("wide.rss", &source).len();
 
-        let diagnostics = analyze_program_with_budget(
-            prepared,
-            AnalysisBudgetLimits {
-                nodes: two_passes,
-                ..AnalysisBudgetLimits::default()
+        let diagnostics = analyze_input_with_budget(
+            input,
+            FrontendBudgetLimits {
+                nodes: token_count * 2,
+                ..FrontendBudgetLimits::default()
             },
+            None,
         );
 
         let incomplete = diagnostics
@@ -465,21 +513,22 @@ mod entrypoint_tests {
             .collect::<Vec<_>>()
             .join(", ");
         let source = format!("features: {feature_names}\nfn main() -> Unit {{ return Unit }}\n");
-        let prepared = prepare_analysis(AnalysisInput {
+        let input = AnalysisInput {
             sources: AnalysisSources::Single {
                 file: "many-errors.rss",
                 source: &source,
             },
             interfaces: &[],
             flavor: AnalysisFlavor::FullWithoutBuiltinInterfaces,
-        });
+        };
 
-        let diagnostics = analyze_program_with_budget(
-            prepared,
-            AnalysisBudgetLimits {
+        let diagnostics = analyze_input_with_budget(
+            input,
+            FrontendBudgetLimits {
                 diagnostics: 8,
-                ..AnalysisBudgetLimits::default()
+                ..FrontendBudgetLimits::default()
             },
+            None,
         );
 
         assert_eq!(diagnostics.len(), 9);
@@ -494,30 +543,170 @@ mod entrypoint_tests {
                 .any(|cause| cause.contains("diagnostics"))
         );
     }
+
+    fn assert_incomplete_cause(diagnostics: &[crate::Diagnostic], expected: &str) {
+        let incomplete = diagnostics
+            .iter()
+            .find(|diagnostic| diagnostic.code == code::ANALYSIS_INCOMPLETE)
+            .expect("frontend should report incomplete analysis");
+        assert!(
+            incomplete
+                .causes
+                .iter()
+                .any(|cause| cause.contains(expected)),
+            "expected {expected:?} exhaustion, got {incomplete:?}",
+        );
+    }
+
+    #[test]
+    fn deeply_nested_expression_stops_at_parse_depth_budget() {
+        let source = format!(
+            "fn main() -> Unit {{ return {}Unit }}\n",
+            "await ".repeat(2_000),
+        );
+        let diagnostics = analyze_input_with_budget(
+            AnalysisInput {
+                sources: AnalysisSources::Single {
+                    file: "deep.rss",
+                    source: &source,
+                },
+                interfaces: &[],
+                flavor: AnalysisFlavor::SyntaxOnly,
+            },
+            FrontendBudgetLimits {
+                parse_depth: 32,
+                ..FrontendBudgetLimits::default()
+            },
+            None,
+        );
+
+        assert_incomplete_cause(&diagnostics, "parse depth");
+    }
+
+    #[test]
+    fn token_storm_stops_during_lexing() {
+        let source = "? ".repeat(10_000);
+        let diagnostics = analyze_input_with_budget(
+            AnalysisInput {
+                sources: AnalysisSources::Single {
+                    file: "tokens.rss",
+                    source: &source,
+                },
+                interfaces: &[],
+                flavor: AnalysisFlavor::SyntaxOnly,
+            },
+            FrontendBudgetLimits {
+                tokens: 64,
+                ..FrontendBudgetLimits::default()
+            },
+            None,
+        );
+
+        assert_incomplete_cause(&diagnostics, "tokens");
+    }
+
+    #[test]
+    fn wide_syntax_tree_stops_at_ast_node_budget() {
+        let source = (0..100)
+            .map(|index| format!("fn f{index}() -> Unit {{ return Unit }}\n"))
+            .collect::<String>();
+        let diagnostics = analyze_input_with_budget(
+            AnalysisInput {
+                sources: AnalysisSources::Single {
+                    file: "ast-nodes.rss",
+                    source: &source,
+                },
+                interfaces: &[],
+                flavor: AnalysisFlavor::SyntaxOnly,
+            },
+            FrontendBudgetLimits {
+                ast_nodes: 16,
+                ..FrontendBudgetLimits::default()
+            },
+            None,
+        );
+
+        assert_incomplete_cause(&diagnostics, "AST nodes");
+    }
+
+    #[test]
+    fn oversized_source_stops_before_lexing() {
+        let source = " ".repeat(4_096);
+        let diagnostics = analyze_input_with_budget(
+            AnalysisInput {
+                sources: AnalysisSources::Single {
+                    file: "large.rss",
+                    source: &source,
+                },
+                interfaces: &[],
+                flavor: AnalysisFlavor::SyntaxOnly,
+            },
+            FrontendBudgetLimits {
+                source_bytes: 128,
+                ..FrontendBudgetLimits::default()
+            },
+            None,
+        );
+
+        assert_incomplete_cause(&diagnostics, "source bytes");
+    }
+
+    #[test]
+    fn cancellation_stops_frontend_work() {
+        let cancel = Arc::new(AtomicBool::new(true));
+        let diagnostics = analyze_input_with_budget(
+            AnalysisInput {
+                sources: AnalysisSources::Single {
+                    file: "cancelled.rss",
+                    source: SOURCE,
+                },
+                interfaces: &[],
+                flavor: AnalysisFlavor::SyntaxOnly,
+            },
+            FrontendBudgetLimits::default(),
+            Some(cancel),
+        );
+
+        assert_incomplete_cause(&diagnostics, "cancellation");
+    }
+
+    #[test]
+    fn parser_consumes_the_tokens_lexed_by_preparation() {
+        let token_count = crate::lexer::lex("single-lex.rss", SOURCE).len() - 1;
+        let diagnostics = analyze_input_with_budget(
+            AnalysisInput {
+                sources: AnalysisSources::Single {
+                    file: "single-lex.rss",
+                    source: SOURCE,
+                },
+                interfaces: &[],
+                flavor: AnalysisFlavor::SyntaxOnly,
+            },
+            FrontendBudgetLimits {
+                tokens: token_count,
+                ..FrontendBudgetLimits::default()
+            },
+            None,
+        );
+
+        assert!(
+            diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.code != code::ANALYSIS_INCOMPLETE),
+            "{diagnostics:?}",
+        );
+    }
 }
 
 fn analyze_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
-    analyze_program_with_budget(prepared, AnalysisBudgetLimits::default())
-}
-
-fn analyze_program_with_budget(
-    prepared: PreparedAnalysis,
-    budget_limits: AnalysisBudgetLimits,
-) -> Vec<Diagnostic> {
     let PreparedAnalysis {
         tokens,
         syntax_program,
         interface_programs,
         hir,
         type_aliases,
+        budget,
     } = prepared;
-    let budget = AnalysisBudget::new(
-        budget_limits,
-        tokens
-            .first()
-            .map(|token| token.span.clone())
-            .unwrap_or_default(),
-    );
     let mut analyzer = Analyzer {
         tokens: &tokens,
         syntax_program,
@@ -531,7 +720,10 @@ fn analyze_program_with_budget(
     };
     analyzer.run();
     analyzer.diagnostics.push_incomplete();
-    crate::syntax::demangle_diagnostics(&analyzer.syntax_program, &mut analyzer.diagnostics);
+    crate::syntax::demangle_diagnostics(
+        &analyzer.syntax_program,
+        analyzer.diagnostics.as_mut_slice(),
+    );
     analyzer.diagnostics.into_vec()
 }
 
@@ -576,14 +768,8 @@ fn analyze_syntax_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
         interface_programs,
         hir,
         type_aliases,
+        budget,
     } = prepared;
-    let budget = AnalysisBudget::new(
-        AnalysisBudgetLimits::default(),
-        tokens
-            .first()
-            .map(|token| token.span.clone())
-            .unwrap_or_default(),
-    );
     let mut analyzer = Analyzer {
         tokens: &tokens,
         syntax_program,
@@ -597,7 +783,10 @@ fn analyze_syntax_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
     };
     analyzer.run_syntax_only();
     analyzer.diagnostics.push_incomplete();
-    crate::syntax::demangle_diagnostics(&analyzer.syntax_program, &mut analyzer.diagnostics);
+    crate::syntax::demangle_diagnostics(
+        &analyzer.syntax_program,
+        analyzer.diagnostics.as_mut_slice(),
+    );
     analyzer.diagnostics.into_vec()
 }
 
@@ -607,7 +796,7 @@ pub(crate) struct Analyzer<'a> {
     pub(crate) interface_programs: Vec<crate::syntax::ast::Program>,
     pub(crate) hir: Hir,
     pub(crate) diagnostics: AnalysisDiagnostics,
-    pub(crate) budget: std::rc::Rc<AnalysisBudget>,
+    pub(crate) budget: Rc<FrontendBudget>,
     pub(crate) type_aliases: std::collections::BTreeMap<String, AliasDefinition>,
     in_task_group: bool,
     pub(crate) async_let_names: Vec<String>,

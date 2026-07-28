@@ -1,3 +1,6 @@
+use std::rc::Rc;
+
+use crate::checks::budget::{FrontendBudget, FrontendBudgetLimits};
 use crate::diagnostic::Span;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +53,34 @@ impl Token {
 }
 
 pub fn lex(file: &str, source: &str) -> Vec<Token> {
+    let budget = FrontendBudget::new(
+        FrontendBudgetLimits::default(),
+        source_span(file, source.len()),
+    );
+    lex_with_budget(file, source, budget)
+}
+
+pub(crate) fn lex_with_budget(file: &str, source: &str, budget: Rc<FrontendBudget>) -> Vec<Token> {
+    lex_with_budget_inner(file, source, budget, true)
+}
+
+pub(crate) fn lex_embedded_with_budget(
+    file: &str,
+    source: &str,
+    budget: Rc<FrontendBudget>,
+) -> Vec<Token> {
+    lex_with_budget_inner(file, source, budget, false)
+}
+
+fn lex_with_budget_inner(
+    file: &str,
+    source: &str,
+    budget: Rc<FrontendBudget>,
+    count_source: bool,
+) -> Vec<Token> {
+    if count_source && !budget.consume_source_bytes(source.len()) {
+        return vec![eof_token(file)];
+    }
     let mut lexer = Lexer {
         file,
         chars: source.chars().collect(),
@@ -57,9 +88,26 @@ pub fn lex(file: &str, source: &str) -> Vec<Token> {
         line: 1,
         column: 1,
         tokens: Vec::new(),
+        budget,
     };
     lexer.run();
     lexer.tokens
+}
+
+fn source_span(file: &str, length: usize) -> Span {
+    Span {
+        file: file.to_string(),
+        line: 1,
+        column: 1,
+        length,
+    }
+}
+
+fn eof_token(file: &str) -> Token {
+    Token {
+        kind: TokenKind::Eof,
+        span: source_span(file, 0),
+    }
 }
 
 struct Lexer<'a> {
@@ -69,11 +117,13 @@ struct Lexer<'a> {
     line: usize,
     column: usize,
     tokens: Vec<Token>,
+    budget: Rc<FrontendBudget>,
 }
 
 impl Lexer<'_> {
     fn run(&mut self) {
         while let Some(ch) = self.peek() {
+            let token_count = self.tokens.len();
             match ch {
                 ch if ch.is_whitespace() => self.bump_whitespace(),
                 '/' if self.peek_next() == Some('/') => self.bump_line_comment(),
@@ -90,6 +140,10 @@ impl Lexer<'_> {
                 ':' | ',' | '.' | '(' | ')' | '{' | '}' | '<' | '>' | '[' | ']' | '?' | '|'
                 | '&' | '~' | '+' | '-' | '*' | '/' | '=' | '!' | ';' | '#' => self.push_one(),
                 _ => self.push_one(),
+            }
+            let added = self.tokens.len().saturating_sub(token_count);
+            if added > 0 && !self.budget.consume_tokens(added) {
+                break;
             }
         }
         self.tokens.push(Token {
@@ -419,6 +473,9 @@ impl Lexer<'_> {
     }
 
     fn peek(&self) -> Option<char> {
+        if !self.budget.check_active() {
+            return None;
+        }
         self.chars.get(self.index).copied()
     }
 

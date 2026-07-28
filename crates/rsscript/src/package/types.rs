@@ -15,6 +15,12 @@ pub const PACKAGE_REVIEW_SCHEMA: &str = "rsscript.package_review.v0.1";
 pub struct ArtifactProducer {
     pub name: String,
     pub version: String,
+    pub source_revision: String,
+    pub build_id: String,
+    pub rustc_version: String,
+    pub target: String,
+    pub enabled_features: Vec<String>,
+    pub ruleset_digest: String,
 }
 
 impl ArtifactProducer {
@@ -22,6 +28,16 @@ impl ArtifactProducer {
         Self {
             name: "rsscript".to_string(),
             version: env!("CARGO_PKG_VERSION").to_string(),
+            source_revision: env!("RSSCRIPT_SOURCE_REVISION").to_string(),
+            build_id: env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT").to_string(),
+            rustc_version: env!("RSSCRIPT_RUSTC_VERSION").to_string(),
+            target: env!("RSSCRIPT_BUILD_TARGET").to_string(),
+            enabled_features: if cfg!(feature = "native-jit") {
+                vec!["native-jit".to_string()]
+            } else {
+                Vec::new()
+            },
+            ruleset_digest: env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT").to_string(),
         }
     }
 }

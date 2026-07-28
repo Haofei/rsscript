@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -66,7 +66,7 @@ fn connections() -> &'static Mutex<ConnectionRegistry> {
 }
 
 fn connection_for_with_config(
-    path: &PathBuf,
+    path: &Path,
     max_cached_connections: usize,
     busy_timeout: Duration,
 ) -> Result<SharedConnection, String> {
@@ -74,15 +74,16 @@ fn connection_for_with_config(
         return Err("maximum cached SQLite connections must be positive".to_string());
     }
 
+    let identity = normalized_database_path(path)?;
     let mut registry = connections().lock().map_err(|error| error.to_string())?;
     registry.clock = registry.clock.wrapping_add(1);
     let last_used = registry.clock;
-    if let Some(entry) = registry.entries.get_mut(path) {
+    if let Some(entry) = registry.entries.get_mut(&identity) {
         entry.last_used = last_used;
         return Ok(Arc::clone(&entry.connection));
     }
 
-    let connection = Connection::open(path).map_err(|error| error.to_string())?;
+    let connection = Connection::open(&identity).map_err(|error| error.to_string())?;
     connection
         .busy_timeout(busy_timeout)
         .map_err(|error| error.to_string())?;
@@ -98,7 +99,7 @@ fn connection_for_with_config(
         registry.entries.remove(&lru_path);
     }
     registry.entries.insert(
-        path.clone(),
+        identity,
         ConnectionEntry {
             connection: Arc::clone(&connection),
             last_used,
@@ -107,7 +108,48 @@ fn connection_for_with_config(
     Ok(connection)
 }
 
-fn connection_for(path: &PathBuf) -> Result<SharedConnection, String> {
+fn normalized_database_path(path: &Path) -> Result<PathBuf, String> {
+    if path.as_os_str().is_empty() || path == Path::new(":memory:") {
+        return Ok(path.to_path_buf());
+    }
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .map_err(|error| error.to_string())?
+            .join(path)
+    };
+    let mut lexical = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                lexical.pop();
+            }
+            other => lexical.push(other.as_os_str()),
+        }
+    }
+
+    let mut cursor = lexical.as_path();
+    let mut missing = Vec::new();
+    let base = loop {
+        match std::fs::canonicalize(cursor) {
+            Ok(base) => break base,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                let name = cursor.file_name().ok_or_else(|| error.to_string())?;
+                missing.push(name.to_os_string());
+                cursor = cursor.parent().ok_or_else(|| error.to_string())?;
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    };
+    Ok(missing
+        .into_iter()
+        .rev()
+        .fold(base, |path, component| path.join(component)))
+}
+
+fn connection_for(path: &Path) -> Result<SharedConnection, String> {
     static MAX_CACHED_CONNECTIONS: OnceLock<Result<usize, String>> = OnceLock::new();
     let limit = MAX_CACHED_CONNECTIONS
         .get_or_init(|| {
@@ -118,7 +160,7 @@ fn connection_for(path: &PathBuf) -> Result<SharedConnection, String> {
 }
 
 fn with_connection<T>(
-    path: &PathBuf,
+    path: &Path,
     operation: impl FnOnce(&mut Connection) -> Result<T, String>,
 ) -> Result<T, String> {
     let connection = connection_for(path)?;
@@ -146,7 +188,7 @@ fn account_value(
 }
 
 fn query_strings_with_limits(
-    path: &PathBuf,
+    path: &Path,
     sql: &str,
     params: &[String],
     limits: QueryLimits,
@@ -169,7 +211,7 @@ fn query_strings_with_limits(
 }
 
 fn query_one_string_with_limits(
-    path: &PathBuf,
+    path: &Path,
     sql: &str,
     params: &[String],
     limits: QueryLimits,
@@ -191,14 +233,14 @@ fn query_one_string_with_limits(
 }
 
 /// Run one or more SQL statements without bind parameters.
-pub fn execute(path: &PathBuf, sql: &str) -> Result<(), String> {
+pub fn execute(path: &Path, sql: &str) -> Result<(), String> {
     with_connection(path, |conn| {
         conn.execute_batch(sql).map_err(|error| error.to_string())
     })
 }
 
 /// Run one SQL statement with positional string bind parameters.
-pub fn execute_params(path: &PathBuf, sql: &str, params: &[String]) -> Result<(), String> {
+pub fn execute_params(path: &Path, sql: &str, params: &[String]) -> Result<(), String> {
     with_connection(path, |conn| {
         conn.execute(sql, params_from_iter(params))
             .map(|_| ())
@@ -206,26 +248,26 @@ pub fn execute_params(path: &PathBuf, sql: &str, params: &[String]) -> Result<()
     })
 }
 
-pub fn query_strings(path: &PathBuf, sql: &str) -> Result<Vec<String>, String> {
+pub fn query_strings(path: &Path, sql: &str) -> Result<Vec<String>, String> {
     query_strings_with_limits(path, sql, &[], configured_query_limits()?)
 }
 
 /// Query with positional string bind parameters.
 pub fn query_strings_params(
-    path: &PathBuf,
+    path: &Path,
     sql: &str,
     params: &[String],
 ) -> Result<Vec<String>, String> {
     query_strings_with_limits(path, sql, params, configured_query_limits()?)
 }
 
-pub fn query_one_string(path: &PathBuf, sql: &str) -> Result<Option<String>, String> {
+pub fn query_one_string(path: &Path, sql: &str) -> Result<Option<String>, String> {
     query_one_string_with_limits(path, sql, &[], configured_query_limits()?)
 }
 
 /// Query one row with positional string bind parameters.
 pub fn query_one_string_params(
-    path: &PathBuf,
+    path: &Path,
     sql: &str,
     params: &[String],
 ) -> Result<Option<String>, String> {
@@ -371,16 +413,59 @@ mod tests {
         assert!(std::sync::Arc::ptr_eq(&first, &reused));
 
         super::connection_for_with_config(&paths[2], 2, timeout).expect("third connection");
+        let identities = paths
+            .iter()
+            .map(|path| super::normalized_database_path(path).expect("normalized cache path"))
+            .collect::<Vec<_>>();
         let registry = super::connections().lock().expect("connection registry");
         assert_eq!(registry.entries.len(), 2);
-        assert!(registry.entries.contains_key(&paths[0]));
-        assert!(!registry.entries.contains_key(&paths[1]));
-        assert!(registry.entries.contains_key(&paths[2]));
+        assert!(registry.entries.contains_key(&identities[0]));
+        assert!(!registry.entries.contains_key(&identities[1]));
+        assert!(registry.entries.contains_key(&identities[2]));
         drop(registry);
 
         for path in paths {
             let _ = std::fs::remove_file(path);
         }
+    }
+
+    #[test]
+    fn normalizes_equivalent_database_paths_before_caching() {
+        let _guard = test_guard();
+        super::connections()
+            .lock()
+            .expect("connection registry")
+            .entries
+            .clear();
+        let path = sqlite_path("normalized");
+        let aliased = path
+            .parent()
+            .expect("temporary path parent")
+            .join(".")
+            .join(path.file_name().expect("temporary file name"));
+
+        let first = super::connection_for_with_config(&path, 2, Duration::from_secs(1))
+            .expect("first connection");
+        let second = super::connection_for_with_config(&aliased, 2, Duration::from_secs(1))
+            .expect("aliased connection");
+
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert_eq!(
+            super::connections()
+                .lock()
+                .expect("connection registry")
+                .entries
+                .len(),
+            1
+        );
+        drop(first);
+        drop(second);
+        super::connections()
+            .lock()
+            .expect("connection registry")
+            .entries
+            .clear();
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

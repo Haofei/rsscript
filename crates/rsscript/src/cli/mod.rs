@@ -142,7 +142,7 @@ pub(crate) fn read_interface_sources(paths: &[&str]) -> Result<Vec<InterfaceSour
     paths
         .iter()
         .map(|path| {
-            fs::read_to_string(path)
+            read_cli_source(Path::new(path))
                 .map(|contents| InterfaceSource {
                     path: (*path).to_string(),
                     contents,
@@ -155,13 +155,15 @@ pub(crate) fn lower_cli_input_to_rust_package(
     path: &str,
     runtime_path: &Path,
     json: bool,
+    trusted_native: bool,
 ) -> Result<rsscript::GeneratedRustPackage, ExitCode> {
     let runtime_path = runtime_path.display().to_string();
     if is_package_directory(path) {
-        let input = package_execution_lowering_input(Path::new(path)).map_err(|error| {
-            eprintln!("{error}");
-            ExitCode::from(2)
-        })?;
+        let input =
+            package_execution_lowering_input(Path::new(path), trusted_native).map_err(|error| {
+                eprintln!("{error}");
+                ExitCode::from(2)
+            })?;
         return lower_sources_to_rust_package_with_options(
             &input.sources,
             &input.package.name,
@@ -190,10 +192,16 @@ pub(crate) fn lower_cli_input_to_rust_package(
 
 fn package_execution_lowering_input(
     package_dir: &Path,
+    trusted_native: bool,
 ) -> Result<rsscript::PackageLoweringInput, String> {
     let input = package_lowering_input(package_dir)?;
     if input.native_dependencies.is_empty() {
         return Ok(input);
+    }
+    if !trusted_native {
+        return Err(
+            "native package execution is disabled by default; pass `--trusted-native` only for code you trust with full host-process authority".to_string(),
+        );
     }
 
     let package = prepare_authorized_package(package_dir)?;
@@ -240,7 +248,7 @@ pub(crate) fn select_runtime_path(
 /// manifest can't be read (the caller then falls back to lowering).
 pub(crate) fn cli_input_package_name(input_path: &str) -> Option<String> {
     if is_package_directory(input_path) {
-        package_execution_lowering_input(Path::new(input_path))
+        package_execution_lowering_input(Path::new(input_path), false)
             .ok()
             .map(|input| input.package.name)
     } else {
@@ -266,6 +274,7 @@ pub(crate) fn run_input_fingerprint(
     input_path: &str,
     runtime_path: &Path,
     release: bool,
+    trusted_native: bool,
 ) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
     // The package cache must invalidate on *any* compiler edit, not merely a
@@ -278,7 +287,7 @@ pub(crate) fn run_input_fingerprint(
     parts.push(format!("release:{release}"));
 
     if is_package_directory(input_path) {
-        let input = package_execution_lowering_input(Path::new(input_path)).ok()?;
+        let input = package_execution_lowering_input(Path::new(input_path), trusted_native).ok()?;
         parts.push(format!("package:{}", input.package.name));
         // Sources/interfaces already carry their contents; include the native
         // dependency identity (path + features + bindings) since it changes the
@@ -408,7 +417,7 @@ pub(crate) fn print_usage() {
     eprintln!("  rss fmt <file.rss>  # writes formatted source to stdout");
     eprintln!("  rss new <package-name>");
     eprintln!(
-        "  rss run [--json] --vm [--trusted-unlimited] <file-or-package-directory> [-- <args>...]"
+        "  rss run [--json] [--vm] [--trusted-unlimited] [--trusted-native] <file-or-package-directory> [-- <args>...]"
     );
     eprintln!(
         "  rss run [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]"
@@ -503,18 +512,18 @@ mod tests {
         let source = root.join("main.rss");
         fs::write(&source, "fn main() -> Unit { return Unit }\n").expect("source should write");
         let source = source.to_string_lossy();
-        let first = super::run_input_fingerprint(&source, &root.join("runtime-a"), false)
+        let first = super::run_input_fingerprint(&source, &root.join("runtime-a"), false, false)
             .expect("fingerprint should compute");
-        let release = super::run_input_fingerprint(&source, &root.join("runtime-a"), true)
+        let release = super::run_input_fingerprint(&source, &root.join("runtime-a"), true, false)
             .expect("release fingerprint should compute");
-        let runtime = super::run_input_fingerprint(&source, &root.join("runtime-b"), false)
+        let runtime = super::run_input_fingerprint(&source, &root.join("runtime-b"), false, false)
             .expect("runtime fingerprint should compute");
         fs::write(
             &*source,
             "fn main() -> Unit { Log.write(message: \"changed\") }\n",
         )
         .expect("source should change");
-        let changed = super::run_input_fingerprint(&source, &root.join("runtime-a"), false)
+        let changed = super::run_input_fingerprint(&source, &root.join("runtime-a"), false, false)
             .expect("changed fingerprint should compute");
 
         assert_ne!(first, release);
@@ -540,7 +549,7 @@ mod tests {
     fn aot_execution_input_preserves_unlocked_pure_package_compatibility() {
         let root = package_fixture("aot-pure-package", "");
 
-        let input = super::package_execution_lowering_input(&root)
+        let input = super::package_execution_lowering_input(&root, false)
             .expect("pure package should not require native authorization");
         assert!(input.native_dependencies.is_empty());
 
@@ -574,10 +583,10 @@ unsafe = "forbid"
             "unauthorized native packages must not enter the cached-run fast path"
         );
         assert!(
-            super::run_input_fingerprint(&root_text, &root.join("runtime"), false).is_none(),
+            super::run_input_fingerprint(&root_text, &root.join("runtime"), false, false).is_none(),
             "unauthorized native packages must not reuse a generated Cargo package"
         );
-        let error = super::package_execution_lowering_input(&root)
+        let error = super::package_execution_lowering_input(&root, true)
             .expect_err("native AOT input without an approved lock must be rejected");
         assert!(error.contains("native build/load denied"), "{error}");
         assert!(error.contains("rsspkg.lock missing"), "{error}");

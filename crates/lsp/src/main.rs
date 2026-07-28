@@ -144,6 +144,7 @@ enum AnalysisKey {
 }
 
 const MAX_BLOCKING_ANALYSES: usize = 2;
+const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
 
 struct Backend {
     client: Client,
@@ -221,6 +222,9 @@ fn open_document(
     text: String,
     version: i32,
 ) -> Option<AnalysisJob> {
+    if text.len() > MAX_DOCUMENT_BYTES {
+        return None;
+    }
     if documents
         .get(&uri)
         .is_some_and(|document| version <= document.version)
@@ -255,7 +259,9 @@ fn change_document(
 
     let mut text = document.text.to_string();
     for change in changes {
-        apply_change(&mut text, change);
+        if !apply_change(&mut text, change) || text.len() > MAX_DOCUMENT_BYTES {
+            return None;
+        }
     }
 
     let analysis_key = analysis_key_for_uri(&uri);
@@ -271,6 +277,9 @@ fn change_document(
 }
 
 fn save_document(documents: &mut DocumentStore, uri: Url, text: String) -> Option<AnalysisJob> {
+    if text.len() > MAX_DOCUMENT_BYTES {
+        return None;
+    }
     let version = documents.get(&uri)?.version;
     let analysis_key = analysis_key_for_uri(&uri);
     let revision = documents.allocate_revision(&analysis_key);
@@ -2179,15 +2188,48 @@ fn char_position(source: &str, position: Position) -> (usize, usize) {
 }
 
 /// Apply one incremental (or full) content change to `text` in place.
-fn apply_change(text: &mut String, change: &TextDocumentContentChangeEvent) {
+fn apply_change(text: &mut String, change: &TextDocumentContentChangeEvent) -> bool {
     match change.range {
         Some(range) => {
-            let start = byte_offset(text, range.start);
-            let end = byte_offset(text, range.end);
+            let Some(start) = checked_byte_offset(text, range.start) else {
+                return false;
+            };
+            let Some(end) = checked_byte_offset(text, range.end) else {
+                return false;
+            };
+            if start > end {
+                return false;
+            }
             text.replace_range(start..end, &change.text);
         }
         None => *text = change.text.clone(),
     }
+    true
+}
+
+fn checked_byte_offset(text: &str, position: Position) -> Option<usize> {
+    let mut line_start = 0usize;
+    for _ in 0..position.line {
+        let newline = text[line_start..].find('\n')?;
+        line_start += newline + 1;
+    }
+
+    let mut utf16 = 0u32;
+    let mut offset = line_start;
+    for character in text[line_start..].chars() {
+        if utf16 == position.character {
+            return Some(offset);
+        }
+        if character == '\n' {
+            return None;
+        }
+        utf16 = utf16.checked_add(character.len_utf16() as u32)?;
+        if utf16 > position.character {
+            return None;
+        }
+        offset += character.len_utf8();
+    }
+    (utf16 == position.character).then_some(offset)
 }
 
 /// Byte offset of an LSP [`Position`] in `text` (line is 0-based, column is in
@@ -2259,6 +2301,54 @@ mod tests {
             revision: 0,
             version: 0,
         }
+    }
+
+    #[test]
+    fn rejects_reversed_and_invalid_utf16_incremental_ranges() {
+        let mut text = "a😀b\n".to_owned();
+        let original = text.clone();
+        let reversed = TextDocumentContentChangeEvent {
+            range: Some(Range::new(Position::new(0, 3), Position::new(0, 1))),
+            range_length: None,
+            text: "x".to_owned(),
+        };
+        assert!(!apply_change(&mut text, &reversed));
+        assert_eq!(text, original);
+
+        let split_surrogate = TextDocumentContentChangeEvent {
+            range: Some(Range::new(Position::new(0, 2), Position::new(0, 2))),
+            range_length: None,
+            text: "x".to_owned(),
+        };
+        assert!(!apply_change(&mut text, &split_surrogate));
+        assert_eq!(text, original);
+    }
+
+    #[test]
+    fn rejects_documents_and_changes_over_the_document_byte_cap() {
+        let uri = file_url("oversized.rss");
+        let mut documents = DocumentStore::new();
+        assert!(
+            open_document(
+                &mut documents,
+                uri.clone(),
+                "x".repeat(MAX_DOCUMENT_BYTES + 1),
+                1,
+            )
+            .is_none()
+        );
+        open_document(&mut documents, uri.clone(), "small".to_owned(), 1)
+            .expect("small document should open");
+        let replacement = TextDocumentContentChangeEvent {
+            range: None,
+            range_length: None,
+            text: "x".repeat(MAX_DOCUMENT_BYTES + 1),
+        };
+        assert!(change_document(&mut documents, uri.clone(), 2, &[replacement]).is_none());
+        assert_eq!(
+            documents.get(&uri).expect("document remains").text.as_ref(),
+            "small"
+        );
     }
 
     #[test]

@@ -35,6 +35,7 @@ const PACKAGE_TREE_MAX_FILES: usize = 20_000;
 const PACKAGE_TREE_MAX_ENTRIES: usize = 40_000;
 const PACKAGE_TREE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const PACKAGE_TREE_MAX_DEPTH: usize = 64;
+const PACKAGE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 pub(crate) const CARGO_OUTPUT_MAX_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const CARGO_METADATA_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -483,22 +484,12 @@ pub(crate) fn run_bounded_command(
     timeout: Duration,
     output_cap: usize,
 ) -> Result<BoundedCommandOutput, String> {
-    rss_process_guard::configure(command, rss_process_guard::ProcessLimits::compiler_worker())
-        .map_err(|error| format!("failed to configure {operation} resource limits: {error}"))?;
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("failed to start {operation}: {error}"))?;
-    let guard = rss_process_guard::ProcessGuard::attach(
-        &child,
+    let (mut child, guard) = rss_process_guard::spawn_guarded(
+        command,
         rss_process_guard::ProcessLimits::compiler_worker(),
     )
-    .map_err(|error| format!("failed to guard {operation}: {error}"))?;
+    .map_err(|error| format!("failed to start guarded {operation}: {error}"))?;
     let stdout = child
         .stdout
         .take()
@@ -924,7 +915,12 @@ fn is_rsscript_source_path(path: &Path) -> bool {
 fn package_manifest_key_span(package_dir: &Path, key: &str) -> crate::diagnostic::Span {
     let path = package_dir.join("rsspkg.toml");
     let file = path.display().to_string();
-    let source = fs::read_to_string(&path).unwrap_or_default();
+    let source = read_utf8_file_bounded(
+        &path,
+        PACKAGE_MANIFEST_MAX_BYTES,
+        "package manifest diagnostic read",
+    )
+    .unwrap_or_default();
     for (index, line) in source.lines().enumerate() {
         if let Some(column) = line.find(key) {
             return crate::diagnostic::Span {

@@ -30,14 +30,14 @@ may exercise the language, but it must not redefine language semantics.
 
 4. Rust Lowering
 
-   `src/rust_lower.rs` owns generated Rust, source maps, backend verification,
+   `src/rust_lower/` owns generated Rust, source maps, backend verification,
    rustc remapping, runtime diagnostic parsing, and runtime hook selection.
    Lowering consumes checked RSScript semantics; it should not be the first
    place that discovers language errors.
 
 5. Package Tooling
 
-   `src/package.rs` owns package manifests, `.rssi` public contracts, dependency
+   `src/package/` owns package manifests, `.rssi` public contracts, dependency
    graphs, semantic locks, package review, publish dry-runs, vendoring, and
    package metadata. It consumes syntax/check/review/lowering APIs.
 
@@ -48,7 +48,7 @@ may exercise the language, but it must not redefine language semantics.
 
 7. CLI
 
-   `src/main.rs` is only the process entrypoint. `src/cli.rs` owns command-line
+   `src/main.rs` is only the process entrypoint. `src/cli/` owns command-line
    parsing and command dispatch, and should remain an application shell around
    the library APIs.
 
@@ -65,15 +65,15 @@ tests/checker_frontend.rs   frontend checker, parser, diagnostics, and fixtures 
 tests/checker_lowering.rs   Rust lowering, source maps, runtime diagnostics module
 tests/checker_package.rs    package review, package manager, REIR adapters module
 tests/checker_review.rs     review map and semantic diff behavior module
-src/package.rs         package domain model, graph, review, lock, publish, vendor
-src/rust_lower.rs      lowering, backend checks, source maps, remapping, intrinsics
+src/package/           package domain model, graph, review, lock, publish, vendor
+src/rust_lower/        lowering, backend checks, source maps, remapping, intrinsics
 src/analyzer.rs        frontend orchestration
 src/checks/*.rs        large semantic checker implementations
 ```
 
 ## Refactoring Order
 
-1. Keep `src/main.rs` thin and move CLI application code under `src/cli.rs`.
+1. Keep `src/main.rs` thin and move CLI application code under `src/cli/`.
 2. Split package code by responsibility:
 
    ```text
@@ -120,13 +120,16 @@ src/checks/*.rs        large semantic checker implementations
    src/lower/intrinsics.rs
    ```
 
-4. Integration tests use exactly four Cargo-facing targets:
+4. Integration tests use four primary semantic domains plus two
+   process-isolated JIT configuration targets:
 
    ```text
    tests/static.rs
    tests/runtime.rs
    tests/differential.rs
    tests/soak.rs
+   tests/jit_cost_model.rs
+   tests/jit_env.rs
    ```
 
    Internal module files are implementation detail under those four targets:

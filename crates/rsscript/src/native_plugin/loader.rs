@@ -8,10 +8,8 @@
 //! `bindings.rssbind.toml`.
 
 use std::collections::BTreeMap;
-use std::collections::hash_map::DefaultHasher;
 use std::fs;
 use std::fs::OpenOptions;
-use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -58,7 +56,12 @@ pub fn load_authorized_package_native_bindings(
     if input.native_dependencies.is_empty() {
         return Ok(Vec::new());
     }
-    let package_dir = package.package_dir();
+    let snapshot_root = package.native_snapshot_root().ok_or_else(|| {
+        "native build denied: authorized package has no private content snapshot".to_string()
+    })?;
+    let abi_path = package.native_abi_path().ok_or_else(|| {
+        "native build denied: authorized package has no ABI content snapshot".to_string()
+    })?;
 
     // Collect the native-fn signatures declared across the package interfaces.
     let mut signatures: BTreeMap<String, (Vec<Param>, Option<TypeRef>)> = BTreeMap::new();
@@ -106,7 +109,7 @@ pub fn load_authorized_package_native_bindings(
     native_deps.dedup();
     bindings.sort_by(|left, right| left.symbol.cmp(&right.symbol));
 
-    let library_path = build_shim_library(package_dir, &native_deps, &bindings)?;
+    let library_path = build_shim_library(snapshot_root, abi_path, &native_deps, &bindings)?;
     rss_native_abi::load_registry(&library_path)
 }
 
@@ -187,22 +190,34 @@ fn shim_return(return_ty: Option<&TypeRef>) -> Result<ShimReturn, String> {
 
 /// Generate (if needed) and cargo-build the shim cdylib, returning its path.
 fn build_shim_library(
-    package_dir: &Path,
+    _snapshot_root: &Path,
+    abi_path: &Path,
     native_deps: &[ShimDependency],
     bindings: &[ShimBinding],
 ) -> Result<PathBuf, String> {
-    let abi_path = format!("{}/../native-abi", env!("CARGO_MANIFEST_DIR"));
-    let canonical_package = package_dir
-        .canonicalize()
-        .map_err(|error| format!("failed to canonicalize {}: {error}", package_dir.display()))?;
+    let mut identity = Sha256::new();
+    identity.update(b"rss-native-shim-identity-v3\0");
+    identity.update(rss_native_abi::ABI_VERSION.to_le_bytes());
+    hash_source_tree(abi_path, &mut identity)?;
+    for dependency in native_deps {
+        identity.update(dependency.crate_name.as_bytes());
+        identity.update([0]);
+        identity.update([u8::from(dependency.default_features)]);
+        for feature in &dependency.cargo_features {
+            identity.update(feature.as_bytes());
+            identity.update([0]);
+        }
+        hash_source_tree(Path::new(&dependency.path), &mut identity)?;
+    }
+    for binding in bindings {
+        identity.update(format!("{binding:?}").as_bytes());
+        identity.update([0]);
+    }
+    let crate_name = format!("rss_shim_{}", &hex::encode(identity.finalize())[..16]);
 
-    // Stable per-package shim crate name (valid Rust identifier).
-    let mut hasher = DefaultHasher::new();
-    canonical_package.hash(&mut hasher);
-    let crate_name = format!("rss_shim_{:016x}", hasher.finish());
-
-    let shim = generate_shim_crate(&crate_name, native_deps, &abi_path, bindings);
-    let cache_key = shim_cache_key(&shim.cargo_toml, &shim.lib_rs, native_deps, &abi_path)?;
+    let abi_path_label = abi_path.to_string_lossy();
+    let shim = generate_shim_crate(&crate_name, native_deps, &abi_path_label, bindings);
+    let cache_key = shim_cache_key(&shim.lib_rs, native_deps, &abi_path_label)?;
     let cache_root = std::env::var_os("RSS_NATIVE_PLUGIN_CACHE_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join("rss-native-plugins-v2"));
@@ -241,12 +256,13 @@ fn build_shim_library(
     let mut lock_command = Command::new("cargo");
     lock_command
         .arg("generate-lockfile")
+        .arg("--offline")
         .arg("--manifest-path")
         .arg(&manifest);
     configure_reduced_build_environment(&mut lock_command);
     let lock_output = run_bounded_command(
         &mut lock_command,
-        "native shim cargo generate-lockfile",
+        "native shim offline lock snapshot preparation",
         CARGO_BUILD_TIMEOUT,
         CARGO_OUTPUT_MAX_BYTES,
     )
@@ -256,14 +272,41 @@ fn build_shim_library(
     if !lock_output.status.success() {
         let _ = fs::remove_dir_all(&staging);
         return Err(format!(
-            "failed to lock native shim dependencies:\n{}",
+            "failed to prepare native shim lock snapshot offline:\n{}",
             String::from_utf8_lossy(&lock_output.stderr)
+        ));
+    }
+    let mut metadata_command = Command::new("cargo");
+    metadata_command
+        .arg("metadata")
+        .arg("--format-version")
+        .arg("1")
+        .arg("--frozen")
+        .arg("--offline")
+        .arg("--manifest-path")
+        .arg(&manifest);
+    configure_reduced_build_environment(&mut metadata_command);
+    let metadata_output = run_bounded_command(
+        &mut metadata_command,
+        "native shim cargo metadata",
+        CARGO_BUILD_TIMEOUT,
+        CARGO_OUTPUT_MAX_BYTES,
+    )
+    .inspect_err(|_| {
+        let _ = fs::remove_dir_all(&staging);
+    })?;
+    if !metadata_output.status.success() {
+        let _ = fs::remove_dir_all(&staging);
+        return Err(format!(
+            "reviewed native shim lock is not complete for frozen offline build:\n{}",
+            String::from_utf8_lossy(&metadata_output.stderr)
         ));
     }
     let mut build_command = Command::new("cargo");
     build_command
         .arg("build")
-        .arg("--locked")
+        .arg("--frozen")
+        .arg("--offline")
         .arg("--release")
         .arg("--manifest-path")
         .arg(&manifest);
@@ -306,16 +349,13 @@ fn build_shim_library(
 }
 
 fn shim_cache_key(
-    cargo_toml: &str,
     lib_rs: &str,
     native_deps: &[ShimDependency],
     abi_path: &str,
 ) -> Result<String, String> {
     let mut digest = Sha256::new();
-    digest.update(b"rss-native-shim-cache-v2\0");
+    digest.update(b"rss-native-shim-cache-v3\0");
     digest.update(rss_native_abi::ABI_VERSION.to_le_bytes());
-    digest.update(cargo_toml.as_bytes());
-    digest.update([0]);
     digest.update(lib_rs.as_bytes());
     let mut rustc_command = Command::new("rustc");
     rustc_command.arg("-Vv");
@@ -365,7 +405,13 @@ fn hash_source_tree(path: &Path, digest: &mut Sha256) -> Result<(), String> {
                 file.display()
             ));
         }
-        digest.update(file.to_string_lossy().as_bytes());
+        let relative = file.strip_prefix(path).map_err(|_| {
+            format!(
+                "native cache input escaped approved root: {}",
+                file.display()
+            )
+        })?;
+        digest.update(relative.to_string_lossy().as_bytes());
         digest.update([0]);
         let hashed = hash_file_streaming_bounded(&file, digest, expected)?;
         remaining -= hashed;
@@ -717,6 +763,11 @@ mod tests {
         .expect("fixture native manifest");
         fs::write(root.join("native/rust/src/lib.rs"), "pub fn unused() {}\n")
             .expect("fixture native source");
+        fs::write(
+            root.join("native/rust/Cargo.lock"),
+            "# This file is automatically @generated by Cargo.\nversion = 4\n\n[[package]]\nname = \"authorization_test_native\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("fixture reviewed Cargo lock");
 
         let error = match load_package_native_bindings(&root) {
             Ok(_) => {
@@ -865,6 +916,11 @@ mod tests {
             "pub fn add_one(value: i64) -> i64 { value + 1 }\n",
         )
         .expect("native source should write");
+        fs::write(
+            native.join("Cargo.lock"),
+            "# This file is automatically @generated by Cargo.\nversion = 4\n\n[[package]]\nname = \"shim_test_native\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("reviewed native lock should write");
         let deps = vec![ShimDependency {
             crate_name: "shim_test_native".to_string(),
             path: native.to_string_lossy().into_owned(),
@@ -879,9 +935,10 @@ mod tests {
             mut_indices: vec![],
         }];
 
+        let abi = Path::new(env!("CARGO_MANIFEST_DIR")).join("../native-abi");
         let paths = std::thread::scope(|scope| {
-            let first = scope.spawn(|| build_shim_library(&root, &deps, &bindings));
-            let second = scope.spawn(|| build_shim_library(&root, &deps, &bindings));
+            let first = scope.spawn(|| build_shim_library(&root, &abi, &deps, &bindings));
+            let second = scope.spawn(|| build_shim_library(&root, &abi, &deps, &bindings));
             [
                 first.join().expect("first build thread should not panic"),
                 second.join().expect("second build thread should not panic"),

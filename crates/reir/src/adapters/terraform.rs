@@ -875,6 +875,20 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
             let resource_type = change.get("type").and_then(|v| v.as_str()).unwrap_or("");
             let name = change.get("name").and_then(|v| v.as_str()).unwrap_or("");
             let address = change.get("address").and_then(|v| v.as_str()).unwrap_or("");
+            let after = change
+                .get("change")
+                .and_then(|c| c.get("after"))
+                .unwrap_or(&Value::Null);
+
+            if resource_type == "postgresql_grant" {
+                facts.extend(postgresql_grant_plan_facts(
+                    name,
+                    address,
+                    after,
+                    change_index,
+                ));
+                continue;
+            }
 
             if !matches!(
                 resource_type,
@@ -886,11 +900,6 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
             ) {
                 continue;
             }
-
-            let after = change
-                .get("change")
-                .and_then(|c| c.get("after"))
-                .unwrap_or(&Value::Null);
 
             if let Some(policy_str) = after.get("policy").and_then(|v| v.as_str()) {
                 match serde_json::from_str::<Value>(policy_str) {
@@ -1003,6 +1012,110 @@ pub fn terraform_plan_json_to_bundle(plan_json: &str) -> Result<Bundle, String> 
         .collect();
     bundle.slices = crate::slice_by_kind(&bundle);
     Ok(bundle)
+}
+
+fn postgresql_grant_plan_facts(
+    name: &str,
+    address: &str,
+    values: &Value,
+    change_index: usize,
+) -> Vec<Fact> {
+    let database = values
+        .get("database")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let schema = values
+        .get("schema")
+        .and_then(Value::as_str)
+        .unwrap_or("public");
+    let role = values
+        .get("role")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let objects = values
+        .get("objects")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| vec!["*"]);
+    let privileges = values
+        .get("privileges")
+        .and_then(Value::as_array)
+        .map(|items| items.iter().filter_map(Value::as_str).collect::<Vec<_>>())
+        .unwrap_or_default();
+    let subject = Subject {
+        kind: SubjectKind::CloudPolicy,
+        id: format!("terraform::postgresql_grant.{name}"),
+        name: Some(format!("postgresql_grant.{name}")),
+        package: Some("terraform".to_owned()),
+    };
+
+    privileges
+        .iter()
+        .enumerate()
+        .flat_map(|(privilege_index, privilege)| {
+            let normalized = privilege.to_ascii_uppercase();
+            let subject = subject.clone();
+            objects.iter().map(move |object| {
+                let resource = format!("postgres://{database}/{schema}/{object}");
+                Fact {
+                    schema: FACT_SCHEMA.to_owned(),
+                    id: format!(
+                        "fact.terraform.postgresql_grant.{}.privilege_{}.{}.{}",
+                        sanitize_id(name),
+                        privilege_index,
+                        sanitize_id(&normalized),
+                        sanitize_id(&resource)
+                    ),
+                    kind: FactKind::Capability,
+                    role: Some(FactRole::Granted),
+                    subject: subject.clone(),
+                    capability: Some(Capability {
+                        category: postgres_privilege_category(&normalized),
+                        provider: Some("postgres".to_owned()),
+                        service: Some("postgres".to_owned()),
+                        action: Some(normalized.clone()),
+                        resource: Some(resource.clone()),
+                        constraints: HashMap::new(),
+                    }),
+                    value: FactValue::True,
+                    confidence: Confidence {
+                        level: ConfidenceLevel::Scanned,
+                        source: Some("terraform_plan_json".to_owned()),
+                    },
+                    acquisition_mode: AcquisitionMode::TerraformPlan,
+                    precision: Precision::ResourceScoped,
+                    evidence: vec![Evidence {
+                        kind: EvidenceKind::TerraformPlanPointer,
+                        file: Some("terraform-plan".to_owned()),
+                        line: Some(0),
+                        column: None,
+                        length: None,
+                        symbol: Some(address.to_owned()),
+                        reason: Some(format!(
+                            "Terraform/OpenTofu plan grants {normalized} on {resource} to role {role}"
+                        )),
+                        json_pointer: Some(format!(
+                            "/resource_changes/{change_index}/change/after/privileges/{privilege_index}"
+                        )),
+                        resource: Some(resource.clone()),
+                        provider: Some("postgres".to_owned()),
+                        value: None,
+                        event_id: None,
+                        time: None,
+                        source: Some("terraform_plan_json".to_owned()),
+                        event_name: None,
+                        principal: (!role.is_empty()).then(|| role.to_owned()),
+                        account: None,
+                        policy_arn: None,
+                        statement_index: Some(privilege_index),
+                        action: Some(normalized.clone()),
+                    }],
+                    unknown_reason: None,
+                }
+            })
+        })
+        .collect()
 }
 
 struct TerraformParseDiagnostic<'a> {

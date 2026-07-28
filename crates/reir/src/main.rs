@@ -19,6 +19,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 const MAX_CLI_INPUT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_CLI_OUTPUT_BYTES: usize = 64 * 1024 * 1024;
+const MAX_MERGE_INPUT_FILES: usize = 1024;
 static OUTPUT_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 const USAGE: &str = "Usage:
@@ -248,15 +249,25 @@ fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
         ));
     }
 
-    let review_map_json = read_optional_text(review_map.as_deref())?;
-    let package_review_json = read_optional_text(package_review.as_deref())?;
-    let package_check_json = read_optional_text(package_check.as_deref())?;
-    let package_lock_json = read_optional_text(package_lock.as_deref())?;
-    let lock_update_json = read_optional_text(lock_update.as_deref())?;
-    let package_tree_json = read_optional_text(package_tree.as_deref())?;
-    let package_publish_json = read_optional_text(package_publish.as_deref())?;
-    let package_metadata_json = read_optional_text(package_metadata.as_deref())?;
-    let package_vendor_json = read_optional_text(package_vendor.as_deref())?;
+    let mut aggregate_input_bytes = 0;
+    let review_map_json =
+        read_optional_text_accounted(review_map.as_deref(), &mut aggregate_input_bytes)?;
+    let package_review_json =
+        read_optional_text_accounted(package_review.as_deref(), &mut aggregate_input_bytes)?;
+    let package_check_json =
+        read_optional_text_accounted(package_check.as_deref(), &mut aggregate_input_bytes)?;
+    let package_lock_json =
+        read_optional_text_accounted(package_lock.as_deref(), &mut aggregate_input_bytes)?;
+    let lock_update_json =
+        read_optional_text_accounted(lock_update.as_deref(), &mut aggregate_input_bytes)?;
+    let package_tree_json =
+        read_optional_text_accounted(package_tree.as_deref(), &mut aggregate_input_bytes)?;
+    let package_publish_json =
+        read_optional_text_accounted(package_publish.as_deref(), &mut aggregate_input_bytes)?;
+    let package_metadata_json =
+        read_optional_text_accounted(package_metadata.as_deref(), &mut aggregate_input_bytes)?;
+    let package_vendor_json =
+        read_optional_text_accounted(package_vendor.as_deref(), &mut aggregate_input_bytes)?;
     let bundle = collect_rsscript_bundle(RsscriptCollectInputs {
         review_map_json: review_map_json.as_deref(),
         package_review_json: package_review_json.as_deref(),
@@ -749,8 +760,38 @@ fn read_bundle(path: &str) -> Result<Bundle, CliError> {
         .map_err(|error| CliError::runtime(format!("failed to parse {path}: {error}")))
 }
 
-fn read_optional_text(path: Option<&str>) -> Result<Option<String>, CliError> {
-    path.map(read_bounded_text).transpose()
+fn read_optional_text_accounted(
+    path: Option<&str>,
+    aggregate_bytes: &mut u64,
+) -> Result<Option<String>, CliError> {
+    path.map(|path| read_bounded_text_accounted(path, aggregate_bytes, MAX_CLI_INPUT_BYTES))
+        .transpose()
+}
+
+fn read_bounded_text_accounted(
+    path: &str,
+    aggregate_bytes: &mut u64,
+    aggregate_limit: u64,
+) -> Result<String, CliError> {
+    let remaining = aggregate_limit
+        .checked_sub(*aggregate_bytes)
+        .ok_or_else(|| CliError::runtime("aggregate input byte limit exceeded"))?;
+    let text = read_bounded_text_with_limit(Path::new(path), remaining).map_err(|error| {
+        if remaining < aggregate_limit {
+            let detail = match error {
+                CliError::Usage(message) | CliError::Runtime(message) => message,
+            };
+            CliError::runtime(format!(
+                "aggregate input exceeds the {aggregate_limit} byte limit: {detail}"
+            ))
+        } else {
+            error
+        }
+    })?;
+    *aggregate_bytes = aggregate_bytes
+        .checked_add(text.len() as u64)
+        .ok_or_else(|| CliError::runtime("aggregate input byte count overflowed"))?;
+    Ok(text)
 }
 
 fn read_bounded_text(path: &str) -> Result<String, CliError> {
@@ -1047,16 +1088,66 @@ fn same_file(left: &fs::Metadata, right: &fs::Metadata) -> bool {
 }
 
 fn print_json<T: serde::Serialize>(value: &T) -> Result<(), CliError> {
-    let json = serde_json::to_string_pretty(value)
+    let output = bounded_json(value, MAX_CLI_OUTPUT_BYTES)?;
+    std::io::stdout()
+        .lock()
+        .write_all(&output)
+        .map_err(|error| CliError::runtime(format!("failed to write JSON to stdout: {error}")))
+}
+
+struct BoundedOutput {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl Write for BoundedOutput {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let new_len = self
+            .bytes
+            .len()
+            .checked_add(bytes.len())
+            .filter(|length| *length <= self.limit)
+            .ok_or_else(|| std::io::Error::other("JSON output byte limit exceeded"))?;
+        self.bytes.reserve(new_len - self.bytes.len());
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn bounded_json<T: serde::Serialize>(value: &T, limit: usize) -> Result<Vec<u8>, CliError> {
+    let mut output = BoundedOutput {
+        bytes: Vec::new(),
+        limit,
+    };
+    serde_json::to_writer_pretty(&mut output, value)
         .map_err(|error| CliError::runtime(format!("failed to serialize JSON: {error}")))?;
-    println!("{json}");
-    Ok(())
+    output.write_all(b"\n").map_err(|error| {
+        CliError::runtime(format!(
+            "JSON output exceeds the {limit} byte limit: {error}"
+        ))
+    })?;
+    Ok(output.bytes)
 }
 
 fn merge_bundles(paths: &[String]) -> Result<Bundle, CliError> {
+    if paths.len() > MAX_MERGE_INPUT_FILES {
+        return Err(CliError::runtime(format!(
+            "merge accepts at most {MAX_MERGE_INPUT_FILES} input files"
+        )));
+    }
+    let mut aggregate_bytes = 0;
     let bundles = paths
         .iter()
-        .map(|path| read_bundle(path))
+        .map(|path| {
+            let json =
+                read_bounded_text_accounted(path, &mut aggregate_bytes, MAX_CLI_INPUT_BYTES)?;
+            Bundle::from_json(&json)
+                .map_err(|error| CliError::runtime(format!("failed to parse {path}: {error}")))
+        })
         .collect::<Result<Vec<_>, _>>()?;
 
     merge_bundle_values(bundles)
@@ -2226,6 +2317,52 @@ POLICY
         let _ = std::fs::remove_dir_all(&temp_dir);
         assert!(
             matches!(error, CliError::Runtime(message) if message.contains("exceeding the 4 byte limit"))
+        );
+    }
+
+    #[test]
+    fn aggregate_input_budget_applies_across_multiple_files() {
+        let temp_dir = unique_temp_dir("aggregate-input-budget");
+        let first = temp_dir.join("first.json");
+        let second = temp_dir.join("second.json");
+        std::fs::write(&first, b"123").expect("first fixture");
+        std::fs::write(&second, b"456").expect("second fixture");
+        let mut aggregate_bytes = 0;
+
+        read_bounded_text_accounted(first.to_str().expect("UTF-8 path"), &mut aggregate_bytes, 5)
+            .expect("first input fits");
+        let error = read_bounded_text_accounted(
+            second.to_str().expect("UTF-8 path"),
+            &mut aggregate_bytes,
+            5,
+        )
+        .expect_err("combined inputs exceed the limit");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        assert_eq!(aggregate_bytes, 3);
+        assert!(
+            matches!(error, CliError::Runtime(message) if message.contains("aggregate input exceeds the 5 byte limit"))
+        );
+    }
+
+    #[test]
+    fn bounded_json_rejects_stdout_payloads_over_the_limit() {
+        let error = bounded_json(&"12345", 4).expect_err("JSON exceeds the output limit");
+        assert!(
+            matches!(error, CliError::Runtime(message) if message.contains("failed to serialize JSON"))
+        );
+        assert_eq!(
+            bounded_json(&"ok", 5).expect("quoted string plus newline fits"),
+            b"\"ok\"\n"
+        );
+    }
+
+    #[test]
+    fn merge_rejects_too_many_input_files_before_reading() {
+        let paths = vec!["does-not-exist.json".to_owned(); MAX_MERGE_INPUT_FILES + 1];
+        let error = merge_bundles(&paths).expect_err("input count must be bounded");
+        assert!(
+            matches!(error, CliError::Runtime(message) if message.contains("at most 1024 input files"))
         );
     }
 

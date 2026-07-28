@@ -1344,6 +1344,15 @@ pub fn reg_vm_eval_package_main_with_args_and_native_bindings_and_limits(
 /// compiled once and executed repeatedly (e.g. for benchmarking).
 pub fn reg_vm_compile_package(package_dir: &Path) -> Result<RegVmExecutable, EvalError> {
     let input = package_lowering_input(package_dir).map_err(EvalError::Runtime)?;
+    reg_vm_compile_package_input(&input)
+}
+
+/// Compile the immutable source/interface snapshot captured by package
+/// authorization. Execution entry points use this form to avoid re-reading a
+/// mutable checkout after review.
+pub fn reg_vm_compile_package_input(
+    input: &crate::package::PackageLoweringInput,
+) -> Result<RegVmExecutable, EvalError> {
     let mut interface_refs = builtin_interfaces()
         .map(|(path, contents)| (path.to_string(), contents.to_string()))
         .collect::<Vec<_>>();

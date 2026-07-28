@@ -6,11 +6,10 @@ use std::time::Duration;
 
 use rsscript::{
     EvalError, EvalOutput, NativeValue, VmLimits, check_generated_rust_package,
-    configure_reduced_build_environment, eval_package_main_with_args_and_native_bindings,
-    eval_package_main_with_args_and_native_bindings_and_limits, format_diagnostics_human,
-    format_diagnostics_json, load_package_native_bindings, parse_runtime_diagnostics,
-    reg_vm_eval_source_main_with_args, reg_vm_eval_source_main_with_limits,
-    write_generated_rust_package,
+    configure_reduced_build_environment, format_diagnostics_human, format_diagnostics_json,
+    load_authorized_package_native_bindings, parse_runtime_diagnostics, prepare_authorized_package,
+    reg_vm_compile_package_input, reg_vm_eval_source_main_with_args,
+    reg_vm_eval_source_main_with_limits, write_generated_rust_package,
 };
 
 use super::{
@@ -32,6 +31,7 @@ struct RunOptions<'a> {
     release: bool,
     dry_run: bool,
     trusted_unlimited: bool,
+    trusted_native: bool,
     path: Option<&'a str>,
     out_dir: Option<&'a str>,
     program_args: Vec<&'a str>,
@@ -43,6 +43,7 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
     let mut release = false;
     let mut dry_run = false;
     let mut trusted_unlimited = false;
+    let mut trusted_native = false;
     let mut path = None;
     let mut out_dir = None;
     let mut program_args = Vec::new();
@@ -62,6 +63,8 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
             dry_run = true;
         } else if arg == "--trusted-unlimited" {
             trusted_unlimited = true;
+        } else if arg == "--trusted-native" {
+            trusted_native = true;
         } else if arg == "--out-dir" {
             index += 1;
             out_dir = Some(required_flag_value(args, index, "--out-dir")?);
@@ -81,6 +84,7 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
         release,
         dry_run,
         trusted_unlimited,
+        trusted_native,
         path,
         out_dir,
         program_args,
@@ -122,6 +126,7 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
             &options.program_args,
             options.json,
             options.trusted_unlimited,
+            options.trusted_native,
         );
     }
     let runtime_path = match default_runtime_path() {
@@ -145,7 +150,8 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
         let cached_package_present =
             cache_dir.join("Cargo.toml").is_file() && cache_dir.join("src/main.rs").is_file();
         if cached_package_present
-            && let Some(fingerprint) = run_input_fingerprint(path, &runtime_path, options.release)
+            && let Some(fingerprint) =
+                run_input_fingerprint(path, &runtime_path, options.release, options.trusted_native)
             && read_cached_fingerprint(&cache_dir).as_deref() == Some(fingerprint.as_str())
         {
             return run_cached_package(
@@ -157,7 +163,12 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
         }
     }
 
-    let package = match lower_cli_input_to_rust_package(path, &runtime_path, options.json) {
+    let package = match lower_cli_input_to_rust_package(
+        path,
+        &runtime_path,
+        options.json,
+        options.trusted_native,
+    ) {
         Ok(package) => package,
         Err(exit_code) => return exit_code,
     };
@@ -205,7 +216,8 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
     // is left untouched. Written after the package files so a partial write never
     // leaves a fingerprint claiming a stale package is current.
     if is_default_cache
-        && let Some(fingerprint) = run_input_fingerprint(path, &runtime_path, options.release)
+        && let Some(fingerprint) =
+            run_input_fingerprint(path, &runtime_path, options.release, options.trusted_native)
     {
         write_cached_fingerprint(&package_dir, &fingerprint);
     }
@@ -220,14 +232,20 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
 /// Execute through the register VM instead of the Rust-lowering AOT backend.
 /// This is the fast edit-run path folded into `rss run` so VM execution remains
 /// available without growing the top-level command set.
-fn run_via_vm(path: &str, program_args: &[&str], json: bool, trusted_unlimited: bool) -> ExitCode {
+fn run_via_vm(
+    path: &str,
+    program_args: &[&str],
+    json: bool,
+    trusted_unlimited: bool,
+    trusted_native: bool,
+) -> ExitCode {
     let limits = if trusted_unlimited {
         VmLimits::default()
     } else {
         cli_vm_limits()
     };
     let result = if is_package_directory(path) {
-        run_package_via_vm(path, program_args, limits)
+        run_package_via_vm(path, program_args, limits, trusted_native)
     } else {
         let source = match read_cli_source(Path::new(path)) {
             Ok(source) => source,
@@ -271,18 +289,29 @@ fn run_package_via_vm(
     path: &str,
     program_args: &[&str],
     limits: VmLimits,
+    trusted_native: bool,
 ) -> Result<EvalOutput, EvalError> {
     let package_dir = Path::new(path);
-    let bindings = load_package_native_bindings(package_dir).map_err(EvalError::Runtime)?;
-    if limits.step_budget.is_none() {
-        eval_package_main_with_args_and_native_bindings(
-            package_dir,
-            program_args.iter().copied(),
+    let input = rsscript::package_lowering_input(package_dir).map_err(EvalError::Runtime)?;
+    let (executable, bindings) = if input.native_dependencies.is_empty() {
+        (reg_vm_compile_package_input(&input)?, Vec::new())
+    } else if trusted_native {
+        let package = prepare_authorized_package(package_dir).map_err(EvalError::Runtime)?;
+        let bindings =
+            load_authorized_package_native_bindings(&package).map_err(EvalError::Runtime)?;
+        (
+            reg_vm_compile_package_input(package.lowering_input())?,
             bindings,
         )
     } else {
-        eval_package_main_with_args_and_native_bindings_and_limits(
-            package_dir,
+        return Err(EvalError::Runtime(
+            "native package execution is disabled by default; pass `--trusted-native` only for code you trust with full host-process authority".to_string(),
+        ));
+    };
+    if limits.step_budget.is_none() {
+        executable.eval_main_with_args_and_native_bindings(program_args.iter().copied(), bindings)
+    } else {
+        executable.eval_main_with_args_and_native_bindings_and_limits(
             program_args.iter().copied(),
             bindings,
             limits,
@@ -459,6 +488,7 @@ fn cargo_build_args(package_dir: &Path, release: bool) -> Vec<String> {
     let mut args = vec![
         "build".to_string(),
         "--quiet".to_string(),
+        "--offline".to_string(),
         "--message-format=json-render-diagnostics".to_string(),
     ];
     if release {
@@ -573,6 +603,7 @@ mod tests {
         assert!(!options.release);
         assert!(!options.dry_run);
         assert!(!options.trusted_unlimited);
+        assert!(!options.trusted_native);
         assert_eq!(options.path, Some("demo.rss"));
         assert_eq!(options.program_args, vec!["input"]);
     }
@@ -618,6 +649,7 @@ mod tests {
             vec![
                 "build",
                 "--quiet",
+                "--offline",
                 "--message-format=json-render-diagnostics",
                 "--release",
                 "--manifest-path",
@@ -676,6 +708,14 @@ mod tests {
         let options = super::parse_run_args(&values).expect("trusted mode should parse");
         assert!(options.vm);
         assert!(options.trusted_unlimited);
+    }
+
+    #[test]
+    fn parse_run_args_accepts_explicit_trusted_native_mode() {
+        let values = args(&["--vm", "--trusted-native", "trusted-package"]);
+        let options = super::parse_run_args(&values).expect("trusted native mode should parse");
+        assert!(options.vm);
+        assert!(options.trusted_native);
     }
 
     #[test]

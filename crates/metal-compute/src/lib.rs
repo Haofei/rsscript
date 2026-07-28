@@ -4,7 +4,10 @@
 //! resource accounting stay platform-neutral so overflow behavior is identical
 //! and testable on every target.
 
+use std::collections::BTreeSet;
 use std::fmt;
+
+use sha2::{Digest, Sha256};
 
 #[cfg(any(test, target_os = "macos"))]
 use std::collections::VecDeque;
@@ -74,6 +77,9 @@ pub enum MetalError {
     },
     CommandExecution,
     UnsupportedPlatform,
+    UntrustedShader {
+        digest: String,
+    },
 }
 
 impl fmt::Display for MetalError {
@@ -158,11 +164,60 @@ impl fmt::Display for MetalError {
             Self::UnsupportedPlatform => {
                 write!(f, "metal: GPU compute is only available on macOS")
             }
+            Self::UntrustedShader { digest } => write!(
+                f,
+                "metal: shader {digest} is not present in the trusted SHA-256 allowlist"
+            ),
         }
     }
 }
 
 impl std::error::Error for MetalError {}
+
+/// Fail-closed policy for caller-provided MSL source.
+///
+/// This controls which kernels may execute but does not make Metal execution
+/// preemptible. Untrusted workloads still require an external worker process.
+#[derive(Debug, Clone, Default)]
+pub struct ShaderPolicy {
+    allowed_sha256: BTreeSet<String>,
+}
+
+impl ShaderPolicy {
+    pub fn deny_all() -> Self {
+        Self::default()
+    }
+
+    pub fn from_allowed_sha256(
+        digests: impl IntoIterator<Item = String>,
+    ) -> Result<Self, MetalError> {
+        let mut allowed_sha256 = BTreeSet::new();
+        for digest in digests {
+            if digest.len() != 64
+                || !digest
+                    .bytes()
+                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            {
+                return Err(MetalError::UntrustedShader { digest });
+            }
+            allowed_sha256.insert(digest);
+        }
+        Ok(Self { allowed_sha256 })
+    }
+
+    fn authorize(&self, source: &str) -> Result<(), MetalError> {
+        let digest = shader_sha256(source);
+        if self.allowed_sha256.contains(&digest) {
+            Ok(())
+        } else {
+            Err(MetalError::UntrustedShader { digest })
+        }
+    }
+}
+
+pub fn shader_sha256(source: &str) -> String {
+    format!("{:x}", Sha256::digest(source.as_bytes()))
+}
 
 // Keeps existing callers that accept an `Into<String>` error source-compatible.
 impl From<MetalError> for String {
@@ -431,7 +486,11 @@ pub fn gpu_matmul(
     imp::gpu_matmul(a, b, request)
 }
 
-/// Compile `source` and dispatch `fn_name` over a one-dimensional grid.
+/// Compile trusted `source` and dispatch `fn_name` over a one-dimensional grid.
+///
+/// This compatibility API accepts arbitrary MSL and must only be used with
+/// trusted source. Policy-enforced callers should use
+/// [`gpu_run_1d_with_policy`].
 pub fn gpu_run_1d(
     source: &str,
     fn_name: &str,
@@ -441,6 +500,19 @@ pub fn gpu_run_1d(
 ) -> Result<Vec<f32>, MetalError> {
     let request = validate_run_1d(source, fn_name, inputs, out_len, threads)?;
     imp::gpu_run_1d(source, fn_name, inputs, out_len, request)
+}
+
+/// Dispatch caller-provided MSL only when its digest is explicitly allowed.
+pub fn gpu_run_1d_with_policy(
+    policy: &ShaderPolicy,
+    source: &str,
+    fn_name: &str,
+    inputs: &[&[f32]],
+    out_len: usize,
+    threads: usize,
+) -> Result<Vec<f32>, MetalError> {
+    policy.authorize(source)?;
+    gpu_run_1d(source, fn_name, inputs, out_len, threads)
 }
 
 #[cfg(target_os = "macos")]
@@ -918,6 +990,25 @@ mod tests {
                 })
             ));
         }
+    }
+
+    #[test]
+    fn shader_policy_is_fail_closed_and_accepts_exact_digest() {
+        let source = "kernel void add() {}";
+        let denied = ShaderPolicy::deny_all()
+            .authorize(source)
+            .expect_err("deny-all policy must reject arbitrary source");
+        assert!(matches!(denied, MetalError::UntrustedShader { .. }));
+
+        let policy = ShaderPolicy::from_allowed_sha256([shader_sha256(source)])
+            .expect("valid lowercase SHA-256 digest");
+        assert_eq!(policy.authorize(source), Ok(()));
+        assert!(policy.authorize("kernel void other() {}").is_err());
+    }
+
+    #[test]
+    fn shader_policy_rejects_noncanonical_digest() {
+        assert!(ShaderPolicy::from_allowed_sha256(["ABC".to_string()]).is_err());
     }
 
     #[test]

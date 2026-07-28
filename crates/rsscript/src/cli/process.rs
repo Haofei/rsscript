@@ -34,20 +34,10 @@ pub(crate) fn run_bounded_with_limits(
     output_cap: usize,
     limits: rss_process_guard::ProcessLimits,
 ) -> Result<BoundedOutput, String> {
-    rss_process_guard::configure(command, limits)
-        .map_err(|error| format!("failed to configure {operation} resource limits: {error}"))?;
     command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
 
-    let mut child = command
-        .spawn()
-        .map_err(|error| format!("failed to start {operation}: {error}"))?;
-    let guard = rss_process_guard::ProcessGuard::attach(&child, limits)
-        .map_err(|error| format!("failed to guard {operation}: {error}"))?;
+    let (mut child, guard) = rss_process_guard::spawn_guarded(command, limits)
+        .map_err(|error| format!("failed to start guarded {operation}: {error}"))?;
     let stdout = child
         .stdout
         .take()

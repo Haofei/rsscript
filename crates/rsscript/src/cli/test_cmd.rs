@@ -12,9 +12,6 @@ use std::time::{Duration, Instant};
 use serde::Deserialize;
 use serde::Serialize;
 
-#[cfg(unix)]
-use std::os::unix::process::CommandExt;
-
 const POLL_INTERVAL: Duration = Duration::from_millis(20);
 const TEST_COMMAND_OUTPUT_MAX_BYTES: usize = 16 * 1024 * 1024;
 
@@ -519,18 +516,10 @@ fn spawn_piped(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    rss_process_guard::configure(
+    rss_process_guard::spawn_guarded(
         &mut command,
         rss_process_guard::ProcessLimits::generated_program(),
-    )?;
-    #[cfg(unix)]
-    command.process_group(0);
-    let child = command.spawn()?;
-    let guard = rss_process_guard::ProcessGuard::attach(
-        &child,
-        rss_process_guard::ProcessLimits::generated_program(),
-    )?;
-    Ok((child, guard))
+    )
 }
 
 fn terminate_process_tree(

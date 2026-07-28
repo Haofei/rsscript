@@ -1,7 +1,10 @@
+use std::cell::RefCell;
 use std::collections::HashSet;
+use std::rc::Rc;
 
+use crate::checks::budget::{FrontendBudget, FrontendBudgetLimits, ParseRecursionGuard};
 use crate::diagnostic::Span;
-use crate::lexer::{Token, TokenKind, lex};
+use crate::lexer::{Token, TokenKind, lex_with_budget};
 use crate::syntax::ast::{
     AssignStmt, BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, DuplicateFileFeature,
     EffectDecl, Expr, FieldDecl, FileFeature, FileFeatureScope, ForStmt, FunctionDecl,
@@ -31,22 +34,102 @@ use types::*;
 /// (checker, HIR, lowering) uses. Tools that must preserve the exact source
 /// surface (formatter, symbol index) use [`parse_source_raw`] instead.
 pub fn parse_source(file: &str, source: &str) -> Program {
-    let mut program = parse_source_raw(file, source);
-    super::desugar::desugar_associated_consts(&mut program);
-    super::desugar::expand_tuple_destructuring(&mut program);
-    super::desugar::inject_tuple_structs(&mut program);
+    let budget = FrontendBudget::new(
+        FrontendBudgetLimits::default(),
+        source_start_span(file, source.len()),
+    );
+    let tokens = lex_with_budget(file, source, budget.clone());
+    parse_source_tokens(file, &tokens, budget)
+}
+
+pub(crate) fn parse_source_tokens(
+    file: &str,
+    tokens: &[Token],
+    budget: Rc<FrontendBudget>,
+) -> Program {
+    let mut program = parse_source_tokens_raw(file, tokens, budget.clone());
+    if budget.check_active() {
+        super::desugar::desugar_associated_consts(&mut program);
+        super::desugar::expand_tuple_destructuring(&mut program);
+        super::desugar::inject_tuple_structs(&mut program);
+    }
     program
+}
+
+impl Program {
+    pub(crate) fn parse_tokens(file: &str, tokens: &[Token], budget: Rc<FrontendBudget>) -> Self {
+        parse_source_tokens(file, tokens, budget)
+    }
 }
 
 /// Parse `source` without desugaring — the AST mirrors the written surface.
 pub fn parse_source_raw(file: &str, source: &str) -> Program {
-    let tokens = lex(file, source);
+    let budget = FrontendBudget::new(
+        FrontendBudgetLimits::default(),
+        source_start_span(file, source.len()),
+    );
+    let tokens = lex_with_budget(file, source, budget.clone());
+    parse_source_tokens_raw(file, &tokens, budget)
+}
+
+fn parse_source_tokens_raw(file: &str, tokens: &[Token], budget: Rc<FrontendBudget>) -> Program {
+    let _active_budget = ActiveParseBudget::set(budget);
     Parser {
-        tokens: &tokens,
+        tokens,
         index: 0,
         file,
     }
     .parse_program()
+}
+
+fn source_start_span(file: &str, length: usize) -> Span {
+    Span {
+        file: file.to_string(),
+        line: 1,
+        column: 1,
+        length,
+    }
+}
+
+thread_local! {
+    static ACTIVE_PARSE_BUDGET: RefCell<Option<Rc<FrontendBudget>>> =
+        const { RefCell::new(None) };
+}
+
+struct ActiveParseBudget {
+    previous: Option<Rc<FrontendBudget>>,
+}
+
+impl ActiveParseBudget {
+    fn set(budget: Rc<FrontendBudget>) -> Self {
+        let previous = ACTIVE_PARSE_BUDGET.with(|active| active.replace(Some(budget)));
+        Self { previous }
+    }
+}
+
+impl Drop for ActiveParseBudget {
+    fn drop(&mut self) {
+        ACTIVE_PARSE_BUDGET.with(|active| {
+            active.replace(self.previous.take());
+        });
+    }
+}
+
+pub(super) fn enter_parse() -> Option<ParseRecursionGuard> {
+    ACTIVE_PARSE_BUDGET.with(|active| active.borrow().as_ref()?.enter_parse())
+}
+
+pub(super) fn current_parse_budget() -> Option<Rc<FrontendBudget>> {
+    ACTIVE_PARSE_BUDGET.with(|active| active.borrow().clone())
+}
+
+pub(super) fn parse_is_active() -> bool {
+    ACTIVE_PARSE_BUDGET.with(|active| {
+        active
+            .borrow()
+            .as_ref()
+            .is_none_or(|budget| budget.check_active())
+    })
 }
 
 struct Parser<'a> {
@@ -63,6 +146,7 @@ struct ParsedFeatures {
 
 impl Parser<'_> {
     fn parse_program(&mut self) -> Program {
+        let _parse = enter_parse();
         let mut features = Vec::new();
         let mut unknown_features = Vec::new();
         let mut duplicate_features = Vec::new();
@@ -74,7 +158,7 @@ impl Parser<'_> {
         let mut protocol_impls = Vec::new();
         let mut items = Vec::new();
 
-        while !self.is_eof() {
+        while parse_is_active() && !self.is_eof() {
             if self.at_ident("features") && self.peek_symbol(1, ":") {
                 feature_spans.push(self.tokens[self.index].span.clone());
                 let parsed = self.parse_features();
@@ -975,10 +1059,11 @@ impl Parser<'_> {
     }
 
     fn is_eof(&self) -> bool {
-        matches!(
-            self.tokens.get(self.index).map(|token| &token.kind),
-            Some(TokenKind::Eof) | None
-        )
+        !parse_is_active()
+            || matches!(
+                self.tokens.get(self.index).map(|token| &token.kind),
+                Some(TokenKind::Eof) | None
+            )
     }
 }
 

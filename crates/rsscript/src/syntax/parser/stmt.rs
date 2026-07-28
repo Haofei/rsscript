@@ -6,6 +6,12 @@ use super::types::*;
 use super::*;
 
 pub(super) fn parse_block(tokens: &[Token], open: usize, close: usize) -> Block {
+    let Some(_parse) = enter_parse() else {
+        return Block {
+            statements: Vec::new(),
+            span: tokens[open].span.clone(),
+        };
+    };
     Block {
         statements: collect_statements(tokens, open + 1, close),
         span: tokens[open].span.clone(),
@@ -86,6 +92,12 @@ fn parse_view_header(
 }
 
 pub(super) fn parse_stmt(tokens: &[Token], start: usize, limit: usize) -> (Stmt, usize) {
+    let Some(_parse) = enter_parse() else {
+        return (
+            Stmt::Unknown(tokens[start].span.clone()),
+            statement_end(tokens, start, limit),
+        );
+    };
     // async let x = expr
     if tokens[start].is_ident_text("async")
         && tokens

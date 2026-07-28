@@ -19,6 +19,9 @@ on:
       - "crates/rsscript/tests/jit_acceptance.rs"
       - "crates/vm-jit/**"
 
+permissions:
+  contents: read
+
 concurrency:
   group: jit-perf-${{ github.ref }}
   cancel-in-progress: true

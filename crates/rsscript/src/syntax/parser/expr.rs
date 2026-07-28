@@ -6,6 +6,7 @@ use super::types::*;
 use super::*;
 
 pub(super) fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<Expr> {
+    let _parse = enter_parse()?;
     // A tuple literal must be detected before `trim_outer` strips the wrapping
     // parens (which would otherwise turn `(a, b)` into the invalid `a, b`).
     if let Some(tuple) = parse_tuple_expr(tokens, start, end) {
@@ -317,7 +318,11 @@ fn parse_interpolated_string_parts(value: &str, span: &Span) -> (String, Vec<Exp
                     continue;
                 };
                 let expr_text = chars[expr_start..expr_end].iter().collect::<String>();
-                let expr_tokens = lex(&span.file, &expr_text);
+                let expr_tokens = crate::lexer::lex_embedded_with_budget(
+                    &span.file,
+                    &expr_text,
+                    current_parse_budget().expect("interpolation parsing has an active budget"),
+                );
                 let token_end = expr_tokens
                     .iter()
                     .position(|token| matches!(token.kind, TokenKind::Eof))

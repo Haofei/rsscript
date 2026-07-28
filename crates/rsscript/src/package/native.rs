@@ -1017,6 +1017,14 @@ fn scan_native_cargo_metadata(
     native: &PackageNativeRustReview,
     reasons: &mut Vec<String>,
 ) -> Result<NativeCargoMetadataScan, String> {
+    let Some(expected_name) = native
+        .crate_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    else {
+        return Ok(NativeCargoMetadataScan::default());
+    };
     let native_root = cargo_toml
         .parent()
         .ok_or_else(|| format!("native Cargo.toml has no parent: {}", cargo_toml.display()))?;
@@ -1024,12 +1032,26 @@ fn scan_native_cargo_metadata(
     super::copy_package_directory(native_root, scan_root.path())?;
     let scan_cargo_toml = scan_root.path().join("Cargo.toml");
     isolate_cargo_manifest_from_parent_workspace(&scan_cargo_toml)?;
+    if !scan_root.path().join("Cargo.lock").is_file() {
+        if let Some(reviewed_lock) = reviewed_native_cargo_lock(native_root, expected_name)? {
+            fs::copy(&reviewed_lock, scan_root.path().join("Cargo.lock")).map_err(|error| {
+                format!(
+                    "failed to stage reviewed Cargo.lock {}: {error}",
+                    reviewed_lock.display()
+                )
+            })?;
+        } else {
+            prepare_native_cargo_lock(&scan_cargo_toml)?;
+        }
+    }
     let mut command = Command::new("cargo");
     command
         .arg("metadata")
         .arg("--format-version")
         .arg("1")
         .arg("--no-deps")
+        .arg("--frozen")
+        .arg("--offline")
         .arg("--manifest-path")
         .arg(&scan_cargo_toml);
     configure_reduced_build_environment(&mut command);
@@ -1096,6 +1118,94 @@ fn scan_native_cargo_metadata(
         package_name: Some(package.name.clone()),
         target_kinds,
     })
+}
+
+pub(super) fn reviewed_native_cargo_lock(
+    native_root: &Path,
+    crate_name: &str,
+) -> Result<Option<PathBuf>, String> {
+    let own_lock = native_root.join("Cargo.lock");
+    if own_lock.is_file() {
+        return Ok(Some(own_lock));
+    }
+
+    let expected_name = format!("name = {crate_name:?}");
+    for ancestor in native_root.ancestors().skip(1) {
+        let workspace_manifest = ancestor.join("Cargo.toml");
+        let workspace_lock = ancestor.join("Cargo.lock");
+        if !workspace_manifest.is_file() || !workspace_lock.is_file() {
+            continue;
+        }
+        let manifest = read_utf8_file_bounded(
+            &workspace_manifest,
+            NATIVE_MANIFEST_MAX_BYTES,
+            "native workspace manifest review",
+        )?;
+        if !manifest
+            .lines()
+            .any(|line| line.trim_start().starts_with("[workspace]"))
+        {
+            continue;
+        }
+        let lock = read_utf8_file_bounded(
+            &workspace_lock,
+            64 * 1024 * 1024,
+            "native workspace Cargo.lock review",
+        )?;
+        if lock.lines().any(|line| line.trim() == expected_name) {
+            return Ok(Some(workspace_lock));
+        }
+    }
+
+    let manifest = read_utf8_file_bounded(
+        &native_root.join("Cargo.toml"),
+        NATIVE_MANIFEST_MAX_BYTES,
+        "native Cargo.toml lock review",
+    )?;
+    let parsed: toml::Value = toml::from_str(&manifest).map_err(|error| {
+        format!(
+            "native build denied: invalid Cargo.toml {}: {error}",
+            native_root.join("Cargo.toml").display()
+        )
+    })?;
+    let has_dependencies = ["dependencies", "build-dependencies"].iter().any(|key| {
+        parsed
+            .get(*key)
+            .and_then(toml::Value::as_table)
+            .is_some_and(|dependencies| !dependencies.is_empty())
+    });
+    if !has_dependencies {
+        return Ok(None);
+    }
+
+    Err(format!(
+        "native build denied: reviewed Cargo.lock is required for `{crate_name}` at {} or in a containing workspace",
+        native_root.display()
+    ))
+}
+
+pub(super) fn prepare_native_cargo_lock(cargo_toml: &Path) -> Result<(), String> {
+    let mut command = Command::new("cargo");
+    command
+        .arg("generate-lockfile")
+        .arg("--offline")
+        .arg("--manifest-path")
+        .arg(cargo_toml);
+    configure_reduced_build_environment(&mut command);
+    let output = run_bounded_command(
+        &mut command,
+        "dependency-free native offline lock review",
+        CARGO_METADATA_TIMEOUT,
+        CARGO_OUTPUT_MAX_BYTES,
+    )?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "failed to prepare dependency-free native Cargo.lock offline:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        ))
+    }
 }
 
 fn isolate_cargo_manifest_from_parent_workspace(cargo_toml: &Path) -> Result<(), String> {

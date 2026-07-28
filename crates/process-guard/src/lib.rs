@@ -94,12 +94,37 @@ pub const fn memory_limit_kind() -> MemoryLimitKind {
     MemoryLimitKind::DataSegmentBestEffort
 }
 
-/// Arrange for `limits` to be installed in the child immediately before exec.
-///
-/// Windows limits that require a process handle are completed by
-/// [`ProcessGuard::attach`] immediately after `Command::spawn`.
-pub fn configure(command: &mut Command, limits: ProcessLimits) -> io::Result<()> {
+fn configure(command: &mut Command, limits: ProcessLimits) -> io::Result<()> {
     configure_platform(command, limits)
+}
+
+/// Configure, spawn, and attach the platform process-tree guard as one
+/// fail-closed operation.
+///
+/// If post-spawn attachment fails, the child is killed and reaped before the
+/// error is returned. Callers therefore never receive an unguarded child.
+pub fn spawn_guarded(
+    command: &mut Command,
+    limits: ProcessLimits,
+) -> io::Result<(Child, ProcessGuard)> {
+    spawn_guarded_with(command, limits, ProcessGuard::attach)
+}
+
+fn spawn_guarded_with(
+    command: &mut Command,
+    limits: ProcessLimits,
+    attach: impl FnOnce(&Child, ProcessLimits) -> io::Result<ProcessGuard>,
+) -> io::Result<(Child, ProcessGuard)> {
+    configure(command, limits)?;
+    let mut child = command.spawn()?;
+    match attach(&child, limits) {
+        Ok(guard) => Ok((child, guard)),
+        Err(error) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Err(error)
+        }
+    }
 }
 
 /// Owns the platform process-tree boundary for a spawned child.
@@ -112,7 +137,7 @@ pub struct ProcessGuard {
 }
 
 impl ProcessGuard {
-    pub fn attach(child: &Child, limits: ProcessLimits) -> io::Result<Self> {
+    fn attach(child: &Child, limits: ProcessLimits) -> io::Result<Self> {
         Ok(Self {
             platform: attach_platform(child, limits)?,
         })
@@ -151,6 +176,7 @@ fn terminate_platform(guard: &PlatformGuard) -> io::Result<()> {
 fn configure_platform(command: &mut Command, limits: ProcessLimits) -> io::Result<()> {
     use std::os::unix::process::CommandExt;
 
+    command.process_group(0);
     // SAFETY: the pre-exec closure only invokes async-signal-safe setrlimit
     // syscalls and constructs no heap-backed state after fork. Values are copied
     // into the closure. Any failure is returned to Command::spawn.
@@ -218,7 +244,12 @@ type RlimitResource = libc::c_int;
 
 #[cfg(unix)]
 fn set_limit(resource: RlimitResource, value: u64) -> io::Result<()> {
-    let value = libc::rlim_t::try_from(value).unwrap_or(libc::RLIM_INFINITY);
+    let value = libc::rlim_t::try_from(value).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "resource limit exceeds the platform representation",
+        )
+    })?;
     let limit = libc::rlimit {
         rlim_cur: value,
         rlim_max: value,
@@ -402,7 +433,7 @@ mod tests {
         let mut command = Command::new("sh");
         command.args(["-c", "ulimit -n"]);
         command.stdout(std::process::Stdio::piped());
-        configure(
+        let (child, _guard) = spawn_guarded(
             &mut command,
             ProcessLimits {
                 cpu_seconds: 10,
@@ -411,9 +442,10 @@ mod tests {
                 file_size_bytes: 0,
             },
         )
-        .expect("limits should configure");
-
-        let output = command.output().expect("guarded child should run");
+        .expect("guarded child should run");
+        let output = child
+            .wait_with_output()
+            .expect("guarded child output should be collected");
         assert!(output.status.success());
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "64");
     }
@@ -453,14 +485,32 @@ mod tests {
         ] {
             let mut command = Command::new("sh");
             command.args(["-c", "exit 0"]);
-            configure(&mut command, limits).expect("limits should configure");
-            let mut child = command
-                .spawn()
+            let (mut child, _guard) = spawn_guarded(&mut command, limits)
                 .unwrap_or_else(|error| panic!("{name} guarded child should spawn: {error}"));
-            let _guard =
-                ProcessGuard::attach(&child, limits).expect("spawned child should be guarded");
             assert!(child.wait().expect("child wait should succeed").success());
         }
+    }
+
+    #[test]
+    fn attach_failure_kills_and_reaps_the_child() {
+        let mut command = Command::new("sh");
+        command.args(["-c", "sleep 30"]);
+        let mut child_pid = None;
+        let result = spawn_guarded_with(
+            &mut command,
+            ProcessLimits::generated_program(),
+            |child, _| {
+                child_pid = Some(child.id());
+                Err(io::Error::other("injected attach failure"))
+            },
+        );
+        assert!(result.is_err());
+
+        let pid = i32::try_from(child_pid.expect("child should have spawned")).expect("pid fits");
+        // SAFETY: signal zero only probes for a live process and dereferences no memory.
+        let status = unsafe { libc::kill(pid, 0) };
+        assert_eq!(status, -1);
+        assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ESRCH));
     }
 
     #[test]
