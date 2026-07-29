@@ -146,6 +146,10 @@ impl NativeBuffer {
             capacity: 0,
         }
     }
+
+    pub const fn is_empty(&self) -> bool {
+        self.ptr.is_null() && self.len == 0 && self.capacity == 0
+    }
 }
 
 #[cfg(feature = "host")]
@@ -279,22 +283,25 @@ struct OwnedNativeBuffer {
 
 #[cfg(feature = "host")]
 impl OwnedNativeBuffer {
-    fn new(buffer: NativeBuffer, free_buffer: NativeFreeBufferFn) -> Self {
-        Self {
+    fn from_validated(
+        buffer: NativeBuffer,
+        free_buffer: NativeFreeBufferFn,
+    ) -> Result<Self, String> {
+        validate_native_buffer(&buffer, MAX_NATIVE_RESULT_BYTES)?;
+        Ok(Self {
             buffer: Some(buffer),
             free_buffer,
-        }
+        })
     }
 
-    fn validated_bytes(&self) -> Result<&[u8], String> {
+    fn bytes(&self) -> &[u8] {
         let buffer = self.buffer.as_ref().expect("owned buffer is present");
-        validate_native_buffer(buffer, MAX_NATIVE_RESULT_BYTES)?;
         if buffer.len == 0 {
-            return Ok(&[]);
+            return &[];
         }
         // SAFETY: the trusted plugin owns this allocation until `Drop`, and
-        // its structural metadata was validated above.
-        Ok(unsafe { std::slice::from_raw_parts(buffer.ptr, buffer.len) })
+        // its structural metadata was validated before ownership transfer.
+        unsafe { std::slice::from_raw_parts(buffer.ptr, buffer.len) }
     }
 }
 
@@ -330,11 +337,16 @@ fn call_native(
     let mut output = NativeBuffer::empty();
     // SAFETY: input and output pointers remain valid for the call.
     let status = unsafe { function(input.as_ptr(), input.len(), &mut output) };
-    let output = OwnedNativeBuffer::new(output, free_buffer);
     if status != 0 {
+        if !output.is_empty() {
+            return Err(format!(
+                "native ABI call failed with status {status} and returned a non-empty output buffer"
+            ));
+        }
         return Err(format!("native ABI call failed with status {status}"));
     }
-    serde_json::from_slice::<Result<NativeValue, String>>(output.validated_bytes()?)
+    let output = OwnedNativeBuffer::from_validated(output, free_buffer)?;
+    serde_json::from_slice::<Result<NativeValue, String>>(output.bytes())
         .map_err(|error| format!("invalid native result payload: {error}"))?
 }
 
@@ -770,24 +782,24 @@ mod tests {
 
     #[cfg(feature = "host")]
     #[test]
-    fn host_releases_every_plugin_output_state_exactly_once() {
+    fn host_only_takes_ownership_after_successful_buffer_validation() {
         let _test_lock = PLUGIN_TEST_LOCK.lock().expect("plugin test lock");
         PLUGIN_CALLS.store(0, Ordering::SeqCst);
         PLUGIN_FREES.store(0, Ordering::SeqCst);
         PLUGIN_ALLOCATIONS.lock().expect("allocation lock").clear();
 
         let cases = [
-            (1, "status 17"),
-            (2, "null buffer"),
-            (3, "length exceeds"),
-            (4, "zero capacity"),
-            (5, "byte limit"),
-            (6, "invalid native result payload"),
-            (7, "invalid native result payload"),
-            (8, "invalid native result payload"),
-            (9, "plugin rejected"),
+            (1, "non-empty output buffer", 0),
+            (2, "null buffer", 0),
+            (3, "length exceeds", 0),
+            (4, "zero capacity", 0),
+            (5, "byte limit", 0),
+            (6, "invalid native result payload", 1),
+            (7, "invalid native result payload", 2),
+            (8, "invalid native result payload", 3),
+            (9, "plugin rejected", 4),
         ];
-        for (expected_frees, (mode, expected_error)) in cases.into_iter().enumerate() {
+        for (mode, expected_error, expected_frees) in cases {
             PLUGIN_MODE.store(mode, Ordering::SeqCst);
             let error = call_native(state_machine_plugin, state_machine_free, vec![])
                 .expect_err("malicious output must fail");
@@ -795,7 +807,7 @@ mod tests {
                 error.contains(expected_error),
                 "unexpected mode {mode} error: {error}"
             );
-            assert_eq!(PLUGIN_FREES.load(Ordering::SeqCst), expected_frees + 1);
+            assert_eq!(PLUGIN_FREES.load(Ordering::SeqCst), expected_frees);
         }
 
         PLUGIN_MODE.store(10, Ordering::SeqCst);
@@ -804,13 +816,30 @@ mod tests {
             Ok(NativeValue::Unit)
         );
         assert_eq!(PLUGIN_CALLS.load(Ordering::SeqCst), 10);
-        assert_eq!(PLUGIN_FREES.load(Ordering::SeqCst), 10);
-        assert!(
-            PLUGIN_ALLOCATIONS
-                .lock()
-                .expect("allocation lock")
-                .is_empty()
-        );
+        assert_eq!(PLUGIN_FREES.load(Ordering::SeqCst), 5);
+
+        // Modes 1, 3, and 5 deliberately violate the ownership-transfer
+        // protocol. Their allocations stay owned by the test plugin and must
+        // never be passed to its free callback by the host.
+        let mut allocations = PLUGIN_ALLOCATIONS.lock().expect("allocation lock");
+        assert_eq!(allocations.len(), 3);
+        allocations.clear();
+    }
+
+    #[cfg(feature = "host")]
+    #[test]
+    fn host_accepts_empty_output_on_plugin_error_without_calling_free() {
+        let _test_lock = PLUGIN_TEST_LOCK.lock().expect("plugin test lock");
+        PLUGIN_MODE.store(0, Ordering::SeqCst);
+        PLUGIN_CALLS.store(0, Ordering::SeqCst);
+        PLUGIN_FREES.store(0, Ordering::SeqCst);
+
+        let error = call_native(state_machine_plugin, state_machine_free, vec![])
+            .expect_err("plugin status must fail");
+
+        assert!(error.contains("status 99"));
+        assert_eq!(PLUGIN_CALLS.load(Ordering::SeqCst), 1);
+        assert_eq!(PLUGIN_FREES.load(Ordering::SeqCst), 0);
     }
 
     #[cfg(feature = "host")]

@@ -341,6 +341,12 @@ pub fn file_write_atomic<P: RuntimePath + ?Sized>(path: &P, text: &str) -> Resul
 fn write_path_atomic(path: &std::path::Path, data: &[u8]) -> Result<(), FileError> {
     let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
     std::fs::create_dir_all(parent)?;
+    let existing_permissions = match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_file() => Some(metadata.permissions()),
+        Ok(_) => None,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
     let file_name = path
         .file_name()
         .map(|name| name.to_string_lossy().to_string())
@@ -358,6 +364,9 @@ fn write_path_atomic(path: &std::path::Path, data: &[u8]) -> Result<(), FileErro
             .create_new(true)
             .write(true)
             .open(&temp_path)?;
+        if let Some(permissions) = existing_permissions {
+            file.set_permissions(permissions)?;
+        }
         file.write_all(data)?;
         file.sync_all()?;
         Ok(())
@@ -380,17 +389,14 @@ pub fn file_append_string<P: RuntimePath + ?Sized>(path: &P, text: &str) -> Resu
 }
 
 fn append_path_durable(path: &std::path::Path, data: &[u8]) -> Result<(), FileError> {
-    let existed = path.exists();
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)?;
     file.write_all(data)?;
     file.sync_data()?;
-    if !existed {
-        let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-        sync_parent_directory(parent)?;
-    }
+    let parent = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    sync_parent_directory(parent)?;
     Ok(())
 }
 
@@ -970,6 +976,33 @@ mod tests {
                 .count(),
             1
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn atomic_write_preserves_private_file_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let root = std::env::temp_dir().join(format!(
+            "rsscript-atomic-write-permissions-{}",
+            std::process::id()
+        ));
+        let path = root.join("secret.txt");
+        std::fs::create_dir_all(&root).expect("test directory should be created");
+        std::fs::write(&path, "old secret").expect("initial file should be written");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("private permissions should be set");
+
+        file_write_atomic(&path, "new secret").expect("replacement should succeed");
+
+        assert_eq!(file_read_string(&path).unwrap(), "new secret");
+        let mode = std::fs::metadata(&path)
+            .expect("replacement metadata should be readable")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o600);
         let _ = std::fs::remove_dir_all(root);
     }
 
