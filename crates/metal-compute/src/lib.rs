@@ -519,29 +519,6 @@ pub fn gpu_run_1d_trusted(
     imp::gpu_run_1d(source, fn_name, inputs, out_len, request)
 }
 
-/// Legacy compatibility entry for trusted in-process callers.
-///
-/// New code should make the trust transition visible with [`TrustedShader`] and
-/// [`gpu_run_1d_trusted`], or use [`gpu_run_1d_with_policy`]. This function is
-/// hidden from generated documentation so arbitrary-source execution is not the
-/// discoverable default.
-#[doc(hidden)]
-pub fn gpu_run_1d(
-    source: &str,
-    fn_name: &str,
-    inputs: &[&[f32]],
-    out_len: usize,
-    threads: usize,
-) -> Result<Vec<f32>, MetalError> {
-    gpu_run_1d_trusted(
-        TrustedShader::new(source),
-        fn_name,
-        inputs,
-        out_len,
-        threads,
-    )
-}
-
 /// Dispatch caller-provided MSL only when its digest is explicitly allowed.
 pub fn gpu_run_1d_with_policy(
     policy: &ShaderPolicy,

@@ -55,9 +55,24 @@ RUN rustup component add clippy rustfmt \
 RUN printf 'export PATH="%s/bin:$PATH"\n' "${CARGO_HOME:-/usr/local/cargo}" \
         > /etc/profile.d/rust-cargo.sh
 
+ARG RSSCRIPT_UID=1000
+ARG RSSCRIPT_GID=1000
+RUN if ! getent group "${RSSCRIPT_GID}" >/dev/null; then \
+        groupadd --gid "${RSSCRIPT_GID}" rsscript; \
+    fi \
+    && useradd \
+        --create-home \
+        --uid "${RSSCRIPT_UID}" \
+        --gid "${RSSCRIPT_GID}" \
+        --shell /bin/bash \
+        rsscript \
+    && mkdir -p /work \
+    && chown -R "${RSSCRIPT_UID}:${RSSCRIPT_GID}" /work "${CARGO_HOME:-/usr/local/cargo}"
+
 WORKDIR /work
 
 # `rss` (and the test suite) compiles generated Rust packages at runtime, so the
 # container keeps the full toolchain available. Default to an interactive shell;
 # compose overrides the command for one-off runs.
+USER rsscript
 CMD ["bash"]

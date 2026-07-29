@@ -8,9 +8,15 @@
 # The repo is bind-mounted at /work, so host edits are picked up immediately.
 # Build artifacts and crate caches live in named volumes (not on the bind mount)
 # so compilation persists between runs and stays fast on macOS/Windows.
+# Linux users whose host UID/GID are not 1000 can set RSSCRIPT_UID and
+# RSSCRIPT_GID before building so bind-mounted files retain the expected owner.
 services:
   dev:
-    build: .
+    build:
+      context: .
+      args:
+        RSSCRIPT_UID: "${RSSCRIPT_UID:-1000}"
+        RSSCRIPT_GID: "${RSSCRIPT_GID:-1000}"
     image: rsscript-dev
     working_dir: /work
     volumes:

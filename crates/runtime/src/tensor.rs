@@ -309,8 +309,14 @@ pub fn tensor_gpu_run_msl(
         .map(|buf| buf.iter().map(|&v| v as f32).collect())
         .collect();
     let input_refs: Vec<&[f32]> = f32_inputs.iter().map(|b| b.as_slice()).collect();
-    let out = crate::metal::gpu_run_1d(source, fn_name, &input_refs, out_len, threads)
-        .map_err(TensorError::new)?;
+    let out = crate::metal::gpu_run_1d_trusted(
+        crate::metal::TrustedShader::new(source),
+        fn_name,
+        &input_refs,
+        out_len,
+        threads,
+    )
+    .map_err(TensorError::new)?;
     Ok(out.into_iter().map(|v| v as f64).collect())
 }
 
