@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, mpsc};
 
 use rsscript::{
     Definition, Diagnostic as RsDiagnostic, PackageReviewFileKind, Reference, RssDocumentSymbol,
@@ -189,14 +189,108 @@ enum AnalysisKey {
 
 const MAX_BLOCKING_ANALYSES: usize = 2;
 const MAX_DOCUMENT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PENDING_DIAGNOSTIC_PUBLICATIONS: usize = 4_096;
 
 struct Backend {
     client: Client,
     documents: Arc<tokio::sync::Mutex<DocumentStore>>,
-    diagnostics_publication: Arc<tokio::sync::Mutex<()>>,
+    diagnostics_publications: DiagnosticsPublisher,
     pending_analysis: tokio::sync::Mutex<HashMap<AnalysisKey, PendingAnalysis>>,
     package_inputs: Arc<PackageInputCache>,
     blocking_analysis_permits: Arc<Semaphore>,
+}
+
+struct DiagnosticsPublication {
+    uri: Url,
+    diagnostics: Vec<Diagnostic>,
+    version: Option<i32>,
+}
+
+#[derive(Clone)]
+struct DiagnosticsPublisher {
+    pending: Arc<Mutex<HashMap<Url, DiagnosticsPublication>>>,
+    wake: mpsc::Sender<()>,
+}
+
+impl DiagnosticsPublisher {
+    fn enqueue(&self, publication: DiagnosticsPublication) {
+        {
+            let mut pending = self
+                .pending
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !pending.contains_key(&publication.uri)
+                && pending.len() >= MAX_PENDING_DIAGNOSTIC_PUBLICATIONS
+                && let Some(uri) = pending.keys().next().cloned()
+            {
+                pending.remove(&uri);
+            }
+            pending.insert(publication.uri.clone(), publication);
+        }
+        // Capacity one is enough: a wake means "drain the coalesced map".
+        // Full and closed channels require no blocking fallback.
+        let _ = self.wake.try_send(());
+    }
+
+    fn take_pending(&self) -> Vec<DiagnosticsPublication> {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        pending
+            .drain()
+            .map(|(_, publication)| publication)
+            .collect()
+    }
+}
+
+fn diagnostics_publication_queue() -> (DiagnosticsPublisher, mpsc::Receiver<()>) {
+    let (wake, receiver) = mpsc::channel(1);
+    (
+        DiagnosticsPublisher {
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            wake,
+        },
+        receiver,
+    )
+}
+
+fn spawn_diagnostics_publisher(client: Client) -> DiagnosticsPublisher {
+    let (publisher, mut receiver) = diagnostics_publication_queue();
+    let worker = publisher.clone();
+    tokio::spawn(async move {
+        while receiver.recv().await.is_some() {
+            loop {
+                let publications = worker.take_pending();
+                if publications.is_empty() {
+                    break;
+                }
+                for publication in publications {
+                    client
+                        .publish_diagnostics(
+                            publication.uri,
+                            publication.diagnostics,
+                            publication.version,
+                        )
+                        .await;
+                }
+            }
+        }
+    });
+    publisher
+}
+
+fn enqueue_diagnostics(
+    publications: &DiagnosticsPublisher,
+    uri: Url,
+    diagnostics: Vec<Diagnostic>,
+    version: Option<i32>,
+) {
+    publications.enqueue(DiagnosticsPublication {
+        uri,
+        diagnostics,
+        version,
+    });
 }
 
 struct AnalysisJob {
@@ -371,10 +465,11 @@ fn save_document(documents: &mut DocumentStore, uri: Url, text: String) -> Optio
 
 impl Backend {
     fn new(client: Client) -> Self {
+        let diagnostics_publications = spawn_diagnostics_publisher(client.clone());
         Self {
             client,
             documents: Arc::new(tokio::sync::Mutex::new(DocumentStore::new())),
-            diagnostics_publication: Arc::new(tokio::sync::Mutex::new(())),
+            diagnostics_publications,
             pending_analysis: tokio::sync::Mutex::new(HashMap::new()),
             package_inputs: Arc::new(PackageInputCache::default()),
             blocking_analysis_permits: Arc::new(Semaphore::new(MAX_BLOCKING_ANALYSES)),
@@ -393,7 +488,7 @@ impl Backend {
         let analysis_key = job.analysis_key.clone();
         let client = self.client.clone();
         let documents = Arc::clone(&self.documents);
-        let diagnostics_publication = Arc::clone(&self.diagnostics_publication);
+        let diagnostics_publications = self.diagnostics_publications.clone();
         let package_inputs = Arc::clone(&self.package_inputs);
         let blocking_analysis_permits = Arc::clone(&self.blocking_analysis_permits);
         let cancellation = Arc::clone(&job.cancellation);
@@ -402,7 +497,7 @@ impl Backend {
             Self::analyze_and_publish(
                 client,
                 documents,
-                diagnostics_publication,
+                diagnostics_publications,
                 package_inputs,
                 blocking_analysis_permits,
                 job,
@@ -425,7 +520,7 @@ impl Backend {
     async fn analyze_and_publish(
         client: Client,
         documents: Arc<tokio::sync::Mutex<DocumentStore>>,
-        diagnostics_publication: Arc<tokio::sync::Mutex<()>>,
+        diagnostics_publications: DiagnosticsPublisher,
         package_inputs: Arc<PackageInputCache>,
         blocking_analysis_permits: Arc<Semaphore>,
         job: AnalysisJob,
@@ -475,7 +570,6 @@ impl Backend {
         if cancellation.is_cancelled() {
             return;
         }
-        let _publication = diagnostics_publication.lock().await;
         if cancellation.is_cancelled() {
             return;
         }
@@ -493,10 +587,13 @@ impl Backend {
             ) {
                 return;
             }
+            enqueue_diagnostics(
+                &diagnostics_publications,
+                uri,
+                lsp_diagnostics,
+                Some(version),
+            );
         }
-        client
-            .publish_diagnostics(uri, lsp_diagnostics, Some(version))
-            .await;
     }
 }
 
@@ -621,7 +718,6 @@ impl LanguageServer for Backend {
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let doc = params.text_document;
         let analysis_key = analysis_key_for_uri(&doc.uri);
-        let _publication = self.diagnostics_publication.lock().await;
         self.cancel_pending_analysis(&analysis_key).await;
         let job = {
             let mut documents = self.documents.lock().await;
@@ -636,15 +732,23 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri;
         let version = params.text_document.version;
         let analysis_key = analysis_key_for_uri(&uri);
-        let _publication = self.diagnostics_publication.lock().await;
         let outcome = {
             let mut documents = self.documents.lock().await;
-            change_document(
+            let outcome = change_document(
                 &mut documents,
                 uri.clone(),
                 version,
                 &params.content_changes,
-            )
+            );
+            if matches!(outcome, ChangeOutcome::Desynchronized(_)) {
+                enqueue_diagnostics(
+                    &self.diagnostics_publications,
+                    uri.clone(),
+                    Vec::new(),
+                    Some(version),
+                );
+            }
+            outcome
         };
         match outcome {
             ChangeOutcome::Applied(job) => {
@@ -654,9 +758,6 @@ impl LanguageServer for Backend {
             ChangeOutcome::IgnoredStale => {}
             ChangeOutcome::Desynchronized(reason) => {
                 self.cancel_pending_analysis(&analysis_key).await;
-                self.client
-                    .publish_diagnostics(uri, Vec::new(), Some(version))
-                    .await;
                 self.client
                     .log_message(
                         MessageType::WARNING,
@@ -672,7 +773,6 @@ impl LanguageServer for Backend {
 
     async fn did_save(&self, params: DidSaveTextDocumentParams) {
         let analysis_key = analysis_key_for_uri(&params.text_document.uri);
-        let _publication = self.diagnostics_publication.lock().await;
         self.cancel_pending_analysis(&analysis_key).await;
         if let Some(package_root) = package_root_for_uri(&params.text_document.uri) {
             self.package_inputs.invalidate(&package_root);
@@ -690,16 +790,18 @@ impl LanguageServer for Backend {
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
         let analysis_key = analysis_key_for_uri(&params.text_document.uri);
-        let _publication = self.diagnostics_publication.lock().await;
         self.cancel_pending_analysis(&analysis_key).await;
         {
             let mut documents = self.documents.lock().await;
             documents.allocate_revision(&analysis_key);
             documents.remove(&params.text_document.uri);
+            enqueue_diagnostics(
+                &self.diagnostics_publications,
+                params.text_document.uri,
+                Vec::new(),
+                None,
+            );
         }
-        self.client
-            .publish_diagnostics(params.text_document.uri, Vec::new(), None)
-            .await;
     }
 
     async fn did_change_watched_files(&self, params: DidChangeWatchedFilesParams) {
@@ -2476,6 +2578,61 @@ mod tests {
             version: 0,
             sync_state: DocumentSyncState::Synchronized,
         }
+    }
+
+    #[tokio::test]
+    async fn slow_diagnostic_client_coalesces_without_blocking_document_progress() {
+        let (publisher, _blocked_receiver) = diagnostics_publication_queue();
+        let first_uri = file_url("first.rss");
+        let second_uri = file_url("second.rss");
+        let documents = tokio::sync::Mutex::new(DocumentStore::new());
+
+        // The first enqueue fills the capacity-one wake channel. Subsequent
+        // publications must only update the bounded coalescing map.
+        enqueue_diagnostics(&publisher, first_uri.clone(), Vec::new(), Some(1));
+        enqueue_diagnostics(&publisher, first_uri.clone(), Vec::new(), Some(2));
+        enqueue_diagnostics(&publisher, second_uri.clone(), Vec::new(), Some(3));
+
+        tokio::time::timeout(Duration::from_millis(100), async {
+            let mut documents = documents.lock().await;
+            open_document(
+                &mut documents,
+                second_uri.clone(),
+                "fn next() {}".to_owned(),
+                3,
+            );
+        })
+        .await
+        .expect("a blocked diagnostics client must not block document state");
+
+        let pending = publisher.take_pending();
+        assert_eq!(pending.len(), 2);
+        assert!(
+            pending.iter().any(|publication| {
+                publication.uri == first_uri && publication.version == Some(2)
+            })
+        );
+        assert!(pending.iter().any(|publication| {
+            publication.uri == second_uri && publication.version == Some(3)
+        }));
+    }
+
+    #[test]
+    fn diagnostic_publication_backlog_has_a_hard_uri_limit() {
+        let (publisher, _blocked_receiver) = diagnostics_publication_queue();
+        for index in 0..(MAX_PENDING_DIAGNOSTIC_PUBLICATIONS + 32) {
+            enqueue_diagnostics(
+                &publisher,
+                file_url(&format!("queued-{index}.rss")),
+                Vec::new(),
+                Some(index as i32),
+            );
+        }
+
+        assert_eq!(
+            publisher.take_pending().len(),
+            MAX_PENDING_DIAGNOSTIC_PUBLICATIONS
+        );
     }
 
     #[test]

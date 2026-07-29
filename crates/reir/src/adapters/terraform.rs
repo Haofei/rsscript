@@ -129,7 +129,15 @@ pub fn terraform_dir_to_bundle_with_limits(
                 "postgresql_grant" => {
                     facts.extend(postgresql_grant_facts(&block));
                 }
-                _ => {}
+                _ => facts.push(unsupported_terraform_resource_fact(
+                    "terraform-source",
+                    AcquisitionMode::SourceScan,
+                    EvidenceKind::SourceTemplatePointer,
+                    &block.resource_type,
+                    &block.name,
+                    &format!("{}.{}", block.resource_type, block.name),
+                    Some(format!("{}:{}", block.file, block.line)),
+                )),
             }
         }
     }
@@ -944,6 +952,20 @@ pub fn terraform_plan_json_to_bundle_with_limits(
                     | "aws_iam_user_policy"
                     | "aws_iam_group_policy"
             ) {
+                append_terraform_facts(
+                    &mut facts,
+                    vec![unsupported_terraform_resource_fact(
+                        "terraform-plan",
+                        AcquisitionMode::TerraformPlan,
+                        EvidenceKind::TerraformPlanPointer,
+                        resource_type,
+                        name,
+                        address,
+                        Some(format!("/resource_changes/{change_index}")),
+                    )],
+                    limits,
+                    &mut budget,
+                )?;
                 continue;
             }
 
@@ -1014,6 +1036,20 @@ pub fn terraform_plan_json_to_bundle_with_limits(
                     | "aws_iam_user_policy"
                     | "aws_iam_group_policy"
             ) {
+                append_terraform_facts(
+                    &mut facts,
+                    vec![unsupported_terraform_resource_fact(
+                        "terraform-state",
+                        AcquisitionMode::TerraformState,
+                        EvidenceKind::TerraformStatePointer,
+                        resource_type,
+                        name,
+                        address,
+                        Some("/values/root_module".to_owned()),
+                    )],
+                    limits,
+                    &mut budget,
+                )?;
                 continue;
             }
 
@@ -1133,6 +1169,68 @@ fn account_terraform_resource(
         ));
     }
     Ok(())
+}
+
+fn unsupported_terraform_resource_fact(
+    source: &str,
+    acquisition_mode: AcquisitionMode,
+    evidence_kind: EvidenceKind,
+    resource_type: &str,
+    name: &str,
+    address: &str,
+    json_pointer: Option<String>,
+) -> Fact {
+    let resource_id = if address.is_empty() {
+        format!("{resource_type}.{name}")
+    } else {
+        address.to_owned()
+    };
+    let reason = format!(
+        "Terraform resource `{resource_id}` has unsupported type `{resource_type}`; capability coverage is unknown"
+    );
+    Fact {
+        schema: FACT_SCHEMA.to_owned(),
+        id: format!("fact.terraform.unsupported.{}", sanitize_id(&resource_id)),
+        kind: FactKind::Diagnostic,
+        role: None,
+        subject: Subject {
+            kind: SubjectKind::TerraformResource,
+            id: format!("terraform::{resource_id}"),
+            name: Some(resource_id.clone()),
+            package: Some("terraform".to_owned()),
+        },
+        capability: None,
+        value: FactValue::Unknown,
+        confidence: Confidence {
+            level: ConfidenceLevel::Authoritative,
+            source: Some(source.to_owned()),
+        },
+        acquisition_mode,
+        precision: Precision::Exact,
+        evidence: vec![Evidence {
+            kind: evidence_kind,
+            file: Some(source.to_owned()),
+            line: None,
+            column: None,
+            length: None,
+            symbol: Some(resource_id.clone()),
+            reason: Some(reason.clone()),
+            json_pointer,
+            resource: Some(resource_id),
+            provider: Some("terraform".to_owned()),
+            value: Some("unsupported_resource_type".to_owned()),
+            event_id: None,
+            time: None,
+            source: Some(source.to_owned()),
+            event_name: None,
+            principal: None,
+            account: None,
+            policy_arn: None,
+            statement_index: None,
+            action: None,
+        }],
+        unknown_reason: Some(reason),
+    }
 }
 
 fn append_terraform_facts(
@@ -2099,6 +2197,106 @@ POLICY
             blocker.fact_id.as_deref() == Some(diagnostic.id.as_str())
                 && blocker.kind == crate::GateIssueKind::InvalidEvidence
         }));
+    }
+
+    #[test]
+    fn unsupported_plan_resource_is_explicit_unknown_coverage() {
+        let bundle = terraform_plan_json_to_bundle(
+            r#"{
+                "resource_changes": [{
+                    "address": "aws_lambda_function.worker",
+                    "type": "aws_lambda_function",
+                    "name": "worker",
+                    "change": { "after": {} }
+                }]
+            }"#,
+        )
+        .expect("plan should parse");
+
+        let diagnostic = bundle
+            .facts
+            .iter()
+            .find(|fact| fact.id.contains("unsupported"))
+            .expect("unsupported resource must be retained");
+        assert_eq!(diagnostic.kind, FactKind::Diagnostic);
+        assert_eq!(diagnostic.value, FactValue::Unknown);
+        assert!(
+            diagnostic
+                .unknown_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("coverage is unknown"))
+        );
+        assert_eq!(
+            diagnostic.evidence[0].value.as_deref(),
+            Some("unsupported_resource_type")
+        );
+
+        let decision =
+            crate::decide_validated_gate(&[], &bundle.facts, &[], crate::GatePolicy::production());
+        assert_eq!(decision.status, crate::GateStatus::Fail);
+    }
+
+    #[test]
+    fn unsupported_source_resource_is_explicit_unknown_coverage() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "reir-terraform-unsupported-source-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).expect("temp dir");
+        std::fs::write(
+            temp_dir.join("main.tf"),
+            r#"resource "aws_lambda_function" "worker" {
+  function_name = "worker"
+}
+"#,
+        )
+        .expect("fixture");
+
+        let bundle = terraform_dir_to_bundle(&temp_dir).expect("source should scan");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let diagnostic = bundle
+            .facts
+            .iter()
+            .find(|fact| fact.id.contains("unsupported"))
+            .expect("unsupported source resource must be retained");
+        assert_eq!(diagnostic.kind, FactKind::Diagnostic);
+        assert_eq!(diagnostic.value, FactValue::Unknown);
+        assert_eq!(
+            diagnostic.evidence[0].kind,
+            EvidenceKind::SourceTemplatePointer
+        );
+    }
+
+    #[test]
+    fn unsupported_state_resource_is_explicit_unknown_coverage() {
+        let bundle = terraform_plan_json_to_bundle(
+            r#"{
+                "values": {
+                    "root_module": {
+                        "resources": [{
+                            "address": "google_storage_bucket.assets",
+                            "type": "google_storage_bucket",
+                            "name": "assets",
+                            "values": {}
+                        }]
+                    }
+                }
+            }"#,
+        )
+        .expect("state should parse");
+
+        let diagnostic = bundle
+            .facts
+            .iter()
+            .find(|fact| fact.id.contains("unsupported"))
+            .expect("unsupported state resource must be retained");
+        assert_eq!(diagnostic.value, FactValue::Unknown);
+        assert_eq!(diagnostic.acquisition_mode, AcquisitionMode::TerraformState);
+        assert_eq!(
+            diagnostic.evidence[0].kind,
+            EvidenceKind::TerraformStatePointer
+        );
     }
 
     #[test]

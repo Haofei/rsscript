@@ -5,28 +5,46 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/security-sensitive.yml"
+      - ".github/workflows/release.yml"
+      - ".github/actions/rsscript-review/**"
       - "crates/metal-compute/**"
       - "crates/native-abi/**"
       - "crates/process-guard/**"
+      - "crates/reir/**"
       - "crates/rsscript/src/native_plugin/**"
       - "crates/rsscript/src/package/**"
       - "crates/rsscript/src/reg_vm/**"
+      - "crates/runtime/src/fs.rs"
       - "crates/runtime/src/process.rs"
+      - "crates/runtime/src/resource_budget.rs"
+      - "crates/runtime/src/socket.rs"
+      - "crates/runtime/src/websocket.rs"
       - "crates/vm-jit/**"
       - "fuzz/**"
+      - "packages/adapters/sqlite/**"
+      - "packages/adapters/sqlx-ffi/**"
   push:
     branches: [main]
     paths:
       - ".github/workflows/security-sensitive.yml"
+      - ".github/workflows/release.yml"
+      - ".github/actions/rsscript-review/**"
       - "crates/metal-compute/**"
       - "crates/native-abi/**"
       - "crates/process-guard/**"
+      - "crates/reir/**"
       - "crates/rsscript/src/native_plugin/**"
       - "crates/rsscript/src/package/**"
       - "crates/rsscript/src/reg_vm/**"
+      - "crates/runtime/src/fs.rs"
       - "crates/runtime/src/process.rs"
+      - "crates/runtime/src/resource_budget.rs"
+      - "crates/runtime/src/socket.rs"
+      - "crates/runtime/src/websocket.rs"
       - "crates/vm-jit/**"
       - "fuzz/**"
+      - "packages/adapters/sqlite/**"
+      - "packages/adapters/sqlx-ffi/**"
   workflow_dispatch:
 
 permissions:

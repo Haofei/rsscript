@@ -89,12 +89,17 @@ runs:
         PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
       run: |
         TEMP_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rsscript-review.XXXXXX")"
+        trap 'rm -rf "$TEMP_DIR"' EXIT
+        # Public action outputs must survive this step; the runner cleans its
+        # temporary directory after the job.
+        OUTPUT_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/rsscript-review-output.XXXXXX")"
         PACKAGE_REVIEW_JSON="$TEMP_DIR/package-review.json"
         PACKAGE_CHECK_JSON="$TEMP_DIR/package-check.json"
         REQUIRED_REIR_JSON="$TEMP_DIR/required.reir.json"
-        REVIEW_OUTPUT_FILE="$TEMP_DIR/review.md"
-        CI_JSON_FILE="$TEMP_DIR/ci-gate.json"
-        COMMENT_FILE="$TEMP_DIR/pr-comment.md"
+        REVIEW_OUTPUT_FILE="$OUTPUT_DIR/review.md"
+        CI_JSON_FILE="$OUTPUT_DIR/ci-gate.json"
+        SARIF_FILE="$OUTPUT_DIR/rsscript-review.sarif"
+        COMMENT_FILE="$OUTPUT_DIR/pr-comment.md"
 
         TRUSTED_GRANTS="$INPUT_GRANTS"
         TRUSTED_POLICY="$INPUT_POLICY"
@@ -168,9 +173,15 @@ runs:
           --granted "$TRUSTED_GRANTS" \
           --target "$INPUT_TARGET" \
           --principal "$INPUT_PRINCIPAL" \
+          --ci-json-out "$CI_JSON_FILE" \
+          --sarif-out "$SARIF_FILE" \
           "${REPORT_FLAGS[@]}" > "$REVIEW_OUTPUT_FILE"
         EXIT_CODE=$?
         set -e
+        if [ ! -s "$REVIEW_OUTPUT_FILE" ] || [ ! -s "$CI_JSON_FILE" ] || [ ! -s "$SARIF_FILE" ]; then
+          echo "::error::reir report-pr failed without producing every requested review artifact"
+          exit 1
+        fi
         {
           echo '<!-- rsscript-review -->'
           cat "$REVIEW_OUTPUT_FILE"
@@ -185,39 +196,9 @@ runs:
         } >> "$GITHUB_OUTPUT"
         echo "comment_file=$COMMENT_FILE" >> "$GITHUB_OUTPUT"
 
-        # Also produce CI JSON for structured consumption
-        set +e
-        "$REIR_BIN" report-pr \
-          --required "$REQUIRED_REIR_JSON" \
-          --granted "$TRUSTED_GRANTS" \
-          --target "$INPUT_TARGET" \
-          --principal "$INPUT_PRINCIPAL" \
-          "${REPORT_FLAGS[@]}" \
-          --ci-json > "$CI_JSON_FILE"
-        CI_JSON_EXIT_CODE=$?
-        set -e
-        if [ $CI_JSON_EXIT_CODE -ne 0 ] && [ ! -s "$CI_JSON_FILE" ]; then
-          echo "::error::reir report-pr --ci-json failed without producing CI JSON"
-          exit $CI_JSON_EXIT_CODE
-        fi
         echo "ci_json=$CI_JSON_FILE" >> "$GITHUB_OUTPUT"
 
         # SARIF for GitHub code scanning / inline PR annotations.
-        SARIF_FILE="$TEMP_DIR/rsscript-review.sarif"
-        set +e
-        "$REIR_BIN" report-pr \
-          --required "$REQUIRED_REIR_JSON" \
-          --granted "$TRUSTED_GRANTS" \
-          --target "$INPUT_TARGET" \
-          --principal "$INPUT_PRINCIPAL" \
-          "${REPORT_FLAGS[@]}" \
-          --sarif > "$SARIF_FILE"
-        SARIF_EXIT_CODE=$?
-        set -e
-        if [ $SARIF_EXIT_CODE -ne 0 ] && [ ! -s "$SARIF_FILE" ]; then
-          echo "::error::reir report-pr --sarif failed without producing SARIF"
-          exit $SARIF_EXIT_CODE
-        fi
         if [ -s "$SARIF_FILE" ]; then
           echo "sarif=$SARIF_FILE" >> "$GITHUB_OUTPUT"
         fi

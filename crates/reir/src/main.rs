@@ -28,7 +28,7 @@ const USAGE: &str = "Usage:
   reir collect --producer terraform-plan --from plan.json [--out bundle.json] [--json]
   reir reconcile --required required.json --granted granted.json [--target name] [--json]
   reir reconcile [--bundle bundle.json] [--target name] [--out reconciled.json] [--json]
-  reir report-pr --required required.json --granted granted.json --principal id [--target name] [--policy rss-policy.toml] [--ci-json | --sarif] [--fail-on-missing | --allow-missing] [--fail-on-unknown | --allow-unknown] [--fail-on-excess | --allow-excess] [--require-verified-capabilities | --allow-unverified-capabilities]
+  reir report-pr --required required.json --granted granted.json --principal id [--target name] [--policy rss-policy.toml] [--ci-json | --sarif] [--ci-json-out path] [--sarif-out path] [--fail-on-missing | --allow-missing] [--fail-on-unknown | --allow-unknown] [--fail-on-excess | --allow-excess] [--require-verified-capabilities | --allow-unverified-capabilities]
   reir diff --baseline baseline.json --current current.json [--json] [--fail-on-change]
   reir slice --bundle bundle.json [--kind <slice-kind>] [--json]
   reir merge file1.json file2.json [...] --out merged.json
@@ -322,6 +322,8 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
     let mut principal = None;
     let mut ci_json = false;
     let mut sarif = false;
+    let mut ci_json_out = None;
+    let mut sarif_out = None;
     let mut policy_file = None;
     // CLI flag overrides, layered on top of any --policy file.
     let mut cli = reir::TargetGatePolicy::default();
@@ -336,6 +338,8 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
             "--policy" => policy_file = Some(take_value(args, &mut index, "--policy")?),
             "--ci-json" => ci_json = true,
             "--sarif" => sarif = true,
+            "--ci-json-out" => ci_json_out = Some(take_value(args, &mut index, "--ci-json-out")?),
+            "--sarif-out" => sarif_out = Some(take_value(args, &mut index, "--sarif-out")?),
             "--fail-on-missing" => {
                 set_policy_override(&mut cli.fail_on_missing, true, "missing capability policy")?
             }
@@ -436,10 +440,18 @@ fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), CliError> {
         &granted_bundle.facts,
         &reconciliations,
     );
+    let ci_json_rendered = reir::format_ci_gate_json(&ci_output);
+    let sarif_rendered = reir::format_sarif(&decision);
+    if let Some(path) = ci_json_out {
+        write_bounded_text_file(&path, &ci_json_rendered)?;
+    }
+    if let Some(path) = sarif_out {
+        write_bounded_text_file(&path, &sarif_rendered)?;
+    }
     let output = if sarif {
-        reir::format_sarif(&decision)
+        sarif_rendered
     } else if ci_json {
-        reir::format_ci_gate_json(&ci_output)
+        ci_json_rendered
     } else {
         format_pr_review_comment(
             &decision,
@@ -978,6 +990,15 @@ fn write_json_file(path: &str, bundle: &Bundle) -> Result<(), CliError> {
     let mut output = json.into_bytes();
     output.push(b'\n');
     atomic_write_no_follow(Path::new(path), &output)
+}
+
+fn write_bounded_text_file(path: &str, output: &str) -> Result<(), CliError> {
+    if output.len() > MAX_CLI_OUTPUT_BYTES {
+        return Err(CliError::runtime(format!(
+            "output is too large to write within the {MAX_CLI_OUTPUT_BYTES} byte limit"
+        )));
+    }
+    atomic_write_no_follow(Path::new(path), output.as_bytes())
 }
 
 fn atomic_write_no_follow(path: &Path, bytes: &[u8]) -> Result<(), CliError> {
@@ -2039,6 +2060,8 @@ mod tests {
         let temp_dir = unique_temp_dir("report-pr");
         let required_path = temp_dir.join("required.json");
         let granted_path = temp_dir.join("granted.json");
+        let ci_json_path = temp_dir.join("decision.json");
+        let sarif_path = temp_dir.join("decision.sarif");
         let function = Subject {
             kind: SubjectKind::CodeFunction,
             id: "reports::Reports.cleanup_old_reports".to_owned(),
@@ -2102,11 +2125,24 @@ mod tests {
             "prod".to_owned(),
             "--principal".to_owned(),
             "arn:aws:iam::123456789012:role/report-uploader".to_owned(),
+            "--ci-json-out".to_owned(),
+            ci_json_path.to_string_lossy().into_owned(),
+            "--sarif-out".to_owned(),
+            sarif_path.to_string_lossy().into_owned(),
         ];
         let (code, comment) = try_run_report_pr(&args).expect("report-pr should run");
+        let ci_json: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&ci_json_path).expect("CI JSON should be written"),
+        )
+        .expect("CI output should be JSON");
+        let sarif: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&sarif_path).expect("SARIF should be written"))
+                .expect("SARIF output should be JSON");
         let _ = std::fs::remove_dir_all(&temp_dir);
 
         assert_eq!(code, ExitCode::from(1));
+        assert_eq!(ci_json["status"], "fail");
+        assert_eq!(sarif["version"], "2.1.0");
         assert!(comment.contains("Status: FAIL"));
         assert!(comment.contains("### Required capabilities needing deployment grant"));
         assert!(comment.contains("object_storage.write aws/s3 s3:PutObject"));

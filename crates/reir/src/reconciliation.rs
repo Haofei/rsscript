@@ -8,6 +8,46 @@ use crate::{
 };
 
 const MAX_RECONCILIATION_EVIDENCE: usize = 256;
+const DEFAULT_MAX_RECONCILIATION_OPERATIONS: usize = 1_000_000;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReconciliationLimits {
+    pub max_candidate_comparisons: usize,
+}
+
+impl Default for ReconciliationLimits {
+    fn default() -> Self {
+        Self {
+            max_candidate_comparisons: DEFAULT_MAX_RECONCILIATION_OPERATIONS,
+        }
+    }
+}
+
+#[derive(Default)]
+struct ReconciliationBudget {
+    candidate_comparisons: usize,
+    limit: usize,
+}
+
+impl ReconciliationBudget {
+    fn new(limits: ReconciliationLimits) -> Self {
+        Self {
+            candidate_comparisons: 0,
+            limit: limits.max_candidate_comparisons,
+        }
+    }
+
+    fn consume_candidate(&mut self) -> bool {
+        let Some(next) = self.candidate_comparisons.checked_add(1) else {
+            return false;
+        };
+        if next > self.limit {
+            return false;
+        }
+        self.candidate_comparisons = next;
+        true
+    }
+}
 
 /// Compares facts with compatible capability keys and subject chains.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +131,14 @@ pub fn reconcile_capabilities(required: &[Fact], granted: &[Fact]) -> Vec<Reconc
     reconcile_capabilities_for_target(required, granted, None)
 }
 
+pub fn reconcile_capabilities_with_limits(
+    required: &[Fact],
+    granted: &[Fact],
+    limits: ReconciliationLimits,
+) -> Vec<Reconciliation> {
+    reconcile_capabilities_impl(required, granted, None, None, false, limits)
+}
+
 /// Reconcile required facts against granted facts and annotate results with a
 /// target environment when the caller has one.
 pub fn reconcile_capabilities_for_target(
@@ -98,7 +146,14 @@ pub fn reconcile_capabilities_for_target(
     granted: &[Fact],
     target: Option<&str>,
 ) -> Vec<Reconciliation> {
-    reconcile_capabilities_impl(required, granted, target, None, false)
+    reconcile_capabilities_impl(
+        required,
+        granted,
+        target,
+        None,
+        false,
+        ReconciliationLimits::default(),
+    )
 }
 
 pub fn reconcile_capabilities_for_gate(
@@ -107,7 +162,14 @@ pub fn reconcile_capabilities_for_gate(
     target: Option<&str>,
     principal: Option<&str>,
 ) -> Vec<Reconciliation> {
-    reconcile_capabilities_impl(required, granted, target, principal, true)
+    reconcile_capabilities_impl(
+        required,
+        granted,
+        target,
+        principal,
+        true,
+        ReconciliationLimits::default(),
+    )
 }
 
 fn reconcile_capabilities_impl(
@@ -116,9 +178,11 @@ fn reconcile_capabilities_impl(
     target: Option<&str>,
     principal: Option<&str>,
     validate_input: bool,
+    limits: ReconciliationLimits,
 ) -> Vec<Reconciliation> {
     let mut results = Vec::new();
     let target = target.map(str::to_owned);
+    let mut budget = ReconciliationBudget::new(limits);
 
     let required_with_capability: Vec<&Fact> = required
         .iter()
@@ -145,9 +209,9 @@ fn reconcile_capabilities_impl(
                 && fact.value == FactValue::True
         })
         .collect();
-    let required_by_category = index_capabilities_by_category(&required_with_capability);
-    let granted_by_category = index_capabilities_by_category(&granted_with_capability);
-    let denied_by_category = index_capabilities_by_category(&denied_with_capability);
+    let required_index = CapabilityIndex::new(&required_with_capability);
+    let granted_index = CapabilityIndex::new(&granted_with_capability);
+    let denied_index = CapabilityIndex::new(&denied_with_capability);
 
     for required_fact in &required_with_capability {
         let required_capability = required_fact
@@ -161,71 +225,64 @@ fn reconcile_capabilities_impl(
             || required_fact
                 .validate_for_gate(FactRole::Required, GateFactDomain::Requirement)
                 .is_empty();
-        let category = capability_category_key(&required_capability.category);
-        let category_denies = denied_by_category
-            .get(category.as_str())
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        let category_grants = granted_by_category
-            .get(category.as_str())
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        let matching_denies: Vec<&Fact> = category_denies
-            .iter()
-            .copied()
-            .filter(|denied_fact| {
-                principal.is_none_or(|id| denied_fact.matches_gate_principal(id))
-                    && (!validate_input
-                        || (!denied_fact.is_unknown_for_gate()
-                            && denied_fact
-                                .validate_for_gate(
-                                    FactRole::Denied,
-                                    GateFactDomain::DeploymentGrant,
-                                )
-                                .is_empty()))
-                    && denied_fact
-                        .capability
-                        .as_ref()
-                        .is_some_and(|denied| capability_intersects(denied, required_capability))
-            })
-            .collect();
-        let matching_grants: Vec<&Fact> = category_grants
-            .iter()
-            .copied()
-            .filter(|granted_fact| {
-                granted_fact.value == FactValue::True
-                    && principal.is_none_or(|id| granted_fact.matches_gate_principal(id))
-                    && !granted_fact.is_unknown_for_gate()
-                    && (!validate_input
-                        || granted_fact
-                            .validate_for_gate(FactRole::Granted, GateFactDomain::DeploymentGrant)
-                            .is_empty())
-                    && granted_fact
-                        .capability
-                        .as_ref()
-                        .is_some_and(|granted_capability| {
-                            capability_covers(granted_capability, required_capability)
-                        })
-            })
-            .collect();
-
-        let has_unknown_coverage = !required_valid
-            || required_fact.is_unknown_for_gate()
-            || category_grants.iter().any(|granted_fact| {
-                principal.is_none_or(|id| granted_fact.matches_gate_principal(id))
-                    && granted_fact
-                        .capability
-                        .as_ref()
-                        .is_some_and(|grant| capability_key_compatible(grant, required_capability))
-                    && (granted_fact.is_unknown_for_gate()
-                        || (validate_input
-                            && !granted_fact
-                                .validate_for_gate(
-                                    FactRole::Granted,
-                                    GateFactDomain::DeploymentGrant,
-                                )
-                                .is_empty()))
-            });
+        let category_grants = granted_index.candidates(required_capability);
+        let mut matching_denies = Vec::new();
+        for denied_fact in denied_index.candidates(required_capability) {
+            if !budget.consume_candidate() {
+                return vec![reconciliation_budget_exceeded(target)];
+            }
+            if principal.is_none_or(|id| denied_fact.matches_gate_principal(id))
+                && (!validate_input
+                    || (!denied_fact.is_unknown_for_gate()
+                        && denied_fact
+                            .validate_for_gate(FactRole::Denied, GateFactDomain::DeploymentGrant)
+                            .is_empty()))
+                && denied_fact
+                    .capability
+                    .as_ref()
+                    .is_some_and(|denied| capability_intersects(denied, required_capability))
+            {
+                matching_denies.push(denied_fact);
+            }
+        }
+        let mut matching_grants = Vec::new();
+        let mut compatible_grant_ids = Vec::new();
+        let mut has_unknown_coverage = !required_valid || required_fact.is_unknown_for_gate();
+        for granted_fact in category_grants {
+            if !budget.consume_candidate() {
+                return vec![reconciliation_budget_exceeded(target)];
+            }
+            let principal_matches =
+                principal.is_none_or(|id| granted_fact.matches_gate_principal(id));
+            let capability_matches = granted_fact
+                .capability
+                .as_ref()
+                .is_some_and(|grant| capability_key_compatible(grant, required_capability));
+            let input_valid = !validate_input
+                || granted_fact
+                    .validate_for_gate(FactRole::Granted, GateFactDomain::DeploymentGrant)
+                    .is_empty();
+            if capability_matches {
+                compatible_grant_ids.push(granted_fact.id.clone());
+            }
+            if principal_matches
+                && capability_matches
+                && (granted_fact.is_unknown_for_gate() || !input_valid)
+            {
+                has_unknown_coverage = true;
+            }
+            if granted_fact.value == FactValue::True
+                && principal_matches
+                && !granted_fact.is_unknown_for_gate()
+                && input_valid
+                && granted_fact
+                    .capability
+                    .as_ref()
+                    .is_some_and(|grant| capability_covers(grant, required_capability))
+            {
+                matching_grants.push(granted_fact);
+            }
+        }
 
         let deny_covers_requirement = matching_denies.iter().any(|fact| {
             fact.capability
@@ -271,15 +328,7 @@ fn reconcile_capabilities_impl(
                 target: target.clone(),
                 subject_chain: None,
                 required_fact: Some(required_fact.id.clone()),
-                granted_facts: granted_with_capability
-                    .iter()
-                    .filter(|fact| {
-                        fact.capability.as_ref().is_some_and(|grant| {
-                            capability_key_compatible(grant, required_capability)
-                        })
-                    })
-                    .map(|fact| fact.id.clone())
-                    .collect(),
+                granted_facts: compatible_grant_ids,
                 observed_fact: None,
                 capability: Some(required_capability.clone()),
                 risk: Some(ReconciliationRisk {
@@ -349,20 +398,23 @@ fn reconcile_capabilities_impl(
             .capability
             .as_ref()
             .expect("filtered granted fact should have capability");
-        let category = capability_category_key(&granted_capability.category);
-        let category_requirements = required_by_category
-            .get(category.as_str())
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        let matches_any_required = category_requirements.iter().any(|required_fact| {
-            required_fact.value == FactValue::True
+        let mut matches_any_required = false;
+        for required_fact in required_index.candidates(granted_capability) {
+            if !budget.consume_candidate() {
+                return vec![reconciliation_budget_exceeded(target)];
+            }
+            if required_fact.value == FactValue::True
                 && required_fact
                     .capability
                     .as_ref()
                     .is_some_and(|required_capability| {
                         capability_covers(granted_capability, required_capability)
                     })
-        });
+            {
+                matches_any_required = true;
+                break;
+            }
+        }
 
         if !matches_any_required {
             results.push(Reconciliation {
@@ -389,19 +441,142 @@ fn reconcile_capabilities_impl(
     results
 }
 
-fn index_capabilities_by_category<'a>(facts: &[&'a Fact]) -> HashMap<String, Vec<&'a Fact>> {
-    let mut index = HashMap::new();
-    for fact in facts {
-        let capability = fact
-            .capability
-            .as_ref()
-            .expect("indexed fact should have capability");
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct ExactCapabilityKey {
+    category: String,
+    provider: String,
+    service: String,
+    action: String,
+    resource: String,
+    constraints: Vec<(String, String)>,
+}
+
+struct CapabilityIndex<'a> {
+    by_category: HashMap<String, Vec<&'a Fact>>,
+    exact: HashMap<ExactCapabilityKey, Vec<&'a Fact>>,
+    broad_by_category: HashMap<String, Vec<&'a Fact>>,
+}
+
+impl<'a> CapabilityIndex<'a> {
+    fn new(facts: &[&'a Fact]) -> Self {
+        let mut index = Self {
+            by_category: HashMap::new(),
+            exact: HashMap::new(),
+            broad_by_category: HashMap::new(),
+        };
+        for fact in facts {
+            let capability = fact
+                .capability
+                .as_ref()
+                .expect("indexed fact should have capability");
+            let category = capability_category_key(&capability.category);
+            index
+                .by_category
+                .entry(category.clone())
+                .or_default()
+                .push(*fact);
+            if let Some(key) = exact_capability_key(capability) {
+                index.exact.entry(key).or_default().push(*fact);
+            } else {
+                index
+                    .broad_by_category
+                    .entry(category)
+                    .or_default()
+                    .push(*fact);
+            }
+        }
         index
-            .entry(capability_category_key(&capability.category))
-            .or_insert_with(Vec::new)
-            .push(*fact);
     }
-    index
+
+    fn candidates(&self, capability: &Capability) -> Vec<&'a Fact> {
+        let category = capability_category_key(&capability.category);
+        let Some(key) = exact_capability_key(capability) else {
+            return self.by_category.get(&category).cloned().unwrap_or_default();
+        };
+        let exact = self.exact.get(&key).map(Vec::as_slice).unwrap_or_default();
+        let broad = self
+            .broad_by_category
+            .get(&category)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let mut candidates = Vec::with_capacity(exact.len() + broad.len());
+        candidates.extend_from_slice(exact);
+        candidates.extend_from_slice(broad);
+        candidates
+    }
+}
+
+fn exact_capability_key(capability: &Capability) -> Option<ExactCapabilityKey> {
+    let provider = exact_dimension(capability.provider.as_deref())?;
+    let service = exact_dimension(capability.service.as_deref())?;
+    let action = exact_dimension(capability.action.as_deref())?;
+    let resource = exact_resource_dimension(capability.resource.as_deref())?;
+    // Constraint intersection is not equality-based (a missing key may still
+    // intersect), so constrained capabilities remain in the broad bucket.
+    if !capability.constraints.is_empty() {
+        return None;
+    }
+    Some(ExactCapabilityKey {
+        category: capability_category_key(&capability.category),
+        provider: provider.to_owned(),
+        service: service.to_owned(),
+        action: action.to_owned(),
+        resource: resource.to_owned(),
+        constraints: Vec::new(),
+    })
+}
+
+fn exact_dimension(value: Option<&str>) -> Option<&str> {
+    value.filter(|value| *value != "*")
+}
+
+fn exact_resource_dimension(value: Option<&str>) -> Option<&str> {
+    exact_dimension(value).filter(|value| !value.ends_with('*'))
+}
+
+fn reconciliation_budget_exceeded(target: Option<String>) -> Reconciliation {
+    Reconciliation {
+        schema: "reir.reconciliation.v0.1".to_owned(),
+        id: "recon.unknown.operation_budget".to_owned(),
+        kind: ReconciliationKind::UnknownCoverage,
+        status: ReconciliationStatus::Unknown,
+        target,
+        subject_chain: None,
+        required_fact: None,
+        granted_facts: Vec::new(),
+        observed_fact: None,
+        capability: None,
+        risk: Some(ReconciliationRisk {
+            class: RiskClass::Availability,
+            severity: RiskSeverity::Unknown,
+            reason: Some("reconciliation_candidate_comparison_budget_exceeded".to_owned()),
+        }),
+        evidence: vec![Evidence {
+            kind: EvidenceKind::UnknownReason,
+            file: None,
+            line: None,
+            column: None,
+            length: None,
+            symbol: Some("reconciliation_operation_budget".to_owned()),
+            reason: Some(
+                "reconciliation stopped before producing partial results because the candidate comparison budget was exceeded"
+                    .to_owned(),
+            ),
+            json_pointer: None,
+            resource: None,
+            provider: None,
+            value: Some("budget_exceeded".to_owned()),
+            event_id: None,
+            time: None,
+            source: Some("reir.reconciliation".to_owned()),
+            event_name: None,
+            principal: None,
+            account: None,
+            policy_arn: None,
+            statement_index: None,
+            action: None,
+        }],
+    }
 }
 
 fn capability_category_key(category: &CapabilityCategory) -> String {
@@ -633,6 +808,92 @@ mod tests {
             resource: Some("*".to_owned()),
             constraints: HashMap::new(),
         }
+    }
+
+    fn exact_fact(id: usize, role: FactRole) -> Fact {
+        let required = role == FactRole::Required;
+        Fact {
+            schema: "reir.fact.v0.1".to_owned(),
+            id: format!("fact.{role:?}.{id}"),
+            kind: FactKind::Capability,
+            role: Some(role),
+            subject: Subject {
+                kind: if required {
+                    SubjectKind::CodeFunction
+                } else {
+                    SubjectKind::CloudRole
+                },
+                id: format!("subject.{id}"),
+                name: None,
+                package: None,
+            },
+            capability: Some(Capability {
+                category: CapabilityCategory::ObjectStorageRead,
+                provider: Some("aws".to_owned()),
+                service: Some("s3".to_owned()),
+                action: Some("s3:GetObject".to_owned()),
+                resource: Some(format!("arn:aws:s3:::bucket-{id}/object")),
+                constraints: HashMap::new(),
+            }),
+            value: FactValue::True,
+            confidence: Confidence {
+                level: ConfidenceLevel::Authoritative,
+                source: Some("test".to_owned()),
+            },
+            acquisition_mode: AcquisitionMode::CloudPolicy,
+            precision: Precision::ResourceScoped,
+            evidence: Vec::new(),
+            unknown_reason: None,
+        }
+    }
+
+    #[test]
+    fn reconciliation_budget_exhaustion_fails_closed_without_partial_results() {
+        let required = exact_fact(1, FactRole::Required);
+        let granted = exact_fact(1, FactRole::Granted);
+        let results = reconcile_capabilities_with_limits(
+            &[required],
+            &[granted],
+            ReconciliationLimits {
+                max_candidate_comparisons: 0,
+            },
+        );
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].kind, ReconciliationKind::UnknownCoverage);
+        assert_eq!(results[0].status, ReconciliationStatus::Unknown);
+        assert_eq!(
+            results[0]
+                .risk
+                .as_ref()
+                .and_then(|risk| risk.reason.as_deref()),
+            Some("reconciliation_candidate_comparison_budget_exceeded")
+        );
+    }
+
+    #[test]
+    fn exact_capability_index_keeps_comparisons_near_linear() {
+        let required = (0..2_000)
+            .map(|id| exact_fact(id, FactRole::Required))
+            .collect::<Vec<_>>();
+        let granted = (0..2_000)
+            .map(|id| exact_fact(id, FactRole::Granted))
+            .collect::<Vec<_>>();
+
+        let results = reconcile_capabilities_with_limits(
+            &required,
+            &granted,
+            ReconciliationLimits {
+                max_candidate_comparisons: 5_000,
+            },
+        );
+
+        assert_eq!(results.len(), required.len());
+        assert!(
+            results
+                .iter()
+                .all(|result| result.kind == ReconciliationKind::Covered)
+        );
     }
 
     #[test]
