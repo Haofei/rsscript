@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::future::Future;
+use std::hash::{BuildHasher, Hasher};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
@@ -46,7 +47,8 @@ struct SqlxConfig {
     max_in_flight_per_pool: usize,
 }
 
-type PoolKey = String;
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct PoolKey([u8; 32]);
 
 #[derive(Clone)]
 struct PoolHandle {
@@ -109,7 +111,23 @@ fn configured_query_limits() -> Result<QueryLimits, String> {
 }
 
 fn pool_key(url: &str) -> PoolKey {
-    normalize_database_url(url)
+    static PROCESS_SALT: OnceLock<[u8; 16]> = OnceLock::new();
+    let process_salt = PROCESS_SALT.get_or_init(|| {
+        let random = std::collections::hash_map::RandomState::new();
+        let mut first = random.build_hasher();
+        first.write_u8(0);
+        let mut second = random.build_hasher();
+        second.write_u8(1);
+        let mut salt = [0_u8; 16];
+        salt[..8].copy_from_slice(&first.finish().to_ne_bytes());
+        salt[8..].copy_from_slice(&second.finish().to_ne_bytes());
+        salt
+    });
+    let normalized = normalize_database_url(url);
+    let mut digest = Sha256::new();
+    digest.update(process_salt);
+    digest.update(normalized.as_bytes());
+    PoolKey(digest.finalize().into())
 }
 
 fn normalize_database_url(url: &str) -> String {
@@ -401,7 +419,7 @@ fn pools() -> &'static Mutex<PoolRegistry> {
 }
 
 fn close_pools(mut removed: Vec<(PoolKey, AnyPool)>) -> Result<(), String> {
-    removed.sort_by(|(left, _), (right, _)| left.cmp(right));
+    removed.sort_by_key(|(key, _)| *key);
     run_on_runtime(async move {
         for (_, pool) in removed {
             pool.close().await;
@@ -443,7 +461,7 @@ fn pool_for_with_config(
             .entries
             .iter()
             .min_by_key(|(_, entry)| entry.sequence)
-            .map(|(key, _)| key.clone())
+            .map(|(key, _)| *key)
             .expect("a full positive-capacity cache has an entry");
         registry.entries.remove(&lru_key);
     }
@@ -777,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn pool_identity_preserves_query_order_and_uses_full_normalized_url() {
+    fn pool_identity_preserves_semantics_without_retaining_url_secrets() {
         let first =
             "POSTGRESQL://user:password@DB.EXAMPLE:5432/app?sslmode=require&application_name=rss";
         let equivalent =
@@ -787,7 +805,10 @@ mod tests {
 
         assert_eq!(super::pool_key(first), super::pool_key(equivalent));
         assert_ne!(super::pool_key(first), super::pool_key(reordered));
-        assert!(super::pool_key(first).contains("user:password"));
+        let debug_key = format!("{:?}", super::pool_key(first));
+        assert!(!debug_key.contains("user"));
+        assert!(!debug_key.contains("password"));
+        assert!(!debug_key.contains("db.example"));
         assert_eq!(
             super::url_fingerprint(first),
             super::url_fingerprint(reordered)

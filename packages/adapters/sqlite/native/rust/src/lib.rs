@@ -1,21 +1,76 @@
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, params_from_iter};
 
 pub const DEFAULT_MAX_CACHED_CONNECTIONS: usize = 32;
 pub const DEFAULT_BUSY_TIMEOUT_MS: u64 = 5_000;
+pub const DEFAULT_QUERY_TIMEOUT_MS: u64 = 30_000;
 pub const DEFAULT_MAX_RESULT_ROWS: usize = 10_000;
 pub const DEFAULT_MAX_RESULT_BYTES: usize = 16 * 1024 * 1024;
 
 const MAX_CACHED_CONNECTIONS_ENV: &str = "RSS_SQLITE_MAX_CACHED_CONNECTIONS";
 const BUSY_TIMEOUT_MS_ENV: &str = "RSS_SQLITE_BUSY_TIMEOUT_MS";
+const QUERY_TIMEOUT_MS_ENV: &str = "RSS_SQLITE_QUERY_TIMEOUT_MS";
 const MAX_RESULT_ROWS_ENV: &str = "RSS_SQLITE_MAX_RESULT_ROWS";
 const MAX_RESULT_BYTES_ENV: &str = "RSS_SQLITE_MAX_RESULT_BYTES";
 
 type SharedConnection = Arc<Mutex<Connection>>;
+const SQLITE_PROGRESS_HANDLER_OPS: i32 = 1_000;
+
+#[derive(Clone, Default)]
+pub struct SqliteCancellationToken {
+    cancelled: Arc<AtomicBool>,
+}
+
+impl SqliteCancellationToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn cancel(&self) {
+        self.cancelled.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::Acquire)
+    }
+}
+
+#[derive(Clone)]
+pub struct SqliteOperationControl {
+    deadline: Instant,
+    timeout: Duration,
+    cancellation: SqliteCancellationToken,
+}
+
+impl SqliteOperationControl {
+    pub fn with_timeout(timeout: Duration) -> Result<Self, String> {
+        if timeout.is_zero() {
+            return Err("SQLite operation timeout must be positive".to_string());
+        }
+        let deadline = Instant::now()
+            .checked_add(timeout)
+            .ok_or_else(|| "SQLite operation timeout is too large".to_string())?;
+        Ok(Self {
+            deadline,
+            timeout,
+            cancellation: SqliteCancellationToken::new(),
+        })
+    }
+
+    pub fn with_timeout_and_cancellation(
+        timeout: Duration,
+        cancellation: SqliteCancellationToken,
+    ) -> Result<Self, String> {
+        let mut control = Self::with_timeout(timeout)?;
+        control.cancellation = cancellation;
+        Ok(control)
+    }
+}
 
 #[derive(Clone, Copy)]
 struct QueryLimits {
@@ -51,6 +106,11 @@ fn configured_limit(name: &str, default: usize) -> Result<usize, String> {
 fn configured_busy_timeout() -> Result<Duration, String> {
     let timeout_ms = configured_limit(BUSY_TIMEOUT_MS_ENV, DEFAULT_BUSY_TIMEOUT_MS as usize)?;
     Ok(Duration::from_millis(timeout_ms as u64))
+}
+
+fn configured_operation_control() -> Result<SqliteOperationControl, String> {
+    let timeout_ms = configured_limit(QUERY_TIMEOUT_MS_ENV, DEFAULT_QUERY_TIMEOUT_MS as usize)?;
+    SqliteOperationControl::with_timeout(Duration::from_millis(timeout_ms as u64))
 }
 
 fn configured_query_limits() -> Result<QueryLimits, String> {
@@ -176,9 +236,35 @@ fn with_connection<T>(
     path: &Path,
     operation: impl FnOnce(&mut Connection) -> Result<T, String>,
 ) -> Result<T, String> {
+    let control = configured_operation_control()?;
+    with_connection_controlled(path, &control, operation)
+}
+
+fn with_connection_controlled<T>(
+    path: &Path,
+    control: &SqliteOperationControl,
+    operation: impl FnOnce(&mut Connection) -> Result<T, String>,
+) -> Result<T, String> {
     let connection = connection_for(path)?;
     let mut connection = connection.lock().map_err(|error| error.to_string())?;
-    operation(&mut connection)
+    let deadline = control.deadline;
+    let cancellation = control.cancellation.clone();
+    connection.progress_handler(
+        SQLITE_PROGRESS_HANDLER_OPS,
+        Some(move || cancellation.is_cancelled() || Instant::now() >= deadline),
+    );
+    let result = operation(&mut connection);
+    connection.progress_handler(0, None::<fn() -> bool>);
+    if control.cancellation.is_cancelled() {
+        return Err("SQLite operation cancelled".to_string());
+    }
+    if Instant::now() >= control.deadline {
+        return Err(format!(
+            "SQLite operation timed out after {}ms",
+            control.timeout.as_millis()
+        ));
+    }
+    result
 }
 
 fn account_value(
@@ -206,7 +292,18 @@ fn query_strings_with_limits(
     params: &[String],
     limits: QueryLimits,
 ) -> Result<Vec<String>, String> {
-    with_connection(path, |conn| {
+    let control = configured_operation_control()?;
+    query_strings_with_limits_and_control(path, sql, params, limits, &control)
+}
+
+fn query_strings_with_limits_and_control(
+    path: &Path,
+    sql: &str,
+    params: &[String],
+    limits: QueryLimits,
+    control: &SqliteOperationControl,
+) -> Result<Vec<String>, String> {
+    with_connection_controlled(path, control, |conn| {
         let mut statement = conn.prepare(sql).map_err(|error| error.to_string())?;
         let mut rows = statement
             .query(params_from_iter(params))
@@ -229,7 +326,18 @@ fn query_one_string_with_limits(
     params: &[String],
     limits: QueryLimits,
 ) -> Result<Option<String>, String> {
-    with_connection(path, |conn| {
+    let control = configured_operation_control()?;
+    query_one_string_with_limits_and_control(path, sql, params, limits, &control)
+}
+
+fn query_one_string_with_limits_and_control(
+    path: &Path,
+    sql: &str,
+    params: &[String],
+    limits: QueryLimits,
+    control: &SqliteOperationControl,
+) -> Result<Option<String>, String> {
+    with_connection_controlled(path, control, |conn| {
         let mut statement = conn.prepare(sql).map_err(|error| error.to_string())?;
         let mut rows = statement
             .query(params_from_iter(params))
@@ -252,9 +360,32 @@ pub fn execute(path: &Path, sql: &str) -> Result<(), String> {
     })
 }
 
+pub fn execute_with_control(
+    path: &Path,
+    sql: &str,
+    control: &SqliteOperationControl,
+) -> Result<(), String> {
+    with_connection_controlled(path, control, |conn| {
+        conn.execute_batch(sql).map_err(|error| error.to_string())
+    })
+}
+
 /// Run one SQL statement with positional string bind parameters.
 pub fn execute_params(path: &Path, sql: &str, params: &[String]) -> Result<(), String> {
     with_connection(path, |conn| {
+        conn.execute(sql, params_from_iter(params))
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    })
+}
+
+pub fn execute_params_with_control(
+    path: &Path,
+    sql: &str,
+    params: &[String],
+    control: &SqliteOperationControl,
+) -> Result<(), String> {
+    with_connection_controlled(path, control, |conn| {
         conn.execute(sql, params_from_iter(params))
             .map(|_| ())
             .map_err(|error| error.to_string())
@@ -274,6 +405,15 @@ pub fn query_strings_params(
     query_strings_with_limits(path, sql, params, configured_query_limits()?)
 }
 
+pub fn query_strings_params_with_control(
+    path: &Path,
+    sql: &str,
+    params: &[String],
+    control: &SqliteOperationControl,
+) -> Result<Vec<String>, String> {
+    query_strings_with_limits_and_control(path, sql, params, configured_query_limits()?, control)
+}
+
 pub fn query_one_string(path: &Path, sql: &str) -> Result<Option<String>, String> {
     query_one_string_with_limits(path, sql, &[], configured_query_limits()?)
 }
@@ -285,6 +425,15 @@ pub fn query_one_string_params(
     params: &[String],
 ) -> Result<Option<String>, String> {
     query_one_string_with_limits(path, sql, params, configured_query_limits()?)
+}
+
+pub fn query_one_string_params_with_control(
+    path: &Path,
+    sql: &str,
+    params: &[String],
+    control: &SqliteOperationControl,
+) -> Result<Option<String>, String> {
+    query_one_string_with_limits_and_control(path, sql, params, configured_query_limits()?, control)
 }
 
 #[cfg(test)]
@@ -526,6 +675,59 @@ mod tests {
                 .entries
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn statement_progress_handler_honors_cancellation() {
+        let _guard = test_guard();
+        let path = sqlite_path("cancel");
+        let cancellation = super::SqliteCancellationToken::new();
+        cancellation.cancel();
+        let control = super::SqliteOperationControl::with_timeout_and_cancellation(
+            Duration::from_secs(1),
+            cancellation,
+        )
+        .expect("control should be valid");
+
+        let error = super::query_one_string_params_with_control(
+            &path,
+            "with recursive cnt(x) as (
+                values(0)
+                union all
+                select x + 1 from cnt where x < 100000000
+             )
+             select printf('%d', sum(x)) from cnt",
+            &[],
+            &control,
+        )
+        .expect_err("cancelled query must stop");
+
+        assert_eq!(error, "SQLite operation cancelled");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn statement_progress_handler_enforces_deadline() {
+        let _guard = test_guard();
+        let path = sqlite_path("deadline");
+        let control = super::SqliteOperationControl::with_timeout(Duration::from_millis(1))
+            .expect("control should be valid");
+
+        let error = super::query_one_string_params_with_control(
+            &path,
+            "with recursive cnt(x) as (
+                values(0)
+                union all
+                select x + 1 from cnt where x < 100000000
+             )
+             select printf('%d', sum(x)) from cnt",
+            &[],
+            &control,
+        )
+        .expect_err("query must hit its deadline");
+
+        assert_eq!(error, "SQLite operation timed out after 1ms");
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]

@@ -1,3 +1,4 @@
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use crate::{
@@ -10,6 +11,73 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 const MAX_TCP_READ_BYTES: i64 = 16 * 1024 * 1024;
 const MAX_TCP_WRITE_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_TCP_OPERATION_TIMEOUT_MS: i64 = 30_000;
+
+pub trait NetworkTargetPolicy: Send + Sync {
+    fn authorize(&self, hostname: &str, port: u16, resolved: &[IpAddr]) -> Result<(), String>;
+}
+
+#[derive(Debug, Default)]
+pub struct AllowAllNetworkTargetPolicy;
+
+impl NetworkTargetPolicy for AllowAllNetworkTargetPolicy {
+    fn authorize(&self, _hostname: &str, _port: u16, _resolved: &[IpAddr]) -> Result<(), String> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct DenyPrivateNetworkTargetPolicy;
+
+impl NetworkTargetPolicy for DenyPrivateNetworkTargetPolicy {
+    fn authorize(&self, _hostname: &str, _port: u16, resolved: &[IpAddr]) -> Result<(), String> {
+        if resolved.is_empty() {
+            return Err("network target did not resolve to an address".to_string());
+        }
+        if resolved
+            .iter()
+            .any(|address| !is_public_network_address(*address))
+        {
+            return Err("network target resolves to a non-public address".to_string());
+        }
+        Ok(())
+    }
+}
+
+fn is_public_network_address(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            !(address.is_private()
+                || address.is_loopback()
+                || address.is_link_local()
+                || address.is_broadcast()
+                || address.is_documentation()
+                || address.is_multicast()
+                || address.is_unspecified())
+        }
+        IpAddr::V6(address) => {
+            if let Some(mapped) = address.to_ipv4_mapped() {
+                return is_public_network_address(IpAddr::V4(mapped));
+            }
+            !(address.is_loopback()
+                || address.is_multicast()
+                || address.is_unspecified()
+                || address.is_unique_local()
+                || address.is_unicast_link_local())
+        }
+    }
+}
+
+pub(crate) fn authorize_resolved_target(
+    policy: &dyn NetworkTargetPolicy,
+    hostname: &str,
+    port: u16,
+    addresses: &[SocketAddr],
+) -> Result<(), String> {
+    let mut resolved = addresses.iter().map(SocketAddr::ip).collect::<Vec<_>>();
+    resolved.sort_unstable();
+    resolved.dedup();
+    policy.authorize(hostname, port, &resolved)
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TcpError {
@@ -49,20 +117,50 @@ pub fn tcp_connect_with_resources(
     cancellation: RssCancellationToken,
     deadline: RssDeadline,
 ) -> NativeAsyncPending<Result<RssTcpStream, TcpError>> {
+    tcp_connect_with_policy_and_resources(
+        host,
+        port,
+        Arc::new(AllowAllNetworkTargetPolicy),
+        cancellation,
+        deadline,
+    )
+}
+
+pub fn tcp_connect_with_policy_and_resources(
+    host: &str,
+    port: i64,
+    policy: Arc<dyn NetworkTargetPolicy>,
+    cancellation: RssCancellationToken,
+    deadline: RssDeadline,
+) -> NativeAsyncPending<Result<RssTcpStream, TcpError>> {
     let host = host.to_string();
     spawn_tokio_native(async move {
         if port <= 0 || port > u16::MAX as i64 {
             return Err(TcpError::new("TCP port must be between 1 and 65535"));
         }
-        let addr = format!("{host}:{port}");
+        let port = port as u16;
+        let addresses = tcp_with_controls(
+            tokio::net::lookup_host((host.as_str(), port)),
+            &cancellation,
+            &deadline,
+            "resolve",
+        )
+        .await?
+        .map_err(|error| TcpError::new(format!("TCP target resolution failed: {error}")))?
+        .collect::<Vec<_>>();
+        if addresses.is_empty() {
+            return Err(TcpError::new("TCP target did not resolve to an address"));
+        }
+        authorize_resolved_target(policy.as_ref(), &host, port, &addresses)
+            .map_err(TcpError::new)?;
         let stream = tcp_with_controls(
-            tokio::net::TcpStream::connect(&addr),
+            tokio::net::TcpStream::connect(addresses.as_slice()),
             &cancellation,
             &deadline,
             "connect",
         )
         .await?
-        .map_err(|error| TcpError::new(format!("TCP connect to `{addr}` failed: {error}")))?;
+        .map_err(|error| TcpError::new(format!("TCP connect failed: {error}")))?;
         let (reader, writer) = stream.into_split();
         Ok(RssTcpStream {
             reader: Arc::new(tokio::sync::Mutex::new(reader)),
@@ -283,6 +381,7 @@ async fn tcp_with_controls<T>(
 mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
+    use std::sync::Arc;
     use std::time::Duration;
 
     use crate::Executor;
@@ -314,6 +413,42 @@ mod tests {
             .expect("TCP read should succeed");
         assert_eq!(response, b"pong");
         server.join().expect("server thread should finish");
+    }
+
+    #[test]
+    fn strict_network_policy_rejects_loopback_before_connecting() {
+        let error = match Executor::new().run_pending(super::tcp_connect_with_policy_and_resources(
+            "127.0.0.1",
+            9,
+            Arc::new(super::DenyPrivateNetworkTargetPolicy),
+            crate::cancellation_never(),
+            crate::deadline_after_ms(1_000),
+        )) {
+            Ok(_) => panic!("strict network policy must reject loopback"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            super::tcp_error_message(&error),
+            "network target resolves to a non-public address"
+        );
+    }
+
+    #[test]
+    fn strict_network_policy_rejects_mixed_public_and_private_answers() {
+        let policy = super::DenyPrivateNetworkTargetPolicy;
+        let error = super::authorize_resolved_target(
+            &policy,
+            "mixed.example",
+            443,
+            &[
+                "8.8.8.8:443".parse().expect("public address"),
+                "127.0.0.1:443".parse().expect("loopback address"),
+            ],
+        )
+        .expect_err("one denied answer must reject the target");
+
+        assert_eq!(error, "network target resolves to a non-public address");
     }
 
     #[test]

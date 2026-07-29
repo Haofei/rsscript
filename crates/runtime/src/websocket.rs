@@ -7,6 +7,9 @@ use crate::{
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+
+use crate::socket::{AllowAllNetworkTargetPolicy, NetworkTargetPolicy, authorize_resolved_target};
 
 type WebSocketStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -50,14 +53,75 @@ pub fn websocket_connect_with_resources(
     cancellation: RssCancellationToken,
     deadline: RssDeadline,
 ) -> NativeAsyncPending<Result<RssWebSocket, WebSocketError>> {
+    websocket_connect_with_policy_and_resources(
+        url,
+        Arc::new(AllowAllNetworkTargetPolicy),
+        cancellation,
+        deadline,
+    )
+}
+
+pub fn websocket_connect_with_policy_and_resources(
+    url: &str,
+    policy: Arc<dyn NetworkTargetPolicy>,
+    cancellation: RssCancellationToken,
+    deadline: RssDeadline,
+) -> NativeAsyncPending<Result<RssWebSocket, WebSocketError>> {
     let url = url.to_string();
     spawn_tokio_native(async move {
+        let request = url
+            .as_str()
+            .into_client_request()
+            .map_err(|_| WebSocketError::new("invalid WebSocket URL"))?;
+        let scheme = request
+            .uri()
+            .scheme_str()
+            .ok_or_else(|| WebSocketError::new("WebSocket URL has no scheme"))?;
+        let hostname = request
+            .uri()
+            .host()
+            .ok_or_else(|| WebSocketError::new("WebSocket URL has no host"))?
+            .to_string();
+        let port = request
+            .uri()
+            .port_u16()
+            .unwrap_or(if scheme == "wss" { 443 } else { 80 });
+        let addresses = websocket_with_controls(
+            async {
+                tokio::net::lookup_host((hostname.as_str(), port))
+                    .await
+                    .map(|addresses| addresses.collect::<Vec<_>>())
+                    .map_err(|_| WebSocketError::new("WebSocket connection failed"))
+            },
+            &cancellation,
+            &deadline,
+            "resolve",
+        )
+        .await?;
+        if addresses.is_empty() {
+            return Err(WebSocketError::new(
+                "WebSocket target did not resolve to an address",
+            ));
+        }
+        authorize_resolved_target(policy.as_ref(), &hostname, port, &addresses)
+            .map_err(WebSocketError::new)?;
+        let socket = websocket_with_controls(
+            async {
+                tokio::net::TcpStream::connect(addresses.as_slice())
+                    .await
+                    .map_err(|_| WebSocketError::new("WebSocket connection failed"))
+            },
+            &cancellation,
+            &deadline,
+            "connect",
+        )
+        .await?;
         let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
             .max_message_size(Some(MAX_WEBSOCKET_MESSAGE_BYTES))
             .max_frame_size(Some(MAX_WEBSOCKET_MESSAGE_BYTES));
         let (stream, _) = websocket_with_controls(
             async {
-                tokio_tungstenite::connect_async_with_config(&url, Some(config), false)
+                tokio_tungstenite::client_async_tls_with_config(request, socket, Some(config), None)
                     .await
                     // Connection errors can echo the request URI, including
                     // credentials. Keep the URL out of diagnostics.
@@ -355,6 +419,7 @@ pub fn websocket_close_with_resources(
 mod tests {
     use crate::{Executor, tokio_native_runtime};
     use futures_util::{SinkExt, StreamExt};
+    use std::sync::Arc;
     use std::time::Duration;
     use tokio_tungstenite::tungstenite::Message;
 
@@ -398,6 +463,25 @@ mod tests {
         tokio_native_runtime()
             .block_on(server)
             .expect("server task should finish");
+    }
+
+    #[test]
+    fn strict_network_policy_rejects_loopback_websocket_targets() {
+        let error =
+            match Executor::new().run_pending(super::websocket_connect_with_policy_and_resources(
+                "ws://127.0.0.1:9",
+                Arc::new(crate::DenyPrivateNetworkTargetPolicy),
+                crate::cancellation_never(),
+                crate::deadline_after_ms(1_000),
+            )) {
+                Ok(_) => panic!("strict policy must reject loopback"),
+                Err(error) => error,
+            };
+
+        assert_eq!(
+            super::websocket_error_message(&error),
+            "network target resolves to a non-public address"
+        );
     }
 
     #[test]

@@ -12,11 +12,13 @@ use crate::{RssCancellationToken, cancellation_token_is_cancelled};
 pub const RUNTIME_PROCESS_OUTPUT_CEILING_BYTES: usize = 64 * 1024 * 1024;
 pub const RUNTIME_PROCESS_CONCURRENCY_CEILING: usize = 32;
 pub const RUNTIME_PROCESS_TIMEOUT_CEILING_MS: u64 = 24 * 60 * 60 * 1_000;
+pub const DEFAULT_RUNTIME_PROCESS_TIMEOUT_MS: u64 = 30_000;
 const PROCESS_STREAM_CHANNEL_CAPACITY: usize = 64;
+const PROCESS_CAPTURE_CHANNEL_CAPACITY: usize = 64;
 
-fn process_timeout(timeout_ms: i64) -> Result<Option<Duration>, String> {
+fn process_timeout(timeout_ms: i64) -> Result<Duration, String> {
     if timeout_ms <= 0 {
-        return Ok(None);
+        return Ok(Duration::from_millis(DEFAULT_RUNTIME_PROCESS_TIMEOUT_MS));
     }
     let timeout_ms = u64::try_from(timeout_ms)
         .map_err(|_| "process timeout must be a positive integer".to_string())?;
@@ -26,7 +28,7 @@ fn process_timeout(timeout_ms: i64) -> Result<Option<Duration>, String> {
             RUNTIME_PROCESS_TIMEOUT_CEILING_MS
         ));
     }
-    Ok(Some(Duration::from_millis(timeout_ms)))
+    Ok(Duration::from_millis(timeout_ms))
 }
 
 struct ProcessConcurrency {
@@ -185,10 +187,6 @@ pub fn process_run_stdout_timeout(
     args: &[String],
     timeout_ms: i64,
 ) -> Result<String, String> {
-    if timeout_ms <= 0 {
-        return process_run_stdout(command, args);
-    }
-
     process_run_timeout(command, args, timeout_ms).and_then(|output| {
         if output.status == 0 {
             Ok(output.stdout)
@@ -296,14 +294,12 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
         .args(&request.args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    configure_process_environment(&mut command, &request.env);
     if request.stdin.is_some() {
         command.stdin(std::process::Stdio::piped());
     }
     if let Some(cwd) = &request.cwd {
         command.current_dir(cwd);
-    }
-    for env in &request.env {
-        command.env(&env.name, &env.value);
     }
     apply_default_ramdisk_env(&mut command);
     let mut child = rss_process_guard::spawn_guarded_child(
@@ -361,9 +357,7 @@ pub fn process_stream(request: &ProcessRequest) -> Result<RssStream<ProcessEvent
                     break;
                 }
                 Ok(None) => {
-                    if let Some(timeout) = timeout
-                        && started.elapsed() >= timeout
-                    {
+                    if started.elapsed() >= timeout {
                         let _ = child.terminate();
                         let _ = sender.send(Ok(ProcessEvent {
                             kind: "timeout".to_string(),
@@ -410,24 +404,21 @@ fn process_run_request_with_cancellation(
     let _process_permit = acquire_process_permit(cancellation)?;
 
     let timeout = process_timeout(request.timeout_ms)?;
-    let deadline = timeout.and_then(|duration| Instant::now().checked_add(duration));
-    if timeout.is_some() && deadline.is_none() {
-        return Err("process timeout cannot be represented by the platform clock".to_string());
-    }
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .ok_or_else(|| "process timeout cannot be represented by the platform clock".to_string())?;
     let cap = normalized_process_output_cap(request.output_cap_bytes);
     let mut command = std::process::Command::new(&request.command);
     command
         .args(&request.args)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+    configure_process_environment(&mut command, &request.env);
     if request.stdin.is_some() {
         command.stdin(std::process::Stdio::piped());
     }
     if let Some(cwd) = &request.cwd {
         command.current_dir(cwd);
-    }
-    for env in &request.env {
-        command.env(&env.name, &env.value);
     }
     apply_default_ramdisk_env(&mut command);
     let mut child = rss_process_guard::spawn_guarded_child(
@@ -443,7 +434,7 @@ fn process_run_request_with_cancellation(
         })
     });
 
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = mpsc::sync_channel(PROCESS_CAPTURE_CHANNEL_CAPACITY);
     let capture_budget = Arc::new(AtomicUsize::new(cap));
     let capture_truncated = Arc::new(AtomicBool::new(false));
     let stdout_thread = child.child_mut().stdout.take().map(|stdout| {
@@ -483,9 +474,7 @@ fn process_run_request_with_cancellation(
             let _ = child.terminate();
             break;
         }
-        if let Some(deadline) = deadline
-            && Instant::now() >= deadline
-        {
+        if Instant::now() >= deadline {
             timed_out = true;
             let _ = child.terminate();
             break;
@@ -515,7 +504,7 @@ fn process_run_request_with_cancellation(
         return Err(format!(
             "`{}` timed out after {}ms: {}",
             request.command,
-            request.timeout_ms,
+            timeout.as_millis(),
             process_output_details_from_strings(&output.stdout, &output.stderr)
         ));
     }
@@ -646,7 +635,7 @@ impl ProcessCapture {
 fn spawn_process_reader<R>(
     mut reader: R,
     stderr: bool,
-    sender: mpsc::Sender<ProcessChunk>,
+    sender: mpsc::SyncSender<ProcessChunk>,
     remaining: Arc<AtomicUsize>,
     truncated: Arc<AtomicBool>,
 ) -> std::thread::JoinHandle<std::io::Result<()>>
@@ -679,6 +668,29 @@ where
             }
         }
     })
+}
+
+fn configure_process_environment(command: &mut std::process::Command, requested: &[ProcessEnv]) {
+    const INHERITED_ENV_ALLOWLIST: &[&str] = &[
+        "PATH",
+        "PATHEXT",
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+    ];
+
+    command.env_clear();
+    for name in INHERITED_ENV_ALLOWLIST {
+        if let Some(value) = std::env::var_os(name) {
+            command.env(name, value);
+        }
+    }
+    for env in requested {
+        command.env(&env.name, &env.value);
+    }
 }
 
 fn normalized_process_output_cap(requested: i64) -> usize {
@@ -1068,6 +1080,18 @@ mod tests {
     }
 
     #[test]
+    fn zero_timeout_uses_a_finite_default() {
+        assert_eq!(
+            super::process_timeout(0).expect("default timeout"),
+            std::time::Duration::from_millis(super::DEFAULT_RUNTIME_PROCESS_TIMEOUT_MS)
+        );
+        assert_eq!(
+            super::process_timeout(-1).expect("negative timeout uses default"),
+            std::time::Duration::from_millis(super::DEFAULT_RUNTIME_PROCESS_TIMEOUT_MS)
+        );
+    }
+
+    #[test]
     fn process_run_stdout_async_completes_on_native_runtime() {
         let args = vec!["--version".to_string()];
         let stdout = Executor::new()
@@ -1155,6 +1179,35 @@ mod tests {
         assert!(output.merged.contains("err"));
         assert!(!output.truncated);
         let _ = std::fs::remove_dir_all(cwd);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn process_environment_is_allowlisted_and_explicit_values_are_preserved() {
+        assert!(
+            std::env::var_os("HOME").is_some(),
+            "test requires a parent HOME value"
+        );
+        let request = super::ProcessRequest {
+            command: "sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "printf 'home=%s explicit=%s' \"${HOME-unset}\" \"$RSS_EXPLICIT\"".to_string(),
+            ],
+            cwd: None,
+            stdin: None,
+            env: vec![super::ProcessEnv {
+                name: "RSS_EXPLICIT".to_string(),
+                value: "visible".to_string(),
+            }],
+            timeout_ms: 10_000,
+            merge_stderr: false,
+            output_cap_bytes: 1024,
+        };
+
+        let output = super::process_run_request(&request).expect("child should run");
+
+        assert_eq!(output.stdout, "home=unset explicit=visible");
     }
 
     #[test]
