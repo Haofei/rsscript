@@ -175,6 +175,34 @@ fn register_vm_test_domains_remain_separate_modules() {
             "reg_vm test domain `{domain}` must have its own module"
         );
     }
+
+    let register_window = read(&root.join("crates/rsscript/src/reg_vm/tests/register_window.rs"));
+    let register_window_domains = [
+        "lowering",
+        "translation",
+        "tiering_and_memo",
+        "abi_and_heap",
+        "osr_collections",
+        "closures",
+        "deopt_and_transactions",
+    ];
+    assert!(
+        register_window.lines().count() <= 600,
+        "register_window.rs must remain a helper and composition root"
+    );
+    for domain in register_window_domains {
+        assert!(
+            register_window.contains(&format!("register_window/{domain}.rs")),
+            "register-window composition root is missing `{domain}`"
+        );
+        assert!(
+            root.join(format!(
+                "crates/rsscript/src/reg_vm/tests/register_window/{domain}.rs"
+            ))
+            .is_file(),
+            "register-window test domain `{domain}` must have its own module"
+        );
+    }
 }
 
 #[test]

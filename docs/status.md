@@ -83,7 +83,7 @@ This table records the current implementation batch for the refactoring work in
 | R14 | Register-VM execution boundary decomposition | Complete | Tier selection, execution planning, lowering, and interpretation have independently testable owners |
 | R15 | REIR adapter pipeline decomposition | Complete | Input, traversal, normalization, coverage, and fact projection are separate from bounded evidence construction |
 | R16 | Semantic checker and lowering decomposition | Complete | Call, ownership, effect, closure, and emission responsibilities have stable module boundaries |
-| R17 | Large test-domain decomposition | Planned | Remaining register-window, JIT, and backend suites have independently owned semantic domains |
+| R17 | Large test-domain decomposition | Complete | Remaining register-window, JIT, and backend suites have independently owned semantic domains |
 | R18 | Host capability adapter enforcement | Planned | Canonical filesystem, network, process, and database adapters consume scoped authorized handles |
 | R19 | Revision-scoped LSP index cache | Planned | Semantic indexes are reused only for matching document and package generations |
 
@@ -222,6 +222,13 @@ signature, body, effect, and structural-type lowering; and Rust program,
 expression, ownership, intrinsic, and structural-type emission.
 `SemanticTypeFacts` remains the source for structured lowering, so module
 decomposition does not reintroduce display-string semantic derivation.
+
+R17 turns the remaining register-window and VM-JIT test monoliths into
+composition roots. Register-VM coverage is grouped by lowering, translation,
+tiering/memoization, ABI/heap behavior, OSR collections, closures, and
+deoptimization/transactions. VM-JIT coverage is grouped by host memoization,
+calls/ABI, deoptimization, validation, fuzzing, range proofs, and the sealed
+compile boundary. Architecture tests pin both domain sets.
 
 ## Experimental Status
 
