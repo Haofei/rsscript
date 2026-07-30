@@ -1,3 +1,7 @@
+use std::collections::BTreeMap;
+
+use crate::semantic::ResolvedType;
+
 use super::*;
 
 /// Infer the type of a built-in `Option`/`Result` variant constructor call so an
@@ -123,7 +127,7 @@ fn infer_signature_return_type(
         .iter()
         .map(String::as_str)
         .collect::<HashSet<_>>();
-    let mut substitutions = HashMap::new();
+    let mut substitutions = BTreeMap::new();
     collect_callee_type_substitutions(signature, callee, &generic_params, &mut substitutions);
     collect_namespace_type_substitutions(hir, callee, &generic_params, &mut substitutions);
     collect_receiver_type_substitutions(
@@ -146,7 +150,11 @@ fn infer_signature_return_type(
     if substitutions.is_empty() {
         None
     } else {
-        Some(substitute_type_params(return_type, &substitutions))
+        Some(
+            ResolvedType::from_display(return_type)
+                .substitute(&substitutions)
+                .to_string(),
+        )
     }
 }
 
@@ -154,7 +162,7 @@ fn collect_callee_type_substitutions(
     signature: &FunctionSig,
     callee: &Callee,
     generic_params: &HashSet<&str>,
-    substitutions: &mut HashMap<String, String>,
+    substitutions: &mut BTreeMap<String, ResolvedType>,
 ) {
     let type_args = match callee {
         Callee::Name(name) | Callee::Qualified { name, .. } => type_arg_names(name),
@@ -167,7 +175,7 @@ fn collect_callee_type_substitutions(
         if generic_params.contains(param.as_str()) {
             substitutions
                 .entry(param.to_string())
-                .or_insert_with(|| actual.to_string());
+                .or_insert_with(|| ResolvedType::from_display(actual));
         }
     }
 }
@@ -176,7 +184,7 @@ fn collect_namespace_type_substitutions(
     hir: &Hir,
     callee: &Callee,
     generic_params: &HashSet<&str>,
-    substitutions: &mut HashMap<String, String>,
+    substitutions: &mut BTreeMap<String, ResolvedType>,
 ) {
     let Callee::Qualified { namespace, .. } = callee else {
         return;
@@ -200,7 +208,7 @@ fn collect_namespace_type_substitutions(
         if generic_params.contains(param) {
             substitutions
                 .entry(param.to_string())
-                .or_insert_with(|| actual.to_string());
+                .or_insert_with(|| ResolvedType::from_display(actual));
         }
     }
 }
@@ -211,7 +219,7 @@ fn collect_receiver_type_substitutions(
     callee: &Callee,
     value_types: &HashMap<String, String>,
     generic_params: &HashSet<&str>,
-    substitutions: &mut HashMap<String, String>,
+    substitutions: &mut BTreeMap<String, ResolvedType>,
 ) {
     let Callee::ReceiverCall { receiver, .. } = callee else {
         return;
@@ -222,9 +230,8 @@ fn collect_receiver_type_substitutions(
     let Some(actual_type) = infer_hir_expr_type(hir, receiver, value_types) else {
         return;
     };
-    collect_type_substitutions(
-        &receiver_param.type_name,
-        &actual_type,
+    ResolvedType::from_display(&receiver_param.type_name).collect_substitutions(
+        &ResolvedType::from_display(&actual_type),
         generic_params,
         substitutions,
     );
@@ -236,7 +243,7 @@ fn collect_arg_type_substitutions(
     args: &[CallArg],
     value_types: &HashMap<String, String>,
     generic_params: &HashSet<&str>,
-    substitutions: &mut HashMap<String, String>,
+    substitutions: &mut BTreeMap<String, ResolvedType>,
 ) {
     for (index, arg) in args.iter().enumerate() {
         let Some(param) = arg
@@ -259,7 +266,11 @@ fn collect_arg_type_substitutions(
             };
             (param.type_name.clone(), actual_type)
         };
-        collect_type_substitutions(&pattern_type, &actual_type, generic_params, substitutions);
+        ResolvedType::from_display(&pattern_type).collect_substitutions(
+            &ResolvedType::from_display(&actual_type),
+            generic_params,
+            substitutions,
+        );
     }
 }
 
@@ -336,54 +347,6 @@ fn infer_arg_expr_type(
     }
 }
 
-fn collect_type_substitutions(
-    pattern: &str,
-    actual: &str,
-    generic_params: &HashSet<&str>,
-    substitutions: &mut HashMap<String, String>,
-) {
-    if generic_params.contains(pattern) {
-        substitutions
-            .entry(pattern.to_string())
-            .or_insert_with(|| actual.to_string());
-        return;
-    }
-
-    if is_noescape_fn_type(pattern) && is_noescape_fn_type(actual) {
-        for (pattern_param, actual_param) in noescape_param_types(pattern)
-            .into_iter()
-            .zip(noescape_param_types(actual))
-        {
-            collect_type_substitutions(pattern_param, actual_param, generic_params, substitutions);
-        }
-        if let (Some(pattern_return), Some(actual_return)) =
-            (noescape_return_type(pattern), noescape_return_type(actual))
-        {
-            collect_type_substitutions(
-                pattern_return,
-                actual_return,
-                generic_params,
-                substitutions,
-            );
-        }
-        return;
-    }
-
-    let Some(pattern_args) = type_arg_names(pattern) else {
-        return;
-    };
-    let Some(actual_args) = type_arg_names(actual) else {
-        return;
-    };
-    if type_root_name(pattern) != type_root_name(actual) || pattern_args.len() != actual_args.len()
-    {
-        return;
-    }
-    for (pattern_arg, actual_arg) in pattern_args.into_iter().zip(actual_args) {
-        collect_type_substitutions(pattern_arg, actual_arg, generic_params, substitutions);
-    }
-}
-
 /// The type of `field` accessed on a value of type `base_type`, with the type's
 /// generic parameters replaced by `base_type`'s concrete arguments — so `item0`
 /// on `__Tuple2<Int, String>` resolves to `Int`, not the declared parameter `A`.
@@ -396,40 +359,15 @@ pub(super) fn substituted_field_type(
     if args.is_empty() || type_info.type_params.is_empty() {
         return field.type_name.clone();
     }
-    let substitutions: HashMap<String, String> = type_info
+    let substitutions: BTreeMap<String, ResolvedType> = type_info
         .type_params
         .iter()
         .cloned()
-        .zip(args.into_iter().map(str::to_string))
+        .zip(args.into_iter().map(ResolvedType::from_display))
         .collect();
-    substitute_type_params(&field.type_name, &substitutions)
-}
-
-fn substitute_type_params(type_name: &str, substitutions: &HashMap<String, String>) -> String {
-    if let Some(replacement) = substitutions.get(type_name) {
-        return replacement.clone();
-    }
-    if let Some(return_ty) = noescape_return_type(type_name) {
-        let params = noescape_param_types(type_name)
-            .into_iter()
-            .map(|param| substitute_type_params(param, substitutions))
-            .collect::<Vec<_>>()
-            .join(", ");
-        return format!(
-            "noescape Fn({params}) -> {}",
-            substitute_type_params(return_ty, substitutions)
-        );
-    }
-    let Some(args) = type_arg_names(type_name) else {
-        return type_name.to_string();
-    };
-    let root = type_root_name(type_name);
-    let args = args
-        .into_iter()
-        .map(|arg| substitute_type_params(arg, substitutions))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("{root}<{args}>")
+    ResolvedType::from_display(&field.type_name)
+        .substitute(&substitutions)
+        .to_string()
 }
 
 use crate::text_util::builtin_generic_type_params;
@@ -458,27 +396,6 @@ fn noescape_return_type(type_name: &str) -> Option<&str> {
         .trim()
         .strip_prefix("noescape ")
         .and_then(fn_return_type)
-}
-
-fn is_noescape_fn_type(type_name: &str) -> bool {
-    type_name
-        .strip_prefix("noescape Fn(")
-        .and_then(|rest| rest.split_once(')'))
-        .is_some()
-}
-
-fn noescape_param_types(type_name: &str) -> Vec<&str> {
-    let Some(params) = type_name
-        .strip_prefix("noescape Fn(")
-        .and_then(|rest| rest.split_once(')').map(|(params, _)| params.trim()))
-    else {
-        return Vec::new();
-    };
-    if params.is_empty() {
-        Vec::new()
-    } else {
-        split_top_level_type_args(params)
-    }
 }
 
 fn result_ok_type(type_name: &str) -> Option<String> {
@@ -588,7 +505,9 @@ pub(super) fn match_pattern_binding_types(
             // by index.
             let mut result = Vec::new();
             for (binding, field_type) in bindings.iter().zip(field_types.iter()) {
-                let field_type_name = substitute_type_params(&field_type.type_name, &substitutions);
+                let field_type_name = ResolvedType::from_display(&field_type.type_name)
+                    .substitute(&substitutions)
+                    .to_string();
                 result.extend(match_pattern_binding_types(
                     hir,
                     binding,
@@ -660,10 +579,10 @@ pub(super) fn match_pattern_binding_types(
 /// Build a substitution from a generic type's declared parameters to the
 /// concrete arguments in `value_type` (`Pair<Int, Int>` -> `{A: Int, B: Int}`),
 /// so match-bound fields carry their resolved element types.
-fn binding_substitutions(hir: &Hir, value_type: &str) -> HashMap<String, String> {
+fn binding_substitutions(hir: &Hir, value_type: &str) -> BTreeMap<String, ResolvedType> {
     let args = type_arg_names(value_type).unwrap_or_default();
     if args.is_empty() {
-        return HashMap::new();
+        return BTreeMap::new();
     }
     let root = type_root_name(value_type);
     let params = hir
@@ -676,7 +595,7 @@ fn binding_substitutions(hir: &Hir, value_type: &str) -> HashMap<String, String>
         .unwrap_or_default();
     params
         .into_iter()
-        .zip(args.into_iter().map(String::from))
+        .zip(args.into_iter().map(ResolvedType::from_display))
         .collect()
 }
 
@@ -684,7 +603,7 @@ fn collect_struct_pattern_binding_types(
     hir: &Hir,
     fields: &[crate::syntax::ast::MatchFieldPattern],
     field_types: &[FieldInfo],
-    substitutions: &HashMap<String, String>,
+    substitutions: &BTreeMap<String, ResolvedType>,
 ) -> Vec<(String, String)> {
     let mut bindings = Vec::new();
     for field in fields.iter().filter(|field| !field.ignored) {
@@ -694,7 +613,9 @@ fn collect_struct_pattern_binding_types(
         else {
             continue;
         };
-        let field_type_name = substitute_type_params(&field_type.type_name, substitutions);
+        let field_type_name = ResolvedType::from_display(&field_type.type_name)
+            .substitute(substitutions)
+            .to_string();
         if let Some(pattern) = &field.pattern {
             bindings.extend(match_pattern_binding_types(
                 hir,

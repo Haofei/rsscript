@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostic::Span;
+use crate::semantic::{ResolvedType, SemanticTypeFacts};
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, Expr, FieldDecl, ForStmt, GenericParam, Item,
     LetStmt, MatchPattern, MatchStmt, Param, Program, Stmt, TypeKind, TypeRef,
@@ -12,6 +13,7 @@ use super::types::{LoweredRust, RustSourceMapEntry};
 
 pub(super) struct RustLowerer<'a> {
     pub(super) program: &'a Program,
+    pub(super) semantic_types: Option<&'a SemanticTypeFacts>,
     pub(super) type_kinds: BTreeMap<String, TypeKind>,
     pub(super) type_fields: BTreeMap<String, Vec<FieldDecl>>,
     pub(super) type_params: BTreeMap<String, Vec<String>>,
@@ -172,6 +174,7 @@ impl<'a> RustLowerer<'a> {
 
         Self {
             program,
+            semantic_types: None,
             type_kinds,
             type_fields,
             type_params,
@@ -203,6 +206,55 @@ impl<'a> RustLowerer<'a> {
             call_temp_counter: 0,
             lowering_default: false,
         }
+    }
+
+    pub(super) fn new_validated(
+        program: &'a Program,
+        semantic_types: &'a SemanticTypeFacts,
+        native_bindings: BTreeMap<String, String>,
+        interface_programs: &[Program],
+    ) -> Self {
+        let mut lowerer = Self::new(program, native_bindings, interface_programs);
+        let span = Span {
+            file: "<semantic-type>".to_string(),
+            line: 1,
+            column: 1,
+            length: 1,
+        };
+        lowerer
+            .function_return_types
+            .extend(semantic_types.functions().filter_map(|(name, facts)| {
+                facts.return_type.map(|return_type| {
+                    (
+                        name.to_string(),
+                        semantic_types.arena().get(return_type).to_type_ref(&span),
+                    )
+                })
+            }));
+        lowerer.function_type_params.extend(
+            semantic_types
+                .functions()
+                .map(|(name, facts)| (name.to_string(), facts.type_parameters.to_vec())),
+        );
+        lowerer
+            .function_param_types
+            .extend(semantic_types.functions().map(|(name, facts)| {
+                (
+                    name.to_string(),
+                    facts
+                        .parameters
+                        .iter()
+                        .map(|(parameter, ty)| {
+                            (
+                                parameter.clone(),
+                                semantic_types.arena().get(*ty).to_type_ref(&span),
+                            )
+                        })
+                        .collect(),
+                )
+            }));
+        lowerer.semantic_types = Some(semantic_types);
+        lowerer
     }
 
     pub(super) fn lower(mut self) -> LoweredRust {
@@ -3021,8 +3073,22 @@ impl<'a> RustLowerer<'a> {
             column: 1,
             length: 1,
         };
-        let ty = self.canonical_type_ref(&type_ref_from_display(type_name, &span));
+        let ty = self.canonical_type_ref(&ResolvedType::from_display(type_name).to_type_ref(&span));
         let root = type_root_name(&ty.name);
+        if let Some(semantic_types) = self.semantic_types
+            && let Some(type_facts) = semantic_types.named_type(root)
+        {
+            let field = type_facts
+                .fields
+                .iter()
+                .find(|(name, _)| name == field_name)
+                .map(|(_, ty)| semantic_types.arena().get(*ty).to_type_ref(&span))?;
+            return Some(substitute_generic_type(
+                &field,
+                &type_facts.type_parameters,
+                &ty.args,
+            ));
+        }
         let field = self
             .type_fields
             .get(root)?

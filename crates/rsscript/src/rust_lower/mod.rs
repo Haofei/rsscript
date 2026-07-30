@@ -221,9 +221,8 @@ pub fn lower_source_to_rust_with_map(
         return Err(lowering_diagnostics);
     }
     Ok(lower_validated_program_to_rust_with_map(
-        program,
+        database,
         BTreeMap::new(),
-        database.interface_programs(),
     ))
 }
 
@@ -301,11 +300,7 @@ pub fn lower_sources_to_rust_package_with_options(
     if !lowering_diagnostics.is_empty() {
         return Err(lowering_diagnostics);
     }
-    let lowered = lower_validated_program_to_rust_with_map(
-        program,
-        native_bindings,
-        database.interface_programs(),
-    );
+    let lowered = lower_validated_program_to_rust_with_map(database, native_bindings);
     let package_name = cargo_package_name(package_name);
     let native_dependency_toml = native_dependencies
         .iter()
@@ -443,11 +438,16 @@ fn lower_program_to_rust_with_map_with_native_bindings(
 }
 
 fn lower_validated_program_to_rust_with_map(
-    program: &Program,
+    database: &crate::semantic::SemanticDatabase,
     native_bindings: BTreeMap<String, String>,
-    interface_programs: &[Program],
 ) -> LoweredRust {
-    RustLowerer::new(program, native_bindings, interface_programs).lower()
+    RustLowerer::new_validated(
+        database.program(),
+        database.types(),
+        native_bindings,
+        database.interface_programs(),
+    )
+    .lower()
 }
 
 #[cfg(test)]
@@ -456,6 +456,28 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{GeneratedRustPackage, write_generated_rust_package};
+
+    #[test]
+    fn validated_lowering_uses_structural_generic_signature_facts() {
+        let source = r#"
+features: local
+
+fn choose<U, W>(left: read U, right: take W) -> W {
+    return right
+}
+
+fn main() -> Int {
+    local right = 2
+    return choose(left: read 1, right: take right)
+}
+"#;
+        let rust = super::lower_source_to_rust("structural-lowering.rss", source)
+            .expect("arbitrary generic parameter names should lower");
+
+        assert!(rust.contains("fn choose<U: Clone, W: Clone>"), "{rust}");
+        assert!(rust.contains("-> W"), "{rust}");
+        assert!(rust.contains("choose(&(1i64), right)"), "{rust}");
+    }
 
     #[test]
     fn generated_package_write_skips_unchanged_files() {

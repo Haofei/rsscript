@@ -4,6 +4,10 @@ use crate::diagnostic::Diagnostic;
 use crate::hir::Hir;
 use crate::syntax::ast::Program;
 
+#[path = "semantic_types.rs"]
+mod semantic_types;
+pub(crate) use semantic_types::{ResolvedType, SemanticTypeFacts};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrontendStopReason {
     SourceBytes,
@@ -83,6 +87,7 @@ pub struct SemanticDatabase {
     program: Program,
     interface_programs: Vec<Program>,
     hir: Hir,
+    types: SemanticTypeFacts,
 }
 
 impl SemanticDatabase {
@@ -94,6 +99,7 @@ impl SemanticDatabase {
         interface_programs: Vec<Program>,
         hir: Hir,
     ) -> Self {
+        let types = SemanticTypeFacts::from_programs(&program, &interface_programs);
         Self {
             sources,
             interfaces,
@@ -101,6 +107,7 @@ impl SemanticDatabase {
             program,
             interface_programs,
             hir,
+            types,
         }
     }
 
@@ -130,6 +137,14 @@ impl SemanticDatabase {
 
     pub fn hir(&self) -> &Hir {
         &self.hir
+    }
+
+    pub(crate) fn types(&self) -> &SemanticTypeFacts {
+        &self.types
+    }
+
+    pub fn interned_type_count(&self) -> usize {
+        self.types.arena().len()
     }
 }
 
@@ -237,5 +252,49 @@ mod tests {
                 .iter()
                 .any(|diagnostic| diagnostic.severity.is_error())
         );
+    }
+
+    #[test]
+    fn semantic_database_interns_shared_signature_and_field_types() {
+        let source = r#"
+struct Holder<U> {
+    value: U
+}
+
+fn first<U, W>(left: read U, right: read W) -> U {
+    return left
+}
+
+fn main() -> Unit {
+    let value: Int = first(left: read 1, right: read "unused")
+    return Unit
+}
+"#;
+        let validated =
+            crate::analyzer::validate_source("structural-types.rss", source).expect("valid source");
+        let database = validated.database();
+        let types = database.types();
+        let first = types
+            .functions()
+            .find(|(name, _)| *name == "first")
+            .map(|(_, facts)| facts)
+            .expect("first signature facts");
+        let holder = types.named_type("Holder").expect("Holder type facts");
+
+        assert_eq!(first.type_parameters.as_ref(), ["U", "W"]);
+        assert_eq!(types.arena().get(first.parameters[0].1).to_string(), "U");
+        assert_eq!(types.arena().get(first.parameters[1].1).to_string(), "W");
+        assert_eq!(
+            first
+                .return_type
+                .map(|ty| types.arena().get(ty).to_string())
+                .as_deref(),
+            Some("U")
+        );
+        assert_eq!(
+            first.parameters[0].1, holder.fields[0].1,
+            "structurally identical U facts must share one TypeId"
+        );
+        assert!(database.interned_type_count() >= 3);
     }
 }

@@ -548,36 +548,3 @@ impl RustLowerer<'_> {
         normalized
     }
 }
-
-fn substitute_type_ref(
-    ty: &TypeRef,
-    substitutions: &std::collections::BTreeMap<String, TypeRef>,
-) -> TypeRef {
-    if ty.args.is_empty()
-        && ty.fn_params.is_empty()
-        && ty.fn_return.is_none()
-        && let Some(replacement) = substitutions.get(&ty.name)
-    {
-        let mut replacement = replacement.clone();
-        replacement.is_fresh |= ty.is_fresh;
-        replacement.is_noescape |= ty.is_noescape;
-        replacement.is_owned |= ty.is_owned;
-        return replacement;
-    }
-    let mut substituted = ty.clone();
-    substituted.args = ty
-        .args
-        .iter()
-        .map(|argument| substitute_type_ref(argument, substitutions))
-        .collect();
-    substituted.fn_params = ty
-        .fn_params
-        .iter()
-        .map(|parameter| substitute_type_ref(parameter, substitutions))
-        .collect();
-    substituted.fn_return = ty
-        .fn_return
-        .as_deref()
-        .map(|return_type| Box::new(substitute_type_ref(return_type, substitutions)));
-    substituted
-}

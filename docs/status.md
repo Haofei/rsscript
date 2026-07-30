@@ -50,7 +50,6 @@ host execution into isolation.
 
 ## Open Maintainability Work
 
-- Replace string-based generic type substitution.
 - Cache raw source indexes by LSP document revision; the checked semantic
   database intentionally stores semantic/desugared programs.
 - Replace remaining global registries with explicit owner/session lifetimes.
@@ -74,6 +73,12 @@ This table records the current implementation batch for the refactoring work in
 | R4 | LSP, REIR, runtime, analyzer, package-native, VM, and JIT decomposition | Complete | Modules are split around tested state transitions without behavior changes |
 | R5 | Public API contraction and explicit facades | Complete | Broad glob exports and duplicate compatibility entrypoints are removed |
 | R6 | Out-of-process native, JIT, and GPU execution | Complete | Untrusted execution uses killable workers with bounded IPC and OS policy |
+| R7 | Interned structural type semantics | Complete | Semantic signatures and fields use shared structural facts; generic substitution no longer depends on parameter-name heuristics |
+| R8 | VM/JIT invariant boundary decomposition | Complete | Validation, executable memory, ABI, optimization, and deoptimization boundaries are independently testable |
+| R9 | Explicit service ownership and session lifetimes | In Progress | Remaining process-global registries move behind explicit contexts with deterministic shutdown |
+| R10 | Opaque host capability handles | Pending | Restricted APIs no longer accept ambient paths, endpoints, executables, or database authority |
+| R11 | REIR adapter convergence | Complete | Adapters share bounded evidence construction, provenance, and explicit unknown coverage |
+| R12 | Test-domain organization | Pending | Large test aggregations are split by semantic domain without reducing coverage |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -142,6 +147,13 @@ private filesystem, explicit read-only inputs, and strict process limits.
 Unsupported launchers and platforms fail closed. Metal transport and worker
 dispatch are complete, but untrusted Metal execution remains unavailable until
 an equivalent verified macOS launcher exists.
+
+R7 adds an interned `TypeId`/`ResolvedType` arena owned by
+`SemanticDatabase`. Function signatures and declared fields are captured once
+from checked syntax and shared with validated Rust lowering. HIR generic
+inference now performs recursive substitution over structural types, including
+arbitrary declared parameter names such as `U` and `W`; rendered type strings
+remain compatibility projections at diagnostics and emission boundaries.
 
 ## Experimental Status
 
