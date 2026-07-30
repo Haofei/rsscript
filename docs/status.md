@@ -75,7 +75,7 @@ This table records the current implementation batch for the refactoring work in
 | R6 | Out-of-process native, JIT, and GPU execution | Complete | Untrusted execution uses killable workers with bounded IPC and OS policy |
 | R7 | Interned structural type semantics | Complete | Semantic signatures and fields use shared structural facts; generic substitution no longer depends on parameter-name heuristics |
 | R8 | VM/JIT invariant boundary decomposition | Complete | Validation, executable memory, ABI, optimization, and deoptimization boundaries are independently testable |
-| R9 | Explicit service ownership and session lifetimes | In Progress | Remaining process-global registries move behind explicit contexts with deterministic shutdown |
+| R9 | Explicit service ownership and session lifetimes | Complete | Stateful runtime and native services have explicit owners, instance isolation, and deterministic close/shutdown paths |
 | R10 | Opaque host capability handles | Pending | Restricted APIs no longer accept ambient paths, endpoints, executables, or database authority |
 | R11 | REIR adapter convergence | Complete | Adapters share bounded evidence construction, provenance, and explicit unknown coverage |
 | R12 | Test-domain organization | Pending | Large test aggregations are split by semantic domain without reducing coverage |
@@ -154,6 +154,13 @@ from checked syntax and shared with validated Rust lowering. HIR generic
 inference now performs recursive substitution over structural types, including
 arbitrary declared parameter names such as `U` and `W`; rendered type strings
 remain compatibility projections at diagnostics and emission boundaries.
+
+R9 introduces explicit owners for SQLite and SQLx adapters, native-library
+loading, Metal dispatch, process concurrency, HTTP, and the Tokio-backed runtime
+services. Instance APIs own caches, limits, and shutdown; compatibility free
+functions delegate to a default instance but no longer contain the core state
+machine. `OperationContext` can carry an explicit `RuntimeServices` owner, so
+embedded executions and tests can use independent lifecycle and policy state.
 
 ## Experimental Status
 
