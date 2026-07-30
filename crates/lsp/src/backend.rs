@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use rsscript::{document_symbols, explain_diagnostic_code, format_source, symbol_index};
+use rsscript::{document_symbols, explain_diagnostic_code, format_source};
 use serde_json::json;
 use tokio::sync::Semaphore;
 use tower_lsp::jsonrpc::Result;
@@ -442,8 +442,10 @@ impl LanguageServer for Backend {
         }
 
         let (line, column) = char_position(&document.text, position);
-        let index = symbol_index(uri.path(), &document.text);
-        let Some(symbol) = hover_symbol_info(&uri, &documents, &index, line, column) else {
+        let index = document.symbol_index(uri.path());
+        let Some(symbol) =
+            hover_symbol_info(&uri, &documents, &index, line, column, &self.package_inputs)
+        else {
             return Ok(None);
         };
         let markdown = symbol_hover_markdown(&symbol);
@@ -468,7 +470,7 @@ impl LanguageServer for Backend {
         };
 
         let (line, column) = char_position(&document.text, position);
-        let index = symbol_index(uri.path(), &document.text);
+        let index = document.symbol_index(uri.path());
         if let Some(span) = index.definition_at(line, column) {
             return Ok(Some(GotoDefinitionResponse::Scalar(Location {
                 uri: uri.clone(),
@@ -479,7 +481,8 @@ impl LanguageServer for Backend {
         let Some(lookup) = index.lookup_at(line, column) else {
             return Ok(None);
         };
-        let workspace_documents = workspace_documents_for_uri(&uri, &documents);
+        let workspace_documents =
+            workspace_documents_for_uri(&uri, &documents, &self.package_inputs);
         let Some(location) = workspace_definition_location(&workspace_documents, &lookup) else {
             return Ok(None);
         };
@@ -495,6 +498,7 @@ impl LanguageServer for Backend {
             position,
             &documents,
             params.context.include_declaration,
+            &self.package_inputs,
         );
         if locations.is_empty() {
             return Ok(None);
@@ -536,7 +540,13 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
 
-        let locations = reference_locations_for_position(&uri, position, &documents, true);
+        let locations = reference_locations_for_position(
+            &uri,
+            position,
+            &documents,
+            true,
+            &self.package_inputs,
+        );
         let highlights = locations
             .into_iter()
             .filter(|location| location.uri == uri)
@@ -547,7 +557,7 @@ impl LanguageServer for Backend {
             .collect::<Vec<_>>();
         if highlights.is_empty() {
             let (line, column) = char_position(&document.text, position);
-            let index = symbol_index(uri.path(), &document.text);
+            let index = document.symbol_index(uri.path());
             let Some(symbol) = index.symbol_at(line, column) else {
                 return Ok(None);
             };
@@ -586,7 +596,7 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         Ok(Some(SemanticTokensResult::Tokens(
-            semantic_tokens_for_source(uri.path(), &document.text),
+            semantic_tokens_for_index(&document.text, &document.symbol_index(uri.path())),
         )))
     }
 
@@ -597,7 +607,8 @@ impl LanguageServer for Backend {
         let uri = params.text_document_position_params.text_document.uri;
         let position = params.text_document_position_params.position;
         let documents = snapshot_documents(&self.documents).await;
-        let workspace_documents = workspace_documents_for_uri(&uri, &documents);
+        let workspace_documents =
+            workspace_documents_for_uri(&uri, &documents, &self.package_inputs);
         let Some(item) = call_hierarchy_item_at(&uri, position, &documents, &workspace_documents)
         else {
             return Ok(None);
@@ -610,7 +621,8 @@ impl LanguageServer for Backend {
         params: CallHierarchyIncomingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
         let documents = snapshot_documents(&self.documents).await;
-        let workspace_documents = workspace_documents_for_uri(&params.item.uri, &documents);
+        let workspace_documents =
+            workspace_documents_for_uri(&params.item.uri, &documents, &self.package_inputs);
         let calls = incoming_call_hierarchy(&workspace_documents, &params.item);
         if calls.is_empty() {
             return Ok(None);
@@ -623,7 +635,8 @@ impl LanguageServer for Backend {
         params: CallHierarchyOutgoingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>> {
         let documents = snapshot_documents(&self.documents).await;
-        let workspace_documents = workspace_documents_for_uri(&params.item.uri, &documents);
+        let workspace_documents =
+            workspace_documents_for_uri(&params.item.uri, &documents, &self.package_inputs);
         let calls = outgoing_call_hierarchy(&workspace_documents, &params.item);
         if calls.is_empty() {
             return Ok(None);
@@ -638,8 +651,8 @@ impl LanguageServer for Backend {
         let query = params.query.trim().to_lowercase();
         let documents = snapshot_documents(&self.documents).await;
         let mut symbols = Vec::new();
-        for document in workspace_documents(&documents) {
-            let index = symbol_index(document.uri.path(), &document.text);
+        for document in workspace_documents(&documents, &self.package_inputs) {
+            let index = document.symbol_index();
             for definition in index.definitions() {
                 if !query.is_empty() && !definition.name.to_lowercase().contains(&query) {
                     continue;
@@ -664,7 +677,8 @@ impl LanguageServer for Backend {
         let Some(context) = call_context_at(&document.text, position) else {
             return Ok(None);
         };
-        let workspace_documents = workspace_documents_for_uri(&uri, &documents);
+        let workspace_documents =
+            workspace_documents_for_uri(&uri, &documents, &self.package_inputs);
         let Some(definition) = workspace_function_definition(&workspace_documents, &context.callee)
         else {
             return Ok(None);
@@ -691,6 +705,7 @@ impl LanguageServer for Backend {
             position,
             &params.new_name,
             &documents,
+            &self.package_inputs,
         ))
     }
 

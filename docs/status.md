@@ -85,7 +85,7 @@ This table records the current implementation batch for the refactoring work in
 | R16 | Semantic checker and lowering decomposition | Complete | Call, ownership, effect, closure, and emission responsibilities have stable module boundaries |
 | R17 | Large test-domain decomposition | Complete | Remaining register-window, JIT, and backend suites have independently owned semantic domains |
 | R18 | Host capability adapter enforcement | Planned | Canonical filesystem, network, process, and database adapters consume scoped authorized handles |
-| R19 | Revision-scoped LSP index cache | Planned | Semantic indexes are reused only for matching document and package generations |
+| R19 | Revision-scoped LSP index cache | Complete | Semantic indexes are reused only for matching document and package generations |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -229,6 +229,13 @@ tiering/memoization, ABI/heap behavior, OSR collections, closures, and
 deoptimization/transactions. VM-JIT coverage is grouped by host memoization,
 calls/ABI, deoptimization, validation, fuzzing, range proofs, and the sealed
 compile boundary. Architecture tests pin both domain sets.
+
+R19 adds an immutable source-index cache keyed by document revision and package
+semantic generation. Editing, desynchronizing, saving, or invalidating package
+inputs advances the relevant cache identity; work started against an old
+generation cannot publish back into the cache. Hover, navigation, references,
+rename, call hierarchy, workspace symbols, and semantic tokens share the same
+index while diagnostics retain their existing cancellation and debounce model.
 
 ## Experimental Status
 

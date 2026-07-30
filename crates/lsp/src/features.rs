@@ -119,8 +119,16 @@ pub(crate) fn semantic_tokens_legend() -> SemanticTokensLegend {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn semantic_tokens_for_source(path: &str, source: &str) -> SemanticTokens {
     let index = symbol_index(path, source);
+    semantic_tokens_for_index(source, &index)
+}
+
+pub(crate) fn semantic_tokens_for_index(
+    source: &str,
+    index: &rsscript::SymbolIndex,
+) -> SemanticTokens {
     let mut raw = Vec::new();
     for definition in index.definitions() {
         let span = semantic_definition_span(source, definition);

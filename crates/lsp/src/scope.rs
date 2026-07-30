@@ -20,7 +20,7 @@ pub(crate) fn workspace_definition_location(
     lookup: &SymbolLookup,
 ) -> Option<Location> {
     documents.iter().find_map(|document| {
-        let index = symbol_index(document.uri.path(), &document.text);
+        let index = document.symbol_index();
         index
             .definitions()
             .iter()
@@ -38,6 +38,7 @@ pub(crate) fn hover_symbol_info(
     index: &rsscript::SymbolIndex,
     line: usize,
     column: usize,
+    package_inputs: &PackageInputCache,
 ) -> Option<SymbolInfo> {
     let symbol = index.symbol_at(line, column)?;
     if symbol.detail.is_some() {
@@ -47,7 +48,7 @@ pub(crate) fn hover_symbol_info(
     if lookup.local_definition.is_some() {
         return Some(symbol);
     }
-    let workspace_documents = workspace_documents_for_uri(uri, open_documents);
+    let workspace_documents = workspace_documents_for_uri(uri, open_documents, package_inputs);
     workspace_symbol_info(&workspace_documents, &lookup).or(Some(symbol))
 }
 
@@ -56,7 +57,7 @@ pub(crate) fn workspace_symbol_info(
     lookup: &SymbolLookup,
 ) -> Option<SymbolInfo> {
     documents.iter().find_map(|document| {
-        let index = symbol_index(document.uri.path(), &document.text);
+        let index = document.symbol_index();
         index
             .definitions()
             .iter()
@@ -160,7 +161,7 @@ pub(crate) fn workspace_function_definition(
     callee: &str,
 ) -> Option<Definition> {
     documents.iter().find_map(|document| {
-        let index = symbol_index(document.uri.path(), &document.text);
+        let index = document.symbol_index();
         index
             .definitions()
             .iter()
@@ -179,7 +180,7 @@ pub(crate) fn call_hierarchy_item_at(
 ) -> Option<CallHierarchyItem> {
     let document = open_documents.get(uri)?;
     let (line, column) = char_position(&document.text, position);
-    let index = symbol_index(uri.path(), &document.text);
+    let index = document.symbol_index(uri.path());
     if let Some(symbol) = index.symbol_at(line, column)
         && symbol.kind == RssSymbolKind::Function
     {
@@ -201,7 +202,7 @@ pub(crate) fn incoming_call_hierarchy(
     let mut calls_by_function: HashMap<(Url, String), (CallHierarchyItem, Vec<Range>)> =
         HashMap::new();
     for document in documents {
-        let index = symbol_index(document.uri.path(), &document.text);
+        let index = document.symbol_index();
         for reference in index
             .references()
             .iter()
@@ -242,7 +243,7 @@ pub(crate) fn outgoing_call_hierarchy(
     let Some(document) = documents.iter().find(|document| document.uri == item.uri) else {
         return Vec::new();
     };
-    let index = symbol_index(document.uri.path(), &document.text);
+    let index = document.symbol_index();
     let Some(caller) = index
         .definitions()
         .iter()
@@ -303,7 +304,7 @@ pub(crate) fn find_function_definition(
     name: &str,
 ) -> Option<Definition> {
     documents.iter().find_map(|document| {
-        let index = symbol_index(document.uri.path(), &document.text);
+        let index = document.symbol_index();
         index
             .definitions()
             .iter()
@@ -319,7 +320,7 @@ pub(crate) fn find_function_definition_with_document<'a>(
     name: &str,
 ) -> Option<(&'a WorkspaceDocument, Definition)> {
     documents.iter().find_map(|document| {
-        let index = symbol_index(document.uri.path(), &document.text);
+        let index = document.symbol_index();
         index
             .definitions()
             .iter()
@@ -455,7 +456,7 @@ pub(crate) fn workspace_reference_locations(
 ) -> Vec<Location> {
     let mut locations = Vec::new();
     for document in documents {
-        let index = symbol_index(document.uri.path(), &document.text);
+        let index = document.symbol_index();
         if include_declaration {
             for definition in index
                 .definitions()
@@ -487,12 +488,13 @@ pub(crate) fn reference_locations_for_position(
     position: Position,
     open_documents: &HashMap<Url, Document>,
     include_declaration: bool,
+    package_inputs: &PackageInputCache,
 ) -> Vec<Location> {
     let Some(document) = open_documents.get(uri) else {
         return Vec::new();
     };
     let (line, column) = char_position(&document.text, position);
-    let index = symbol_index(uri.path(), &document.text);
+    let index = document.symbol_index(uri.path());
     let Some(lookup) = index.lookup_at(line, column) else {
         return Vec::new();
     };
@@ -506,7 +508,7 @@ pub(crate) fn reference_locations_for_position(
             })
             .collect();
     }
-    let workspace_documents = workspace_documents_for_uri(uri, open_documents);
+    let workspace_documents = workspace_documents_for_uri(uri, open_documents, package_inputs);
     workspace_reference_locations(&workspace_documents, &lookup, include_declaration)
 }
 
@@ -517,7 +519,7 @@ pub(crate) fn rename_target(
 ) -> Option<(Range, String)> {
     let document = open_documents.get(uri)?;
     let (line, column) = char_position(&document.text, position);
-    let index = symbol_index(uri.path(), &document.text);
+    let index = document.symbol_index(uri.path());
     index.lookup_at(line, column)?;
     let symbol = index.symbol_at(line, column)?;
     Some((span_to_range(&document.text, &symbol.span), symbol.name))
@@ -528,10 +530,11 @@ pub(crate) fn rename_workspace_edit(
     position: Position,
     new_name: &str,
     open_documents: &HashMap<Url, Document>,
+    package_inputs: &PackageInputCache,
 ) -> Option<WorkspaceEdit> {
     let document = open_documents.get(uri)?;
     let (line, column) = char_position(&document.text, position);
-    let index = symbol_index(uri.path(), &document.text);
+    let index = document.symbol_index(uri.path());
     let lookup = index.lookup_at(line, column)?;
     let symbol = index.symbol_at(line, column)?;
     let locations = if lookup.local_definition.is_some()
@@ -546,7 +549,7 @@ pub(crate) fn rename_workspace_edit(
             })
             .collect::<Vec<_>>()
     } else {
-        let workspace_documents = workspace_documents_for_uri(uri, open_documents);
+        let workspace_documents = workspace_documents_for_uri(uri, open_documents, package_inputs);
         workspace_reference_locations(&workspace_documents, &lookup, true)
     };
     let changes = rename_changes(locations, new_name);

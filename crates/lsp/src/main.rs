@@ -12,6 +12,7 @@ mod features;
 mod publication;
 mod scheduler;
 mod scope;
+mod source_index;
 #[cfg(test)]
 mod tests;
 mod text;

@@ -16,6 +16,7 @@ use crate::features::*;
 use crate::publication::*;
 use crate::scheduler::*;
 use crate::scope::*;
+use crate::source_index::SourceIndexCache;
 use crate::text::*;
 use crate::workspace::*;
 
@@ -30,7 +31,58 @@ fn document(text: &str) -> Document {
         revision: 0,
         version: 0,
         sync_state: DocumentSyncState::Synchronized,
+        source_index: Arc::new(SourceIndexCache::default()),
     }
+}
+
+fn workspace_document(uri: Url, text: &str) -> WorkspaceDocument {
+    WorkspaceDocument {
+        uri,
+        text: Arc::from(text),
+        kind: Some(PackageReviewFileKind::Source),
+        revision: 0,
+        semantic_generation: 0,
+        source_index: Arc::new(SourceIndexCache::default()),
+    }
+}
+
+#[test]
+fn source_index_is_reused_within_a_document_revision_and_rebuilt_after_edit() {
+    let uri = file_url("revision-cache.rss");
+    let mut documents = DocumentStore::new();
+    open_document(
+        &mut documents,
+        uri.clone(),
+        "fn old() -> Unit {}\n".to_owned(),
+        1,
+    )
+    .expect("document should open");
+
+    let old_document = documents.get(&uri).expect("open document").clone();
+    let first = old_document.symbol_index(uri.path());
+    let second = old_document.symbol_index(uri.path());
+    assert!(Arc::ptr_eq(&first, &second));
+    assert_eq!(old_document.source_index.build_count(), 1);
+    assert_eq!(first.definitions()[0].name, "old");
+
+    let replacement = TextDocumentContentChangeEvent {
+        range: None,
+        range_length: None,
+        text: "fn new() -> Unit {}\n".to_owned(),
+    };
+    change_document(&mut documents, uri.clone(), 2, &[replacement])
+        .expect_applied("full edit should apply");
+    let new_document = documents.get(&uri).expect("changed document");
+    let changed = new_document.symbol_index(uri.path());
+
+    assert!(!Arc::ptr_eq(&first, &changed));
+    assert_eq!(new_document.source_index.build_count(), 1);
+    assert_eq!(changed.definitions()[0].name, "new");
+    assert_eq!(
+        old_document.symbol_index(uri.path()).definitions()[0].name,
+        "old",
+        "an in-flight immutable snapshot must retain its revision index"
+    );
 }
 
 #[tokio::test]
@@ -472,10 +524,11 @@ async fn feature_snapshot_releases_document_lock_during_symbol_scans() {
 #[test]
 fn blocking_analysis_stops_at_cooperative_checkpoint() {
     let documents = (0..8)
-        .map(|index| WorkspaceDocument {
-            uri: file_url(&format!("cancel-{index}.rss")),
-            text: Arc::from("fn broken( -> Unit {}\n"),
-            kind: Some(PackageReviewFileKind::Source),
+        .map(|index| {
+            workspace_document(
+                file_url(&format!("cancel-{index}.rss")),
+                "fn broken( -> Unit {}\n",
+            )
         })
         .collect::<Vec<_>>();
     let mut checkpoints = 0;
@@ -504,6 +557,7 @@ fn cancelled_snapshot_cannot_replace_existing_diagnostics() {
             revision: 1,
             version: 1,
             sync_state: DocumentSyncState::Synchronized,
+            source_index: Arc::new(SourceIndexCache::default()),
         },
     )]);
     let cancellation = AnalysisCancellation::default();
@@ -736,7 +790,7 @@ fn workspace_definition_resolves_unresolved_call_in_open_document() {
     let caller = documents.get(&caller_uri).expect("caller document");
     let index = symbol_index("/workspace/caller.rss", &caller.text);
     let lookup = index.lookup_at(2, 12).expect("helper lookup");
-    let workspace = workspace_documents(&documents);
+    let workspace = workspace_documents(&documents, &PackageInputCache::default());
 
     let location =
         workspace_definition_location(&workspace, &lookup).expect("workspace definition");
@@ -761,7 +815,7 @@ fn workspace_references_collect_unresolved_cross_file_calls() {
     let caller = documents.get(&caller_uri).expect("caller document");
     let index = symbol_index("/workspace/caller.rss", &caller.text);
     let lookup = index.lookup_at(2, 12).expect("helper lookup");
-    let workspace = workspace_documents(&documents);
+    let workspace = workspace_documents(&documents, &PackageInputCache::default());
 
     let locations = workspace_reference_locations(&workspace, &lookup, true);
 
@@ -789,6 +843,7 @@ fn document_highlight_locations_stay_in_current_document() {
         },
         &documents,
         true,
+        &PackageInputCache::default(),
     );
 
     assert_eq!(locations.len(), 2);
@@ -877,11 +932,7 @@ fn call_hierarchy_reports_incoming_and_outgoing_calls() {
         "    return leaf()\n",
         "}\n",
     );
-    let workspace = vec![WorkspaceDocument {
-        uri: uri.clone(),
-        text: Arc::from(source),
-        kind: Some(PackageReviewFileKind::Source),
-    }];
+    let workspace = vec![workspace_document(uri.clone(), source)];
     let (_, leaf_definition) =
         find_function_definition_with_document(&workspace, "leaf").expect("leaf definition");
     let (_, caller_definition) =
@@ -923,7 +974,8 @@ fn workspace_definition_loads_package_sources_from_disk() {
     documents.insert(caller_uri.clone(), document(caller_text));
     let index = symbol_index(caller_uri.path(), caller_text);
     let lookup = index.lookup_at(2, 12).expect("helper lookup");
-    let workspace = workspace_documents_for_uri(&caller_uri, &documents);
+    let workspace =
+        workspace_documents_for_uri(&caller_uri, &documents, &PackageInputCache::default());
 
     let location = workspace_definition_location(&workspace, &lookup).expect("package definition");
 
@@ -947,6 +999,10 @@ fn package_input_cache_reuses_and_invalidates_immutable_inputs() {
     let cache = PackageInputCache::default();
 
     let first = cache.documents_for_root(&package_dir);
+    let first_document = first.get(&source_uri).expect("first source");
+    let first_generation = first_document.semantic_generation;
+    let first_index = first_document.symbol_index();
+    assert_eq!(first_document.source_index.build_count(), 1);
     fs::write(&source_path, "fn new() -> Unit {}\n").expect("rewrite source");
     let cached = cache.documents_for_root(&package_dir);
     assert!(Arc::ptr_eq(&first, &cached));
@@ -958,6 +1014,12 @@ fn package_input_cache_reuses_and_invalidates_immutable_inputs() {
             .as_ref(),
         "fn old() -> Unit {}\n"
     );
+    let cached_index = cached
+        .get(&source_uri)
+        .expect("cached source")
+        .symbol_index();
+    assert!(Arc::ptr_eq(&first_index, &cached_index));
+    assert_eq!(first_document.source_index.build_count(), 1);
 
     cache.invalidate(&package_dir);
     let refreshed = cache.documents_for_root(&package_dir);
@@ -970,6 +1032,14 @@ fn package_input_cache_reuses_and_invalidates_immutable_inputs() {
             .as_ref(),
         "fn new() -> Unit {}\n"
     );
+    let refreshed_document = refreshed.get(&source_uri).expect("refreshed source");
+    assert_ne!(
+        refreshed_document.semantic_generation, first_generation,
+        "package invalidation must advance the semantic generation"
+    );
+    let refreshed_index = refreshed_document.symbol_index();
+    assert!(!Arc::ptr_eq(&cached_index, &refreshed_index));
+    assert_eq!(refreshed_index.definitions()[0].name, "new");
 
     assert_eq!(
         cache.invalidate_path(&source_path),
@@ -1019,7 +1089,7 @@ fn workspace_symbols_include_package_sources_from_disk() {
     let mut documents = HashMap::new();
     documents.insert(caller_uri, document(caller_text));
 
-    let workspace = workspace_documents(&documents);
+    let workspace = workspace_documents(&documents, &PackageInputCache::default());
 
     assert!(
         workspace
@@ -1202,8 +1272,15 @@ fn hover_symbol_info_uses_package_definition_detail() {
     documents.insert(caller_uri.clone(), document(caller_text));
     let index = symbol_index(caller_uri.path(), caller_text);
 
-    let symbol =
-        hover_symbol_info(&caller_uri, &documents, &index, 2, 12).expect("helper hover symbol");
+    let symbol = hover_symbol_info(
+        &caller_uri,
+        &documents,
+        &index,
+        2,
+        12,
+        &PackageInputCache::default(),
+    )
+    .expect("helper hover symbol");
     let markdown = symbol_hover_markdown(&symbol);
 
     assert_eq!(symbol.name, "helper");
@@ -1252,7 +1329,8 @@ fn signature_help_uses_package_function_detail() {
     let caller_uri = Url::from_file_path(&caller_path).expect("caller URL");
     let mut documents = HashMap::new();
     documents.insert(caller_uri.clone(), document(caller_text));
-    let workspace = workspace_documents_for_uri(&caller_uri, &documents);
+    let workspace =
+        workspace_documents_for_uri(&caller_uri, &documents, &PackageInputCache::default());
     let context = call_context_at(
         caller_text,
         Position {
@@ -1302,6 +1380,7 @@ fn rename_local_symbol_stays_in_current_scope() {
         },
         "amount",
         &documents,
+        &PackageInputCache::default(),
     )
     .expect("rename edit");
     let changes = edit.changes.expect("changes");
@@ -1336,6 +1415,7 @@ fn rename_top_level_symbol_updates_package_references() {
         },
         "compute",
         &documents,
+        &PackageInputCache::default(),
     )
     .expect("rename edit");
     let changes = edit.changes.expect("changes");

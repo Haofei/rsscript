@@ -8,6 +8,7 @@ use rsscript::Diagnostic as RsDiagnostic;
 use tower_lsp::lsp_types::*;
 
 use crate::scheduler::*;
+use crate::source_index::*;
 use crate::text::apply_change;
 use crate::workspace::*;
 
@@ -18,6 +19,20 @@ pub(crate) struct Document {
     pub(crate) revision: u64,
     pub(crate) version: i32,
     pub(crate) sync_state: DocumentSyncState,
+    pub(crate) source_index: Arc<SourceIndexCache>,
+}
+
+impl Document {
+    pub(crate) fn symbol_index(&self, path: &str) -> Arc<rsscript::SymbolIndex> {
+        self.source_index.get(
+            SourceIndexIdentity {
+                document_revision: self.revision,
+                semantic_generation: 0,
+            },
+            path,
+            &self.text,
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -185,6 +200,7 @@ pub(crate) fn open_document(
             revision,
             version,
             sync_state: DocumentSyncState::Synchronized,
+            source_index: Arc::new(SourceIndexCache::default()),
         },
     );
     Some(analysis_job(documents, uri, revision, version))
@@ -231,6 +247,7 @@ pub(crate) fn change_document(
     document.revision = revision;
     document.version = version;
     document.sync_state = DocumentSyncState::Synchronized;
+    document.source_index = Arc::new(SourceIndexCache::default());
     ChangeOutcome::Applied(Box::new(analysis_job(documents, uri, revision, version)))
 }
 
@@ -242,6 +259,7 @@ pub(crate) fn mark_document_desynchronized(documents: &mut DocumentStore, uri: &
         document.revision = revision;
         document.version = version;
         document.sync_state = DocumentSyncState::Desynchronized;
+        document.source_index = Arc::new(SourceIndexCache::default());
     }
 }
 
@@ -263,5 +281,6 @@ pub(crate) fn save_document(
     document.diagnostics = Arc::new(Vec::new());
     document.revision = revision;
     document.sync_state = DocumentSyncState::Synchronized;
+    document.source_index = Arc::new(SourceIndexCache::default());
     Some(analysis_job(documents, uri, revision, version))
 }
