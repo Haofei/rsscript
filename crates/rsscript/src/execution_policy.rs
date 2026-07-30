@@ -255,6 +255,78 @@ pub struct NetworkEndpointGrant {
     port: u16,
 }
 
+/// An authorized filesystem path bound to one execution scope.
+///
+/// The fields are private so restricted callers cannot manufacture authority
+/// by wrapping an arbitrary host path. Host adapters should accept this type
+/// instead of accepting a raw path plus a separate authorization boolean.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizedPath {
+    scope: ExecutionScopeId,
+    path: PathBuf,
+}
+
+impl AuthorizedPath {
+    pub const fn scope_id(&self) -> ExecutionScopeId {
+        self.scope
+    }
+
+    pub fn as_path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// An exact authorized network endpoint bound to one execution scope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizedEndpoint {
+    scope: ExecutionScopeId,
+    endpoint: NetworkEndpointGrant,
+}
+
+impl AuthorizedEndpoint {
+    pub const fn scope_id(&self) -> ExecutionScopeId {
+        self.scope
+    }
+
+    pub fn endpoint(&self) -> &NetworkEndpointGrant {
+        &self.endpoint
+    }
+}
+
+/// An authorized executable identity bound to one execution scope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizedExecutable {
+    scope: ExecutionScopeId,
+    path: PathBuf,
+}
+
+impl AuthorizedExecutable {
+    pub const fn scope_id(&self) -> ExecutionScopeId {
+        self.scope
+    }
+
+    pub fn as_path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// An authorized logical database identity bound to one execution scope.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizedDatabase {
+    scope: ExecutionScopeId,
+    logical_id: String,
+}
+
+impl AuthorizedDatabase {
+    pub const fn scope_id(&self) -> ExecutionScopeId {
+        self.scope
+    }
+
+    pub fn logical_id(&self) -> &str {
+        &self.logical_id
+    }
+}
+
 impl NetworkEndpointGrant {
     pub fn new(
         scheme: impl Into<String>,
@@ -528,10 +600,10 @@ impl ExecutionContext {
     pub fn authorize_filesystem_path(
         &self,
         path: impl AsRef<Path>,
-    ) -> Result<PathBuf, AuthorityError> {
+    ) -> Result<AuthorizedPath, AuthorityError> {
         let path = path.as_ref();
-        match &self.host {
-            HostAccess::Ambient => Ok(path.to_path_buf()),
+        let path = match &self.host {
+            HostAccess::Ambient => path.to_path_buf(),
             HostAccess::Restricted(capabilities) => {
                 let path = normalize_absolute_path(path.to_path_buf())?;
                 if capabilities
@@ -539,12 +611,16 @@ impl ExecutionContext {
                     .iter()
                     .any(|root| path.starts_with(root))
                 {
-                    Ok(path)
+                    path
                 } else {
-                    Err(AuthorityError::FilesystemDenied(path))
+                    return Err(AuthorityError::FilesystemDenied(path));
                 }
             }
-        }
+        };
+        Ok(AuthorizedPath {
+            scope: self.scope,
+            path,
+        })
     }
 
     /// Resolves and authorizes a relative path under a selected granted root.
@@ -552,18 +628,22 @@ impl ExecutionContext {
         &self,
         root_index: usize,
         relative: impl AsRef<Path>,
-    ) -> Result<PathBuf, AuthorityError> {
+    ) -> Result<AuthorizedPath, AuthorityError> {
         let relative = normalize_relative_path(relative.as_ref())?;
-        match &self.host {
-            HostAccess::Ambient => Ok(relative),
+        let path = match &self.host {
+            HostAccess::Ambient => relative,
             HostAccess::Restricted(capabilities) => {
                 let root = capabilities
                     .filesystem_roots
                     .get(root_index)
                     .ok_or(AuthorityError::FilesystemRootDenied(root_index))?;
-                Ok(root.join(relative))
+                root.join(relative)
             }
-        }
+        };
+        Ok(AuthorizedPath {
+            scope: self.scope,
+            path,
+        })
     }
 
     pub fn authorize_network_endpoint(
@@ -571,17 +651,23 @@ impl ExecutionContext {
         scheme: &str,
         host: &str,
         port: u16,
-    ) -> Result<(), AuthorityError> {
-        if matches!(self.host, HostAccess::Ambient) {
-            return Ok(());
-        }
+    ) -> Result<AuthorizedEndpoint, AuthorityError> {
         let endpoint = NetworkEndpointGrant::new(scheme, host, port)?;
+        if matches!(self.host, HostAccess::Ambient) {
+            return Ok(AuthorizedEndpoint {
+                scope: self.scope,
+                endpoint,
+            });
+        }
         match &self.host {
             HostAccess::Ambient => unreachable!(),
             HostAccess::Restricted(capabilities)
                 if capabilities.network_endpoints.contains(&endpoint) =>
             {
-                Ok(())
+                Ok(AuthorizedEndpoint {
+                    scope: self.scope,
+                    endpoint,
+                })
             }
             HostAccess::Restricted(_) => Err(AuthorityError::NetworkDenied(endpoint)),
         }
@@ -590,34 +676,59 @@ impl ExecutionContext {
     pub fn authorize_process_executable(
         &self,
         executable: impl AsRef<Path>,
-    ) -> Result<PathBuf, AuthorityError> {
+    ) -> Result<AuthorizedExecutable, AuthorityError> {
         let executable = executable.as_ref();
-        match &self.host {
-            HostAccess::Ambient => Ok(executable.to_path_buf()),
+        let path = match &self.host {
+            HostAccess::Ambient => executable.to_path_buf(),
             HostAccess::Restricted(capabilities) => {
                 let executable = normalize_absolute_path(executable.to_path_buf())?;
                 if capabilities.process_executables.contains(&executable) {
-                    Ok(executable)
+                    executable
                 } else {
-                    Err(AuthorityError::ProcessDenied(executable))
+                    return Err(AuthorityError::ProcessDenied(executable));
                 }
             }
-        }
+        };
+        Ok(AuthorizedExecutable {
+            scope: self.scope,
+            path,
+        })
     }
 
-    pub fn authorize_database(&self, logical_id: &str) -> Result<(), AuthorityError> {
-        if matches!(self.host, HostAccess::Ambient) {
-            return Ok(());
-        }
+    pub fn authorize_database(
+        &self,
+        logical_id: &str,
+    ) -> Result<AuthorizedDatabase, AuthorityError> {
         let logical_id = normalize_logical_name("database", logical_id.to_owned())?;
+        if matches!(self.host, HostAccess::Ambient) {
+            return Ok(AuthorizedDatabase {
+                scope: self.scope,
+                logical_id,
+            });
+        }
         match &self.host {
             HostAccess::Ambient => unreachable!(),
             HostAccess::Restricted(capabilities)
                 if capabilities.database_ids.contains(&logical_id) =>
             {
-                Ok(())
+                Ok(AuthorizedDatabase {
+                    scope: self.scope,
+                    logical_id,
+                })
             }
             HostAccess::Restricted(_) => Err(AuthorityError::DatabaseDenied(logical_id)),
+        }
+    }
+
+    /// Rejects a capability object that belongs to another execution.
+    pub fn authorize_scope(&self, scope: ExecutionScopeId) -> Result<(), AuthorityError> {
+        if self.scope == scope {
+            Ok(())
+        } else {
+            Err(AuthorityError::ScopeMismatch {
+                expected: self.scope,
+                actual: scope,
+            })
         }
     }
 
@@ -679,6 +790,10 @@ pub enum AuthorityError {
     DatabaseDenied(String),
     EnvironmentDenied(String),
     TempDirectoryDenied,
+    ScopeMismatch {
+        expected: ExecutionScopeId,
+        actual: ExecutionScopeId,
+    },
 }
 
 impl fmt::Display for AuthorityError {
@@ -724,6 +839,12 @@ impl fmt::Display for AuthorityError {
             Self::TempDirectoryDenied => {
                 formatter.write_str("ambient temporary-directory access is not authorized")
             }
+            Self::ScopeMismatch { expected, actual } => write!(
+                formatter,
+                "host capability belongs to execution scope {}, not {}",
+                actual.get(),
+                expected.get()
+            ),
         }
     }
 }
@@ -907,12 +1028,11 @@ mod tests {
             .grant_temp_directory();
         let context = ExecutionContext::trusted_ci(capabilities);
 
-        assert_eq!(
-            context
-                .authorize_filesystem_relative(0, "input/source.rss")
-                .expect("relative path"),
-            root.join("input/source.rss")
-        );
+        let path = context
+            .authorize_filesystem_relative(0, "input/source.rss")
+            .expect("relative path");
+        assert_eq!(path.as_path(), root.join("input/source.rss"));
+        assert_eq!(path.scope_id(), context.scope_id());
         assert!(
             context
                 .authorize_filesystem_relative(0, "../escape")
@@ -928,12 +1048,11 @@ mod tests {
                 .authorize_network_endpoint("https", "example.com", 444)
                 .is_err()
         );
-        assert_eq!(
-            context
-                .authorize_process_executable(&executable)
-                .expect("process"),
-            executable
-        );
+        let authorized_executable = context
+            .authorize_process_executable(&executable)
+            .expect("process");
+        assert_eq!(authorized_executable.as_path(), executable);
+        assert_eq!(authorized_executable.scope_id(), context.scope_id());
         assert!(
             context
                 .authorize_process_executable(test_absolute_path("bin/other"))
@@ -958,9 +1077,18 @@ mod tests {
 
     #[test]
     fn execution_scopes_are_unique() {
-        let first = ExecutionContext::trusted_local().scope_id();
-        let second = ExecutionContext::trusted_ci(HostCapabilities::deny_all()).scope_id();
-        assert_ne!(first, second);
+        let first_context = ExecutionContext::trusted_local();
+        let second_context = ExecutionContext::trusted_ci(HostCapabilities::deny_all());
+        let first = first_context
+            .authorize_database("primary")
+            .expect("ambient database handle");
+
+        assert_ne!(first_context.scope_id(), second_context.scope_id());
+        assert!(first_context.authorize_scope(first.scope_id()).is_ok());
+        assert!(matches!(
+            second_context.authorize_scope(first.scope_id()),
+            Err(AuthorityError::ScopeMismatch { .. })
+        ));
     }
 
     #[cfg(unix)]

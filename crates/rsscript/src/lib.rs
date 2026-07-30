@@ -69,9 +69,10 @@ pub use diagnostic::{
 pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
 pub use eval_types::{CoverageBucket, EvalError, EvalOutput, NativeInterpreterFn, NativeValue};
 pub use execution_policy::{
-    AuthorityError, DeploymentProfile, ExecutionCapability, ExecutionContext,
-    ExecutionContextError, ExecutionPolicyError, ExecutionScopeId, HostAuthority, HostCapabilities,
-    NetworkEndpointGrant, ParseDeploymentProfileError, SupportLevel,
+    AuthorityError, AuthorizedDatabase, AuthorizedEndpoint, AuthorizedExecutable, AuthorizedPath,
+    DeploymentProfile, ExecutionCapability, ExecutionContext, ExecutionContextError,
+    ExecutionPolicyError, ExecutionScopeId, HostAuthority, HostCapabilities, NetworkEndpointGrant,
+    ParseDeploymentProfileError, SupportLevel,
 };
 pub use formatter::{format_program, format_source};
 pub use generate::{
@@ -270,7 +271,8 @@ pub mod api {
         /// Register-VM compilation and execution.
         pub mod vm {
             pub use crate::{
-                AuthorityError, CoverageBucket, DeploymentProfile, EvalError, EvalOutput,
+                AuthorityError, AuthorizedDatabase, AuthorizedEndpoint, AuthorizedExecutable,
+                AuthorizedPath, CoverageBucket, DeploymentProfile, EvalError, EvalOutput,
                 ExecutionCapability, ExecutionContext, ExecutionContextError, ExecutionPolicyError,
                 ExecutionScopeId, HostAuthority, HostCapabilities, IsolatedExecutionError,
                 IsolatedProgram, IsolatedProgramSource, IsolatedWorkerConfig, JitPlan,

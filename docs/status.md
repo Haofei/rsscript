@@ -76,7 +76,7 @@ This table records the current implementation batch for the refactoring work in
 | R7 | Interned structural type semantics | Complete | Semantic signatures and fields use shared structural facts; generic substitution no longer depends on parameter-name heuristics |
 | R8 | VM/JIT invariant boundary decomposition | Complete | Validation, executable memory, ABI, optimization, and deoptimization boundaries are independently testable |
 | R9 | Explicit service ownership and session lifetimes | Complete | Stateful runtime and native services have explicit owners, instance isolation, and deterministic close/shutdown paths |
-| R10 | Opaque host capability handles | Pending | Restricted APIs no longer accept ambient paths, endpoints, executables, or database authority |
+| R10 | Opaque host capability handles | Complete | Concrete host authorization returns execution-scoped path, endpoint, executable, and database handles |
 | R11 | REIR adapter convergence | Complete | Adapters share bounded evidence construction, provenance, and explicit unknown coverage |
 | R12 | Test-domain organization | Pending | Large test aggregations are split by semantic domain without reducing coverage |
 
@@ -161,6 +161,13 @@ services. Instance APIs own caches, limits, and shutdown; compatibility free
 functions delegate to a default instance but no longer contain the core state
 machine. `OperationContext` can carry an explicit `RuntimeServices` owner, so
 embedded executions and tests can use independent lifecycle and policy state.
+
+R10 replaces successful concrete authorization results with opaque
+`AuthorizedPath`, `AuthorizedEndpoint`, `AuthorizedExecutable`, and
+`AuthorizedDatabase` values. Each handle carries the unforgeable
+`ExecutionScopeId` that issued it, and cross-scope reuse is rejected. Restricted
+VM host effects remain fail-closed until their adapter accepts the corresponding
+handle; trusted-local compatibility does not weaken restricted construction.
 
 ## Experimental Status
 
