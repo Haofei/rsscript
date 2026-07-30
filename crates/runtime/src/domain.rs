@@ -9,8 +9,8 @@ use crate::async_runtime::{NativeAsyncPending, run_pending, spawn_tokio_native};
 use crate::channel::{ChannelError, RssStream, stream_from_iterator};
 #[cfg(feature = "net")]
 use crate::{
-    RssCancellationToken, RssDeadline, cancellation_never, cancellation_token_cancelled,
-    deadline_after_ms, deadline_remaining_duration,
+    cancellation_never, cancellation_token_cancelled, deadline_after_ms,
+    deadline_remaining_duration,
 };
 use std::io::{BufRead, Read};
 use std::str::Utf8Error;
@@ -470,14 +470,12 @@ pub fn http_get_async(url: &str) -> NativeAsyncPending<Result<Response, HttpErro
 }
 
 #[cfg(feature = "net")]
-pub fn http_get_async_with_resources(
+pub fn http_get_async_with_context(
     url: &str,
-    budget: ResourceBudget,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
 ) -> NativeAsyncPending<Result<Response, HttpError>> {
     let request = http_request_new("GET", url, None, None);
-    http_send_async_with_resources(request, budget, cancellation, deadline)
+    http_send_async_with_context(request, context)
 }
 
 pub fn http_request_json(url: &str, body: &str) -> HttpRequest {
@@ -532,7 +530,10 @@ pub fn http_send_async(request: HttpRequest) -> NativeAsyncPending<Result<Respon
     let budget = default_http_budget(&request);
     let cancellation = cancellation_never();
     let deadline = deadline_after_ms(normalized_http_timeout_ms(request.timeout_ms));
-    http_send_async_with_resources(request, budget, cancellation, deadline)
+    http_send_async_with_context(
+        request,
+        OperationContext::new(deadline, cancellation, budget),
+    )
 }
 
 #[cfg(feature = "net")]
@@ -541,19 +542,6 @@ pub fn http_send_async_with_context(
     context: OperationContext,
 ) -> NativeAsyncPending<Result<Response, HttpError>> {
     spawn_tokio_native(async move { http_request_retry_with_context(request, context).await })
-}
-
-#[cfg(feature = "net")]
-pub fn http_send_async_with_resources(
-    request: HttpRequest,
-    budget: ResourceBudget,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
-) -> NativeAsyncPending<Result<Response, HttpError>> {
-    http_send_async_with_context(
-        request,
-        OperationContext::from_resources(budget, cancellation, deadline),
-    )
 }
 
 #[cfg(feature = "net")]
@@ -1696,11 +1684,9 @@ mod tests {
         let started = std::time::Instant::now();
         let mut executor = Executor::new();
         let error = executor
-            .run_pending(http_get_async_with_resources(
+            .run_pending(http_get_async_with_context(
                 &format!("http://{addr}/cancel"),
-                ResourceBudget::new(1024),
-                token,
-                deadline_after_ms(1_000),
+                OperationContext::new(deadline_after_ms(1_000), token, ResourceBudget::new(1024)),
             ))
             .expect_err("cancelled request should complete with an error");
         assert!(error.message.contains("cancelled"), "{error:?}");

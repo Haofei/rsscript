@@ -78,7 +78,7 @@ This table records the current implementation batch for the refactoring work in
 | R2 | `SourceSnapshot`, frontend budget, semantic database, and `ValidatedProgram` | Complete | Review, lowering, VM, and LSP consume one bounded frontend result; executable backends require validated checked facts |
 | R3 | Mandatory `ExecutionContext` and scoped host capabilities | Complete | Restricted execution cannot reach ambient filesystem, network, process, or database authority |
 | R4 | LSP, REIR, runtime, analyzer, package-native, VM, and JIT decomposition | Complete | Modules are split around tested state transitions without behavior changes |
-| R5 | Public API contraction and explicit facades | Not started | Broad glob exports and duplicate compatibility entrypoints are removed |
+| R5 | Public API contraction and explicit facades | Complete | Broad glob exports and duplicate compatibility entrypoints are removed |
 | R6 | Out-of-process native, JIT, and GPU execution | Not started | Untrusted execution uses killable workers with bounded IPC and OS policy |
 
 Update this table in the same commit that changes a batch state. Do not create a
@@ -123,6 +123,17 @@ package-native bindings, native-loader shim/cache, VM tier admission/scratch/
 recursion, and JIT analysis/executable-memory accounting each have dedicated
 modules. Architecture tests prevent the composition roots and stateful types
 from collapsing back into the previous monoliths.
+
+R5 makes public surface growth explicit. `rsscript::api::v1` groups frontend,
+diagnostics, review, package, and register-VM entrypoints and removes duplicate
+VM compatibility names. `reir::api::v1` groups model, decision,
+reconciliation, and rendering APIs while the crate root retains only the
+minimal compatibility set used by RSScript. `rsscript-runtime` replaces
+blanket exports with a generated-code ABI manifest plus curated `api::v1`,
+`host`, and `net` facades; resource-aware network calls use one
+`OperationContext`. Architecture tests reject new root glob exports and the
+removed aliases. These versioned namespaces control API growth but do not
+declare `0.1.x` SemVer stability.
 
 ## Experimental Status
 

@@ -1,7 +1,10 @@
 use super::{CliError, USAGE};
-use reir::{
-    Bundle, Capability, Diff, DiffItem, DiffItemKind, Evidence, Fact, Reconciliation,
-    ReconciliationKind, ReconciliationStatus, Slice, SliceKind,
+use reir::api::v1::{
+    model::{Bundle, Capability, Evidence, Fact},
+    reconciliation::{
+        Diff, DiffItem, DiffItemKind, Reconciliation, ReconciliationKind, ReconciliationStatus,
+        Slice, SliceKind,
+    },
 };
 use std::process::ExitCode;
 

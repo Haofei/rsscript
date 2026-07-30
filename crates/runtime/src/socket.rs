@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::network::{NetworkEndpoint, NetworkOperationContext, authorize_resolved_target};
 use crate::{
-    NativeAsyncPending, ResourceBudget, RssCancellationToken, RssDeadline, cancellation_never,
-    deadline_after_ms, spawn_tokio_native,
+    NativeAsyncPending, OperationContext, ResourceBudget, cancellation_never, deadline_after_ms,
+    spawn_tokio_native,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -39,38 +39,41 @@ pub struct RssTcpStream {
 }
 
 pub fn tcp_connect(host: &str, port: i64) -> NativeAsyncPending<Result<RssTcpStream, TcpError>> {
-    tcp_connect_with_resources(
+    tcp_connect_with_context(
         host,
         port,
-        cancellation_never(),
-        deadline_after_ms(DEFAULT_TCP_OPERATION_TIMEOUT_MS),
+        OperationContext::new(
+            deadline_after_ms(DEFAULT_TCP_OPERATION_TIMEOUT_MS),
+            cancellation_never(),
+            ResourceBudget::new(0),
+        ),
     )
 }
 
-pub fn tcp_connect_with_resources(
+pub fn tcp_connect_with_context(
     host: &str,
     port: i64,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
 ) -> NativeAsyncPending<Result<RssTcpStream, TcpError>> {
-    tcp_connect_with_policy_and_resources(
-        host,
-        port,
-        Arc::new(AllowAllNetworkTargetPolicy),
-        cancellation,
-        deadline,
-    )
+    tcp_connect_with_policy_and_context(host, port, Arc::new(AllowAllNetworkTargetPolicy), context)
 }
 
-pub fn tcp_connect_with_policy_and_resources(
+pub fn tcp_connect_with_policy_and_context(
     host: &str,
     port: i64,
     policy: Arc<dyn NetworkTargetPolicy>,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
+) -> NativeAsyncPending<Result<RssTcpStream, TcpError>> {
+    tcp_connect_inner(host, port, policy, NetworkOperationContext::new(context))
+}
+
+fn tcp_connect_inner(
+    host: &str,
+    port: i64,
+    policy: Arc<dyn NetworkTargetPolicy>,
+    context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<RssTcpStream, TcpError>> {
     let host = host.to_string();
-    let context = NetworkOperationContext::from_controls(cancellation, deadline);
     spawn_tokio_native(async move {
         let endpoint = NetworkEndpoint::from_host_and_port(&host, port)
             .ok_or_else(|| TcpError::new("TCP port must be between 1 and 65535"))?;
@@ -105,24 +108,31 @@ pub fn tcp_stream_read(
     stream: &RssTcpStream,
     max_bytes: i64,
 ) -> NativeAsyncPending<Result<Vec<u8>, TcpError>> {
-    tcp_stream_read_with_resources(
+    tcp_stream_read_with_context(
         stream,
         max_bytes,
-        ResourceBudget::new(MAX_TCP_READ_BYTES as u64),
-        cancellation_never(),
-        deadline_after_ms(DEFAULT_TCP_OPERATION_TIMEOUT_MS),
+        OperationContext::new(
+            deadline_after_ms(DEFAULT_TCP_OPERATION_TIMEOUT_MS),
+            cancellation_never(),
+            ResourceBudget::new(MAX_TCP_READ_BYTES as u64),
+        ),
     )
 }
 
-pub fn tcp_stream_read_with_resources(
+pub fn tcp_stream_read_with_context(
     stream: &RssTcpStream,
     max_bytes: i64,
-    budget: ResourceBudget,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
+) -> NativeAsyncPending<Result<Vec<u8>, TcpError>> {
+    tcp_stream_read_inner_pending(stream, max_bytes, NetworkOperationContext::new(context))
+}
+
+fn tcp_stream_read_inner_pending(
+    stream: &RssTcpStream,
+    max_bytes: i64,
+    context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<Vec<u8>, TcpError>> {
     let reader = Arc::clone(&stream.reader);
-    let context = NetworkOperationContext::from_resources(budget, cancellation, deadline);
     spawn_tokio_native(async move {
         tcp_with_controls(
             tcp_stream_read_inner(reader, max_bytes, context.byte_budget()),
@@ -166,25 +176,32 @@ pub fn tcp_stream_write(
     stream: &RssTcpStream,
     data: &[u8],
 ) -> NativeAsyncPending<Result<i64, TcpError>> {
-    tcp_stream_write_with_resources(
+    tcp_stream_write_with_context(
         stream,
         data,
-        ResourceBudget::new(MAX_TCP_WRITE_BYTES as u64),
-        cancellation_never(),
-        deadline_after_ms(DEFAULT_TCP_OPERATION_TIMEOUT_MS),
+        OperationContext::new(
+            deadline_after_ms(DEFAULT_TCP_OPERATION_TIMEOUT_MS),
+            cancellation_never(),
+            ResourceBudget::new(MAX_TCP_WRITE_BYTES as u64),
+        ),
     )
 }
 
-pub fn tcp_stream_write_with_resources(
+pub fn tcp_stream_write_with_context(
     stream: &RssTcpStream,
     data: &[u8],
-    budget: ResourceBudget,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
+) -> NativeAsyncPending<Result<i64, TcpError>> {
+    tcp_stream_write_inner_pending(stream, data, NetworkOperationContext::new(context))
+}
+
+fn tcp_stream_write_inner_pending(
+    stream: &RssTcpStream,
+    data: &[u8],
+    context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<i64, TcpError>> {
     let writer = Arc::clone(&stream.writer);
     let data = data.to_vec();
-    let context = NetworkOperationContext::from_resources(budget, cancellation, deadline);
     spawn_tokio_native(async move {
         if data.len() > MAX_TCP_WRITE_BYTES {
             return Err(TcpError::new("TCP write exceeds the runtime ceiling"));
@@ -211,25 +228,32 @@ pub fn tcp_stream_write_all(
     stream: &RssTcpStream,
     data: &[u8],
 ) -> NativeAsyncPending<Result<(), TcpError>> {
-    tcp_stream_write_all_with_resources(
+    tcp_stream_write_all_with_context(
         stream,
         data,
-        ResourceBudget::new(MAX_TCP_WRITE_BYTES as u64),
-        cancellation_never(),
-        deadline_after_ms(DEFAULT_TCP_OPERATION_TIMEOUT_MS),
+        OperationContext::new(
+            deadline_after_ms(DEFAULT_TCP_OPERATION_TIMEOUT_MS),
+            cancellation_never(),
+            ResourceBudget::new(MAX_TCP_WRITE_BYTES as u64),
+        ),
     )
 }
 
-pub fn tcp_stream_write_all_with_resources(
+pub fn tcp_stream_write_all_with_context(
     stream: &RssTcpStream,
     data: &[u8],
-    budget: ResourceBudget,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
+) -> NativeAsyncPending<Result<(), TcpError>> {
+    tcp_stream_write_all_inner_pending(stream, data, NetworkOperationContext::new(context))
+}
+
+fn tcp_stream_write_all_inner_pending(
+    stream: &RssTcpStream,
+    data: &[u8],
+    context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<(), TcpError>> {
     let writer = Arc::clone(&stream.writer);
     let data = data.to_vec();
-    let context = NetworkOperationContext::from_resources(budget, cancellation, deadline);
     spawn_tokio_native(async move {
         if data.len() > MAX_TCP_WRITE_BYTES {
             return Err(TcpError::new("TCP write_all exceeds the runtime ceiling"));
@@ -255,20 +279,28 @@ pub fn tcp_stream_write_all_with_resources(
 }
 
 pub fn tcp_stream_shutdown(stream: &RssTcpStream) -> NativeAsyncPending<Result<(), TcpError>> {
-    tcp_stream_shutdown_with_resources(
+    tcp_stream_shutdown_with_context(
         stream,
-        cancellation_never(),
-        deadline_after_ms(DEFAULT_TCP_OPERATION_TIMEOUT_MS),
+        OperationContext::new(
+            deadline_after_ms(DEFAULT_TCP_OPERATION_TIMEOUT_MS),
+            cancellation_never(),
+            ResourceBudget::new(0),
+        ),
     )
 }
 
-pub fn tcp_stream_shutdown_with_resources(
+pub fn tcp_stream_shutdown_with_context(
     stream: &RssTcpStream,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
+) -> NativeAsyncPending<Result<(), TcpError>> {
+    tcp_stream_shutdown_inner(stream, NetworkOperationContext::new(context))
+}
+
+fn tcp_stream_shutdown_inner(
+    stream: &RssTcpStream,
+    context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<(), TcpError>> {
     let writer = Arc::clone(&stream.writer);
-    let context = NetworkOperationContext::from_controls(cancellation, deadline);
     spawn_tokio_native(async move {
         tcp_with_controls(
             async {
@@ -335,12 +367,15 @@ mod tests {
 
     #[test]
     fn strict_network_policy_rejects_loopback_before_connecting() {
-        let error = match Executor::new().run_pending(super::tcp_connect_with_policy_and_resources(
+        let error = match Executor::new().run_pending(super::tcp_connect_with_policy_and_context(
             "127.0.0.1",
             9,
             Arc::new(super::DenyPrivateNetworkTargetPolicy),
-            crate::cancellation_never(),
-            crate::deadline_after_ms(1_000),
+            crate::OperationContext::new(
+                crate::deadline_after_ms(1_000),
+                crate::cancellation_never(),
+                crate::ResourceBudget::new(0),
+            ),
         )) {
             Ok(_) => panic!("strict network policy must reject loopback"),
             Err(error) => error,
@@ -423,12 +458,14 @@ mod tests {
             .run_pending(super::tcp_connect("127.0.0.1", i64::from(port)))
             .expect("TCP connect should succeed");
         let error = executor
-            .run_pending(super::tcp_stream_read_with_resources(
+            .run_pending(super::tcp_stream_read_with_context(
                 &stream,
                 4,
-                crate::ResourceBudget::new(2),
-                crate::cancellation_never(),
-                crate::deadline_after_ms(1_000),
+                crate::OperationContext::new(
+                    crate::deadline_after_ms(1_000),
+                    crate::cancellation_never(),
+                    crate::ResourceBudget::new(2),
+                ),
             ))
             .expect_err("read allocation should exceed the budget");
         assert!(error.message.contains("byte budget exhausted"));
@@ -459,12 +496,14 @@ mod tests {
         });
         let started = std::time::Instant::now();
         let error = executor
-            .run_pending(super::tcp_stream_read_with_resources(
+            .run_pending(super::tcp_stream_read_with_context(
                 &stream,
                 4,
-                crate::ResourceBudget::new(4),
-                token,
-                crate::deadline_after_ms(1_000),
+                crate::OperationContext::new(
+                    crate::deadline_after_ms(1_000),
+                    token,
+                    crate::ResourceBudget::new(4),
+                ),
             ))
             .expect_err("cancelled read should complete with an error");
         assert!(error.message.contains("cancelled"));

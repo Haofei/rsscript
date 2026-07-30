@@ -21,8 +21,7 @@ mod common;
 use std::fs;
 use std::process::Command;
 
-// `reg_vm_eval_source_main` is re-exported from the crate root as `eval_source_main`.
-use rsscript::eval_source_main as reg_vm_eval_source_main;
+use rsscript::reg_vm_eval_source_main;
 
 /// A representative program: arithmetic, a user function call, a `match` over the
 /// result, and `Log.write` for stdout. Exercises the value path AND the I/O path.

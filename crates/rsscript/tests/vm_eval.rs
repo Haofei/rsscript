@@ -17,9 +17,10 @@ use std::thread;
 
 use rsscript::{
     EvalError, ExecutionContext, HostCapabilities, NativeInterpreterFn, NativeRustDependency,
-    NativeValue, VmLimits, eval_package_main_with_args, eval_source_main,
-    eval_source_main_with_args, eval_source_main_with_args_and_native_bindings,
-    lower_source_to_rust_package, lower_sources_to_rust_package_with_options,
+    NativeValue, VmLimits, lower_source_to_rust_package,
+    lower_sources_to_rust_package_with_options, reg_vm_eval_package_main_with_args,
+    reg_vm_eval_source_main, reg_vm_eval_source_main_with_args,
+    reg_vm_eval_source_main_with_args_and_native_bindings,
     reg_vm_eval_source_main_with_context_and_limits, write_generated_rust_package,
 };
 
@@ -33,7 +34,8 @@ fn main() -> Int {
 }
 "#;
 
-    let output = eval_source_main("eval-arithmetic.rss", source).expect("eval should succeed");
+    let output =
+        reg_vm_eval_source_main("eval-arithmetic.rss", source).expect("eval should succeed");
 
     assert_eq!(output.value, "14");
     assert_eq!(output.display_value, "14");
@@ -101,7 +103,7 @@ fn main() -> Int {
 }
 "#;
 
-    let output = eval_source_main("eval-function.rss", source).expect("eval should succeed");
+    let output = reg_vm_eval_source_main("eval-function.rss", source).expect("eval should succeed");
 
     assert_eq!(output.value, "7");
 }
@@ -129,7 +131,8 @@ fn main() -> Bool {
 }
 "#;
 
-    let output = eval_source_main("stable-map-key.rss", source).expect("eval should succeed");
+    let output =
+        reg_vm_eval_source_main("stable-map-key.rss", source).expect("eval should succeed");
     assert_eq!(output.value, "true");
 }
 
@@ -184,8 +187,8 @@ fn float_fold_fast_path_matches_slow_path_and_is_faster() {
     let slow_src = float_fold_program("|acc, x| { let y = x\n        return acc + y }");
 
     // Warm up + correctness: both paths must yield the same f64 string.
-    let fast0 = eval_source_main("float-fold-fast.rss", &fast_src).expect("fast eval");
-    let slow0 = eval_source_main("float-fold-slow.rss", &slow_src).expect("slow eval");
+    let fast0 = reg_vm_eval_source_main("float-fold-fast.rss", &fast_src).expect("fast eval");
+    let slow0 = reg_vm_eval_source_main("float-fold-slow.rss", &slow_src).expect("slow eval");
     assert_eq!(
         fast0.value, slow0.value,
         "fast and slow float fold must be bit-identical"
@@ -197,12 +200,12 @@ fn float_fold_fast_path_matches_slow_path_and_is_faster() {
     let mut slow_ns = u128::MAX;
     for _ in 0..reps {
         let t = Instant::now();
-        let r = eval_source_main("float-fold-fast.rss", &fast_src).expect("fast eval");
+        let r = reg_vm_eval_source_main("float-fold-fast.rss", &fast_src).expect("fast eval");
         fast_ns = fast_ns.min(t.elapsed().as_nanos());
         assert_eq!(r.value, fast0.value);
 
         let t = Instant::now();
-        let r = eval_source_main("float-fold-slow.rss", &slow_src).expect("slow eval");
+        let r = reg_vm_eval_source_main("float-fold-slow.rss", &slow_src).expect("slow eval");
         slow_ns = slow_ns.min(t.elapsed().as_nanos());
         assert_eq!(r.value, slow0.value);
     }
@@ -264,7 +267,7 @@ fn main() -> Unit {
     )
     .expect("main source should write");
 
-    let output = eval_package_main_with_args(&package_dir, ["alpha", "beta"])
+    let output = reg_vm_eval_package_main_with_args(&package_dir, ["alpha", "beta"])
         .expect("package eval should run");
 
     assert_eq!(output.stdout, "alpha|beta\n");
@@ -291,7 +294,8 @@ fn main() -> String {
 }
 "#;
 
-    let output = eval_source_main("eval-nested-match.rss", source).expect("eval should succeed");
+    let output =
+        reg_vm_eval_source_main("eval-nested-match.rss", source).expect("eval should succeed");
 
     assert_eq!(output.value, "rss");
 }
@@ -307,7 +311,7 @@ fn main() -> Int {
 "#;
 
     let output =
-        eval_source_main("eval-random-int.rss", source).expect("Random.int should evaluate");
+        reg_vm_eval_source_main("eval-random-int.rss", source).expect("Random.int should evaluate");
 
     let Some(NativeValue::Int(value)) = output.native_value else {
         panic!("expected an Int result, got {output:?}");
@@ -503,7 +507,7 @@ fn eval_matches_lowered_rust_for_pure_core_example() {
     let source_path = "examples/scripts/core/interpreter_pure_parity.rss";
     let source = fs::read_to_string(common::workspace_root().join(source_path))
         .expect("parity fixture should be readable");
-    let eval = eval_source_main(source_path, &source).expect("eval should succeed");
+    let eval = reg_vm_eval_source_main(source_path, &source).expect("eval should succeed");
     assert_eq!(eval.value, "Unit");
 
     let runtime_path = common::runtime_path();
@@ -543,7 +547,8 @@ fn main() -> Unit {
     Log.write(message: read String.from_int(value: len))
 }
 "#;
-    let eval = eval_source_main("eval-string-len-utf8.rss", source).expect("eval should succeed");
+    let eval =
+        reg_vm_eval_source_main("eval-string-len-utf8.rss", source).expect("eval should succeed");
     assert_eq!(eval.value, "Unit");
     assert_eq!(eval.stdout, "2\n");
 
@@ -586,8 +591,8 @@ fn eval_matches_backend_for_declared_host_boundary() {
     let source = fs::read_to_string(common::workspace_root().join(source_path))
         .expect("host boundary fixture should be readable");
     let cwd = std::env::current_dir().expect("current dir should be readable");
-    let eval =
-        eval_source_main(source_path, &source).expect("eval should run host boundary fixture");
+    let eval = reg_vm_eval_source_main(source_path, &source)
+        .expect("eval should run host boundary fixture");
     std::env::set_current_dir(&cwd).expect("current dir should be restored after eval");
     assert_eq!(eval.stdout, "host-ok\n");
     assert_eq!(eval.stderr, "");
@@ -657,7 +662,7 @@ fn main() -> Unit {
 }
 "#;
 
-    let eval = eval_source_main_with_args_and_native_bindings(
+    let eval = reg_vm_eval_source_main_with_args_and_native_bindings(
         "eval-native-host.rss",
         source,
         std::iter::empty::<&str>(),
@@ -687,7 +692,7 @@ fn main() -> Unit {
 }
 "#;
 
-    let error = eval_source_main("eval-unbound-native.rss", source)
+    let error = reg_vm_eval_source_main("eval-unbound-native.rss", source)
         .expect_err("unbound native declaration should fail");
 
     assert!(
@@ -759,7 +764,7 @@ fn main() -> Unit {
 }
 "#;
 
-    let output = eval_source_main_with_args_and_native_bindings(
+    let output = reg_vm_eval_source_main_with_args_and_native_bindings(
         "receiver-native-bindings.rss",
         source,
         std::iter::empty::<&str>(),
@@ -942,7 +947,7 @@ fn main() -> Unit {
 }
 "#;
 
-    let output = eval_source_main("reg-vm-live-closure-intrinsics.rss", source)
+    let output = reg_vm_eval_source_main("reg-vm-live-closure-intrinsics.rss", source)
         .expect("eval should succeed");
 
     let expected = "true\n\
@@ -1015,7 +1020,7 @@ fn main() -> Unit {
 }
 "#;
 
-    let eval = eval_source_main_with_args_and_native_bindings(
+    let eval = reg_vm_eval_source_main_with_args_and_native_bindings(
         "parity-native-host.rss",
         source,
         std::iter::empty::<&str>(),

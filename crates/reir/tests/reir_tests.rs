@@ -1,4 +1,4 @@
-use reir::*;
+use reir::api::v1::{decision::*, model::*, reconciliation::*, rendering::*};
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;

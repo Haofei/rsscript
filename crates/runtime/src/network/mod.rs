@@ -2,8 +2,7 @@ use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
 
 use crate::{
-    OperationContext, ResourceBudget, RssCancellationToken, RssDeadline,
-    cancellation_token_cancelled, deadline_remaining_duration,
+    OperationContext, ResourceBudget, cancellation_token_cancelled, deadline_remaining_duration,
 };
 
 pub trait NetworkTargetPolicy: Send + Sync {
@@ -111,20 +110,8 @@ pub(crate) struct NetworkOperationContext {
 }
 
 impl NetworkOperationContext {
-    pub(crate) fn from_controls(cancellation: RssCancellationToken, deadline: RssDeadline) -> Self {
-        Self {
-            resources: OperationContext::new(deadline, cancellation, ResourceBudget::new(0)),
-        }
-    }
-
-    pub(crate) fn from_resources(
-        budget: ResourceBudget,
-        cancellation: RssCancellationToken,
-        deadline: RssDeadline,
-    ) -> Self {
-        Self {
-            resources: OperationContext::from_resources(budget, cancellation, deadline),
-        }
+    pub(crate) fn new(resources: OperationContext) -> Self {
+        Self { resources }
     }
 
     pub(crate) fn byte_budget(&self) -> &ResourceBudget {

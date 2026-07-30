@@ -3,13 +3,14 @@ use crate::cli::commands::*;
 use crate::cli::rendering::*;
 use crate::cli::safe_io::*;
 use crate::cli::{CliError, USAGE};
-use reir::{
-    AcquisitionMode, CapabilityCategory, Confidence, ConfidenceLevel, Edge, EdgeKind, EvidenceKind,
-    FactKind, FactRole, FactValue, Precision, Profile, ProfileBudget, Subject, SubjectKind,
-};
-use reir::{
-    Bundle, Capability, Diff, DiffItem, DiffItemKind, Evidence, Fact, ReconciliationKind, Slice,
-    SliceKind,
+use reir::api::v1::{
+    decision::{Profile, ProfileBudget},
+    model::{
+        AcquisitionMode, Bundle, Capability, CapabilityCategory, Confidence, ConfidenceLevel, Edge,
+        EdgeKind, Evidence, EvidenceKind, Fact, FactKind, FactRole, FactValue, Precision, Subject,
+        SubjectKind,
+    },
+    reconciliation::{Diff, DiffItem, DiffItemKind, ReconciliationKind, Slice, SliceKind},
 };
 use std::collections::HashMap;
 use std::process::ExitCode;

@@ -12,8 +12,17 @@ use super::safe_io::{
     write_bounded_text_file, write_json_file,
 };
 use reir::adapters::terraform::{terraform_dir_to_bundle, terraform_plan_json_to_bundle};
-use reir::{
-    compute_diff, format_pr_review_comment, reconcile_capabilities_for_target, slice_by_kind,
+use reir::api::v1::{
+    decision::{GatePolicy, GatePolicyFile, GateStatus, TargetGatePolicy, decide_validated_gate},
+    model::FactKind,
+    reconciliation::{
+        compute_diff, reconcile_capabilities_for_gate, reconcile_capabilities_for_target,
+        slice_by_kind,
+    },
+    rendering::{
+        format_ci_gate_json, format_ci_gate_output_from_decision, format_pr_review_comment,
+        format_sarif,
+    },
 };
 use std::process::ExitCode;
 
@@ -226,7 +235,7 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
         let error_diagnostics = bundle
             .facts
             .iter()
-            .filter(|fact| fact.kind == reir::FactKind::Diagnostic && fact.unknown_reason.is_some())
+            .filter(|fact| fact.kind == FactKind::Diagnostic && fact.unknown_reason.is_some())
             .count();
         if error_diagnostics > 0 {
             return Err(CliError::usage(format!(
@@ -266,7 +275,7 @@ pub(super) fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), C
     let mut sarif_out = None;
     let mut policy_file = None;
     // CLI flag overrides, layered on top of any --policy file.
-    let mut cli = reir::TargetGatePolicy::default();
+    let mut cli = TargetGatePolicy::default();
     let mut index = 0;
 
     while index < args.len() {
@@ -323,7 +332,7 @@ pub(super) fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), C
             let text = read_bounded_text(path).map_err(|error| match error {
                 CliError::Usage(message) | CliError::Runtime(message) => CliError::usage(message),
             })?;
-            Some(reir::GatePolicyFile::parse(&text).map_err(CliError::usage)?)
+            Some(GatePolicyFile::parse(&text).map_err(CliError::usage)?)
         }
         None => None,
     };
@@ -331,7 +340,7 @@ pub(super) fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), C
         Some(config) => config
             .gate_policy_for(target.as_deref())
             .map_err(CliError::usage)?,
-        None => reir::GatePolicy::production(),
+        None => GatePolicy::production(),
     };
     cli.apply_to(&mut policy);
 
@@ -361,27 +370,27 @@ pub(super) fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), C
     granted_bundle
         .validate_for_gate("granted")
         .map_err(CliError::usage)?;
-    let reconciliations = reir::reconcile_capabilities_for_gate(
+    let reconciliations = reconcile_capabilities_for_gate(
         &required_bundle.facts,
         &granted_bundle.facts,
         target.as_deref(),
         principal.as_deref(),
     );
 
-    let decision = reir::decide_validated_gate(
+    let decision = decide_validated_gate(
         &required_bundle.facts,
         &granted_bundle.facts,
         &reconciliations,
         policy,
     );
-    let ci_output = reir::format_ci_gate_output_from_decision(
+    let ci_output = format_ci_gate_output_from_decision(
         &decision,
         &required_bundle.facts,
         &granted_bundle.facts,
         &reconciliations,
     );
-    let ci_json_rendered = reir::format_ci_gate_json(&ci_output);
-    let sarif_rendered = reir::format_sarif(&decision);
+    let ci_json_rendered = format_ci_gate_json(&ci_output);
+    let sarif_rendered = format_sarif(&decision);
     if let Some(path) = ci_json_out {
         write_bounded_text_file(&path, &ci_json_rendered)?;
     }
@@ -402,7 +411,7 @@ pub(super) fn try_run_report_pr(args: &[String]) -> Result<(ExitCode, String), C
     };
     // The exit code follows the (policy-aware) gate status so --fail-on-excess /
     // --fail-on-unknown actually block, not just annotate.
-    let exit = if decision.status == reir::GateStatus::Fail {
+    let exit = if decision.status == GateStatus::Fail {
         ExitCode::from(1)
     } else {
         ExitCode::SUCCESS

@@ -2,13 +2,14 @@ use std::env;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream as StdTcpStream};
 
-use rsscript_runtime::{spawn_tokio_native, NativeAsyncPending};
+use rsscript_runtime::host::{NativeAsyncPending, spawn_tokio_native};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
 const DEFAULT_ENDPOINT: &str = "127.0.0.1:39090";
 const DEFAULT_PAYLOAD_BYTES: usize = 256 * 1024;
 
+#[allow(clippy::ptr_arg)] // Signature is part of the generated RSS native ABI.
 pub fn put_object_start(
     bucket: &String,
     key: &String,

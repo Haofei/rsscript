@@ -2,6 +2,9 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+#[path = "public_api_architecture.rs"]
+mod public_api_architecture;
+
 struct BoundaryCrate {
     package: &'static str,
     rust_name: &'static str,

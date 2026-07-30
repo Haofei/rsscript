@@ -5,8 +5,8 @@ use crate::network::{
     authorize_resolved_target,
 };
 use crate::{
-    NativeAsyncPending, ResourceBudget, RssCancellationToken, RssDeadline, cancellation_never,
-    deadline_after_ms, spawn_tokio_native,
+    NativeAsyncPending, OperationContext, ResourceBudget, cancellation_never, deadline_after_ms,
+    spawn_tokio_native,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -42,34 +42,37 @@ pub struct RssWebSocket {
 }
 
 pub fn websocket_connect(url: &str) -> NativeAsyncPending<Result<RssWebSocket, WebSocketError>> {
-    websocket_connect_with_resources(
+    websocket_connect_with_context(
         url,
-        cancellation_never(),
-        deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
+        OperationContext::new(
+            deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
+            cancellation_never(),
+            ResourceBudget::new(0),
+        ),
     )
 }
 
-pub fn websocket_connect_with_resources(
+pub fn websocket_connect_with_context(
     url: &str,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
 ) -> NativeAsyncPending<Result<RssWebSocket, WebSocketError>> {
-    websocket_connect_with_policy_and_resources(
-        url,
-        Arc::new(AllowAllNetworkTargetPolicy),
-        cancellation,
-        deadline,
-    )
+    websocket_connect_with_policy_and_context(url, Arc::new(AllowAllNetworkTargetPolicy), context)
 }
 
-pub fn websocket_connect_with_policy_and_resources(
+pub fn websocket_connect_with_policy_and_context(
     url: &str,
     policy: Arc<dyn NetworkTargetPolicy>,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
+) -> NativeAsyncPending<Result<RssWebSocket, WebSocketError>> {
+    websocket_connect_inner(url, policy, NetworkOperationContext::new(context))
+}
+
+fn websocket_connect_inner(
+    url: &str,
+    policy: Arc<dyn NetworkTargetPolicy>,
+    context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<RssWebSocket, WebSocketError>> {
     let url = url.to_string();
-    let context = NetworkOperationContext::from_controls(cancellation, deadline);
     spawn_tokio_native(async move {
         let request = url
             .as_str()
@@ -140,25 +143,32 @@ pub fn websocket_send_text(
     socket: &RssWebSocket,
     text: &str,
 ) -> NativeAsyncPending<Result<(), WebSocketError>> {
-    websocket_send_text_with_resources(
+    websocket_send_text_with_context(
         socket,
         text,
-        ResourceBudget::new(MAX_WEBSOCKET_MESSAGE_BYTES as u64),
-        cancellation_never(),
-        deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
+        OperationContext::new(
+            deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
+            cancellation_never(),
+            ResourceBudget::new(MAX_WEBSOCKET_MESSAGE_BYTES as u64),
+        ),
     )
 }
 
-pub fn websocket_send_text_with_resources(
+pub fn websocket_send_text_with_context(
     socket: &RssWebSocket,
     text: &str,
-    budget: ResourceBudget,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
+) -> NativeAsyncPending<Result<(), WebSocketError>> {
+    websocket_send_text_inner(socket, text, NetworkOperationContext::new(context))
+}
+
+fn websocket_send_text_inner(
+    socket: &RssWebSocket,
+    text: &str,
+    context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<(), WebSocketError>> {
     let writer = Arc::clone(&socket.writer);
     let text = text.to_string();
-    let context = NetworkOperationContext::from_resources(budget, cancellation, deadline);
     spawn_tokio_native(async move {
         context
             .byte_budget()
@@ -189,25 +199,32 @@ pub fn websocket_send_bytes(
     socket: &RssWebSocket,
     bytes: &[u8],
 ) -> NativeAsyncPending<Result<(), WebSocketError>> {
-    websocket_send_bytes_with_resources(
+    websocket_send_bytes_with_context(
         socket,
         bytes,
-        ResourceBudget::new(MAX_WEBSOCKET_MESSAGE_BYTES as u64),
-        cancellation_never(),
-        deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
+        OperationContext::new(
+            deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
+            cancellation_never(),
+            ResourceBudget::new(MAX_WEBSOCKET_MESSAGE_BYTES as u64),
+        ),
     )
 }
 
-pub fn websocket_send_bytes_with_resources(
+pub fn websocket_send_bytes_with_context(
     socket: &RssWebSocket,
     bytes: &[u8],
-    budget: ResourceBudget,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
+) -> NativeAsyncPending<Result<(), WebSocketError>> {
+    websocket_send_bytes_inner(socket, bytes, NetworkOperationContext::new(context))
+}
+
+fn websocket_send_bytes_inner(
+    socket: &RssWebSocket,
+    bytes: &[u8],
+    context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<(), WebSocketError>> {
     let writer = Arc::clone(&socket.writer);
     let bytes = bytes.to_vec();
-    let context = NetworkOperationContext::from_resources(budget, cancellation, deadline);
     spawn_tokio_native(async move {
         context
             .byte_budget()
@@ -237,22 +254,28 @@ pub fn websocket_send_bytes_with_resources(
 pub fn websocket_recv_text(
     socket: &RssWebSocket,
 ) -> NativeAsyncPending<Result<Option<String>, WebSocketError>> {
-    websocket_recv_text_with_resources(
+    websocket_recv_text_with_context(
         socket,
-        ResourceBudget::new(MAX_WEBSOCKET_MESSAGE_BYTES as u64),
-        cancellation_never(),
-        deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
+        OperationContext::new(
+            deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
+            cancellation_never(),
+            ResourceBudget::new(MAX_WEBSOCKET_MESSAGE_BYTES as u64),
+        ),
     )
 }
 
-pub fn websocket_recv_text_with_resources(
+pub fn websocket_recv_text_with_context(
     socket: &RssWebSocket,
-    budget: ResourceBudget,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
+) -> NativeAsyncPending<Result<Option<String>, WebSocketError>> {
+    websocket_recv_text_inner_pending(socket, NetworkOperationContext::new(context))
+}
+
+fn websocket_recv_text_inner_pending(
+    socket: &RssWebSocket,
+    context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<Option<String>, WebSocketError>> {
     let reader = Arc::clone(&socket.reader);
-    let context = NetworkOperationContext::from_resources(budget, cancellation, deadline);
     spawn_tokio_native(async move {
         websocket_with_controls(
             websocket_recv_text_inner(reader, context.byte_budget()),
@@ -301,22 +324,28 @@ async fn websocket_recv_text_inner(
 pub fn websocket_recv_bytes(
     socket: &RssWebSocket,
 ) -> NativeAsyncPending<Result<Option<Vec<u8>>, WebSocketError>> {
-    websocket_recv_bytes_with_resources(
+    websocket_recv_bytes_with_context(
         socket,
-        ResourceBudget::new(MAX_WEBSOCKET_MESSAGE_BYTES as u64),
-        cancellation_never(),
-        deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
+        OperationContext::new(
+            deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
+            cancellation_never(),
+            ResourceBudget::new(MAX_WEBSOCKET_MESSAGE_BYTES as u64),
+        ),
     )
 }
 
-pub fn websocket_recv_bytes_with_resources(
+pub fn websocket_recv_bytes_with_context(
     socket: &RssWebSocket,
-    budget: ResourceBudget,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
+) -> NativeAsyncPending<Result<Option<Vec<u8>>, WebSocketError>> {
+    websocket_recv_bytes_inner_pending(socket, NetworkOperationContext::new(context))
+}
+
+fn websocket_recv_bytes_inner_pending(
+    socket: &RssWebSocket,
+    context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<Option<Vec<u8>>, WebSocketError>> {
     let reader = Arc::clone(&socket.reader);
-    let context = NetworkOperationContext::from_resources(budget, cancellation, deadline);
     spawn_tokio_native(async move {
         websocket_with_controls(
             websocket_recv_bytes_inner(reader, context.byte_budget()),
@@ -374,20 +403,28 @@ async fn websocket_with_controls<T>(
 }
 
 pub fn websocket_close(socket: &RssWebSocket) -> NativeAsyncPending<Result<(), WebSocketError>> {
-    websocket_close_with_resources(
+    websocket_close_with_context(
         socket,
-        cancellation_never(),
-        deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
+        OperationContext::new(
+            deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
+            cancellation_never(),
+            ResourceBudget::new(0),
+        ),
     )
 }
 
-pub fn websocket_close_with_resources(
+pub fn websocket_close_with_context(
     socket: &RssWebSocket,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
+) -> NativeAsyncPending<Result<(), WebSocketError>> {
+    websocket_close_inner(socket, NetworkOperationContext::new(context))
+}
+
+fn websocket_close_inner(
+    socket: &RssWebSocket,
+    context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<(), WebSocketError>> {
     let writer = Arc::clone(&socket.writer);
-    let context = NetworkOperationContext::from_controls(cancellation, deadline);
     spawn_tokio_native(async move {
         websocket_with_controls(
             async {
@@ -456,11 +493,14 @@ mod tests {
     #[test]
     fn strict_network_policy_rejects_loopback_websocket_targets() {
         let error =
-            match Executor::new().run_pending(super::websocket_connect_with_policy_and_resources(
+            match Executor::new().run_pending(super::websocket_connect_with_policy_and_context(
                 "ws://127.0.0.1:9",
                 Arc::new(crate::DenyPrivateNetworkTargetPolicy),
-                crate::cancellation_never(),
-                crate::deadline_after_ms(1_000),
+                crate::OperationContext::new(
+                    crate::deadline_after_ms(1_000),
+                    crate::cancellation_never(),
+                    crate::ResourceBudget::new(0),
+                ),
             )) {
                 Ok(_) => panic!("strict policy must reject loopback"),
                 Err(error) => error,
@@ -544,11 +584,13 @@ mod tests {
             .run_pending(super::websocket_connect(&format!("ws://127.0.0.1:{port}")))
             .expect("websocket connect should succeed");
         let error = executor
-            .run_pending(super::websocket_recv_bytes_with_resources(
+            .run_pending(super::websocket_recv_bytes_with_context(
                 &socket,
-                crate::ResourceBudget::new(2),
-                crate::cancellation_never(),
-                crate::deadline_after_ms(1_000),
+                crate::OperationContext::new(
+                    crate::deadline_after_ms(1_000),
+                    crate::cancellation_never(),
+                    crate::ResourceBudget::new(2),
+                ),
             ))
             .expect_err("message should exceed shared budget");
         assert!(error.message.contains("byte budget exhausted"));

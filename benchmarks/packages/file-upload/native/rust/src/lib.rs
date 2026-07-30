@@ -2,7 +2,7 @@ use std::env;
 use std::sync::{Arc, Once, OnceLock};
 use std::time::Instant;
 
-use rsscript_runtime::{NativeAsyncPending, spawn_tokio_native};
+use rsscript_runtime::host::{NativeAsyncPending, spawn_tokio_native};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tracing::info;
@@ -12,6 +12,7 @@ const DEFAULT_PAYLOAD_BYTES: usize = 64 * 1024;
 static TRACE_INIT: Once = Once::new();
 static PAYLOAD_CACHE: OnceLock<Arc<Vec<u8>>> = OnceLock::new();
 
+#[allow(clippy::ptr_arg)] // Signature is part of the generated RSS native ABI.
 pub fn upload_start(path: &String, body: &String) -> NativeAsyncPending<Result<(), String>> {
     init_tracing();
     let started = Instant::now();

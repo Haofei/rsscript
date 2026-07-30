@@ -5,9 +5,12 @@ use reir::adapters::rsscript::{
     rsscript_lock_json_to_bundle, rsscript_metadata_json_to_bundle,
     rsscript_publish_json_to_bundle, rsscript_tree_json_to_bundle, rsscript_vendor_json_to_bundle,
 };
-use reir::{
-    Bundle, Diff, FactRole, Reconciliation, ReconciliationStatus, Slice,
-    reconcile_capabilities_for_target, slice_by_kind,
+use reir::api::v1::{
+    model::{Bundle, FactRole},
+    reconciliation::{
+        Diff, Reconciliation, ReconciliationStatus, Slice, reconcile_capabilities_for_target,
+        slice_by_kind,
+    },
 };
 use std::collections::BTreeMap;
 use std::process::ExitCode;

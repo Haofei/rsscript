@@ -2,10 +2,10 @@
 mod common;
 pub(crate) use base64::Engine;
 pub(crate) use rsscript::{
-    EvalError, NativeInterpreterFn, NativeRustDependency, NativeValue, eval_package_main_with_args,
-    eval_source_main, eval_source_main_with_args, eval_source_main_with_args_and_native_bindings,
+    EvalError, NativeInterpreterFn, NativeRustDependency, NativeValue,
     lower_source_to_rust_package, lower_sources_to_rust_package_with_options,
-    write_generated_rust_package,
+    reg_vm_eval_package_main_with_args, reg_vm_eval_source_main, reg_vm_eval_source_main_with_args,
+    reg_vm_eval_source_main_with_args_and_native_bindings, write_generated_rust_package,
 };
 pub(crate) use sha1::{Digest, Sha1};
 pub(crate) use std::collections::BTreeMap;
