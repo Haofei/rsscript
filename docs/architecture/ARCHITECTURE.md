@@ -46,7 +46,7 @@ inventing backend-specific semantics.
 ### Package Domain
 
 `package/` owns manifests, `.rssi` contracts, dependency graphs, semantic locks,
-review aggregation, snapshots, publication, and vendoring. Package operations
+review aggregation and snapshots. Package operations
 consume compiler and review APIs; they do not define language semantics.
 
 Security-sensitive package operations must act on an immutable snapshot. A

@@ -329,23 +329,6 @@ pub struct RsScriptPackageTreeNode {
     pub dependencies: Vec<RsScriptPackageTreeNode>,
 }
 
-/// Input from RSScript package publish dry-run output.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RsScriptPackagePublishInput {
-    pub package: RsScriptPackageIdentityInput,
-    #[serde(default)]
-    pub ready: bool,
-    pub risk: RsScriptPackageRisk,
-    pub registry_index: RsScriptRegistryIndexInput,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub registry_target: Option<RsScriptRegistryTargetInput>,
-    #[serde(default)]
-    pub archive_format: String,
-    pub archive_hash: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub checks: Vec<RsScriptPublishCheckInput>,
-}
-
 /// Input from RSScript package metadata write/verify output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RsScriptPackageMetadataInput {
@@ -382,120 +365,12 @@ pub struct RsScriptPackageMetadataMismatch {
     pub actual_sha256: Option<String>,
 }
 
-/// Input from RSScript package vendor output.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RsScriptPackageVendorInput {
-    pub package: RsScriptPackageIdentityInput,
-    #[serde(default)]
-    pub package_dir: String,
-    pub vendor_dir: String,
-    #[serde(default)]
-    pub dry_run: bool,
-    #[serde(default)]
-    pub ok: bool,
-    pub risk: RsScriptPackageRisk,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub entries: Vec<RsScriptPackageVendorEntry>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unresolved: Vec<RsScriptPackageVendorUnresolved>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub reasons: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RsScriptPackageVendorEntry {
-    pub name: String,
-    pub version: String,
-    pub source_path: String,
-    pub vendor_path: String,
-    pub checksum: String,
-    #[serde(default)]
-    pub native: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RsScriptPackageVendorUnresolved {
-    pub name: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub requirement: Option<String>,
-    pub source: String,
-    pub reason: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RsScriptPackageIdentityInput {
     pub name: String,
     pub version: String,
     #[serde(default)]
     pub edition: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RsScriptRegistryIndexInput {
-    pub schema: String,
-    pub name: String,
-    pub version: String,
-    pub checksum: String,
-    pub interface_hash: String,
-    #[serde(default)]
-    pub effective_interface_hash_default: String,
-    pub review_hash: String,
-    #[serde(default)]
-    pub review_schema: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub native_hash: Option<String>,
-    pub risk: RsScriptPackageRisk,
-    #[serde(default)]
-    pub native: bool,
-    #[serde(default, rename = "unsafe", alias = "unsafe_apis")]
-    pub unsafe_boundary: bool,
-    #[serde(default)]
-    pub dependencies: BTreeMap<String, String>,
-    #[serde(default)]
-    pub features: BTreeMap<String, Vec<String>>,
-    #[serde(default)]
-    pub footprint_default: RsScriptRegistryFootprintInput,
-}
-
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct RsScriptRegistryFootprintInput {
-    #[serde(default)]
-    pub direct_dependencies: usize,
-    #[serde(default)]
-    pub total_packages: usize,
-    #[serde(default)]
-    pub path_dependencies: usize,
-    #[serde(default)]
-    pub unresolved_dependencies: usize,
-    #[serde(default)]
-    pub native: bool,
-    #[serde(default)]
-    pub native_packages: usize,
-    #[serde(default)]
-    pub build_time_execution: bool,
-    #[serde(default)]
-    pub build_execution_packages: usize,
-    #[serde(default)]
-    pub high_risk_packages: usize,
-    #[serde(default)]
-    pub unknown_facts: usize,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RsScriptRegistryTargetInput {
-    pub registry_dir: String,
-    pub index_path: String,
-    pub archive_manifest_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RsScriptPublishCheckInput {
-    pub name: String,
-    #[serde(default)]
-    pub ok: bool,
-    pub risk: RsScriptPackageRisk,
-    #[serde(default)]
-    pub detail: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -2,9 +2,8 @@ use std::path::Path;
 
 use crate::package::{
     PackageCheck, PackageDependencyKind, PackageDiff, PackageLock, PackageLockDiff,
-    PackageMetadataReport, PackagePublishDryRun, PackageReview, PackageReviewAwaitBoundary,
-    PackageReviewAwaitSite, PackageReviewDependency, PackageReviewExport, PackageTree,
-    PackageTreeNode, PackageVendorReport, package_risk_label,
+    PackageMetadataReport, PackageReview, PackageReviewAwaitBoundary, PackageReviewAwaitSite,
+    PackageReviewDependency, PackageReviewExport, PackageTree, PackageTreeNode, package_risk_label,
 };
 use crate::review::format_review_human;
 
@@ -72,28 +71,6 @@ pub fn format_package_tree_reir_json(tree: &PackageTree) -> String {
     let bundle = reir::adapters::rsscript::rsscript_tree_json_to_bundle(&tree_json)
         .expect("package tree JSON should convert to REIR");
     serde_json::to_string(&bundle).expect("REIR package tree JSON serialization should not fail")
-}
-
-pub fn format_package_publish_json(publish: &PackagePublishDryRun) -> String {
-    serde_json::to_string(publish).expect("package publish JSON serialization should not fail")
-}
-
-pub fn format_package_publish_reir_json(publish: &PackagePublishDryRun) -> String {
-    let publish_json = format_package_publish_json(publish);
-    let bundle = reir::adapters::rsscript::rsscript_publish_json_to_bundle(&publish_json)
-        .expect("package publish JSON should convert to REIR");
-    serde_json::to_string(&bundle).expect("REIR package publish JSON serialization should not fail")
-}
-
-pub fn format_package_vendor_json(vendor: &PackageVendorReport) -> String {
-    serde_json::to_string(vendor).expect("package vendor JSON serialization should not fail")
-}
-
-pub fn format_package_vendor_reir_json(vendor: &PackageVendorReport) -> String {
-    let vendor_json = format_package_vendor_json(vendor);
-    let bundle = reir::adapters::rsscript::rsscript_vendor_json_to_bundle(&vendor_json)
-        .expect("package vendor JSON should convert to REIR");
-    serde_json::to_string(&bundle).expect("REIR package vendor JSON serialization should not fail")
 }
 
 pub fn format_package_lock_json(lock: &PackageLock) -> String {
@@ -691,79 +668,6 @@ pub fn format_package_tree_human(tree: &PackageTree) -> String {
         tree.summary.unknown_risk_packages
     ));
     format_package_tree_node_human(&tree.root, "", true, &mut output);
-    output
-}
-
-pub fn format_package_publish_human(publish: &PackagePublishDryRun) -> String {
-    let mut output = String::new();
-    output.push_str(&format!(
-        "package publish dry-run {} {} {} risk {}\n",
-        publish.package.name,
-        publish.package.version,
-        if publish.ready { "ready" } else { "blocked" },
-        package_risk_label(publish.risk)
-    ));
-    output.push_str(&format!(
-        "archive: {} {} files {}\n",
-        publish.archive_format,
-        publish.archive_files.len(),
-        publish.archive_hash
-    ));
-    output.push_str(&format!(
-        "registry index: {} {} {} risk {} native={} unsafe={}\n",
-        publish.registry_index.schema,
-        publish.registry_index.name,
-        publish.registry_index.version,
-        package_risk_label(publish.registry_index.risk),
-        publish.registry_index.native,
-        publish.registry_index.unsafe_boundary
-    ));
-    if let Some(target) = &publish.registry_target {
-        output.push_str(&format!(
-            "registry target: {} index={} archive_manifest={}\n",
-            target.registry_dir, target.index_path, target.archive_manifest_path
-        ));
-    }
-    for check in &publish.checks {
-        output.push_str(&format!(
-            "{}: {} ({}) {}\n",
-            check.name,
-            if check.ok { "ok" } else { "failed" },
-            package_risk_label(check.risk),
-            check.detail
-        ));
-    }
-    if !publish.reasons.is_empty() {
-        output.push_str("reasons:\n");
-        for reason in &publish.reasons {
-            output.push_str(&format!("  - {reason}\n"));
-        }
-    }
-    output
-}
-
-pub fn format_package_vendor_human(vendor: &PackageVendorReport) -> String {
-    let mut output = String::new();
-    output.push_str(&format!(
-        "package vendor {} {} {} risk {}\n",
-        vendor.package.name,
-        vendor.package.version,
-        if vendor.dry_run { "dry-run" } else { "wrote" },
-        package_risk_label(vendor.risk)
-    ));
-    output.push_str(&format!("vendor dir: {}\n", vendor.vendor_dir));
-    for entry in &vendor.entries {
-        output.push_str(&format!(
-            "vendored {} {} -> {} {}\n",
-            entry.name, entry.version, entry.vendor_path, entry.checksum
-        ));
-    }
-    for dependency in &vendor.unresolved {
-        output.push_str(&format!(
-            "unresolved {} {} ({})\n",
-            dependency.name, dependency.source, dependency.reason
-        ));
-    }
     output
 }
 

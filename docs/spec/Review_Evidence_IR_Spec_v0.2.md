@@ -1652,7 +1652,7 @@ native hash value, the corresponding `supply_chain` fact is `unknown` rather tha
 evidence.
 Future lock-update REIR producers may emit update-risk, per-package risk, and
 changed-field facts with `lockfile_entry` evidence so dependency update review
-can be merged with package, graph, and publish evidence. The top-level
+can be merged with package and graph evidence. The top-level
 update-risk fact uses `/risk` evidence. Added or changed package/field evidence
 points at the new lockfile; removed package or field evidence points at the old
 lockfile because the reviewed entry no longer exists in the new artifact.
@@ -1665,29 +1665,6 @@ package-review evidence. For resolved `path+` graph nodes, `dependency_path`
 evidence uses the resolved package directory as its evidence file; unresolved
 registry, git, or missing path nodes leave `evidence.file` empty rather than
 inventing a local artifact path.
-The RSScript publish dry-run JSON can be adapted into registry/archive
-`supply_chain` facts and publish check results with `registry_metadata`
-evidence. The RSScript publish adapter consumes the current
-`rss.registry.index.v1` dry-run shape, including review schema, default feature
-selection, default graph footprint, and native/unsafe registry review signals.
-It emits `native_boundary` and `unsafe_boundary` facts for the registry preview
-`native` and `unsafe_apis` fields so `native_unsafe_slice` can include publish
-preview risk. The adapter keeps accepting the older `unsafe` field for
-compatibility with cached preview artifacts. For effective-interface evidence it prefers
-`/registry_index/effective_interface_hash_default` and falls back to the older
-`/registry_index/interface_hash` pointer when necessary. These are preview facts
-for CI and registry ingestion; they do not mean a registry has accepted or
-signed the package. When the publish dry-run includes a registry target, REIR
-evidence for `/registry_index/...` facts uses the planned registry index path as
-its evidence file, and archive checksum evidence uses the planned archive
-manifest path. Publish readiness and per-check facts use the target registry
-directory as evidence because they summarize the dry-run decision rather than a
-single index/archive file. This lets CI point reviewers at the exact dry-run
-artifact or target that would be written without treating the artifact as already
-published. If a publish preview input lacks an expected hash value, the
-corresponding `supply_chain` fact is `unknown` rather than `true`; missing
-checksums or interface/review hashes must not be represented as verified
-supply-chain evidence.
 The implemented RSScript metadata producer (`rss pkg metadata --reir`, including
 `--verify`) emits metadata status, generated-artifact `supply_chain` facts, and
 stale/missing/unreadable mismatch `policy_result` facts with `package_metadata`
@@ -1700,17 +1677,7 @@ evidence files remain the artifact paths themselves; hash details must not be
 appended to `evidence.file`. This producer describes whether review artifacts are
 current; it does not replace the review bundle stored at `review/reir/rsscript.json`.
 Generated REIR artifacts under `review/reir/` are review evidence, not package
-payload. RSScript package archives must exclude them from content hashing so CI
-or registry review outputs do not alter package checksums.
-The implemented RSScript vendor producer (`rss pkg vendor --reir`) emits
-vendored dependency checksum `supply_chain` facts and unresolved dependency-risk
-facts with `package_metadata` evidence. This captures offline dependency
-materialization without pretending unresolved registry or git sources were
-reviewed. The top-level vendor status fact uses the vendor directory as its
-evidence file and `/ok` as its JSON pointer. Vendored entry checksum facts use
-the entry's concrete vendor path as the evidence file; unresolved dependency
-facts use the vendor directory because there is no materialized dependency
-artifact.
+payload.
 
 Await-site metadata from package review should be preserved as `async_boundary`
 facts. The fact subject is the enclosing RSScript function, evidence points at
@@ -2162,8 +2129,8 @@ over existing REIR bundle JSON. The RSScript collector accepts `--review-map`
 JSON from a review-map artifact, `--package-review` JSON from `rss pkg review
 --json`, or both; package-review JSON may also carry an embedded
 `review_map`. It also accepts package-manager JSON artifacts from
-`--package-check`, `--package-lock`, `--lock-update`, `--package-tree`,
-`--package-publish`, `--package-metadata`, and `--package-vendor`, then merges
+`--package-check`, `--package-lock`, `--lock-update`, `--package-tree`, and
+`--package-metadata`, then merges
 the resulting RSScript producer bundles into one deduped bundle. When
 `--package-lock` input JSON does not already carry `lockfile_path`, the
 collector uses the input artifact path as lockfile-entry evidence so collected
@@ -2178,7 +2145,6 @@ rss pkg ci --json . > review/reir/rsscript-check.json
 rss pkg metadata .   # writes review/package-review.json and review/reir/rsscript.json
 rss pkg metadata --verify .   # verifies committed package review and REIR artifacts
 rss pkg metadata --verify --reir . > review/reir/rsscript-metadata-verify.json
-rss pkg vendor --dry-run --reir . > review/reir/rsscript-vendor.json
 # planned non-RSScript producers:
 # reir collect --producer k8s --from rendered/prod --out review/reir/k8s.json
 # reir collect --producer terraform-plan --from tfplan.json --out review/reir/terraform.json

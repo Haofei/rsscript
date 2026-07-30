@@ -63,9 +63,7 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
     let mut package_lock = None;
     let mut lock_update = None;
     let mut package_tree = None;
-    let mut package_publish = None;
     let mut package_metadata = None;
-    let mut package_vendor = None;
     let mut package_name = None;
     let mut from = None;
     let mut out = None;
@@ -91,14 +89,8 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
             "--package-tree" => {
                 package_tree = Some(take_value(args, &mut index, "--package-tree")?)
             }
-            "--package-publish" => {
-                package_publish = Some(take_value(args, &mut index, "--package-publish")?)
-            }
             "--package-metadata" => {
                 package_metadata = Some(take_value(args, &mut index, "--package-metadata")?)
-            }
-            "--package-vendor" => {
-                package_vendor = Some(take_value(args, &mut index, "--package-vendor")?)
             }
             "--package-name" => {
                 package_name = Some(take_value(args, &mut index, "--package-name")?)
@@ -125,9 +117,7 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
             || package_lock.is_some()
             || lock_update.is_some()
             || package_tree.is_some()
-            || package_publish.is_some()
             || package_metadata.is_some()
-            || package_vendor.is_some()
             || package_name.is_some()
         {
             return Err(CliError::usage(
@@ -189,9 +179,7 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
         && package_lock.is_none()
         && lock_update.is_none()
         && package_tree.is_none()
-        && package_publish.is_none()
         && package_metadata.is_none()
-        && package_vendor.is_none()
     {
         return Err(CliError::usage(
             "collect requires at least one RSScript JSON input",
@@ -211,12 +199,8 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
         read_optional_text_accounted(lock_update.as_deref(), &mut aggregate_input_bytes)?;
     let package_tree_json =
         read_optional_text_accounted(package_tree.as_deref(), &mut aggregate_input_bytes)?;
-    let package_publish_json =
-        read_optional_text_accounted(package_publish.as_deref(), &mut aggregate_input_bytes)?;
     let package_metadata_json =
         read_optional_text_accounted(package_metadata.as_deref(), &mut aggregate_input_bytes)?;
-    let package_vendor_json =
-        read_optional_text_accounted(package_vendor.as_deref(), &mut aggregate_input_bytes)?;
     let bundle = collect_rsscript_bundle(RsscriptCollectInputs {
         review_map_json: review_map_json.as_deref(),
         package_review_json: package_review_json.as_deref(),
@@ -225,9 +209,7 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
         package_lock_path: package_lock.as_deref(),
         lock_update_json: lock_update_json.as_deref(),
         package_tree_json: package_tree_json.as_deref(),
-        package_publish_json: package_publish_json.as_deref(),
         package_metadata_json: package_metadata_json.as_deref(),
-        package_vendor_json: package_vendor_json.as_deref(),
         package_name: package_name.as_deref(),
     })?;
 

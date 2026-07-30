@@ -2,8 +2,7 @@ use super::CliError;
 use super::safe_io::{MAX_CLI_INPUT_BYTES, read_bounded_text_accounted};
 use reir::adapters::rsscript::{
     rsscript_check_json_to_bundle, rsscript_json_to_bundle, rsscript_lock_diff_json_to_bundle,
-    rsscript_lock_json_to_bundle, rsscript_metadata_json_to_bundle,
-    rsscript_publish_json_to_bundle, rsscript_tree_json_to_bundle, rsscript_vendor_json_to_bundle,
+    rsscript_lock_json_to_bundle, rsscript_metadata_json_to_bundle, rsscript_tree_json_to_bundle,
 };
 use reir::api::v1::{
     model::{Bundle, FactRole},
@@ -25,9 +24,7 @@ pub(super) struct RsscriptCollectInputs<'a> {
     pub(super) package_lock_path: Option<&'a str>,
     pub(super) lock_update_json: Option<&'a str>,
     pub(super) package_tree_json: Option<&'a str>,
-    pub(super) package_publish_json: Option<&'a str>,
     pub(super) package_metadata_json: Option<&'a str>,
-    pub(super) package_vendor_json: Option<&'a str>,
     pub(super) package_name: Option<&'a str>,
 }
 
@@ -74,24 +71,10 @@ pub(super) fn collect_rsscript_bundle(
             CliError::runtime(format!("failed to collect RSScript tree evidence: {error}"))
         })?);
     }
-    if let Some(json) = inputs.package_publish_json {
-        bundles.push(rsscript_publish_json_to_bundle(json).map_err(|error| {
-            CliError::runtime(format!(
-                "failed to collect RSScript publish evidence: {error}"
-            ))
-        })?);
-    }
     if let Some(json) = inputs.package_metadata_json {
         bundles.push(rsscript_metadata_json_to_bundle(json).map_err(|error| {
             CliError::runtime(format!(
                 "failed to collect RSScript metadata evidence: {error}"
-            ))
-        })?);
-    }
-    if let Some(json) = inputs.package_vendor_json {
-        bundles.push(rsscript_vendor_json_to_bundle(json).map_err(|error| {
-            CliError::runtime(format!(
-                "failed to collect RSScript vendor evidence: {error}"
             ))
         })?);
     }

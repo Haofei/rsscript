@@ -286,9 +286,7 @@ fn collect_rsscript_bundle_merges_package_manager_inputs() {
         package_lock_path: None,
         lock_update_json: None,
         package_tree_json: None,
-        package_publish_json: None,
         package_metadata_json: None,
-        package_vendor_json: None,
         package_name: None,
     })
     .expect("RSScript package-manager JSON should collect");

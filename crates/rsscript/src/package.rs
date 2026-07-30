@@ -23,11 +23,9 @@ mod lock;
 mod metadata;
 mod native;
 mod policy;
-mod publish;
 mod review;
 mod source_set;
 mod types;
-mod vendor;
 
 pub const PACKAGE_REVIEW_METADATA_SCHEMA: &str = "rss.review.package.v1";
 
@@ -40,7 +38,7 @@ pub(crate) const CARGO_OUTPUT_MAX_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const CARGO_METADATA_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
-pub use artifact_store::{ArtifactStore, DirectoryCommitOutcome};
+pub use artifact_store::ArtifactStore;
 pub use authorization::{
     AuthorizedPackage, PreparedPackage, prepare_authorized_package, prepare_package_for_execution,
 };
@@ -57,11 +55,9 @@ pub use lock::{diff_package_locks, lock_package_dir};
 pub use metadata::{package_lowering_input, package_metadata, package_metadata_verify};
 pub(crate) use native::package_native_plugin_build_dependencies;
 use native::{manifest_native_enabled, manifest_native_unsafe_boundary};
-pub use publish::{publish_package_dry_run, publish_package_dry_run_with_registry};
 pub use review::review_package_dir;
 use source_set::{LoadedPackage, Manifest, ManifestNativeRust, PackageSource};
 pub use types::*;
-pub use vendor::vendor_package_dir;
 
 pub fn package_sources(package_dir: &Path) -> Result<Vec<PackageSourceFile>, String> {
     let package = source_set::load_package(package_dir)?;
@@ -880,19 +876,6 @@ pub(super) fn dedup_diagnostics(diagnostics: &mut Vec<Diagnostic>) {
             diagnostic.span.length,
         ))
     });
-}
-
-fn sanitize_vendor_path_component(value: &str) -> String {
-    value
-        .chars()
-        .map(|character| {
-            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
-                character
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 fn canonical_path_label(path: &Path) -> String {

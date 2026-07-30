@@ -449,7 +449,6 @@ crates/rsscript/tests/fixtures/pass/selfhost-package-root-manifest.rss
 crates/rsscript/tests/fixtures/pass/selfhost-package-source-set/src/main.rss
 crates/rsscript/tests/fixtures/pass/selfhost-package-source-set/tools/check.rss
 crates/rsscript/tests/fixtures/pass/selfhost-package-sources.rss
-crates/rsscript/tests/fixtures/pass/selfhost-package-vendor-copy.rss
 crates/rsscript/tests/fixtures/pass/selfhost-review-classifier.rss
 crates/rsscript/tests/fixtures/pass/selfhost-rustc-remap.rss
 crates/rsscript/tests/fixtures/pass/set-to-list.rss

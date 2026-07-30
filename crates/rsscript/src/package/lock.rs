@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
@@ -11,20 +11,13 @@ use super::dependency::{DependencyResolutionScope, resolve_dependency_graph};
 use super::review::review_package_dir_captured_with_features;
 use super::source_set::{ManifestNativeRust, load_package_with_features};
 use super::{
-    LoadedPackage, PackageArchiveFile, PackageLock, PackageLockDiff, PackageLockFieldChange,
-    PackageLockMetadata, PackageLockPackage, PackageLockPackageChange, PackageReview,
-    PackageReviewAwaitBoundary, PackageReviewFileKind, PackageRisk, PackageSource,
-    collect_regular_files, ensure_package_path_within_root,
-    package_feature_may_change_boundary_risk, package_path_metadata, package_risk_label,
-    relative_path,
+    LoadedPackage, PackageLock, PackageLockDiff, PackageLockFieldChange, PackageLockMetadata,
+    PackageLockPackage, PackageLockPackageChange, PackageReview, PackageReviewAwaitBoundary,
+    PackageReviewFileKind, PackageRisk, PackageSource, collect_regular_files,
+    package_feature_may_change_boundary_risk, package_risk_label, relative_path,
 };
 
 const PACKAGE_LOCK_MAX_BYTES: u64 = 16 * 1024 * 1024;
-const ARCHIVE_MAX_FILES: usize = 20_000;
-const ARCHIVE_MAX_ENTRIES: usize = 40_000;
-const ARCHIVE_MAX_BYTES: u64 = 512 * 1024 * 1024;
-const ARCHIVE_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
-const ARCHIVE_MAX_DEPTH: usize = 64;
 const NATIVE_HASH_MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
 const NATIVE_HASH_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const BINDING_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
@@ -440,169 +433,6 @@ pub(super) fn package_checksum(package: &LoadedPackage, native_hash: Option<&str
     sha256_label(input.as_bytes())
 }
 
-pub(super) fn package_archive_files(package_dir: &Path) -> Result<Vec<PackageArchiveFile>, String> {
-    let mut paths = Vec::new();
-    let root = std::fs::canonicalize(package_dir)
-        .map_err(|error| format!("failed to canonicalize {}: {error}", package_dir.display()))?;
-    let mut traversal_budget = ArchiveBudget::default();
-    collect_package_archive_paths(
-        package_dir,
-        &root,
-        package_dir,
-        &mut paths,
-        0,
-        &mut traversal_budget,
-    )?;
-    paths.sort();
-    let mut read_bytes = 0_u64;
-    paths
-        .into_iter()
-        .map(|path| package_archive_file(package_dir, &path, &mut read_bytes))
-        .collect()
-}
-
-fn collect_package_archive_paths(
-    root: &Path,
-    canonical_root: &Path,
-    path: &Path,
-    files: &mut Vec<PathBuf>,
-    depth: usize,
-    budget: &mut ArchiveBudget,
-) -> Result<(), String> {
-    budget.check_depth(depth, path)?;
-    let metadata = package_path_metadata(path, "package archive")?;
-    ensure_package_path_within_root(canonical_root, path, "package archive")?;
-    if metadata.is_file() {
-        budget.add_file(metadata.len(), path)?;
-        files.push(path.to_path_buf());
-        return Ok(());
-    }
-    if !metadata.is_dir() {
-        return Ok(());
-    }
-    let entries = fs::read_dir(path)
-        .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    for entry in entries {
-        let entry = entry
-            .map_err(|error| format!("failed to read entry in {}: {error}", path.display()))?;
-        budget.add_entry(path)?;
-        let path = entry.path();
-        let name = entry.file_name();
-        if should_skip_archive_entry(root, &path, &name.to_string_lossy()) {
-            continue;
-        }
-        collect_package_archive_paths(root, canonical_root, &path, files, depth + 1, budget)?;
-    }
-    Ok(())
-}
-
-fn should_skip_archive_entry(root: &Path, path: &Path, name: &str) -> bool {
-    if matches!(
-        name,
-        ".git"
-            | "target"
-            | "vendor"
-            | ".DS_Store"
-            | ".rsscript-artifacts.lock"
-            | super::source_set::SNAPSHOT_MANIFEST_SOURCE_FILE
-    ) {
-        return true;
-    }
-    let relative = relative_path(root, path);
-    matches!(
-        relative.as_str(),
-        "review/package-review.json" | "vendor/rss-vendor.json"
-    ) || relative.starts_with("review/reir/")
-}
-
-fn package_archive_file(
-    root: &Path,
-    path: &Path,
-    read_bytes: &mut u64,
-) -> Result<PackageArchiveFile, String> {
-    let (size, sha256) = hash_file_streaming(
-        path,
-        ARCHIVE_MAX_FILE_BYTES,
-        read_bytes,
-        ARCHIVE_MAX_BYTES,
-        "package archive",
-    )?;
-    Ok(PackageArchiveFile {
-        path: relative_path(root, path),
-        size,
-        sha256,
-    })
-}
-
-#[derive(Debug, Default)]
-struct ArchiveBudget {
-    files: usize,
-    entries: usize,
-    bytes: u64,
-}
-
-impl ArchiveBudget {
-    fn check_depth(&self, depth: usize, path: &Path) -> Result<(), String> {
-        if depth > ARCHIVE_MAX_DEPTH {
-            return Err(format!(
-                "package archive exceeded depth limit of {ARCHIVE_MAX_DEPTH} at {}",
-                path.display()
-            ));
-        }
-        Ok(())
-    }
-
-    fn add_entry(&mut self, path: &Path) -> Result<(), String> {
-        self.entries = self.entries.saturating_add(1);
-        if self.entries > ARCHIVE_MAX_ENTRIES {
-            return Err(format!(
-                "package archive exceeded entry limit of {ARCHIVE_MAX_ENTRIES} below {}",
-                path.display()
-            ));
-        }
-        Ok(())
-    }
-
-    fn add_file(&mut self, size: u64, path: &Path) -> Result<(), String> {
-        if size > ARCHIVE_MAX_FILE_BYTES {
-            return Err(format!(
-                "package archive file {} exceeded byte limit of {ARCHIVE_MAX_FILE_BYTES}",
-                path.display()
-            ));
-        }
-        self.files = self.files.saturating_add(1);
-        if self.files > ARCHIVE_MAX_FILES {
-            return Err(format!(
-                "package archive exceeded file limit of {ARCHIVE_MAX_FILES}"
-            ));
-        }
-        self.bytes = self
-            .bytes
-            .checked_add(size)
-            .ok_or_else(|| "package archive byte accounting overflowed".to_string())?;
-        if self.bytes > ARCHIVE_MAX_BYTES {
-            return Err(format!(
-                "package archive exceeded total byte limit of {ARCHIVE_MAX_BYTES}"
-            ));
-        }
-        Ok(())
-    }
-}
-
-pub(super) fn package_archive_hash(files: &[PackageArchiveFile]) -> String {
-    let mut input = String::new();
-    input.push_str("rss.package.archive.v1\n");
-    for file in files {
-        input.push_str(&file.path);
-        input.push('\n');
-        input.push_str(&file.size.to_string());
-        input.push('\n');
-        input.push_str(&file.sha256);
-        input.push('\n');
-    }
-    sha256_label(input.as_bytes())
-}
-
 pub(super) fn effective_interface_hash(sources: &[PackageSource], features: &[String]) -> String {
     let filtered = sources
         .iter()
@@ -991,6 +821,7 @@ fn digest_label(digest: impl IntoIterator<Item = u8>) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs::OpenOptions;
+    use std::path::PathBuf;
 
     use super::*;
 
@@ -1150,41 +981,6 @@ mod tests {
     }
 
     #[test]
-    fn archive_rejects_oversized_file_without_loading_it() {
-        let root = test_dir("archive-size");
-        fs::create_dir_all(&root).expect("fixture root");
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(root.join("large.bin"))
-            .expect("fixture file");
-        file.set_len(ARCHIVE_MAX_FILE_BYTES + 1)
-            .expect("sparse oversized file");
-
-        let error = package_archive_files(&root).expect_err("archive file must be bounded");
-
-        assert!(error.contains("exceeded byte limit"), "{error}");
-        fs::remove_dir_all(root).expect("fixture cleanup");
-    }
-
-    #[test]
-    fn archive_rejects_excessive_directory_depth() {
-        let root = test_dir("archive-depth");
-        let mut directory = root.clone();
-        for _ in 0..=ARCHIVE_MAX_DEPTH {
-            directory.push("nested");
-        }
-        fs::create_dir_all(&directory).expect("deep fixture");
-        fs::write(directory.join("file.txt"), b"content").expect("fixture file");
-
-        let error = package_archive_files(&root).expect_err("archive depth must be bounded");
-
-        assert!(error.contains("exceeded depth limit"), "{error}");
-        fs::remove_dir_all(root).expect("fixture cleanup");
-    }
-
-    #[test]
     fn streaming_hash_matches_in_memory_hash() {
         let root = test_dir("streaming-hash");
         fs::create_dir_all(&root).expect("fixture root");
@@ -1195,9 +991,9 @@ mod tests {
 
         let (size, hash) = hash_file_streaming(
             &path,
-            ARCHIVE_MAX_FILE_BYTES,
+            NATIVE_HASH_MAX_FILE_BYTES,
             &mut total,
-            ARCHIVE_MAX_BYTES,
+            NATIVE_HASH_MAX_BYTES,
             "test hash",
         )
         .expect("streaming hash");

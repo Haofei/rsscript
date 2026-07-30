@@ -4,8 +4,7 @@ pub(crate) use rsscript::{
     check_package_dir, diff_package_dirs, diff_package_locks, format_package_lock_toml,
     format_package_review_reir_diff_json, format_package_review_reir_json, lock_package_dir,
     lower_sources_to_rust_package_with_options, package_lowering_input, package_metadata,
-    package_metadata_verify, package_tree, publish_package_dry_run, review_package_dir,
-    vendor_package_dir,
+    package_metadata_verify, package_tree, review_package_dir,
 };
 pub(crate) use serde_json::Value;
 pub(crate) use std::collections::HashMap;
@@ -57,7 +56,5 @@ mod lock_metadata;
 mod misc;
 #[path = "checker_package/native_bindings.rs"]
 mod native_bindings;
-#[path = "checker_package/publish.rs"]
-mod publish;
 #[path = "checker_package/review.rs"]
 mod review;

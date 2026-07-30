@@ -77,14 +77,14 @@ rss pkg diff
 rss pkg lock
 rss pkg tree
 rss pkg metadata
-rss pkg vendor
-rss pkg publish --dry-run
 rss pkg add
 ```
 
 Use `rss --help` for exact flags. `--json` and `--reir` outputs are structured
-views over the same package facts. `publish` is validation-only; the repository
-does not claim a complete hosted registry.
+views over the same package facts. Registry requirements remain dependency
+grammar: unresolved registry nodes remain explicit in graph output, and lock
+entries preserve source identity. The repository does not provide package
+publication, package vendoring, or hosted-registry previews.
 
 ## Semantic Identity
 
@@ -156,11 +156,11 @@ CLI execution denies native packages unless `--trusted-native` is supplied
 under the `local-trusted` deployment profile. Third-party package inspection
 must remain static and must not build or load native code.
 
-## Mutation And Publication
+## Artifact Mutation
 
-Package lock, vendor, metadata, and generated artifacts use staged or atomic
-publication where implemented. Operations are bounded by file count, depth,
-and byte limits. The authoritative current limitations are tracked in
+Package lock, metadata, and generated artifacts use atomic file replacement
+where implemented. Operations are bounded by file count, depth, and byte
+limits. The authoritative current limitations are tracked in
 [status.md](status.md), including snapshot-first review and Windows secure-store
 work that remains open.
 

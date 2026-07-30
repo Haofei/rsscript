@@ -13,13 +13,6 @@ struct PackageManifestFacts {
     source_paths: Int
 }
 
-struct VendorCopyFacts {
-    copied_files: Int
-    interface_files: Int
-    source_files: Int
-    manifest_files: Int
-}
-
 struct PackageCheckFacts {
     package_name: String
     interface_roots: Int
@@ -69,16 +62,6 @@ struct DiffFacts {
     removed_apis: Int
     changed_interfaces: Int
     risk_changed: Bool
-}
-
-struct PublishCheckFacts {
-    package_name: String
-    version: String
-    interface_files: Int
-    source_files: Int
-    public_apis: Int
-    ok: Bool
-    errors: Int
 }
 
 struct InterfaceSummary {
@@ -779,96 +762,12 @@ fn package_tree_facts(root: Path) -> Result<fresh PackageTreeFacts, String> {
     }
 }
 
-fn empty_vendor_facts() -> fresh VendorCopyFacts {
-    return VendorCopyFacts(
-        copied_files: 0,
-        interface_files: 0,
-        source_files: 0,
-        manifest_files: 0,
-    )
-}
-
 fn bool_count(value: Bool) -> Int {
     if value {
         return 1
     }
 
     return 0
-}
-
-fn add_file_facts(facts: VendorCopyFacts, relative_path: String) -> fresh VendorCopyFacts {
-    let is_interface = String.ends_with(value: relative_path, suffix: ".rssi")
-    let is_source = String.ends_with(value: relative_path, suffix: ".rss")
-    let is_manifest = relative_path == "rsspkg.toml"
-
-    return VendorCopyFacts(
-        copied_files: facts.copied_files + 1,
-        interface_files: facts.interface_files + bool_count(value: is_interface),
-        source_files: facts.source_files + bool_count(value: is_source),
-        manifest_files: facts.manifest_files + bool_count(value: is_manifest),
-    )
-}
-
-fn copy_relative_file(
-    source: Path,
-    vendor: Path,
-    facts: VendorCopyFacts,
-    relative_path: String,
-) -> Result<fresh VendorCopyFacts, String> {
-    let input = Path.join(base: source, child: relative_path)
-    let output = Path.join(base: vendor, child: relative_path)
-    let contents = read_text_result(path: input)?
-    write_text_result(path: output, text: contents)?
-
-    return add_file_facts(facts, relative_path)
-}
-
-fn copy_package_tree(
-    source: Path,
-    vendor: Path,
-    files: List<String>,
-) -> Result<fresh VendorCopyFacts, String> {
-    return List.try_fold<String, VendorCopyFacts, String>(
-        list: files,
-        initial: empty_vendor_facts(),
-        folder: |facts, relative_path| {
-            return copy_relative_file(
-                source,
-                vendor,
-                facts,
-                relative_path,
-            )
-        },
-    )
-}
-
-fn vendor_metadata_json(
-    manifest: PackageManifestFacts,
-    facts: VendorCopyFacts,
-) -> fresh String {
-    local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: "{\n")
-    StringBuilder.push(builder: mut builder, value: "  \"package\": ")
-    let package_name = Json.quote_string(value: manifest.package_name)
-    StringBuilder.push(builder: mut builder, value: package_name)
-    StringBuilder.push(builder: mut builder, value: ",\n  \"version\": ")
-    let version = Json.quote_string(value: manifest.version)
-    StringBuilder.push(builder: mut builder, value: version)
-    StringBuilder.push(builder: mut builder, value: ",\n  \"copied_files\": ")
-    let copied = String.from_int(value: facts.copied_files)
-    StringBuilder.push(builder: mut builder, value: copied)
-    StringBuilder.push(builder: mut builder, value: ",\n  \"interface_files\": ")
-    let interfaces = String.from_int(value: facts.interface_files)
-    StringBuilder.push(builder: mut builder, value: interfaces)
-    StringBuilder.push(builder: mut builder, value: ",\n  \"source_files\": ")
-    let sources = String.from_int(value: facts.source_files)
-    StringBuilder.push(builder: mut builder, value: sources)
-    StringBuilder.push(builder: mut builder, value: ",\n  \"manifest_files\": ")
-    let manifests = String.from_int(value: facts.manifest_files)
-    StringBuilder.push(builder: mut builder, value: manifests)
-    StringBuilder.push(builder: mut builder, value: "\n}\n")
-
-    return StringBuilder.finish(builder: take builder)
 }
 
 fn json_bool_text(value: Bool) -> String {
@@ -1466,69 +1365,6 @@ fn package_diff_json(facts: DiffFacts) -> fresh String {
     return StringBuilder.finish(builder: take builder)
 }
 
-fn package_publish_json(facts: PublishCheckFacts) -> fresh String {
-    local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: "{\n")
-    StringBuilder.push(builder: mut builder, value: "  \"package\": ")
-    let package_name = Json.quote_string(value: facts.package_name)
-    StringBuilder.push(builder: mut builder, value: package_name)
-    StringBuilder.push(builder: mut builder, value: ",\n  \"version\": ")
-    let version = Json.quote_string(value: facts.version)
-    StringBuilder.push(builder: mut builder, value: version)
-    StringBuilder.push(builder: mut builder, value: ",\n  \"interface_files\": ")
-    let interface_files = String.from_int(value: facts.interface_files)
-    StringBuilder.push(builder: mut builder, value: interface_files)
-    StringBuilder.push(builder: mut builder, value: ",\n  \"source_files\": ")
-    let source_files = String.from_int(value: facts.source_files)
-    StringBuilder.push(builder: mut builder, value: source_files)
-    StringBuilder.push(builder: mut builder, value: ",\n  \"public_apis\": ")
-    let public_apis = String.from_int(value: facts.public_apis)
-    StringBuilder.push(builder: mut builder, value: public_apis)
-    StringBuilder.push(builder: mut builder, value: ",\n  \"ok\": ")
-    let ok = json_bool_text(value: facts.ok)
-    StringBuilder.push(builder: mut builder, value: ok)
-    StringBuilder.push(builder: mut builder, value: ",\n  \"errors\": ")
-    let errors = String.from_int(value: facts.errors)
-    StringBuilder.push(builder: mut builder, value: errors)
-    StringBuilder.push(builder: mut builder, value: "\n}\n")
-
-    return StringBuilder.finish(builder: take builder)
-}
-
-fn package_publish_check_facts(root: Path) -> Result<fresh PublishCheckFacts, String> {
-    let manifest = parse_toml_result(path: manifest_path(root))?
-    let package_name = manifest_package_string_or_empty(manifest, field: "name")
-    let version = manifest_package_string_or_empty(manifest, field: "version")
-    let edition = manifest_package_string_or_empty(manifest, field: "edition")
-    let source_roots = manifest_array_strings_or_empty(
-        manifest,
-        section: "sources",
-        field: "paths",
-    )
-    let interface_summary = package_interface_summary(root)?
-    let source_files = count_existing_root_files_with_suffix(
-        root,
-        children: source_roots,
-        suffix: ".rss",
-    )?
-    let missing_name = bool_count(value: String.len(value: package_name) == 0)
-    let missing_version = bool_count(value: String.len(value: version) == 0)
-    let missing_edition = bool_count(value: String.len(value: edition) == 0)
-    let missing_interfaces = bool_count(value: interface_summary.interface_files == 0)
-    let missing_sources = bool_count(value: source_files == 0)
-    let errors = missing_name + missing_version + missing_edition + missing_interfaces + missing_sources + interface_summary.empty_files + interface_summary.non_public_files
-
-    return PublishCheckFacts(
-        package_name,
-        version,
-        interface_files: interface_summary.interface_files,
-        source_files: source_files,
-        public_apis: interface_summary.public_apis,
-        ok: errors == 0,
-        errors: errors,
-    )
-}
-
 fn run_metadata(root: Path, output: Path) -> Result<Unit, String> {
     let facts = package_manifest_facts(root)?
     let text = package_metadata_json(facts)
@@ -1537,34 +1373,6 @@ fn run_metadata(root: Path, output: Path) -> Result<Unit, String> {
         left: "rss package manager metadata ",
         right: facts.package_name,
     )
-    Log.write(message)
-
-    return Ok(Unit)
-}
-
-fn run_vendor(root: Path, vendor: Path) -> Result<Unit, String> {
-    create_dir_result(path: vendor)?
-    let manifest = package_manifest_facts(root)?
-    let files = list_files_result(path: root)?
-    let facts = copy_package_tree(source: root, vendor, files)?
-    let metadata_path = Path.join(base: vendor, child: "rss-vendor.json")
-    let metadata = vendor_metadata_json(manifest, facts)
-    write_text_result(path: metadata_path, text: metadata)?
-
-    local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: "rss package manager vendor copied=")
-    let copied = String.from_int(value: facts.copied_files)
-    StringBuilder.push(builder: mut builder, value: copied)
-    StringBuilder.push(builder: mut builder, value: " interfaces=")
-    let interfaces = String.from_int(value: facts.interface_files)
-    StringBuilder.push(builder: mut builder, value: interfaces)
-    StringBuilder.push(builder: mut builder, value: " sources=")
-    let sources = String.from_int(value: facts.source_files)
-    StringBuilder.push(builder: mut builder, value: sources)
-    StringBuilder.push(builder: mut builder, value: " manifests=")
-    let manifests = String.from_int(value: facts.manifest_files)
-    StringBuilder.push(builder: mut builder, value: manifests)
-    let message = StringBuilder.finish(builder: take builder)
     Log.write(message)
 
     return Ok(Unit)
@@ -1706,23 +1514,6 @@ fn run_diff(root: Path, other: Path, output: Path) -> Result<Unit, String> {
     return Ok(Unit)
 }
 
-fn run_publish(root: Path, output: Path) -> Result<Unit, String> {
-    let facts = package_publish_check_facts(root)?
-    let text = package_publish_json(facts)
-    write_text_result(path: output, text)?
-
-    local builder = StringBuilder.new()
-    StringBuilder.push(builder: mut builder, value: "rss package manager publish ")
-    StringBuilder.push(builder: mut builder, value: facts.package_name)
-    StringBuilder.push(builder: mut builder, value: " errors=")
-    let errors = String.from_int(value: facts.errors)
-    StringBuilder.push(builder: mut builder, value: errors)
-    let message = StringBuilder.finish(builder: take builder)
-    Log.write(message)
-
-    return Ok(Unit)
-}
-
 pub fn main() -> Result<Unit, String> {
     let command = Args.get_or_default(index: 0, default: "metadata")
     let root = root_path()
@@ -1730,10 +1521,6 @@ pub fn main() -> Result<Unit, String> {
 
     if command == "metadata" {
         return run_metadata(root, output)
-    }
-
-    if command == "vendor" {
-        return run_vendor(root, vendor: output)
     }
 
     if command == "check" {
@@ -1756,10 +1543,6 @@ pub fn main() -> Result<Unit, String> {
         let other = Args.get_or_default(index: 3, default: ".")
         let other_path = Path.from_string(value: other)
         return run_diff(root, other: other_path, output)
-    }
-
-    if command == "publish" {
-        return run_publish(root, output)
     }
 
     let message = String.concat(left: "unknown package command: ", right: command)

@@ -98,34 +98,12 @@ pub fn rsscript_tree_json_to_bundle(tree_json: &str) -> Result<Bundle, serde_jso
     .map_err(adapter_error_to_json)
 }
 
-/// Build a REIR bundle from RSScript package publish JSON.
-pub fn rsscript_publish_json_to_bundle(publish_json: &str) -> Result<Bundle, serde_json::Error> {
-    let publish = package_publish_input_from_json(publish_json)?;
-    build_rsscript_bundle(
-        rsscript_provenance("rsscript-publish", PUBLISH_SOURCE),
-        package_publish_to_facts(&publish),
-        [],
-    )
-    .map_err(adapter_error_to_json)
-}
-
 /// Build a REIR bundle from RSScript package metadata JSON.
 pub fn rsscript_metadata_json_to_bundle(metadata_json: &str) -> Result<Bundle, serde_json::Error> {
     let metadata = package_metadata_input_from_json(metadata_json)?;
     build_rsscript_bundle(
         rsscript_provenance("rsscript-metadata", PACKAGE_METADATA_SOURCE),
         package_metadata_report_to_facts(&metadata),
-        [],
-    )
-    .map_err(adapter_error_to_json)
-}
-
-/// Build a REIR bundle from RSScript package vendor JSON.
-pub fn rsscript_vendor_json_to_bundle(vendor_json: &str) -> Result<Bundle, serde_json::Error> {
-    let vendor = package_vendor_input_from_json(vendor_json)?;
-    build_rsscript_bundle(
-        rsscript_provenance("rsscript-vendor", VENDOR_SOURCE),
-        package_vendor_to_facts(&vendor),
         [],
     )
     .map_err(adapter_error_to_json)

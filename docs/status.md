@@ -64,7 +64,7 @@ This table records the current implementation batch for the refactoring work in
 | Batch | Scope | Status | Exit condition |
 | --- | --- | --- | --- |
 | R0 | Architecture dependency guards and behavior baselines | Complete | CI rejects forbidden dependency directions and current contract suites remain green |
-| R1 | Complete package/dependency snapshot before review or execution | Complete | Check, review, lower, build, publish, and vendor consume one immutable graph |
+| R1 | Complete package/dependency snapshot before review or execution | Complete | Check, review, lock, tree, lower, and build consume one immutable graph |
 | R2 | `SourceSnapshot`, frontend budget, semantic database, and `ValidatedProgram` | Complete | Review, lowering, VM, and LSP consume one bounded frontend result; executable backends require validated checked facts |
 | R3 | Mandatory `ExecutionContext` and scoped host capabilities | Complete | Restricted execution cannot reach ambient filesystem, network, process, or database authority |
 | R4 | LSP, REIR, runtime, analyzer, package-native, VM, and JIT decomposition | Complete | Modules are split around tested state transitions without behavior changes |
@@ -85,13 +85,14 @@ This table records the current implementation batch for the refactoring work in
 | R19 | Revision-scoped LSP index cache | Complete | Semantic indexes are reused only for matching document and package generations |
 | R20 | Remove third-party safe-execution scope | Complete | No untrusted profile, worker protocol, worker binary, sandbox launcher, release artifact, or execution API remains |
 | R21 | Remove Metal/GPU and tensor execution surfaces | Complete | No Metal crate, tensor runtime, GPU ABI, language interface, VM lowering, test domain, or release job remains |
+| R22 | Remove package publish, vendor, and hosted-registry preview surfaces | Complete | No publish/vendor CLI, RSScript API/model, REIR collector, preview badge, archive-manifest, fixture, or package-manager prototype surface remains |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
 
 R1 captures the complete development dependency graph before direct check,
-review, lock, tree, CLI, register-VM, native-loader, publish, or vendor work
-begins. Internal captured entrypoints consume only that graph for their full
+review, lock, tree, CLI, register-VM, or native-loader work begins. Internal
+captured entrypoints consume only that graph for their full
 lifetime. Public results map diagnostics and package identities back to checkout
 paths, and regression tests cover later source mutation and absolute path
 dependencies without exposing private snapshot paths.
@@ -251,13 +252,20 @@ parity suites, manifests, documentation, and CI/release jobs were deleted.
 RSScript no longer claims hardware-accelerated tensor execution as part of its
 review-first language scope.
 
+R22 removes package publication, package vendoring, and hosted-registry previews
+from the supported product. RSScript retains registry dependency grammar,
+explicit unresolved registry graph nodes, lock source identity, native Cargo
+registry lock/vendor validation, generic REIR `RegistryMetadata` and
+`PublishedAs`, native ABI registries, the core package index, and snapshot
+exclusions for `vendor` directories. Metadata dry-run and lock/tree/metadata
+REIR remain the package evidence surfaces.
+
 ## Experimental Status
 
 - Native JIT has dedicated path-triggered, nightly, and release validation. It
   is not Core.
 - Self-hosting proves substantial lexer/parser/checker parity but is not an
   independent compiler or release requirement.
-- Package publish remains a dry-run validation surface, not a hosted registry.
 - True multi-isolate execution and declarative rewrite
   systems are research, not committed product surface.
 

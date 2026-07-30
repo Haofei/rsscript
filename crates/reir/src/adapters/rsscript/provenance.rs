@@ -340,18 +340,6 @@ fn package_metadata_report_summary(input: &RsScriptPackageMetadataInput) -> Stri
     )
 }
 
-fn package_vendor_summary(input: &RsScriptPackageVendorInput) -> String {
-    format!(
-        "package vendor {} package={} version={} risk={} entries={} unresolved={}",
-        if input.dry_run { "dry-run" } else { "write" },
-        input.package.name,
-        input.package.version,
-        input.risk.as_str(),
-        input.entries.len(),
-        input.unresolved.len()
-    )
-}
-
 fn package_export_summary(export: &RsScriptPackageExport) -> String {
     let mut parts = vec![
         format!("kind={}", export.kind),

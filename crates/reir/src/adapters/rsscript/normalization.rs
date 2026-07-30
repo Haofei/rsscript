@@ -42,21 +42,9 @@ pub fn package_tree_input_from_json(
     serde_json::from_str(json)
 }
 
-pub fn package_publish_input_from_json(
-    json: &str,
-) -> Result<RsScriptPackagePublishInput, serde_json::Error> {
-    serde_json::from_str(json)
-}
-
 pub fn package_metadata_input_from_json(
     json: &str,
 ) -> Result<RsScriptPackageMetadataInput, serde_json::Error> {
-    serde_json::from_str(json)
-}
-
-pub fn package_vendor_input_from_json(
-    json: &str,
-) -> Result<RsScriptPackageVendorInput, serde_json::Error> {
     serde_json::from_str(json)
 }
 

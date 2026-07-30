@@ -7,15 +7,13 @@ use rsscript::{
     format_package_check_human, format_package_check_json, format_package_diff_human,
     format_package_diff_json, format_package_lock_json, format_package_lock_reir_json,
     format_package_lock_toml, format_package_metadata_human, format_package_metadata_json,
-    format_package_metadata_reir_json, format_package_publish_human, format_package_publish_json,
-    format_package_review_human, format_package_review_json, format_package_review_markdown,
-    format_package_tree_human, format_package_tree_json, format_package_tree_reir_json,
-    format_package_vendor_human, format_package_vendor_json, format_package_vendor_reir_json,
-    lock_package_dir, package_metadata, package_metadata_verify, package_tree,
-    publish_package_dry_run_with_registry, review_package_dir, vendor_package_dir,
+    format_package_metadata_reir_json, format_package_review_human, format_package_review_json,
+    format_package_review_markdown, format_package_tree_human, format_package_tree_json,
+    format_package_tree_reir_json, lock_package_dir, package_metadata, package_metadata_verify,
+    package_tree, review_package_dir,
 };
 
-use super::{print_usage, required_flag_value};
+use super::print_usage;
 
 pub(crate) fn run_package(args: &[String]) -> ExitCode {
     let command = match parse_package_args(args) {
@@ -39,12 +37,6 @@ pub(crate) fn run_package(args: &[String]) -> ExitCode {
             old_path,
             new_path,
         } => run_package_diff(json, old_path, new_path),
-        PackageCommand::Publish {
-            json,
-            dry_run,
-            path,
-            registry,
-        } => run_package_publish(json, dry_run, path, registry),
         PackageCommand::Lock { json, reir, path } => run_package_lock(json, reir, path),
         PackageCommand::Tree { json, reir, path } => run_package_tree(json, reir, path),
         PackageCommand::Metadata {
@@ -54,12 +46,6 @@ pub(crate) fn run_package(args: &[String]) -> ExitCode {
             dry_run,
             path,
         } => run_package_metadata(json, reir, verify, dry_run, path),
-        PackageCommand::Vendor {
-            json,
-            reir,
-            dry_run,
-            path,
-        } => run_package_vendor(json, reir, dry_run, path),
         PackageCommand::Add { dependency } => run_package_add(dependency),
     }
 }
@@ -84,12 +70,6 @@ pub(crate) enum PackageCommand<'a> {
         json: bool,
         path: &'a str,
     },
-    Publish {
-        json: bool,
-        dry_run: bool,
-        path: &'a str,
-        registry: Option<&'a str>,
-    },
     Lock {
         json: bool,
         reir: bool,
@@ -107,12 +87,6 @@ pub(crate) enum PackageCommand<'a> {
         dry_run: bool,
         path: &'a str,
     },
-    Vendor {
-        json: bool,
-        reir: bool,
-        dry_run: bool,
-        path: &'a str,
-    },
     Add {
         dependency: &'a str,
     },
@@ -124,7 +98,6 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
     let mut reir = false;
     let mut verify = false;
     let mut dry_run = false;
-    let mut registry_path = None;
     let mut words = Vec::new();
     let mut paths = Vec::new();
     let mut index = 0;
@@ -140,14 +113,11 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
             verify = true;
         } else if arg == "--dry-run" {
             dry_run = true;
-        } else if arg == "--registry" {
-            index += 1;
-            registry_path = Some(required_flag_value(args, index, "--registry")?);
         } else if arg.starts_with("--") {
             return Err(format!("unknown argument `{arg}`."));
         } else if matches!(
             arg.as_str(),
-            "review" | "diff" | "ci" | "publish" | "lock" | "tree" | "metadata" | "vendor" | "add"
+            "review" | "diff" | "ci" | "lock" | "tree" | "metadata" | "add"
         ) {
             words.push(arg.as_str());
         } else {
@@ -162,31 +132,16 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
     if json && matches!(words.as_slice(), ["add"]) {
         return Err("`--json` is not supported for `rss pkg add`.".to_owned());
     }
-    if dry_run && !matches!(words.as_slice(), ["publish"] | ["vendor"] | ["metadata"]) {
-        return Err(
-            "`--dry-run` is only supported for `rss pkg publish`, `vendor`, or `metadata`."
-                .to_owned(),
-        );
-    }
-    if registry_path.is_some() && !matches!(words.as_slice(), ["publish"]) {
-        return Err("`--registry` is only supported for `rss pkg publish`.".to_owned());
+    if dry_run && !matches!(words.as_slice(), ["metadata"]) {
+        return Err("`--dry-run` is only supported for `rss pkg metadata`.".to_owned());
     }
     if verify && !matches!(words.as_slice(), ["metadata"]) {
         return Err("`--verify` is only supported for `rss pkg metadata`.".to_owned());
     }
-    if reir
-        && !matches!(
-            words.as_slice(),
-            ["lock"] | ["tree"] | ["metadata"] | ["vendor"]
-        )
-    {
+    if reir && !matches!(words.as_slice(), ["lock"] | ["tree"] | ["metadata"]) {
         return Err(
-            "`--reir` is only supported for `rss pkg lock`, `tree`, `metadata`, or `vendor`."
-                .to_owned(),
+            "`--reir` is only supported for `rss pkg lock`, `tree`, or `metadata`.".to_owned(),
         );
-    }
-    if matches!(words.as_slice(), ["publish"]) && !dry_run {
-        return Err("`rss pkg publish` currently requires `--dry-run`.".to_owned());
     }
 
     match (words.as_slice(), paths.as_slice()) {
@@ -209,18 +164,6 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
         }),
         (["ci"], []) => Ok(PackageCommand::Ci { json, path: "." }),
         (["ci"], [path]) => Ok(PackageCommand::Ci { json, path }),
-        (["publish"], []) => Ok(PackageCommand::Publish {
-            json,
-            dry_run,
-            path: ".",
-            registry: registry_path,
-        }),
-        (["publish"], [path]) => Ok(PackageCommand::Publish {
-            json,
-            dry_run,
-            path,
-            registry: registry_path,
-        }),
         (["lock"], []) => Ok(PackageCommand::Lock {
             json,
             reir,
@@ -244,18 +187,6 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
             json,
             reir,
             verify,
-            dry_run,
-            path,
-        }),
-        (["vendor"], []) => Ok(PackageCommand::Vendor {
-            json,
-            reir,
-            dry_run,
-            path: ".",
-        }),
-        (["vendor"], [path]) => Ok(PackageCommand::Vendor {
-            json,
-            reir,
             dry_run,
             path,
         }),
@@ -426,33 +357,6 @@ fn run_package_diff(json: bool, old_path: &str, new_path: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_package_publish(json: bool, dry_run: bool, path: &str, registry: Option<&str>) -> ExitCode {
-    if !dry_run {
-        eprintln!("rss pkg publish currently requires --dry-run");
-        return ExitCode::from(2);
-    }
-    let registry_path = registry.map(Path::new);
-    let publish = match publish_package_dry_run_with_registry(Path::new(path), registry_path) {
-        Ok(publish) => publish,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::from(2);
-        }
-    };
-
-    if json {
-        println!("{}", format_package_publish_json(&publish));
-    } else {
-        print!("{}", format_package_publish_human(&publish));
-    }
-
-    if publish.ready {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(1)
-    }
-}
-
 fn run_package_lock(json: bool, reir: bool, path: &str) -> ExitCode {
     let store = match ArtifactStore::open(Path::new(path)) {
         Ok(store) => store,
@@ -530,30 +434,6 @@ fn run_package_metadata(
         println!("{}", format_package_metadata_json(&report));
     } else {
         print!("{}", format_package_metadata_human(&report));
-    }
-
-    if report.ok {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::from(1)
-    }
-}
-
-fn run_package_vendor(json: bool, reir: bool, dry_run: bool, path: &str) -> ExitCode {
-    let report = match vendor_package_dir(Path::new(path), dry_run) {
-        Ok(report) => report,
-        Err(error) => {
-            eprintln!("{error}");
-            return ExitCode::from(2);
-        }
-    };
-
-    if reir {
-        println!("{}", format_package_vendor_reir_json(&report));
-    } else if json {
-        println!("{}", format_package_vendor_json(&report));
-    } else {
-        print!("{}", format_package_vendor_human(&report));
     }
 
     if report.ok {
@@ -750,27 +630,10 @@ mod tests {
             }
             other => panic!("unexpected package command: {other:?}"),
         }
-
-        let values = args(&["publish", "--dry-run", "--registry", "registry", "package"]);
-        let command = super::parse_package_args(&values).expect("publish should parse");
-        match command {
-            super::PackageCommand::Publish {
-                json,
-                dry_run,
-                path,
-                registry,
-            } => {
-                assert!(!json);
-                assert!(dry_run);
-                assert_eq!(path, "package");
-                assert_eq!(registry, Some("registry"));
-            }
-            other => panic!("unexpected package command: {other:?}"),
-        }
     }
 
     #[test]
-    fn parse_package_args_accepts_lock_tree_metadata_and_vendor() {
+    fn parse_package_args_accepts_lock_tree_and_metadata() {
         let values = args(&["lock", "pkgdir"]);
         match super::parse_package_args(&values).expect("lock should parse") {
             super::PackageCommand::Lock { json, reir, path } => {
@@ -802,15 +665,6 @@ mod tests {
             }
             other => panic!("unexpected package command: {other:?}"),
         }
-
-        let values = args(&["vendor", "--dry-run"]);
-        match super::parse_package_args(&values).expect("vendor --dry-run should parse") {
-            super::PackageCommand::Vendor { dry_run, path, .. } => {
-                assert!(dry_run);
-                assert_eq!(path, ".");
-            }
-            other => panic!("unexpected package command: {other:?}"),
-        }
     }
 
     #[test]
@@ -829,7 +683,7 @@ mod tests {
         assert_eq!(
             super::parse_package_args(&args(&["review", "--reir", "p"]))
                 .expect_err("reir on review should fail"),
-            "`--reir` is only supported for `rss pkg lock`, `tree`, `metadata`, or `vendor`."
+            "`--reir` is only supported for `rss pkg lock`, `tree`, or `metadata`."
         );
         assert_eq!(
             super::parse_package_args(&args(&["lock", "--verify", "p"]))
@@ -845,7 +699,7 @@ mod tests {
 
     #[test]
     fn parse_package_args_rejects_invalid_flags() {
-        let values = args(&["publish", "--wat", "package"]);
+        let values = args(&["review", "--wat", "package"]);
         let error = super::parse_package_args(&values).expect_err("unknown flag should fail");
         assert_eq!(error, "unknown argument `--wat`.");
 
@@ -853,19 +707,8 @@ mod tests {
         let error = super::parse_package_args(&values).expect_err("dry-run should fail");
         assert_eq!(
             error,
-            "`--dry-run` is only supported for `rss pkg publish`, `vendor`, or `metadata`."
+            "`--dry-run` is only supported for `rss pkg metadata`."
         );
-
-        let values = args(&["review", "--registry", "registry"]);
-        let error = super::parse_package_args(&values).expect_err("registry should fail");
-        assert_eq!(
-            error,
-            "`--registry` is only supported for `rss pkg publish`."
-        );
-
-        let values = args(&["publish", "package"]);
-        let error = super::parse_package_args(&values).expect_err("publish should require dry-run");
-        assert_eq!(error, "`rss pkg publish` currently requires `--dry-run`.");
 
         let values = args(&["add", "--json", "dep"]);
         let error = super::parse_package_args(&values).expect_err("add json should fail");

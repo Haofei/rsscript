@@ -23,9 +23,7 @@ const PACKAGE_REVIEW_SOURCE: &str = "rsscript_package_review";
 const PACKAGE_CHECK_SOURCE: &str = "rsscript_package_check";
 const LOCKFILE_SOURCE: &str = "rsscript_lockfile";
 const PACKAGE_METADATA_SOURCE: &str = "rsscript_package_metadata";
-const PUBLISH_SOURCE: &str = "rsscript_publish_dry_run";
 const TREE_SOURCE: &str = "rsscript_tree";
-const VENDOR_SOURCE: &str = "rsscript_vendor";
 const REVIEW_REQUIRED_KIND: &str = "review_required";
 const RSSCRIPT_ADAPTER_LIMITS: AdapterLimits =
     AdapterLimits::new(1_000_000, 250_000, 64 * 1024 * 1024);

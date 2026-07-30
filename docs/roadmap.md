@@ -9,7 +9,7 @@ win when status prose becomes stale. The current product scope is defined in
 These items block stronger deployment claims:
 
 1. Capture a complete immutable package and dependency snapshot before review,
-   lowering, build, or publication.
+   lowering, or build.
 2. Carry one mandatory execution policy through VM intrinsics, generated AOT
    programs, native loading, JIT, process, network, filesystem, and
    database capabilities.

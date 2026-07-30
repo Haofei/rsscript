@@ -1,5 +1,5 @@
 const USAGE: &str = "Usage:
-  reir collect --producer rsscript [--review-map review-map.json] [--package-review package-review.json] [--package-check check.json] [--package-lock lock.json] [--lock-update lock-diff.json] [--package-tree tree.json] [--package-publish publish.json] [--package-metadata metadata.json] [--package-vendor vendor.json] [--package-name name] [--out bundle.json] [--json]
+  reir collect --producer rsscript [--review-map review-map.json] [--package-review package-review.json] [--package-check check.json] [--package-lock lock.json] [--lock-update lock-diff.json] [--package-tree tree.json] [--package-metadata metadata.json] [--package-name name] [--out bundle.json] [--json]
   reir collect --producer terraform --from infra/terraform [--out bundle.json] [--json]
   reir collect --producer terraform-plan --from plan.json [--out bundle.json] [--json]
   reir reconcile --required required.json --granted granted.json [--target name] [--json]

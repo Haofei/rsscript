@@ -51,11 +51,6 @@ pub struct PackageReview {
     pub manifest_path: String,
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
-    /// Compact, machine-readable review-risk badges derived from `risk` and the
-    /// capability `summary` (e.g. `risk:elevated`, `native`, `unsafe`, `async`,
-    /// `unknown-capability`). A registry surfaces these as per-package badges.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub badges: Vec<String>,
     pub features: Vec<String>,
     pub virtual_package: Option<PackageVirtual>,
     pub implements: Vec<PackageProviderImplementation>,
@@ -200,84 +195,6 @@ pub struct PackageGraphCheck {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackagePublishDryRun {
-    pub package: PackageIdentity,
-    pub package_dir: String,
-    pub ready: bool,
-    pub risk: PackageRisk,
-    pub reasons: Vec<String>,
-    pub registry_index: PackageRegistryIndexEntry,
-    pub registry_target: Option<PackageRegistryPublishTarget>,
-    pub archive_format: String,
-    pub archive_hash: String,
-    pub archive_files: Vec<PackageArchiveFile>,
-    pub review: PackageReviewSummary,
-    pub dependency_summary: PackageTreeSummary,
-    pub checks: Vec<PackagePublishCheck>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageRegistryPublishTarget {
-    pub registry_dir: String,
-    pub index_path: String,
-    pub archive_manifest_path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageRegistryIndexEntry {
-    pub schema: String,
-    pub name: String,
-    pub version: String,
-    pub checksum: String,
-    pub interface_hash: String,
-    pub effective_interface_hash_default: String,
-    pub review_hash: String,
-    pub review_schema: String,
-    pub native_hash: Option<String>,
-    pub risk: PackageRisk,
-    pub native: bool,
-    pub virtual_package: Option<PackageVirtual>,
-    #[serde(rename = "unsafe_apis")]
-    pub unsafe_boundary: bool,
-    /// Review-risk badges (same set as `PackageReview::badges`) carried into the
-    /// registry index so a registry can render them without re-deriving.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub badges: Vec<String>,
-    pub dependencies: BTreeMap<String, String>,
-    pub features: BTreeMap<String, Vec<String>>,
-    pub footprint_default: PackageRegistryFootprint,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageRegistryFootprint {
-    pub direct_dependencies: usize,
-    pub total_packages: usize,
-    pub path_dependencies: usize,
-    pub unresolved_dependencies: usize,
-    pub native: bool,
-    pub native_packages: usize,
-    pub build_time_execution: bool,
-    pub build_execution_packages: usize,
-    pub high_risk_packages: usize,
-    pub unknown_facts: usize,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageArchiveFile {
-    pub path: String,
-    pub size: u64,
-    pub sha256: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackagePublishCheck {
-    pub name: String,
-    pub ok: bool,
-    pub risk: PackageRisk,
-    pub detail: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PackageReviewDependency {
     pub name: String,
     pub requirement: Option<String>,
@@ -287,37 +204,6 @@ pub struct PackageReviewDependency {
     pub compile_only: bool,
     pub test_only: bool,
     pub platform_provided: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageVendorReport {
-    pub package: PackageIdentity,
-    pub package_dir: String,
-    pub vendor_dir: String,
-    pub dry_run: bool,
-    pub ok: bool,
-    pub risk: PackageRisk,
-    pub entries: Vec<PackageVendorEntry>,
-    pub unresolved: Vec<PackageVendorUnresolved>,
-    pub reasons: Vec<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageVendorEntry {
-    pub name: String,
-    pub version: String,
-    pub source_path: String,
-    pub vendor_path: String,
-    pub checksum: String,
-    pub native: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageVendorUnresolved {
-    pub name: String,
-    pub requirement: Option<String>,
-    pub source: String,
-    pub reason: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]

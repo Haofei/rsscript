@@ -350,15 +350,6 @@ fn s3_iam_reir_demo_missing_capability_binding_is_unknown_not_safe() {
 
     assert_eq!(review.risk, rsscript::PackageRisk::Unknown);
     assert_eq!(review.summary.unknown_apis, 1);
-    // Review-risk badges restate the classified risk + capability signals as a
-    // compact, registry-renderable set; they must agree with risk/summary.
-    assert!(
-        review.badges.contains(&"risk:unknown".to_string()),
-        "badges: {:?}",
-        review.badges
-    );
-    assert!(review.badges.contains(&"native".to_string()));
-    assert!(review.badges.contains(&"unknown-capability".to_string()));
     assert!(
         review
             .reasons

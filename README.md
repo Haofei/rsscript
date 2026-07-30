@@ -468,11 +468,9 @@ rss pkg      add <dependency|dependency@version|path-to-package>
 rss pkg      review [--json] [package-directory]
 rss pkg      diff   [--json] <old-package-directory> <new-package-directory>
 rss pkg      ci     [--json] [package-directory]
-rss pkg      publish --dry-run [--json] [--registry <directory>] [package-directory]
 rss pkg      lock     [--json|--reir] [package-directory]
 rss pkg      tree     [--json|--reir] [package-directory]
 rss pkg      metadata [--verify|--dry-run] [--json|--reir] [package-directory]
-rss pkg      vendor   [--dry-run] [--json|--reir] [package-directory]
 rss run      [--json] [--vm] [--deployment-profile <profile>] [--trusted-unlimited] [--trusted-native] <file-or-package-directory> [-- <args>...]
 rss run      [--json] [--release] [--dry-run] [--deployment-profile <profile>] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]
 rss test     [--all] [--json] [--filter <substring>]
@@ -490,7 +488,10 @@ rss test     [--all] [--json] [--filter <substring>]
 - `rss pkg review` shows the review surface for public contracts, dependencies, mutating/retaining/resource/native/unsafe APIs, and unknown risk.
 - `rss pkg diff` compares two local package directories and reports semantic package changes.
 - `rss pkg ci` is the CI-facing package check entrypoint. It uses the same package health rules as `rss pkg`, with stable `--json` output for automation.
-- `rss pkg publish --dry-run` runs pre-publish checks without uploading and reports whether the package is ready.
+- Registry dependency specifications remain supported. Unresolved registry
+  dependencies stay visible in package graphs and semantic locks retain source
+  identity; RSScript does not provide package publication, vendoring, or a
+  hosted-registry preview.
 - `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package, builds it in a reduced environment, and then executes the emitted binary as a separately bounded child (10-minute deadline and 16 MiB cap per output stream). Unix children receive CPU, file-size, and descriptor limits; Linux/Android add an address-space limit and macOS applies a best-effort data-segment limit. Windows children run in a kill-on-close Job Object with process-tree memory limits. Native package execution is denied by default; `--trusted-native` is the explicit acknowledgement that native Rust/build scripts have full host authority. Package lowering then carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--vm` runs the same input through the register VM for fast feedback with default step, memory, output, host-call, recursion, and 60-second wall-clock limits; `--trusted-unlimited` explicitly restores the embedding API's unlimited VM budgets. `--vm` cannot be combined with AOT-only flags (`--release`, `--dry-run`, or `--out-dir`). Single-file CLI input is capped at 16 MiB. `--dry-run` prints the generated `Cargo.toml`, lowered Rust, build invocation, and program invocation without executing them; `--release` delegates to Cargo's release profile, `--out-dir` keeps the generated package, and arguments after `--` reach the program through the core `Args` API.
 - `--deployment-profile` accepts `local-trusted` (the default) or `trusted-ci`.
   `trusted-ci` can execute bounded, pure register-VM code
