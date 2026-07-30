@@ -17,13 +17,29 @@ pub fn vendor_package_dir(
     package_dir: &Path,
     dry_run: bool,
 ) -> Result<PackageVendorReport, String> {
+    let original_package_dir = package_dir.canonicalize().map_err(|error| {
+        format!(
+            "failed to canonicalize package before vendor snapshot {}: {error}",
+            package_dir.display()
+        )
+    })?;
+    let snapshot = super::authorization::snapshot_package_graph_inputs(&original_package_dir)?;
+    vendor_package_snapshot(&snapshot, &original_package_dir, dry_run)
+}
+
+fn vendor_package_snapshot(
+    snapshot: &super::authorization::PackageGraphSnapshot,
+    original_package_dir: &Path,
+    dry_run: bool,
+) -> Result<PackageVendorReport, String> {
+    let package_dir = snapshot.root();
     let store = if dry_run {
         None
     } else {
-        Some(ArtifactStore::open(package_dir)?)
+        Some(ArtifactStore::open(&original_package_dir)?)
     };
     let package = load_package(package_dir)?;
-    let package_root = canonical_checked_root(package_dir, "package vendor write")?;
+    let package_root = canonical_checked_root(&original_package_dir, "package vendor write")?;
     let vendor_dir = package_root.join("vendor");
     let mut visiting = BTreeSet::new();
     let mut entries = Vec::new();
@@ -36,6 +52,27 @@ pub fn vendor_package_dir(
         &mut entries,
         &mut unresolved,
     )?;
+    for entry in &mut entries {
+        let snapshot_source = Path::new(&entry.source_path);
+        let original_source = snapshot.original_path(snapshot_source).ok_or_else(|| {
+            format!(
+                "vendor dependency is outside the captured package graph: {}",
+                snapshot_source.display()
+            )
+        })?;
+        let identity = PackageIdentity {
+            name: entry.name.clone(),
+            version: entry.version.clone(),
+            edition: String::new(),
+        };
+        entry.vendor_path = vendor_dir
+            .join(vendor_package_dir_name(
+                &identity,
+                &canonical_path_label(&original_source),
+            ))
+            .display()
+            .to_string();
+    }
 
     entries.sort_by(|left, right| {
         left.name
@@ -75,6 +112,19 @@ pub fn vendor_package_dir(
             commit_warnings = warnings;
         }
     }
+    for entry in &mut entries {
+        let snapshot_source = Path::new(&entry.source_path);
+        if let Some(original_source) = snapshot.original_path(snapshot_source) {
+            entry.source_path = original_source.display().to_string();
+        }
+    }
+    for dependency in &mut unresolved {
+        if let Some(path) = dependency.source.strip_prefix("path+")
+            && let Some(original_source) = snapshot.original_path(Path::new(path))
+        {
+            dependency.source = format!("path+{}", original_source.display());
+        }
+    }
 
     let ok = unresolved.is_empty();
     let risk = if !commit_warnings.is_empty() {
@@ -92,7 +142,7 @@ pub fn vendor_package_dir(
 
     Ok(PackageVendorReport {
         package: package_identity(&package.manifest),
-        package_dir: package_dir.display().to_string(),
+        package_dir: original_package_dir.display().to_string(),
         vendor_dir: vendor_dir.display().to_string(),
         dry_run,
         ok,
@@ -186,6 +236,18 @@ fn vendor_package_dir_name(identity: &PackageIdentity, canonical_source: &str) -
 mod tests {
     use super::*;
 
+    fn write_package(root: &Path, name: &str, dependencies: &str, source: &str) {
+        fs::create_dir_all(root.join("src")).expect("package source directory");
+        fs::write(
+            root.join("rsspkg.toml"),
+            format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n{dependencies}"
+            ),
+        )
+        .expect("package manifest");
+        fs::write(root.join("src/lib.rss"), source).expect("package source");
+    }
+
     #[test]
     fn vendor_directory_names_include_source_identity() {
         let identity = PackageIdentity {
@@ -204,5 +266,49 @@ mod tests {
             Some(64),
             "vendor paths must retain the full source digest"
         );
+    }
+
+    #[test]
+    fn vendor_uses_the_captured_dependency_after_checkout_mutation() {
+        let container = std::env::temp_dir().join(format!(
+            "rss-vendor-snapshot-test-{}-{}",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let root = container.join("root");
+        let dependency = container.join("dependency");
+        write_package(
+            &dependency,
+            "dependency",
+            "",
+            "fn dependency_value() -> Int { return 1 }\n",
+        );
+        write_package(
+            &root,
+            "root",
+            "\n[dependencies]\ndependency = { path = \"../dependency\" }\n",
+            "fn main() -> Unit { return Unit }\n",
+        );
+        let dependency_package = load_package(&dependency).expect("dependency package");
+        let expected_checksum = package_checksum(&dependency_package, None);
+        let original_root = root.canonicalize().expect("canonical root");
+        let snapshot = super::super::authorization::snapshot_package_graph_inputs(&original_root)
+            .expect("package graph snapshot");
+        fs::write(
+            dependency.join("src/lib.rss"),
+            "fn dependency_value() -> Int { return 999 }\n",
+        )
+        .expect("mutate original dependency");
+
+        let report =
+            vendor_package_snapshot(&snapshot, &original_root, true).expect("vendor dry run");
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(report.entries[0].checksum, expected_checksum);
+        assert_eq!(
+            Path::new(&report.entries[0].source_path),
+            dependency.canonicalize().expect("canonical dependency")
+        );
+
+        let _ = fs::remove_dir_all(container);
     }
 }

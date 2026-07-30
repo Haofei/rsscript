@@ -25,8 +25,8 @@ use sha2::{Digest, Sha256};
 
 use crate::package::{
     AuthorizedPackage, BoundedRegularFile, CARGO_BUILD_TIMEOUT, CARGO_OUTPUT_MAX_BYTES, TreeLimits,
-    collect_bounded_regular_files, configure_reduced_build_environment, prepare_authorized_package,
-    run_bounded_command,
+    collect_bounded_regular_files, configure_reduced_build_environment,
+    prepare_package_for_execution, run_bounded_command,
 };
 use crate::syntax::ast::{DataEffect, Item, Param, TypeRef};
 use crate::syntax::parse_source;
@@ -41,11 +41,11 @@ use super::shim_gen::{ShimBinding, ShimDependency, ShimReturn, ShimType, generat
 pub fn load_package_native_bindings(
     package_dir: &Path,
 ) -> Result<Vec<(String, NativeInterpreterFn)>, String> {
-    let input = crate::package::package_lowering_input(package_dir)?;
-    if input.native_dependencies.is_empty() {
+    let prepared = prepare_package_for_execution(package_dir)?;
+    if !prepared.requires_native_authorization() {
         return Ok(Vec::new());
     }
-    let package = prepare_authorized_package(package_dir)?;
+    let package = prepared.authorize()?;
     load_authorized_package_native_bindings(&package)
 }
 

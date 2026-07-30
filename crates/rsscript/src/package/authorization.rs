@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -6,11 +6,40 @@ use std::path::{Path, PathBuf};
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
 
+use super::dependency::{DependencyResolutionScope, resolve_dependency_graph};
 use super::{
     NativePluginBuildDependency, PackageLoweringInput, TreeLimits, check_package_dir,
-    collect_bounded_regular_files, package_lowering_input,
-    package_native_plugin_build_dependencies,
+    collect_bounded_regular_files, copy_package_directory, format_package_lock_toml,
+    package_lowering_input, package_native_plugin_build_dependencies, package_path_source,
 };
+
+#[derive(Debug)]
+pub(super) struct PackageGraphSnapshot {
+    _directory: tempfile::TempDir,
+    root: PathBuf,
+    paths: Vec<(PathBuf, PathBuf)>,
+}
+
+impl PackageGraphSnapshot {
+    pub(super) fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub(super) fn original_path(&self, snapshot_path: &Path) -> Option<PathBuf> {
+        let snapshot_path = snapshot_path
+            .canonicalize()
+            .unwrap_or_else(|_| snapshot_path.to_path_buf());
+        self.paths.iter().find_map(|(original, captured)| {
+            let captured = captured
+                .canonicalize()
+                .unwrap_or_else(|_| captured.to_path_buf());
+            snapshot_path
+                .strip_prefix(&captured)
+                .ok()
+                .map(|relative| original.join(relative))
+        })
+    }
+}
 
 #[derive(Debug)]
 struct PrivateContentSnapshot {
@@ -27,14 +56,49 @@ impl PrivateContentSnapshot {
 /// A package whose review, lock, dependency graph, and native policy checks
 /// succeeded.
 ///
-/// Values can only be created by [`prepare_authorized_package`]. Native build
-/// and load code consumes this type instead of accepting an unchecked path.
+/// Values can only be created by authorizing a [`PreparedPackage`] or through
+/// [`prepare_authorized_package`]. Native build and load code consumes this type
+/// instead of accepting an unchecked path.
 #[derive(Debug)]
 pub struct AuthorizedPackage {
     package_dir: PathBuf,
     lowering_input: PackageLoweringInput,
     native_build_dependencies: Vec<NativePluginBuildDependency>,
+    _package_snapshot: PackageGraphSnapshot,
     content_snapshot: Option<PrivateContentSnapshot>,
+}
+
+/// An immutable package dependency graph prepared for lowering or review.
+///
+/// Pure packages can be consumed directly. Packages with native dependencies
+/// must be converted into an [`AuthorizedPackage`] before lowering or loading.
+#[derive(Debug)]
+pub struct PreparedPackage {
+    package_dir: PathBuf,
+    lowering_input: PackageLoweringInput,
+    package_snapshot: PackageGraphSnapshot,
+}
+
+impl PreparedPackage {
+    /// Return whether this graph must pass native authorization before use.
+    pub fn requires_native_authorization(&self) -> bool {
+        !self.lowering_input.native_dependencies.is_empty()
+    }
+
+    /// Consume a pure package graph and return its captured lowering input.
+    pub fn into_lowering_input(self) -> Result<PackageLoweringInput, String> {
+        if self.requires_native_authorization() {
+            return Err(
+                "native package execution requires an AuthorizedPackage; explicitly authorize the prepared snapshot before lowering".to_string(),
+            );
+        }
+        Ok(self.lowering_input)
+    }
+
+    /// Review and authorize the captured graph for native build and loading.
+    pub fn authorize(self) -> Result<AuthorizedPackage, String> {
+        authorize_prepared_package(self)
+    }
 }
 
 impl AuthorizedPackage {
@@ -73,7 +137,35 @@ impl AuthorizedPackage {
 /// used by the loader, so the loader cannot independently rediscover an
 /// unchecked package graph.
 pub fn prepare_authorized_package(package_dir: &Path) -> Result<AuthorizedPackage, String> {
-    let check = check_package_dir(package_dir)?;
+    prepare_package_for_execution(package_dir)?.authorize()
+}
+
+/// Capture a complete package dependency graph before lowering or review.
+pub fn prepare_package_for_execution(package_dir: &Path) -> Result<PreparedPackage, String> {
+    let package_dir = package_dir.canonicalize().map_err(|error| {
+        format!(
+            "failed to canonicalize package before authorization snapshot {}: {error}",
+            package_dir.display()
+        )
+    })?;
+    let package_snapshot = snapshot_package_graph_inputs(&package_dir)?;
+    let lowering_input = package_lowering_input(package_snapshot.root())?;
+    Ok(PreparedPackage {
+        package_dir,
+        lowering_input,
+        package_snapshot,
+    })
+}
+
+fn authorize_prepared_package(prepared: PreparedPackage) -> Result<AuthorizedPackage, String> {
+    let PreparedPackage {
+        package_dir,
+        mut lowering_input,
+        package_snapshot,
+    } = prepared;
+    let snapshot_root = package_snapshot.root();
+
+    let check = check_package_dir(snapshot_root)?;
     if !check.ok {
         let reasons = if check.reasons.is_empty() {
             "package check did not authorize native execution".to_string()
@@ -85,14 +177,7 @@ pub fn prepare_authorized_package(package_dir: &Path) -> Result<AuthorizedPackag
         ));
     }
 
-    let package_dir = package_dir.canonicalize().map_err(|error| {
-        format!(
-            "failed to canonicalize authorized package {}: {error}",
-            package_dir.display()
-        )
-    })?;
-    let mut lowering_input = package_lowering_input(&package_dir)?;
-    let native_build_dependencies = package_native_plugin_build_dependencies(&package_dir)?;
+    let native_build_dependencies = package_native_plugin_build_dependencies(snapshot_root)?;
     let (native_build_dependencies, content_snapshot) =
         snapshot_native_build_inputs(&native_build_dependencies)?;
     for dependency in &mut lowering_input.native_dependencies {
@@ -112,8 +197,186 @@ pub fn prepare_authorized_package(package_dir: &Path) -> Result<AuthorizedPackag
         package_dir,
         lowering_input,
         native_build_dependencies,
+        _package_snapshot: package_snapshot,
         content_snapshot,
     })
+}
+
+#[cfg(test)]
+fn authorize_package_snapshot(
+    package_dir: PathBuf,
+    package_snapshot: PackageGraphSnapshot,
+) -> Result<AuthorizedPackage, String> {
+    let lowering_input = package_lowering_input(package_snapshot.root())?;
+    authorize_prepared_package(PreparedPackage {
+        package_dir,
+        lowering_input,
+        package_snapshot,
+    })
+}
+
+pub(super) fn snapshot_package_graph_inputs(
+    package_dir: &Path,
+) -> Result<PackageGraphSnapshot, String> {
+    let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
+    let directory = tempfile::Builder::new()
+        .prefix("rsscript-package-graph-")
+        .tempdir()
+        .map_err(|error| format!("failed to create private package graph snapshot: {error}"))?;
+    set_package_snapshot_permissions(directory.path())?;
+
+    let packages_root = directory.path().join("packages");
+    fs::create_dir_all(&packages_root).map_err(|error| {
+        format!(
+            "failed to create package graph snapshot root {}: {error}",
+            packages_root.display()
+        )
+    })?;
+    set_package_snapshot_permissions(&packages_root)?;
+
+    let mut destinations = BTreeMap::new();
+    for (key, node) in &graph.nodes {
+        destinations.insert(
+            key.clone(),
+            mirrored_snapshot_path(&packages_root, &node.package_dir)?,
+        );
+    }
+
+    for (key, node) in &graph.nodes {
+        let destination = &destinations[key];
+        copy_package_directory(&node.package_dir, destination)?;
+        validate_captured_manifest(node, destination)?;
+    }
+    rewrite_snapshot_locks(&graph, &destinations)?;
+
+    let root = destinations
+        .get(&graph.root)
+        .cloned()
+        .ok_or_else(|| "package graph snapshot did not contain its root package".to_string())?;
+    let paths = graph
+        .nodes
+        .iter()
+        .map(|(key, node)| {
+            (
+                node.package_dir
+                    .canonicalize()
+                    .unwrap_or_else(|_| node.package_dir.clone()),
+                destinations[key].clone(),
+            )
+        })
+        .collect();
+    Ok(PackageGraphSnapshot {
+        _directory: directory,
+        root,
+        paths,
+    })
+}
+
+fn mirrored_snapshot_path(root: &Path, source: &Path) -> Result<PathBuf, String> {
+    let source = source.canonicalize().map_err(|error| {
+        format!(
+            "failed to canonicalize package snapshot source {}: {error}",
+            source.display()
+        )
+    })?;
+    let mut destination = root.to_path_buf();
+    for component in source.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => {
+                destination.push(snapshot_path_component(
+                    &prefix.as_os_str().to_string_lossy(),
+                ));
+            }
+            std::path::Component::RootDir => destination.push("root"),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                return Err(format!(
+                    "canonical package snapshot source contains a parent component: {}",
+                    source.display()
+                ));
+            }
+            std::path::Component::Normal(component) => destination.push(component),
+        }
+    }
+    Ok(destination)
+}
+
+fn validate_captured_manifest(
+    node: &super::dependency::ResolvedDependencyNode,
+    destination: &Path,
+) -> Result<(), String> {
+    let manifest_path = destination.join("rsspkg.toml");
+    let captured_source = fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
+    if captured_source != node.manifest_source {
+        return Err(format!(
+            "package manifest changed while the authorization snapshot was captured: {}",
+            node.package_dir.display()
+        ));
+    }
+    for (name, value) in node
+        .manifest
+        .dependencies
+        .iter()
+        .chain(node.manifest.dev_dependencies.iter())
+    {
+        let spec = super::package_dependency_spec(name, value);
+        if spec
+            .path
+            .as_deref()
+            .is_some_and(|path| Path::new(path).is_absolute())
+        {
+            return Err(format!(
+                "authorized package snapshots require relative path dependencies; `{name}` in {} is absolute",
+                node.package_dir.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn snapshot_path_component(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn rewrite_snapshot_locks(
+    graph: &super::dependency::ResolvedDependencyGraph,
+    destinations: &BTreeMap<String, PathBuf>,
+) -> Result<(), String> {
+    let source_map = graph
+        .nodes
+        .keys()
+        .map(|key| (key.clone(), package_path_source(&destinations[key])))
+        .collect::<BTreeMap<_, _>>();
+
+    for destination in destinations.values() {
+        let lock_path = destination.join("rsspkg.lock");
+        if !lock_path.is_file() {
+            continue;
+        }
+        let mut lock = super::lock::read_package_lock(&lock_path)?;
+        for package in &mut lock.packages {
+            let Some(path) = package.source.strip_prefix("path+") else {
+                continue;
+            };
+            let canonical = super::canonical_path_label(Path::new(path));
+            if let Some(snapshot_source) = source_map.get(&canonical) {
+                package.source = snapshot_source.clone();
+            }
+        }
+        fs::write(&lock_path, format_package_lock_toml(&lock))
+            .map_err(|error| format!("failed to rewrite {}: {error}", lock_path.display()))?;
+    }
+    Ok(())
 }
 
 fn snapshot_native_build_inputs(
@@ -414,6 +677,19 @@ fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
         .map_err(|error| format!("failed to protect {}: {error}", path.display()))
 }
 
+#[cfg(unix)]
+fn set_package_snapshot_permissions(path: &Path) -> Result<(), String> {
+    set_private_directory_permissions(path)
+}
+
+#[cfg(not(unix))]
+fn set_package_snapshot_permissions(_path: &Path) -> Result<(), String> {
+    // tempfile creates a per-user private directory where the platform backend
+    // supports it. Native loading still requires the stronger ACL verification
+    // enforced by set_private_directory_permissions.
+    Ok(())
+}
+
 #[cfg(not(unix))]
 fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
     Err(format!(
@@ -549,6 +825,134 @@ mod tests {
         assert!(error.contains("rsspkg.lock missing"), "{error}");
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn package_graph_snapshot_preserves_lock_semantics() {
+        let root = pure_package_fixture();
+        add_native_dependency(&root);
+        let original = lock_package_dir(&root).expect("original lock");
+        let snapshot = snapshot_package_graph_inputs(&root).expect("package graph snapshot");
+        let captured = lock_package_dir(snapshot.root()).expect("snapshot lock");
+        let original_files = collect_regular_files_for_test(&root.join("native/rust"), &root);
+        let captured_files =
+            collect_regular_files_for_test(&snapshot.root().join("native/rust"), snapshot.root());
+        assert_eq!(original_files, captured_files, "native snapshot files");
+
+        assert_eq!(original.packages.len(), captured.packages.len());
+        for (original, captured) in original.packages.iter().zip(&captured.packages) {
+            assert_eq!(original.name, captured.name);
+            assert_eq!(original.version, captured.version);
+            assert_eq!(
+                original.interface_hash, captured.interface_hash,
+                "interface hash"
+            );
+            assert_eq!(original.review_hash, captured.review_hash, "review hash");
+            assert_eq!(original.native_hash, captured.native_hash, "native hash");
+            assert_eq!(original.checksum, captured.checksum, "package checksum");
+            assert_eq!(original.features, captured.features);
+        }
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn authorization_checks_the_captured_source_not_a_later_checkout_mutation() {
+        let root = pure_package_fixture();
+        let lock = lock_package_dir(&root).expect("fixture lock");
+        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+            .expect("fixture lockfile");
+
+        let original_root = root.canonicalize().expect("canonical fixture");
+        let snapshot =
+            snapshot_package_graph_inputs(&original_root).expect("package graph snapshot");
+        fs::write(
+            root.join("src/main.rss"),
+            "fn main() -> Unit { Missing.call(); return Unit }\n",
+        )
+        .expect("mutate original checkout after capture");
+
+        let package = authorize_package_snapshot(original_root, snapshot)
+            .expect("authorization must inspect captured source");
+        assert_eq!(
+            package.lowering_input().source,
+            "fn main() -> Unit { return Unit }\n"
+        );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn authorization_captures_path_dependency_sources_before_check() {
+        let root = pure_package_fixture();
+        let dependency = root.with_file_name(format!(
+            "{}-dependency",
+            root.file_name()
+                .and_then(|name| name.to_str())
+                .expect("fixture name")
+        ));
+        fs::create_dir_all(dependency.join("src")).expect("dependency source directory");
+        fs::write(
+            dependency.join("rsspkg.toml"),
+            "[package]\nname = \"authorized-dependency\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n",
+        )
+        .expect("dependency manifest");
+        fs::write(
+            dependency.join("src/lib.rss"),
+            "fn dependency_value() -> Int { return 1 }\n",
+        )
+        .expect("dependency source");
+        fs::write(
+            root.join("rsspkg.toml"),
+            format!(
+                "[package]\nname = \"authorized-test\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n\n[dependencies]\nauthorized-dependency = {{ path = \"../{}\" }}\n",
+                dependency
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("dependency fixture name")
+            ),
+        )
+        .expect("root dependency manifest");
+        let lock = lock_package_dir(&root).expect("fixture dependency lock");
+        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+            .expect("fixture lockfile");
+
+        let original_root = root.canonicalize().expect("canonical fixture");
+        let snapshot =
+            snapshot_package_graph_inputs(&original_root).expect("package graph snapshot");
+        fs::write(
+            dependency.join("src/lib.rss"),
+            "fn dependency_value() -> Int { return 999 }\n",
+        )
+        .expect("mutate dependency after capture");
+
+        let package = authorize_package_snapshot(original_root, snapshot)
+            .expect("captured dependency graph should authorize");
+        assert!(
+            package
+                .lowering_input()
+                .sources
+                .iter()
+                .any(|(_, source)| { source == "fn dependency_value() -> Int { return 1 }\n" })
+        );
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(dependency);
+    }
+
+    fn collect_regular_files_for_test(root: &Path, package_root: &Path) -> Vec<(String, Vec<u8>)> {
+        let mut files = Vec::new();
+        super::super::collect_regular_files(root, &mut files).expect("collect native files");
+        files.sort();
+        files
+            .into_iter()
+            .map(|path| {
+                (
+                    super::super::relative_path(package_root, &path),
+                    fs::read(path).expect("read native file"),
+                )
+            })
+            .collect()
     }
 
     #[cfg(unix)]

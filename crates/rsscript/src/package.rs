@@ -41,7 +41,9 @@ pub(crate) const CARGO_METADATA_TIMEOUT: Duration = Duration::from_secs(60);
 pub(crate) const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 pub use artifact_store::{ArtifactStore, DirectoryCommitOutcome};
-pub use authorization::{AuthorizedPackage, prepare_authorized_package};
+pub use authorization::{
+    AuthorizedPackage, PreparedPackage, prepare_authorized_package, prepare_package_for_execution,
+};
 pub use check::check_package_dir;
 use dependency::{
     PackageDependencySpec, collect_dependency_interface_sources,
@@ -92,7 +94,20 @@ fn package_source_files(sources: Vec<PackageSource>) -> Vec<PackageSourceFile> {
 }
 
 fn relative_path(base: &Path, path: &Path) -> String {
-    path.strip_prefix(base)
+    let relative = path
+        .strip_prefix(base)
+        .ok()
+        .map(Path::to_path_buf)
+        .or_else(|| {
+            let canonical_base = base.canonicalize().ok()?;
+            let canonical_path = path.canonicalize().ok()?;
+            canonical_path
+                .strip_prefix(canonical_base)
+                .ok()
+                .map(Path::to_path_buf)
+        });
+    relative
+        .as_deref()
         .unwrap_or(path)
         .display()
         .to_string()

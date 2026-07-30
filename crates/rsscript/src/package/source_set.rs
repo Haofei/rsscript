@@ -407,6 +407,12 @@ pub(super) fn load_package_with_features(
 }
 
 pub(super) fn load_package_manifest(package_dir: &Path) -> Result<Manifest, String> {
+    load_package_manifest_with_source(package_dir).map(|(_, manifest)| manifest)
+}
+
+pub(super) fn load_package_manifest_with_source(
+    package_dir: &Path,
+) -> Result<(String, Manifest), String> {
     let package_root = canonical_package_root(package_dir)?;
     let manifest_path = package_dir.join("rsspkg.toml");
     let (manifest_source, _) = read_bounded_utf8_file(
@@ -415,8 +421,9 @@ pub(super) fn load_package_manifest(package_dir: &Path) -> Result<Manifest, Stri
         MANIFEST_MAX_BYTES,
         "package manifest",
     )?;
-    toml::from_str(&manifest_source)
-        .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))
+    let manifest = toml::from_str(&manifest_source)
+        .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
+    Ok((manifest_source, manifest))
 }
 
 pub(super) fn selected_root_package_features(manifest: &Manifest) -> Vec<String> {

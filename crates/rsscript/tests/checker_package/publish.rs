@@ -105,7 +105,7 @@ fn package_publish_archive_rejects_symlink_entries() {
     let _ = fs::remove_file(&outside_file);
     let _ = fs::remove_dir_all(&temp_dir);
 
-    assert!(error.contains("package archive rejects symlinks"));
+    assert!(error.contains("rejects symlinks"));
     assert!(error.contains("leak.txt"));
 }
 

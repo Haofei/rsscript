@@ -5,7 +5,7 @@ use crate::diagnostic::{Diagnostic, code};
 
 use super::source_set::{
     Manifest, ManifestReviewFeaturePolicy, PackageSource, load_package_manifest,
-    load_package_with_features, resolve_package_features,
+    load_package_manifest_with_source, load_package_with_features, resolve_package_features,
 };
 use super::{PackageReviewFileKind, canonical_path_label, toml_value_label};
 
@@ -36,6 +36,7 @@ pub(super) struct ResolvedDependencyGraph {
 #[derive(Debug)]
 pub(super) struct ResolvedDependencyNode {
     pub(super) package_dir: PathBuf,
+    pub(super) manifest_source: String,
     pub(super) manifest: Manifest,
     pub(super) features: Vec<String>,
     pub(super) dependencies: Vec<ResolvedDependencyEdge>,
@@ -93,11 +94,12 @@ fn resolve_dependency_node(
     }
 
     if !graph.nodes.contains_key(&canonical) {
-        let manifest = load_package_manifest(package_dir)?;
+        let (manifest_source, manifest) = load_package_manifest_with_source(package_dir)?;
         graph.nodes.insert(
             canonical.clone(),
             ResolvedDependencyNode {
                 package_dir: package_dir.to_path_buf(),
+                manifest_source,
                 manifest,
                 features: Vec::new(),
                 dependencies: Vec::new(),

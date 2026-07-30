@@ -8,7 +8,7 @@ use rsscript::{
     DeploymentProfile, EvalError, EvalOutput, ExecutionCapability, NativeValue, VmLimits,
     check_generated_rust_package, configure_reduced_build_environment, format_diagnostics_human,
     format_diagnostics_json, load_authorized_package_native_bindings, parse_runtime_diagnostics,
-    prepare_authorized_package, reg_vm_compile_package_input, reg_vm_eval_source_main_with_args,
+    prepare_package_for_execution, reg_vm_compile_package_input, reg_vm_eval_source_main_with_args,
     reg_vm_eval_source_main_with_limits, write_generated_rust_package,
 };
 
@@ -323,11 +323,12 @@ fn run_package_via_vm(
     trusted_native: bool,
 ) -> Result<EvalOutput, EvalError> {
     let package_dir = Path::new(path);
-    let input = rsscript::package_lowering_input(package_dir).map_err(EvalError::Runtime)?;
-    let (executable, bindings) = if input.native_dependencies.is_empty() {
+    let prepared = prepare_package_for_execution(package_dir).map_err(EvalError::Runtime)?;
+    let (executable, bindings) = if !prepared.requires_native_authorization() {
+        let input = prepared.into_lowering_input().map_err(EvalError::Runtime)?;
         (reg_vm_compile_package_input(&input)?, Vec::new())
     } else if trusted_native {
-        let package = prepare_authorized_package(package_dir).map_err(EvalError::Runtime)?;
+        let package = prepared.authorize().map_err(EvalError::Runtime)?;
         let bindings =
             load_authorized_package_native_bindings(&package).map_err(EvalError::Runtime)?;
         (

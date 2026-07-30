@@ -20,6 +20,21 @@ pub fn publish_package_dry_run_with_registry(
     package_dir: &Path,
     registry_dir: Option<&Path>,
 ) -> Result<PackagePublishDryRun, String> {
+    let package_dir = package_dir.canonicalize().map_err(|error| {
+        format!(
+            "failed to canonicalize package before publish snapshot {}: {error}",
+            package_dir.display()
+        )
+    })?;
+    let snapshot = super::authorization::snapshot_package_graph_inputs(&package_dir)?;
+    publish_package_snapshot(snapshot.root(), &package_dir, registry_dir)
+}
+
+fn publish_package_snapshot(
+    package_dir: &Path,
+    original_package_dir: &Path,
+    registry_dir: Option<&Path>,
+) -> Result<PackagePublishDryRun, String> {
     let package = load_package(package_dir)?;
     let review = review_package_dir(package_dir)?;
     let check = check_package_dir(package_dir)?;
@@ -152,7 +167,7 @@ pub fn publish_package_dry_run_with_registry(
 
     Ok(PackagePublishDryRun {
         package: package_identity(&package.manifest),
-        package_dir: package_dir.display().to_string(),
+        package_dir: original_package_dir.display().to_string(),
         ready,
         risk,
         reasons,

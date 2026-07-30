@@ -7,7 +7,7 @@ use std::process::ExitCode;
 
 use rsscript::{
     Diagnostic, format_diagnostics_human, format_diagnostics_json, lower_source_to_rust_package,
-    lower_sources_to_rust_package_with_options, package_lowering_input, prepare_authorized_package,
+    lower_sources_to_rust_package_with_options, prepare_package_for_execution,
 };
 use sha2::{Digest, Sha256};
 
@@ -194,9 +194,9 @@ fn package_execution_lowering_input(
     package_dir: &Path,
     trusted_native: bool,
 ) -> Result<rsscript::PackageLoweringInput, String> {
-    let input = package_lowering_input(package_dir)?;
-    if input.native_dependencies.is_empty() {
-        return Ok(input);
+    let prepared = prepare_package_for_execution(package_dir)?;
+    if !prepared.requires_native_authorization() {
+        return prepared.into_lowering_input();
     }
     if !trusted_native {
         return Err(
@@ -204,7 +204,7 @@ fn package_execution_lowering_input(
         );
     }
 
-    let package = prepare_authorized_package(package_dir)?;
+    let package = prepared.authorize()?;
     Ok(package.lowering_input().clone())
 }
 

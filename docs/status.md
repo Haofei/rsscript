@@ -65,6 +65,31 @@ host execution into isolation.
 These are not reported as correctness fixes until executable invariants and
 regression tests exist.
 
+## Refactoring Execution
+
+This table records the current implementation batch for the refactoring work in
+[the roadmap](roadmap.md). It is a state summary, not a chronological ledger.
+
+| Batch | Scope | Status | Exit condition |
+| --- | --- | --- | --- |
+| R0 | Architecture dependency guards and behavior baselines | Complete | CI rejects forbidden dependency directions and current contract suites remain green |
+| R1 | Complete package/dependency snapshot before review or execution | In progress | Check, review, lower, build, publish, and vendor consume one immutable graph |
+| R2 | `SourceSnapshot`, frontend budget, semantic database, and `ValidatedProgram` | Not started | Review, lowering, VM, and LSP consume checked facts without semantic re-derivation |
+| R3 | Mandatory `ExecutionContext` and scoped host capabilities | Not started | Restricted execution cannot reach ambient filesystem, network, process, or database authority |
+| R4 | LSP, REIR, runtime, analyzer, package-native, VM, and JIT decomposition | Not started | Modules are split around tested state transitions without behavior changes |
+| R5 | Public API contraction and explicit facades | Not started | Broad glob exports and duplicate compatibility entrypoints are removed |
+| R6 | Out-of-process native, JIT, and GPU execution | Not started | Untrusted execution uses killable workers with bounded IPC and OS policy |
+
+Update this table in the same commit that changes a batch state. Do not create a
+separate dated progress report.
+
+R1 currently captures the complete development dependency graph before CLI,
+register-VM, native-loader, publish, or vendor work begins. Those paths retain
+the captured graph for their full lifetime, and mutation tests verify that later
+checkout changes are not consumed. The remaining R1 work is to move the direct
+`check_package_dir`, `review_package_dir`, and lockfile entrypoints onto the same
+read context while preserving diagnostics and external path identities.
+
 ## Experimental Status
 
 - Native JIT and Metal have dedicated path-triggered, nightly, and release

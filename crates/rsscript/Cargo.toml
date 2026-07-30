@@ -72,6 +72,10 @@ name = "static"
 path = "tests/static.rs"
 
 [[test]]
+name = "architecture"
+path = "tests/architecture.rs"
+
+[[test]]
 name = "runtime"
 path = "tests/runtime.rs"
 

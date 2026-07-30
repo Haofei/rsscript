@@ -30,7 +30,7 @@ use crate::hir::{
 use crate::interfaces::builtin_interfaces;
 #[cfg(test)]
 use crate::interfaces::standard_package_interfaces;
-use crate::package::package_lowering_input;
+use crate::package::prepare_package_for_execution;
 use crate::syntax::ast::{
     BinaryOp, Callee, MatchFieldPattern, MatchLiteral, MatchPattern, merge_programs,
 };
@@ -1343,7 +1343,8 @@ pub fn reg_vm_eval_package_main_with_args_and_native_bindings_and_limits(
 /// run time via the `native_bindings` passed to the eval call, so this can be
 /// compiled once and executed repeatedly (e.g. for benchmarking).
 pub fn reg_vm_compile_package(package_dir: &Path) -> Result<RegVmExecutable, EvalError> {
-    let input = package_lowering_input(package_dir).map_err(EvalError::Runtime)?;
+    let prepared = prepare_package_for_execution(package_dir).map_err(EvalError::Runtime)?;
+    let input = prepared.into_lowering_input().map_err(EvalError::Runtime)?;
     reg_vm_compile_package_input(&input)
 }
 
