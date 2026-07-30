@@ -10,6 +10,8 @@ use serde_json::Value;
 
 use crate::*;
 
+use super::bounded::{AdapterLimits, BoundedEvidenceBuilder, ProducerProvenance, UnknownCoverage};
+
 const FACT_SCHEMA: &str = "reir.fact.v0.1";
 const PRODUCER_VERSION: &str = "0.1.0";
 const ADAPTER_VERSION: &str = "0.1";
@@ -39,11 +41,28 @@ impl Default for TerraformPlanLimits {
     }
 }
 
-#[derive(Default)]
 struct TerraformPlanBudget {
     json_nodes: usize,
     resources: usize,
-    facts: usize,
+    evidence: BoundedEvidenceBuilder,
+}
+
+impl TerraformPlanBudget {
+    fn new(limits: TerraformPlanLimits) -> Self {
+        let max_operations = limits
+            .max_json_nodes
+            .saturating_add(limits.max_resources)
+            .saturating_add(limits.max_facts);
+        Self {
+            json_nodes: 0,
+            resources: 0,
+            evidence: BoundedEvidenceBuilder::new(AdapterLimits::new(
+                max_operations,
+                limits.max_facts,
+                limits.max_input_bytes.saturating_mul(8).max(1024 * 1024),
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -144,23 +163,25 @@ pub fn terraform_dir_to_bundle_with_limits(
     for fact in &mut facts {
         mark_source_scan_unverified(fact);
     }
-
-    let mut bundle = Bundle::new();
-    bundle.producers.push(crate::subject::Producer {
-        name: "terraform".to_owned(),
-        version: PRODUCER_VERSION.to_owned(),
-        adapter: Some("reir.adapters.terraform".to_owned()),
-        adapter_version: Some(ADAPTER_VERSION.to_owned()),
-        source: Some(PRODUCER_SOURCE.to_owned()),
-    });
-    bundle.facts = facts;
-    bundle.subjects = bundle
-        .facts
-        .iter()
-        .map(|fact| fact.subject.clone())
-        .collect();
-    bundle.slices = crate::slice_by_kind(&bundle);
-    Ok(bundle)
+    let max_operations = limits
+        .max_files
+        .saturating_add(facts.len())
+        .saturating_add(1);
+    let max_facts = (limits.max_total_bytes as usize).min(250_000);
+    let mut evidence = BoundedEvidenceBuilder::new(AdapterLimits::new(
+        max_operations,
+        max_facts,
+        (limits.max_total_bytes as usize)
+            .saturating_mul(8)
+            .max(1024 * 1024),
+    ));
+    evidence
+        .record_operations(budget.files)
+        .and_then(|()| evidence.extend_facts(facts))
+        .map_err(|error| format!("Terraform source conversion failed: {error}"))?;
+    evidence
+        .finish_preserving_fact_subjects(terraform_source_provenance())
+        .map_err(|error| format!("Terraform source conversion failed: {error}"))
 }
 
 fn mark_source_scan_unverified(fact: &mut Fact) {
@@ -913,10 +934,9 @@ pub fn terraform_plan_json_to_bundle_with_limits(
     }
     let plan: Value = serde_json::from_str(plan_json)
         .map_err(|e| format!("failed to parse terraform plan JSON: {e}"))?;
-    let mut budget = TerraformPlanBudget::default();
+    let mut budget = TerraformPlanBudget::new(limits);
     account_json_value(&plan, limits, &mut budget)?;
 
-    let mut facts = Vec::new();
     let mut diagnostics = Vec::new();
     let mut omitted_diagnostics = 0_usize;
 
@@ -936,7 +956,6 @@ pub fn terraform_plan_json_to_bundle_with_limits(
             if resource_type == "postgresql_grant" {
                 ensure_fact_capacity(postgresql_grant_fact_upper_bound(after), limits, &budget)?;
                 append_terraform_facts(
-                    &mut facts,
                     postgresql_grant_plan_facts(name, address, after, change_index),
                     limits,
                     &mut budget,
@@ -953,7 +972,6 @@ pub fn terraform_plan_json_to_bundle_with_limits(
                     | "aws_iam_group_policy"
             ) {
                 append_terraform_facts(
-                    &mut facts,
                     vec![unsupported_terraform_resource_fact(
                         "terraform-plan",
                         AcquisitionMode::TerraformPlan,
@@ -986,7 +1004,6 @@ pub fn terraform_plan_json_to_bundle_with_limits(
                             line: 0,
                         };
                         append_terraform_facts(
-                            &mut facts,
                             policy_grant_facts_with_address(&block, &policy, address),
                             limits,
                             &mut budget,
@@ -1037,7 +1054,6 @@ pub fn terraform_plan_json_to_bundle_with_limits(
                     | "aws_iam_group_policy"
             ) {
                 append_terraform_facts(
-                    &mut facts,
                     vec![unsupported_terraform_resource_fact(
                         "terraform-state",
                         AcquisitionMode::TerraformState,
@@ -1071,7 +1087,6 @@ pub fn terraform_plan_json_to_bundle_with_limits(
                             line: 0,
                         };
                         append_terraform_facts(
-                            &mut facts,
                             policy_grant_facts_with_address(&block, &policy, address),
                             limits,
                             &mut budget,
@@ -1098,24 +1113,12 @@ pub fn terraform_plan_json_to_bundle_with_limits(
     if omitted_diagnostics > 0 {
         diagnostics.push(terraform_diagnostic_budget_fact(omitted_diagnostics));
     }
-    append_terraform_facts(&mut facts, diagnostics, limits, &mut budget)?;
+    append_terraform_facts(diagnostics, limits, &mut budget)?;
 
-    let mut bundle = Bundle::new();
-    bundle.producers.push(crate::subject::Producer {
-        name: "terraform-plan".to_owned(),
-        version: PRODUCER_VERSION.to_owned(),
-        adapter: Some("reir.adapters.terraform_plan".to_owned()),
-        adapter_version: Some(ADAPTER_VERSION.to_owned()),
-        source: Some("terraform_plan_json".to_owned()),
-    });
-    bundle.facts = facts;
-    bundle.subjects = bundle
-        .facts
-        .iter()
-        .map(|fact| fact.subject.clone())
-        .collect();
-    bundle.slices = crate::slice_by_kind(&bundle);
-    Ok(bundle)
+    budget
+        .evidence
+        .finish_preserving_fact_subjects(terraform_plan_provenance())
+        .map_err(|error| format!("Terraform plan conversion failed: {error}"))
 }
 
 fn account_json_value(
@@ -1141,6 +1144,10 @@ fn account_json_value(
                 limits.max_json_nodes
             ));
         }
+        budget
+            .evidence
+            .record_operation()
+            .map_err(|error| format!("Terraform JSON conversion failed: {error}"))?;
         match value {
             Value::Array(values) => {
                 stack.extend(values.iter().map(|value| (value, depth + 1)));
@@ -1168,6 +1175,10 @@ fn account_terraform_resource(
             limits.max_resources
         ));
     }
+    budget
+        .evidence
+        .record_operation()
+        .map_err(|error| format!("Terraform JSON conversion failed: {error}"))?;
     Ok(())
 }
 
@@ -1188,69 +1199,52 @@ fn unsupported_terraform_resource_fact(
     let reason = format!(
         "Terraform resource `{resource_id}` has unsupported type `{resource_type}`; capability coverage is unknown"
     );
-    Fact {
-        schema: FACT_SCHEMA.to_owned(),
+    UnknownCoverage {
         id: format!("fact.terraform.unsupported.{}", sanitize_id(&resource_id)),
-        kind: FactKind::Diagnostic,
-        role: None,
-        subject: Subject {
-            kind: SubjectKind::TerraformResource,
-            id: format!("terraform::{resource_id}"),
-            name: Some(resource_id.clone()),
-            package: Some("terraform".to_owned()),
-        },
-        capability: None,
-        value: FactValue::Unknown,
-        confidence: Confidence {
-            level: ConfidenceLevel::Authoritative,
-            source: Some(source.to_owned()),
-        },
+        subject_kind: SubjectKind::TerraformResource,
+        subject_id: format!("terraform::{resource_id}"),
+        subject_name: resource_id,
+        package: "terraform",
+        reason,
+        source,
         acquisition_mode,
-        precision: Precision::Exact,
-        evidence: vec![Evidence {
-            kind: evidence_kind,
-            file: Some(source.to_owned()),
-            line: None,
-            column: None,
-            length: None,
-            symbol: Some(resource_id.clone()),
-            reason: Some(reason.clone()),
-            json_pointer,
-            resource: Some(resource_id),
-            provider: Some("terraform".to_owned()),
-            value: Some("unsupported_resource_type".to_owned()),
-            event_id: None,
-            time: None,
-            source: Some(source.to_owned()),
-            event_name: None,
-            principal: None,
-            account: None,
-            policy_arn: None,
-            statement_index: None,
-            action: None,
-        }],
-        unknown_reason: Some(reason),
+        evidence_kind,
+        evidence_file: source,
+        evidence_pointer: json_pointer,
+        evidence_value: "unsupported_resource_type",
+    }
+    .into_fact()
+}
+
+fn terraform_source_provenance() -> ProducerProvenance {
+    ProducerProvenance {
+        name: "terraform",
+        version: PRODUCER_VERSION,
+        adapter: "reir.adapters.terraform",
+        adapter_version: ADAPTER_VERSION,
+        source: PRODUCER_SOURCE,
+    }
+}
+
+fn terraform_plan_provenance() -> ProducerProvenance {
+    ProducerProvenance {
+        name: "terraform-plan",
+        version: PRODUCER_VERSION,
+        adapter: "reir.adapters.terraform_plan",
+        adapter_version: ADAPTER_VERSION,
+        source: "terraform_plan_json",
     }
 }
 
 fn append_terraform_facts(
-    destination: &mut Vec<Fact>,
     facts: Vec<Fact>,
-    limits: TerraformPlanLimits,
+    _limits: TerraformPlanLimits,
     budget: &mut TerraformPlanBudget,
 ) -> Result<(), String> {
-    budget.facts = budget
-        .facts
-        .checked_add(facts.len())
-        .ok_or_else(|| "Terraform fact count overflow".to_owned())?;
-    if budget.facts > limits.max_facts {
-        return Err(format!(
-            "Terraform plan conversion exceeds the {} fact limit",
-            limits.max_facts
-        ));
-    }
-    destination.extend(facts);
-    Ok(())
+    budget
+        .evidence
+        .extend_facts(facts)
+        .map_err(|error| format!("Terraform plan conversion failed: {error}"))
 }
 
 fn ensure_fact_capacity(
@@ -1258,17 +1252,15 @@ fn ensure_fact_capacity(
     limits: TerraformPlanLimits,
     budget: &TerraformPlanBudget,
 ) -> Result<(), String> {
-    let total = budget
-        .facts
-        .checked_add(additional)
-        .ok_or_else(|| "Terraform fact count overflow".to_owned())?;
-    if total > limits.max_facts {
-        return Err(format!(
-            "Terraform plan conversion exceeds the {} fact limit",
-            limits.max_facts
-        ));
-    }
-    Ok(())
+    budget
+        .evidence
+        .ensure_fact_capacity(additional)
+        .map_err(|error| {
+            format!(
+                "Terraform plan conversion exceeds the {} fact limit: {error}",
+                limits.max_facts
+            )
+        })
 }
 
 fn iam_policy_fact_upper_bound(policy: &Value) -> usize {
@@ -1681,6 +1673,12 @@ POLICY
         let bundle = terraform_dir_to_bundle(&temp_dir).expect("Terraform should collect");
         let _ = std::fs::remove_dir_all(&temp_dir);
 
+        assert_eq!(bundle.producers.len(), 1);
+        assert_eq!(
+            bundle.producers[0].adapter.as_deref(),
+            Some("reir.adapters.terraform")
+        );
+        assert_eq!(bundle.producers[0].source.as_deref(), Some("terraform_iac"));
         assert!(bundle.facts.iter().any(|fact| {
             fact.role == Some(FactRole::Granted)
                 && fact.capability.as_ref().is_some_and(|capability| {
@@ -2218,6 +2216,14 @@ POLICY
             .iter()
             .find(|fact| fact.id.contains("unsupported"))
             .expect("unsupported resource must be retained");
+        assert_eq!(
+            bundle.producers[0].adapter.as_deref(),
+            Some("reir.adapters.terraform_plan")
+        );
+        assert_eq!(
+            bundle.producers[0].source.as_deref(),
+            Some("terraform_plan_json")
+        );
         assert_eq!(diagnostic.kind, FactKind::Diagnostic);
         assert_eq!(diagnostic.value, FactValue::Unknown);
         assert!(

@@ -9,6 +9,10 @@ use serde_json::Value;
 
 use crate::*;
 
+use super::bounded::{
+    AdapterBuildError, AdapterLimits, BoundedEvidenceBuilder, ProducerProvenance, UnknownCoverage,
+};
+
 const FACT_SCHEMA: &str = "reir.fact.v0.1";
 const EDGE_SCHEMA: &str = "reir.edge.v0.1";
 const PRODUCER_VERSION: &str = "0.5.0";
@@ -23,6 +27,8 @@ const PUBLISH_SOURCE: &str = "rsscript_publish_dry_run";
 const TREE_SOURCE: &str = "rsscript_tree";
 const VENDOR_SOURCE: &str = "rsscript_vendor";
 const REVIEW_REQUIRED_KIND: &str = "review_required";
+const RSSCRIPT_ADAPTER_LIMITS: AdapterLimits =
+    AdapterLimits::new(1_000_000, 250_000, 64 * 1024 * 1024);
 
 /// Input from RSScript review-map (mirrors what the compiler produces).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1770,23 +1776,14 @@ pub fn rsscript_to_bundle(
     review_map: &RsScriptReviewMapInput,
     package_review: &RsScriptPackageReviewInput,
 ) -> Bundle {
-    let producer = Producer {
-        name: "rssc".to_string(),
-        version: PRODUCER_VERSION.to_string(),
-        adapter: Some("rsscript-language".to_string()),
-        adapter_version: Some(ADAPTER_VERSION.to_string()),
-        source: Some(PRODUCER_SOURCE.to_string()),
-    };
-
-    let mut bundle = Bundle::new();
-    bundle.producers.push(producer);
-    bundle.facts.extend(review_map_to_facts(review_map));
-    bundle.facts.extend(package_review_to_facts(package_review));
-    bundle
-        .edges
-        .extend(native_boundaries_to_edges(package_review));
-    finalize_bundle(&mut bundle);
-    bundle
+    build_rsscript_bundle(
+        rsscript_provenance("rsscript-language", PRODUCER_SOURCE),
+        review_map_to_facts(review_map)
+            .into_iter()
+            .chain(package_review_to_facts(package_review)),
+        native_boundaries_to_edges(package_review),
+    )
+    .unwrap_or_else(|error| rsscript_budget_exceeded_bundle(error, PRODUCER_SOURCE))
 }
 
 /// Build a REIR bundle from RSScript review-map JSON and package-review JSON.
@@ -1810,63 +1807,43 @@ pub fn rsscript_json_to_bundle(
             .map(|value| review_map_input_from_value(fallback_package, value)),
     };
 
-    let producer = Producer {
-        name: "rssc".to_string(),
-        version: PRODUCER_VERSION.to_string(),
-        adapter: Some("rsscript-language".to_string()),
-        adapter_version: Some(ADAPTER_VERSION.to_string()),
-        source: Some(PRODUCER_SOURCE.to_string()),
-    };
-
-    let mut bundle = Bundle::new();
-    bundle.producers.push(producer);
+    let mut facts = Vec::new();
+    let mut edges = Vec::new();
     if let Some(review_map) = &review_map {
-        bundle.facts.extend(review_map_to_facts(review_map));
+        facts.extend(review_map_to_facts(review_map));
     }
     if let Some(package_review) = &package_review {
-        bundle.facts.extend(package_review_to_facts(package_review));
-        bundle
-            .edges
-            .extend(native_boundaries_to_edges(package_review));
+        facts.extend(package_review_to_facts(package_review));
+        edges.extend(native_boundaries_to_edges(package_review));
     }
-    finalize_bundle(&mut bundle);
-    Ok(bundle)
+    build_rsscript_bundle(
+        rsscript_provenance("rsscript-language", PRODUCER_SOURCE),
+        facts,
+        edges,
+    )
+    .map_err(adapter_error_to_json)
 }
 
 /// Build a REIR bundle from RSScript package lock JSON.
 pub fn rsscript_lock_json_to_bundle(lock_json: &str) -> Result<Bundle, serde_json::Error> {
     let lock = package_lock_input_from_json(lock_json)?;
-    let producer = Producer {
-        name: "rssc".to_string(),
-        version: PRODUCER_VERSION.to_string(),
-        adapter: Some("rsscript-lockfile".to_string()),
-        adapter_version: Some(ADAPTER_VERSION.to_string()),
-        source: Some(LOCKFILE_SOURCE.to_string()),
-    };
-
-    let mut bundle = Bundle::new();
-    bundle.producers.push(producer);
-    bundle.facts.extend(package_lock_to_facts(&lock));
-    finalize_bundle(&mut bundle);
-    Ok(bundle)
+    build_rsscript_bundle(
+        rsscript_provenance("rsscript-lockfile", LOCKFILE_SOURCE),
+        package_lock_to_facts(&lock),
+        [],
+    )
+    .map_err(adapter_error_to_json)
 }
 
 /// Build a REIR bundle from RSScript package check JSON.
 pub fn rsscript_check_json_to_bundle(check_json: &str) -> Result<Bundle, serde_json::Error> {
     let check = package_check_input_from_json(check_json)?;
-    let producer = Producer {
-        name: "rssc".to_string(),
-        version: PRODUCER_VERSION.to_string(),
-        adapter: Some("rsscript-package-check".to_string()),
-        adapter_version: Some(ADAPTER_VERSION.to_string()),
-        source: Some(PACKAGE_CHECK_SOURCE.to_string()),
-    };
-
-    let mut bundle = Bundle::new();
-    bundle.producers.push(producer);
-    bundle.facts.extend(package_check_to_facts(&check));
-    finalize_bundle(&mut bundle);
-    Ok(bundle)
+    build_rsscript_bundle(
+        rsscript_provenance("rsscript-package-check", PACKAGE_CHECK_SOURCE),
+        package_check_to_facts(&check),
+        [],
+    )
+    .map_err(adapter_error_to_json)
 }
 
 /// Build a REIR bundle from RSScript package lock diff JSON.
@@ -1874,94 +1851,56 @@ pub fn rsscript_lock_diff_json_to_bundle(
     lock_diff_json: &str,
 ) -> Result<Bundle, serde_json::Error> {
     let diff = package_lock_diff_input_from_json(lock_diff_json)?;
-    let producer = Producer {
-        name: "rssc".to_string(),
-        version: PRODUCER_VERSION.to_string(),
-        adapter: Some("rsscript-lock-diff".to_string()),
-        adapter_version: Some(ADAPTER_VERSION.to_string()),
-        source: Some(LOCKFILE_SOURCE.to_string()),
-    };
-
-    let mut bundle = Bundle::new();
-    bundle.producers.push(producer);
-    bundle.facts.extend(package_lock_diff_to_facts(&diff));
-    finalize_bundle(&mut bundle);
-    Ok(bundle)
+    build_rsscript_bundle(
+        rsscript_provenance("rsscript-lock-diff", LOCKFILE_SOURCE),
+        package_lock_diff_to_facts(&diff),
+        [],
+    )
+    .map_err(adapter_error_to_json)
 }
 
 /// Build a REIR bundle from RSScript package tree JSON.
 pub fn rsscript_tree_json_to_bundle(tree_json: &str) -> Result<Bundle, serde_json::Error> {
     let tree = package_tree_input_from_json(tree_json)?;
-    let producer = Producer {
-        name: "rssc".to_string(),
-        version: PRODUCER_VERSION.to_string(),
-        adapter: Some("rsscript-package-tree".to_string()),
-        adapter_version: Some(ADAPTER_VERSION.to_string()),
-        source: Some(TREE_SOURCE.to_string()),
-    };
-
-    let mut bundle = Bundle::new();
-    bundle.producers.push(producer);
-    bundle.facts.extend(package_tree_to_facts(&tree));
-    bundle.edges.extend(package_tree_to_edges(&tree));
-    finalize_bundle(&mut bundle);
-    Ok(bundle)
+    build_rsscript_bundle(
+        rsscript_provenance("rsscript-package-tree", TREE_SOURCE),
+        package_tree_to_facts(&tree),
+        package_tree_to_edges(&tree),
+    )
+    .map_err(adapter_error_to_json)
 }
 
 /// Build a REIR bundle from RSScript package publish JSON.
 pub fn rsscript_publish_json_to_bundle(publish_json: &str) -> Result<Bundle, serde_json::Error> {
     let publish = package_publish_input_from_json(publish_json)?;
-    let producer = Producer {
-        name: "rssc".to_string(),
-        version: PRODUCER_VERSION.to_string(),
-        adapter: Some("rsscript-publish".to_string()),
-        adapter_version: Some(ADAPTER_VERSION.to_string()),
-        source: Some(PUBLISH_SOURCE.to_string()),
-    };
-
-    let mut bundle = Bundle::new();
-    bundle.producers.push(producer);
-    bundle.facts.extend(package_publish_to_facts(&publish));
-    finalize_bundle(&mut bundle);
-    Ok(bundle)
+    build_rsscript_bundle(
+        rsscript_provenance("rsscript-publish", PUBLISH_SOURCE),
+        package_publish_to_facts(&publish),
+        [],
+    )
+    .map_err(adapter_error_to_json)
 }
 
 /// Build a REIR bundle from RSScript package metadata JSON.
 pub fn rsscript_metadata_json_to_bundle(metadata_json: &str) -> Result<Bundle, serde_json::Error> {
     let metadata = package_metadata_input_from_json(metadata_json)?;
-    let producer = Producer {
-        name: "rssc".to_string(),
-        version: PRODUCER_VERSION.to_string(),
-        adapter: Some("rsscript-metadata".to_string()),
-        adapter_version: Some(ADAPTER_VERSION.to_string()),
-        source: Some(PACKAGE_METADATA_SOURCE.to_string()),
-    };
-
-    let mut bundle = Bundle::new();
-    bundle.producers.push(producer);
-    bundle
-        .facts
-        .extend(package_metadata_report_to_facts(&metadata));
-    finalize_bundle(&mut bundle);
-    Ok(bundle)
+    build_rsscript_bundle(
+        rsscript_provenance("rsscript-metadata", PACKAGE_METADATA_SOURCE),
+        package_metadata_report_to_facts(&metadata),
+        [],
+    )
+    .map_err(adapter_error_to_json)
 }
 
 /// Build a REIR bundle from RSScript package vendor JSON.
 pub fn rsscript_vendor_json_to_bundle(vendor_json: &str) -> Result<Bundle, serde_json::Error> {
     let vendor = package_vendor_input_from_json(vendor_json)?;
-    let producer = Producer {
-        name: "rssc".to_string(),
-        version: PRODUCER_VERSION.to_string(),
-        adapter: Some("rsscript-vendor".to_string()),
-        adapter_version: Some(ADAPTER_VERSION.to_string()),
-        source: Some(VENDOR_SOURCE.to_string()),
-    };
-
-    let mut bundle = Bundle::new();
-    bundle.producers.push(producer);
-    bundle.facts.extend(package_vendor_to_facts(&vendor));
-    finalize_bundle(&mut bundle);
-    Ok(bundle)
+    build_rsscript_bundle(
+        rsscript_provenance("rsscript-vendor", VENDOR_SOURCE),
+        package_vendor_to_facts(&vendor),
+        [],
+    )
+    .map_err(adapter_error_to_json)
 }
 
 pub fn review_map_input_from_json(
@@ -4950,29 +4889,57 @@ fn normalized_id(input: &str) -> String {
         .collect()
 }
 
-fn finalize_bundle(bundle: &mut Bundle) {
-    index_bundle_subjects(bundle);
-    bundle.slices = slice_by_kind(bundle);
+const fn rsscript_provenance(adapter: &'static str, source: &'static str) -> ProducerProvenance {
+    ProducerProvenance {
+        name: "rssc",
+        version: PRODUCER_VERSION,
+        adapter,
+        adapter_version: ADAPTER_VERSION,
+        source,
+    }
 }
 
-fn index_bundle_subjects(bundle: &mut Bundle) {
-    let mut subjects = BTreeMap::<String, Subject>::new();
-    for subject in &bundle.subjects {
-        subjects.insert(subject.id.clone(), subject.clone());
+fn build_rsscript_bundle(
+    producer: ProducerProvenance,
+    facts: impl IntoIterator<Item = Fact>,
+    edges: impl IntoIterator<Item = Edge>,
+) -> Result<Bundle, AdapterBuildError> {
+    let mut builder = BoundedEvidenceBuilder::new(RSSCRIPT_ADAPTER_LIMITS);
+    builder.extend_facts(facts)?;
+    builder.extend_edges(edges)?;
+    builder.finish(producer)
+}
+
+fn rsscript_budget_exceeded_bundle(error: AdapterBuildError, source: &'static str) -> Bundle {
+    let reason = format!("RSScript adapter output is incomplete: {error}");
+    let mut builder = BoundedEvidenceBuilder::new(AdapterLimits::new(4, 1, 64 * 1024));
+    let coverage = UnknownCoverage {
+        id: "fact.rsscript.adapter_budget.unknown".to_owned(),
+        subject_kind: SubjectKind::Package,
+        subject_id: "package::rsscript".to_owned(),
+        subject_name: "rsscript".to_owned(),
+        package: "rsscript",
+        reason,
+        source,
+        acquisition_mode: AcquisitionMode::CompilerContract,
+        evidence_kind: EvidenceKind::UnknownReason,
+        evidence_file: source,
+        evidence_pointer: None,
+        evidence_value: "adapter_budget_exceeded",
+    };
+    if builder.push_unknown_coverage(coverage).is_err() {
+        return Bundle::new();
     }
-    for fact in &bundle.facts {
-        subjects.insert(fact.subject.id.clone(), fact.subject.clone());
-    }
-    for edge in &bundle.edges {
-        subjects.insert(edge.from.id.clone(), edge.from.clone());
-        subjects.insert(edge.to.id.clone(), edge.to.clone());
-    }
-    for chain in &bundle.subject_chains {
-        for subject in &chain.nodes {
-            subjects.insert(subject.id.clone(), subject.clone());
-        }
-    }
-    bundle.subjects = subjects.into_values().collect();
+    builder
+        .finish(rsscript_provenance("rsscript-language", source))
+        .unwrap_or_default()
+}
+
+fn adapter_error_to_json(error: AdapterBuildError) -> serde_json::Error {
+    serde_json::Error::io(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        error.to_string(),
+    ))
 }
 
 #[cfg(test)]
@@ -6451,6 +6418,15 @@ mod tests {
 
         assert_eq!(bundle.producers.len(), 1);
         assert_eq!(bundle.producers[0].name, "rssc");
+        assert_eq!(
+            bundle.producers[0].adapter.as_deref(),
+            Some("rsscript-language")
+        );
+        assert_eq!(bundle.producers[0].adapter_version.as_deref(), Some("0.1"));
+        assert_eq!(
+            bundle.producers[0].source.as_deref(),
+            Some("compiler_contract")
+        );
         assert_eq!(bundle.facts.len(), 12);
         assert_eq!(bundle.edges.len(), 3);
         assert!(
