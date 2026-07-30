@@ -14,8 +14,6 @@ on:
       - "crates/metal-compute/**"
       - "crates/native-abi/**"
       - "crates/process-guard/**"
-      - "crates/worker-protocol/**"
-      - "crates/execution-worker/**"
       - "crates/reir/**"
       - "crates/rsscript/src/cli/run_cmd.rs"
       - "crates/rsscript/src/execution_policy.rs"
@@ -46,8 +44,6 @@ on:
       - "crates/metal-compute/**"
       - "crates/native-abi/**"
       - "crates/process-guard/**"
-      - "crates/worker-protocol/**"
-      - "crates/execution-worker/**"
       - "crates/reir/**"
       - "crates/rsscript/src/cli/run_cmd.rs"
       - "crates/rsscript/src/execution_policy.rs"
@@ -89,16 +85,11 @@ jobs:
           toolchain: 1.96.1
           components: clippy
 
-      - name: Install worker isolation launcher
-        run: sudo apt-get update && sudo apt-get install --yes bubblewrap
-
       - name: Check unsafe boundary crates
         run: |
           cargo clippy --locked -p vm-jit --all-targets -- -D warnings
           cargo clippy --locked -p rss-native-abi --all-targets -- -D warnings
           cargo clippy --locked -p rss-process-guard --all-targets -- -D warnings
-          cargo clippy --locked -p rss-worker-protocol --all-targets -- -D warnings
-          cargo clippy --locked -p rss-execution-worker --all-targets --no-deps -- -D warnings
           cargo clippy --locked -p rss-metal-compute --all-targets -- -D warnings
           cargo clippy --locked -p reir -p rss-lsp --all-targets -- -D warnings
           cargo clippy --locked -p rsscript-runtime --all-targets --all-features -- -D warnings
@@ -116,10 +107,6 @@ jobs:
         run: |
           cargo test --locked -p rss-native-abi
           cargo test --locked -p rss-process-guard
-          cargo test --locked -p rss-worker-protocol
-          cargo test --locked -p rss-execution-worker
-          RSS_RUN_BWRAP_TESTS=1 cargo test --locked -p rss-execution-worker \
-            --test isolation -- --ignored
 
       - name: Test review, runtime, and database boundaries
         run: |

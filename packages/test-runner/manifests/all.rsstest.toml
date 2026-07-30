@@ -17,25 +17,6 @@ args = [
   "rsscript-runtime",
   "--exclude",
   "rss-metal-compute",
-  "--exclude",
-  "rss-execution-worker",
-  "--",
-  "-D",
-  "warnings",
-]
-
-[[tests]]
-name = "isolated worker clippy has no warnings"
-kind = "command_success"
-command = "cargo"
-timeout_ms = 600000
-args = [
-  "--locked",
-  "clippy",
-  "-p",
-  "rss-execution-worker",
-  "--all-targets",
-  "--no-deps",
   "--",
   "-D",
   "warnings",
@@ -75,10 +56,8 @@ args = [
 
 [[tests]]
 # Keep the complete runtime's default net/GPU features out of the compiler test
-# graph. The execution worker similarly enables `native-jit`; selecting every
-# workspace member in one Cargo invocation would apply that feature to the
-# compiler's Core test graph. Dedicated batches below test the excluded members
-# with their intended features.
+# graph. Dedicated batches below test the excluded members with their intended
+# features.
 #
 # `selfhost_parity` deliberately runs below in one cargo-test process: nextest
 # otherwise creates a separate process for every case, which prevents its
@@ -98,19 +77,10 @@ args = [
   "rsscript-runtime",
   "--exclude",
   "rss-metal-compute",
-  "--exclude",
-  "rss-execution-worker",
   "--no-fail-fast",
   "-E",
   "not test(/selfhost_parity::/)",
 ]
-
-[[tests]]
-name = "isolated worker tests pass"
-kind = "command_success"
-command = "cargo"
-timeout_ms = 600000
-args = ["--locked", "test", "-p", "rss-execution-worker"]
 
 [[tests]]
 name = "runtime tests pass (nextest)"

@@ -7,8 +7,6 @@ members = [
     "crates/reir",
     "crates/native-abi",
     "crates/process-guard",
-    "crates/worker-protocol",
-    "crates/execution-worker",
     "crates/metal-compute",
     "crates/vm-jit",
     "crates/rss-testgen",
