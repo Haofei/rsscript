@@ -81,7 +81,7 @@ This table records the current implementation batch for the refactoring work in
 | R12 | Test-domain organization | Complete | Register-VM, JIT acceptance, and self-host parity suites are composed from independently owned semantic domains |
 | R13 | Runtime compatibility owner isolation | Complete | Canonical async work uses explicit services and the generated ABI has exactly one isolated process-wide compatibility owner |
 | R14 | Register-VM execution boundary decomposition | Planned | Tier selection, execution planning, lowering, and interpretation have independently testable owners |
-| R15 | REIR adapter pipeline decomposition | Planned | Input, traversal, normalization, coverage, and fact projection are separate from bounded evidence construction |
+| R15 | REIR adapter pipeline decomposition | Complete | Input, traversal, normalization, coverage, and fact projection are separate from bounded evidence construction |
 | R16 | Semantic checker and lowering decomposition | Planned | Call, ownership, effect, closure, and emission responsibilities have stable module boundaries |
 | R17 | Large test-domain decomposition | Planned | Remaining register-window, JIT, and backend suites have independently owned semantic domains |
 | R18 | Host capability adapter enforcement | Planned | Canonical filesystem, network, process, and database adapters consume scoped authorized handles |
@@ -201,6 +201,14 @@ R13 removes the second process-wide Tokio runtime and isolates the sole default
 operations retain explicit services through `OperationContext`; runtime tests
 create and shut down their own owners. An architecture test prevents global
 runtime ownership from returning to the async state machine.
+
+R15 decomposes the RSScript and Terraform adapters into explicit input,
+normalization, traversal, fact, coverage, provenance, and pipeline stages.
+Terraform owns a separate budget stage. The shared `BoundedEvidenceBuilder`
+remains the only bundle-construction boundary, unsupported resources remain
+explicit unknown coverage, and exhausted budgets fail before returning partial
+evidence. Architecture tests prevent adapter monoliths and direct bundle
+construction from returning.
 
 ## Experimental Status
 

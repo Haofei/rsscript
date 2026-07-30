@@ -5,6 +5,7 @@ use reir::{
         terraform::{TerraformPlanLimits, terraform_plan_json_to_bundle_with_limits},
     },
 };
+use std::path::PathBuf;
 
 const UNSUPPORTED_PLAN: &str = r#"{
     "resource_changes": [{
@@ -97,5 +98,55 @@ fn adapter_bundles_include_complete_producer_provenance() {
                 .as_deref()
                 .is_some_and(|value| !value.is_empty())
         );
+    }
+}
+
+#[test]
+fn adapter_pipelines_remain_decomposed_by_responsibility() {
+    let adapters = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/adapters");
+
+    for adapter in ["rsscript", "terraform"] {
+        let root = adapters.join(adapter);
+        assert!(root.join("mod.rs").is_file(), "{adapter} module entry");
+        for responsibility in [
+            "input.rs",
+            "traversal.rs",
+            "normalization.rs",
+            "facts.rs",
+            "coverage.rs",
+            "provenance.rs",
+            "pipeline.rs",
+        ] {
+            assert!(
+                root.join(responsibility).is_file(),
+                "{adapter} adapter is missing {responsibility}"
+            );
+        }
+        assert!(
+            !adapters.join(format!("{adapter}.rs")).exists(),
+            "{adapter} adapter must not return to a monolithic source file"
+        );
+    }
+}
+
+#[test]
+fn adapter_fact_stages_cannot_construct_bundles_directly() {
+    let adapters = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/adapters");
+
+    for adapter in ["rsscript", "terraform"] {
+        for stage in ["facts.rs", "normalization.rs", "traversal.rs"] {
+            let path = adapters.join(adapter).join(stage);
+            let source = std::fs::read_to_string(&path).expect("adapter stage should be readable");
+            assert!(
+                !source.contains("BoundedEvidenceBuilder"),
+                "{} must emit candidates through the bounded pipeline",
+                path.display()
+            );
+            assert!(
+                !source.contains("Bundle::"),
+                "{} must not construct evidence bundles",
+                path.display()
+            );
+        }
     }
 }
