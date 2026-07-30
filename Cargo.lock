@@ -2141,7 +2141,6 @@ dependencies = [
  "rss-native-abi",
  "rss-process-guard",
  "rss-testgen",
- "rss-worker-protocol",
  "rsscript-runtime",
  "rustix",
  "semver",

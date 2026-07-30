@@ -4,14 +4,12 @@ use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use rss_process_guard::WorkerIsolationProof;
-
 /// Product support level for an execution capability.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SupportLevel {
     Core,
     Experimental,
-    UnsupportedForUntrusted,
+    TrustedOnly,
 }
 
 /// Host-facing capabilities whose availability depends on deployment trust.
@@ -22,7 +20,6 @@ pub enum ExecutionCapability {
     BoundedReferenceVm,
     UnlimitedVm,
     InProcessNative,
-    IsolatedNative,
     NativeJit,
     DynamicGpuShader,
     ArbitraryProcess,
@@ -35,13 +32,11 @@ impl ExecutionCapability {
             Self::StaticLowering | Self::BoundedRustAot | Self::BoundedReferenceVm => {
                 SupportLevel::Core
             }
-            Self::IsolatedNative | Self::NativeJit | Self::DynamicGpuShader => {
-                SupportLevel::Experimental
-            }
+            Self::NativeJit | Self::DynamicGpuShader => SupportLevel::Experimental,
             Self::UnlimitedVm
             | Self::InProcessNative
             | Self::ArbitraryProcess
-            | Self::ArbitraryNetwork => SupportLevel::UnsupportedForUntrusted,
+            | Self::ArbitraryNetwork => SupportLevel::TrustedOnly,
         }
     }
 
@@ -52,7 +47,6 @@ impl ExecutionCapability {
             Self::BoundedReferenceVm => "bounded reference VM execution",
             Self::UnlimitedVm => "unlimited VM execution",
             Self::InProcessNative => "in-process native plugins",
-            Self::IsolatedNative => "isolated native plugin call",
             Self::NativeJit => "native JIT execution",
             Self::DynamicGpuShader => "dynamic GPU shaders",
             Self::ArbitraryProcess => "arbitrary child processes",
@@ -63,59 +57,14 @@ impl ExecutionCapability {
 
 /// Deployment trust profile enforced at execution entry points.
 ///
-/// `UntrustedIsolated` requires a proof-gated, out-of-process execution path.
-/// Ordinary capability authorization deliberately remains denied so callers
-/// cannot silently fall back to trusted in-process execution.
+/// RSScript does not provide an untrusted-package execution profile. Third-party
+/// packages may be inspected statically, but execution is limited to explicitly
+/// trusted local code or restricted trusted CI.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DeploymentProfile {
     #[default]
     LocalTrusted,
     TrustedCi,
-    UntrustedIsolated,
-}
-
-/// Opaque authority to send one operation to a verified isolated worker.
-///
-/// Only the isolated execution client can construct this value, and only after
-/// `rss-process-guard` returns a non-forgeable [`WorkerIsolationProof`].
-#[derive(Debug)]
-pub(crate) struct IsolatedExecutionAuthorization {
-    child_pid: u32,
-    _private: (),
-}
-
-impl IsolatedExecutionAuthorization {
-    pub(crate) fn from_worker_isolation_proof(proof: WorkerIsolationProof) -> Self {
-        Self {
-            child_pid: proof.child_pid(),
-            _private: (),
-        }
-    }
-
-    pub(crate) fn authorize(
-        &self,
-        profile: DeploymentProfile,
-        capability: ExecutionCapability,
-        child_pid: u32,
-    ) -> Result<(), ExecutionPolicyError> {
-        if profile == DeploymentProfile::UntrustedIsolated
-            && matches!(
-                capability,
-                ExecutionCapability::BoundedReferenceVm
-                    | ExecutionCapability::IsolatedNative
-                    | ExecutionCapability::NativeJit
-                    | ExecutionCapability::DynamicGpuShader
-            )
-            && self.child_pid == child_pid
-        {
-            Ok(())
-        } else {
-            Err(ExecutionPolicyError {
-                profile,
-                capability,
-            })
-        }
-    }
 }
 
 impl DeploymentProfile {
@@ -123,7 +72,6 @@ impl DeploymentProfile {
         match self {
             Self::LocalTrusted => "local-trusted",
             Self::TrustedCi => "trusted-ci",
-            Self::UntrustedIsolated => "untrusted-isolated",
         }
     }
 
@@ -134,7 +82,6 @@ impl DeploymentProfile {
                 capability,
                 ExecutionCapability::StaticLowering | ExecutionCapability::BoundedReferenceVm
             ),
-            Self::UntrustedIsolated => matches!(capability, ExecutionCapability::StaticLowering),
         };
         if allowed {
             Ok(())
@@ -160,7 +107,6 @@ impl FromStr for DeploymentProfile {
         match value {
             "local-trusted" => Ok(Self::LocalTrusted),
             "trusted-ci" => Ok(Self::TrustedCi),
-            "untrusted-isolated" => Ok(Self::UntrustedIsolated),
             _ => Err(ParseDeploymentProfileError(value.to_owned())),
         }
     }
@@ -173,7 +119,7 @@ impl fmt::Display for ParseDeploymentProfileError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             formatter,
-            "unknown deployment profile `{}`; expected local-trusted, trusted-ci, or untrusted-isolated",
+            "unknown deployment profile `{}`; expected local-trusted or trusted-ci",
             self.0
         )
     }
@@ -199,14 +145,6 @@ impl ExecutionPolicyError {
 
 impl fmt::Display for ExecutionPolicyError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.profile == DeploymentProfile::UntrustedIsolated {
-            return write!(
-                formatter,
-                "deployment profile `{}` denies {} in process; untrusted execution requires a verified isolated worker",
-                self.profile,
-                self.capability.name()
-            );
-        }
         if self.profile == DeploymentProfile::TrustedCi {
             return write!(
                 formatter,
@@ -560,18 +498,14 @@ impl ExecutionContext {
 
     /// Constructs a context for a deployment profile.
     ///
-    /// Untrusted execution remains unavailable until a worker can provide a
-    /// non-forgeable isolation proof. It never degrades to an in-process
-    /// restricted context.
+    /// Only the trusted-CI profile may construct a restricted in-process
+    /// context. Third-party package execution is outside the product scope.
     pub fn restricted(
         profile: DeploymentProfile,
         capabilities: HostCapabilities,
     ) -> Result<Self, ExecutionContextError> {
         match profile {
             DeploymentProfile::TrustedCi => Ok(Self::trusted_ci(capabilities)),
-            DeploymentProfile::UntrustedIsolated => {
-                Err(ExecutionContextError::IsolationUnavailable)
-            }
             DeploymentProfile::LocalTrusted => {
                 Err(ExecutionContextError::ProfileRequiresAmbient { profile })
             }
@@ -811,16 +745,12 @@ impl ExecutionContext {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ExecutionContextError {
-    IsolationUnavailable,
     ProfileRequiresAmbient { profile: DeploymentProfile },
 }
 
 impl fmt::Display for ExecutionContextError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::IsolationUnavailable => formatter.write_str(
-                "untrusted isolated execution cannot create an in-process execution context; a verified isolated worker is mandatory",
-            ),
             Self::ProfileRequiresAmbient { profile } => write!(
                 formatter,
                 "deployment profile `{profile}` is not a restricted execution profile; use ExecutionContext::trusted_local explicitly"
@@ -1002,21 +932,10 @@ mod tests {
     }
 
     #[test]
-    fn untrusted_profile_denies_ordinary_in_process_authorization() {
-        let error = DeploymentProfile::UntrustedIsolated
-            .authorize(ExecutionCapability::BoundedReferenceVm)
-            .expect_err("in-process execution must remain unavailable");
-        assert!(
-            error
-                .to_string()
-                .contains("denies bounded reference VM execution in process")
-        );
-    }
-
-    #[test]
     fn profile_parser_rejects_ambiguous_names() {
         assert_eq!("trusted-ci".parse(), Ok(DeploymentProfile::TrustedCi));
         assert!("production".parse::<DeploymentProfile>().is_err());
+        assert!("untrusted-isolated".parse::<DeploymentProfile>().is_err());
     }
 
     #[test]
@@ -1115,16 +1034,6 @@ mod tests {
         assert!(context.authorize_environment_variable("CI_TOKEN").is_ok());
         assert!(context.authorize_environment_variable("HOME").is_err());
         assert!(context.authorize_temp_directory().is_ok());
-    }
-
-    #[test]
-    fn untrusted_context_never_falls_back_to_in_process_restriction() {
-        let error = ExecutionContext::restricted(
-            DeploymentProfile::UntrustedIsolated,
-            HostCapabilities::deny_all(),
-        )
-        .expect_err("worker isolation is mandatory");
-        assert_eq!(error, ExecutionContextError::IsolationUnavailable);
     }
 
     #[test]

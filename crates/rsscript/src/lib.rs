@@ -27,7 +27,6 @@ mod hir;
 #[cfg(test)]
 mod interface_metadata;
 mod interfaces;
-mod isolated_execution;
 mod lexer;
 mod lint;
 mod native_plugin;
@@ -79,11 +78,6 @@ pub use generate::{
     CommitBehavior, Completion, CompletionKind, ContinuationOptions, Continuations, Effect,
     ExpectedType, GenerateContext, LiteralClass, PrefixStatus, SymbolCompleteness, TextRange,
     TypeRef, prefix_status, valid_continuations,
-};
-pub use isolated_execution::{
-    IsolatedExecutionError, IsolatedProgram, IsolatedProgramSource, IsolatedWorkerConfig,
-    call_isolated_native, eval_isolated_native_jit, eval_isolated_reference_vm,
-    metal_matmul_isolated, metal_run_1d_isolated,
 };
 pub use lint::lint_source;
 pub use native_plugin::{load_authorized_package_native_bindings, load_package_native_bindings};
@@ -143,7 +137,6 @@ pub use review::{
     format_review_human, format_review_json, format_review_map_human, format_review_map_json,
     review_map_sources, review_sources,
 };
-pub use rss_worker_protocol::{MetalMatmulRequest, MetalRun1dRequest};
 pub use rust_lower::lowered_symbol_name;
 pub use rust_lower::{
     GeneratedRustPackage, LowerCoverageReport, LoweredRust, NativeRustDependency,
@@ -274,15 +267,12 @@ pub mod api {
                 AuthorityError, AuthorizedDatabase, AuthorizedEndpoint, AuthorizedExecutable,
                 AuthorizedPath, CoverageBucket, DeploymentProfile, EvalError, EvalOutput,
                 ExecutionCapability, ExecutionContext, ExecutionContextError, ExecutionPolicyError,
-                ExecutionScopeId, HostAuthority, HostCapabilities, IsolatedExecutionError,
-                IsolatedProgram, IsolatedProgramSource, IsolatedWorkerConfig, JitPlan,
-                MetalMatmulRequest, MetalRun1dRequest, NativeInterpreterFn, NativeValue,
-                NetworkEndpointGrant, ParseDeploymentProfileError, RegVmExecutable, SupportLevel,
-                VmCoverageReport, VmLimits, call_isolated_native, eval_isolated_native_jit,
-                eval_isolated_reference_vm, load_authorized_package_native_bindings,
-                load_package_native_bindings, metal_matmul_isolated, metal_run_1d_isolated,
-                reg_vm_compile_package, reg_vm_compile_package_input, reg_vm_compile_source,
-                reg_vm_compile_validated, reg_vm_eval_package_main_with_args,
+                ExecutionScopeId, HostAuthority, HostCapabilities, JitPlan, NativeInterpreterFn,
+                NativeValue, NetworkEndpointGrant, ParseDeploymentProfileError, RegVmExecutable,
+                SupportLevel, VmCoverageReport, VmLimits, load_authorized_package_native_bindings,
+                load_package_native_bindings, reg_vm_compile_package, reg_vm_compile_package_input,
+                reg_vm_compile_source, reg_vm_compile_validated,
+                reg_vm_eval_package_main_with_args,
                 reg_vm_eval_package_main_with_args_and_native_bindings,
                 reg_vm_eval_package_main_with_args_and_native_bindings_and_limits,
                 reg_vm_eval_package_main_with_args_and_native_bindings_streaming_stdout,
