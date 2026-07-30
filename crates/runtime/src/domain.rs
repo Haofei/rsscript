@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
+#[cfg(feature = "net")]
+use crate::OperationContext;
 use crate::ResourceBudget;
 #[cfg(feature = "net")]
 use crate::async_runtime::{NativeAsyncPending, run_pending, spawn_tokio_native};
@@ -575,15 +577,24 @@ pub fn http_send_async(request: HttpRequest) -> NativeAsyncPending<Result<Respon
 }
 
 #[cfg(feature = "net")]
+pub fn http_send_async_with_context(
+    request: HttpRequest,
+    context: OperationContext,
+) -> NativeAsyncPending<Result<Response, HttpError>> {
+    spawn_tokio_native(async move { http_request_retry_with_context(request, context).await })
+}
+
+#[cfg(feature = "net")]
 pub fn http_send_async_with_resources(
     request: HttpRequest,
     budget: ResourceBudget,
     cancellation: RssCancellationToken,
     deadline: RssDeadline,
 ) -> NativeAsyncPending<Result<Response, HttpError>> {
-    spawn_tokio_native(async move {
-        http_request_retry_with_resources(request, budget, cancellation, deadline).await
-    })
+    http_send_async_with_context(
+        request,
+        OperationContext::from_resources(budget, cancellation, deadline),
+    )
 }
 
 #[cfg(feature = "net")]
@@ -854,19 +865,8 @@ async fn http_request_timeout_async(
     );
     let cancellation = cancellation_never();
     let deadline = deadline_after_ms(timeout_ms);
-    http_request_once_with_controls(
-        method,
-        url,
-        headers,
-        content_type,
-        body,
-        HttpControls {
-            budget: &budget,
-            cancellation: &cancellation,
-            deadline: &deadline,
-        },
-    )
-    .await
+    let context = OperationContext::from_resources(budget, cancellation, deadline);
+    http_request_once_with_controls(method, url, headers, content_type, body, &context).await
 }
 
 #[cfg(feature = "net")]
@@ -883,7 +883,11 @@ async fn http_request_retry_async(request: HttpRequest) -> Result<Response, Http
     let budget = default_http_budget(&request);
     let cancellation = cancellation_never();
     let deadline = deadline_after_ms(normalized_http_timeout_ms(request.timeout_ms));
-    http_request_retry_with_resources(request, budget, cancellation, deadline).await
+    http_request_retry_with_context(
+        request,
+        OperationContext::from_resources(budget, cancellation, deadline),
+    )
+    .await
 }
 
 #[cfg(feature = "net")]
@@ -904,10 +908,10 @@ async fn http_request_once_with_controls(
     headers: Vec<(String, String)>,
     content_type: Option<&str>,
     body: Option<String>,
-    controls: HttpControls<'_>,
+    context: &OperationContext,
 ) -> Result<Response, HttpError> {
     let display_url = redact_http_url(url);
-    let remaining = deadline_remaining_duration(controls.deadline);
+    let remaining = deadline_remaining_duration(context.deadline());
     if remaining.is_zero() {
         return Err(HttpError {
             message: format!("HTTP request to {display_url} timed out"),
@@ -915,12 +919,19 @@ async fn http_request_once_with_controls(
     }
     tokio::select! {
         biased;
-        _ = cancellation_token_cancelled(controls.cancellation) => Err(HttpError {
+        _ = cancellation_token_cancelled(context.cancellation()) => Err(HttpError {
             message: format!("HTTP request to {display_url} was cancelled"),
         }),
         result = tokio::time::timeout(
             remaining,
-            http_request_once_async(method, url, headers, content_type, body, controls.budget),
+            http_request_once_async(
+                method,
+                url,
+                headers,
+                content_type,
+                body,
+                context.byte_budget(),
+            ),
         ) => result.map_err(|_| HttpError {
             message: format!("HTTP request to {display_url} timed out"),
         })?,
@@ -928,19 +939,9 @@ async fn http_request_once_with_controls(
 }
 
 #[cfg(feature = "net")]
-#[derive(Clone, Copy)]
-struct HttpControls<'a> {
-    budget: &'a ResourceBudget,
-    cancellation: &'a RssCancellationToken,
-    deadline: &'a RssDeadline,
-}
-
-#[cfg(feature = "net")]
-async fn http_request_retry_with_resources(
+async fn http_request_retry_with_context(
     request: HttpRequest,
-    budget: ResourceBudget,
-    cancellation: RssCancellationToken,
-    deadline: RssDeadline,
+    context: OperationContext,
 ) -> Result<Response, HttpError> {
     let attempts = request.attempts.clamp(1, MAX_HTTP_ATTEMPTS);
     let backoff_ms = request.backoff_ms.max(0) as u64;
@@ -948,7 +949,7 @@ async fn http_request_retry_with_resources(
     let mut last_error = None;
     let mut last_response = None;
     for attempt in 0..attempts {
-        let remaining = deadline_remaining_duration(&deadline);
+        let remaining = deadline_remaining_duration(context.deadline());
         if remaining.is_zero() {
             break;
         }
@@ -958,11 +959,7 @@ async fn http_request_retry_with_resources(
             request.headers.clone(),
             request.content_type.as_deref(),
             request.body.clone(),
-            HttpControls {
-                budget: &budget,
-                cancellation: &cancellation,
-                deadline: &deadline,
-            },
+            &context,
         )
         .await
         {
@@ -975,14 +972,14 @@ async fn http_request_retry_with_resources(
             Err(error) => last_error = Some(error),
         }
         if attempt + 1 < attempts && backoff_ms > 0 {
-            let remaining = deadline_remaining_duration(&deadline);
+            let remaining = deadline_remaining_duration(context.deadline());
             if remaining.is_zero() {
                 break;
             }
             let sleep = std::time::Duration::from_millis(backoff_ms).min(remaining);
             tokio::select! {
                 biased;
-                _ = cancellation_token_cancelled(&cancellation) => {
+                _ = cancellation_token_cancelled(context.cancellation()) => {
                     return Err(HttpError {
                         message: format!(
                             "HTTP request to {} was cancelled",
@@ -2323,14 +2320,15 @@ mod tests {
         });
 
         let budget = ResourceBudget::new(6);
+        let request = http_request_new("GET", &format!("http://{addr}/budget"), None, None);
+        let context = OperationContext::from_resources(
+            budget.clone(),
+            cancellation_never(),
+            deadline_after_ms(1_000),
+        );
         let mut executor = Executor::new();
         let error = executor
-            .run_pending(http_get_async_with_resources(
-                &format!("http://{addr}/budget"),
-                budget.clone(),
-                cancellation_never(),
-                deadline_after_ms(1_000),
-            ))
+            .run_pending(http_send_async_with_context(request, context))
             .expect_err("response should exhaust the shared byte budget");
         assert!(error.message.contains("byte budget exhausted"), "{error:?}");
         assert!(budget.bytes_used() <= 6);

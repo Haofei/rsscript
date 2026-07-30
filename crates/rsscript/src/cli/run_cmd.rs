@@ -5,10 +5,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rsscript::{
-    EvalError, EvalOutput, NativeValue, VmLimits, check_generated_rust_package,
-    configure_reduced_build_environment, format_diagnostics_human, format_diagnostics_json,
-    load_authorized_package_native_bindings, parse_runtime_diagnostics, prepare_authorized_package,
-    reg_vm_compile_package_input, reg_vm_eval_source_main_with_args,
+    DeploymentProfile, EvalError, EvalOutput, ExecutionCapability, NativeValue, VmLimits,
+    check_generated_rust_package, configure_reduced_build_environment, format_diagnostics_human,
+    format_diagnostics_json, load_authorized_package_native_bindings, parse_runtime_diagnostics,
+    prepare_authorized_package, reg_vm_compile_package_input, reg_vm_eval_source_main_with_args,
     reg_vm_eval_source_main_with_limits, write_generated_rust_package,
 };
 
@@ -32,6 +32,7 @@ struct RunOptions<'a> {
     dry_run: bool,
     trusted_unlimited: bool,
     trusted_native: bool,
+    deployment_profile: DeploymentProfile,
     path: Option<&'a str>,
     out_dir: Option<&'a str>,
     program_args: Vec<&'a str>,
@@ -44,6 +45,7 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
     let mut dry_run = false;
     let mut trusted_unlimited = false;
     let mut trusted_native = false;
+    let mut deployment_profile = DeploymentProfile::default();
     let mut path = None;
     let mut out_dir = None;
     let mut program_args = Vec::new();
@@ -65,6 +67,11 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
             trusted_unlimited = true;
         } else if arg == "--trusted-native" {
             trusted_native = true;
+        } else if arg == "--deployment-profile" {
+            index += 1;
+            deployment_profile = required_flag_value(args, index, "--deployment-profile")?
+                .parse()
+                .map_err(|error: rsscript::ParseDeploymentProfileError| error.to_string())?;
         } else if arg == "--out-dir" {
             index += 1;
             out_dir = Some(required_flag_value(args, index, "--out-dir")?);
@@ -85,6 +92,7 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
         dry_run,
         trusted_unlimited,
         trusted_native,
+        deployment_profile,
         path,
         out_dir,
         program_args,
@@ -106,6 +114,29 @@ fn validate_run_options(options: &RunOptions<'_>) -> Result<(), String> {
     if options.trusted_unlimited && !options.vm {
         return Err("`--trusted-unlimited` is only valid with `rss run --vm`.".to_string());
     }
+    if options.trusted_unlimited {
+        options
+            .deployment_profile
+            .authorize(ExecutionCapability::UnlimitedVm)
+            .map_err(|error| error.to_string())?;
+    }
+    if options.trusted_native {
+        options
+            .deployment_profile
+            .authorize(ExecutionCapability::InProcessNative)
+            .map_err(|error| error.to_string())?;
+    }
+    let backend = if options.dry_run {
+        ExecutionCapability::StaticLowering
+    } else if options.vm {
+        ExecutionCapability::BoundedReferenceVm
+    } else {
+        ExecutionCapability::BoundedRustAot
+    };
+    options
+        .deployment_profile
+        .authorize(backend)
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
@@ -561,6 +592,8 @@ fn print_run_dry_run(
 
 #[cfg(test)]
 mod tests {
+    use rsscript::DeploymentProfile;
+
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
     }
@@ -604,6 +637,7 @@ mod tests {
         assert!(!options.dry_run);
         assert!(!options.trusted_unlimited);
         assert!(!options.trusted_native);
+        assert_eq!(options.deployment_profile, DeploymentProfile::LocalTrusted);
         assert_eq!(options.path, Some("demo.rss"));
         assert_eq!(options.program_args, vec!["input"]);
     }
@@ -716,6 +750,71 @@ mod tests {
         let options = super::parse_run_args(&values).expect("trusted native mode should parse");
         assert!(options.vm);
         assert!(options.trusted_native);
+    }
+
+    #[test]
+    fn trusted_ci_profile_is_static_only() {
+        let bounded = args(&["--vm", "--deployment-profile", "trusted-ci", "demo.rss"]);
+        let error = super::parse_run_args(&bounded).expect_err("CI execution must fail closed");
+        assert!(
+            error.contains("denies bounded reference VM execution"),
+            "{error}"
+        );
+
+        let native = args(&[
+            "--vm",
+            "--trusted-native",
+            "--deployment-profile",
+            "trusted-ci",
+            "trusted-package",
+        ]);
+        let error = super::parse_run_args(&native).expect_err("native CI run must fail");
+        assert!(
+            error.contains("denies in-process native plugins"),
+            "{error}"
+        );
+
+        let unlimited = args(&[
+            "--vm",
+            "--trusted-unlimited",
+            "--deployment-profile",
+            "trusted-ci",
+            "demo.rss",
+        ]);
+        let error = super::parse_run_args(&unlimited).expect_err("unlimited CI run must fail");
+        assert!(error.contains("denies unlimited VM execution"), "{error}");
+
+        let dry_run = args(&[
+            "--dry-run",
+            "--deployment-profile",
+            "trusted-ci",
+            "demo.rss",
+        ]);
+        let options = super::parse_run_args(&dry_run).expect("CI static lowering should parse");
+        assert_eq!(options.deployment_profile, DeploymentProfile::TrustedCi);
+    }
+
+    #[test]
+    fn untrusted_profile_only_allows_non_executing_dry_run() {
+        let execution = args(&[
+            "--vm",
+            "--deployment-profile",
+            "untrusted-isolated",
+            "demo.rss",
+        ]);
+        let error = super::parse_run_args(&execution).expect_err("execution must fail closed");
+        assert!(
+            error.contains("isolated worker sandbox is not implemented"),
+            "{error}"
+        );
+
+        let dry_run = args(&[
+            "--dry-run",
+            "--deployment-profile",
+            "untrusted-isolated",
+            "demo.rss",
+        ]);
+        super::parse_run_args(&dry_run).expect("static lowering should remain available");
     }
 
     #[test]

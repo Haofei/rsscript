@@ -155,19 +155,28 @@ temporary Rust packages, or run timing-sensitive demo clients. They must be
 marked `#[ignore]` at the Cargo test level so `cargo test --workspace` and the
 default full manifest remain static-first.
 
-CI runs the RSScript test-runner full manifest. It is intentionally static-first:
-it runs the unignored workspace test suite, generated-package compile checks,
-and RSScript lint checks without executing every example, release demo, or
-self-hosted tool as a behavior test.
+Core CI runs the RSScript test-runner full manifest on every pull request. It is
+intentionally static-first: it runs the unignored workspace test suite,
+generated-package compile checks, and RSScript lint checks without executing
+every example, release demo, or self-hosted tool as a behavior test. Supply-chain
+audit and Windows/macOS process-containment and native-authorization tests are
+also Core per-PR gates.
+
+The off-by-default native JIT and real-device Metal paths are Experimental.
+Their full suites run when matching paths change, nightly, manually, and during
+release validation. Security-sensitive JIT differential and unsafe-boundary
+checks remain separate path-triggered blockers; Experimental classification does
+not bypass them. The binding matrix is in
+[Support And Deployment Policy](../support.md).
 
 Tagged releases use that same locked full manifest as a required
 `release-validation` job, then add the native-JIT suite, full generated-Rust
 backend parity, and the release self-host lexer/parser/checker corpus. The
-artifact job cannot start until this gate passes. The Linux release runner
-compiles and tests the portable Metal surface and the SQLite/SQLx adapters, but
-does not claim real Metal-device coverage or a live PostgreSQL integration
-test. Tests requiring those devices/services, and ignored soak tests that launch
-servers or native demos, remain explicit dedicated-environment checks.
+artifact job cannot start until this gate and the macOS real-device Metal
+validation pass. The Linux release runner compiles and tests the portable Metal
+surface and the SQLite/SQLx adapters. Live PostgreSQL integration and ignored
+soak tests that launch servers or native demos remain explicit
+dedicated-environment checks.
 
 Generated Rust package targets and temporary generated packages are disposable.
 Default local development uses a memory-backed workspace. On macOS, `rss`

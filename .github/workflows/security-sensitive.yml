@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/security-sensitive.yml"
+      - ".github/workflows/experimental.yml"
       - ".github/workflows/release.yml"
       - ".github/actions/rsscript-review/**"
       - "Dockerfile"
@@ -14,6 +15,8 @@ on:
       - "crates/native-abi/**"
       - "crates/process-guard/**"
       - "crates/reir/**"
+      - "crates/rsscript/src/cli/run_cmd.rs"
+      - "crates/rsscript/src/execution_policy.rs"
       - "crates/rsscript/src/native_plugin/**"
       - "crates/rsscript/src/package/**"
       - "crates/rsscript/src/reg_vm/**"
@@ -32,6 +35,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/security-sensitive.yml"
+      - ".github/workflows/experimental.yml"
       - ".github/workflows/release.yml"
       - ".github/actions/rsscript-review/**"
       - "Dockerfile"
@@ -41,6 +45,8 @@ on:
       - "crates/native-abi/**"
       - "crates/process-guard/**"
       - "crates/reir/**"
+      - "crates/rsscript/src/cli/run_cmd.rs"
+      - "crates/rsscript/src/execution_policy.rs"
       - "crates/rsscript/src/native_plugin/**"
       - "crates/rsscript/src/package/**"
       - "crates/rsscript/src/reg_vm/**"

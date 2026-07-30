@@ -19,6 +19,7 @@ mod default_read_migration;
 mod diagnostic;
 mod editor_grammar;
 mod eval_types;
+mod execution_policy;
 mod fnv;
 mod formatter;
 mod generate;
@@ -61,6 +62,10 @@ pub use diagnostic::{
 };
 pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
 pub use eval_types::{CoverageBucket, EvalError, EvalOutput, NativeInterpreterFn, NativeValue};
+pub use execution_policy::{
+    DeploymentProfile, ExecutionCapability, ExecutionPolicyError, ParseDeploymentProfileError,
+    SupportLevel,
+};
 pub use formatter::{format_program, format_source};
 pub use generate::{
     CommitBehavior, Completion, CompletionKind, ContinuationOptions, Continuations, Effect,

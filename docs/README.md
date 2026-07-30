@@ -18,12 +18,14 @@ LLMs); everything else lives here, grouped into categorized subfolders.
 | Doc | What it governs |
 |-----|-----------------|
 | [ARCHITECTURE.md](architecture/ARCHITECTURE.md) | Module boundaries of the checker/lowering implementation. |
+| [support.md](support.md) | Binding Core/Experimental/Unsupported-for-untrusted support levels, deployment profiles, and CI contract. |
 
 ## Ledgers
 
 | Doc | What it governs |
 |-----|-----------------|
 | [self-hosting.md](self-hosting.md) | Single canonical self-hosting doc: status, validation model, dump formats, and `SH-*` ledger. |
+| [scope-remediation-2026-07-29.md](ledgers/scope-remediation-2026-07-29.md) | Product-scope remediation ledger: completed changes, frozen claims, and open debt. |
 
 ## Development
 

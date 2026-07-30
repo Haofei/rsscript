@@ -417,10 +417,10 @@ pub(crate) fn print_usage() {
     eprintln!("  rss fmt <file.rss>  # writes formatted source to stdout");
     eprintln!("  rss new <package-name>");
     eprintln!(
-        "  rss run [--json] [--vm] [--trusted-unlimited] [--trusted-native] <file-or-package-directory> [-- <args>...]"
+        "  rss run [--json] [--vm] [--deployment-profile <profile>] [--trusted-unlimited] [--trusted-native] <file-or-package-directory> [-- <args>...]"
     );
     eprintln!(
-        "  rss run [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]"
+        "  rss run [--json] [--release] [--dry-run] [--deployment-profile <profile>] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]"
     );
     eprintln!("  rss test [--all] [--json] [--filter <substring>]");
     eprintln!("  rss pkg [--json] [package-directory]");

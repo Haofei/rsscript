@@ -65,19 +65,23 @@ It records what each producer can support, keeps unknown and best-effort facts
 visible, and lets CI compare changed semantic facts instead of re-reading every
 raw artifact.
 
-### Deployment trust levels
+### Support and deployment profiles
 
-| Mode | Acceptable input | Native code | Status |
-| --- | --- | --- | --- |
-| Local development | Code you control | In-process loading is permitted | Supported for development |
-| Trusted CI | Reviewed organization repositories | Build in an isolated environment | Experimental |
-| Registry inspection | Third-party source | Static review only; do not build or load | Supported review mode |
-| Multi-tenant execution | Untrusted code | Out-of-process worker/container required | Not supported |
+The maintained product surface is classified as `Core`, `Experimental`, or
+`Unsupported-for-untrusted`. Deployments are classified independently as
+`LocalTrusted`, `TrustedCI`, or `UntrustedIsolated`.
 
-An RSScript capability declaration does not confine a native dynamic library.
-In-process native bindings have the full authority of the host process and are
-therefore restricted to trusted inputs. The current toolchain is not an
-out-of-process native sandbox.
+| Profile | Current commitment |
+| --- | --- |
+| `LocalTrusted` | Supported development on source and dependencies you control |
+| `TrustedCI` | Supported CI experiments on reviewed repositories with pinned tools, least privilege, and disposable isolated runners |
+| `UntrustedIsolated` | Static inspection only; an execution sandbox is not implemented |
+
+Native plugins, generated Cargo builds, JIT code, dynamic GPU shaders, and host
+capabilities are unsupported for untrusted input. Capability declarations and
+resource limits do not confine them. See the binding
+[support and deployment policy](docs/support.md) for the surface matrix, required
+controls, and CI contract.
 
 ## GitHub Action
 
@@ -203,6 +207,9 @@ Toolchain crate version: 0.1.x
 Language spec target: v0.7
 Artifact schemas: unstable unless explicitly marked
 ```
+
+The current support boundary and deployment requirements are defined in
+[Support And Deployment Policy](docs/support.md).
 
 Stable enough for demos:
 
@@ -465,8 +472,8 @@ rss pkg      lock     [--json|--reir] [package-directory]
 rss pkg      tree     [--json|--reir] [package-directory]
 rss pkg      metadata [--verify|--dry-run] [--json|--reir] [package-directory]
 rss pkg      vendor   [--dry-run] [--json|--reir] [package-directory]
-rss run      [--json] [--vm] [--trusted-unlimited] [--trusted-native] <file-or-package-directory> [-- <args>...]
-rss run      [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]
+rss run      [--json] [--vm] [--deployment-profile <profile>] [--trusted-unlimited] [--trusted-native] <file-or-package-directory> [-- <args>...]
+rss run      [--json] [--release] [--dry-run] [--deployment-profile <profile>] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]
 rss test     [--all] [--json] [--filter <substring>]
 ```
 
@@ -484,6 +491,11 @@ rss test     [--all] [--json] [--filter <substring>]
 - `rss pkg ci` is the CI-facing package check entrypoint. It uses the same package health rules as `rss pkg`, with stable `--json` output for automation.
 - `rss pkg publish --dry-run` runs pre-publish checks without uploading and reports whether the package is ready.
 - `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package, builds it in a reduced environment, and then executes the emitted binary as a separately bounded child (10-minute deadline and 16 MiB cap per output stream). Unix children receive CPU, file-size, and descriptor limits; Linux/Android add an address-space limit and macOS applies a best-effort data-segment limit. Windows children run in a kill-on-close Job Object with process-tree memory limits. Native package execution is denied by default; `--trusted-native` is the explicit acknowledgement that native Rust/build scripts have full host authority. Package lowering then carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--vm` runs the same input through the register VM for fast feedback with default step, memory, output, host-call, recursion, and 60-second wall-clock limits; `--trusted-unlimited` explicitly restores the embedding API's unlimited VM budgets. `--vm` cannot be combined with AOT-only flags (`--release`, `--dry-run`, or `--out-dir`). Single-file CLI input is capped at 16 MiB. `--dry-run` prints the generated `Cargo.toml`, lowered Rust, build invocation, and program invocation without executing them; `--release` delegates to Cargo's release profile, `--out-dir` keeps the generated package, and arguments after `--` reach the program through the core `Args` API.
+- `--deployment-profile` accepts `local-trusted` (the default), `trusted-ci`, or
+  `untrusted-isolated`. Only `local-trusted` currently executes programs.
+  `trusted-ci` and `untrusted-isolated` permit non-executing `--dry-run`
+  lowering, but fail closed for VM/AOT execution until deployment policy is
+  enforced through every generated-program and VM host capability.
 
 > **Performance — use a release-built `rss` for package-scale checking.** On large, generics-heavy packages, `rss check` / `rss pkg` can be noticeably slow when run from a **debug** build of the compiler, because generic type-argument substitution currently re-parses type strings at each nesting level (a known, deferred ~O(n³) path in generic substitution). The debug build leaves that path unoptimized; a release build optimizes it enough to be comfortable. For repeated package-wide validation (e.g. an inner edit→check loop on a big codebase), build the compiler once in release and use that binary:
 >
@@ -504,7 +516,7 @@ These are **not equivalent backends** — they cover different slices of the lan
 | **Rust lowering (reference)** | `rss run [--release]` | the **full** language, via generated Rust + `rustc` | — (this is the reference semantics) |
 | Register-VM interpreter | `rss run --vm` / Rust test harnesses | scalar / control-flow / user functions / structs / sum patterns / collections / a runtime-intrinsic subset | **fails closed** with a diagnostic on unsupported native / host / async / resource boundaries |
 | Tier-0 JIT | Rust test/benchmark harnesses | the register VM's numeric / control core plus side-effect-free heap reads | per-function **fallback** to the interpreter (gap-free) |
-| Native JIT (Cranelift) | Rust test/benchmark harnesses (feature `native-jit`) | unboxed `Int` / `Float` / `Bool` arithmetic + control flow + `Int` heap reads | **bails** to the interpreter (gap-free) |
+| Native JIT (Cranelift, Experimental) | Rust test/benchmark harnesses (feature `native-jit`) | unboxed `Int` / `Float` / `Bool` arithmetic + control flow + `Int` heap reads | **bails** to the interpreter (gap-free) |
 
 The supported/unsupported surface of the VM tiers is tracked mechanically: `vm_coverage_report()` enumerates every HIR statement/expression and runtime intrinsic versus the supported set, and `tests/execution_coverage.rs` fails if anything leaves the supported set without being on a documented, shrinking allowlist (desugared constructs and scheduler-run async). VM/JIT harnesses and `rss run` are distinct, checked claims — not assumed equivalences.
 

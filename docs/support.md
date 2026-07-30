@@ -1,0 +1,109 @@
+# Support And Deployment Policy
+
+Effective 2026-07-29. This document defines what the project maintains, what it
+only experiments with, and where its security boundary ends. A feature's support
+level and its deployment profile are separate decisions.
+
+## Support Levels
+
+### Core
+
+`Core` is the maintained product surface. It is enabled in the default feature
+graph, documented as current behavior, and validated on every pull request.
+Regressions in Core, its supply chain audit, or its security boundary tests block
+merge and release.
+
+Core currently includes:
+
+- static frontend checks, formatting, linting, diagnostics, and source maps;
+- package review, semantic diff/lock metadata, REIR collection,
+  reconciliation, reports, and fail-closed policy decisions;
+- Rust lowering and the default register-VM interpreter path for trusted input;
+- default runtime budgets, process containment reporting, native authorization,
+  and portable platform-policy tests;
+- the protected-base behavior and failure propagation of the review action.
+
+Core means maintained within the documented `0.1.x` prototype contract. It does
+not make unstable schemas stable, turn declared capabilities into independently
+verified facts, or make the runtime a sandbox.
+
+### Experimental
+
+`Experimental` is opt-in, narrower than the reference semantics, or dependent on
+specialized hardware/toolchains. It may change without compatibility guarantees.
+Matching code paths run dedicated CI on pull requests and pushes; the complete
+experimental matrix also runs nightly and for releases. A matching pull-request
+failure and every release validation failure are blocking. A nightly failure is
+triaged but does not retroactively change a published Core claim.
+
+Experimental currently includes:
+
+- the off-by-default Cranelift `native-jit` feature and JIT performance/hardening
+  sweeps;
+- Metal policy plus real-device execution;
+- self-hosting parity and exhaustive corpus work;
+- using the `0.1.x` GitHub Action or REIR schemas as a production authorization
+  control without an independent audit.
+
+Promotion to Core requires a documented compatibility contract, inclusion in the
+default supported surface, per-PR coverage on supported platforms, and closure
+of threat-model debt relevant to the promoted feature.
+
+### Unsupported-for-untrusted
+
+`Unsupported-for-untrusted` is a security qualifier, not a lower maturity tier.
+It applies whenever input can be controlled by an attacker and the operation can
+execute, compile, or load that input. Core status does not override this label.
+
+The following are unsupported for untrusted input:
+
+- `rss run`, generated Cargo builds, build scripts, and executable package
+  dependencies;
+- in-process native plugins or native wrappers;
+- tier-0/native JIT execution and dynamically supplied GPU shaders;
+- host filesystem, environment, network, process, database, or device access;
+- multi-tenant execution based only on RSScript capabilities, VM budgets,
+  process limits, a container, or the review action.
+
+Static inspection is the only project-supported operation for third-party source:
+do not build dependencies, run hooks, load native code, execute shaders, or
+provide ambient credentials. RSScript and REIR emit evidence; they do not enforce
+OS isolation.
+
+## Deployment Profiles
+
+| Profile | Allowed input and operations | Required controls | Project status |
+| --- | --- | --- | --- |
+| `LocalTrusted` | Source and dependencies controlled by the developer; Core execution and explicitly enabled Experimental paths | Review native/build-script changes; acknowledge trusted native execution; keep normal resource budgets unless deliberately debugging | Supported for development, not an adversarial boundary |
+| `TrustedCI` | Reviewed organization repositories in disposable CI; Core gates and dedicated Experimental jobs | Immutable action/tool pins, locked dependencies, least-privilege token, no secrets for fork PR code, protected-base policy, isolated ephemeral runner, explicit native/JIT/Metal jobs | Supported for CI experiments; not a production authorization system |
+| `UntrustedIsolated` | Static inspection by default; execution only in an externally supplied hostile-workload sandbox | Separate OS identity or VM boundary, immutable input snapshot, no ambient secrets, deny-by-default network/filesystem/device access, strict resource/time limits, killable process tree, no in-process native/JIT/GPU escape | Execution profile is not implemented; static inspection only |
+
+The `rss run --deployment-profile` spellings are `local-trusted`, `trusted-ci`,
+and `untrusted-isolated`. The CLI enforces the current matrix conservatively:
+only `LocalTrusted` executes programs. `TrustedCI` and `UntrustedIsolated`
+permit non-executing `--dry-run` lowering but reject VM/AOT execution. This is
+intentional: embedding APIs do not yet carry one mandatory profile context
+across every process, network, database, GPU, native, and JIT capability.
+Allowing a nominally bounded backend before that propagation exists would
+create a policy bypass, so CLI enforcement must not be generalized into a
+runtime sandbox claim.
+
+An ordinary container or child-process limit is defense in depth, not sufficient
+implementation of `UntrustedIsolated`. Until the project ships and tests a
+machine-enforced profile, deployments must not advertise untrusted or
+multi-tenant execution.
+
+## CI Contract
+
+| Layer | Trigger | Blocking contract |
+| --- | --- | --- |
+| Core | Every pull request and push to `main` | Locked full manifest, supply-chain audit, Windows/macOS containment and native authorization, review-action smoke, and other always-on Core workflows |
+| Security-sensitive | Pull requests and pushes touching boundary paths; manual | Deployment-policy tests, unsafe-boundary Clippy, JIT differential safety, native ABI, process containment, runtime, REIR/LSP, and database boundary tests |
+| Experimental | Matching JIT/Metal paths, nightly, manual | Full native-JIT suite on Linux and real-device Metal suite on macOS |
+| JIT performance/hardening | Matching JIT performance paths or scheduled/manual hardening | Performance regression gate, sanitizer/Miri/fuzz sweeps according to the dedicated workflow |
+| Release | Version tag or manual release | Core validation plus native JIT, generated backend parity, self-host corpus, and real-device Metal before artifact promotion |
+
+Path filtering is a scheduling optimization, not a security exemption.
+Experimental code under a security-sensitive path must pass both layers. Release
+artifacts are still built once after the locked validation and promoted without
+rebuilding.
