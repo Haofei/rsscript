@@ -80,7 +80,7 @@ This table records the current implementation batch for the refactoring work in
 | R11 | REIR adapter convergence | Complete | Adapters share bounded evidence construction, provenance, and explicit unknown coverage |
 | R12 | Test-domain organization | Complete | Register-VM, JIT acceptance, and self-host parity suites are composed from independently owned semantic domains |
 | R13 | Runtime compatibility owner isolation | Complete | Canonical async work uses explicit services and the generated ABI has exactly one isolated process-wide compatibility owner |
-| R14 | Register-VM execution boundary decomposition | Planned | Tier selection, execution planning, lowering, and interpretation have independently testable owners |
+| R14 | Register-VM execution boundary decomposition | Complete | Tier selection, execution planning, lowering, and interpretation have independently testable owners |
 | R15 | REIR adapter pipeline decomposition | Complete | Input, traversal, normalization, coverage, and fact projection are separate from bounded evidence construction |
 | R16 | Semantic checker and lowering decomposition | Planned | Call, ownership, effect, closure, and emission responsibilities have stable module boundaries |
 | R17 | Large test-domain decomposition | Planned | Remaining register-window, JIT, and backend suites have independently owned semantic domains |
@@ -201,6 +201,12 @@ R13 removes the second process-wide Tokio runtime and isolates the sole default
 operations retain explicit services through `OperationContext`; runtime tests
 create and shut down their own owners. An architecture test prevents global
 runtime ownership from returning to the async state machine.
+
+R14 separates static JIT eligibility planning, profiling facts, DeepCopy
+taint/escape analysis, closure-capture lowering, register storage accounting,
+OSR planning/materialization, and native compile telemetry from the Register VM
+composition roots. Architecture tests pin those owners so later tier or
+interpreter changes cannot silently recombine their state machines.
 
 R15 decomposes the RSScript and Terraform adapters into explicit input,
 normalization, traversal, fact, coverage, provenance, and pipeline stages.
