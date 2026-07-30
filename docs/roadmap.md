@@ -13,18 +13,19 @@ These items block stronger deployment claims:
 2. Carry one mandatory execution policy through VM intrinsics, generated AOT
    programs, native loading, JIT, GPU, process, network, filesystem, and
    database capabilities.
-3. Add killable, out-of-process workers for native, JIT, GPU, and other hostile
-   execution. Workers require bounded IPC, no ambient credentials, explicit
-   filesystem/network policy, and hard process-tree termination.
+3. Extend the completed Linux killable-worker boundary to audited Windows and
+   macOS launchers without weakening bounded IPC, credential denial, filesystem
+   policy, or process-tree termination.
 4. Complete Windows secure-store SID/DACL validation and suspended
    create/Job-assign/resume process launch.
 5. Replace path/string authority with scoped handles where host resources are
    exposed.
 
-The bounded reference VM now carries a mandatory context and supports pure
+The bounded reference VM carries a mandatory context and supports pure
 `trusted-ci` execution with no ambient host authority. AOT and host effects
-remain fail-closed for that profile. `untrusted-isolated` execution remains
-fail-closed until the worker boundary ships.
+remain fail-closed for that profile. Linux `untrusted-isolated` execution uses
+the versioned worker protocol and verified bubblewrap launcher; unsupported
+platforms and launchers fail closed.
 
 ## Priority 1: Strengthen The Core Product
 

@@ -4,6 +4,8 @@ use std::path::{Component, Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use rss_process_guard::WorkerIsolationProof;
+
 /// Product support level for an execution capability.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SupportLevel {
@@ -20,6 +22,7 @@ pub enum ExecutionCapability {
     BoundedReferenceVm,
     UnlimitedVm,
     InProcessNative,
+    IsolatedNative,
     NativeJit,
     DynamicGpuShader,
     ArbitraryProcess,
@@ -32,7 +35,9 @@ impl ExecutionCapability {
             Self::StaticLowering | Self::BoundedRustAot | Self::BoundedReferenceVm => {
                 SupportLevel::Core
             }
-            Self::NativeJit | Self::DynamicGpuShader => SupportLevel::Experimental,
+            Self::IsolatedNative | Self::NativeJit | Self::DynamicGpuShader => {
+                SupportLevel::Experimental
+            }
             Self::UnlimitedVm
             | Self::InProcessNative
             | Self::ArbitraryProcess
@@ -47,6 +52,7 @@ impl ExecutionCapability {
             Self::BoundedReferenceVm => "bounded reference VM execution",
             Self::UnlimitedVm => "unlimited VM execution",
             Self::InProcessNative => "in-process native plugins",
+            Self::IsolatedNative => "isolated native plugin call",
             Self::NativeJit => "native JIT execution",
             Self::DynamicGpuShader => "dynamic GPU shaders",
             Self::ArbitraryProcess => "arbitrary child processes",
@@ -57,15 +63,59 @@ impl ExecutionCapability {
 
 /// Deployment trust profile enforced at execution entry points.
 ///
-/// `UntrustedIsolated` deliberately denies execution until RSScript has a
-/// killable worker sandbox. It remains a profile so callers can fail closed
-/// instead of silently falling back to trusted in-process execution.
+/// `UntrustedIsolated` requires a proof-gated, out-of-process execution path.
+/// Ordinary capability authorization deliberately remains denied so callers
+/// cannot silently fall back to trusted in-process execution.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum DeploymentProfile {
     #[default]
     LocalTrusted,
     TrustedCi,
     UntrustedIsolated,
+}
+
+/// Opaque authority to send one operation to a verified isolated worker.
+///
+/// Only the isolated execution client can construct this value, and only after
+/// `rss-process-guard` returns a non-forgeable [`WorkerIsolationProof`].
+#[derive(Debug)]
+pub(crate) struct IsolatedExecutionAuthorization {
+    child_pid: u32,
+    _private: (),
+}
+
+impl IsolatedExecutionAuthorization {
+    pub(crate) fn from_worker_isolation_proof(proof: WorkerIsolationProof) -> Self {
+        Self {
+            child_pid: proof.child_pid(),
+            _private: (),
+        }
+    }
+
+    pub(crate) fn authorize(
+        &self,
+        profile: DeploymentProfile,
+        capability: ExecutionCapability,
+        child_pid: u32,
+    ) -> Result<(), ExecutionPolicyError> {
+        if profile == DeploymentProfile::UntrustedIsolated
+            && matches!(
+                capability,
+                ExecutionCapability::BoundedReferenceVm
+                    | ExecutionCapability::IsolatedNative
+                    | ExecutionCapability::NativeJit
+                    | ExecutionCapability::DynamicGpuShader
+            )
+            && self.child_pid == child_pid
+        {
+            Ok(())
+        } else {
+            Err(ExecutionPolicyError {
+                profile,
+                capability,
+            })
+        }
+    }
 }
 
 impl DeploymentProfile {
@@ -152,7 +202,7 @@ impl fmt::Display for ExecutionPolicyError {
         if self.profile == DeploymentProfile::UntrustedIsolated {
             return write!(
                 formatter,
-                "deployment profile `{}` denies {} because an isolated worker sandbox is not implemented",
+                "deployment profile `{}` denies {} in process; untrusted execution requires a verified isolated worker",
                 self.profile,
                 self.capability.name()
             );
@@ -606,7 +656,7 @@ impl fmt::Display for ExecutionContextError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::IsolationUnavailable => formatter.write_str(
-                "untrusted isolated execution is unavailable because no worker sandbox is implemented",
+                "untrusted isolated execution cannot create an in-process execution context; a verified isolated worker is mandatory",
             ),
             Self::ProfileRequiresAmbient { profile } => write!(
                 formatter,
@@ -779,14 +829,14 @@ mod tests {
     }
 
     #[test]
-    fn untrusted_profile_fails_closed_until_worker_is_available() {
+    fn untrusted_profile_denies_ordinary_in_process_authorization() {
         let error = DeploymentProfile::UntrustedIsolated
             .authorize(ExecutionCapability::BoundedReferenceVm)
             .expect_err("in-process execution must remain unavailable");
         assert!(
             error
                 .to_string()
-                .contains("isolated worker sandbox is not implemented")
+                .contains("denies bounded reference VM execution in process")
         );
     }
 

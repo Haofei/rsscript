@@ -42,13 +42,10 @@ host execution into isolation.
 
 | Area | Current limitation | Required closure |
 | --- | --- | --- |
-| Package authorization | Review can precede capture of the complete dependency closure | Snapshot first; review, lower, build, and publish only that immutable graph |
-| Deployment profile | CLI fails closed outside `local-trusted`, but embedding APIs do not carry one mandatory policy | End-to-end execution context and capability checks |
-| Native/JIT/GPU | Trusted code still runs in the host process | Killable OS-isolated workers with bounded IPC |
 | Windows | Secure cache ACL and atomic Job attachment remain incomplete | SID/DACL validation and suspended process launch |
-| Host authority | Some APIs still accept paths, URLs, commands, and DSNs as authority | Root/endpoint/executable/database capability handles |
+| Isolated execution portability | Verified worker launch is Linux/bubblewrap only; Metal has no verified macOS isolation backend | Add audited platform launchers without weakening fail-closed policy |
+| Host authority | Adapters outside the register VM still accept some paths, URLs, commands, and DSNs as authority | Root/endpoint/executable/database capability handles |
 | Capability evidence | Some native capability facts are author declarations | Independent verification and provenance |
-| Frontend budgets | Limits exist in several phases but are not one end-to-end contract | Unified source/token/depth/node/diagnostic budget |
 | External integrations | Live PostgreSQL and broader hardware coverage are environment-gated | Dedicated, auditable integration runners |
 
 ## Open Maintainability Work
@@ -56,12 +53,9 @@ host execution into isolation.
 - Replace string-based generic type substitution.
 - Cache raw source indexes by LSP document revision; the checked semantic
   database intentionally stores semantic/desugared programs.
-- Continue migrating runtime APIs from `OperationContext` to a mandatory
-  injected execution context.
-- Split LSP, REIR, analyzer, lowering, runtime services, and VM/JIT by
-  invariant.
-- Reduce broad public re-exports before declaring API stability.
 - Replace remaining global registries with explicit owner/session lifetimes.
+- Extend isolated workers to audited Windows and macOS launchers without
+  treating process limits or an ordinary container as equivalent isolation.
 
 These are not reported as correctness fixes until executable invariants and
 regression tests exist.
@@ -79,7 +73,7 @@ This table records the current implementation batch for the refactoring work in
 | R3 | Mandatory `ExecutionContext` and scoped host capabilities | Complete | Restricted execution cannot reach ambient filesystem, network, process, or database authority |
 | R4 | LSP, REIR, runtime, analyzer, package-native, VM, and JIT decomposition | Complete | Modules are split around tested state transitions without behavior changes |
 | R5 | Public API contraction and explicit facades | Complete | Broad glob exports and duplicate compatibility entrypoints are removed |
-| R6 | Out-of-process native, JIT, and GPU execution | Not started | Untrusted execution uses killable workers with bounded IPC and OS policy |
+| R6 | Out-of-process native, JIT, and GPU execution | Complete | Untrusted execution uses killable workers with bounded IPC and OS policy |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -110,7 +104,8 @@ filesystem, environment, process, network, database, native, JIT, and GPU
 effects before side effects occur. Capability objects support exact grants, but
 the VM remains deliberately conservative: a restricted intrinsic stays denied
 until that intrinsic validates its concrete resource through the scoped API.
-Rust AOT and `UntrustedIsolated` execution remain denied pending R6 workers.
+Rust AOT remains denied outside `LocalTrusted`; untrusted execution is available
+only through the R6 proof-gated worker entrypoints.
 
 R4 turns the largest orchestration files into composition roots and invariant
 owners without changing public behavior. LSP now separates documents, text,
@@ -134,6 +129,19 @@ blanket exports with a generated-code ABI manifest plus curated `api::v1`,
 `OperationContext`. Architecture tests reject new root glob exports and the
 removed aliases. These versioned namespaces control API growth but do not
 declare `0.1.x` SemVer stability.
+
+R6 adds a dependency-neutral, versioned, length-bounded worker protocol and a
+single-request execution worker for the reference VM, native JIT, digest-pinned
+native ABI calls, and Metal operations. The host client validates request and
+response identities, preserves complete VM output, bounds process stderr,
+enforces a wall deadline, and kills the guarded process tree on every failure.
+`UntrustedIsolated` cannot construct an in-process context and has no fallback.
+On Linux, workers launch through a verified root-owned bubblewrap binary with
+new user/PID/IPC/UTS/network namespaces, no capabilities or environment, a
+private filesystem, explicit read-only inputs, and strict process limits.
+Unsupported launchers and platforms fail closed. Metal transport and worker
+dispatch are complete, but untrusted Metal execution remains unavailable until
+an equivalent verified macOS launcher exists.
 
 ## Experimental Status
 

@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::sync::Arc;
@@ -6,8 +7,9 @@ use std::time::Duration;
 
 use rsscript::{
     DeploymentProfile, EvalError, EvalOutput, ExecutionCapability, ExecutionContext,
-    HostCapabilities, NativeValue, VmLimits, check_generated_rust_package,
-    configure_reduced_build_environment, format_diagnostics_human, format_diagnostics_json,
+    HostCapabilities, IsolatedProgram, IsolatedProgramSource, IsolatedWorkerConfig, NativeValue,
+    VmLimits, check_generated_rust_package, configure_reduced_build_environment,
+    eval_isolated_reference_vm, format_diagnostics_human, format_diagnostics_json,
     load_authorized_package_native_bindings, parse_runtime_diagnostics,
     prepare_package_for_execution, reg_vm_compile_package_input, reg_vm_eval_source_main_with_args,
     write_generated_rust_package,
@@ -134,10 +136,15 @@ fn validate_run_options(options: &RunOptions<'_>) -> Result<(), String> {
     } else {
         ExecutionCapability::BoundedRustAot
     };
-    options
-        .deployment_profile
-        .authorize(backend)
-        .map_err(|error| error.to_string())?;
+    let uses_isolated_worker = options.vm
+        && !options.trusted_unlimited
+        && options.deployment_profile == DeploymentProfile::UntrustedIsolated;
+    if !uses_isolated_worker {
+        options
+            .deployment_profile
+            .authorize(backend)
+            .map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
@@ -273,6 +280,10 @@ fn run_via_vm(
     trusted_native: bool,
     deployment_profile: DeploymentProfile,
 ) -> ExitCode {
+    if deployment_profile == DeploymentProfile::UntrustedIsolated {
+        let result = run_via_isolated_vm(path, program_args, trusted_native);
+        return finish_vm_run(result, json);
+    }
     let limits = if trusted_unlimited {
         VmLimits::default()
     } else {
@@ -297,6 +308,67 @@ fn run_via_vm(
         run_source_via_vm(path, &source, program_args, limits, deployment_profile)
     };
     finish_vm_run(result, json)
+}
+
+fn run_via_isolated_vm(
+    path: &str,
+    program_args: &[&str],
+    trusted_native: bool,
+) -> Result<EvalOutput, EvalError> {
+    if trusted_native {
+        return Err(EvalError::Runtime(
+            "in-process native execution is denied for untrusted-isolated deployments".to_string(),
+        ));
+    }
+    let config = isolated_worker_config_from_value(std::env::var_os("RSS_EXECUTION_WORKER"))
+        .map_err(EvalError::Runtime)?;
+    let program = if is_package_directory(path) {
+        let prepared =
+            prepare_package_for_execution(Path::new(path)).map_err(EvalError::Runtime)?;
+        if prepared.requires_native_authorization() {
+            return Err(EvalError::Runtime(
+                "native package execution is denied for untrusted-isolated deployments".to_string(),
+            ));
+        }
+        let input = prepared.into_lowering_input().map_err(EvalError::Runtime)?;
+        IsolatedProgram::new(
+            input.source_relative_path,
+            input
+                .sources
+                .into_iter()
+                .map(|(path, source)| IsolatedProgramSource::new(path, source)),
+        )
+        .with_interfaces(
+            input
+                .interfaces
+                .into_iter()
+                .map(|(path, source)| IsolatedProgramSource::new(path, source)),
+        )
+    } else {
+        let source = read_cli_source(Path::new(path)).map_err(EvalError::Runtime)?;
+        // Wire paths are logical, sandbox-relative identifiers. The source
+        // contents are bundled, so an absolute host input path must not cross
+        // the protocol boundary.
+        IsolatedProgram::source("main.rss", source)
+    };
+    eval_isolated_reference_vm(
+        &config,
+        program,
+        program_args.iter().map(|argument| (*argument).to_string()),
+    )
+}
+
+fn isolated_worker_config_from_value(
+    worker: Option<OsString>,
+) -> Result<IsolatedWorkerConfig, String> {
+    let worker = worker.filter(|value| !value.is_empty()).ok_or_else(|| {
+        "`RSS_EXECUTION_WORKER` must name the absolute isolated worker executable for untrusted-isolated VM execution".to_string()
+    })?;
+    IsolatedWorkerConfig::new(
+        PathBuf::from(worker),
+        rss_process_guard::WorkerIsolationBackend::bubblewrap(),
+    )
+    .map_err(|error| format!("invalid `RSS_EXECUTION_WORKER`: {error}"))
 }
 
 fn cli_vm_limits() -> VmLimits {
@@ -633,6 +705,8 @@ fn print_run_dry_run(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+
     use rsscript::DeploymentProfile;
 
     fn args(values: &[&str]) -> Vec<String> {
@@ -681,6 +755,54 @@ mod tests {
         assert_eq!(options.deployment_profile, DeploymentProfile::LocalTrusted);
         assert_eq!(options.path, Some("demo.rss"));
         assert_eq!(options.program_args, vec!["input"]);
+    }
+
+    #[test]
+    fn untrusted_bounded_vm_selects_isolated_route() {
+        let values = args(&[
+            "--vm",
+            "--deployment-profile",
+            "untrusted-isolated",
+            "main.rss",
+        ]);
+        let options =
+            super::parse_run_args(&values).expect("bounded VM is routed through isolation");
+        assert!(options.vm);
+        assert_eq!(
+            options.deployment_profile,
+            DeploymentProfile::UntrustedIsolated
+        );
+    }
+
+    #[test]
+    fn untrusted_aot_and_unlimited_vm_remain_denied() {
+        assert!(
+            super::parse_run_args(&args(&[
+                "--deployment-profile",
+                "untrusted-isolated",
+                "main.rss",
+            ]))
+            .is_err()
+        );
+        assert!(
+            super::parse_run_args(&args(&[
+                "--vm",
+                "--trusted-unlimited",
+                "--deployment-profile",
+                "untrusted-isolated",
+                "main.rss",
+            ]))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn isolated_route_requires_absolute_worker_configuration() {
+        let missing = super::isolated_worker_config_from_value(None).expect_err("missing worker");
+        assert!(missing.contains("RSS_EXECUTION_WORKER"));
+        let relative = super::isolated_worker_config_from_value(Some(OsString::from("worker")))
+            .expect_err("relative worker");
+        assert!(relative.contains("absolute path"));
     }
 
     #[test]
@@ -835,17 +957,19 @@ mod tests {
     }
 
     #[test]
-    fn untrusted_profile_only_allows_non_executing_dry_run() {
+    fn untrusted_profile_allows_isolated_vm_and_non_executing_dry_run() {
         let execution = args(&[
             "--vm",
             "--deployment-profile",
             "untrusted-isolated",
             "demo.rss",
         ]);
-        let error = super::parse_run_args(&execution).expect_err("execution must fail closed");
-        assert!(
-            error.contains("isolated worker sandbox is not implemented"),
-            "{error}"
+        let options =
+            super::parse_run_args(&execution).expect("bounded VM should route through isolation");
+        assert!(options.vm);
+        assert_eq!(
+            options.deployment_profile,
+            DeploymentProfile::UntrustedIsolated
         );
 
         let dry_run = args(&[

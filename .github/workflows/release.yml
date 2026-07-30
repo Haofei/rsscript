@@ -1,6 +1,7 @@
 name: Release
 
-# Build pinned, checksummed `rss` + `reir` binaries with build provenance on tag.
+# Build pinned, checksummed `rss`, `reir`, and execution-worker binaries with
+# build provenance on tag.
 # This is the trust artifact a supply-chain gate should pin to (instead of @main
 # / ambient PATH tools): download the release binary, verify the checksum, and
 # verify provenance with `gh attestation verify`.
@@ -47,7 +48,7 @@ jobs:
             exit 1
           }
           EXPECTED="${GITHUB_REF_NAME#v}"
-          for PACKAGE in rsscript reir; do
+          for PACKAGE in rsscript reir rss-execution-worker; do
             ACTUAL="$(cargo metadata --locked --no-deps --format-version 1 | jq -r ".packages[] | select(.name == \"$PACKAGE\") | .version")"
             [ "$ACTUAL" = "$EXPECTED" ] || {
               echo "::error::$PACKAGE version $ACTUAL does not match tag $GITHUB_REF_NAME"
@@ -69,6 +70,13 @@ jobs:
       - name: Validate native JIT
         run: |
           cargo nextest run --locked -p rsscript --features native-jit --no-fail-fast
+
+      - name: Validate Linux isolated worker
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes bubblewrap
+          RSS_RUN_BWRAP_TESTS=1 cargo test --locked -p rss-execution-worker \
+            --test isolation -- --ignored
 
       - name: Validate generated backend parity
         run: |
@@ -93,9 +101,11 @@ jobs:
         run: |
           cargo build --locked --frozen --release --bin rss -p rsscript
           cargo build --locked --frozen --release --bin reir -p reir
+          cargo build --locked --frozen --release --bin rss-execution-worker -p rss-execution-worker
           mkdir -p dist
           cp target/release/rss dist/rss-linux-x86_64
           cp target/release/reir dist/reir-linux-x86_64
+          cp target/release/rss-execution-worker dist/rss-execution-worker-linux-x86_64
           {
             echo "commit=$GITHUB_SHA"
             echo "target=x86_64-unknown-linux-gnu"
@@ -104,7 +114,7 @@ jobs:
           } > dist/BUILD-INFO.txt
           dist/rss-linux-x86_64 --help >/dev/null
           dist/reir-linux-x86_64 --help >/dev/null
-          (cd dist && sha256sum rss-linux-x86_64 reir-linux-x86_64 BUILD-INFO.txt > SHA256SUMS)
+          (cd dist && sha256sum rss-linux-x86_64 reir-linux-x86_64 rss-execution-worker-linux-x86_64 BUILD-INFO.txt > SHA256SUMS)
 
       - name: Upload validated release artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -163,6 +173,7 @@ jobs:
           subject-path: |
             dist/rss-linux-x86_64
             dist/reir-linux-x86_64
+            dist/rss-execution-worker-linux-x86_64
             dist/BUILD-INFO.txt
 
       - name: Upload release assets
@@ -172,5 +183,6 @@ jobs:
           files: |
             dist/rss-linux-x86_64
             dist/reir-linux-x86_64
+            dist/rss-execution-worker-linux-x86_64
             dist/BUILD-INFO.txt
             dist/SHA256SUMS

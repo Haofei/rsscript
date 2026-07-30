@@ -22,6 +22,7 @@ test = false
 reir = { path = "../reir" }
 rss-native-abi = { path = "../native-abi", features = ["host"] }
 rss-process-guard = { path = "../process-guard" }
+rss-worker-protocol = { path = "../worker-protocol" }
 # The reg-VM's native tensor intrinsics call the exact same `tensor_*` kernels
 # the AOT backend lowers to, so VM<->compiled results are bit-identical (the
 # slice-1 parity guarantee). That requires the compiler crate to link the

@@ -2011,6 +2011,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rss-execution-worker"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "rss-metal-compute",
+ "rss-native-abi",
+ "rss-process-guard",
+ "rss-worker-protocol",
+ "rsscript",
+ "sha2",
+ "tempfile",
+]
+
+[[package]]
 name = "rss-lsp"
 version = "0.1.0"
 dependencies = [
@@ -2045,6 +2059,7 @@ name = "rss-process-guard"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "serde_json",
  "windows-sys 0.61.2",
 ]
 
@@ -2053,6 +2068,14 @@ name = "rss-testgen"
 version = "0.1.0"
 dependencies = [
  "rsscript",
+]
+
+[[package]]
+name = "rss-worker-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2118,6 +2141,7 @@ dependencies = [
  "rss-native-abi",
  "rss-process-guard",
  "rss-testgen",
+ "rss-worker-protocol",
  "rsscript-runtime",
  "rustix",
  "semver",

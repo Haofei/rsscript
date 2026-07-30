@@ -3,6 +3,12 @@
 //! This crate is intentionally small: it contains the Unix `pre_exec` unsafe
 //! boundary so the compiler and runtime crates can remain safe Rust.
 
+mod isolation;
+
+pub use isolation::{
+    WorkerIsolationBackend, WorkerIsolationProof, WorkerSandbox, spawn_isolated_worker,
+};
+
 use std::io;
 use std::process::{Child, Command, ExitStatus};
 #[cfg(windows)]

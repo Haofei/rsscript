@@ -61,6 +61,13 @@ facilities are adapters with explicit trust and resource policies.
 The runtime is not a sandbox. Untrusted execution requires an isolated worker
 and operating-system enforcement.
 
+`rss-worker-protocol` owns the dependency-neutral bounded wire contract.
+`rss-execution-worker` converts validated wire requests at the process boundary
+and dispatches one reference-VM, native-JIT, native-ABI, or Metal operation.
+`rss-process-guard` is the only component allowed to mint worker-isolation
+proofs. The host authorizes an untrusted operation only after receiving that
+opaque proof, validates the matching response, and never retries in process.
+
 ### Applications
 
 The CLI, LSP, GitHub Action, and other entrypoints are composition roots. They
