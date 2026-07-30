@@ -634,7 +634,7 @@ pub(super) fn package_path_metadata(path: &Path, operation: &str) -> Result<fs::
         .map_err(|error| format!("failed to inspect {}: {error}", path.display()))?;
     if is_package_link_like(&metadata) {
         return Err(format!(
-            "{operation} rejects symlinks or reparse points inside package input: {}",
+            "{operation} rejects symlinks or reparse points because the path resolves outside the package root: {}",
             path.display()
         ));
     }
@@ -860,7 +860,11 @@ pub(super) fn ensure_package_path_within_root(
 fn should_skip_vendor_copy_entry(name: &str) -> bool {
     matches!(
         name,
-        ".git" | "target" | "vendor" | ".rsscript-artifacts.lock"
+        ".git"
+            | "target"
+            | "vendor"
+            | ".rsscript-artifacts.lock"
+            | source_set::SNAPSHOT_MANIFEST_SOURCE_FILE
     )
 }
 

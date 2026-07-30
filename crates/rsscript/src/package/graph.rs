@@ -6,7 +6,7 @@ use super::dependency::{
     resolve_dependency_graph,
 };
 use super::lock::effective_interface_hash;
-use super::review::review_package_dir_with_features;
+use super::review::review_package_dir_captured_with_features;
 use super::source_set::{
     ManifestDependencyBudget, ManifestProviderChoice, load_package_manifest,
     load_package_with_features,
@@ -17,6 +17,14 @@ use super::{
 };
 
 pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
+    let snapshot = super::authorization::snapshot_package_graph_inputs(package_dir)?;
+    let mut tree =
+        package_tree_captured(snapshot.root()).map_err(|error| snapshot.remap_error(error))?;
+    snapshot.remap_tree(&mut tree);
+    Ok(tree)
+}
+
+pub(super) fn package_tree_captured(package_dir: &Path) -> Result<PackageTree, String> {
     let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
     let root = package_tree_node(
         &graph,
@@ -32,7 +40,7 @@ pub fn package_tree(package_dir: &Path) -> Result<PackageTree, String> {
 
 pub(super) fn check_package_graph(package_dir: &Path) -> Result<PackageGraphCheck, String> {
     let root_manifest = load_package_manifest(package_dir)?;
-    let tree = package_tree(package_dir)?;
+    let tree = package_tree_captured(package_dir)?;
     let mut packages_by_name: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     collect_package_graph_identities(&tree.root, &mut packages_by_name);
 
@@ -287,7 +295,7 @@ fn package_tree_node(
     let package_dir = &resolved.package_dir;
     let features = resolved.features.clone();
     let package = load_package_with_features(package_dir, Some(&features))?;
-    let review = review_package_dir_with_features(package_dir, Some(&features))?;
+    let review = review_package_dir_captured_with_features(package_dir, Some(&features))?;
     let interface_effective_hash = effective_interface_hash(&package.sources, &features);
     let identity = package_identity(&package.manifest);
     let mut dependencies = Vec::new();

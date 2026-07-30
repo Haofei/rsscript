@@ -54,12 +54,15 @@ fn vendor_package_snapshot(
     )?;
     for entry in &mut entries {
         let snapshot_source = Path::new(&entry.source_path);
-        let original_source = snapshot.original_path(snapshot_source).ok_or_else(|| {
-            format!(
-                "vendor dependency is outside the captured package graph: {}",
-                snapshot_source.display()
-            )
-        })?;
+        let original_source = snapshot
+            .original_path(snapshot_source)
+            .and_then(|path| path.canonicalize().ok())
+            .ok_or_else(|| {
+                format!(
+                    "vendor dependency is outside the captured package graph: {}",
+                    snapshot_source.display()
+                )
+            })?;
         let identity = PackageIdentity {
             name: entry.name.clone(),
             version: entry.version.clone(),
@@ -114,13 +117,18 @@ fn vendor_package_snapshot(
     }
     for entry in &mut entries {
         let snapshot_source = Path::new(&entry.source_path);
-        if let Some(original_source) = snapshot.original_path(snapshot_source) {
+        if let Some(original_source) = snapshot
+            .original_path(snapshot_source)
+            .and_then(|path| path.canonicalize().ok())
+        {
             entry.source_path = original_source.display().to_string();
         }
     }
     for dependency in &mut unresolved {
         if let Some(path) = dependency.source.strip_prefix("path+")
-            && let Some(original_source) = snapshot.original_path(Path::new(path))
+            && let Some(original_source) = snapshot
+                .original_path(Path::new(path))
+                .and_then(|path| path.canonicalize().ok())
         {
             dependency.source = format!("path+{}", original_source.display());
         }

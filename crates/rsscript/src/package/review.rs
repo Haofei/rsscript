@@ -37,10 +37,14 @@ mod review_await;
 use review_await::*;
 
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
-    review_package_dir_with_features(package_dir, None)
+    let snapshot = super::authorization::snapshot_package_graph_inputs(package_dir)?;
+    let mut review = review_package_dir_captured_with_features(snapshot.root(), None)
+        .map_err(|error| snapshot.remap_error(error))?;
+    snapshot.remap_review(&mut review);
+    Ok(review)
 }
 
-pub(super) fn review_package_dir_with_features(
+pub(super) fn review_package_dir_captured_with_features(
     package_dir: &Path,
     selected_features: Option<&[String]>,
 ) -> Result<PackageReview, String> {

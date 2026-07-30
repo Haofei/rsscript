@@ -73,7 +73,7 @@ This table records the current implementation batch for the refactoring work in
 | Batch | Scope | Status | Exit condition |
 | --- | --- | --- | --- |
 | R0 | Architecture dependency guards and behavior baselines | Complete | CI rejects forbidden dependency directions and current contract suites remain green |
-| R1 | Complete package/dependency snapshot before review or execution | In progress | Check, review, lower, build, publish, and vendor consume one immutable graph |
+| R1 | Complete package/dependency snapshot before review or execution | Complete | Check, review, lower, build, publish, and vendor consume one immutable graph |
 | R2 | `SourceSnapshot`, frontend budget, semantic database, and `ValidatedProgram` | Not started | Review, lowering, VM, and LSP consume checked facts without semantic re-derivation |
 | R3 | Mandatory `ExecutionContext` and scoped host capabilities | Not started | Restricted execution cannot reach ambient filesystem, network, process, or database authority |
 | R4 | LSP, REIR, runtime, analyzer, package-native, VM, and JIT decomposition | Not started | Modules are split around tested state transitions without behavior changes |
@@ -83,12 +83,12 @@ This table records the current implementation batch for the refactoring work in
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
 
-R1 currently captures the complete development dependency graph before CLI,
-register-VM, native-loader, publish, or vendor work begins. Those paths retain
-the captured graph for their full lifetime, and mutation tests verify that later
-checkout changes are not consumed. The remaining R1 work is to move the direct
-`check_package_dir`, `review_package_dir`, and lockfile entrypoints onto the same
-read context while preserving diagnostics and external path identities.
+R1 captures the complete development dependency graph before direct check,
+review, lock, tree, CLI, register-VM, native-loader, publish, or vendor work
+begins. Internal captured entrypoints consume only that graph for their full
+lifetime. Public results map diagnostics and package identities back to checkout
+paths, and regression tests cover later source mutation and absolute path
+dependencies without exposing private snapshot paths.
 
 ## Experimental Status
 

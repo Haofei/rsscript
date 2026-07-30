@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use crate::formatter::format_source;
 
 use super::dependency::{DependencyResolutionScope, resolve_dependency_graph};
-use super::review::review_package_dir_with_features;
+use super::review::review_package_dir_captured_with_features;
 use super::source_set::{ManifestNativeRust, load_package_with_features};
 use super::{
     LoadedPackage, PackageArchiveFile, PackageLock, PackageLockDiff, PackageLockFieldChange,
@@ -30,6 +30,14 @@ const NATIVE_HASH_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const BINDING_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 
 pub fn lock_package_dir(package_dir: &Path) -> Result<PackageLock, String> {
+    let snapshot = super::authorization::snapshot_package_graph_inputs(package_dir)?;
+    let mut lock =
+        lock_package_dir_captured(snapshot.root()).map_err(|error| snapshot.remap_error(error))?;
+    snapshot.remap_lock(&mut lock);
+    Ok(lock)
+}
+
+pub(super) fn lock_package_dir_captured(package_dir: &Path) -> Result<PackageLock, String> {
     let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
     let root = &graph.nodes[&graph.root];
     let package = load_package_with_features(&root.package_dir, Some(&root.features))?;
@@ -63,7 +71,7 @@ pub(super) fn lock_package_entry(
     package: &LoadedPackage,
     features: Vec<String>,
 ) -> Result<PackageLockPackage, String> {
-    let review = review_package_dir_with_features(package_dir, Some(&features))?;
+    let review = review_package_dir_captured_with_features(package_dir, Some(&features))?;
     let native = package
         .manifest
         .native
@@ -491,7 +499,12 @@ fn collect_package_archive_paths(
 fn should_skip_archive_entry(root: &Path, path: &Path, name: &str) -> bool {
     if matches!(
         name,
-        ".git" | "target" | "vendor" | ".DS_Store" | ".rsscript-artifacts.lock"
+        ".git"
+            | "target"
+            | "vendor"
+            | ".DS_Store"
+            | ".rsscript-artifacts.lock"
+            | super::source_set::SNAPSHOT_MANIFEST_SOURCE_FILE
     ) {
         return true;
     }

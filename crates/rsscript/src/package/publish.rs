@@ -1,15 +1,16 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use super::graph::package_tree;
+use super::check::check_package_dir_captured;
+use super::graph::package_tree_captured;
 use super::lock::{lock_package_entry, package_archive_files, package_archive_hash};
+use super::review::review_package_dir_captured_with_features;
 use super::source_set::{LoadedPackage, Manifest, load_package, selected_root_package_features};
 use super::{
     PACKAGE_REVIEW_METADATA_SCHEMA, PackageLockPackage, PackageNativeRustCheck,
     PackagePublishCheck, PackagePublishDryRun, PackageRegistryFootprint, PackageRegistryIndexEntry,
-    PackageRegistryPublishTarget, PackageRisk, PackageTreeSummary, check_package_dir,
-    package_dependency_spec, package_identity, package_risk_label, review_package_dir,
-    sanitize_vendor_path_component,
+    PackageRegistryPublishTarget, PackageRisk, PackageTreeSummary, package_dependency_spec,
+    package_identity, package_risk_label, sanitize_vendor_path_component,
 };
 
 pub fn publish_package_dry_run(package_dir: &Path) -> Result<PackagePublishDryRun, String> {
@@ -36,9 +37,9 @@ fn publish_package_snapshot(
     registry_dir: Option<&Path>,
 ) -> Result<PackagePublishDryRun, String> {
     let package = load_package(package_dir)?;
-    let review = review_package_dir(package_dir)?;
-    let check = check_package_dir(package_dir)?;
-    let tree = package_tree(package_dir)?;
+    let review = review_package_dir_captured_with_features(package_dir, None)?;
+    let check = check_package_dir_captured(package_dir)?;
+    let tree = package_tree_captured(package_dir)?;
     let archive_files = package_archive_files(package_dir)?;
     let archive_hash = package_archive_hash(&archive_files);
     let root_features = selected_root_package_features(&package.manifest);

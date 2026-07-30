@@ -8,6 +8,7 @@ use serde::Deserialize;
 use crate::package::PackageReviewFileKind;
 
 const MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
+pub(super) const SNAPSHOT_MANIFEST_SOURCE_FILE: &str = ".rsscript-snapshot-manifest";
 const SOURCE_FILE_MAX_BYTES: u64 = 4 * 1024 * 1024;
 const PACKAGE_SOURCE_MAX_FILES: usize = 20_000;
 const PACKAGE_SOURCE_MAX_BYTES: u64 = 512 * 1024 * 1024;
@@ -349,14 +350,26 @@ pub(super) fn load_package_with_features(
 ) -> Result<LoadedPackage, String> {
     let package_root = canonical_package_root(package_dir)?;
     let manifest_path = package_dir.join("rsspkg.toml");
-    let (manifest_source, _) = read_bounded_utf8_file(
+    let (physical_manifest_source, _) = read_bounded_utf8_file(
         &package_root,
         &package_root.join("rsspkg.toml"),
         MANIFEST_MAX_BYTES,
         "package manifest",
     )?;
-    let manifest: Manifest = toml::from_str(&manifest_source)
+    let manifest: Manifest = toml::from_str(&physical_manifest_source)
         .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
+    let snapshot_manifest_source = package_root.join(SNAPSHOT_MANIFEST_SOURCE_FILE);
+    let manifest_source = if snapshot_manifest_source.is_file() {
+        read_bounded_utf8_file(
+            &package_root,
+            &snapshot_manifest_source,
+            MANIFEST_MAX_BYTES,
+            "package snapshot manifest identity",
+        )?
+        .0
+    } else {
+        physical_manifest_source
+    };
 
     let selected_features = selected_features
         .map(|features| resolve_package_features(&manifest, features).selected)

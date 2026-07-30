@@ -2,7 +2,8 @@ use std::path::Path;
 
 use super::graph::check_package_graph;
 use super::lock::{
-    compare_locked_packages, lock_package_dir, package_lock_diff_reasons, read_package_lock,
+    compare_locked_packages, lock_package_dir_captured, package_lock_diff_reasons,
+    read_package_lock,
 };
 use super::native::check_package_native_rust;
 use super::policy::{
@@ -10,14 +11,20 @@ use super::policy::{
     package_review_policy_has_high_risk_violation, package_review_policy_ok,
 };
 use super::source_set::load_package;
-use super::{
-    PackageCheck, PackageCheckLock, PackageLock, PackageRisk, dedup_diagnostics, review_package_dir,
-};
+use super::{PackageCheck, PackageCheckLock, PackageLock, PackageRisk, dedup_diagnostics};
 
 pub fn check_package_dir(package_dir: &Path) -> Result<PackageCheck, String> {
+    let snapshot = super::authorization::snapshot_package_graph_inputs(package_dir)?;
+    let mut check =
+        check_package_dir_captured(snapshot.root()).map_err(|error| snapshot.remap_error(error))?;
+    snapshot.remap_check(&mut check);
+    Ok(check)
+}
+
+pub(super) fn check_package_dir_captured(package_dir: &Path) -> Result<PackageCheck, String> {
     let package = load_package(package_dir)?;
-    let review = review_package_dir(package_dir)?;
-    let current_lock = lock_package_dir(package_dir)?;
+    let review = super::review::review_package_dir_captured_with_features(package_dir, None)?;
+    let current_lock = lock_package_dir_captured(package_dir)?;
     let graph = check_package_graph(package_dir)?;
     let lock = check_package_lock(package_dir, &current_lock)?;
     let native_rust = check_package_native_rust(package_dir, review.native_rust.as_ref())?;

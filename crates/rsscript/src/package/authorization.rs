@@ -6,11 +6,13 @@ use std::path::{Path, PathBuf};
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
 
+use super::check::check_package_dir_captured;
 use super::dependency::{DependencyResolutionScope, resolve_dependency_graph};
 use super::{
-    NativePluginBuildDependency, PackageLoweringInput, TreeLimits, check_package_dir,
-    collect_bounded_regular_files, copy_package_directory, format_package_lock_toml,
-    package_lowering_input, package_native_plugin_build_dependencies, package_path_source,
+    NativePluginBuildDependency, PackageCheck, PackageLock, PackageLoweringInput, PackageReview,
+    PackageTree, PackageTreeNode, TreeLimits, collect_bounded_regular_files,
+    copy_package_directory, format_package_lock_toml, package_lowering_input,
+    package_native_plugin_build_dependencies, package_path_source,
 };
 
 #[derive(Debug)]
@@ -33,11 +35,118 @@ impl PackageGraphSnapshot {
             let captured = captured
                 .canonicalize()
                 .unwrap_or_else(|_| captured.to_path_buf());
-            snapshot_path
-                .strip_prefix(&captured)
-                .ok()
-                .map(|relative| original.join(relative))
+            snapshot_path.strip_prefix(&captured).ok().map(|relative| {
+                if relative.as_os_str().is_empty() {
+                    original.clone()
+                } else {
+                    original.join(relative)
+                }
+            })
         })
+    }
+
+    fn remap_path_label(&self, value: &str) -> String {
+        if let Some(path) = value.strip_prefix("path+") {
+            return self
+                .original_path(Path::new(path))
+                .map(|path| format!("path+{}", path.display()))
+                .unwrap_or_else(|| value.to_string());
+        }
+        self.original_path(Path::new(value))
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| value.to_string())
+    }
+
+    pub(super) fn remap_error(&self, error: String) -> String {
+        let mut paths = self.paths.iter().collect::<Vec<_>>();
+        paths.sort_by_key(|(_, captured)| std::cmp::Reverse(captured.as_os_str().len()));
+        paths
+            .into_iter()
+            .fold(error, |error, (original, captured)| {
+                error.replace(
+                    &captured.display().to_string(),
+                    &original.display().to_string(),
+                )
+            })
+    }
+
+    fn remap_span(&self, span: &mut crate::diagnostic::Span) {
+        span.file = self.remap_path_label(&span.file);
+    }
+
+    fn remap_diagnostic(&self, diagnostic: &mut crate::diagnostic::Diagnostic) {
+        self.remap_span(&mut diagnostic.span);
+        for fix in &mut diagnostic.fixes {
+            if let Some(edit) = &mut fix.edit {
+                self.remap_span(&mut edit.span);
+            }
+        }
+    }
+
+    pub(super) fn remap_review(&self, review: &mut PackageReview) {
+        review.manifest_path = self.remap_path_label(&review.manifest_path);
+        for dependency in &mut review.dependencies {
+            dependency.source = self.remap_path_label(&dependency.source);
+        }
+        for file in &mut review.files {
+            file.path = self.remap_path_label(&file.path);
+        }
+        for capability in &mut review.capabilities {
+            if let Some(span) = &mut capability.span {
+                self.remap_span(span);
+            }
+        }
+        for await_site in &mut review.await_sites {
+            self.remap_span(&mut await_site.span);
+        }
+        for file in &mut review.review_map.files {
+            file.file = self.remap_path_label(&file.file);
+        }
+        for module in &mut review.review_map.modules {
+            module.file = self.remap_path_label(&module.file);
+        }
+        for diagnostic in &mut review.diagnostics {
+            self.remap_diagnostic(diagnostic);
+        }
+    }
+
+    pub(super) fn remap_lock(&self, lock: &mut PackageLock) {
+        for package in &mut lock.packages {
+            package.source = self.remap_path_label(&package.source);
+        }
+    }
+
+    pub(super) fn remap_tree(&self, tree: &mut PackageTree) {
+        self.remap_tree_node(&mut tree.root);
+    }
+
+    fn remap_tree_node(&self, node: &mut PackageTreeNode) {
+        node.source = self.remap_path_label(&node.source);
+        for dependency in &mut node.dependencies {
+            self.remap_tree_node(dependency);
+        }
+    }
+
+    pub(super) fn remap_check(&self, check: &mut PackageCheck) {
+        check.package_dir = self.remap_path_label(&check.package_dir);
+        check.lock.path = self.remap_path_label(&check.lock.path);
+        for change in &mut check.lock.package_changes {
+            for field in &mut change.changes {
+                if field.field == "source" {
+                    field.before = field
+                        .before
+                        .as_deref()
+                        .map(|value| self.remap_path_label(value));
+                    field.after = field
+                        .after
+                        .as_deref()
+                        .map(|value| self.remap_path_label(value));
+                }
+            }
+        }
+        for diagnostic in &mut check.diagnostics {
+            self.remap_diagnostic(diagnostic);
+        }
     }
 }
 
@@ -165,7 +274,7 @@ fn authorize_prepared_package(prepared: PreparedPackage) -> Result<AuthorizedPac
     } = prepared;
     let snapshot_root = package_snapshot.root();
 
-    let check = check_package_dir(snapshot_root)?;
+    let check = check_package_dir_captured(snapshot_root)?;
     if !check.ok {
         let reasons = if check.reasons.is_empty() {
             "package check did not authorize native execution".to_string()
@@ -244,9 +353,22 @@ pub(super) fn snapshot_package_graph_inputs(
 
     for (key, node) in &graph.nodes {
         let destination = &destinations[key];
-        copy_package_directory(&node.package_dir, destination)?;
+        if !destination.join("rsspkg.toml").is_file() {
+            copy_package_directory(&node.package_dir, destination)?;
+        }
         validate_captured_manifest(node, destination)?;
+        fs::write(
+            destination.join(super::source_set::SNAPSHOT_MANIFEST_SOURCE_FILE),
+            &node.manifest_source,
+        )
+        .map_err(|error| {
+            format!(
+                "failed to preserve original manifest identity for {}: {error}",
+                node.package_dir.display()
+            )
+        })?;
     }
+    rewrite_snapshot_manifests(&graph, &destinations)?;
     rewrite_snapshot_locks(&graph, &destinations)?;
 
     let root = destinations
@@ -256,14 +378,7 @@ pub(super) fn snapshot_package_graph_inputs(
     let paths = graph
         .nodes
         .iter()
-        .map(|(key, node)| {
-            (
-                node.package_dir
-                    .canonicalize()
-                    .unwrap_or_else(|_| node.package_dir.clone()),
-                destinations[key].clone(),
-            )
-        })
+        .map(|(key, node)| (node.package_dir.clone(), destinations[key].clone()))
         .collect();
     Ok(PackageGraphSnapshot {
         _directory: directory,
@@ -314,24 +429,6 @@ fn validate_captured_manifest(
             node.package_dir.display()
         ));
     }
-    for (name, value) in node
-        .manifest
-        .dependencies
-        .iter()
-        .chain(node.manifest.dev_dependencies.iter())
-    {
-        let spec = super::package_dependency_spec(name, value);
-        if spec
-            .path
-            .as_deref()
-            .is_some_and(|path| Path::new(path).is_absolute())
-        {
-            return Err(format!(
-                "authorized package snapshots require relative path dependencies; `{name}` in {} is absolute",
-                node.package_dir.display()
-            ));
-        }
-    }
     Ok(())
 }
 
@@ -346,6 +443,64 @@ fn snapshot_path_component(value: &str) -> String {
             }
         })
         .collect()
+}
+
+fn rewrite_snapshot_manifests(
+    graph: &super::dependency::ResolvedDependencyGraph,
+    destinations: &BTreeMap<String, PathBuf>,
+) -> Result<(), String> {
+    for (key, node) in &graph.nodes {
+        let manifest_path = destinations[key].join("rsspkg.toml");
+        let mut document: toml::Value = toml::from_str(&node.manifest_source)
+            .map_err(|error| format!("failed to parse {}: {error}", manifest_path.display()))?;
+        let mut changed = false;
+        for section in ["dependencies", "dev-dependencies"] {
+            let Some(dependencies) = document
+                .get_mut(section)
+                .and_then(toml::Value::as_table_mut)
+            else {
+                continue;
+            };
+            for (_, dependency) in dependencies.iter_mut() {
+                let Some(specification) = dependency.as_table_mut() else {
+                    continue;
+                };
+                let Some(path) = specification
+                    .get("path")
+                    .and_then(toml::Value::as_str)
+                    .map(str::to_string)
+                else {
+                    continue;
+                };
+                let path = Path::new(&path);
+                if !path.is_absolute() {
+                    continue;
+                }
+                let target = super::canonical_path_label(path);
+                let Some(destination) = destinations.get(&target) else {
+                    return Err(format!(
+                        "absolute path dependency is outside the captured package graph: {}",
+                        path.display()
+                    ));
+                };
+                specification.insert(
+                    "path".to_string(),
+                    toml::Value::String(destination.display().to_string()),
+                );
+                changed = true;
+            }
+        }
+        if changed {
+            fs::write(
+                &manifest_path,
+                toml::to_string_pretty(&document).map_err(|error| {
+                    format!("failed to encode {}: {error}", manifest_path.display())
+                })?,
+            )
+            .map_err(|error| format!("failed to rewrite {}: {error}", manifest_path.display()))?;
+        }
+    }
+    Ok(())
 }
 
 fn rewrite_snapshot_locks(
@@ -749,7 +904,10 @@ mod tests {
 
     use super::*;
     use crate::native_plugin::load_authorized_package_native_bindings;
-    use crate::package::{format_package_lock_toml, lock_package_dir};
+    use crate::package::{
+        check_package_dir, format_package_lock_toml, lock_package_dir, package_tree,
+        review_package_dir,
+    };
 
     fn pure_package_fixture() -> PathBuf {
         let root = std::env::temp_dir().join(format!(
@@ -833,7 +991,8 @@ mod tests {
         add_native_dependency(&root);
         let original = lock_package_dir(&root).expect("original lock");
         let snapshot = snapshot_package_graph_inputs(&root).expect("package graph snapshot");
-        let captured = lock_package_dir(snapshot.root()).expect("snapshot lock");
+        let captured =
+            super::super::lock::lock_package_dir_captured(snapshot.root()).expect("snapshot lock");
         let original_files = collect_regular_files_for_test(&root.join("native/rust"), &root);
         let captured_files =
             collect_regular_files_for_test(&snapshot.root().join("native/rust"), snapshot.root());
@@ -878,6 +1037,130 @@ mod tests {
             package.lowering_input().source,
             "fn main() -> Unit { return Unit }\n"
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn captured_read_operations_ignore_later_checkout_mutation() {
+        let root = pure_package_fixture();
+        let lock = lock_package_dir(&root).expect("fixture lock");
+        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+            .expect("fixture lockfile");
+
+        let snapshot = snapshot_package_graph_inputs(&root).expect("package graph snapshot");
+        fs::write(
+            root.join("src/main.rss"),
+            "fn main() -> Unit { Missing.call(); return Unit }\n",
+        )
+        .expect("mutate original checkout after capture");
+
+        let review =
+            super::super::review::review_package_dir_captured_with_features(snapshot.root(), None)
+                .expect("captured review");
+        let mut captured_lock =
+            super::super::lock::lock_package_dir_captured(snapshot.root()).expect("captured lock");
+        snapshot.remap_lock(&mut captured_lock);
+        let check = super::super::check::check_package_dir_captured(snapshot.root())
+            .expect("captured check");
+
+        assert!(
+            review
+                .diagnostics
+                .iter()
+                .all(|diagnostic| !diagnostic.severity.is_error()),
+            "{:?}",
+            review.diagnostics
+        );
+        assert_eq!(captured_lock.packages, lock.packages);
+        assert!(check.ok, "{:?}", check.reasons);
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn public_package_reads_preserve_checkout_paths() {
+        let root = pure_package_fixture();
+        let dependency = root.with_file_name(format!(
+            "{}-absolute-dependency",
+            root.file_name()
+                .and_then(|name| name.to_str())
+                .expect("fixture name")
+        ));
+        fs::create_dir_all(dependency.join("src")).expect("dependency source directory");
+        fs::write(
+            dependency.join("rsspkg.toml"),
+            "[package]\nname = \"absolute-dependency\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n",
+        )
+        .expect("dependency manifest");
+        fs::write(
+            dependency.join("src/lib.rss"),
+            "fn dependency_value() -> Int { return 1 }\n",
+        )
+        .expect("dependency source");
+        fs::write(
+            root.join("rsspkg.toml"),
+            format!(
+                "[package]\nname = \"authorized-test\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n\n[dependencies]\nabsolute-dependency = {{ path = {:?} }}\n",
+                dependency.display().to_string()
+            ),
+        )
+        .expect("root dependency manifest");
+        let lock = lock_package_dir(&root).expect("fixture dependency lock");
+        fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
+            .expect("fixture lockfile");
+
+        let review = review_package_dir(&root).expect("public review");
+        let check = check_package_dir(&root).expect("public check");
+        let lock = lock_package_dir(&root).expect("public lock");
+        let tree = package_tree(&root).expect("public tree");
+        let outputs = [
+            serde_json::to_string(&review).expect("review JSON"),
+            serde_json::to_string(&check).expect("check JSON"),
+            serde_json::to_string(&lock).expect("lock JSON"),
+            serde_json::to_string(&tree).expect("tree JSON"),
+        ];
+
+        for output in outputs {
+            assert!(
+                !output.contains("rsscript-package-graph-"),
+                "snapshot path leaked into public output: {output}"
+            );
+        }
+        assert_eq!(
+            review.manifest_path,
+            root.join("rsspkg.toml").display().to_string()
+        );
+        assert_eq!(check.package_dir, root.display().to_string());
+        assert!(
+            lock.packages
+                .iter()
+                .any(|package| { package.source == format!("path+{}", dependency.display()) }),
+            "{:?}",
+            lock.packages
+        );
+        assert!(
+            tree.root
+                .dependencies
+                .iter()
+                .any(|node| node.source == format!("path+{}", dependency.display())),
+            "{:?}",
+            tree.root.dependencies
+        );
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(dependency);
+    }
+
+    #[test]
+    fn public_package_read_errors_do_not_expose_snapshot_paths() {
+        let root = pure_package_fixture();
+        fs::write(root.join("src/main.rss"), [0xff])
+            .expect("replace fixture with invalid UTF-8 source");
+
+        let error = review_package_dir(&root).expect_err("invalid source encoding must fail");
+        assert!(!error.contains("rsscript-package-graph-"), "{error}");
+        assert!(error.contains(&root.display().to_string()), "{error}");
 
         let _ = fs::remove_dir_all(root);
     }
