@@ -1450,7 +1450,7 @@ mod tests {
 
     #[test]
     fn http_client_is_reused() {
-        let services = crate::async_runtime::default_runtime_services();
+        let services = crate::compatibility::runtime_services();
         assert!(std::ptr::eq(services.http_client(), services.http_client()));
     }
 

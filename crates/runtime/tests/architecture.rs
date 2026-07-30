@@ -45,3 +45,21 @@ fn canonical_facades_exclude_compatibility_entrypoints() {
         );
     }
 }
+
+#[test]
+fn process_wide_runtime_owner_is_isolated_to_compatibility_module() {
+    let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let compatibility = source_dir.join("compatibility.rs");
+    let compatibility_source =
+        fs::read_to_string(&compatibility).expect("compatibility module should be readable");
+    assert!(
+        compatibility_source.contains("OnceLock<Arc<RuntimeServices>>"),
+        "compatibility module should own the sole process-wide runtime service"
+    );
+
+    let async_runtime = fs::read_to_string(source_dir.join("async_runtime.rs"))
+        .expect("async runtime source should be readable");
+    assert!(!async_runtime.contains("COMPATIBILITY_RUNTIME"));
+    assert!(!async_runtime.contains("fn default_runtime_services"));
+    assert!(!async_runtime.contains("fn tokio_native_runtime("));
+}

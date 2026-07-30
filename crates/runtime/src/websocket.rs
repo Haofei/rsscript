@@ -442,7 +442,7 @@ fn websocket_close_inner(
 
 #[cfg(test)]
 mod tests {
-    use crate::{Executor, tokio_native_runtime};
+    use crate::{Executor, RuntimeServices};
     use futures_util::{SinkExt, StreamExt};
     use std::sync::Arc;
     use std::time::Duration;
@@ -450,14 +450,16 @@ mod tests {
 
     #[test]
     fn websocket_round_trips_text_on_native_runtime() {
-        let listener = tokio_native_runtime()
+        let services = RuntimeServices::with_worker_threads(2).expect("test runtime should start");
+        let runtime = services.runtime_handle().expect("test runtime handle");
+        let listener = runtime
             .block_on(async { tokio::net::TcpListener::bind("127.0.0.1:0").await })
             .expect("test listener should bind");
         let port = listener
             .local_addr()
             .expect("listener should have addr")
             .port();
-        let server = tokio_native_runtime().spawn(async move {
+        let server = runtime.spawn(async move {
             let (stream, _) = listener.accept().await.expect("client should connect");
             let mut websocket = tokio_tungstenite::accept_async(stream)
                 .await
@@ -485,9 +487,8 @@ mod tests {
             .run_pending(super::websocket_recv_text(&socket))
             .expect("websocket recv should succeed");
         assert_eq!(response, Some("pong".to_string()));
-        tokio_native_runtime()
-            .block_on(server)
-            .expect("server task should finish");
+        runtime.block_on(server).expect("server task should finish");
+        services.shutdown(Duration::from_secs(1));
     }
 
     #[test]
@@ -514,14 +515,16 @@ mod tests {
 
     #[test]
     fn pending_websocket_receive_does_not_block_sends() {
-        let listener = tokio_native_runtime()
+        let services = RuntimeServices::with_worker_threads(2).expect("test runtime should start");
+        let runtime = services.runtime_handle().expect("test runtime handle");
+        let listener = runtime
             .block_on(async { tokio::net::TcpListener::bind("127.0.0.1:0").await })
             .expect("test listener should bind");
         let port = listener
             .local_addr()
             .expect("listener should have addr")
             .port();
-        let server = tokio_native_runtime().spawn(async move {
+        let server = runtime.spawn(async move {
             let (stream, _) = listener.accept().await.expect("client should connect");
             let mut websocket = tokio_tungstenite::accept_async(stream)
                 .await
@@ -554,21 +557,22 @@ mod tests {
                 .expect("pending receive should complete"),
             Some("pong".to_string())
         );
-        tokio_native_runtime()
-            .block_on(server)
-            .expect("server task should finish");
+        runtime.block_on(server).expect("server task should finish");
+        services.shutdown(Duration::from_secs(1));
     }
 
     #[test]
     fn websocket_receive_consumes_shared_budget() {
-        let listener = tokio_native_runtime()
+        let services = RuntimeServices::with_worker_threads(2).expect("test runtime should start");
+        let runtime = services.runtime_handle().expect("test runtime handle");
+        let listener = runtime
             .block_on(async { tokio::net::TcpListener::bind("127.0.0.1:0").await })
             .expect("test listener should bind");
         let port = listener
             .local_addr()
             .expect("listener should have addr")
             .port();
-        let server = tokio_native_runtime().spawn(async move {
+        let server = runtime.spawn(async move {
             let (stream, _) = listener.accept().await.expect("client should connect");
             let mut websocket = tokio_tungstenite::accept_async(stream)
                 .await
@@ -594,9 +598,8 @@ mod tests {
             ))
             .expect_err("message should exceed shared budget");
         assert!(error.message.contains("byte budget exhausted"));
-        tokio_native_runtime()
-            .block_on(server)
-            .expect("server task should finish");
+        runtime.block_on(server).expect("server task should finish");
+        services.shutdown(Duration::from_secs(1));
     }
 
     #[test]

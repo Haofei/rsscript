@@ -5,6 +5,7 @@ mod async_runtime;
 mod channel;
 mod clock;
 mod collections;
+mod compatibility;
 mod date;
 mod diagnostics;
 mod domain;
@@ -54,8 +55,8 @@ macro_rules! runtime_abi_exports {
             pending_try, run_pending, spawn_tokio_native, spawn_tokio_native_with_cancellation,
             spawn_tokio_native_with_services, timer_sleep_cancellable_native_start,
             timer_sleep_native_start, timer_sleep_native_start_with_cancellation,
-            timer_sleep_start, timer_sleep_until_native_start, tokio_native_runtime,
-            tokio_native_runtime_worker_threads, trace_async_runtime_phase,
+            timer_sleep_start, timer_sleep_until_native_start, tokio_native_runtime_worker_threads,
+            trace_async_runtime_phase,
         };
         pub use crate::channel::{
             ChannelError, RecvPending, RssChannel, RssReceiver, RssSender, RssStream, SendPending,

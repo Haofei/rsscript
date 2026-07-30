@@ -79,6 +79,13 @@ This table records the current implementation batch for the refactoring work in
 | R10 | Opaque host capability handles | Complete | Concrete host authorization returns execution-scoped path, endpoint, executable, and database handles |
 | R11 | REIR adapter convergence | Complete | Adapters share bounded evidence construction, provenance, and explicit unknown coverage |
 | R12 | Test-domain organization | Complete | Register-VM, JIT acceptance, and self-host parity suites are composed from independently owned semantic domains |
+| R13 | Runtime compatibility owner isolation | Complete | Canonical async work uses explicit services and the generated ABI has exactly one isolated process-wide compatibility owner |
+| R14 | Register-VM execution boundary decomposition | Planned | Tier selection, execution planning, lowering, and interpretation have independently testable owners |
+| R15 | REIR adapter pipeline decomposition | Planned | Input, traversal, normalization, coverage, and fact projection are separate from bounded evidence construction |
+| R16 | Semantic checker and lowering decomposition | Planned | Call, ownership, effect, closure, and emission responsibilities have stable module boundaries |
+| R17 | Large test-domain decomposition | Planned | Remaining register-window, JIT, and backend suites have independently owned semantic domains |
+| R18 | Host capability adapter enforcement | Planned | Canonical filesystem, network, process, and database adapters consume scoped authorized handles |
+| R19 | Revision-scoped LSP index cache | Planned | Semantic indexes are reused only for matching document and package generations |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -188,6 +195,12 @@ are divided into registry, resource, register-window, closure-cache, and
 profiling domains; self-host parity is divided by compiler phase; JIT acceptance
 is divided into core, optimization, and resource-limit contracts. Architecture
 tests prevent those aggregators from growing back into monoliths.
+
+R13 removes the second process-wide Tokio runtime and isolates the sole default
+`RuntimeServices` owner in the generated-ABI compatibility module. Canonical
+operations retain explicit services through `OperationContext`; runtime tests
+create and shut down their own owners. An architecture test prevents global
+runtime ownership from returning to the async state machine.
 
 ## Experimental Status
 

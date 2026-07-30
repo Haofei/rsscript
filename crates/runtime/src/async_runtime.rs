@@ -834,26 +834,6 @@ impl Drop for RuntimeServices {
     }
 }
 
-pub(crate) fn default_runtime_services() -> &'static Arc<RuntimeServices> {
-    static SERVICES: std::sync::OnceLock<Arc<RuntimeServices>> = std::sync::OnceLock::new();
-    SERVICES.get_or_init(|| {
-        Arc::new(RuntimeServices::new().expect("default runtime services should start"))
-    })
-}
-
-pub fn tokio_native_runtime() -> &'static tokio::runtime::Runtime {
-    static COMPATIBILITY_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> =
-        std::sync::OnceLock::new();
-    COMPATIBILITY_RUNTIME.get_or_init(|| {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(tokio_native_runtime_worker_threads())
-            .thread_name("rsscript-runtime-tokio")
-            .enable_all()
-            .build()
-            .expect("rsscript tokio runtime should start")
-    })
-}
-
 pub fn spawn_tokio_native<T, F>(future: F) -> NativeAsyncPending<T>
 where
     T: Send + 'static,
@@ -870,8 +850,12 @@ where
     T: Send + 'static,
     F: Future<Output = T> + Send + 'static,
 {
-    spawn_tokio_native_with_services(default_runtime_services(), cancellation, future)
-        .expect("default runtime services should be running")
+    spawn_tokio_native_with_services(
+        crate::compatibility::runtime_services(),
+        cancellation,
+        future,
+    )
+    .expect("default runtime services should be running")
 }
 
 pub fn spawn_tokio_native_with_services<T, F>(
