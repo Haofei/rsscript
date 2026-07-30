@@ -11,7 +11,8 @@ Two copies of one package tell the story:
 - [`after/`](./after) — the same package after a "PR" adds an outbound HTTP call.
 
 Each native boundary declares the capability it grants in `rsspkg.toml`, using
-the canonical taxonomy in [`src/capability.rs`](../../src/capability.rs):
+the canonical taxonomy in
+[`crates/rsscript/src/capability.rs`](../../crates/rsscript/src/capability.rs):
 
 ```toml
 [[review.capability_bindings]]

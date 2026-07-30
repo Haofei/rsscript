@@ -510,14 +510,14 @@ risk = "unknown"
 }
 
 #[test]
-fn package_manager_spec_uses_implemented_provider_resolution_manifest_shape() {
-    let spec = fs::read_to_string(common::package_manager_spec_path())
-        .expect("package manager spec should be readable");
+fn package_reference_uses_implemented_provider_resolution_manifest_shape() {
+    let spec = fs::read_to_string(common::package_reference_path())
+        .expect("package reference should be readable");
 
     for stale in ["[provider]", "mode = \"platform_provided\""] {
         assert!(
             !spec.contains(stale),
-            "package manager spec should not document unimplemented provider manifest shape `{stale}`"
+            "package reference should not document unimplemented provider manifest shape `{stale}`"
         );
     }
     for current in [
@@ -529,7 +529,7 @@ fn package_manager_spec_uses_implemented_provider_resolution_manifest_shape() {
     ] {
         assert!(
             spec.contains(current),
-            "package manager spec should document implemented provider manifest shape `{current}`"
+            "package reference should document implemented provider manifest shape `{current}`"
         );
     }
 }

@@ -12,7 +12,7 @@ fn docs_do_not_reintroduce_legacy_gc_runtime_surface() {
     for doc_path in [
         root.join("README.md"),
         common::language_spec_path(),
-        common::package_manager_spec_path(),
+        common::package_reference_path(),
     ] {
         let relative_path = doc_path
             .strip_prefix(&root)
@@ -38,9 +38,9 @@ fn docs_do_not_reintroduce_legacy_gc_runtime_surface() {
 }
 
 #[test]
-fn package_manager_spec_uses_current_http_and_env_facade_shapes() {
-    let spec = fs::read_to_string(common::package_manager_spec_path())
-        .expect("package manager spec should be readable");
+fn package_reference_uses_current_http_and_env_facade_shapes() {
+    let spec = fs::read_to_string(common::package_reference_path())
+        .expect("package reference should be readable");
 
     for stale in [
         "Http.HttpClient",
@@ -53,7 +53,7 @@ fn package_manager_spec_uses_current_http_and_env_facade_shapes() {
     ] {
         assert!(
             !spec.contains(stale),
-            "package manager spec should not reference stale facade shape `{stale}`"
+            "package reference should not reference stale facade shape `{stale}`"
         );
     }
     for current in [
@@ -64,7 +64,7 @@ fn package_manager_spec_uses_current_http_and_env_facade_shapes() {
     ] {
         assert!(
             spec.contains(current),
-            "package manager spec should document current facade shape `{current}`"
+            "package reference should document current facade shape `{current}`"
         );
     }
 }

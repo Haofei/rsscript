@@ -1,52 +1,50 @@
-# RSScript Specifications & Design Docs
+# RSScript Documentation
 
-Normative specifications and design drafts for RSScript. The project root keeps
-only `README.md` (overview) and `AGENT.md` (the prompt-sized language guide for
-LLMs); everything else lives here, grouped into categorized subfolders.
+This directory has one current document for each concern. Git history is the
+archive for superseded plans, review reports, and remediation logs.
 
-## Spec
+## Authority
 
-| Doc | What it governs |
-|-----|-----------------|
-| [RSScript_v0.7_Spec.md](spec/RSScript_v0.7_Spec.md) | The language. Opens with a binding **Constitution** (Articles I–IX) that overrides every chapter. |
-| [RSScript_Execution_Spec_v0.1.md](spec/RSScript_Execution_Spec_v0.1.md) | The execution engine: reg-VM + JIT tiers — the single home. Normative parity contract (interp ≡ tier-0 ≡ native ≡ AOT), calling convention, sandbox/hardening, host-helper ABI (§0–11), plus the consolidated implementation baseline, JIT phase status, and per-feature parity ledger (Part II appendices). Subordinate to the language spec. |
-| [RSScript_Package_Manager_Design_v0.6.md](spec/RSScript_Package_Manager_Design_v0.6.md) | The package manager (`rss pkg`): `.rssi` contracts, `rsspkg.toml`/`.lock`, semantic dependency review. This is still a v0.6 design document; use the root README and `rss --help` for implemented command shape. |
-| [Review_Evidence_IR_Spec_v0.2.md](spec/Review_Evidence_IR_Spec_v0.2.md) | REIR — the review-evidence IR consumed by `--reir` tooling and CI gates. |
+When documents disagree, use this order:
 
-## Architecture
+1. [Language specification](spec/RSScript_v0.7_Spec.md)
+2. [Execution specification](spec/RSScript_Execution_Spec_v0.1.md)
+3. [REIR specification](spec/Review_Evidence_IR_Spec_v0.2.md)
+4. Current code, tests, `rss --help`, and the root [README](../README.md)
+5. The references and roadmap below
 
-| Doc | What it governs |
-|-----|-----------------|
-| [ARCHITECTURE.md](architecture/ARCHITECTURE.md) | Module boundaries of the checker/lowering implementation. |
-| [support.md](support.md) | Binding Core/Experimental/Unsupported-for-untrusted support levels, deployment profiles, and CI contract. |
+## Current Documents
 
-## Ledgers
+| Document | Purpose |
+| --- | --- |
+| [support.md](support.md) | Supported, Experimental, and unsupported-for-untrusted surfaces; deployment profiles and CI contract |
+| [status.md](status.md) | Current closure state, accepted limitations, and open engineering debt |
+| [roadmap.md](roadmap.md) | Prioritized future work and explicit freezes |
+| [package.md](package.md) | Implemented package artifacts, commands, review model, and trust boundary |
+| [architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md) | Module ownership and dependency rules |
+| [development/DEVELOPMENT.md](development/DEVELOPMENT.md) | Local development and verification |
+| [development/DOCKER.md](development/DOCKER.md) | Containerized development |
+| [self-hosting.md](self-hosting.md) | Experimental self-hosting goal, current coverage, and validation contract |
 
-| Doc | What it governs |
-|-----|-----------------|
-| [self-hosting.md](self-hosting.md) | Single canonical self-hosting doc: status, validation model, dump formats, and `SH-*` ledger. |
-| [scope-remediation-2026-07-29.md](ledgers/scope-remediation-2026-07-29.md) | Product-scope remediation ledger: completed changes, frozen claims, and open debt. |
+## Specifications
 
-## Development
+| Specification | Scope |
+| --- | --- |
+| [RSScript v0.7](spec/RSScript_v0.7_Spec.md) | Language syntax and semantics |
+| [Execution v0.1](spec/RSScript_Execution_Spec_v0.1.md) | Interpreter, JIT, AOT parity, limits, and host ABI |
+| [REIR v0.2](spec/Review_Evidence_IR_Spec_v0.2.md) | Review evidence model and reconciliation |
 
-| Doc | What it governs |
-|-----|-----------------|
-| [DEVELOPMENT.md](development/DEVELOPMENT.md) | Local verification flow and development discipline. |
-| [DOCKER.md](development/DOCKER.md) | Containerized, cross-platform dev environment (Docker / VS Code / Codespaces). |
+The specifications are intentionally detailed and some tests read them by path.
+Do not rename them without updating those tests.
 
-## Planning
+## Maintenance Rules
 
-Planning docs are non-normative and can be active roadmaps or historical evidence.
-Start with [planning/README.md](planning/README.md), which separates current
-roadmaps from shipped/rejected performance notes and records the authority order
-for resolving stale claims.
-
-## Conventions
-
-- The **Constitution** (in the language spec) is the highest authority; a chapter
-  that conflicts with an article is in error (§0 normative hierarchy).
-- Generated artifacts are produced from a single source of truth with a
-  freshness-guard test (e.g. the VS Code grammar from the lexer `KEYWORDS` table);
-  the design drafts above extend that discipline.
-- Some tests read these files by path (`tests/checker_package.rs`,
-  `reir/tests/reir_tests.rs`); if you rename or move a spec, update those joins.
+- Do not add dated status reports, completion ledgers, or a second roadmap.
+- Update `status.md` when a boundary closes or a limitation changes.
+- Update `roadmap.md` only for work that remains relevant to the current support
+  policy.
+- Put benchmark measurements beside the benchmark data, not in roadmap prose.
+- Put historical rationale in commit messages or an ADR only when the decision
+  remains binding.
+- Remove a superseded document in the same change that updates its inbound
+  links.

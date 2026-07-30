@@ -1,156 +1,131 @@
 # RSScript Architecture
 
-This repository is organized around one product boundary:
+RSScript is organized around one primary product path:
 
 ```text
-RSScript source -> frontend semantics -> review metadata -> Rust lowering
+source
+  -> syntax
+  -> checked semantics
+  -> review evidence
+  -> REIR decision or executable lowering
 ```
 
-The language core stays ahead of package-manager surface area. Package tooling
-may exercise the language, but it must not redefine language semantics.
+The review model is the core product boundary. Execution backends consume
+checked semantics; they do not redefine the language or silently convert
+unknown behavior into supported behavior.
 
 ## Layers
 
-1. Syntax
+### Syntax
 
-   `src/syntax/` owns parsing and source-preserving AST shapes. It should not
-   know package policy, review risk, Rust lowering, or runtime hooks.
+`crates/rsscript/src/syntax/` and the lexer own tokens, parsing, recovery, and
+source-preserving AST shapes. They must not depend on package policy, review
+risk, lowering, or runtime services.
 
-2. HIR and Frontend Checks
+### Semantic Analysis
 
-   `src/hir.rs`, `src/analyzer.rs`, and `src/checks/` own semantic facts and
-   RSScript diagnostics: features, named arguments, data effects, local/fresh
-   state, resource lifetime, weak/handle access, and unsupported executable
-   surfaces.
+`hir.rs`, `analyzer.rs`, and `checks/` own resolved language facts and
+diagnostics. This layer validates types, effects, resources, handles, weak
+references, and executable surfaces before a backend consumes them.
 
-3. Review Protocol
+### Review
 
-   `src/review.rs` owns review-map and semantic diff classification. Unknown is
-   preserved as a first-class product signal and is never folded into low risk.
+`review.rs`, package review code, and the `reir` crate own review facts,
+semantic differences, reconciliation, and gate decisions. `Unknown` is a
+first-class result and is never treated as low risk.
 
-4. Rust Lowering
+### Lowering And Execution
 
-   `src/rust_lower/` owns generated Rust, source maps, backend verification,
-   rustc remapping, runtime diagnostic parsing, and runtime hook selection.
-   Lowering consumes checked RSScript semantics; it should not be the first
-   place that discovers language errors.
+`rust_lower/` emits Rust from checked semantics. The register VM is the
+reference interactive execution path. JIT, native plugins, and Metal are
+experimental trusted-code accelerators and explicit unsafe boundaries.
 
-5. Package Tooling
+Lowering and execution must reject unsupported checked forms rather than
+inventing backend-specific semantics.
 
-   `src/package/` owns package manifests, `.rssi` public contracts, dependency
-   graphs, semantic locks, package review, publish dry-runs, vendoring, and
-   package metadata. It consumes syntax/check/review/lowering APIs.
+### Package Domain
 
-6. Runtime
+`package/` owns manifests, `.rssi` contracts, dependency graphs, semantic locks,
+review aggregation, snapshots, publication, and vendoring. Package operations
+consume compiler and review APIs; they do not define language semantics.
 
-   `runtime/` owns the reference runtime ABI: managed handles, weak handles,
-   resources, diagnostics, and core native hooks used by lowered Rust.
+Security-sensitive package operations must act on an immutable snapshot. A
+reviewed path is not an execution capability.
 
-7. CLI
+### Runtime And Adapters
 
-   `src/main.rs` is only the process entrypoint. `src/cli/` owns command-line
-   parsing and command dispatch, and should remain an application shell around
-   the library APIs.
+The `runtime` crate owns the host-facing runtime contract and resource
+accounting. Network, process, filesystem, database, native, JIT, and GPU
+facilities are adapters with explicit trust and resource policies.
+
+The runtime is not a sandbox. Untrusted execution requires an isolated worker
+and operating-system enforcement.
+
+### Applications
+
+The CLI, LSP, GitHub Action, and other entrypoints are composition roots. They
+select deployment profiles, construct policies and budgets, and invoke library
+use cases. Domain code should not discover policy through ambient process state.
+
+## Dependency Rules
+
+The intended dependency direction is:
+
+```text
+syntax
+  -> semantics
+  -> review/package domain
+  -> use cases
+  -> runtime and infrastructure adapters
+  -> CLI, LSP, and CI entrypoints
+```
+
+The following rules are architectural invariants:
+
+1. Syntax does not depend on package, review, runtime, or backend code.
+2. Lowering consumes validated semantic facts.
+3. Package tooling does not reinterpret the language.
+4. Review decisions preserve incomplete and unknown evidence.
+5. Host capabilities require explicit policy and bounded resources.
+6. Unsafe implementation remains isolated in dedicated crates and adapters.
+7. Security decisions bind to immutable content and producer provenance.
+8. Restricted execution cannot accept trusted-only native, JIT, or GPU handles.
+
+## Stable Boundary Types
+
+New cross-layer APIs should prefer validated or authorized values over raw
+strings, paths, and booleans. Important boundary concepts include:
+
+```text
+SourceSnapshot
+ParsedProgram
+ValidatedProgram
+ValidatedBundle
+AuthorizedPackage
+ArtifactHandle
+ExecutionPolicy
+OperationContext
+```
+
+These names describe the intended invariants. They do not imply that every
+boundary is already fully implemented.
 
 ## Current Hotspots
 
-These files are intentionally tracked as refactoring targets:
+Large compiler, package, LSP, runtime, register-VM, and JIT modules remain
+maintenance risks. They should be split around validated state transitions,
+policy boundaries, and platform adapters, not around arbitrary line counts.
 
-```text
-tests/static.rs          non-executing frontend/lowering/package checks
-tests/runtime.rs         fast VM/runtime/JIT behavior checks
-tests/differential.rs    backend agreement, corpus, generative, metamorphic checks
-tests/soak.rs            slow demo, benchmark, release-shaped checks
-tests/checker_frontend.rs   frontend checker, parser, diagnostics, and fixtures module
-tests/checker_lowering.rs   Rust lowering, source maps, runtime diagnostics module
-tests/checker_package.rs    package review, package manager, REIR adapters module
-tests/checker_review.rs     review map and semantic diff behavior module
-src/package/           package domain model, graph, review, lock, publish, vendor
-src/rust_lower/        lowering, backend checks, source maps, remapping, intrinsics
-src/analyzer.rs        frontend orchestration
-src/checks/*.rs        large semantic checker implementations
-```
-
-## Refactoring Order
-
-1. Keep `src/main.rs` thin and move CLI application code under `src/cli/`.
-2. Split package code by responsibility:
-
-   ```text
-   src/package/source_set.rs
-   src/package/native.rs
-   src/package/types.rs
-   src/package/graph.rs
-   src/package/review.rs
-   src/package/lock.rs
-   src/package/diff.rs
-   src/package/publish.rs
-   src/package/vendor.rs
-   src/package/format.rs
-   ```
-
-   Current completed package splits:
-
-   ```text
-   src/package/types.rs       public package/review/lock data shapes
-   src/package/check.rs       package check aggregation and semantic lock validation
-   src/package/dependency.rs  path dependency specs, interface loading, feature resolution
-   src/package/format.rs      JSON/TOML/human output formatting
-   src/package/source_set.rs  rsspkg.toml loading and source/interface selection
-   src/package/native.rs      native binding metadata and native Rust risk checks
-   src/package/policy.rs      review policy parsing and enforcement helpers
-   src/package/review.rs      package review aggregation, API summary, and risk scoring
-   src/package/contract.rs    .rssi public contract extraction and comparison
-   src/package/lock.rs        semantic lockfile, package archive, and hash logic
-   src/package/graph.rs       dependency tree and package graph validation
-   src/package/diff.rs        manifest/interface semantic diff and risk rules
-   src/package/metadata.rs    package review metadata and lowering input assembly
-   src/package/vendor.rs      path dependency vendoring and vendor metadata
-   src/package/publish.rs     publish dry-runs, registry index, and archive targets
-   ```
-
-3. Split lowering by backend responsibility:
-
-   ```text
-   src/lower/mod.rs
-   src/lower/rust.rs
-   src/lower/source_map.rs
-   src/lower/rustc_remap.rs
-   src/lower/runtime_diagnostics.rs
-   src/lower/intrinsics.rs
-   ```
-
-4. Integration tests use four primary semantic domains plus two
-   process-isolated JIT configuration targets:
-
-   ```text
-   tests/static.rs
-   tests/runtime.rs
-   tests/differential.rs
-   tests/soak.rs
-   tests/jit_cost_model.rs
-   tests/jit_env.rs
-   ```
-
-   Internal module files are implementation detail under those four targets:
-
-   ```text
-   tests/checker_frontend.rs
-   tests/checker_lowering.rs
-   tests/checker_review.rs
-   tests/checker_package.rs
-   tests/s3_iam_reir_demo_e2e.rs      ignored runtime demo plus fast REIR preflight/scenarios
-   tests/file_upload_benchmark_e2e.rs ignored release/demo benchmark
-   ```
-
-5. Only then reduce checker internals further. Checker changes are higher risk
-   because they carry the language invariants.
+Active consolidation and security work is tracked only in
+[the roadmap](../roadmap.md). Current support and unresolved boundaries are
+recorded in [status](../status.md) and [support](../support.md).
 
 ## Non-Goals
 
-- Do not introduce compatibility aliases while RSScript is pre-adoption.
-- Do not add package-manager behavior that depends on unimplemented language
-  semantics.
-- Do not make Rust lowering responsible for accepting code the frontend cannot
-  explain.
-- Do not classify unknown review regions as low risk.
+- Package tooling must not introduce unimplemented language semantics.
+- Lowering must not accept code the frontend cannot explain.
+- Unknown review regions must not be classified as safe.
+- In-process native code, JIT machine code, and dynamic shaders are not
+  security sandboxes.
+- Experimental execution features do not become supported solely because an
+  implementation exists.

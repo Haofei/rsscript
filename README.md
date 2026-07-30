@@ -552,7 +552,11 @@ Near term for v0.7 hardening: close remaining static-checker gaps against the sp
 
 Package-management hardening: keep implemented commands documented under their actual `--json` surface, treat dependency updates as review events, preserve unknown risk instead of downgrading it, and land design-only graph-audit/native-ABI/semver workflows only after their underlying interface and native facts are available without weakening review semantics. The package manager itself should be implemented in RSScript as the language core becomes capable enough — package review, dependency-risk classification, semantic lock diffing, and registry metadata shaping are exactly the application-layer systems code RSScript is meant to make reviewable. Any part that still needs Rust should mark the missing RSScript capability clearly instead of growing a parallel Rust-only model.
 
-Longer term: deeper semantic review tooling, a larger core library, agent and runtime examples, stronger optimization paths, optional native ABI adapter checks, graph-level audit-surface reporting, and an experimental self-hosted frontend. Current active roadmaps and historical evidence logs are consolidated in [docs/planning/README.md](docs/planning/README.md); use that index instead of treating older standalone plans as current.
+Longer-term work is deliberately constrained by the supported product boundary.
+See the single [roadmap](docs/roadmap.md) for active priorities and
+[status](docs/status.md) for unresolved security, correctness, and maintenance
+work. Git history is the archive for completed plans and dated remediation
+reports.
 
 These intentionally exclude Dart-style conveniences that conflict with review-first semantics: cascade (`..`), extension methods / implicit method resolution, and positional records / implicit flow promotion.
 

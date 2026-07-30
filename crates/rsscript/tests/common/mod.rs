@@ -44,10 +44,9 @@ pub fn language_spec_path() -> PathBuf {
     find_versioned_doc("RSScript_v", "_Spec.md")
 }
 
-/// Locate the package-manager design doc by its version-independent name shape
-/// `RSScript_Package_Manager_Design_v<version>.md`.
-pub fn package_manager_spec_path() -> PathBuf {
-    find_versioned_doc("RSScript_Package_Manager_Design_v", ".md")
+/// Locate the current package reference.
+pub fn package_reference_path() -> PathBuf {
+    workspace_root().join("docs/package.md")
 }
 
 /// Find exactly one file in `docs/` whose name starts with `prefix` and ends
