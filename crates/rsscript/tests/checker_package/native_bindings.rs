@@ -159,7 +159,7 @@ native fn Native.noop() -> Unit
     .expect("native Cargo.toml should be written");
     fs::write(
         temp_dir.join("native/rust/src/lib.rs"),
-        "// use rayon::prelude::*;\n// std::thread::spawn(|| {});\npub fn noop() {}\n",
+        "// use worker_pool::prelude::*;\n// std::thread::spawn(|| {});\npub fn noop() {}\n",
     )
     .expect("native source should be written");
 
@@ -429,7 +429,7 @@ proc_macros = "forbid"
 unsafe = "forbid"
 
 [native.rust.feature_map]
-wasm-browser = { cargo_features = ["rayon/web_spin_lock"] }
+wasm-browser = { cargo_features = ["worker-pool/web-spin-lock"] }
 "#,
         r#"features: native
 
@@ -469,7 +469,7 @@ native fn Feature.value() -> Int
     assert!(
         cargo_features
             .iter()
-            .any(|feature| feature == "rayon/web_spin_lock")
+            .any(|feature| feature == "worker-pool/web-spin-lock")
     );
     assert!(reir_json["facts"].as_array().is_some_and(|facts| {
         facts.iter().any(|fact| {
@@ -478,7 +478,7 @@ native fn Feature.value() -> Int
         }) && facts.iter().any(|fact| {
             fact["kind"] == "native_cargo_feature"
                 && fact["subject"]["id"]
-                    == "rss-json@0.1.0#native-cargo-feature:rayon/web_spin_lock"
+                    == "rss-json@0.1.0#native-cargo-feature:worker-pool/web-spin-lock"
         })
     }));
     assert!(reir_json["slices"].as_array().is_some_and(|slices| {
@@ -1804,46 +1804,10 @@ fn main() -> Unit {
 }
 
 #[test]
-fn package_lowering_input_records_checked_in_rayon_wrapper_dependency() {
-    let root_dir = common::unique_temp_dir("rsscript-package-rust-rayon-root");
-    let rayon_dir = common::workspace_root().join("packages/rayon");
-    common::write_named_package_fixture(
-        &root_dir,
-        "rss-rayon-app",
-        "0.1.0",
-        &format!(
-            r#"[dependencies]
-rss-rayon = {{ path = "{}" }}
-"#,
-            common::toml_path(&rayon_dir)
-        ),
-        "",
-    );
-    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
-    fs::write(
-        root_dir.join("src/main.rss"),
-        r#"features: native
+fn package_lowering_input_records_checked_in_native_abi_fixture_binding() {
+    let fixture_dir = common::workspace_root().join("packages/native-abi-fixture");
 
-fn main() -> Unit {
-    let values = List<Int>.new()
-    List.push(list: mut values, value: read 1)
-    List.push(list: mut values, value: read 2)
-    List.push(list: mut values, value: read 3)
-    match Rayon.sum_squares(values: read values) {
-        Ok(sum) => {
-            Assert.equal_int(left: sum, right: 14)
-        }
-        Err(_) => {
-            Assert.equal_bool(left: false, right: true)
-        }
-    }
-    return Unit
-}
-"#,
-    )
-    .expect("source should be written");
-
-    let input = package_lowering_input(&root_dir).expect("package should lower");
+    let input = package_lowering_input(&fixture_dir).expect("fixture package should lower");
     let package = lower_sources_to_rust_package_with_options(
         &input.sources,
         &input.package.name,
@@ -1851,21 +1815,27 @@ fn main() -> Unit {
         &input.interfaces,
         &input.native_dependencies,
     )
-    .expect("package source should lower with rayon native binding");
-    let _ = fs::remove_dir_all(&root_dir);
+    .expect("package source should lower with native ABI fixture binding");
 
     assert_eq!(input.native_dependencies.len(), 1);
-    assert_eq!(input.native_dependencies[0].crate_name, "rss_rayon_native");
+    assert_eq!(
+        input.native_dependencies[0].crate_name,
+        "rss_native_abi_fixture_bridge"
+    );
     assert!(
         input.native_dependencies[0]
             .bindings
-            .get("Rayon.sum_squares")
-            .is_some_and(|target| target == "rss_rayon_native::sum_squares")
+            .get("NativeAbiFixture.sort_int")
+            .is_some_and(|target| target == "rss_native_abi_fixture_bridge::sort_int")
     );
     assert!(
         package
             .cargo_toml
-            .contains("\"rss_rayon_native\" = { path = ")
+            .contains("\"rss_native_abi_fixture_bridge\" = { path = ")
     );
-    assert!(package.lib_rs.contains("rss_rayon_native::sum_squares"));
+    assert!(
+        package
+            .lib_rs
+            .contains("rss_native_abi_fixture_bridge::sort_int")
+    );
 }

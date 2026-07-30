@@ -426,16 +426,16 @@ mod tests {
     #[test]
     fn adapter_section_expands_to_per_method_bindings() {
         let flat = flatten(
-            "[adapter.Rayon]\ncrate = \"rss_rayon_native\"\nfunctions = [\"sum_int\", \"sort_int\"]\n",
+            "[adapter.NativeOps]\ncrate = \"rss_native_ops\"\nfunctions = [\"sum_int\", \"sort_int\"]\n",
         )
         .expect("adapter expands");
         assert_eq!(
-            flat.get("Rayon.sum_int").map(String::as_str),
-            Some("rss_rayon_native::sum_int")
+            flat.get("NativeOps.sum_int").map(String::as_str),
+            Some("rss_native_ops::sum_int")
         );
         assert_eq!(
-            flat.get("Rayon.sort_int").map(String::as_str),
-            Some("rss_rayon_native::sort_int")
+            flat.get("NativeOps.sort_int").map(String::as_str),
+            Some("rss_native_ops::sort_int")
         );
         assert_eq!(flat.len(), 2);
     }
@@ -443,11 +443,11 @@ mod tests {
     #[test]
     fn adapter_form_matches_the_explicit_form() {
         let compact = flatten(
-            "[adapter.Rayon]\ncrate = \"rss_rayon_native\"\nfunctions = [\"sum_int\", \"sort_int\"]\n",
+            "[adapter.NativeOps]\ncrate = \"rss_native_ops\"\nfunctions = [\"sum_int\", \"sort_int\"]\n",
         )
         .unwrap();
         let explicit = flatten(
-            "[bindings]\n\"Rayon.sum_int\" = \"rss_rayon_native::sum_int\"\n\"Rayon.sort_int\" = \"rss_rayon_native::sort_int\"\n",
+            "[bindings]\n\"NativeOps.sum_int\" = \"rss_native_ops::sum_int\"\n\"NativeOps.sort_int\" = \"rss_native_ops::sort_int\"\n",
         )
         .unwrap();
         assert_eq!(compact, explicit);

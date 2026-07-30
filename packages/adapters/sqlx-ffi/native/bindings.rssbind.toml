@@ -1,9 +1,0 @@
-[bindings]
-"SqlxFfi.execute" = "rss_sqlx_native::execute"
-"SqlxFfi.execute_params" = "rss_sqlx_native::execute_params"
-"SqlxFfi.query_strings" = "rss_sqlx_native::query_strings"
-"SqlxFfi.query_strings_params" = "rss_sqlx_native::query_strings_params"
-"SqlxFfi.query_one_string" = "rss_sqlx_native::query_one_string"
-"SqlxFfi.query_one_string_params" = "rss_sqlx_native::query_one_string_params"
-"SqlxFfi.close" = "rss_sqlx_native::close"
-"SqlxFfi.close_all" = "rss_sqlx_native::close_all"

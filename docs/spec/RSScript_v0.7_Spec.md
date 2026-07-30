@@ -2472,7 +2472,7 @@ sorts over `List<Int>`. User-provided parallel closures, parallel iterators,
 structured joins/scopes, thread-pool configuration, and partitioned mutable
 views are future features. When those are admitted, they must use RSScript-native
 contracts such as a `parallel Fn` closure kind with explicit capture and effect
-rules; they must not expose Rust's Rayon traits or `Send`/`Sync` vocabulary.
+rules; they must not expose backend-specific traits or `Send`/`Sync` vocabulary.
 
 `pure` is call-time observational purity, not Haskell-style referential
 transparency over mutable identity and not a memoization guarantee. It means the

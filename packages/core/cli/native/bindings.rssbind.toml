@@ -1,4 +1,0 @@
-[bindings]
-"Cli.flag" = "rss_cli_native::flag"
-"Cli.option" = "rss_cli_native::option"
-"Cli.positionals" = "rss_cli_native::positionals"

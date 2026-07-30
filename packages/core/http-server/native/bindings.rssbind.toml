@@ -1,2 +1,0 @@
-[bindings]
-"HttpServer.serve_static" = "rss_http_server_native::serve_static"

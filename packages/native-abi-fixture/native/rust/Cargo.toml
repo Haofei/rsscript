@@ -1,0 +1,4 @@
+[package]
+name = "rss_native_abi_fixture_bridge"
+version = "0.1.0"
+edition = "2024"

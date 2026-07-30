@@ -10,7 +10,7 @@ kind = "command_for_each_path"
 command = "cargo"
 args = ["test", "-q", "--test", "static", "--", "--exact"]
 paths = [
-  "checker_package::native_bindings::package_lowering_input_records_checked_in_rayon_wrapper_dependency",
+  "checker_package::native_bindings::package_lowering_input_records_checked_in_native_abi_fixture_binding",
   "checker_package::lock_metadata::package_tree_expands_path_dependencies_and_marks_unresolved",
 ]
 

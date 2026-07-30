@@ -70,7 +70,7 @@ provider and its `interface_effective_hash`.
 The current command family is:
 
 ```text
-rss pkg check
+rss pkg
 rss pkg ci
 rss pkg review
 rss pkg diff
@@ -152,9 +152,11 @@ snapshots, offline/frozen Cargo builds, artifact digests, cache ownership
 checks, and ABI validation reduce accidental and supply-chain failures; they do
 not sandbox machine code.
 
-CLI execution denies native packages unless `--trusted-native` is supplied
-under the `local-trusted` deployment profile. Third-party package inspection
-must remain static and must not build or load native code.
+CLI execution denies native packages unless `--trusted-native` is supplied.
+The checked-in `packages/native-abi-fixture` follows the same rule and must pass
+locked native-package authorization under the `local-trusted` deployment
+profile. Third-party package inspection must remain static and must not build or
+load native code.
 
 ## Artifact Mutation
 

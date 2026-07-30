@@ -1984,7 +1984,7 @@ impl RegLowerer<'_> {
                             // Native declarations also appear in `function_ids` (with
                             // empty bodies), so dispatch them as native boundaries
                             // first. A user-defined qualified function (e.g.
-                            // `pub fn Sqlx.execute`) is never native, so it falls
+                            // `pub fn Data.execute`) is never native, so it falls
                             // through to the `function_ids` lookup below.
                             if self.is_native_function(Some(namespace_root), name_root) {
                                 let mut_args =

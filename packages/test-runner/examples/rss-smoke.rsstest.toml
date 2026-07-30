@@ -1,14 +1,14 @@
 [[tests]]
-name = "rayon wrapper pins rayon crate"
+name = "native ABI fixture crate is dependency free"
 kind = "file_contains"
-path = "packages/rayon/native/rust/Cargo.toml"
-contains = "rayon = \"1.12\""
+path = "packages/native-abi-fixture/native/rust/Cargo.toml"
+contains = "name = \"rss_native_abi_fixture_bridge\""
 
 [[tests]]
-name = "rayon wrapper exposes rss interface"
+name = "native ABI fixture exposes mutating RSS interface"
 kind = "file_contains"
-path = "packages/rayon/interface/lib.rssi"
-contains = "Rayon.sum_squares"
+path = "packages/native-abi-fixture/interface/lib.rssi"
+contains = "NativeAbiFixture.sort_int(values: mut List<Int>)"
 
 [[tests]]
 name = "package manager rss command surface exists"

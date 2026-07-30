@@ -20,7 +20,6 @@ benchmarks/micro/sorted_map_insert.rss
 benchmarks/micro/sorted_map_scan.rss
 benchmarks/micro/struct_field_rw.rss
 benchmarks/packages/file-upload/src/main.rss
-benchmarks/packages/sqlx-sqlite/src/main.rss
 benchmarks/vm-jit/kernels/bool_logic_loop.rss
 benchmarks/vm-jit/kernels/bytes_scan.rss
 benchmarks/vm-jit/kernels/closure_alloc_loop.rss
@@ -525,10 +524,6 @@ examples/scripts/core/json_nested.rss
 examples/scripts/core/rules_config_reload.rss
 examples/scripts/core/uop_interning.rss
 examples/scripts/core/yaml_config.rss
-packages/adapters/sqlite/tests/sqlite-smoke/src/main.rss
-packages/adapters/sqlx-ffi/tests/sqlx-ffi-smoke/src/main.rss
-packages/adapters/sqlx/src/lib.rss
-packages/adapters/sqlx/tests/sqlx-smoke/src/main.rss
 packages/agent-tools/src/lib.rss
 packages/agent/src/lib.rss
 packages/async-runtime/src/lib.rss
@@ -540,13 +535,10 @@ packages/core-properties/src/properties_json.rss
 packages/core-properties/src/properties_result_option.rss
 packages/core-properties/src/properties_state.rss
 packages/core-properties/src/properties_views.rss
-packages/core/http-server/examples/serve-hello/src/main.rss
 packages/core/telemetry/src/lib.rss
+packages/native-abi-fixture/src/main.rss
 packages/package-manager/main.rss
 packages/quickcheck/src/lib.rss
-packages/rayon/tests/sort-smoke/src/main.rss
-packages/rayon/tests/sort-speed/src/main.rss
-packages/rayon/tests/sum-smoke/src/main.rss
 packages/test-runner/examples/async-smoke.rss
 packages/test-runner/examples/expected-failure.rss
 packages/test-runner/src/main.rss

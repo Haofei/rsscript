@@ -6,7 +6,7 @@
 //! builds it, and `dlopen`s it to obtain host bindings — no per-package
 //! hand-written glue, and nothing hard-coded in the host. Native dependencies are
 //! collected transitively, so a pure-RSS facade over a native package (e.g.
-//! `rss-sqlx` over `rss-sqlx-ffi`) works too.
+//! a plain RSS facade over a native binding package) works too.
 //!
 //! Supported binding shapes (params and returns), composable:
 //! `Unit`, `String`, `Int`, `Float`, `Bool`, `Bytes`, `Path`, `List<T>`,
@@ -14,7 +14,7 @@
 //!
 //! `mut` parameters are supported: the shim passes them by `&mut` and returns an
 //! envelope `List[result, mutated...]`, and the host writes the mutated values
-//! back to the caller's registers (so e.g. `Rayon.sort_int` sorts in place).
+//! back to the caller's registers so mutable native arguments update in place.
 //!
 //! Bindings whose parameter or return *types* aren't in the supported set are
 //! **skipped** (not registered) rather than fatal — a program only fails

@@ -1,0 +1,15 @@
+version = 1
+
+[[package]]
+name = "rss-native-abi-fixture"
+version = "0.1.0"
+source = "path+packages/native-abi-fixture"
+checksum = "sha256:15698ffef5329c0c13e08aa8601428dce364d28dc49b752e1bc557294ec8b839"
+interface_hash = "sha256:b198538417866e2137a8a78cad33446bcf85797d8ffe07a2007474999720522c"
+review_hash = "sha256:2ba809a58597fcd941c5d460d6801e545630bd75098b93a129d535532b214dda"
+native_hash = "sha256:34fddde62699156f044562c5c73ffffbfb4720eb991aaf924e4329aa35779243"
+features = []
+
+[metadata]
+rss_version = "0.1.0"
+created_by = "rsscript pkg"

@@ -138,8 +138,8 @@ cargo run --quiet -p rsscript --bin rss -- run packages/test-runner -- packages/
 ```
 
 This runs package-manager-focused static tests, the core JSON/lowering hooks
-needed by the RSS implementation, and the checked-in Rayon package wrapper
-facts. It intentionally avoids executable self-hosted package-manager sweeps.
+needed by the RSS implementation, and the checked-in native ABI fixture facts.
+It intentionally avoids executable self-hosted package-manager sweeps.
 It is the intended sub-10-second loop while iterating on
 `packages/package-manager/main.rss`; run the full gate only before committing or when
 touching shared lowering/runtime behavior.
@@ -170,10 +170,9 @@ path-triggered blockers; Experimental classification does not bypass them. The b
 
 Tagged releases use that same locked full manifest as a required
 `release-validation` job, then add the native-JIT suite, full generated-Rust
-backend parity, and the release self-host lexer/parser/checker corpus. The Linux
-release runner also compiles and tests the SQLite/SQLx adapters. Live PostgreSQL
-integration and ignored soak tests that launch servers or native demos remain
-explicit dedicated-environment checks.
+backend parity, and the release self-host lexer/parser/checker corpus. External
+service integration and ignored soak tests that launch servers or native demos
+remain explicit dedicated-environment checks.
 
 Generated Rust package targets and temporary generated packages are disposable.
 Default local development uses a memory-backed workspace. On macOS, `rss`

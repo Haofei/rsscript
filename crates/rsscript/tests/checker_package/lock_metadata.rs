@@ -93,12 +93,12 @@ native fn Parallel.sort(values: mut List<Int>) -> Unit
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
     fs::write(
         temp_dir.join("native/rust/Cargo.toml"),
-        "[package]\nname = \"rss_parallel_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[dependencies]\nrayon = \"1.12\"\n",
+        "[package]\nname = \"rss_parallel_native\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[dependencies]\nworker-pool = \"1.0\"\n",
     )
     .expect("native Cargo.toml should be written");
     fs::write(
         temp_dir.join("native/rust/src/lib.rs"),
-        "use rayon::prelude::*;\npub fn sort(values: &mut Vec<i64>) { values.par_sort_unstable(); }\n",
+        "use worker_pool::prelude::*;\npub fn sort(values: &mut Vec<i64>) { values.parallel_sort(); }\n",
     )
     .expect("native source should be written");
 
@@ -118,7 +118,7 @@ native fn Parallel.sort(values: mut List<Int>) -> Unit
     );
     assert_eq!(
         json["native_rust"]["semantic"]["author_declaration"]["native_parallel_backend"],
-        "rayon"
+        "worker-pool"
     );
     assert_eq!(
         json["native_rust"]["semantic"]["source_scan_best_effort"]["worker_thread_parallelism_detected"],
@@ -127,7 +127,7 @@ native fn Parallel.sort(values: mut List<Int>) -> Unit
     assert!(
         json["native_rust"]["semantic"]["source_scan_best_effort"]["native_parallel_backends"]
             .as_array()
-            .is_some_and(|backends| backends.iter().any(|backend| backend == "rayon"))
+            .is_some_and(|backends| backends.iter().any(|backend| backend == "worker-pool"))
     );
     assert!(reir_json["facts"].as_array().is_some_and(|facts| {
         facts.iter().any(|fact| {

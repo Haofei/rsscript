@@ -649,7 +649,7 @@ mod tests {
             "--json",
             "--release",
             "--dry-run",
-            "packages/rayon/tests/sort-speed",
+            "packages/native-abi-fixture",
             "--",
             "input",
         ]);
@@ -659,7 +659,7 @@ mod tests {
         assert!(!options.vm);
         assert!(options.release);
         assert!(options.dry_run);
-        assert_eq!(options.path, Some("packages/rayon/tests/sort-speed"));
+        assert_eq!(options.path, Some("packages/native-abi-fixture"));
         assert_eq!(options.program_args, vec!["input"]);
     }
 
@@ -703,12 +703,12 @@ mod tests {
 
     #[test]
     fn parse_run_args_treats_release_after_separator_as_program_arg() {
-        let values = args(&["packages/rayon/tests/sort-speed", "--", "--release"]);
+        let values = args(&["packages/native-abi-fixture", "--", "--release"]);
         let options = super::parse_run_args(&values).expect("arguments should parse");
 
         assert!(!options.release);
         assert!(!options.dry_run);
-        assert_eq!(options.path, Some("packages/rayon/tests/sort-speed"));
+        assert_eq!(options.path, Some("packages/native-abi-fixture"));
         assert_eq!(options.program_args, vec!["--release"]);
     }
 

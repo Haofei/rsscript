@@ -1035,106 +1035,6 @@
   ],
   "packages": [
     {
-      "kind": "adapter",
-      "name": "rss-sqlite",
-      "version": "0.1.0",
-      "path": "packages/adapters/sqlite",
-      "interface_files": [
-        "interface/lib.rssi"
-      ],
-      "source_files": [],
-      "native_rust": {
-        "crate_name": "rss_sqlite_native",
-        "path": "native/rust"
-      },
-      "virtual_package": null,
-      "dependencies": [],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "adapter",
-      "name": "rss-sqlite-smoke",
-      "version": "0.1.0",
-      "path": "packages/adapters/sqlite/tests/sqlite-smoke",
-      "interface_files": [],
-      "source_files": [
-        "src/main.rss"
-      ],
-      "native_rust": null,
-      "virtual_package": null,
-      "dependencies": [
-        "rss-sqlite"
-      ],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "adapter",
-      "name": "rss-sqlx",
-      "version": "0.1.0",
-      "path": "packages/adapters/sqlx",
-      "interface_files": [
-        "interface/lib.rssi"
-      ],
-      "source_files": [
-        "src/lib.rss"
-      ],
-      "native_rust": null,
-      "virtual_package": null,
-      "dependencies": [
-        "rss-sqlx-ffi"
-      ],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "adapter",
-      "name": "rss-sqlx-smoke",
-      "version": "0.1.0",
-      "path": "packages/adapters/sqlx/tests/sqlx-smoke",
-      "interface_files": [],
-      "source_files": [
-        "src/main.rss"
-      ],
-      "native_rust": null,
-      "virtual_package": null,
-      "dependencies": [
-        "rss-sqlx"
-      ],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "adapter",
-      "name": "rss-sqlx-ffi",
-      "version": "0.1.0",
-      "path": "packages/adapters/sqlx-ffi",
-      "interface_files": [
-        "interface/lib.rssi"
-      ],
-      "source_files": [],
-      "native_rust": {
-        "crate_name": "rss_sqlx_native",
-        "path": "native/rust"
-      },
-      "virtual_package": null,
-      "dependencies": [],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "adapter",
-      "name": "rss-sqlx-ffi-smoke",
-      "version": "0.1.0",
-      "path": "packages/adapters/sqlx-ffi/tests/sqlx-ffi-smoke",
-      "interface_files": [],
-      "source_files": [
-        "src/main.rss"
-      ],
-      "native_rust": null,
-      "virtual_package": null,
-      "dependencies": [
-        "rss-sqlx-ffi"
-      ],
-      "dev_dependencies": []
-    },
-    {
       "kind": "package",
       "name": "rss-agent",
       "version": "0.1.0",
@@ -1229,73 +1129,6 @@
     },
     {
       "kind": "core",
-      "name": "rss-core-cli",
-      "version": "0.1.0",
-      "path": "packages/core/cli",
-      "interface_files": [
-        "interface/lib.rssi"
-      ],
-      "source_files": [],
-      "native_rust": {
-        "crate_name": "rss_cli_native",
-        "path": "native/rust"
-      },
-      "virtual_package": null,
-      "dependencies": [],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "core",
-      "name": "rss-core-crypto",
-      "version": "0.1.0",
-      "path": "packages/core/crypto",
-      "interface_files": [
-        "interface/lib.rssi"
-      ],
-      "source_files": [],
-      "native_rust": {
-        "crate_name": "rss_crypto_native",
-        "path": "native/rust"
-      },
-      "virtual_package": null,
-      "dependencies": [],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "core",
-      "name": "rss-core-http-server-serve-hello",
-      "version": "0.1.0",
-      "path": "packages/core/http-server/examples/serve-hello",
-      "interface_files": [],
-      "source_files": [
-        "src/main.rss"
-      ],
-      "native_rust": null,
-      "virtual_package": null,
-      "dependencies": [
-        "rss-core-http-server"
-      ],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "core",
-      "name": "rss-core-http-server",
-      "version": "0.1.0",
-      "path": "packages/core/http-server",
-      "interface_files": [
-        "interface/lib.rssi"
-      ],
-      "source_files": [],
-      "native_rust": {
-        "crate_name": "rss_http_server_native",
-        "path": "native/rust"
-      },
-      "virtual_package": null,
-      "dependencies": [],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "core",
       "name": "rss-core-telemetry",
       "version": "0.1.0",
       "path": "packages/core/telemetry",
@@ -1337,6 +1170,25 @@
     },
     {
       "kind": "package",
+      "name": "rss-native-abi-fixture",
+      "version": "0.1.0",
+      "path": "packages/native-abi-fixture",
+      "interface_files": [
+        "interface/lib.rssi"
+      ],
+      "source_files": [
+        "src/main.rss"
+      ],
+      "native_rust": {
+        "crate_name": "rss_native_abi_fixture_bridge",
+        "path": "native/rust"
+      },
+      "virtual_package": null,
+      "dependencies": [],
+      "dev_dependencies": []
+    },
+    {
+      "kind": "package",
       "name": "rss-quickcheck",
       "version": "0.1.0",
       "path": "packages/quickcheck",
@@ -1349,89 +1201,6 @@
       "native_rust": null,
       "virtual_package": null,
       "dependencies": [],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "package",
-      "name": "rss-rayon",
-      "version": "0.1.0",
-      "path": "packages/rayon",
-      "interface_files": [
-        "interface/lib.rssi"
-      ],
-      "source_files": [],
-      "native_rust": {
-        "crate_name": "rss_rayon_native",
-        "path": "native/rust"
-      },
-      "virtual_package": null,
-      "dependencies": [],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "package",
-      "name": "rss-rayon-sort-fixture",
-      "version": "0.1.0",
-      "path": "packages/rayon/tests/sort-fixture",
-      "interface_files": [
-        "interface/lib.rssi"
-      ],
-      "source_files": [],
-      "native_rust": {
-        "crate_name": "rss_rayon_sort_fixture",
-        "path": "native/rust"
-      },
-      "virtual_package": null,
-      "dependencies": [],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "package",
-      "name": "rss-rayon-sort-smoke",
-      "version": "0.1.0",
-      "path": "packages/rayon/tests/sort-smoke",
-      "interface_files": [],
-      "source_files": [
-        "src/main.rss"
-      ],
-      "native_rust": null,
-      "virtual_package": null,
-      "dependencies": [
-        "rss-rayon"
-      ],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "package",
-      "name": "rss-rayon-sort-speed",
-      "version": "0.1.0",
-      "path": "packages/rayon/tests/sort-speed",
-      "interface_files": [],
-      "source_files": [
-        "src/main.rss"
-      ],
-      "native_rust": null,
-      "virtual_package": null,
-      "dependencies": [
-        "rss-rayon",
-        "rss-rayon-sort-fixture"
-      ],
-      "dev_dependencies": []
-    },
-    {
-      "kind": "package",
-      "name": "rss-rayon-sum-smoke",
-      "version": "0.1.0",
-      "path": "packages/rayon/tests/sum-smoke",
-      "interface_files": [],
-      "source_files": [
-        "src/main.rss"
-      ],
-      "native_rust": null,
-      "virtual_package": null,
-      "dependencies": [
-        "rss-rayon"
-      ],
       "dev_dependencies": []
     },
     {

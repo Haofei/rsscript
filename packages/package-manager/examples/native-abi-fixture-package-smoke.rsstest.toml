@@ -1,0 +1,48 @@
+[[tests]]
+name = "pkg check reports native ABI fixture risk"
+kind = "command_stdout_contains"
+command = "target/debug/rss"
+args = ["pkg", "--json", "packages/native-abi-fixture"]
+contains_all = [
+  "\"ok\":true",
+  "\"name\":\"rss-native-abi-fixture\"",
+  "\"native_apis\":1",
+  "\"parallel_apis\":0",
+  "\"cargo_package_name\":\"rss_native_abi_fixture_bridge\"",
+]
+
+[[tests]]
+name = "pkg review reports fixture public native API"
+kind = "command_stdout_contains"
+command = "target/debug/rss"
+args = ["pkg", "review", "--json", "packages/native-abi-fixture"]
+contains_all = [
+  "\"risk\":\"unknown\"",
+  "\"name\":\"NativeAbiFixture.sort_int\"",
+  "\"classification\":\"review_if_changed\"",
+  "\"native_rust\"",
+]
+
+[[tests]]
+name = "pkg tree summarizes fixture graph risk"
+kind = "command_stdout_contains"
+command = "target/debug/rss"
+args = ["pkg", "tree", "--json", "packages/native-abi-fixture"]
+contains_all = [
+  "\"packages\":1",
+  "\"native_packages\":1",
+  "\"unknown_risk_packages\":1",
+  "\"unresolved_dependencies\":0",
+]
+
+[[tests]]
+name = "pkg tree emits native fixture REIR"
+kind = "command_stdout_contains"
+command = "target/debug/rss"
+args = ["pkg", "tree", "--reir", "packages/native-abi-fixture"]
+contains_all = [
+  "\"schema\":\"reir.bundle.v0.2\"",
+  "\"id\":\"rss-native-abi-fixture@0.1.0\"",
+  "\"kind\":\"package_risk\"",
+  "\"value\":\"unknown\"",
+]

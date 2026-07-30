@@ -1,8 +1,0 @@
-[package]
-name = "rss-rayon-sort-speed"
-version = "0.1.0"
-edition = "2026"
-
-[dependencies]
-rss-rayon = { path = "../.." }
-rss-rayon-sort-fixture = { path = "../sort-fixture" }

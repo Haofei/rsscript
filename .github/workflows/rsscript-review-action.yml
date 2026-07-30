@@ -68,26 +68,26 @@ jobs:
             exit 1
           }
 
-      - name: Unverified-capability failure is not swallowed
-        id: unverified_failure
+      - name: Unknown native-capability failure is not swallowed
+        id: native_review_failure
         continue-on-error: true
         uses: Haofei/rsscript/.github/actions/rsscript-review@036f576f389a8001916b851440dc2578f0c8cdd9
         with:
-          head: packages/core/crypto
+          head: packages/native-abi-fixture
           grants: examples/demos/s3-iam-reir/expected/prod-grants.reir.json
           target: prod
           principal: prod/report-uploader
           post-comment: false
           fail-on-missing: false
-          fail-on-unknown: false
+          fail-on-unknown: true
           fail-on-excess: false
-          require-verified-capabilities: true
+          require-verified-capabilities: false
 
-      - name: Assert verification failure propagated
+      - name: Assert native review failure propagated
         if: ${{ always() }}
         shell: bash
         run: |
-          [ "${{ steps.unverified_failure.outcome }}" = "failure" ] || {
-            echo "::error::unverified-capability failure was swallowed"
+          [ "${{ steps.native_review_failure.outcome }}" = "failure" ] || {
+            echo "::error::unknown native-capability failure was swallowed"
             exit 1
           }

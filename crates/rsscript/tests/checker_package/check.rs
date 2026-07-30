@@ -88,52 +88,10 @@ rss-wrapper = {{ path = "{}" }}
 }
 
 #[test]
-fn package_lowering_input_records_checked_in_optional_core_packages() {
-    let root_dir = common::unique_temp_dir("rsscript-package-optional-core-root");
-    let repo = common::workspace_root();
-    let cli_dir = repo.join("packages/core/cli");
-    let crypto_dir = repo.join("packages/core/crypto");
-    let sqlite_dir = repo.join("packages/adapters/sqlite");
-    common::write_named_package_fixture(
-        &root_dir,
-        "rss-optional-core-app",
-        "0.1.0",
-        &format!(
-            r#"[dependencies]
-rss-core-cli = {{ path = "{}" }}
-rss-core-crypto = {{ path = "{}" }}
-rss-sqlite = {{ path = "{}" }}
-"#,
-            common::toml_path(&cli_dir),
-            common::toml_path(&crypto_dir),
-            common::toml_path(&sqlite_dir)
-        ),
-        "",
-    );
-    fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
-    fs::write(
-        root_dir.join("src/main.rss"),
-        r#"features: native
+fn package_lowering_input_records_checked_in_native_abi_fixture() {
+    let fixture_dir = common::workspace_root().join("packages/native-abi-fixture");
 
-fn main() -> Result<Unit, String> {
-    let args = List<String>.new()
-    List.push(list: mut args, value: read "--verbose")
-    let verbose = Cli.flag(args: read args, name: read "verbose")
-    Assert.equal_bool(left: verbose, right: true)
-
-    let digest = Sha256.hex_string(value: read "abc")
-    Assert.equal(left: read digest, right: read "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
-
-    let path = Path.from_string(value: read "target/rss-optional-core-app.db")
-    Sqlite.execute(path: read path, sql: read "create table if not exists item(name text);")?
-    let value = Sqlite.query_one_string(path: read path, sql: read "select name from item limit 1")?
-    return Ok(Unit)
-}
-"#,
-    )
-    .expect("source should be written");
-
-    let input = package_lowering_input(&root_dir).expect("package should lower");
+    let input = package_lowering_input(&fixture_dir).expect("fixture package should lower");
     let package = lower_sources_to_rust_package_with_options(
         &input.sources,
         &input.package.name,
@@ -141,38 +99,24 @@ fn main() -> Result<Unit, String> {
         &input.interfaces,
         &input.native_dependencies,
     )
-    .expect("package source should lower with optional core native bindings");
-    let _ = fs::remove_dir_all(&root_dir);
+    .expect("package source should lower with native ABI fixture binding");
 
-    assert_eq!(input.native_dependencies.len(), 3);
-    assert!(input.native_dependencies.iter().any(|dep| {
-        dep.crate_name == "rss_cli_native"
-            && dep
-                .bindings
-                .get("Cli.flag")
-                .is_some_and(|target| target == "rss_cli_native::flag")
-    }));
-    assert!(input.native_dependencies.iter().any(|dep| {
-        dep.crate_name == "rss_crypto_native"
-            && dep
-                .bindings
-                .get("Sha256.hex_string")
-                .is_some_and(|target| target == "rss_crypto_native::sha256_hex_string")
-    }));
-    assert!(input.native_dependencies.iter().any(|dep| {
-        dep.crate_name == "rss_sqlite_native"
-            && dep
-                .bindings
-                .get("Sqlite.execute")
-                .is_some_and(|target| target == "rss_sqlite_native::execute")
-    }));
-    assert!(package.lib_rs.contains("rss_cli_native::flag"));
+    assert_eq!(input.native_dependencies.len(), 1);
+    assert_eq!(
+        input.native_dependencies[0].crate_name,
+        "rss_native_abi_fixture_bridge"
+    );
+    assert!(
+        input.native_dependencies[0]
+            .bindings
+            .get("NativeAbiFixture.sort_int")
+            .is_some_and(|target| target == "rss_native_abi_fixture_bridge::sort_int")
+    );
     assert!(
         package
             .lib_rs
-            .contains("rss_crypto_native::sha256_hex_string")
+            .contains("rss_native_abi_fixture_bridge::sort_int")
     );
-    assert!(package.lib_rs.contains("rss_sqlite_native::execute"));
 }
 
 #[cfg(unix)]

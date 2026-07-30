@@ -569,9 +569,8 @@ fn scan_native_rust_semantics(
     }
     scan.native_parallel_backends.sort();
     scan.native_parallel_backends.dedup();
-    let worker_thread_parallelism_detected = !scan.native_parallel_backends.is_empty()
-        || scan.thread_detected
-        || scan.rayon_usage_detected;
+    let worker_thread_parallelism_detected =
+        !scan.native_parallel_backends.is_empty() || scan.thread_detected;
     PackageNativeRustSourceScan {
         tool: "rss-native-source-scan".to_string(),
         selected_graph: "package-native-rust".to_string(),
@@ -590,7 +589,6 @@ fn scan_native_rust_semantics(
 #[derive(Default)]
 struct NativeSemanticScanAccumulator {
     native_parallel_backends: Vec<String>,
-    rayon_usage_detected: bool,
     thread_detected: bool,
     unsafe_detected: bool,
     ffi_detected: bool,
@@ -608,8 +606,10 @@ fn native_parallel_backends_from_cargo(cargo_source: &str) -> Vec<String> {
         let Some(dependencies) = value.get(section).and_then(toml::Value::as_table) else {
             continue;
         };
-        if dependencies.contains_key("rayon") {
-            backends.push("rayon".to_string());
+        for dependency in dependencies.keys() {
+            if dependency.contains("parallel") || dependency.contains("worker") {
+                backends.push(dependency.clone());
+            }
         }
     }
     backends
@@ -617,10 +617,6 @@ fn native_parallel_backends_from_cargo(cargo_source: &str) -> Vec<String> {
 
 fn scan_source_semantics(source: &str, scan: &mut NativeSemanticScanAccumulator) {
     let stripped = source_without_rust_comments(source);
-    if stripped.contains("rayon::") || stripped.contains("use rayon") {
-        scan.rayon_usage_detected = true;
-        scan.native_parallel_backends.push("rayon".to_string());
-    }
     if stripped.contains("std::thread")
         || stripped.contains("thread::spawn")
         || stripped.contains(".spawn(")

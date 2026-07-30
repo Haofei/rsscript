@@ -13,7 +13,7 @@ reproducible across platforms.
 
 - [Docker](https://docs.docker.com/get-docker/) with Compose v2 (`docker
   compose`). Docker Desktop (macOS/Windows) or Docker Engine (Linux) both work.
-- That's all — no local Rust, C compiler, or SQLite needed.
+- That's all - no local Rust or C compiler needed.
 
 ## Quick start
 
@@ -70,15 +70,14 @@ contend on one shared target directory and make the entire gate slower.
 
 The Docker target and Cargo registry volumes are part of the performance
 contract. Do not reset them for normal measurements; use two warm runs and
-compare the second. Database adapters are already separate workspace packages,
-so there is no runtime `db` feature to compile on ordinary compiler tests.
+compare the second.
 
 ## How it is wired
 
 - **Image** (`Dockerfile`): `rust:1-bookworm` plus `build-essential`, `cmake`,
-  and `pkg-config` (for `ring`/rustls and the bundled-SQLite `rusqlite`),
-  `clippy`/`rustfmt`, and `cargo-nextest`. The workspace uses rustls/ring
-  throughout, so no OpenSSL is required.
+  and `pkg-config` for native Rust dependencies, `clippy`/`rustfmt`, and
+  `cargo-nextest`. The workspace uses rustls/ring throughout, so no OpenSSL is
+  required.
 - **Source** is bind-mounted at `/work` (see `compose.yaml`) — not copied into
   the image — so host edits are picked up with no rebuild.
 - **Caches** live in named volumes, deliberately kept off the host bind mount so

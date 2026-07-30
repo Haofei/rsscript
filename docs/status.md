@@ -86,6 +86,7 @@ This table records the current implementation batch for the refactoring work in
 | R20 | Remove third-party safe-execution scope | Complete | No untrusted profile, worker protocol, worker binary, sandbox launcher, release artifact, or execution API remains |
 | R21 | Remove Metal/GPU and tensor execution surfaces | Complete | No Metal crate, tensor runtime, GPU ABI, language interface, VM lowering, test domain, or release job remains |
 | R22 | Remove package publish, vendor, and hosted-registry preview surfaces | Complete | No publish/vendor CLI, RSScript API/model, REIR collector, preview badge, archive-manifest, fixture, or package-manager prototype surface remains |
+| R23 | Contract native package ecosystem demos | Complete | One dependency-free native ABI fixture covers mutable list write-back; SQLite, SQLx, Rayon, CLI, Crypto, and HTTP native package trees are removed |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -161,12 +162,14 @@ by intrinsic facts, semantics, region optimization, scalar replacement, and
 inlining. Raw IR cannot reach code generation without a mode-specific borrowed
 `ValidatedJitFunction`.
 
-R9 introduces explicit owners for SQLite and SQLx adapters, native-library
-loading, process concurrency, HTTP, and the Tokio-backed runtime
-services. Instance APIs own caches, limits, and shutdown; compatibility free
-functions delegate to a default instance but no longer contain the core state
-machine. `OperationContext` can carry an explicit `RuntimeServices` owner, so
-embedded executions and tests can use independent lifecycle and policy state.
+R9 introduced explicit owners for native-library loading, process concurrency,
+HTTP, database access, and the Tokio-backed runtime services. Instance APIs own
+caches, limits, and shutdown; compatibility free functions delegate to a default
+instance but no longer contain the core state machine. `OperationContext` can
+carry an explicit `RuntimeServices` owner, so embedded executions and tests can
+use independent lifecycle and policy state. R23 later removes the checked-in
+native database and HTTP package implementations without weakening those
+generic runtime ownership boundaries.
 
 R10 replaces successful concrete authorization results with opaque
 `AuthorizedPath`, `AuthorizedEndpoint`, `AuthorizedExecutable`, and
@@ -259,6 +262,13 @@ registry lock/vendor validation, generic REIR `RegistryMetadata` and
 `PublishedAs`, native ABI registries, the core package index, and snapshot
 exclusions for `vendor` directories. Metadata dry-run and lock/tree/metadata
 REIR remain the package evidence surfaces.
+
+R23 contracts the checked-in native package ecosystem to
+`packages/native-abi-fixture`, a dependency-free Rust crate with one
+deterministic mutable-list operation. It preserves package checking, native
+binding generation, dynamic ABI dispatch, review gating, and `mut List<Int>`
+write-back coverage without shipping database, parallelism, CLI, cryptography,
+or HTTP demo adapters.
 
 ## Experimental Status
 

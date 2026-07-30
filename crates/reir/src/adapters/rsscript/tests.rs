@@ -638,7 +638,7 @@ mod tests {
         review.native_cargo_features = vec!["base-native".to_owned()];
         review.native_author_declaration = Some(RsScriptNativeAuthorDeclaration {
             worker_thread_parallelism: true,
-            native_parallel_backend: Some("rayon".to_owned()),
+            native_parallel_backend: Some("worker-pool".to_owned()),
             risk_reasons: vec!["native API declares parallel worker execution".to_owned()],
         });
 
@@ -1244,7 +1244,7 @@ mod tests {
     #[test]
     fn rsscript_json_collects_package_review_with_embedded_review_map() {
         let package_review = r#"{
-            "package": { "name": "rss-rayon", "version": "0.1.0" },
+            "package": { "name": "rss-native-sample", "version": "0.1.0" },
             "risk": "high",
             "summary": {
                 "public_apis": 4,
@@ -1256,17 +1256,17 @@ mod tests {
                 "unknown_apis": 0
             },
             "files": [
-                { "path": "packages/rayon/interface/lib.rssi", "kind": "interface" }
+                { "path": "packages/native-sample/interface/lib.rssi", "kind": "interface" }
             ],
             "exports": [
                 {
-                    "name": "Rayon.sum_int",
+                    "name": "NativeSample.sum_int",
                     "kind": "function",
                     "classification": "review_if_changed",
                     "normalized_effects": ["native", "parallel"]
                 },
                 {
-                    "name": "Rayon.sort_int",
+                    "name": "NativeSample.sort_int",
                     "kind": "function",
                     "classification": "review_if_changed",
                     "normalized_effects": ["native", "parallel"]
@@ -1275,16 +1275,16 @@ mod tests {
             "review_map": {
                 "files": [
                     {
-                        "file": "packages/rayon/interface/lib.rssi",
+                        "file": "packages/native-sample/interface/lib.rssi",
                         "regions": [
                             {
-                                "function": "Rayon.sum_int",
+                                "function": "NativeSample.sum_int",
                                 "classification": "must_review",
                                 "line": 3,
                                 "reasons": ["native boundary", "parallel boundary"]
                             },
                             {
-                                "function": "Rayon.sort_int",
+                                "function": "NativeSample.sort_int",
                                 "classification": "must_review",
                                 "line": 7,
                                 "reasons": ["native boundary", "parallel boundary"]
@@ -1299,23 +1299,24 @@ mod tests {
 
         assert_eq!(bundle.producers.len(), 1);
         assert!(bundle.facts.iter().any(|fact| {
-            fact.kind == FactKind::PackageRisk && fact.subject.id == "rss-rayon@0.1.0"
+            fact.kind == FactKind::PackageRisk && fact.subject.id == "rss-native-sample@0.1.0"
         }));
         assert!(bundle.facts.iter().any(|fact| {
             fact.kind == FactKind::NativeBoundary
-                && fact.subject.id == "rss-rayon::Rayon.sum_int"
+                && fact.subject.id == "rss-native-sample::NativeSample.sum_int"
                 && fact.evidence[0].line == Some(3)
         }));
         assert!(bundle.facts.iter().any(|fact| {
             fact.kind == FactKind::PublicContract
                 && fact.subject.kind == SubjectKind::CodePublicApi
-                && fact.subject.id == "rss-rayon::public::function::Rayon.sum_int"
+                && fact.subject.id == "rss-native-sample::public::function::NativeSample.sum_int"
                 && fact.evidence[0].value.as_deref() == Some("function")
         }));
         assert!(bundle.facts.iter().any(|fact| {
             fact.kind == FactKind::NativeBoundary
-                && fact.subject.id == "rss-rayon::native::Rayon"
-                && fact.evidence[0].file.as_deref() == Some("packages/rayon/interface/lib.rssi")
+                && fact.subject.id == "rss-native-sample::native::NativeSample"
+                && fact.evidence[0].file.as_deref()
+                    == Some("packages/native-sample/interface/lib.rssi")
                 && fact.evidence[0].line == Some(3)
         }));
         assert_eq!(
@@ -1323,35 +1324,40 @@ mod tests {
                 .facts
                 .iter()
                 .filter(|fact| {
-                    fact.id == "fact.native_boundary.rss_rayon__native__Rayon"
+                    fact.id == "fact.native_boundary.rss_native_sample__native__NativeSample"
                         && fact.kind == FactKind::NativeBoundary
                 })
                 .count(),
             1
         );
         assert!(bundle.edges.iter().any(|edge| {
-            edge.from.id == "rss-rayon::Rayon.sum_int" && edge.to.id == "rss-rayon::native::Rayon"
+            edge.from.id == "rss-native-sample::NativeSample.sum_int"
+                && edge.to.id == "rss-native-sample::native::NativeSample"
         }));
         assert!(bundle.edges.iter().any(|edge| {
-            edge.from.id == "rss-rayon::Rayon.sort_int" && edge.to.id == "rss-rayon::native::Rayon"
+            edge.from.id == "rss-native-sample::NativeSample.sort_int"
+                && edge.to.id == "rss-native-sample::native::NativeSample"
         }));
         assert!(bundle.subjects.iter().any(|subject| {
-            subject.kind == SubjectKind::Package && subject.id == "rss-rayon@0.1.0"
+            subject.kind == SubjectKind::Package && subject.id == "rss-native-sample@0.1.0"
         }));
         assert!(bundle.subjects.iter().any(|subject| {
-            subject.kind == SubjectKind::NativeBoundary && subject.id == "rss-rayon::native::Rayon"
+            subject.kind == SubjectKind::NativeBoundary
+                && subject.id == "rss-native-sample::native::NativeSample"
         }));
         assert!(bundle.slices.iter().any(|slice| {
             slice.kind == SliceKind::NativeUnsafeSlice
                 && slice
                     .facts
-                    .contains(&"fact.native_boundary.rss_rayon__native__Rayon".to_owned())
+                    .contains(
+                        &"fact.native_boundary.rss_native_sample__native__NativeSample".to_owned(),
+                    )
         }));
         assert!(bundle.slices.iter().any(|slice| {
             slice.kind == SliceKind::PackageRiskSlice
                 && slice
                     .facts
-                    .contains(&"fact.package.rss_rayon_0_1_0.risk".to_owned())
+                    .contains(&"fact.package.rss_native_sample_0_1_0.risk".to_owned())
         }));
     }
 

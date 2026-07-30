@@ -8,11 +8,9 @@
 # This image only provides the toolchain and system libraries.
 FROM rust:1.96.1-bookworm@sha256:a339861ae23e9abb272cea45dfafde21760d2ce6577a70f8a926153677902663
 
-# System libraries needed to build the workspace and the Rust packages that
-# RSScript lowers to. Everything here uses rustls/ring (no OpenSSL) and a
-# source-bundled SQLite, so the list is just a C/C++ toolchain plus the usual
-# fetch/build helpers:
-#   build-essential, cmake -> `ring` (rustls) and `rusqlite` (bundled SQLite)
+# System libraries needed to build the workspace and Rust packages emitted by
+# RSScript, plus the usual fetch/build helpers:
+#   build-essential, cmake -> native Rust dependencies such as `ring`
 #   pkg-config             -> -sys crate probing
 #   git, curl, ca-certificates -> fetching crates and tools over HTTPS
 RUN apt-get update \

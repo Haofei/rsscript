@@ -117,9 +117,7 @@ jobs:
 
       # Deliberate release exclusions:
       # - ignored soak tests that launch services or native demo programs;
-      # - live PostgreSQL smoke (requires RSS_SQLX_TEST_POSTGRES_URL);
-      # Portable SQLx/SQLite surfaces are covered by the locked workspace gate
-      # above; external-service tests belong on their dedicated runners.
+      # - external-service tests, which belong on dedicated runners.
 
   release:
     needs: [release-validation]

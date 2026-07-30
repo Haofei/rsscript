@@ -1255,13 +1255,13 @@ fn slice_groups_missing_capabilities() {
 fn slice_groups_package_risk_and_native_facts() {
     let package = named_subject(
         SubjectKind::Package,
-        "rss-rayon@0.1.0",
-        "rss-rayon",
-        "rss-rayon",
+        "rss-native-sample@0.1.0",
+        "rss-native-sample",
+        "rss-native-sample",
     );
     let package_risk = Fact {
         schema: "reir.fact.v0.1".to_owned(),
-        id: "fact.package.rss_rayon_0_1_0.risk".to_owned(),
+        id: "fact.package.rss_native_sample_0_1_0.risk".to_owned(),
         kind: FactKind::PackageRisk,
         role: None,
         subject: package.clone(),
@@ -1274,29 +1274,36 @@ fn slice_groups_package_risk_and_native_facts() {
         unknown_reason: None,
     };
     let native_capability = required_capability_fact(
-        "fact.package.rss_rayon.capability.runtime_native",
+        "fact.package.rss_native_sample.capability.runtime_native",
         package,
         Capability {
             category: CapabilityCategory::RuntimeNative,
             provider: Some("rsscript".to_owned()),
             service: None,
             action: None,
-            resource: Some("rss-rayon@0.1.0".to_owned()),
+            resource: Some("rss-native-sample@0.1.0".to_owned()),
             constraints: HashMap::new(),
         },
     );
     let native_boundary = Fact {
         schema: "reir.fact.v0.1".to_owned(),
-        id: "fact.native_boundary.rss_rayon_native_Rayon".to_owned(),
+        id: "fact.native_boundary.rss_native_sample_native_NativeSample".to_owned(),
         kind: FactKind::NativeBoundary,
         role: None,
-        subject: subject(SubjectKind::NativeBoundary, "rss-rayon::native::Rayon"),
+        subject: subject(
+            SubjectKind::NativeBoundary,
+            "rss-native-sample::native::NativeSample",
+        ),
         capability: None,
         value: FactValue::True,
         confidence: confidence(ConfidenceLevel::Authoritative, "rsscript_package_review"),
         acquisition_mode: AcquisitionMode::CompilerContract,
         precision: Precision::Exact,
-        evidence: vec![source_span("packages/rayon/interface/lib.rssi", 3, "Rayon")],
+        evidence: vec![source_span(
+            "packages/native-sample/interface/lib.rssi",
+            3,
+            "NativeSample",
+        )],
         unknown_reason: None,
     };
     let bundle = Bundle {
@@ -1316,13 +1323,13 @@ fn slice_groups_package_risk_and_native_facts() {
 
     assert_eq!(
         package_slice.facts,
-        vec!["fact.package.rss_rayon_0_1_0.risk".to_owned()]
+        vec!["fact.package.rss_native_sample_0_1_0.risk".to_owned()]
     );
     assert_eq!(
         native_slice.facts,
         vec![
-            "fact.native_boundary.rss_rayon_native_Rayon".to_owned(),
-            "fact.package.rss_rayon.capability.runtime_native".to_owned(),
+            "fact.native_boundary.rss_native_sample_native_NativeSample".to_owned(),
+            "fact.package.rss_native_sample.capability.runtime_native".to_owned(),
         ]
     );
 }

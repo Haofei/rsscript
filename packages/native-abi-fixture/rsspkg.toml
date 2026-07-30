@@ -1,0 +1,15 @@
+[package]
+name = "rss-native-abi-fixture"
+version = "0.1.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[native.rust]
+enabled = true
+path = "native/rust"
+crate = "rss_native_abi_fixture_bridge"
+build_scripts = "forbid"
+proc_macros = "forbid"
+unsafe = "forbid"

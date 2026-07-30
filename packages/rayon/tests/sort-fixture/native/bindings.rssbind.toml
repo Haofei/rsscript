@@ -1,4 +1,0 @@
-[bindings]
-"SortFixture.random_ints" = "rss_rayon_sort_fixture::random_ints"
-"SortFixture.sort_int_serial" = "rss_rayon_sort_fixture::sort_int_serial"
-"SortFixture.now_ns" = "rss_rayon_sort_fixture::now_ns"
