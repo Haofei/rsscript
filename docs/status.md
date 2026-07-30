@@ -77,7 +77,7 @@ This table records the current implementation batch for the refactoring work in
 | R1 | Complete package/dependency snapshot before review or execution | Complete | Check, review, lower, build, publish, and vendor consume one immutable graph |
 | R2 | `SourceSnapshot`, frontend budget, semantic database, and `ValidatedProgram` | Complete | Review, lowering, VM, and LSP consume one bounded frontend result; executable backends require validated checked facts |
 | R3 | Mandatory `ExecutionContext` and scoped host capabilities | Complete | Restricted execution cannot reach ambient filesystem, network, process, or database authority |
-| R4 | LSP, REIR, runtime, analyzer, package-native, VM, and JIT decomposition | Not started | Modules are split around tested state transitions without behavior changes |
+| R4 | LSP, REIR, runtime, analyzer, package-native, VM, and JIT decomposition | Complete | Modules are split around tested state transitions without behavior changes |
 | R5 | Public API contraction and explicit facades | Not started | Broad glob exports and duplicate compatibility entrypoints are removed |
 | R6 | Out-of-process native, JIT, and GPU execution | Not started | Untrusted execution uses killable workers with bounded IPC and OS policy |
 
@@ -111,6 +111,18 @@ effects before side effects occur. Capability objects support exact grants, but
 the VM remains deliberately conservative: a restricted intrinsic stays denied
 until that intrinsic validates its concrete resource through the scoped API.
 Rust AOT and `UntrustedIsolated` execution remain denied pending R6 workers.
+
+R4 turns the largest orchestration files into composition roots and invariant
+owners without changing public behavior. LSP now separates documents, text,
+workspace loading, scheduling, publication, diagnostics, features, and protocol
+adaptation. REIR separates CLI I/O/rendering/bundle operations from indexed
+reconciliation model, matching, and engine code. Runtime separates structured
+data, network policy, and process policy/environment/capture/supervision.
+Analyzer task-group traversal, lowering declaration/projection passes,
+package-native bindings, native-loader shim/cache, VM tier admission/scratch/
+recursion, and JIT analysis/executable-memory accounting each have dedicated
+modules. Architecture tests prevent the composition roots and stateful types
+from collapsing back into the previous monoliths.
 
 ## Experimental Status
 

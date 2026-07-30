@@ -1,15 +1,16 @@
 use std::sync::Arc;
 
+use crate::network::{
+    AllowAllNetworkTargetPolicy, NetworkEndpoint, NetworkOperationContext, NetworkTargetPolicy,
+    authorize_resolved_target,
+};
 use crate::{
     NativeAsyncPending, ResourceBudget, RssCancellationToken, RssDeadline, cancellation_never,
-    cancellation_token_cancelled, deadline_after_ms, deadline_remaining_duration,
-    spawn_tokio_native,
+    deadline_after_ms, spawn_tokio_native,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-
-use crate::socket::{AllowAllNetworkTargetPolicy, NetworkTargetPolicy, authorize_resolved_target};
 
 type WebSocketStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -68,6 +69,7 @@ pub fn websocket_connect_with_policy_and_resources(
     deadline: RssDeadline,
 ) -> NativeAsyncPending<Result<RssWebSocket, WebSocketError>> {
     let url = url.to_string();
+    let context = NetworkOperationContext::from_controls(cancellation, deadline);
     spawn_tokio_native(async move {
         let request = url
             .as_str()
@@ -77,24 +79,20 @@ pub fn websocket_connect_with_policy_and_resources(
             .uri()
             .scheme_str()
             .ok_or_else(|| WebSocketError::new("WebSocket URL has no scheme"))?;
-        let hostname = request
-            .uri()
-            .host()
-            .ok_or_else(|| WebSocketError::new("WebSocket URL has no host"))?
-            .to_string();
-        let port = request
-            .uri()
-            .port_u16()
-            .unwrap_or(if scheme == "wss" { 443 } else { 80 });
+        let endpoint = NetworkEndpoint::from_optional_host(
+            request.uri().host(),
+            request.uri().port_u16(),
+            if scheme == "wss" { 443 } else { 80 },
+        )
+        .ok_or_else(|| WebSocketError::new("WebSocket URL has no host"))?;
         let addresses = websocket_with_controls(
             async {
-                tokio::net::lookup_host((hostname.as_str(), port))
+                tokio::net::lookup_host((endpoint.hostname(), endpoint.port()))
                     .await
                     .map(|addresses| addresses.collect::<Vec<_>>())
                     .map_err(|_| WebSocketError::new("WebSocket connection failed"))
             },
-            &cancellation,
-            &deadline,
+            &context,
             "resolve",
         )
         .await?;
@@ -103,7 +101,7 @@ pub fn websocket_connect_with_policy_and_resources(
                 "WebSocket target did not resolve to an address",
             ));
         }
-        authorize_resolved_target(policy.as_ref(), &hostname, port, &addresses)
+        authorize_resolved_target(policy.as_ref(), &endpoint, &addresses)
             .map_err(WebSocketError::new)?;
         let socket = websocket_with_controls(
             async {
@@ -111,8 +109,7 @@ pub fn websocket_connect_with_policy_and_resources(
                     .await
                     .map_err(|_| WebSocketError::new("WebSocket connection failed"))
             },
-            &cancellation,
-            &deadline,
+            &context,
             "connect",
         )
         .await?;
@@ -127,8 +124,7 @@ pub fn websocket_connect_with_policy_and_resources(
                     // credentials. Keep the URL out of diagnostics.
                     .map_err(|_| WebSocketError::new("WebSocket connection failed"))
             },
-            &cancellation,
-            &deadline,
+            &context,
             "connect",
         )
         .await?;
@@ -162,12 +158,16 @@ pub fn websocket_send_text_with_resources(
 ) -> NativeAsyncPending<Result<(), WebSocketError>> {
     let writer = Arc::clone(&socket.writer);
     let text = text.to_string();
+    let context = NetworkOperationContext::from_resources(budget, cancellation, deadline);
     spawn_tokio_native(async move {
-        budget.try_consume(text.len()).map_err(|error| {
-            WebSocketError::new(format!(
-                "WebSocket send text byte budget exhausted: {error}"
-            ))
-        })?;
+        context
+            .byte_budget()
+            .try_consume(text.len())
+            .map_err(|error| {
+                WebSocketError::new(format!(
+                    "WebSocket send text byte budget exhausted: {error}"
+                ))
+            })?;
         websocket_with_controls(
             async {
                 let mut writer = writer.lock().await;
@@ -178,8 +178,7 @@ pub fn websocket_send_text_with_resources(
                         WebSocketError::new(format!("WebSocket send text failed: {error}"))
                     })
             },
-            &cancellation,
-            &deadline,
+            &context,
             "send text",
         )
         .await
@@ -208,12 +207,16 @@ pub fn websocket_send_bytes_with_resources(
 ) -> NativeAsyncPending<Result<(), WebSocketError>> {
     let writer = Arc::clone(&socket.writer);
     let bytes = bytes.to_vec();
+    let context = NetworkOperationContext::from_resources(budget, cancellation, deadline);
     spawn_tokio_native(async move {
-        budget.try_consume(bytes.len()).map_err(|error| {
-            WebSocketError::new(format!(
-                "WebSocket send bytes byte budget exhausted: {error}"
-            ))
-        })?;
+        context
+            .byte_budget()
+            .try_consume(bytes.len())
+            .map_err(|error| {
+                WebSocketError::new(format!(
+                    "WebSocket send bytes byte budget exhausted: {error}"
+                ))
+            })?;
         websocket_with_controls(
             async {
                 let mut writer = writer.lock().await;
@@ -224,8 +227,7 @@ pub fn websocket_send_bytes_with_resources(
                         WebSocketError::new(format!("WebSocket send bytes failed: {error}"))
                     })
             },
-            &cancellation,
-            &deadline,
+            &context,
             "send bytes",
         )
         .await
@@ -250,11 +252,11 @@ pub fn websocket_recv_text_with_resources(
     deadline: RssDeadline,
 ) -> NativeAsyncPending<Result<Option<String>, WebSocketError>> {
     let reader = Arc::clone(&socket.reader);
+    let context = NetworkOperationContext::from_resources(budget, cancellation, deadline);
     spawn_tokio_native(async move {
         websocket_with_controls(
-            websocket_recv_text_inner(reader, &budget),
-            &cancellation,
-            &deadline,
+            websocket_recv_text_inner(reader, context.byte_budget()),
+            &context,
             "receive text",
         )
         .await
@@ -314,11 +316,11 @@ pub fn websocket_recv_bytes_with_resources(
     deadline: RssDeadline,
 ) -> NativeAsyncPending<Result<Option<Vec<u8>>, WebSocketError>> {
     let reader = Arc::clone(&socket.reader);
+    let context = NetworkOperationContext::from_resources(budget, cancellation, deadline);
     spawn_tokio_native(async move {
         websocket_with_controls(
-            websocket_recv_bytes_inner(reader, &budget),
-            &cancellation,
-            &deadline,
+            websocket_recv_bytes_inner(reader, context.byte_budget()),
+            &context,
             "receive bytes",
         )
         .await
@@ -362,27 +364,13 @@ async fn websocket_recv_bytes_inner(
 
 async fn websocket_with_controls<T>(
     future: impl std::future::Future<Output = Result<T, WebSocketError>>,
-    cancellation: &RssCancellationToken,
-    deadline: &RssDeadline,
+    context: &NetworkOperationContext,
     operation: &str,
 ) -> Result<T, WebSocketError> {
-    let remaining = deadline_remaining_duration(deadline);
-    if remaining.is_zero() {
-        return Err(WebSocketError::new(format!(
-            "WebSocket {operation} deadline expired"
-        )));
-    }
-    tokio::select! {
-        biased;
-        _ = cancellation_token_cancelled(cancellation) => {
-            Err(WebSocketError::new(format!("WebSocket {operation} was cancelled")))
-        }
-        result = tokio::time::timeout(remaining, future) => {
-            result.map_err(|_| {
-                WebSocketError::new(format!("WebSocket {operation} deadline expired"))
-            })?
-        }
-    }
+    context
+        .run(future)
+        .await
+        .map_err(|error| WebSocketError::new(error.message("WebSocket", operation)))?
 }
 
 pub fn websocket_close(socket: &RssWebSocket) -> NativeAsyncPending<Result<(), WebSocketError>> {
@@ -399,6 +387,7 @@ pub fn websocket_close_with_resources(
     deadline: RssDeadline,
 ) -> NativeAsyncPending<Result<(), WebSocketError>> {
     let writer = Arc::clone(&socket.writer);
+    let context = NetworkOperationContext::from_controls(cancellation, deadline);
     spawn_tokio_native(async move {
         websocket_with_controls(
             async {
@@ -407,8 +396,7 @@ pub fn websocket_close_with_resources(
                     WebSocketError::new(format!("WebSocket close failed: {error}"))
                 })
             },
-            &cancellation,
-            &deadline,
+            &context,
             "close",
         )
         .await

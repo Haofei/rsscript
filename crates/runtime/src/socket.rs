@@ -1,83 +1,19 @@
-use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
+use crate::network::{NetworkEndpoint, NetworkOperationContext, authorize_resolved_target};
 use crate::{
     NativeAsyncPending, ResourceBudget, RssCancellationToken, RssDeadline, cancellation_never,
-    cancellation_token_cancelled, deadline_after_ms, deadline_remaining_duration,
-    spawn_tokio_native,
+    deadline_after_ms, spawn_tokio_native,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+pub use crate::network::{
+    AllowAllNetworkTargetPolicy, DenyPrivateNetworkTargetPolicy, NetworkTargetPolicy,
+};
 
 const MAX_TCP_READ_BYTES: i64 = 16 * 1024 * 1024;
 const MAX_TCP_WRITE_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_TCP_OPERATION_TIMEOUT_MS: i64 = 30_000;
-
-pub trait NetworkTargetPolicy: Send + Sync {
-    fn authorize(&self, hostname: &str, port: u16, resolved: &[IpAddr]) -> Result<(), String>;
-}
-
-#[derive(Debug, Default)]
-pub struct AllowAllNetworkTargetPolicy;
-
-impl NetworkTargetPolicy for AllowAllNetworkTargetPolicy {
-    fn authorize(&self, _hostname: &str, _port: u16, _resolved: &[IpAddr]) -> Result<(), String> {
-        Ok(())
-    }
-}
-
-#[derive(Debug, Default)]
-pub struct DenyPrivateNetworkTargetPolicy;
-
-impl NetworkTargetPolicy for DenyPrivateNetworkTargetPolicy {
-    fn authorize(&self, _hostname: &str, _port: u16, resolved: &[IpAddr]) -> Result<(), String> {
-        if resolved.is_empty() {
-            return Err("network target did not resolve to an address".to_string());
-        }
-        if resolved
-            .iter()
-            .any(|address| !is_public_network_address(*address))
-        {
-            return Err("network target resolves to a non-public address".to_string());
-        }
-        Ok(())
-    }
-}
-
-fn is_public_network_address(address: IpAddr) -> bool {
-    match address {
-        IpAddr::V4(address) => {
-            !(address.is_private()
-                || address.is_loopback()
-                || address.is_link_local()
-                || address.is_broadcast()
-                || address.is_documentation()
-                || address.is_multicast()
-                || address.is_unspecified())
-        }
-        IpAddr::V6(address) => {
-            if let Some(mapped) = address.to_ipv4_mapped() {
-                return is_public_network_address(IpAddr::V4(mapped));
-            }
-            !(address.is_loopback()
-                || address.is_multicast()
-                || address.is_unspecified()
-                || address.is_unique_local()
-                || address.is_unicast_link_local())
-        }
-    }
-}
-
-pub(crate) fn authorize_resolved_target(
-    policy: &dyn NetworkTargetPolicy,
-    hostname: &str,
-    port: u16,
-    addresses: &[SocketAddr],
-) -> Result<(), String> {
-    let mut resolved = addresses.iter().map(SocketAddr::ip).collect::<Vec<_>>();
-    resolved.sort_unstable();
-    resolved.dedup();
-    policy.authorize(hostname, port, &resolved)
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TcpError {
@@ -134,15 +70,13 @@ pub fn tcp_connect_with_policy_and_resources(
     deadline: RssDeadline,
 ) -> NativeAsyncPending<Result<RssTcpStream, TcpError>> {
     let host = host.to_string();
+    let context = NetworkOperationContext::from_controls(cancellation, deadline);
     spawn_tokio_native(async move {
-        if port <= 0 || port > u16::MAX as i64 {
-            return Err(TcpError::new("TCP port must be between 1 and 65535"));
-        }
-        let port = port as u16;
+        let endpoint = NetworkEndpoint::from_host_and_port(&host, port)
+            .ok_or_else(|| TcpError::new("TCP port must be between 1 and 65535"))?;
         let addresses = tcp_with_controls(
-            tokio::net::lookup_host((host.as_str(), port)),
-            &cancellation,
-            &deadline,
+            tokio::net::lookup_host((endpoint.hostname(), endpoint.port())),
+            &context,
             "resolve",
         )
         .await?
@@ -151,12 +85,10 @@ pub fn tcp_connect_with_policy_and_resources(
         if addresses.is_empty() {
             return Err(TcpError::new("TCP target did not resolve to an address"));
         }
-        authorize_resolved_target(policy.as_ref(), &host, port, &addresses)
-            .map_err(TcpError::new)?;
+        authorize_resolved_target(policy.as_ref(), &endpoint, &addresses).map_err(TcpError::new)?;
         let stream = tcp_with_controls(
             tokio::net::TcpStream::connect(addresses.as_slice()),
-            &cancellation,
-            &deadline,
+            &context,
             "connect",
         )
         .await?
@@ -190,22 +122,14 @@ pub fn tcp_stream_read_with_resources(
     deadline: RssDeadline,
 ) -> NativeAsyncPending<Result<Vec<u8>, TcpError>> {
     let reader = Arc::clone(&stream.reader);
+    let context = NetworkOperationContext::from_resources(budget, cancellation, deadline);
     spawn_tokio_native(async move {
-        let remaining = deadline_remaining_duration(&deadline);
-        if remaining.is_zero() {
-            return Err(TcpError::new("TCP read deadline expired"));
-        }
-        tokio::select! {
-            biased;
-            _ = cancellation_token_cancelled(&cancellation) => {
-                Err(TcpError::new("TCP read was cancelled"))
-            }
-            result = tokio::time::timeout(
-                remaining,
-                tcp_stream_read_inner(reader, max_bytes, &budget),
-            ) => result
-                .map_err(|_| TcpError::new("TCP read deadline expired"))?,
-        }
+        tcp_with_controls(
+            tcp_stream_read_inner(reader, max_bytes, context.byte_budget()),
+            &context,
+            "read",
+        )
+        .await?
     })
 }
 
@@ -260,11 +184,13 @@ pub fn tcp_stream_write_with_resources(
 ) -> NativeAsyncPending<Result<i64, TcpError>> {
     let writer = Arc::clone(&stream.writer);
     let data = data.to_vec();
+    let context = NetworkOperationContext::from_resources(budget, cancellation, deadline);
     spawn_tokio_native(async move {
         if data.len() > MAX_TCP_WRITE_BYTES {
             return Err(TcpError::new("TCP write exceeds the runtime ceiling"));
         }
-        budget
+        context
+            .byte_budget()
             .try_consume(data.len())
             .map_err(|error| TcpError::new(format!("TCP write byte budget exhausted: {error}")))?;
         let written = tcp_with_controls(
@@ -272,8 +198,7 @@ pub fn tcp_stream_write_with_resources(
                 let mut writer = writer.lock().await;
                 writer.write(&data).await
             },
-            &cancellation,
-            &deadline,
+            &context,
             "write",
         )
         .await?
@@ -304,20 +229,23 @@ pub fn tcp_stream_write_all_with_resources(
 ) -> NativeAsyncPending<Result<(), TcpError>> {
     let writer = Arc::clone(&stream.writer);
     let data = data.to_vec();
+    let context = NetworkOperationContext::from_resources(budget, cancellation, deadline);
     spawn_tokio_native(async move {
         if data.len() > MAX_TCP_WRITE_BYTES {
             return Err(TcpError::new("TCP write_all exceeds the runtime ceiling"));
         }
-        budget.try_consume(data.len()).map_err(|error| {
-            TcpError::new(format!("TCP write_all byte budget exhausted: {error}"))
-        })?;
+        context
+            .byte_budget()
+            .try_consume(data.len())
+            .map_err(|error| {
+                TcpError::new(format!("TCP write_all byte budget exhausted: {error}"))
+            })?;
         tcp_with_controls(
             async {
                 let mut writer = writer.lock().await;
                 writer.write_all(&data).await
             },
-            &cancellation,
-            &deadline,
+            &context,
             "write_all",
         )
         .await?
@@ -340,14 +268,14 @@ pub fn tcp_stream_shutdown_with_resources(
     deadline: RssDeadline,
 ) -> NativeAsyncPending<Result<(), TcpError>> {
     let writer = Arc::clone(&stream.writer);
+    let context = NetworkOperationContext::from_controls(cancellation, deadline);
     spawn_tokio_native(async move {
         tcp_with_controls(
             async {
                 let mut writer = writer.lock().await;
                 writer.shutdown().await
             },
-            &cancellation,
-            &deadline,
+            &context,
             "shutdown",
         )
         .await?
@@ -358,23 +286,13 @@ pub fn tcp_stream_shutdown_with_resources(
 
 async fn tcp_with_controls<T>(
     future: impl std::future::Future<Output = T>,
-    cancellation: &RssCancellationToken,
-    deadline: &RssDeadline,
+    context: &NetworkOperationContext,
     operation: &str,
 ) -> Result<T, TcpError> {
-    let remaining = deadline_remaining_duration(deadline);
-    if remaining.is_zero() {
-        return Err(TcpError::new(format!("TCP {operation} deadline expired")));
-    }
-    tokio::select! {
-        biased;
-        _ = cancellation_token_cancelled(cancellation) => {
-            Err(TcpError::new(format!("TCP {operation} was cancelled")))
-        }
-        result = tokio::time::timeout(remaining, future) => {
-            result.map_err(|_| TcpError::new(format!("TCP {operation} deadline expired")))
-        }
-    }
+    context
+        .run(future)
+        .await
+        .map_err(|error| TcpError::new(error.message("TCP", operation)))
 }
 
 #[cfg(test)]
@@ -437,10 +355,11 @@ mod tests {
     #[test]
     fn strict_network_policy_rejects_mixed_public_and_private_answers() {
         let policy = super::DenyPrivateNetworkTargetPolicy;
+        let endpoint = crate::network::NetworkEndpoint::from_host_and_port("mixed.example", 443)
+            .expect("valid endpoint");
         let error = super::authorize_resolved_target(
             &policy,
-            "mixed.example",
-            443,
+            &endpoint,
             &[
                 "8.8.8.8:443".parse().expect("public address"),
                 "127.0.0.1:443".parse().expect("loopback address"),

@@ -315,3 +315,36 @@ fn restricted_vm_authority_is_mandatory_and_precedes_intrinsic_dispatch() {
         "authority must be checked before intrinsic dispatch"
     );
 }
+
+#[test]
+fn high_risk_state_machines_keep_dedicated_module_owners() {
+    let root = workspace_root();
+    let required = [
+        "crates/rsscript/src/analyzer/task_group.rs",
+        "crates/rsscript/src/native_plugin/loader/cache.rs",
+        "crates/rsscript/src/native_plugin/loader/shim.rs",
+        "crates/rsscript/src/package/native/bindings.rs",
+        "crates/rsscript/src/reg_vm/tier/admission.rs",
+        "crates/rsscript/src/reg_vm/tier/call_scratch.rs",
+        "crates/rsscript/src/reg_vm/tier/recursion.rs",
+        "crates/rsscript/src/rust_lower/helpers/executable_declarations.rs",
+        "crates/rsscript/src/rust_lower/helpers/semantic_projection.rs",
+        "crates/runtime/src/json.rs",
+        "crates/runtime/src/network/mod.rs",
+        "crates/runtime/src/process/supervisor.rs",
+        "crates/vm-jit/src/analysis.rs",
+        "crates/vm-jit/src/executable_memory.rs",
+        "crates/reir/src/reconciliation/engine.rs",
+        "crates/reir/src/cli/safe_io.rs",
+    ];
+    let missing = required
+        .iter()
+        .filter(|relative| !root.join(relative).is_file())
+        .copied()
+        .collect::<Vec<_>>();
+    assert!(
+        missing.is_empty(),
+        "refactoring module owners must remain explicit: {}",
+        missing.join(", ")
+    );
+}
