@@ -79,7 +79,7 @@ fn main() -> Result<Unit, FileError> {
     )
     .expect_err("restricted execution must deny ambient filesystem access");
 
-    assert!(matches!(error, EvalError::Runtime(message) if message.contains("Filesystem")));
+    assert!(matches!(error, EvalError::Runtime(message) if message.contains("filesystem")));
     assert!(
         !target.exists(),
         "authorization must run before file creation"
@@ -87,6 +87,79 @@ fn main() -> Result<Unit, FileError> {
     if root.exists() {
         fs::remove_dir_all(root).expect("temporary directory cleanup");
     }
+}
+
+#[test]
+fn restricted_execution_context_uses_scoped_filesystem_grant() {
+    let root = common::unique_temp_dir("rsscript-scoped-filesystem");
+    fs::create_dir_all(&root).expect("temporary directory");
+    let target = root.join("allowed.txt");
+    let outside = root
+        .parent()
+        .expect("temporary directory parent")
+        .join("outside.txt");
+    let source = r#"
+features: native, local
+
+fn main() -> Result<Unit, FileError> {
+    let path = Path.from_string(value: read Args.get(index: 0)?)
+    File.write_string_to_path(path: read path, text: read "scoped")?
+    return Ok(Unit)
+}
+"#;
+    let capabilities = HostCapabilities::deny_all()
+        .grant_filesystem_root(&root)
+        .expect("filesystem root");
+
+    reg_vm_eval_source_main_with_context_and_limits(
+        "scoped-filesystem.rss",
+        source,
+        [target.display().to_string()],
+        ExecutionContext::trusted_ci(capabilities.clone()),
+        VmLimits::safe_default(),
+    )
+    .expect("path inside the granted root should execute");
+    assert_eq!(fs::read_to_string(&target).expect("written file"), "scoped");
+
+    let error = reg_vm_eval_source_main_with_context_and_limits(
+        "scoped-filesystem-denied.rss",
+        source,
+        [outside.display().to_string()],
+        ExecutionContext::trusted_ci(capabilities),
+        VmLimits::safe_default(),
+    )
+    .expect_err("path outside the granted root must be denied");
+    assert!(matches!(error, EvalError::Runtime(message) if message.contains("not authorized")));
+    assert!(!outside.exists());
+
+    fs::remove_dir_all(root).expect("temporary directory cleanup");
+}
+
+#[test]
+fn restricted_execution_context_uses_scoped_database_grant() {
+    let source = r#"
+features: native
+
+fn main() -> Result<Unit, DbError> {
+    let url = Url.from_string(value: read "db://primary")
+    with DbConnection.open(url: read url) as conn {
+        DbConnection.query(conn: mut conn, sql: read "select 1")?
+    }
+    return Ok(Unit)
+}
+"#;
+    let capabilities = HostCapabilities::deny_all()
+        .grant_database("db://primary")
+        .expect("database grant");
+
+    reg_vm_eval_source_main_with_context_and_limits(
+        "scoped-database.rss",
+        source,
+        std::iter::empty::<String>(),
+        ExecutionContext::trusted_ci(capabilities),
+        VmLimits::safe_default(),
+    )
+    .expect("exact database grant should execute");
 }
 
 #[test]

@@ -1521,7 +1521,6 @@ impl RegIntrinsic {
             | Self::FileWriteStringAsync
             | Self::FileWriteStringToPath
             | Self::HashSha256File
-            | Self::ImageInspect
             | Self::ImageLoad
             | Self::ImageSave
             | Self::JsonParseFile
@@ -1585,10 +1584,9 @@ impl RegIntrinsic {
             | Self::ProcessRunTimeout
             | Self::ProcessRunTimeoutAsync
             | Self::ProcessStream => Some(HostAuthority::Process),
-            Self::DbClose
-            | Self::DbConnectionOpen
-            | Self::DbConnectionQuery
-            | Self::DbConnectionTryOpen => Some(HostAuthority::Database),
+            Self::DbConnectionOpen | Self::DbConnectionQuery | Self::DbConnectionTryOpen => {
+                Some(HostAuthority::Database)
+            }
             Self::TensorGpuRunMsl
             | Self::TensorMatmulMetal
             | Self::TensorMetalAvailable

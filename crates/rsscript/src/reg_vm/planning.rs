@@ -144,86 +144,6 @@ pub(super) fn functions_reaching_call_cycle(edges: &[Vec<usize>]) -> Vec<bool> {
     reaches_cycle
 }
 
-#[cfg(test)]
-mod jit_eligibility_tests {
-    use super::*;
-
-    fn function(callees: impl IntoIterator<Item = usize>) -> RegFunction {
-        let mut function = RegFunction::placeholder(String::new());
-        function.code = callees
-            .into_iter()
-            .map(|callee| RegInstr::CallKnown {
-                dst: 0,
-                function: callee,
-                args: Vec::new(),
-                mut_args: Vec::new(),
-            })
-            .collect();
-        function
-    }
-
-    #[test]
-    fn jit_eligibility_accepts_an_acyclic_call_chain() {
-        let functions = vec![function([1]), function([2]), function([3]), function([])];
-
-        assert_eq!(
-            compute_jit_eligibility(&functions),
-            vec![true, true, true, true]
-        );
-    }
-
-    #[test]
-    fn jit_eligibility_rejects_only_star_nodes_that_reach_a_cycle() {
-        let functions = vec![
-            function([1, 2, 3]),
-            function([]),
-            function([2]),
-            function([]),
-        ];
-
-        assert_eq!(
-            compute_jit_eligibility(&functions),
-            vec![false, true, false, true]
-        );
-    }
-
-    #[test]
-    fn jit_eligibility_handles_sccs_and_shared_callees() {
-        let functions = vec![
-            function([1]),
-            function([0]),
-            function([0, 3]),
-            function([]),
-            function([3]),
-            function([3]),
-        ];
-
-        assert_eq!(
-            compute_jit_eligibility(&functions),
-            vec![false, false, false, true, true, true]
-        );
-    }
-
-    #[test]
-    fn call_cycle_classification_scales_with_a_large_chain() {
-        const NODE_COUNT: usize = 100_000;
-        let mut edges = Vec::with_capacity(NODE_COUNT);
-        for node in 0..NODE_COUNT {
-            edges.push(if node + 1 == NODE_COUNT {
-                Vec::new()
-            } else {
-                vec![node + 1]
-            });
-        }
-
-        assert!(
-            functions_reaching_call_cycle(&edges)
-                .into_iter()
-                .all(|reaches_cycle| !reaches_cycle)
-        );
-    }
-}
-
 /// Instructions reachable from `ip == 0` along the control-flow graph
 /// (sequential fallthrough, jumps, conditional branches, branch-shaped match
 /// arms). Mirrors [`native_reachable_instructions`] but is always compiled (the
@@ -590,4 +510,84 @@ pub(super) fn jit_supported_instruction(instr: &RegInstr) -> bool {
             | RegInstr::JumpIfIntCompare { .. }
             | RegInstr::Return { .. }
     )
+}
+
+#[cfg(test)]
+mod jit_eligibility_tests {
+    use super::*;
+
+    fn function(callees: impl IntoIterator<Item = usize>) -> RegFunction {
+        let mut function = RegFunction::placeholder(String::new());
+        function.code = callees
+            .into_iter()
+            .map(|callee| RegInstr::CallKnown {
+                dst: 0,
+                function: callee,
+                args: Vec::new(),
+                mut_args: Vec::new(),
+            })
+            .collect();
+        function
+    }
+
+    #[test]
+    fn jit_eligibility_accepts_an_acyclic_call_chain() {
+        let functions = vec![function([1]), function([2]), function([3]), function([])];
+
+        assert_eq!(
+            compute_jit_eligibility(&functions),
+            vec![true, true, true, true]
+        );
+    }
+
+    #[test]
+    fn jit_eligibility_rejects_only_star_nodes_that_reach_a_cycle() {
+        let functions = vec![
+            function([1, 2, 3]),
+            function([]),
+            function([2]),
+            function([]),
+        ];
+
+        assert_eq!(
+            compute_jit_eligibility(&functions),
+            vec![false, true, false, true]
+        );
+    }
+
+    #[test]
+    fn jit_eligibility_handles_sccs_and_shared_callees() {
+        let functions = vec![
+            function([1]),
+            function([0]),
+            function([0, 3]),
+            function([]),
+            function([3]),
+            function([3]),
+        ];
+
+        assert_eq!(
+            compute_jit_eligibility(&functions),
+            vec![false, false, false, true, true, true]
+        );
+    }
+
+    #[test]
+    fn call_cycle_classification_scales_with_a_large_chain() {
+        const NODE_COUNT: usize = 100_000;
+        let mut edges = Vec::with_capacity(NODE_COUNT);
+        for node in 0..NODE_COUNT {
+            edges.push(if node + 1 == NODE_COUNT {
+                Vec::new()
+            } else {
+                vec![node + 1]
+            });
+        }
+
+        assert!(
+            functions_reaching_call_cycle(&edges)
+                .into_iter()
+                .all(|reaches_cycle| !reaches_cycle)
+        );
+    }
 }

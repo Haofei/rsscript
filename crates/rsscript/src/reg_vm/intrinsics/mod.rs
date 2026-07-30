@@ -36,9 +36,7 @@ impl RegVm {
         next_base: usize,
     ) -> Result<VmValue, EvalError> {
         self.charge_host_call()?;
-        if let Some(authority) = intrinsic.host_authority() {
-            self.authorize_host_authority(authority)?;
-        }
+        self.authorize_intrinsic_host_access(intrinsic, args, base)?;
         match intrinsic {
             RegIntrinsic::ArgsAll => Ok(VmValue::List(Rc::new(RefCell::new(
                 self.args.iter().cloned().map(VmValue::string).collect(),

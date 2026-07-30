@@ -44,14 +44,12 @@ host execution into isolation.
 | --- | --- | --- |
 | Windows | Secure cache ACL and atomic Job attachment remain incomplete | SID/DACL validation and suspended process launch |
 | Isolated execution portability | Verified worker launch is Linux/bubblewrap only; Metal has no verified macOS isolation backend | Add audited platform launchers without weakening fail-closed policy |
-| Host authority | Adapters outside the register VM still accept some paths, URLs, commands, and DSNs as authority | Root/endpoint/executable/database capability handles |
+| Host authority | Trusted-local compatibility APIs outside the register VM still accept raw paths, URLs, commands, and DSNs | Migrate hosted adapters to `ScopedHostAdapters`; do not expose raw compatibility APIs to restricted execution |
 | Capability evidence | Some native capability facts are author declarations | Independent verification and provenance |
 | External integrations | Live PostgreSQL and broader hardware coverage are environment-gated | Dedicated, auditable integration runners |
 
 ## Open Maintainability Work
 
-- Cache raw source indexes by LSP document revision; the checked semantic
-  database intentionally stores semantic/desugared programs.
 - Replace remaining global registries with explicit owner/session lifetimes.
 - Extend isolated workers to audited Windows and macOS launchers without
   treating process limits or an ordinary container as equivalent isolation.
@@ -84,7 +82,7 @@ This table records the current implementation batch for the refactoring work in
 | R15 | REIR adapter pipeline decomposition | Complete | Input, traversal, normalization, coverage, and fact projection are separate from bounded evidence construction |
 | R16 | Semantic checker and lowering decomposition | Complete | Call, ownership, effect, closure, and emission responsibilities have stable module boundaries |
 | R17 | Large test-domain decomposition | Complete | Remaining register-window, JIT, and backend suites have independently owned semantic domains |
-| R18 | Host capability adapter enforcement | Planned | Canonical filesystem, network, process, and database adapters consume scoped authorized handles |
+| R18 | Host capability adapter enforcement | Complete | Canonical filesystem, network, process, and database adapters consume scoped authorized handles |
 | R19 | Revision-scoped LSP index cache | Complete | Semantic indexes are reused only for matching document and package generations |
 
 Update this table in the same commit that changes a batch state. Do not create a
@@ -104,8 +102,8 @@ only from a complete result without error diagnostics. Register-VM compilation
 consumes checked HIR directly; Rust lowering and package review reuse the same
 parsed programs and no longer reparse built-in interfaces. LSP diagnostics use
 the same result API. Code-generation-only declaration projections remain AST
-projections, not an independent semantic checker; raw source indexes remain an
-R4 LSP decomposition concern.
+projections, not an independent semantic checker; R19 adds revision-scoped
+source-index reuse without changing that semantic ownership boundary.
 
 R3 gives every register-VM instance an explicit execution context and a unique
 scope identity. Legacy embedding helpers construct a named trusted-local
@@ -229,6 +227,16 @@ tiering/memoization, ABI/heap behavior, OSR collections, closures, and
 deoptimization/transactions. VM-JIT coverage is grouped by host memoization,
 calls/ABI, deoptimization, validation, fuzzing, range proofs, and the sealed
 compile boundary. Architecture tests pin both domain sets.
+
+R18 introduces `ScopedHostAdapters` as the sole consumption boundary for
+`AuthorizedPath`, `AuthorizedEndpoint`, `AuthorizedExecutable`, and
+`AuthorizedDatabase`. Restricted Register-VM dispatch now derives the concrete
+path, URL endpoint, executable, database identity, process working directory,
+and process environment names before any host effect; it mints an exact
+scope-bound handle and passes that handle through the adapter. Cross-scope
+handles fail closed. Existing stream/file resources remain valid only inside
+their creating VM, while trusted-local raw entrypoints remain explicitly
+compatibility-only.
 
 R19 adds an immutable source-index cache keyed by document revision and package
 semantic generation. Editing, desynchronizing, saving, or invalidating package

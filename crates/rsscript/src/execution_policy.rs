@@ -327,6 +327,52 @@ impl AuthorizedDatabase {
     }
 }
 
+/// Canonical host-adapter boundary for one execution scope.
+///
+/// Restricted callers first ask [`ExecutionContext`] to mint an exact
+/// capability and then pass that capability through this adapter before
+/// touching the host. Keeping scope validation here prevents individual
+/// filesystem, network, process, and database adapters from reimplementing
+/// capability checks or accepting a detached authorization boolean.
+#[derive(Clone, Copy, Debug)]
+pub struct ScopedHostAdapters<'a> {
+    context: &'a ExecutionContext,
+}
+
+impl<'a> ScopedHostAdapters<'a> {
+    pub fn filesystem_path<'resource>(
+        &self,
+        authorized: &'resource AuthorizedPath,
+    ) -> Result<&'resource Path, AuthorityError> {
+        self.context.authorize_scope(authorized.scope)?;
+        Ok(&authorized.path)
+    }
+
+    pub fn network_endpoint<'resource>(
+        &self,
+        authorized: &'resource AuthorizedEndpoint,
+    ) -> Result<&'resource NetworkEndpointGrant, AuthorityError> {
+        self.context.authorize_scope(authorized.scope)?;
+        Ok(&authorized.endpoint)
+    }
+
+    pub fn process_executable<'resource>(
+        &self,
+        authorized: &'resource AuthorizedExecutable,
+    ) -> Result<&'resource Path, AuthorityError> {
+        self.context.authorize_scope(authorized.scope)?;
+        Ok(&authorized.path)
+    }
+
+    pub fn database<'resource>(
+        &self,
+        authorized: &'resource AuthorizedDatabase,
+    ) -> Result<&'resource str, AuthorityError> {
+        self.context.authorize_scope(authorized.scope)?;
+        Ok(&authorized.logical_id)
+    }
+}
+
 impl NetworkEndpointGrant {
     pub fn new(
         scheme: impl Into<String>,
@@ -549,6 +595,12 @@ impl ExecutionContext {
 
     pub const fn is_ambient(&self) -> bool {
         matches!(self.host, HostAccess::Ambient)
+    }
+
+    /// Returns the canonical adapter boundary for capabilities minted by this
+    /// execution context.
+    pub const fn host_adapters(&self) -> ScopedHostAdapters<'_> {
+        ScopedHostAdapters { context: self }
     }
 
     /// Performs the coarse authorization used before dispatching an intrinsic.
@@ -1087,6 +1139,51 @@ mod tests {
         assert!(first_context.authorize_scope(first.scope_id()).is_ok());
         assert!(matches!(
             second_context.authorize_scope(first.scope_id()),
+            Err(AuthorityError::ScopeMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn scoped_host_adapters_reject_capabilities_from_another_execution() {
+        let path = test_absolute_path("workspace/input.rss");
+        let executable = test_absolute_path("bin/tool");
+        let first = ExecutionContext::trusted_local();
+        let second = ExecutionContext::trusted_local();
+
+        let authorized_path = first.authorize_filesystem_path(&path).expect("path");
+        let authorized_endpoint = first
+            .authorize_network_endpoint("https", "example.com", 443)
+            .expect("endpoint");
+        let authorized_executable = first
+            .authorize_process_executable(&executable)
+            .expect("executable");
+        let authorized_database = first.authorize_database("primary").expect("database");
+
+        assert_eq!(
+            first
+                .host_adapters()
+                .filesystem_path(&authorized_path)
+                .expect("same scope"),
+            path
+        );
+        assert!(matches!(
+            second.host_adapters().filesystem_path(&authorized_path),
+            Err(AuthorityError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            second
+                .host_adapters()
+                .network_endpoint(&authorized_endpoint),
+            Err(AuthorityError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            second
+                .host_adapters()
+                .process_executable(&authorized_executable),
+            Err(AuthorityError::ScopeMismatch { .. })
+        ));
+        assert!(matches!(
+            second.host_adapters().database(&authorized_database),
             Err(AuthorityError::ScopeMismatch { .. })
         ));
     }

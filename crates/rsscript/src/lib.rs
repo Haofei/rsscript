@@ -72,7 +72,7 @@ pub use execution_policy::{
     AuthorityError, AuthorizedDatabase, AuthorizedEndpoint, AuthorizedExecutable, AuthorizedPath,
     DeploymentProfile, ExecutionCapability, ExecutionContext, ExecutionContextError,
     ExecutionPolicyError, ExecutionScopeId, HostAuthority, HostCapabilities, NetworkEndpointGrant,
-    ParseDeploymentProfileError, SupportLevel,
+    ParseDeploymentProfileError, ScopedHostAdapters, SupportLevel,
 };
 pub use formatter::{format_program, format_source};
 pub use generate::{

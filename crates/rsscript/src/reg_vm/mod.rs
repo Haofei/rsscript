@@ -62,6 +62,7 @@ fn intern_struct_layout(name: &str, fields: &[(String, Reg)]) -> Rc<TypeLayout> 
 mod architecture;
 mod calls;
 mod exec;
+mod host_adapters;
 mod intrinsics;
 mod lower;
 mod model;

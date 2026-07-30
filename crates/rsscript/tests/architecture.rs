@@ -426,9 +426,17 @@ fn restricted_vm_authority_is_mandatory_and_precedes_intrinsic_dispatch() {
     let intrinsics = read(&root.join("crates/rsscript/src/reg_vm/intrinsics/mod.rs"));
     let dispatch = function_source(&intrinsics, "pub(super) fn call_intrinsic");
     assert!(
-        dispatch.contains("intrinsic.host_authority()")
-            && dispatch.contains("self.authorize_host_authority(authority)?"),
+        dispatch.contains("self.authorize_intrinsic_host_access(intrinsic, args, base)?"),
         "authority must be checked before intrinsic dispatch"
+    );
+    let adapters = read(&root.join("crates/rsscript/src/reg_vm/host_adapters.rs"));
+    assert!(
+        adapters.contains("intrinsic.host_authority()")
+            && adapters.contains(".filesystem_path(&authorized)")
+            && adapters.contains(".network_endpoint(&authorized)")
+            && adapters.contains(".process_executable(&authorized)")
+            && adapters.contains(".database(&authorized)"),
+        "restricted dispatch must consume exact scope-bound host capabilities"
     );
 }
 
