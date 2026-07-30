@@ -516,10 +516,14 @@ fn spawn_piped(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    rss_process_guard::spawn_guarded(
-        &mut command,
-        rss_process_guard::ProcessLimits::generated_program(),
-    )
+    // Test manifests execute trusted compiler and verification tooling. Those
+    // commands legitimately create artifacts and sparse boundary-test files
+    // larger than the generated-program ceiling.
+    rss_process_guard::spawn_guarded(&mut command, test_command_limits())
+}
+
+fn test_command_limits() -> rss_process_guard::ProcessLimits {
+    rss_process_guard::ProcessLimits::compiler_worker()
 }
 
 fn terminate_process_tree(
@@ -1007,6 +1011,16 @@ mod tests {
 
         assert_eq!(output.len(), TEST_COMMAND_OUTPUT_MAX_BYTES);
         assert!(exceeded.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn test_commands_allow_compiler_sized_artifacts() {
+        let limits = super::test_command_limits();
+        assert_eq!(limits, rss_process_guard::ProcessLimits::compiler_worker());
+        assert!(
+            limits.file_size_bytes
+                > rss_process_guard::ProcessLimits::generated_program().file_size_bytes
+        );
     }
 
     fn unique_temp_dir(name: &str) -> std::path::PathBuf {
