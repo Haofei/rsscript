@@ -23,11 +23,6 @@ const UNSAFE_BOUNDARY_CRATES: &[BoundaryCrate] = &[
         directory: "process-guard",
     },
     BoundaryCrate {
-        package: "rss-metal-compute",
-        rust_name: "rss_metal_compute",
-        directory: "metal-compute",
-    },
-    BoundaryCrate {
         package: "vm-jit",
         rust_name: "vm_jit",
         directory: "vm-jit",

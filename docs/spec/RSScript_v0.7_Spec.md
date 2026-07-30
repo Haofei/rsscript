@@ -5293,7 +5293,7 @@ pub fn Csv.parse_row(buffer: read RowBuffer) -> Result<fresh Row, CsvError>
 pub fn Row.field_string(row: read Row, index: Int) -> Result<String, CsvError>
 ```
 
-Agent, GPU, model-client, and domain-specific network clients are use-case
+Agent, model-client, and domain-specific network clients are use-case
 libraries, not language core. The bundled HTTP surface is intentionally only a
 small façade: `stdlib/http/http.rssi` covers handler request/response values, and
 `stdlib/http/client.rssi` exposes a native client boundary for simple package-tool
@@ -5842,7 +5842,6 @@ blanket impls
 Rust-style trait objects (implicit coercion, auto method resolution)
 Future / Pin / Poll / Waker source model
 general user-defined FFI
-GPU kernel language
 agent runtime as language core
 managed -> local demotion
 operator-overloaded numeric DSLs
@@ -5907,7 +5906,7 @@ Reviewers should evaluate v0.7 by asking:
 13. Are runtime crate surfaces defined before lowering?
 14. Are generated Rust diagnostics source-mapped?
 15. Do package review/diff artifacts cover both diff and map modes?
-16. Is the spec free of domain-specific agent/GPU core pollution?
+16. Is the spec free of domain-specific agent core pollution?
 ```
 
 ---

@@ -16,7 +16,7 @@ The binding support and deployment matrix is [support.md](support.md).
 ## Established Boundaries
 
 - Compiler and review core forbid unsafe Rust; unsafe code is isolated in
-  dedicated JIT, ABI, process, and GPU crates.
+  dedicated JIT, ABI, and process crates.
 - Unknown review evidence remains explicit and production REIR policy is
   fail-closed.
 - Package inputs and artifacts use bounded traversal, content identities,
@@ -84,6 +84,7 @@ This table records the current implementation batch for the refactoring work in
 | R18 | Host capability adapter enforcement | Complete | Canonical filesystem, network, process, and database adapters consume scoped authorized handles |
 | R19 | Revision-scoped LSP index cache | Complete | Semantic indexes are reused only for matching document and package generations |
 | R20 | Remove third-party safe-execution scope | Complete | No untrusted profile, worker protocol, worker binary, sandbox launcher, release artifact, or execution API remains |
+| R21 | Remove Metal/GPU and tensor execution surfaces | Complete | No Metal crate, tensor runtime, GPU ABI, language interface, VM lowering, test domain, or release job remains |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -110,7 +111,7 @@ scope identity. Legacy embedding helpers construct a named trusted-local
 context; restricted callers use the context-aware entrypoint. Every
 host-touching intrinsic is classified and checked before dispatch. Trusted-CI
 VM execution defaults to no host grants, can run pure bounded code, and denies
-filesystem, environment, process, network, database, native, JIT, and GPU
+filesystem, environment, process, network, database, native, and JIT
 effects before side effects occur. Capability objects support exact grants, but
 the VM remains deliberately conservative: a restricted intrinsic stays denied
 until that intrinsic validates its concrete resource through the scoped API.
@@ -160,13 +161,11 @@ inlining. Raw IR cannot reach code generation without a mode-specific borrowed
 `ValidatedJitFunction`.
 
 R9 introduces explicit owners for SQLite and SQLx adapters, native-library
-loading, Metal dispatch, process concurrency, HTTP, and the Tokio-backed runtime
+loading, process concurrency, HTTP, and the Tokio-backed runtime
 services. Instance APIs own caches, limits, and shutdown; compatibility free
 functions delegate to a default instance but no longer contain the core state
 machine. `OperationContext` can carry an explicit `RuntimeServices` owner, so
 embedded executions and tests can use independent lifecycle and policy state.
-Each owner initializes its Metal context only on first GPU use, so ordinary
-HTTP, process, and socket operations do not allocate device resources.
 
 R10 replaces successful concrete authorization results with opaque
 `AuthorizedPath`, `AuthorizedEndpoint`, `AuthorizedExecutable`, and
@@ -245,14 +244,21 @@ release assets were deleted. `LocalTrusted` remains the normal execution mode;
 organization repositories. Third-party packages are static-analysis inputs
 only.
 
+R21 removes the Metal/GPU and tensor product surface rather than carrying it as
+an experimental compatibility layer. The Metal workspace crate, tensor runtime,
+generated ABI hooks, language interfaces, Register-VM intrinsics and lowering,
+parity suites, manifests, documentation, and CI/release jobs were deleted.
+RSScript no longer claims hardware-accelerated tensor execution as part of its
+review-first language scope.
+
 ## Experimental Status
 
-- Native JIT and Metal have dedicated path-triggered, nightly, and release
-  validation. They are not Core.
+- Native JIT has dedicated path-triggered, nightly, and release validation. It
+  is not Core.
 - Self-hosting proves substantial lexer/parser/checker parity but is not an
   independent compiler or release requirement.
 - Package publish remains a dry-run validation surface, not a hosted registry.
-- True multi-isolate execution, general ML scheduling, and declarative rewrite
+- True multi-isolate execution and declarative rewrite
   systems are research, not committed product surface.
 
 ## Documentation Policy

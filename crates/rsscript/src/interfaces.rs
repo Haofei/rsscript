@@ -50,21 +50,9 @@ pub(crate) const STANDARD_PACKAGE_INTERFACES: &[(&str, &str)] = &[
         "packages/async/interface/websocket.rssi",
         include_str!("../../../packages/async/interface/websocket.rssi"),
     ),
-    (
-        "packages/ml/interface/tensor.rssi",
-        include_str!("../../../packages/ml/interface/tensor.rssi"),
-    ),
 ];
 
 pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
-    // Native Metal GPU-dispatch surface. Standalone (no `struct Tensor`), so a host
-    // program defining its own `Tensor` can use `Metal.*` without a type collision.
-    // Kept in CORE so it is available to package compiles (which only load
-    // `builtin_interfaces()` plus declared deps), like the tinygrad port.
-    (
-        "packages/ml/interface/metal.rssi",
-        include_str!("../../../packages/ml/interface/metal.rssi"),
-    ),
     (
         "stdlib/capability/capability.rssi",
         include_str!("../../../stdlib/capability/capability.rssi"),

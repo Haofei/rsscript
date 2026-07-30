@@ -598,16 +598,6 @@ pub(super) fn expect_string_list_ref(value: &VmValue) -> Result<Vec<String>, Eva
         .collect()
 }
 
-pub(super) fn expect_float_list_ref(value: &VmValue) -> Result<Vec<f64>, EvalError> {
-    let list = expect_list_ref(value)?;
-    list.borrow().iter().map(|v| expect_float_ref(&v)).collect()
-}
-
-pub(super) fn expect_int_list_ref(value: &VmValue) -> Result<Vec<i64>, EvalError> {
-    let list = expect_list_ref(value)?;
-    list.borrow().iter().map(|v| expect_int_ref(&v)).collect()
-}
-
 pub(super) fn expect_bool_ref(value: &VmValue) -> Result<bool, EvalError> {
     match value {
         VmValue::Bool(value) => Ok(*value),

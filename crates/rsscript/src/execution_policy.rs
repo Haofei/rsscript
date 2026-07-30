@@ -21,7 +21,6 @@ pub enum ExecutionCapability {
     UnlimitedVm,
     InProcessNative,
     NativeJit,
-    DynamicGpuShader,
     ArbitraryProcess,
     ArbitraryNetwork,
 }
@@ -32,7 +31,7 @@ impl ExecutionCapability {
             Self::StaticLowering | Self::BoundedRustAot | Self::BoundedReferenceVm => {
                 SupportLevel::Core
             }
-            Self::NativeJit | Self::DynamicGpuShader => SupportLevel::Experimental,
+            Self::NativeJit => SupportLevel::Experimental,
             Self::UnlimitedVm
             | Self::InProcessNative
             | Self::ArbitraryProcess
@@ -48,7 +47,6 @@ impl ExecutionCapability {
             Self::UnlimitedVm => "unlimited VM execution",
             Self::InProcessNative => "in-process native plugins",
             Self::NativeJit => "native JIT execution",
-            Self::DynamicGpuShader => "dynamic GPU shaders",
             Self::ArbitraryProcess => "arbitrary child processes",
             Self::ArbitraryNetwork => "arbitrary network access",
         }
@@ -453,7 +451,6 @@ pub enum HostAuthority {
     TempDirectory,
     Native,
     Jit,
-    Gpu,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

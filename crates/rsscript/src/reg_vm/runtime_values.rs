@@ -396,15 +396,6 @@ pub(super) fn channel_error_value(message: impl Into<String>) -> VmValue {
     )))
 }
 
-pub(super) fn tensor_error_value(message: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> =
-        vec![("message".to_string(), VmValue::string(message.into()))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::from("TensorError"),
-        fields,
-    )))
-}
-
 pub(super) fn http_error_value(message: impl Into<String>) -> VmValue {
     let fields: Vec<(String, VmValue)> =
         vec![("message".to_string(), VmValue::string(message.into()))];

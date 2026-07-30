@@ -411,7 +411,7 @@ enum IntrinsicTaintClass {
     /// the aliased result correctly pins the copy.
     AliasReturner,
     /// Not proven read-only-and-non-storing: conservatively force-keep if it touches a tainted
-    /// register. Covers Tier-3 (channels/streams/IO/resource-pool/tensor/json/string/…) and every
+    /// register. Covers Tier-3 (channels/streams/IO/resource-pool/json/string/…) and every
     /// variant not explicitly whitelisted below. This is the DEFAULT arm — soundness rests on it.
     Keep,
 }
@@ -428,7 +428,7 @@ fn deepcopy_intrinsic_class(intrinsic: RegIntrinsic) -> IntrinsicTaintClass {
     //   2. AliasReturner    → READ-ONLY-SAFE args, but result aliases an arg's `Rc`
     //                          (taint propagates arg→dst in `deepcopy_elidable_param_regs`).
     //   3. everything else  → UNCLASSIFIED ⇒ `Keep` (the fail-safe default arm; soundness
-    //                          rests on it — Tier-3 IO/channels/streams/tensor/json/… and any
+    //                          rests on it — Tier-3 IO/channels/streams/json/… and any
     //                          not-yet-audited variant conservatively pins the copy).
     match intrinsic {
         // ---- (1) PureFreshReader: fresh scalar/bool/collection-of-scalars, no arg aliasing. ----

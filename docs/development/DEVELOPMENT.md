@@ -91,7 +91,7 @@ filter by module path:
 
 ```sh
 docker compose run --rm dev cargo test -p rsscript --test static checker_frontend::misc::pass_fixtures_have_no_diagnostics -- --exact
-docker compose run --rm dev cargo test -p rsscript --test runtime vm_eval_parity::tensor::parity_tensor_matmul -- --exact
+docker compose run --rm dev cargo test -p rsscript --test runtime vm_eval_parity::misc::parity_arithmetic_and_control_flow -- --exact
 ```
 
 Default RSScript runtime/differential tests run the broad VM/JIT matrix
@@ -162,21 +162,18 @@ every example, release demo, or self-hosted tool as a behavior test. Supply-chai
 audit and Windows/macOS process-containment and native-authorization tests are
 also Core per-PR gates.
 
-The off-by-default native JIT and real-device Metal paths are Experimental.
-Their full suites run when matching paths change, nightly, manually, and during
-release validation. Security-sensitive JIT differential and unsafe-boundary
-checks remain separate path-triggered blockers; Experimental classification does
-not bypass them. The binding matrix is in
+The off-by-default native JIT path is Experimental. Its full suite runs when
+matching paths change, nightly, manually, and during release validation.
+Security-sensitive JIT differential and unsafe-boundary checks remain separate
+path-triggered blockers; Experimental classification does not bypass them. The binding matrix is in
 [Support And Deployment Policy](../support.md).
 
 Tagged releases use that same locked full manifest as a required
 `release-validation` job, then add the native-JIT suite, full generated-Rust
-backend parity, and the release self-host lexer/parser/checker corpus. The
-artifact job cannot start until this gate and the macOS real-device Metal
-validation pass. The Linux release runner compiles and tests the portable Metal
-surface and the SQLite/SQLx adapters. Live PostgreSQL integration and ignored
-soak tests that launch servers or native demos remain explicit
-dedicated-environment checks.
+backend parity, and the release self-host lexer/parser/checker corpus. The Linux
+release runner also compiles and tests the SQLite/SQLx adapters. Live PostgreSQL
+integration and ignored soak tests that launch servers or native demos remain
+explicit dedicated-environment checks.
 
 Generated Rust package targets and temporary generated packages are disposable.
 Default local development uses a memory-backed workspace. On macOS, `rss`

@@ -29,5 +29,3 @@ mod net_io;
 mod owned_fn;
 #[path = "vm_eval_parity/system.rs"]
 mod system;
-#[path = "vm_eval_parity/tensor.rs"]
-mod tensor;

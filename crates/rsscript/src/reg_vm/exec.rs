@@ -54,8 +54,6 @@ impl RegVm {
             websockets: HashMap::new(),
             next_pool_id: 1,
             pools: HashMap::new(),
-            next_tensor_id: 1,
-            tensors: HashMap::new(),
             jit_enabled: false,
             jit_force_all: false,
             limits: VmLimits::default(),

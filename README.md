@@ -76,8 +76,8 @@ The maintained product surface is classified as `Core`, `Experimental`, or
 | `LocalTrusted` | Supported development on source and dependencies you control |
 | `TrustedCI` | Supported CI experiments on reviewed repositories with pinned tools, least privilege, and disposable isolated runners |
 
-In-process native plugins, generated Cargo builds, JIT code, dynamic GPU
-shaders, and ambient host capabilities are trusted-only. Third-party package
+In-process native plugins, generated Cargo builds, JIT code, and ambient host
+capabilities are trusted-only. Third-party package
 support is static inspection: check, review, semantic diff, and REIR evidence.
 RSScript does not build or execute third-party packages and does not provide an
 untrusted execution profile. See the binding
@@ -495,7 +495,7 @@ rss test     [--all] [--json] [--filter <substring>]
 - `--deployment-profile` accepts `local-trusted` (the default) or `trusted-ci`.
   `trusted-ci` can execute bounded, pure register-VM code
   with a deny-all host capability context; filesystem, environment, process,
-  network, database, native, JIT, and GPU effects fail before dispatch.
+  network, database, native, and JIT effects fail before dispatch.
   Trusted-CI AOT remains denied. There is no third-party or untrusted execution
   profile.
 

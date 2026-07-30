@@ -185,8 +185,6 @@ parsing doesn't taint per-function eligibility.
 ### Known not covered (intentionally)
 - **Bitwise ops** — the language has no `& | ^ << >>` operators, so there is no
   kernel for them.
-- **Tensor / ML kernels** — those are native-backed already (see the ML perf
-  work) and live outside this VM-dispatch baseline.
 
 ## Baseline (2026-06-20) — headline findings
 

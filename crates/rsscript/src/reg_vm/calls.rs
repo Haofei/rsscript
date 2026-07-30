@@ -491,40 +491,6 @@ impl RegVm {
             .ok_or_else(|| EvalError::Runtime(format!("unknown channel id `{id}`.")))
     }
 
-    /// Store a native tensor handle and return the opaque `VmValue::Native`
-    /// carried through the program (mirrors `task_handle_value`).
-    pub(super) fn store_tensor(&mut self, tensor: rsscript_runtime::RssTensor) -> VmValue {
-        let id = self.next_tensor_id;
-        self.next_tensor_id = self.next_tensor_id.saturating_add(1);
-        self.tensors.insert(id, tensor);
-        VmValue::Native(Rc::new(VmNative {
-            type_name: Rc::from("Tensor"),
-            id,
-        }))
-    }
-
-    /// Resolve a `Tensor` handle to the stored `RssTensor` (cloned — the buffer is
-    /// `Rc`-shared, so this is a cheap pointer bump, not a data copy).
-    pub(super) fn expect_tensor_ref(
-        &self,
-        value: &VmValue,
-    ) -> Result<rsscript_runtime::RssTensor, EvalError> {
-        let id = match value {
-            VmValue::Native(native) if native.type_name.as_ref() == "Tensor" => native.id,
-            VmValue::Managed(inner) => return self.expect_tensor_ref(&inner.borrow()),
-            other => {
-                return Err(EvalError::Runtime(format!(
-                    "reg VM expected Tensor, got `{}`.",
-                    other.display()
-                )));
-            }
-        };
-        self.tensors
-            .get(&id)
-            .cloned()
-            .ok_or_else(|| EvalError::Runtime(format!("unknown tensor id `{id}`.")))
-    }
-
     pub(super) fn channel_send(
         &mut self,
         sender: VmSender,

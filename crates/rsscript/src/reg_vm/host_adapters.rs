@@ -32,8 +32,7 @@ impl RegVm {
             }
             crate::HostAuthority::TempDirectory
             | crate::HostAuthority::Native
-            | crate::HostAuthority::Jit
-            | crate::HostAuthority::Gpu => self.authorize_host_authority(authority),
+            | crate::HostAuthority::Jit => self.authorize_host_authority(authority),
         }
     }
 

@@ -11,7 +11,7 @@ These items block stronger deployment claims:
 1. Capture a complete immutable package and dependency snapshot before review,
    lowering, build, or publication.
 2. Carry one mandatory execution policy through VM intrinsics, generated AOT
-   programs, native loading, JIT, GPU, process, network, filesystem, and
+   programs, native loading, JIT, process, network, filesystem, and
    database capabilities.
 3. Complete Windows secure-store SID/DACL validation for trusted package
    artifacts.
@@ -74,11 +74,11 @@ limited to:
 Do not add a second machine-code backend, SIMD, or broad speculation without a
 measured workload that justifies the additional verification matrix.
 
-### Metal And Native Plugins
+### Native Plugins
 
-Do not broaden dynamic shader or in-process plugin surfaces. The next meaningful
-work is reducing trusted-only surface and strengthening provenance, not adding
-heuristic source classification or an untrusted execution subsystem.
+Do not broaden in-process plugin surfaces. The next meaningful work is reducing
+trusted-only surface and strengthening provenance, not adding heuristic source
+classification or an untrusted execution subsystem.
 
 ### Self-Hosting
 

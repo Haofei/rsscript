@@ -15,8 +15,6 @@ args = [
   "--workspace",
   "--exclude",
   "rsscript-runtime",
-  "--exclude",
-  "rss-metal-compute",
   "--",
   "-D",
   "warnings",
@@ -32,8 +30,6 @@ args = [
   "clippy",
   "-p",
   "rsscript-runtime",
-  "-p",
-  "rss-metal-compute",
   "--",
   "-D",
   "warnings",
@@ -55,7 +51,7 @@ args = [
 ]
 
 [[tests]]
-# Keep the complete runtime's default net/GPU features out of the compiler test
+# Keep the complete runtime's default network features out of the compiler test
 # graph. Dedicated batches below test the excluded members with their intended
 # features.
 #
@@ -75,8 +71,6 @@ args = [
   "--workspace",
   "--exclude",
   "rsscript-runtime",
-  "--exclude",
-  "rss-metal-compute",
   "--no-fail-fast",
   "-E",
   "not test(/selfhost_parity::/)",
@@ -93,8 +87,6 @@ args = [
   "run",
   "-p",
   "rsscript-runtime",
-  "-p",
-  "rss-metal-compute",
   "--no-fail-fast",
 ]
 

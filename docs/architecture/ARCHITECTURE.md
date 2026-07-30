@@ -37,8 +37,8 @@ first-class result and is never treated as low risk.
 ### Lowering And Execution
 
 `rust_lower/` emits Rust from checked semantics. The register VM is the
-reference interactive execution path. JIT, native plugins, and Metal are
-experimental trusted-code accelerators and explicit unsafe boundaries.
+reference interactive execution path. JIT and native plugins are experimental
+trusted-code accelerators and explicit unsafe boundaries.
 
 Lowering and execution must reject unsupported checked forms rather than
 inventing backend-specific semantics.
@@ -55,7 +55,7 @@ reviewed path is not an execution capability.
 ### Runtime And Adapters
 
 The `runtime` crate owns the host-facing runtime contract and resource
-accounting. Network, process, filesystem, database, native, JIT, and GPU
+accounting. Network, process, filesystem, database, native, and JIT
 facilities are adapters with explicit trust and resource policies.
 
 The runtime is not a sandbox. Runtime execution is restricted to source and
@@ -91,7 +91,7 @@ The following rules are architectural invariants:
 5. Host capabilities require explicit policy and bounded resources.
 6. Unsafe implementation remains isolated in dedicated crates and adapters.
 7. Security decisions bind to immutable content and producer provenance.
-8. Restricted execution cannot accept trusted-only native, JIT, or GPU handles.
+8. Restricted execution cannot accept trusted-only native or JIT handles.
 
 ## Stable Boundary Types
 

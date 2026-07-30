@@ -22,10 +22,6 @@ test = false
 reir = { path = "../reir" }
 rss-native-abi = { path = "../native-abi", features = ["host"] }
 rss-process-guard = { path = "../process-guard" }
-# The reg-VM's native tensor intrinsics call the exact same `tensor_*` kernels
-# the AOT backend lowers to, so VM<->compiled results are bit-identical (the
-# slice-1 parity guarantee). That requires the compiler crate to link the
-# runtime kernels directly rather than reimplement the math.
 rsscript-runtime = { path = "../runtime", default-features = false, features = ["core"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

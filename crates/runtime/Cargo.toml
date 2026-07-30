@@ -11,12 +11,11 @@ path = "src/lib.rs"
 
 [features]
 # Generated RSS packages retain the complete runtime by default. The compiler
-# itself depends on `core` only, so its edit/test loop does not compile HTTP,
-# WebSocket, or GPU support it never executes.
-default = ["core", "net", "gpu"]
+# itself depends on `core` only, so its edit/test loop does not compile HTTP or
+# WebSocket support it never executes.
+default = ["core", "net"]
 core = []
 net = ["tokio/net", "dep:reqwest", "dep:tokio-tungstenite"]
-gpu = ["dep:rss-metal-compute"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -41,12 +40,6 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 tracing = "0.1"
 imbl = "7.0.0"
 rss-process-guard = { path = "../process-guard" }
-
-# Native Metal GPU compute. The unsafe FFI lives in `rss-metal-compute` (this crate
-# is `#![forbid(unsafe_code)]`); off macOS that crate is a stub reporting no GPU.
-[dependencies.rss-metal-compute]
-path = "../metal-compute"
-optional = true
 
 [dev-dependencies]
 static_assertions = "1"

@@ -11,7 +11,6 @@ on:
       - "Dockerfile"
       - "compose.yaml"
       - "crates/lsp/**"
-      - "crates/metal-compute/**"
       - "crates/native-abi/**"
       - "crates/process-guard/**"
       - "crates/reir/**"
@@ -21,11 +20,9 @@ on:
       - "crates/rsscript/src/package/**"
       - "crates/rsscript/src/reg_vm/**"
       - "crates/runtime/src/fs.rs"
-      - "crates/runtime/src/metal.rs"
       - "crates/runtime/src/process.rs"
       - "crates/runtime/src/resource_budget.rs"
       - "crates/runtime/src/socket.rs"
-      - "crates/runtime/src/tensor.rs"
       - "crates/runtime/src/websocket.rs"
       - "crates/vm-jit/**"
       - "fuzz/**"
@@ -41,7 +38,6 @@ on:
       - "Dockerfile"
       - "compose.yaml"
       - "crates/lsp/**"
-      - "crates/metal-compute/**"
       - "crates/native-abi/**"
       - "crates/process-guard/**"
       - "crates/reir/**"
@@ -51,11 +47,9 @@ on:
       - "crates/rsscript/src/package/**"
       - "crates/rsscript/src/reg_vm/**"
       - "crates/runtime/src/fs.rs"
-      - "crates/runtime/src/metal.rs"
       - "crates/runtime/src/process.rs"
       - "crates/runtime/src/resource_budget.rs"
       - "crates/runtime/src/socket.rs"
-      - "crates/runtime/src/tensor.rs"
       - "crates/runtime/src/websocket.rs"
       - "crates/vm-jit/**"
       - "fuzz/**"
@@ -90,7 +84,6 @@ jobs:
           cargo clippy --locked -p vm-jit --all-targets -- -D warnings
           cargo clippy --locked -p rss-native-abi --all-targets -- -D warnings
           cargo clippy --locked -p rss-process-guard --all-targets -- -D warnings
-          cargo clippy --locked -p rss-metal-compute --all-targets -- -D warnings
           cargo clippy --locked -p reir -p rss-lsp --all-targets -- -D warnings
           cargo clippy --locked -p rsscript-runtime --all-targets --all-features -- -D warnings
           cargo clippy --locked -p rss_sqlite_native -p rss_sqlx_native --all-targets -- -D warnings

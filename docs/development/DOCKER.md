@@ -62,7 +62,7 @@ example/package checks.
 `rss test --json` emits a `duration_ms` field for every manifest item. When a
 full run slows down, use that output to identify the slow item before changing
 parallelism or profiles. The full suite keeps compiler/adapter tests separate
-from the complete runtime's default net/GPU feature set; combining every
+from the complete runtime's default network feature set; combining every
 workspace member in one Cargo invocation would unify those features into the
 compiler's core-only runtime dependency and build a much larger test artifact.
 Generated-Rust tests remain serialized because nested Cargo builds otherwise

@@ -40,7 +40,6 @@ Experimental currently includes:
 
 - the off-by-default Cranelift `native-jit` feature and JIT performance/hardening
   sweeps;
-- Metal policy plus real-device execution;
 - self-hosting parity and exhaustive corpus work;
 - using the `0.1.x` GitHub Action or REIR schemas as a production authorization
   control without an independent audit.
@@ -59,7 +58,7 @@ The following are trusted-only:
 
 - generated Cargo builds, build scripts, and executable package dependencies;
 - in-process native plugins or native wrappers;
-- in-process tier-0/native JIT execution and dynamically supplied GPU shaders;
+- in-process tier-0/native JIT execution;
 - host filesystem, environment, network, process, database, or device access;
 - execution based only on RSScript capabilities, VM budgets, process limits, a
   container, or the review action.
@@ -74,12 +73,12 @@ execution and do not enforce OS isolation.
 | Profile | Allowed input and operations | Required controls | Project status |
 | --- | --- | --- | --- |
 | `LocalTrusted` | Source and dependencies controlled by the developer; Core execution and explicitly enabled Experimental paths | Review native/build-script changes; acknowledge trusted native execution; keep normal resource budgets unless deliberately debugging | Supported for development, not an adversarial boundary |
-| `TrustedCI` | Reviewed organization repositories in disposable CI; Core gates and dedicated Experimental jobs | Immutable action/tool pins, locked dependencies, least-privilege token, no secrets for fork PR code, protected-base policy, isolated ephemeral runner, explicit native/JIT/Metal jobs | Supported for CI experiments; not a production authorization system |
+| `TrustedCI` | Reviewed organization repositories in disposable CI; Core gates and dedicated Experimental jobs | Immutable action/tool pins, locked dependencies, least-privilege token, no secrets for fork PR code, protected-base policy, isolated ephemeral runner, explicit native/JIT jobs | Supported for CI experiments; not a production authorization system |
 
 The `rss run --deployment-profile` spellings are `local-trusted` and
 `trusted-ci`. `TrustedCI` may run bounded pure code in the reference VM. That
 path carries an explicit deny-all host context and rejects every host-touching
-intrinsic before dispatch. It does not permit AOT, native, JIT, GPU, process,
+intrinsic before dispatch. It does not permit AOT, native, JIT, process,
 network, database, environment, or filesystem effects. This is a controlled-CI
 convenience for repositories the operator already trusts, not an untrusted-code
 execution boundary.
@@ -94,9 +93,9 @@ provide and audit a separate system outside this repository.
 | --- | --- | --- |
 | Core | Every pull request and push to `main` | Locked full manifest, supply-chain audit, Windows/macOS containment and native authorization, review-action smoke, and other always-on Core workflows |
 | Security-sensitive | Pull requests and pushes touching boundary paths; manual | Deployment-policy tests, unsafe-boundary Clippy, JIT differential safety, native ABI, process containment, runtime, REIR/LSP, and database boundary tests |
-| Experimental | Matching JIT/Metal paths, nightly, manual | Full native-JIT suite on Linux and real-device Metal suite on macOS |
+| Experimental | Matching JIT paths, nightly, manual | Full native-JIT suite on Linux |
 | JIT performance/hardening | Matching JIT performance paths or scheduled/manual hardening | Performance regression gate, sanitizer/Miri/fuzz sweeps according to the dedicated workflow |
-| Release | Version tag or manual release | Core validation plus native JIT, generated backend parity, self-host corpus, and real-device Metal before artifact promotion |
+| Release | Version tag or manual release | Core validation plus native JIT, generated backend parity, and self-host corpus before artifact promotion |
 
 Path filtering is a scheduling optimization, not a security exemption.
 Experimental code under a security-sensitive path must pass both layers. Release

@@ -1369,7 +1369,6 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Math.log2 runtime:Math.sin runtime:Math.tanh runtime:Math.trunc_float
 // parity: runtime:Math.saturating_add runtime:Math.saturating_mul runtime:Math.saturating_sub
 // parity: runtime:Math.wrapping_add runtime:Math.wrapping_mul runtime:Math.wrapping_sub
-// parity: runtime:Metal.available runtime:Metal.device_name runtime:Metal.gpu_run_msl
 // parity: runtime:Option.and_then runtime:Option.filter runtime:Option.is_none
 // parity: runtime:Option.is_some runtime:Option.map runtime:Option.ok_or
 // parity: runtime:Option.or runtime:Option.unwrap_or runtime:Option.unwrap_or_else
@@ -1416,24 +1415,6 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Stream.collect_list runtime:Stream.from_list runtime:Stream.next
 // parity: runtime:GlobalConfig.new runtime:GlobalConfig.replace runtime:GlobalConfig.rule_count
 // parity: runtime:TempDir.keep runtime:TempDir.new runtime:TempDir.new_in runtime:TempDir.path
-// parity: runtime:Tensor.from_f32_slice runtime:Tensor.to_f32_slice runtime:Tensor.shape
-// parity: runtime:Tensor.rank runtime:Tensor.matmul runtime:TensorError.message
-// parity: runtime:Tensor.add runtime:Tensor.sub runtime:Tensor.mul runtime:Tensor.div
-// parity: runtime:Tensor.neg runtime:Tensor.exp runtime:Tensor.log runtime:Tensor.sqrt runtime:Tensor.relu
-// parity: runtime:Tensor.sum_all runtime:Tensor.sum_axis runtime:Tensor.max_axis
-// parity: runtime:Tensor.mean_axis runtime:Tensor.argmax_axis
-// parity: runtime:Tensor.reshape runtime:Tensor.transpose runtime:Tensor.permute runtime:Tensor.broadcast_to
-// parity: runtime:Tensor.cmplt runtime:Tensor.cmpne runtime:Tensor.cmpeq runtime:Tensor.select
-// parity: runtime:Tensor.maximum runtime:Tensor.minimum
-// parity: runtime:Tensor.cast_f32 runtime:Tensor.cast_i32 runtime:Tensor.cast_bool runtime:Tensor.dtype_code
-// parity: runtime:Tensor.pad runtime:Tensor.shrink runtime:Tensor.flip runtime:Tensor.gather
-// parity: runtime:Tensor.prod_axis runtime:Tensor.min_axis runtime:Tensor.sum_axes runtime:Tensor.prod_axes runtime:Tensor.max_axes runtime:Tensor.min_axes runtime:Tensor.mean_axes runtime:Tensor.reciprocal runtime:Tensor.exp2 runtime:Tensor.log2 runtime:Tensor.rsqrt runtime:Tensor.pow
-// parity: runtime:Tensor.bmm runtime:Tensor.idiv runtime:Tensor.modulo runtime:Tensor.shl runtime:Tensor.shr runtime:Tensor.bit_and runtime:Tensor.bit_or runtime:Tensor.bit_xor runtime:Tensor.bitcast_f32_to_i32 runtime:Tensor.bitcast_i32_to_f32
-// parity: runtime:Tensor.f32_from_le_bytes runtime:Tensor.f32_to_le_bytes runtime:Tensor.floordiv runtime:Tensor.floormod runtime:Tensor.gpu_run_msl runtime:Tensor.matmul_metal runtime:Tensor.metal_available runtime:Tensor.metal_device_name runtime:Tensor.sin runtime:Tensor.trunc
-// parity: runtime:Tensor.rand runtime:Tensor.randint runtime:Tensor.randn
-// parity: runtime:Tensor.iota runtime:Tensor.one_hot runtime:Tensor.softmax runtime:Tensor.log_softmax runtime:Tensor.cross_entropy
-// parity: runtime:Tensor.conv2d runtime:Tensor.max_pool2d runtime:Tensor.avg_pool2d
-// parity: runtime:Tensor.scatter_add
 // parity: runtime:Timer.sleep runtime:Timer.sleep_cancellable runtime:Timer.sleep_until
 // parity: runtime:Tcp.connect runtime:TcpError.message
 // parity: runtime:TcpStream.read runtime:TcpStream.shutdown

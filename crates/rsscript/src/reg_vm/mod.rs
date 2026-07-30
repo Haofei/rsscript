@@ -1828,13 +1828,6 @@ struct RegVm {
     websockets: HashMap<i64, TcpStream>,
     next_pool_id: i64,
     pools: HashMap<i64, VmResourcePool>,
-    // Native tensor handles. The VM stores the real `RssTensor` (the same type
-    // the AOT backend lowers to) keyed by id and carries an opaque
-    // `VmValue::Native { type_name: "Tensor", id }` handle through the program.
-    // The intrinsic handlers call the exact `rsscript_runtime::tensor_*` kernels
-    // the lowered code calls, so VM<->compiled results are bit-identical.
-    next_tensor_id: i64,
-    tensors: HashMap<i64, rsscript_runtime::RssTensor>,
     /// Tier-0 JIT: when set, JIT-eligible functions run via the specializing
     /// executor `run_jit` (which reuses the interpreter's value/register
     /// semantics, so it is gap-free by construction).

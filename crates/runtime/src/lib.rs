@@ -17,7 +17,6 @@ mod hash;
 mod json;
 mod managed;
 mod math;
-mod metal;
 #[cfg(feature = "net")]
 mod network;
 mod operation_context;
@@ -30,7 +29,6 @@ mod resource_pool;
 mod socket;
 mod string_helpers;
 mod tempdir;
-mod tensor;
 mod text_edit;
 #[cfg(feature = "net")]
 mod websocket;
@@ -209,9 +207,6 @@ macro_rules! runtime_abi_exports {
             math_saturating_mul, math_saturating_sub, math_sin, math_sqrt, math_tanh,
             math_trunc_float, math_wrapping_add, math_wrapping_mul, math_wrapping_sub,
         };
-        pub use crate::metal::{
-            TrustedShader, gpu_matmul, gpu_run_1d_trusted, metal_available, metal_device_name,
-        };
         pub use crate::operation_context::OperationContext;
         pub use crate::process::{
             DEFAULT_RUNTIME_PROCESS_TIMEOUT_MS, ProcessEnv, ProcessEvent, ProcessOutput,
@@ -269,26 +264,6 @@ macro_rules! runtime_abi_exports {
         };
         pub use crate::tempdir::{
             TempDir, tempdir_keep, tempdir_new, tempdir_new_in, tempdir_path,
-        };
-        pub use crate::tensor::{
-            DType, RssTensor, TensorError, tensor_add, tensor_and, tensor_argmax_axis,
-            tensor_avg_pool2d, tensor_bitcast_f32_to_i32, tensor_bitcast_i32_to_f32, tensor_bmm,
-            tensor_broadcast_to, tensor_cast_bool, tensor_cast_f32, tensor_cast_i32, tensor_cmpeq,
-            tensor_cmplt, tensor_cmpne, tensor_conv2d, tensor_cross_entropy, tensor_div,
-            tensor_dtype_code, tensor_error_message, tensor_exp, tensor_exp2,
-            tensor_f32_from_le_bytes, tensor_f32_to_le_bytes, tensor_flip, tensor_floordiv,
-            tensor_floormod, tensor_from_f32_slice, tensor_gather, tensor_gpu_run_msl, tensor_idiv,
-            tensor_iota, tensor_log, tensor_log_softmax, tensor_log2, tensor_matmul,
-            tensor_matmul_metal, tensor_max_axes, tensor_max_axis, tensor_max_pool2d,
-            tensor_maximum, tensor_mean_axes, tensor_mean_axis, tensor_metal_available,
-            tensor_metal_device_name, tensor_min_axes, tensor_min_axis, tensor_minimum, tensor_mod,
-            tensor_mul, tensor_neg, tensor_one_hot, tensor_or, tensor_pad, tensor_permute,
-            tensor_pow, tensor_prod_axes, tensor_prod_axis, tensor_rand, tensor_randint,
-            tensor_randn, tensor_rank, tensor_reciprocal, tensor_relu, tensor_reshape,
-            tensor_rsqrt, tensor_scatter_add, tensor_select, tensor_shape, tensor_shl, tensor_shr,
-            tensor_shrink, tensor_sin, tensor_softmax, tensor_sqrt, tensor_sub, tensor_sum_all,
-            tensor_sum_axes, tensor_sum_axis, tensor_to_f32_slice, tensor_transpose, tensor_trunc,
-            tensor_xor,
         };
         pub use crate::text_edit::{diff_unified, patch_apply_text};
         #[cfg(feature = "net")]
