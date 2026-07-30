@@ -6,6 +6,7 @@
 
 use std::collections::BTreeSet;
 use std::fmt;
+use std::sync::OnceLock;
 
 use sha2::{Digest, Sha256};
 
@@ -76,6 +77,7 @@ pub enum MetalError {
         max_height: u64,
     },
     CommandExecution,
+    ContextClosed,
     UnsupportedPlatform,
     UntrustedShader {
         digest: String,
@@ -161,6 +163,7 @@ impl fmt::Display for MetalError {
             Self::CommandExecution => {
                 write!(f, "metal: command buffer finished in Error status")
             }
+            Self::ContextClosed => write!(f, "metal: context is shut down"),
             Self::UnsupportedPlatform => {
                 write!(f, "metal: GPU compute is only available on macOS")
             }
@@ -484,17 +487,96 @@ impl<K: Eq, V: Clone> BoundedLru<K, V> {
     }
 }
 
-/// Whether a Metal device is available in this process (always false off macOS).
+pub struct MetalContext {
+    inner: imp::MetalContext,
+}
+
+impl Default for MetalContext {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl MetalContext {
+    pub fn new() -> Self {
+        Self {
+            inner: imp::MetalContext::new(),
+        }
+    }
+
+    pub fn is_closed(&self) -> bool {
+        self.inner.is_closed()
+    }
+
+    pub fn shutdown(&self) {
+        self.inner.shutdown();
+    }
+
+    /// Whether this context owns an available Metal device.
+    pub fn metal_available(&self) -> bool {
+        self.inner.metal_available()
+    }
+
+    /// The context's Metal device name, or an empty string when unavailable.
+    pub fn metal_device_name(&self) -> String {
+        self.inner.metal_device_name()
+    }
+
+    pub fn gpu_matmul(
+        &self,
+        a: &[f32],
+        b: &[f32],
+        m: usize,
+        k: usize,
+        n: usize,
+    ) -> Result<Vec<f32>, MetalError> {
+        let request = validate_matmul(a.len(), b.len(), m, k, n)?;
+        self.inner.gpu_matmul(a, b, request)
+    }
+
+    pub fn gpu_run_1d_trusted(
+        &self,
+        shader: TrustedShader<'_>,
+        fn_name: &str,
+        inputs: &[&[f32]],
+        out_len: usize,
+        threads: usize,
+    ) -> Result<Vec<f32>, MetalError> {
+        let source = shader.source();
+        let request = validate_run_1d(source, fn_name, inputs, out_len, threads)?;
+        self.inner
+            .gpu_run_1d(source, fn_name, inputs, out_len, request)
+    }
+
+    pub fn gpu_run_1d_with_policy(
+        &self,
+        policy: &ShaderPolicy,
+        source: &str,
+        fn_name: &str,
+        inputs: &[&[f32]],
+        out_len: usize,
+        threads: usize,
+    ) -> Result<Vec<f32>, MetalError> {
+        policy.authorize(source)?;
+        let request = validate_run_1d(source, fn_name, inputs, out_len, threads)?;
+        self.inner
+            .gpu_run_1d(source, fn_name, inputs, out_len, request)
+    }
+}
+
+fn default_context() -> &'static MetalContext {
+    static CONTEXT: OnceLock<MetalContext> = OnceLock::new();
+    CONTEXT.get_or_init(MetalContext::new)
+}
+
 pub fn metal_available() -> bool {
-    imp::metal_available()
+    default_context().metal_available()
 }
 
-/// The system default Metal device's name, or an empty string when unavailable.
 pub fn metal_device_name() -> String {
-    imp::metal_device_name()
+    default_context().metal_device_name()
 }
 
-/// GPU matrix multiply `(m, k) x (k, n) -> (m, n)`, row-major f32.
 pub fn gpu_matmul(
     a: &[f32],
     b: &[f32],
@@ -502,11 +584,9 @@ pub fn gpu_matmul(
     k: usize,
     n: usize,
 ) -> Result<Vec<f32>, MetalError> {
-    let request = validate_matmul(a.len(), b.len(), m, k, n)?;
-    imp::gpu_matmul(a, b, request)
+    default_context().gpu_matmul(a, b, m, k, n)
 }
 
-/// Compile an explicitly trusted shader and dispatch `fn_name`.
 pub fn gpu_run_1d_trusted(
     shader: TrustedShader<'_>,
     fn_name: &str,
@@ -514,12 +594,9 @@ pub fn gpu_run_1d_trusted(
     out_len: usize,
     threads: usize,
 ) -> Result<Vec<f32>, MetalError> {
-    let source = shader.source();
-    let request = validate_run_1d(source, fn_name, inputs, out_len, threads)?;
-    imp::gpu_run_1d(source, fn_name, inputs, out_len, request)
+    default_context().gpu_run_1d_trusted(shader, fn_name, inputs, out_len, threads)
 }
 
-/// Dispatch caller-provided MSL only when its digest is explicitly allowed.
 pub fn gpu_run_1d_with_policy(
     policy: &ShaderPolicy,
     source: &str,
@@ -528,9 +605,7 @@ pub fn gpu_run_1d_with_policy(
     out_len: usize,
     threads: usize,
 ) -> Result<Vec<f32>, MetalError> {
-    policy.authorize(source)?;
-    let request = validate_run_1d(source, fn_name, inputs, out_len, threads)?;
-    imp::gpu_run_1d(source, fn_name, inputs, out_len, request)
+    default_context().gpu_run_1d_with_policy(policy, source, fn_name, inputs, out_len, threads)
 }
 
 #[cfg(target_os = "macos")]
@@ -540,7 +615,8 @@ mod imp {
     use objc::rc::autoreleasepool;
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
-    use std::sync::{Mutex, OnceLock};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex};
 
     #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
     struct PipelineOptions {
@@ -581,29 +657,80 @@ mod imp {
         pipelines: Mutex<BoundedLru<PipelineKey, metal::ComputePipelineState>>,
     }
 
-    static STATE: OnceLock<Option<MetalState>> = OnceLock::new();
+    pub struct MetalContext {
+        state: Mutex<Option<Arc<MetalState>>>,
+        closed: AtomicBool,
+    }
 
-    fn state() -> Result<&'static MetalState, MetalError> {
-        STATE
-            .get_or_init(|| {
-                Device::system_default().map(|device| MetalState {
+    impl MetalContext {
+        pub fn new() -> Self {
+            let state = Device::system_default().map(|device| {
+                Arc::new(MetalState {
                     queue: device.new_command_queue(),
                     device,
                     pipelines: Mutex::new(BoundedLru::new(PIPELINE_CACHE_CAPACITY)),
                 })
-            })
-            .as_ref()
-            .ok_or(MetalError::DeviceUnavailable)
-    }
+            });
+            Self {
+                state: Mutex::new(state),
+                closed: AtomicBool::new(false),
+            }
+        }
 
-    pub fn metal_available() -> bool {
-        state().is_ok()
-    }
+        pub fn is_closed(&self) -> bool {
+            self.closed.load(Ordering::Acquire)
+        }
 
-    pub fn metal_device_name() -> String {
-        state()
-            .map(|state| state.device.name().to_string())
-            .unwrap_or_default()
+        pub fn shutdown(&self) {
+            self.closed.store(true, Ordering::Release);
+            self.state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .take();
+        }
+
+        fn state(&self) -> Result<Arc<MetalState>, MetalError> {
+            if self.is_closed() {
+                return Err(MetalError::ContextClosed);
+            }
+            self.state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone()
+                .ok_or(MetalError::DeviceUnavailable)
+        }
+
+        pub fn metal_available(&self) -> bool {
+            self.state().is_ok()
+        }
+
+        pub fn metal_device_name(&self) -> String {
+            self.state()
+                .map(|state| state.device.name().to_string())
+                .unwrap_or_default()
+        }
+
+        pub fn gpu_matmul(
+            &self,
+            a: &[f32],
+            b: &[f32],
+            request: MatmulRequest,
+        ) -> Result<Vec<f32>, MetalError> {
+            let state = self.state()?;
+            gpu_matmul_with_state(&state, a, b, request)
+        }
+
+        pub fn gpu_run_1d(
+            &self,
+            source: &str,
+            fn_name: &str,
+            inputs: &[&[f32]],
+            out_len: usize,
+            request: Run1dRequest,
+        ) -> Result<Vec<f32>, MetalError> {
+            let state = self.state()?;
+            gpu_run_1d_with_state(&state, source, fn_name, inputs, out_len, request)
+        }
     }
 
     fn allocated_bytes(bytes: u64) -> u64 {
@@ -737,7 +864,8 @@ kernel void rss_matmul(
 }
 "#;
 
-    pub fn gpu_matmul(
+    fn gpu_matmul_with_state(
+        state: &MetalState,
         a: &[f32],
         b: &[f32],
         request: MatmulRequest,
@@ -746,7 +874,6 @@ kernel void rss_matmul(
             return Ok(Vec::new());
         }
         autoreleasepool(|| {
-            let state = state()?;
             let pipeline = make_pipeline(state, MATMUL_SRC, "rss_matmul")?;
             let a_buf = upload(state, "lhs", a, request.a_bytes)?;
             let b_buf = upload(state, "rhs", b, request.b_bytes)?;
@@ -789,7 +916,8 @@ kernel void rss_matmul(
         })
     }
 
-    pub fn gpu_run_1d(
+    fn gpu_run_1d_with_state(
+        state: &MetalState,
         source: &str,
         fn_name: &str,
         inputs: &[&[f32]],
@@ -800,7 +928,6 @@ kernel void rss_matmul(
             return Ok(vec![0.0; out_len]);
         }
         autoreleasepool(|| {
-            let state = state()?;
             let pipeline = make_pipeline(state, source, fn_name)?;
             let in_bufs = inputs
                 .iter()
@@ -857,31 +984,62 @@ kernel void rss_matmul(
 #[cfg(not(target_os = "macos"))]
 mod imp {
     use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
-    pub fn metal_available() -> bool {
-        false
+    pub struct MetalContext {
+        closed: AtomicBool,
     }
 
-    pub fn metal_device_name() -> String {
-        String::new()
-    }
+    impl MetalContext {
+        pub fn new() -> Self {
+            Self {
+                closed: AtomicBool::new(false),
+            }
+        }
 
-    pub fn gpu_matmul(
-        _a: &[f32],
-        _b: &[f32],
-        _request: MatmulRequest,
-    ) -> Result<Vec<f32>, MetalError> {
-        Err(MetalError::UnsupportedPlatform)
-    }
+        pub fn is_closed(&self) -> bool {
+            self.closed.load(Ordering::Acquire)
+        }
 
-    pub fn gpu_run_1d(
-        _source: &str,
-        _fn_name: &str,
-        _inputs: &[&[f32]],
-        _out_len: usize,
-        _request: Run1dRequest,
-    ) -> Result<Vec<f32>, MetalError> {
-        Err(MetalError::UnsupportedPlatform)
+        pub fn shutdown(&self) {
+            self.closed.store(true, Ordering::Release);
+        }
+
+        pub fn metal_available(&self) -> bool {
+            false
+        }
+
+        pub fn metal_device_name(&self) -> String {
+            String::new()
+        }
+
+        pub fn gpu_matmul(
+            &self,
+            _a: &[f32],
+            _b: &[f32],
+            _request: MatmulRequest,
+        ) -> Result<Vec<f32>, MetalError> {
+            if self.is_closed() {
+                Err(MetalError::ContextClosed)
+            } else {
+                Err(MetalError::UnsupportedPlatform)
+            }
+        }
+
+        pub fn gpu_run_1d(
+            &self,
+            _source: &str,
+            _fn_name: &str,
+            _inputs: &[&[f32]],
+            _out_len: usize,
+            _request: Run1dRequest,
+        ) -> Result<Vec<f32>, MetalError> {
+            if self.is_closed() {
+                Err(MetalError::ContextClosed)
+            } else {
+                Err(MetalError::UnsupportedPlatform)
+            }
+        }
     }
 }
 
@@ -1040,6 +1198,35 @@ mod tests {
         assert_eq!(cache.get(&"b"), None);
         assert_eq!(cache.get(&"a"), Some(1));
         assert_eq!(cache.get(&"c"), Some(3));
+    }
+
+    #[test]
+    fn contexts_shutdown_and_execute_independently_in_parallel() {
+        let first = std::sync::Arc::new(MetalContext::new());
+        let second = std::sync::Arc::new(MetalContext::new());
+        let threads = [first.clone(), second.clone()].map(|context| {
+            std::thread::spawn(move || {
+                let _ = context.metal_device_name();
+                context.is_closed()
+            })
+        });
+        assert_eq!(
+            threads.map(|thread| thread.join().expect("context thread")),
+            [false, false]
+        );
+
+        first.shutdown();
+        assert!(first.is_closed());
+        assert!(!second.is_closed());
+        assert_eq!(
+            first.gpu_matmul(&[1.0], &[1.0], 1, 1, 1),
+            Err(MetalError::ContextClosed)
+        );
+        assert!(!matches!(
+            second.gpu_matmul(&[1.0], &[1.0], 1, 1, 1),
+            Err(MetalError::ContextClosed)
+        ));
+        second.shutdown();
     }
 
     #[cfg(target_os = "macos")]

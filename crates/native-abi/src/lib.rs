@@ -17,6 +17,11 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+#[cfg(feature = "host")]
+use std::collections::HashMap;
+#[cfg(feature = "host")]
+use std::sync::{Mutex, OnceLock, Weak};
+
 use serde::{Deserialize, Serialize};
 
 pub const ABI_MAGIC: u64 = 0x5253_534E_4154_4956;
@@ -359,31 +364,116 @@ fn call_native(
 pub fn load_registry(
     library_path: &std::path::Path,
 ) -> Result<Vec<(String, NativeInterpreterFn)>, String> {
-    let library = load_library_once(library_path)?;
-    // SAFETY: the symbol is copied immediately while `library` remains owned.
-    let registry_fn = unsafe {
-        *library
-            .get::<unsafe extern "C" fn() -> NativeRegistry>(REGISTRY_SYMBOL.as_bytes())
-            .map_err(|error| format!("native shim is missing `{REGISTRY_SYMBOL}`: {error}"))?
-    };
-    // SAFETY: the generated registry function has no preconditions.
-    let registry = unsafe { registry_fn() };
-    validate_registry(&registry)?;
-    // SAFETY: registry validation checked nullness and bounded the length.
-    let entries = unsafe { std::slice::from_raw_parts(registry.entries, registry.len) };
-    let mut bindings = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let name = decode_binding_name(entry)?;
-        let function = entry.func;
-        let free_buffer = registry.free_buffer;
-        let owner = Arc::clone(&library);
-        let callable = NativeInterpreterFn::new(move |args| {
-            let _owner = &owner;
-            call_native(function, free_buffer, args)
-        });
-        bindings.push((name, callable));
+    default_library_loader()?.load_registry(library_path)
+}
+
+#[cfg(feature = "host")]
+pub struct NativeLibraryLoader {
+    libraries: Mutex<HashMap<String, Weak<libloading::Library>>>,
+    store: tempfile::TempDir,
+}
+
+#[cfg(feature = "host")]
+impl NativeLibraryLoader {
+    pub fn new() -> Result<Self, String> {
+        let store = tempfile::Builder::new()
+            .prefix("rsscript-native-abi-")
+            .tempdir()
+            .map_err(|error| format!("failed to create native ABI content store: {error}"))?;
+        Ok(Self {
+            libraries: Mutex::new(HashMap::new()),
+            store,
+        })
     }
-    Ok(bindings)
+
+    pub fn load_registry(
+        &self,
+        library_path: &std::path::Path,
+    ) -> Result<Vec<(String, NativeInterpreterFn)>, String> {
+        let library = self.load_library(library_path)?;
+        self.bindings_from_library(library)
+    }
+
+    pub fn close_unused(&self) -> Result<(), String> {
+        self.libraries
+            .lock()
+            .map_err(|_| "native library cache lock was poisoned".to_string())?
+            .retain(|_, library| library.strong_count() != 0);
+        Ok(())
+    }
+
+    pub fn close_all(&self) -> Result<(), String> {
+        self.libraries
+            .lock()
+            .map_err(|_| "native library cache lock was poisoned".to_string())?
+            .clear();
+        Ok(())
+    }
+
+    fn bindings_from_library(
+        &self,
+        library: Arc<libloading::Library>,
+    ) -> Result<Vec<(String, NativeInterpreterFn)>, String> {
+        // SAFETY: the symbol is copied immediately while `library` remains owned.
+        let registry_fn = unsafe {
+            *library
+                .get::<unsafe extern "C" fn() -> NativeRegistry>(REGISTRY_SYMBOL.as_bytes())
+                .map_err(|error| format!("native shim is missing `{REGISTRY_SYMBOL}`: {error}"))?
+        };
+        // SAFETY: the generated registry function has no preconditions.
+        let registry = unsafe { registry_fn() };
+        validate_registry(&registry)?;
+        // SAFETY: registry validation checked nullness and bounded the length.
+        let entries = unsafe { std::slice::from_raw_parts(registry.entries, registry.len) };
+        let mut bindings = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let name = decode_binding_name(entry)?;
+            let function = entry.func;
+            let free_buffer = registry.free_buffer;
+            let owner = Arc::clone(&library);
+            let callable = NativeInterpreterFn::new(move |args| {
+                let _owner = &owner;
+                call_native(function, free_buffer, args)
+            });
+            bindings.push((name, callable));
+        }
+        Ok(bindings)
+    }
+
+    fn load_library(&self, path: &std::path::Path) -> Result<Arc<libloading::Library>, String> {
+        let (verified_path, key) = self.stage_verified_library(path)?;
+        let mut cache = self
+            .libraries
+            .lock()
+            .map_err(|_| "native library cache lock was poisoned".to_string())?;
+        cache.retain(|_, library| library.strong_count() != 0);
+        if let Some(library) = cache.get(&key).and_then(Weak::upgrade) {
+            return Ok(library);
+        }
+        // SAFETY: symbols and registry metadata are validated before use.
+        let library = Arc::new(
+            unsafe { libloading::Library::new(&verified_path) }
+                .map_err(|error| format!("failed to load native shim library: {error}"))?,
+        );
+        cache.insert(key, Arc::downgrade(&library));
+        Ok(library)
+    }
+
+    fn stage_verified_library(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<(std::path::PathBuf, String), String> {
+        stage_verified_library_in(path, self.store.path())
+    }
+}
+
+#[cfg(feature = "host")]
+fn default_library_loader() -> Result<&'static NativeLibraryLoader, String> {
+    static LOADER: OnceLock<Result<NativeLibraryLoader, String>> = OnceLock::new();
+    LOADER
+        .get_or_init(NativeLibraryLoader::new)
+        .as_ref()
+        .map_err(Clone::clone)
 }
 
 #[cfg(feature = "host")]
@@ -400,37 +490,14 @@ fn decode_binding_name(entry: &NativeBindingEntry) -> Result<String, String> {
 }
 
 #[cfg(feature = "host")]
-fn load_library_once(path: &std::path::Path) -> Result<Arc<libloading::Library>, String> {
-    use std::collections::HashMap;
-    use std::sync::{Mutex, OnceLock, Weak};
-
-    static LIBRARIES: OnceLock<Mutex<HashMap<String, Weak<libloading::Library>>>> = OnceLock::new();
-    let (verified_path, key) = stage_verified_library(path)?;
-    let cache = LIBRARIES.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut cache = cache
-        .lock()
-        .map_err(|_| "native library cache lock was poisoned".to_string())?;
-    cache.retain(|_, library| library.strong_count() != 0);
-    if let Some(library) = cache.get(&key).and_then(Weak::upgrade) {
-        return Ok(library);
-    }
-    // SAFETY: symbols and registry metadata are validated before use.
-    let library = Arc::new(
-        unsafe { libloading::Library::new(&verified_path) }
-            .map_err(|error| format!("failed to load native shim library: {error}"))?,
-    );
-    cache.insert(key, Arc::downgrade(&library));
-    Ok(library)
-}
-
-#[cfg(feature = "host")]
-fn stage_verified_library(path: &std::path::Path) -> Result<(std::path::PathBuf, String), String> {
+fn stage_verified_library_in(
+    path: &std::path::Path,
+    store: &std::path::Path,
+) -> Result<(std::path::PathBuf, String), String> {
     use sha2::{Digest, Sha256};
     use std::io::{Read, Write};
-    use std::sync::OnceLock;
 
     const MAX_LIBRARY_BYTES: u64 = 1024 * 1024 * 1024;
-    static STORE: OnceLock<Result<tempfile::TempDir, String>> = OnceLock::new();
 
     let canonical = path
         .canonicalize()
@@ -450,16 +517,7 @@ fn stage_verified_library(path: &std::path::Path) -> Result<(std::path::PathBuf,
         ));
     }
 
-    let store = STORE
-        .get_or_init(|| {
-            tempfile::Builder::new()
-                .prefix("rsscript-native-abi-")
-                .tempdir()
-                .map_err(|error| format!("failed to create native ABI content store: {error}"))
-        })
-        .as_ref()
-        .map_err(Clone::clone)?;
-    let mut staged = tempfile::NamedTempFile::new_in(store.path())
+    let mut staged = tempfile::NamedTempFile::new_in(store)
         .map_err(|error| format!("failed to stage native library: {error}"))?;
     let mut hasher = Sha256::new();
     let mut copied = 0_u64;
@@ -502,7 +560,7 @@ fn stage_verified_library(path: &std::path::Path) -> Result<(std::path::PathBuf,
         std::env::consts::OS,
         std::env::consts::ARCH
     );
-    let verified_path = store.path().join(format!("{key}.{extension}"));
+    let verified_path = store.join(format!("{key}.{extension}"));
     match staged.persist_noclobber(&verified_path) {
         Ok(_) => {}
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
@@ -926,5 +984,44 @@ mod tests {
             ..valid
         };
         assert!(decode_binding_name(&oversized).is_err());
+    }
+
+    #[cfg(feature = "host")]
+    #[test]
+    fn library_loaders_stage_content_in_isolated_owner_stores_in_parallel() {
+        use std::io::Write;
+
+        let mut source = tempfile::NamedTempFile::new().expect("source file");
+        source
+            .write_all(b"native-library-test-content")
+            .expect("source bytes");
+        source.as_file().sync_all().expect("source sync");
+        let source_path = source.path().to_path_buf();
+
+        let loaders = [
+            std::sync::Arc::new(NativeLibraryLoader::new().expect("first loader")),
+            std::sync::Arc::new(NativeLibraryLoader::new().expect("second loader")),
+        ];
+        let threads = loaders.clone().map(|loader| {
+            let source_path = source_path.clone();
+            std::thread::spawn(move || {
+                let first = loader
+                    .stage_verified_library(&source_path)
+                    .expect("first stage");
+                let second = loader
+                    .stage_verified_library(&source_path)
+                    .expect("second stage");
+                assert_eq!(first, second);
+                first
+            })
+        });
+        let [first, second] = threads.map(|thread| thread.join().expect("loader thread"));
+
+        assert_eq!(first.1, second.1);
+        assert_ne!(first.0, second.0);
+        assert!(first.0.starts_with(loaders[0].store.path()));
+        assert!(second.0.starts_with(loaders[1].store.path()));
+        loaders[0].close_all().expect("first close");
+        loaders[1].close_all().expect("second close");
     }
 }

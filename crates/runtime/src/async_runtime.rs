@@ -581,9 +581,6 @@ pub fn native_async_pending<T>(
     )
 }
 
-static TOKIO_NATIVE_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> =
-    std::sync::OnceLock::new();
-
 const DEFAULT_MAX_TOKIO_WORKERS: usize = 32;
 const TOKIO_WORKER_THREADS_ENV: &str = "RSSCRIPT_TOKIO_WORKER_THREADS";
 
@@ -604,8 +601,247 @@ pub fn tokio_native_runtime_worker_threads() -> usize {
     )
 }
 
+struct OwnedTokioRuntime {
+    handle: tokio::runtime::Handle,
+    shutdown: Mutex<Option<std::sync::mpsc::SyncSender<Duration>>>,
+    thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+    closed: AtomicBool,
+}
+
+impl OwnedTokioRuntime {
+    fn new(worker_threads: usize) -> Result<Self, String> {
+        let (ready_sender, ready_receiver) = std::sync::mpsc::sync_channel(1);
+        let (shutdown_sender, shutdown_receiver) = std::sync::mpsc::sync_channel(1);
+        let thread = std::thread::Builder::new()
+            .name("rsscript-runtime-owner".to_string())
+            .spawn(move || {
+                let runtime = tokio::runtime::Builder::new_multi_thread()
+                    .worker_threads(worker_threads)
+                    .thread_name("rsscript-runtime-tokio")
+                    .enable_all()
+                    .build();
+                match runtime {
+                    Ok(runtime) => {
+                        if ready_sender.send(Ok(runtime.handle().clone())).is_ok() {
+                            let timeout = shutdown_receiver.recv().unwrap_or_default();
+                            runtime.shutdown_timeout(timeout);
+                        }
+                    }
+                    Err(error) => {
+                        let _ = ready_sender
+                            .send(Err(format!("rsscript tokio runtime should start: {error}")));
+                    }
+                }
+            })
+            .map_err(|error| format!("failed to start runtime owner thread: {error}"))?;
+        let handle = ready_receiver
+            .recv()
+            .map_err(|_| "runtime owner stopped during startup".to_string())??;
+        Ok(Self {
+            handle,
+            shutdown: Mutex::new(Some(shutdown_sender)),
+            thread: Mutex::new(Some(thread)),
+            closed: AtomicBool::new(false),
+        })
+    }
+
+    fn handle(&self) -> Result<tokio::runtime::Handle, String> {
+        if self.closed.load(Ordering::Acquire) {
+            Err("runtime services are shut down".to_string())
+        } else {
+            Ok(self.handle.clone())
+        }
+    }
+
+    fn shutdown(&self, timeout: Duration) {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        if let Some(sender) = self
+            .shutdown
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            let _ = sender.send(timeout);
+        }
+        if let Some(thread) = self
+            .thread
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            let _ = thread.join();
+        }
+    }
+}
+
+struct ProcessConcurrency {
+    active: Mutex<usize>,
+    ready: Condvar,
+    limit: usize,
+    closed: AtomicBool,
+}
+
+pub(crate) struct ProcessPermit {
+    concurrency: Arc<ProcessConcurrency>,
+}
+
+impl Drop for ProcessPermit {
+    fn drop(&mut self) {
+        let mut active = self
+            .concurrency
+            .active
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *active = active.saturating_sub(1);
+        self.concurrency.ready.notify_one();
+    }
+}
+
+impl ProcessConcurrency {
+    fn new(limit: usize) -> Self {
+        Self {
+            active: Mutex::new(0),
+            ready: Condvar::new(),
+            limit: limit.clamp(1, 32),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    fn shutdown(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.ready.notify_all();
+    }
+
+    fn acquire(
+        self: &Arc<Self>,
+        cancellation: Option<&RssCancellationToken>,
+    ) -> Result<ProcessPermit, String> {
+        let mut active = self
+            .active
+            .lock()
+            .map_err(|_| "process concurrency lock poisoned".to_string())?;
+        while *active >= self.limit {
+            if self.closed.load(Ordering::Acquire) {
+                return Err("runtime services are shut down".to_string());
+            }
+            if cancellation.is_some_and(cancellation_token_is_cancelled) {
+                return Err("process cancelled while waiting for a concurrency slot".to_string());
+            }
+            let (next, _) = self
+                .ready
+                .wait_timeout(active, Duration::from_millis(25))
+                .map_err(|_| "process concurrency lock poisoned".to_string())?;
+            active = next;
+        }
+        if self.closed.load(Ordering::Acquire) {
+            return Err("runtime services are shut down".to_string());
+        }
+        *active += 1;
+        Ok(ProcessPermit {
+            concurrency: Arc::clone(self),
+        })
+    }
+}
+
+pub struct RuntimeServices {
+    runtime: OwnedTokioRuntime,
+    worker_threads: usize,
+    process_concurrency: Arc<ProcessConcurrency>,
+    #[cfg(feature = "net")]
+    http_client: reqwest::Client,
+    #[cfg(feature = "gpu")]
+    metal_context: rss_metal_compute::MetalContext,
+}
+
+impl RuntimeServices {
+    pub fn new() -> Result<Self, String> {
+        let worker_threads = tokio_native_runtime_worker_threads();
+        Self::with_worker_threads(worker_threads)
+    }
+
+    pub fn with_worker_threads(worker_threads: usize) -> Result<Self, String> {
+        if !(1..=DEFAULT_MAX_TOKIO_WORKERS).contains(&worker_threads) {
+            return Err(format!(
+                "runtime worker threads must be between 1 and {DEFAULT_MAX_TOKIO_WORKERS}"
+            ));
+        }
+        let runtime = OwnedTokioRuntime::new(worker_threads)?;
+        #[cfg(feature = "net")]
+        let http_client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|error| format!("failed to build runtime HTTP client: {error}"))?;
+        Ok(Self {
+            runtime,
+            worker_threads,
+            process_concurrency: Arc::new(ProcessConcurrency::new(
+                std::thread::available_parallelism()
+                    .map(usize::from)
+                    .unwrap_or(4),
+            )),
+            #[cfg(feature = "net")]
+            http_client,
+            #[cfg(feature = "gpu")]
+            metal_context: rss_metal_compute::MetalContext::new(),
+        })
+    }
+
+    pub fn shutdown(&self, timeout: Duration) {
+        self.process_concurrency.shutdown();
+        #[cfg(feature = "gpu")]
+        self.metal_context.shutdown();
+        self.runtime.shutdown(timeout);
+    }
+
+    pub fn is_shutdown(&self) -> bool {
+        self.runtime.closed.load(Ordering::Acquire)
+    }
+
+    pub fn worker_threads(&self) -> usize {
+        self.worker_threads
+    }
+
+    #[cfg(feature = "gpu")]
+    pub fn metal_context(&self) -> &rss_metal_compute::MetalContext {
+        &self.metal_context
+    }
+
+    pub(crate) fn runtime_handle(&self) -> Result<tokio::runtime::Handle, String> {
+        self.runtime.handle()
+    }
+
+    pub(crate) fn acquire_process_permit(
+        &self,
+        cancellation: Option<&RssCancellationToken>,
+    ) -> Result<ProcessPermit, String> {
+        self.process_concurrency.acquire(cancellation)
+    }
+
+    #[cfg(feature = "net")]
+    pub(crate) fn http_client(&self) -> &reqwest::Client {
+        &self.http_client
+    }
+}
+
+impl Drop for RuntimeServices {
+    fn drop(&mut self) {
+        self.shutdown(Duration::from_secs(1));
+    }
+}
+
+pub(crate) fn default_runtime_services() -> &'static Arc<RuntimeServices> {
+    static SERVICES: std::sync::OnceLock<Arc<RuntimeServices>> = std::sync::OnceLock::new();
+    SERVICES.get_or_init(|| {
+        Arc::new(RuntimeServices::new().expect("default runtime services should start"))
+    })
+}
+
 pub fn tokio_native_runtime() -> &'static tokio::runtime::Runtime {
-    TOKIO_NATIVE_RUNTIME.get_or_init(|| {
+    static COMPATIBILITY_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> =
+        std::sync::OnceLock::new();
+    COMPATIBILITY_RUNTIME.get_or_init(|| {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(tokio_native_runtime_worker_threads())
             .thread_name("rsscript-runtime-tokio")
@@ -631,9 +867,22 @@ where
     T: Send + 'static,
     F: Future<Output = T> + Send + 'static,
 {
+    spawn_tokio_native_with_services(default_runtime_services(), cancellation, future)
+        .expect("default runtime services should be running")
+}
+
+pub fn spawn_tokio_native_with_services<T, F>(
+    services: &RuntimeServices,
+    cancellation: CancellationToken,
+    future: F,
+) -> Result<NativeAsyncPending<T>, String>
+where
+    T: Send + 'static,
+    F: Future<Output = T> + Send + 'static,
+{
     let (mut pending, completer) = native_async_pending(cancellation.clone());
     let (start_sender, start_receiver) = tokio::sync::oneshot::channel();
-    let task = tokio_native_runtime().spawn(async move {
+    let task = services.runtime_handle()?.spawn(async move {
         let _ = start_receiver.await;
         let value = future.await;
         completer.complete(value);
@@ -646,7 +895,7 @@ where
         .expect("cancellation registration lock poisoned") = registration;
     pending.abort_handle = Some(abort_handle);
     let _ = start_sender.send(());
-    pending
+    Ok(pending)
 }
 
 impl<T> NativeAsyncCompleter<T> {
@@ -1530,5 +1779,49 @@ mod tests {
             max_in_flight.load(Ordering::SeqCst) > 1,
             "tokio-backed native pending work should overlap"
         );
+    }
+
+    #[test]
+    fn runtime_services_execute_and_shutdown_independently_in_parallel() {
+        let first = Arc::new(RuntimeServices::new().expect("first services"));
+        let second = Arc::new(RuntimeServices::new().expect("second services"));
+        let threads = [first.clone(), second.clone()].map(|services| {
+            std::thread::spawn(move || {
+                let pending =
+                    spawn_tokio_native_with_services(&services, CancellationToken::new(), async {
+                        42
+                    })
+                    .expect("service spawn");
+                Executor::new().run_pending(pending)
+            })
+        });
+        assert_eq!(
+            threads.map(|thread| thread.join().expect("service thread")),
+            [42, 42]
+        );
+
+        first.shutdown(Duration::from_secs(1));
+        assert!(first.is_shutdown());
+        assert!(!second.is_shutdown());
+        assert!(
+            spawn_tokio_native_with_services(&first, CancellationToken::new(), async { 1 })
+                .is_err()
+        );
+        let pending =
+            spawn_tokio_native_with_services(&second, CancellationToken::new(), async { 7 })
+                .expect("second remains live");
+        assert_eq!(Executor::new().run_pending(pending), 7);
+        second.shutdown(Duration::from_secs(1));
+    }
+
+    #[test]
+    fn runtime_services_keep_configuration_per_instance() {
+        let first = RuntimeServices::with_worker_threads(2).expect("first services");
+        let second = RuntimeServices::with_worker_threads(3).expect("second services");
+
+        assert_eq!(first.worker_threads(), 2);
+        assert_eq!(second.worker_threads(), 3);
+        first.shutdown(Duration::from_secs(1));
+        second.shutdown(Duration::from_secs(1));
     }
 }

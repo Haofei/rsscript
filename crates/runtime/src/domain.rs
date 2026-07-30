@@ -1,11 +1,16 @@
 use std::collections::HashMap;
 use std::fmt;
+#[cfg(feature = "net")]
+use std::sync::Arc;
 
 #[cfg(feature = "net")]
 use crate::OperationContext;
 use crate::ResourceBudget;
 #[cfg(feature = "net")]
-use crate::async_runtime::{NativeAsyncPending, run_pending, spawn_tokio_native};
+use crate::async_runtime::{
+    CancellationToken, NativeAsyncPending, native_async_pending, run_pending, spawn_tokio_native,
+    spawn_tokio_native_with_services,
+};
 use crate::channel::{ChannelError, RssStream, stream_from_iterator};
 #[cfg(feature = "net")]
 use crate::{
@@ -541,7 +546,17 @@ pub fn http_send_async_with_context(
     request: HttpRequest,
     context: OperationContext,
 ) -> NativeAsyncPending<Result<Response, HttpError>> {
-    spawn_tokio_native(async move { http_request_retry_with_context(request, context).await })
+    let services = Arc::clone(context.services());
+    match spawn_tokio_native_with_services(&services, CancellationToken::new(), async move {
+        http_request_retry_with_context(request, context).await
+    }) {
+        Ok(pending) => pending,
+        Err(error) => {
+            let (pending, completer) = native_async_pending(CancellationToken::new());
+            completer.complete(Err(HttpError { message: error }));
+            pending
+        }
+    }
 }
 
 #[cfg(feature = "net")]
@@ -706,18 +721,9 @@ async fn http_request_async(
 }
 
 #[cfg(feature = "net")]
-fn shared_http_client() -> &'static reqwest::Client {
-    static CLIENT: std::sync::OnceLock<reqwest::Client> = std::sync::OnceLock::new();
-    CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .connect_timeout(std::time::Duration::from_secs(10))
-            .build()
-            .expect("HTTP client should build with static configuration")
-    })
-}
-
 #[cfg(feature = "net")]
 async fn http_request_once_async(
+    client: &reqwest::Client,
     method: &str,
     url: &str,
     headers: Vec<(String, String)>,
@@ -725,7 +731,6 @@ async fn http_request_once_async(
     body: Option<String>,
     budget: &ResourceBudget,
 ) -> Result<Response, HttpError> {
-    let client = shared_http_client();
     let display_url = redact_http_url(url);
     let body_len = body.as_ref().map_or(0, String::len);
     if body_len > MAX_HTTP_REQUEST_BYTES {
@@ -872,6 +877,7 @@ async fn http_request_once_with_controls(
         result = tokio::time::timeout(
             remaining,
             http_request_once_async(
+                context.services().http_client(),
                 method,
                 url,
                 headers,
@@ -1444,7 +1450,8 @@ mod tests {
 
     #[test]
     fn http_client_is_reused() {
-        assert!(std::ptr::eq(shared_http_client(), shared_http_client()));
+        let services = crate::async_runtime::default_runtime_services();
+        assert!(std::ptr::eq(services.http_client(), services.http_client()));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::future::Future;
 use std::hash::{BuildHasher, Hasher};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex, Once, OnceLock};
 use std::time::{Duration, Instant};
@@ -38,13 +39,73 @@ struct QueryLimits {
     max_bytes: usize,
 }
 
-#[derive(Clone, Copy)]
-struct SqlxConfig {
-    max_cached_pools: usize,
-    connect_timeout: Duration,
-    query_timeout: Duration,
-    pool_idle_timeout: Duration,
-    max_in_flight_per_pool: usize,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SqlxAdapterConfig {
+    pub max_cached_pools: usize,
+    pub connect_timeout: Duration,
+    pub query_timeout: Duration,
+    pub pool_idle_timeout: Duration,
+    pub max_result_rows: usize,
+    pub max_result_bytes: usize,
+    pub max_in_flight: usize,
+    pub max_in_flight_per_pool: usize,
+}
+
+impl Default for SqlxAdapterConfig {
+    fn default() -> Self {
+        Self {
+            max_cached_pools: DEFAULT_MAX_CACHED_POOLS,
+            connect_timeout: Duration::from_millis(DEFAULT_CONNECT_TIMEOUT_MS),
+            query_timeout: Duration::from_millis(DEFAULT_QUERY_TIMEOUT_MS),
+            pool_idle_timeout: Duration::from_millis(DEFAULT_POOL_IDLE_TIMEOUT_MS),
+            max_result_rows: DEFAULT_MAX_RESULT_ROWS,
+            max_result_bytes: DEFAULT_MAX_RESULT_BYTES,
+            max_in_flight: DEFAULT_MAX_IN_FLIGHT,
+            max_in_flight_per_pool: DEFAULT_MAX_IN_FLIGHT_PER_POOL,
+        }
+    }
+}
+
+impl SqlxAdapterConfig {
+    pub fn from_env() -> Result<Self, String> {
+        Ok(Self {
+            max_cached_pools: configured_limit(MAX_CACHED_POOLS_ENV, DEFAULT_MAX_CACHED_POOLS)?,
+            connect_timeout: configured_duration(
+                CONNECT_TIMEOUT_MS_ENV,
+                DEFAULT_CONNECT_TIMEOUT_MS,
+            )?,
+            query_timeout: configured_duration(QUERY_TIMEOUT_MS_ENV, DEFAULT_QUERY_TIMEOUT_MS)?,
+            pool_idle_timeout: configured_duration(
+                POOL_IDLE_TIMEOUT_MS_ENV,
+                DEFAULT_POOL_IDLE_TIMEOUT_MS,
+            )?,
+            max_result_rows: configured_limit(MAX_RESULT_ROWS_ENV, DEFAULT_MAX_RESULT_ROWS)?,
+            max_result_bytes: configured_limit(MAX_RESULT_BYTES_ENV, DEFAULT_MAX_RESULT_BYTES)?,
+            max_in_flight: configured_limit(MAX_IN_FLIGHT_ENV, DEFAULT_MAX_IN_FLIGHT)?,
+            max_in_flight_per_pool: configured_limit(
+                MAX_IN_FLIGHT_PER_POOL_ENV,
+                DEFAULT_MAX_IN_FLIGHT_PER_POOL,
+            )?,
+        })
+    }
+
+    fn validate(self) -> Result<Self, String> {
+        if self.max_cached_pools == 0
+            || self.max_result_rows == 0
+            || self.max_result_bytes == 0
+            || self.max_in_flight == 0
+            || self.max_in_flight_per_pool == 0
+        {
+            return Err("SQLx adapter limits must be positive".to_string());
+        }
+        if self.connect_timeout.is_zero()
+            || self.query_timeout.is_zero()
+            || self.pool_idle_timeout.is_zero()
+        {
+            return Err("SQLx adapter timeouts must be positive".to_string());
+        }
+        Ok(self)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -87,45 +148,22 @@ fn configured_duration(name: &str, default_ms: u64) -> Result<Duration, String> 
     Ok(Duration::from_millis(timeout_ms as u64))
 }
 
-fn configured_sqlx() -> Result<SqlxConfig, String> {
-    Ok(SqlxConfig {
-        max_cached_pools: configured_limit(MAX_CACHED_POOLS_ENV, DEFAULT_MAX_CACHED_POOLS)?,
-        connect_timeout: configured_duration(CONNECT_TIMEOUT_MS_ENV, DEFAULT_CONNECT_TIMEOUT_MS)?,
-        query_timeout: configured_duration(QUERY_TIMEOUT_MS_ENV, DEFAULT_QUERY_TIMEOUT_MS)?,
-        pool_idle_timeout: configured_duration(
-            POOL_IDLE_TIMEOUT_MS_ENV,
-            DEFAULT_POOL_IDLE_TIMEOUT_MS,
-        )?,
-        max_in_flight_per_pool: configured_limit(
-            MAX_IN_FLIGHT_PER_POOL_ENV,
-            DEFAULT_MAX_IN_FLIGHT_PER_POOL,
-        )?,
-    })
+fn new_salt() -> [u8; 16] {
+    let random = std::collections::hash_map::RandomState::new();
+    let mut first = random.build_hasher();
+    first.write_u8(0);
+    let mut second = random.build_hasher();
+    second.write_u8(1);
+    let mut salt = [0_u8; 16];
+    salt[..8].copy_from_slice(&first.finish().to_ne_bytes());
+    salt[8..].copy_from_slice(&second.finish().to_ne_bytes());
+    salt
 }
 
-fn configured_query_limits() -> Result<QueryLimits, String> {
-    Ok(QueryLimits {
-        max_rows: configured_limit(MAX_RESULT_ROWS_ENV, DEFAULT_MAX_RESULT_ROWS)?,
-        max_bytes: configured_limit(MAX_RESULT_BYTES_ENV, DEFAULT_MAX_RESULT_BYTES)?,
-    })
-}
-
-fn pool_key(url: &str) -> PoolKey {
-    static PROCESS_SALT: OnceLock<[u8; 16]> = OnceLock::new();
-    let process_salt = PROCESS_SALT.get_or_init(|| {
-        let random = std::collections::hash_map::RandomState::new();
-        let mut first = random.build_hasher();
-        first.write_u8(0);
-        let mut second = random.build_hasher();
-        second.write_u8(1);
-        let mut salt = [0_u8; 16];
-        salt[..8].copy_from_slice(&first.finish().to_ne_bytes());
-        salt[8..].copy_from_slice(&second.finish().to_ne_bytes());
-        salt
-    });
+fn pool_key(salt: &[u8; 16], url: &str) -> PoolKey {
     let normalized = normalize_database_url(url);
     let mut digest = Sha256::new();
-    digest.update(process_salt);
+    digest.update(salt);
     digest.update(normalized.as_bytes());
     PoolKey(digest.finalize().into())
 }
@@ -315,30 +353,65 @@ fn account_value(
     Ok(())
 }
 
-struct RuntimeService {
-    runtime: Runtime,
+pub struct SqlxAdapter {
+    config: SqlxAdapterConfig,
+    runtime: Mutex<Option<Runtime>>,
     permits: Arc<Semaphore>,
+    pools: Mutex<PoolRegistry>,
+    salt: [u8; 16],
+    closed: AtomicBool,
 }
 
-/// Shared multi-thread runtime. Work is admitted with a global semaphore and
-/// then scheduled independently, so one slow pool cannot serialize all others.
-fn runtime_service() -> Result<&'static RuntimeService, String> {
-    static SERVICE: OnceLock<Result<RuntimeService, String>> = OnceLock::new();
-    SERVICE
-        .get_or_init(|| {
-            let max_in_flight = configured_limit(MAX_IN_FLIGHT_ENV, DEFAULT_MAX_IN_FLIGHT)?;
-            let runtime = Builder::new_multi_thread()
-                .thread_name("rss-sqlx-runtime")
-                .enable_all()
-                .build()
-                .map_err(|error| format!("failed to create SQLx runtime: {error}"))?;
-            Ok(RuntimeService {
-                runtime,
-                permits: Arc::new(Semaphore::new(max_in_flight)),
-            })
+impl SqlxAdapter {
+    pub fn new() -> Result<Self, String> {
+        Self::with_config(SqlxAdapterConfig::from_env()?)
+    }
+
+    pub fn with_config(config: SqlxAdapterConfig) -> Result<Self, String> {
+        let config = config.validate()?;
+        let runtime = Builder::new_multi_thread()
+            .thread_name("rss-sqlx-runtime")
+            .enable_all()
+            .build()
+            .map_err(|error| format!("failed to create SQLx runtime: {error}"))?;
+        Ok(Self {
+            config,
+            runtime: Mutex::new(Some(runtime)),
+            permits: Arc::new(Semaphore::new(config.max_in_flight)),
+            pools: Mutex::new(PoolRegistry::default()),
+            salt: new_salt(),
+            closed: AtomicBool::new(false),
         })
-        .as_ref()
-        .map_err(Clone::clone)
+    }
+
+    pub fn config(&self) -> SqlxAdapterConfig {
+        self.config
+    }
+
+    fn runtime_handle(&self) -> Result<tokio::runtime::Handle, String> {
+        self.runtime
+            .lock()
+            .map_err(|_| "SQLx runtime lock poisoned".to_string())?
+            .as_ref()
+            .map(Runtime::handle)
+            .cloned()
+            .ok_or_else(|| "SQLx adapter is shut down".to_string())
+    }
+
+    fn ensure_open(&self) -> Result<(), String> {
+        if self.closed.load(Ordering::Acquire) {
+            Err("SQLx adapter is shut down".to_string())
+        } else {
+            Ok(())
+        }
+    }
+
+    fn query_limits(&self) -> QueryLimits {
+        QueryLimits {
+            max_rows: self.config.max_result_rows,
+            max_bytes: self.config.max_result_bytes,
+        }
+    }
 }
 
 fn try_acquire(permits: &Arc<Semaphore>, scope: &str) -> Result<OwnedSemaphorePermit, String> {
@@ -347,15 +420,15 @@ fn try_acquire(permits: &Arc<Semaphore>, scope: &str) -> Result<OwnedSemaphorePe
         .map_err(|_| format!("SQLx {scope} concurrency limit reached"))
 }
 
-fn run_on_runtime<F, T>(future: F) -> Result<T, String>
+fn run_on_runtime<F, T>(adapter: &SqlxAdapter, future: F) -> Result<T, String>
 where
     F: Future<Output = T> + Send + 'static,
     T: Send + 'static,
 {
-    let service = runtime_service()?;
-    let global_permit = try_acquire(&service.permits, "global")?;
+    let runtime = adapter.runtime_handle()?;
+    let global_permit = try_acquire(&adapter.permits, "global")?;
     let (sender, receiver) = mpsc::sync_channel(1);
-    service.runtime.spawn(async move {
+    runtime.spawn(async move {
         let result = tokio::spawn(future)
             .await
             .map_err(|_| "SQLx runtime task panicked".to_string());
@@ -368,6 +441,7 @@ where
 }
 
 fn run_with_deadline<F, T>(
+    adapter: &SqlxAdapter,
     url: &str,
     operation: &'static str,
     timeout: Duration,
@@ -377,7 +451,9 @@ where
     F: Future<Output = Result<T, String>> + Send + 'static,
     T: Send + 'static,
 {
-    let result = run_on_runtime(async move { tokio::time::timeout(timeout, future).await })?;
+    let result = run_on_runtime(adapter, async move {
+        tokio::time::timeout(timeout, future).await
+    })?;
     match result {
         Ok(result) => result.map_err(|error| {
             format!(
@@ -395,6 +471,7 @@ where
 }
 
 fn run_pool_with_deadline<F, T>(
+    adapter: &SqlxAdapter,
     url: &str,
     operation: &'static str,
     timeout: Duration,
@@ -406,21 +483,16 @@ where
     T: Send + 'static,
 {
     let pool_permit = try_acquire(&permits, "per-pool")?;
-    run_with_deadline(url, operation, timeout, async move {
+    run_with_deadline(adapter, url, operation, timeout, async move {
         let result = future.await;
         drop(pool_permit);
         result
     })
 }
 
-fn pools() -> &'static Mutex<PoolRegistry> {
-    static POOLS: OnceLock<Mutex<PoolRegistry>> = OnceLock::new();
-    POOLS.get_or_init(|| Mutex::new(PoolRegistry::default()))
-}
-
-fn close_pools(mut removed: Vec<(PoolKey, AnyPool)>) -> Result<(), String> {
+fn close_pools(adapter: &SqlxAdapter, mut removed: Vec<(PoolKey, AnyPool)>) -> Result<(), String> {
     removed.sort_by_key(|(key, _)| *key);
-    run_on_runtime(async move {
+    run_on_runtime(adapter, async move {
         for (_, pool) in removed {
             pool.close().await;
         }
@@ -428,12 +500,14 @@ fn close_pools(mut removed: Vec<(PoolKey, AnyPool)>) -> Result<(), String> {
 }
 
 fn pool_for_with_config(
+    adapter: &SqlxAdapter,
     url: &str,
     max_cached_pools: usize,
     idle_timeout: Duration,
     connect_timeout: Duration,
     max_in_flight_per_pool: usize,
 ) -> Result<PoolHandle, String> {
+    adapter.ensure_open()?;
     if max_cached_pools == 0 {
         return Err("maximum cached SQLx pools must be positive".to_string());
     }
@@ -442,9 +516,9 @@ fn pool_for_with_config(
     }
 
     INSTALL_DRIVERS.call_once(sqlx::any::install_default_drivers);
-    let key = pool_key(url);
+    let key = pool_key(&adapter.salt, url);
     let now = Instant::now();
-    let mut registry = pools().lock().map_err(|error| error.to_string())?;
+    let mut registry = adapter.pools.lock().map_err(|error| error.to_string())?;
     registry.clock = registry.clock.wrapping_add(1);
     let sequence = registry.clock;
     registry
@@ -469,7 +543,8 @@ fn pool_for_with_config(
     // Creating the lazy pool while holding the registry lock prevents duplicate
     // entries when native calls arrive concurrently.
     let pool = {
-        let _enter = runtime_service()?.runtime.enter();
+        let runtime = adapter.runtime_handle()?;
+        let _enter = runtime.enter();
         AnyPoolOptions::new()
             .max_connections(DEFAULT_MAX_CONNECTIONS)
             .acquire_timeout(connect_timeout)
@@ -498,8 +573,10 @@ fn pool_for_with_config(
     Ok(handle)
 }
 
-fn pool_for(url: &str, config: SqlxConfig) -> Result<PoolHandle, String> {
+fn pool_for(adapter: &SqlxAdapter, url: &str) -> Result<PoolHandle, String> {
+    let config = adapter.config;
     pool_for_with_config(
+        adapter,
         url,
         config.max_cached_pools,
         config.pool_idle_timeout,
@@ -508,179 +585,255 @@ fn pool_for(url: &str, config: SqlxConfig) -> Result<PoolHandle, String> {
     )
 }
 
-/// Remove and close the cached pool for one URL. In-flight users may delay
-/// completion until they return their connections.
-pub fn close(url: &str) -> Result<(), String> {
-    let key = pool_key(url);
-    let removed = pools()
-        .lock()
-        .map_err(|error| error.to_string())?
-        .entries
-        .remove(&key)
-        .map(|entry| (key, entry.handle.pool));
-    if let Some(pool) = removed {
-        close_pools(vec![pool])?;
-    }
-    Ok(())
-}
-
-/// Remove and close every cached pool in deterministic fingerprint order.
-pub fn close_all() -> Result<(), String> {
-    let removed = {
-        let mut registry = pools().lock().map_err(|error| error.to_string())?;
-        registry
+impl SqlxAdapter {
+    /// Remove and close the cached pool for one URL.
+    pub fn close(&self, url: &str) -> Result<(), String> {
+        let key = pool_key(&self.salt, url);
+        let removed = self
+            .pools
+            .lock()
+            .map_err(|error| error.to_string())?
             .entries
-            .drain()
-            .map(|(key, entry)| (key, entry.handle.pool))
-            .collect()
-    };
-    close_pools(removed)
-}
+            .remove(&key)
+            .map(|entry| (key, entry.handle.pool));
+        if let Some(pool) = removed {
+            close_pools(self, vec![pool])?;
+        }
+        Ok(())
+    }
 
-/// Run one or more SQL statements that produce no rows (DDL, `INSERT`, ...).
-pub fn execute(url: &str, sql: &str) -> Result<(), String> {
-    let config = configured_sqlx()?;
-    let handle = pool_for(url, config)?;
-    let pool = handle.pool.clone();
-    let sql = sql.to_owned();
-    run_pool_with_deadline(
-        url,
-        "query",
-        config.query_timeout,
-        handle.permits,
-        async move {
-            sqlx::raw_sql(&sql)
-                .execute(&pool)
-                .await
-                .map(|_| ())
-                .map_err(|error| error.to_string())
-        },
-    )
-}
+    pub fn close_all(&self) -> Result<(), String> {
+        let removed = {
+            let mut registry = self.pools.lock().map_err(|error| error.to_string())?;
+            registry
+                .entries
+                .drain()
+                .map(|(key, entry)| (key, entry.handle.pool))
+                .collect()
+        };
+        close_pools(self, removed)
+    }
 
-/// Run one SQL statement with positional string bind parameters.
-pub fn execute_params(url: &str, sql: &str, params: &[String]) -> Result<(), String> {
-    let config = configured_sqlx()?;
-    let handle = pool_for(url, config)?;
-    let pool = handle.pool.clone();
-    let sql = sql.to_owned();
-    let params = params.to_vec();
-    run_pool_with_deadline(
-        url,
-        "query",
-        config.query_timeout,
-        handle.permits,
-        async move {
-            let mut query = sqlx::query(&sql);
-            for param in &params {
-                query = query.bind(param);
-            }
-            query
-                .execute(&pool)
-                .await
-                .map(|_| ())
-                .map_err(|error| error.to_string())
-        },
-    )
-}
+    pub fn shutdown(&self, timeout: Duration) -> Result<(), String> {
+        if self.closed.swap(true, Ordering::AcqRel) {
+            return Ok(());
+        }
+        self.close_all()?;
+        let runtime = self
+            .runtime
+            .lock()
+            .map_err(|_| "SQLx runtime lock poisoned".to_string())?
+            .take();
+        if let Some(runtime) = runtime {
+            runtime.shutdown_timeout(timeout);
+        }
+        Ok(())
+    }
 
-fn query_strings_with_limits(
-    url: &str,
-    sql: &str,
-    params: &[String],
-    limits: QueryLimits,
-) -> Result<Vec<String>, String> {
-    let config = configured_sqlx()?;
-    let handle = pool_for(url, config)?;
-    let pool = handle.pool.clone();
-    let sql = sql.to_owned();
-    let params = params.to_vec();
-    run_pool_with_deadline(
-        url,
-        "query",
-        config.query_timeout,
-        handle.permits,
-        async move {
-            let mut query = sqlx::query(&sql);
-            for param in &params {
-                query = query.bind(param);
-            }
-            let mut rows = query.fetch(&pool);
-            let mut values = Vec::new();
-            let mut bytes = 0;
-            while let Some(row) =
-                std::future::poll_fn(|context| rows.as_mut().poll_next(context)).await
-            {
-                let row = row.map_err(|error| error.to_string())?;
+    pub fn execute(&self, url: &str, sql: &str) -> Result<(), String> {
+        let handle = pool_for(self, url)?;
+        let pool = handle.pool.clone();
+        let sql = sql.to_owned();
+        run_pool_with_deadline(
+            self,
+            url,
+            "query",
+            self.config.query_timeout,
+            handle.permits,
+            async move {
+                sqlx::raw_sql(&sql)
+                    .execute(&pool)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            },
+        )
+    }
+
+    pub fn execute_params(&self, url: &str, sql: &str, params: &[String]) -> Result<(), String> {
+        let handle = pool_for(self, url)?;
+        let pool = handle.pool.clone();
+        let sql = sql.to_owned();
+        let params = params.to_vec();
+        run_pool_with_deadline(
+            self,
+            url,
+            "query",
+            self.config.query_timeout,
+            handle.permits,
+            async move {
+                let mut query = sqlx::query(&sql);
+                for param in &params {
+                    query = query.bind(param);
+                }
+                query
+                    .execute(&pool)
+                    .await
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            },
+        )
+    }
+
+    fn query_strings_with_limits(
+        &self,
+        url: &str,
+        sql: &str,
+        params: &[String],
+        limits: QueryLimits,
+    ) -> Result<Vec<String>, String> {
+        let handle = pool_for(self, url)?;
+        let pool = handle.pool.clone();
+        let sql = sql.to_owned();
+        let params = params.to_vec();
+        run_pool_with_deadline(
+            self,
+            url,
+            "query",
+            self.config.query_timeout,
+            handle.permits,
+            async move {
+                let mut query = sqlx::query(&sql);
+                for param in &params {
+                    query = query.bind(param);
+                }
+                let mut rows = query.fetch(&pool);
+                let mut values = Vec::new();
+                let mut bytes = 0;
+                while let Some(row) =
+                    std::future::poll_fn(|context| rows.as_mut().poll_next(context)).await
+                {
+                    let row = row.map_err(|error| error.to_string())?;
+                    let value: &str = row.try_get(0).map_err(|error| error.to_string())?;
+                    account_value(value, values.len(), &mut bytes, limits)?;
+                    values.push(value.to_string());
+                }
+                Ok(values)
+            },
+        )
+    }
+
+    pub fn query_strings(&self, url: &str, sql: &str) -> Result<Vec<String>, String> {
+        self.query_strings_with_limits(url, sql, &[], self.query_limits())
+    }
+
+    pub fn query_strings_params(
+        &self,
+        url: &str,
+        sql: &str,
+        params: &[String],
+    ) -> Result<Vec<String>, String> {
+        self.query_strings_with_limits(url, sql, params, self.query_limits())
+    }
+
+    fn query_one_string_with_limits(
+        &self,
+        url: &str,
+        sql: &str,
+        params: &[String],
+        limits: QueryLimits,
+    ) -> Result<Option<String>, String> {
+        let handle = pool_for(self, url)?;
+        let pool = handle.pool.clone();
+        let sql = sql.to_owned();
+        let params = params.to_vec();
+        run_pool_with_deadline(
+            self,
+            url,
+            "query",
+            self.config.query_timeout,
+            handle.permits,
+            async move {
+                let mut query = sqlx::query(&sql);
+                for param in &params {
+                    query = query.bind(param);
+                }
+                let row = query
+                    .fetch_optional(&pool)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let Some(row) = row else {
+                    return Ok(None);
+                };
                 let value: &str = row.try_get(0).map_err(|error| error.to_string())?;
-                account_value(value, values.len(), &mut bytes, limits)?;
-                values.push(value.to_string());
-            }
-            Ok(values)
-        },
-    )
+                let mut bytes = 0;
+                account_value(value, 0, &mut bytes, limits)?;
+                Ok(Some(value.to_string()))
+            },
+        )
+    }
+
+    pub fn query_one_string(&self, url: &str, sql: &str) -> Result<Option<String>, String> {
+        self.query_one_string_with_limits(url, sql, &[], self.query_limits())
+    }
+
+    pub fn query_one_string_params(
+        &self,
+        url: &str,
+        sql: &str,
+        params: &[String],
+    ) -> Result<Option<String>, String> {
+        self.query_one_string_with_limits(url, sql, params, self.query_limits())
+    }
+}
+
+impl Drop for SqlxAdapter {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::Release);
+        if let Ok(runtime) = self.runtime.get_mut()
+            && let Some(runtime) = runtime.take()
+        {
+            runtime.shutdown_background();
+        }
+    }
+}
+
+fn default_adapter() -> Result<&'static SqlxAdapter, String> {
+    static ADAPTER: OnceLock<Result<SqlxAdapter, String>> = OnceLock::new();
+    ADAPTER
+        .get_or_init(SqlxAdapter::new)
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+pub fn close(url: &str) -> Result<(), String> {
+    default_adapter()?.close(url)
+}
+
+pub fn close_all() -> Result<(), String> {
+    default_adapter()?.close_all()
+}
+
+pub fn execute(url: &str, sql: &str) -> Result<(), String> {
+    default_adapter()?.execute(url, sql)
+}
+
+pub fn execute_params(url: &str, sql: &str, params: &[String]) -> Result<(), String> {
+    default_adapter()?.execute_params(url, sql, params)
 }
 
 pub fn query_strings(url: &str, sql: &str) -> Result<Vec<String>, String> {
-    query_strings_with_limits(url, sql, &[], configured_query_limits()?)
+    default_adapter()?.query_strings(url, sql)
 }
 
-/// Query with positional string bind parameters.
 pub fn query_strings_params(
     url: &str,
     sql: &str,
     params: &[String],
 ) -> Result<Vec<String>, String> {
-    query_strings_with_limits(url, sql, params, configured_query_limits()?)
-}
-
-fn query_one_string_with_limits(
-    url: &str,
-    sql: &str,
-    params: &[String],
-    limits: QueryLimits,
-) -> Result<Option<String>, String> {
-    let config = configured_sqlx()?;
-    let handle = pool_for(url, config)?;
-    let pool = handle.pool.clone();
-    let sql = sql.to_owned();
-    let params = params.to_vec();
-    run_pool_with_deadline(
-        url,
-        "query",
-        config.query_timeout,
-        handle.permits,
-        async move {
-            let mut query = sqlx::query(&sql);
-            for param in &params {
-                query = query.bind(param);
-            }
-            let row = query
-                .fetch_optional(&pool)
-                .await
-                .map_err(|error| error.to_string())?;
-            let Some(row) = row else {
-                return Ok(None);
-            };
-            let value: &str = row.try_get(0).map_err(|error| error.to_string())?;
-            let mut bytes = 0;
-            account_value(value, 0, &mut bytes, limits)?;
-            Ok(Some(value.to_string()))
-        },
-    )
+    default_adapter()?.query_strings_params(url, sql, params)
 }
 
 pub fn query_one_string(url: &str, sql: &str) -> Result<Option<String>, String> {
-    query_one_string_with_limits(url, sql, &[], configured_query_limits()?)
+    default_adapter()?.query_one_string(url, sql)
 }
 
-/// Query one row with positional string bind parameters.
 pub fn query_one_string_params(
     url: &str,
     sql: &str,
     params: &[String],
 ) -> Result<Option<String>, String> {
-    query_one_string_with_limits(url, sql, params, configured_query_limits()?)
+    default_adapter()?.query_one_string_params(url, sql, params)
 }
 
 #[cfg(test)]
@@ -765,29 +918,32 @@ mod tests {
             "create table item(name text); insert into item values ('aa'), ('bbb');",
         )
         .expect("sqlite setup should work");
+        let adapter = super::default_adapter().expect("default adapter");
 
-        let row_error = super::query_strings_with_limits(
-            &url,
-            "select name from item order by name",
-            &[],
-            super::QueryLimits {
-                max_rows: 1,
-                max_bytes: 100,
-            },
-        )
-        .expect_err("two rows must exceed the limit");
+        let row_error = adapter
+            .query_strings_with_limits(
+                &url,
+                "select name from item order by name",
+                &[],
+                super::QueryLimits {
+                    max_rows: 1,
+                    max_bytes: 100,
+                },
+            )
+            .expect_err("two rows must exceed the limit");
         assert!(row_error.ends_with("query result exceeds row limit of 1"));
 
-        let byte_error = super::query_strings_with_limits(
-            &url,
-            "select name from item order by name",
-            &[],
-            super::QueryLimits {
-                max_rows: 10,
-                max_bytes: 4,
-            },
-        )
-        .expect_err("five bytes must exceed the limit");
+        let byte_error = adapter
+            .query_strings_with_limits(
+                &url,
+                "select name from item order by name",
+                &[],
+                super::QueryLimits {
+                    max_rows: 10,
+                    max_bytes: 4,
+                },
+            )
+            .expect_err("five bytes must exceed the limit");
         assert!(byte_error.ends_with("query result exceeds byte limit of 4"));
 
         super::close(&url).expect("pool should close");
@@ -802,10 +958,17 @@ mod tests {
             "postgres://user:password@db.example/app?sslmode=require&application_name=rss";
         let reordered =
             "postgres://user:password@db.example/app?application_name=rss&sslmode=require";
+        let salt = super::new_salt();
 
-        assert_eq!(super::pool_key(first), super::pool_key(equivalent));
-        assert_ne!(super::pool_key(first), super::pool_key(reordered));
-        let debug_key = format!("{:?}", super::pool_key(first));
+        assert_eq!(
+            super::pool_key(&salt, first),
+            super::pool_key(&salt, equivalent)
+        );
+        assert_ne!(
+            super::pool_key(&salt, first),
+            super::pool_key(&salt, reordered)
+        );
+        let debug_key = format!("{:?}", super::pool_key(&salt, first));
         assert!(!debug_key.contains("user"));
         assert!(!debug_key.contains("password"));
         assert!(!debug_key.contains("db.example"));
@@ -845,11 +1008,13 @@ mod tests {
 
     #[test]
     fn runtime_executes_independent_jobs_concurrently() {
+        let adapter = std::sync::Arc::new(super::SqlxAdapter::new().expect("adapter"));
         let started = std::time::Instant::now();
         let jobs = (0..2)
             .map(|_| {
-                std::thread::spawn(|| {
-                    super::run_on_runtime(async {
+                let adapter = adapter.clone();
+                std::thread::spawn(move || {
+                    super::run_on_runtime(&adapter, async {
                         tokio::time::sleep(std::time::Duration::from_millis(80)).await;
                     })
                     .expect("runtime job should run");
@@ -878,40 +1043,58 @@ mod tests {
 
     #[test]
     fn bounds_registry_with_lru_eviction_and_closes_pools_deterministically() {
-        let _guard = test_guard();
-        super::close_all().expect("registry cleanup should work");
+        let adapter = super::SqlxAdapter::new().expect("adapter");
         let (path_a, url_a) = sqlite_url("pool-a");
         let (path_b, url_b) = sqlite_url("pool-b");
         let (path_c, url_c) = sqlite_url("pool-c");
 
         let idle_timeout = std::time::Duration::from_secs(60);
         let connect_timeout = std::time::Duration::from_secs(1);
-        super::pool_for_with_config(&url_a, 2, idle_timeout, connect_timeout, 2)
+        super::pool_for_with_config(&adapter, &url_a, 2, idle_timeout, connect_timeout, 2)
             .expect("first pool");
-        super::pool_for_with_config(&url_b, 2, idle_timeout, connect_timeout, 2)
+        super::pool_for_with_config(&adapter, &url_b, 2, idle_timeout, connect_timeout, 2)
             .expect("second pool");
-        super::pool_for_with_config(&url_a, 2, idle_timeout, connect_timeout, 2)
+        super::pool_for_with_config(&adapter, &url_a, 2, idle_timeout, connect_timeout, 2)
             .expect("existing pool remains available");
-        super::pool_for_with_config(&url_c, 2, idle_timeout, connect_timeout, 2)
+        super::pool_for_with_config(&adapter, &url_c, 2, idle_timeout, connect_timeout, 2)
             .expect("third pool should evict the least recently used pool");
 
         {
-            let registry = super::pools().lock().expect("pool registry lock");
+            let registry = adapter.pools.lock().expect("pool registry lock");
             assert_eq!(registry.entries.len(), 2);
-            assert!(registry.entries.contains_key(&super::pool_key(&url_a)));
-            assert!(!registry.entries.contains_key(&super::pool_key(&url_b)));
-            assert!(registry.entries.contains_key(&super::pool_key(&url_c)));
+            assert!(
+                registry
+                    .entries
+                    .contains_key(&super::pool_key(&adapter.salt, &url_a))
+            );
+            assert!(
+                !registry
+                    .entries
+                    .contains_key(&super::pool_key(&adapter.salt, &url_b))
+            );
+            assert!(
+                registry
+                    .entries
+                    .contains_key(&super::pool_key(&adapter.salt, &url_c))
+            );
         }
 
-        super::close(&url_a).expect("single pool close should work");
+        adapter
+            .close(&url_a)
+            .expect("single pool close should work");
         {
-            let registry = super::pools().lock().expect("pool registry lock");
-            assert!(!registry.entries.contains_key(&super::pool_key(&url_a)));
+            let registry = adapter.pools.lock().expect("pool registry lock");
+            assert!(
+                !registry
+                    .entries
+                    .contains_key(&super::pool_key(&adapter.salt, &url_a))
+            );
             assert_eq!(registry.entries.len(), 1);
         }
-        super::close_all().expect("all pools should close");
+        adapter.close_all().expect("all pools should close");
         assert!(
-            super::pools()
+            adapter
+                .pools
                 .lock()
                 .expect("pool registry lock")
                 .entries
@@ -925,27 +1108,32 @@ mod tests {
 
     #[test]
     fn evicts_idle_pool_entries() {
-        let _guard = test_guard();
-        super::close_all().expect("registry cleanup should work");
+        let adapter = super::SqlxAdapter::new().expect("adapter");
         let (path_a, url_a) = sqlite_url("idle-a");
         let idle_timeout = std::time::Duration::from_millis(1);
         let connect_timeout = std::time::Duration::from_secs(1);
 
-        let expired = super::pool_for_with_config(&url_a, 2, idle_timeout, connect_timeout, 2)
-            .expect("first pool");
+        let expired =
+            super::pool_for_with_config(&adapter, &url_a, 2, idle_timeout, connect_timeout, 2)
+                .expect("first pool");
         std::thread::sleep(std::time::Duration::from_millis(5));
-        let replacement = super::pool_for_with_config(&url_a, 2, idle_timeout, connect_timeout, 2)
-            .expect("expired pool should be replaced");
-        super::run_on_runtime(async move { expired.pool.close().await })
+        let replacement =
+            super::pool_for_with_config(&adapter, &url_a, 2, idle_timeout, connect_timeout, 2)
+                .expect("expired pool should be replaced");
+        super::run_on_runtime(&adapter, async move { expired.pool.close().await })
             .expect("expired pool should close");
         assert!(!replacement.pool.is_closed());
 
-        let registry = super::pools().lock().expect("pool registry lock");
+        let registry = adapter.pools.lock().expect("pool registry lock");
         assert_eq!(registry.entries.len(), 1);
-        assert!(registry.entries.contains_key(&super::pool_key(&url_a)));
+        assert!(
+            registry
+                .entries
+                .contains_key(&super::pool_key(&adapter.salt, &url_a))
+        );
         drop(registry);
 
-        super::close_all().expect("registry cleanup should work");
+        adapter.close_all().expect("registry cleanup should work");
         let _ = std::fs::remove_file(path_a);
     }
 
@@ -964,14 +1152,19 @@ mod tests {
 
     #[test]
     fn enforces_total_deadlines_without_exposing_urls() {
-        let _guard = test_guard();
+        let adapter = super::SqlxAdapter::new().expect("adapter");
         let url = "postgres://deadline-user:deadline-password@example.invalid/database";
-        let error =
-            super::run_with_deadline(url, "query", std::time::Duration::from_millis(1), async {
+        let error = super::run_with_deadline(
+            &adapter,
+            url,
+            "query",
+            std::time::Duration::from_millis(1),
+            async {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                 Ok::<_, String>(())
-            })
-            .expect_err("slow operation should time out");
+            },
+        )
+        .expect_err("slow operation should time out");
 
         assert!(error.contains("timed out after 1ms"));
         assert!(error.contains("<database-url:"));
@@ -1002,6 +1195,77 @@ mod tests {
 
         super::close(&url).expect("pool should close");
         let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn adapters_isolate_runtime_pools_and_shutdown_independently_in_parallel() {
+        let (first_path, first_url) = sqlite_url("owner-first");
+        let (second_path, second_url) = sqlite_url("owner-second");
+        let first = std::sync::Arc::new(super::SqlxAdapter::new().expect("first adapter"));
+        let second = std::sync::Arc::new(super::SqlxAdapter::new().expect("second adapter"));
+        let jobs = [
+            (first.clone(), first_url.clone()),
+            (second.clone(), second_url.clone()),
+        ]
+        .map(|(adapter, url)| {
+            std::thread::spawn(move || {
+                adapter
+                    .execute(&url, "create table owner_test(value text)")
+                    .expect("isolated execute");
+            })
+        });
+        for job in jobs {
+            job.join().expect("adapter thread");
+        }
+
+        assert_eq!(first.pools.lock().expect("first pools").entries.len(), 1);
+        assert_eq!(second.pools.lock().expect("second pools").entries.len(), 1);
+        first
+            .shutdown(std::time::Duration::from_secs(1))
+            .expect("first shutdown");
+        assert!(
+            first
+                .execute(&first_url, "select 1")
+                .expect_err("shut down adapter must reject work")
+                .contains("shut down")
+        );
+        assert_eq!(
+            second
+                .query_one_string(&second_url, "select 'ready'")
+                .expect("second adapter remains live"),
+            Some("ready".to_string())
+        );
+
+        second
+            .shutdown(std::time::Duration::from_secs(1))
+            .expect("second shutdown");
+        let _ = std::fs::remove_file(first_path);
+        let _ = std::fs::remove_file(second_path);
+    }
+
+    #[test]
+    fn new_adapters_read_current_environment_without_sticky_configuration() {
+        let _guard = test_guard();
+        let previous = std::env::var_os(super::MAX_IN_FLIGHT_ENV);
+        // SAFETY: environment mutation is serialized with every environment-sensitive test.
+        unsafe { std::env::set_var(super::MAX_IN_FLIGHT_ENV, "3") };
+        let first = super::SqlxAdapter::new().expect("first adapter");
+        // SAFETY: environment mutation is serialized with every environment-sensitive test.
+        unsafe { std::env::set_var(super::MAX_IN_FLIGHT_ENV, "7") };
+        let second = super::SqlxAdapter::new().expect("second adapter");
+        match previous {
+            Some(value) => {
+                // SAFETY: environment mutation is serialized with every environment-sensitive test.
+                unsafe { std::env::set_var(super::MAX_IN_FLIGHT_ENV, value) }
+            }
+            None => {
+                // SAFETY: environment mutation is serialized with every environment-sensitive test.
+                unsafe { std::env::remove_var(super::MAX_IN_FLIGHT_ENV) }
+            }
+        }
+
+        assert_eq!(first.config().max_in_flight, 3);
+        assert_eq!(second.config().max_in_flight, 7);
     }
 
     // Live Postgres test. Skipped unless `RSS_SQLX_TEST_POSTGRES_URL` points at a

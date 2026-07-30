@@ -1,13 +1,16 @@
-use crate::{ResourceBudget, RssCancellationToken, RssDeadline};
+use std::sync::Arc;
+
+use crate::{ResourceBudget, RssCancellationToken, RssDeadline, RuntimeServices};
 
 /// Controls shared by one runtime operation and any work it starts.
 ///
 /// Clones retain the same cancellation signal and cumulative byte budget.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct OperationContext {
     deadline: RssDeadline,
     cancellation: RssCancellationToken,
     byte_budget: ResourceBudget,
+    services: Arc<RuntimeServices>,
 }
 
 impl OperationContext {
@@ -16,10 +19,25 @@ impl OperationContext {
         cancellation: RssCancellationToken,
         byte_budget: ResourceBudget,
     ) -> Self {
+        Self::with_services(
+            deadline,
+            cancellation,
+            byte_budget,
+            Arc::clone(crate::async_runtime::default_runtime_services()),
+        )
+    }
+
+    pub fn with_services(
+        deadline: RssDeadline,
+        cancellation: RssCancellationToken,
+        byte_budget: ResourceBudget,
+        services: Arc<RuntimeServices>,
+    ) -> Self {
         Self {
             deadline,
             cancellation,
             byte_budget,
+            services,
         }
     }
 
@@ -42,6 +60,22 @@ impl OperationContext {
 
     pub fn byte_budget(&self) -> &ResourceBudget {
         &self.byte_budget
+    }
+
+    pub fn services(&self) -> &Arc<RuntimeServices> {
+        &self.services
+    }
+}
+
+impl std::fmt::Debug for OperationContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("OperationContext")
+            .field("deadline", &self.deadline)
+            .field("cancellation", &self.cancellation)
+            .field("byte_budget", &self.byte_budget)
+            .field("services_shutdown", &self.services.is_shutdown())
+            .finish()
     }
 }
 
@@ -91,5 +125,22 @@ mod tests {
             .expect("consumption should fit");
         assert_eq!(budget.bytes_used(), 3);
         assert!(!cancellation_token_is_cancelled(context.cancellation()));
+    }
+
+    #[test]
+    fn context_explicitly_retains_its_runtime_services_owner() {
+        let services = Arc::new(RuntimeServices::new().expect("runtime services"));
+        let context = OperationContext::with_services(
+            deadline_after_ms(10_000),
+            cancellation_never(),
+            ResourceBudget::new(8),
+            services.clone(),
+        );
+        let clone = context.clone();
+
+        assert!(Arc::ptr_eq(context.services(), &services));
+        assert!(Arc::ptr_eq(clone.services(), &services));
+        services.shutdown(std::time::Duration::from_secs(1));
+        assert!(context.services().is_shutdown());
     }
 }
