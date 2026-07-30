@@ -168,6 +168,8 @@ services. Instance APIs own caches, limits, and shutdown; compatibility free
 functions delegate to a default instance but no longer contain the core state
 machine. `OperationContext` can carry an explicit `RuntimeServices` owner, so
 embedded executions and tests can use independent lifecycle and policy state.
+Each owner initializes its Metal context only on first GPU use, so ordinary
+HTTP, process, and socket operations do not allocate device resources.
 
 R10 replaces successful concrete authorization results with opaque
 `AuthorizedPath`, `AuthorizedEndpoint`, `AuthorizedExecutable`, and

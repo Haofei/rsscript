@@ -50,10 +50,7 @@ fn terraform_fact_budget_fails_before_returning_partial_evidence() {
     )
     .expect_err("zero fact budget must reject the conversion");
 
-    assert!(
-        error.contains("fact") && error.contains("limit"),
-        "{error}"
-    );
+    assert!(error.contains("fact") && error.contains("limit"), "{error}");
 }
 
 #[test]

@@ -752,7 +752,7 @@ pub struct RuntimeServices {
     #[cfg(feature = "net")]
     http_client: reqwest::Client,
     #[cfg(feature = "gpu")]
-    metal_context: rss_metal_compute::MetalContext,
+    metal_context: std::sync::OnceLock<rss_metal_compute::MetalContext>,
 }
 
 impl RuntimeServices {
@@ -784,14 +784,16 @@ impl RuntimeServices {
             #[cfg(feature = "net")]
             http_client,
             #[cfg(feature = "gpu")]
-            metal_context: rss_metal_compute::MetalContext::new(),
+            metal_context: std::sync::OnceLock::new(),
         })
     }
 
     pub fn shutdown(&self, timeout: Duration) {
         self.process_concurrency.shutdown();
         #[cfg(feature = "gpu")]
-        self.metal_context.shutdown();
+        if let Some(metal_context) = self.metal_context.get() {
+            metal_context.shutdown();
+        }
         self.runtime.shutdown(timeout);
     }
 
@@ -805,7 +807,8 @@ impl RuntimeServices {
 
     #[cfg(feature = "gpu")]
     pub fn metal_context(&self) -> &rss_metal_compute::MetalContext {
-        &self.metal_context
+        self.metal_context
+            .get_or_init(rss_metal_compute::MetalContext::new)
     }
 
     pub(crate) fn runtime_handle(&self) -> Result<tokio::runtime::Handle, String> {
@@ -1823,5 +1826,15 @@ mod tests {
         assert_eq!(second.worker_threads(), 3);
         first.shutdown(Duration::from_secs(1));
         second.shutdown(Duration::from_secs(1));
+    }
+
+    #[cfg(feature = "gpu")]
+    #[test]
+    fn runtime_services_defer_metal_initialization_until_gpu_use() {
+        let services = RuntimeServices::with_worker_threads(1).expect("runtime services");
+
+        assert!(services.metal_context.get().is_none());
+        services.shutdown(Duration::from_secs(1));
+        assert!(services.metal_context.get().is_none());
     }
 }
