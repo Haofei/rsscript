@@ -4,12 +4,10 @@ pub(super) use crate::text_util::{
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostic::{Diagnostic, Span, code};
-use crate::interfaces::builtin_interfaces;
 use crate::syntax::ast::{
     Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FileFeature, FunctionDecl, GenericBound,
     GenericParam, Item, MatchLiteral, MatchPattern, Param, Program, Stmt, TypeRef,
 };
-use crate::syntax::parse_source;
 
 use super::intrinsics::*;
 use super::lowerer::RustLowerer;
@@ -384,10 +382,6 @@ pub(super) fn collect_function_return_types(
 ) -> BTreeMap<String, TypeRef> {
     let mut return_types = BTreeMap::new();
     collect_program_function_return_types(program, &mut return_types);
-    for (file, source) in builtin_interfaces() {
-        let interface_program = parse_source(file, source);
-        collect_program_function_return_types(&interface_program, &mut return_types);
-    }
     for interface_program in interface_programs {
         collect_program_function_return_types(interface_program, &mut return_types);
     }
@@ -399,10 +393,6 @@ pub(super) fn collect_function_type_params(
     interface_programs: &[Program],
 ) -> BTreeMap<String, Vec<String>> {
     let mut type_params = BTreeMap::new();
-    for (file, source) in builtin_interfaces() {
-        let interface_program = parse_source(file, source);
-        collect_program_function_type_params(&interface_program, &mut type_params);
-    }
     for interface_program in interface_programs {
         collect_program_function_type_params(interface_program, &mut type_params);
     }
@@ -415,10 +405,6 @@ pub(super) fn collect_function_param_types(
     interface_programs: &[Program],
 ) -> BTreeMap<String, Vec<(String, TypeRef)>> {
     let mut param_types = BTreeMap::new();
-    for (file, source) in builtin_interfaces() {
-        let interface_program = parse_source(file, source);
-        collect_program_function_param_types(&interface_program, &mut param_types);
-    }
     for interface_program in interface_programs {
         collect_program_function_param_types(interface_program, &mut param_types);
     }
@@ -431,10 +417,6 @@ pub(super) fn collect_function_param_effects(
     interface_programs: &[Program],
 ) -> BTreeMap<String, Vec<(String, Option<DataEffect>)>> {
     let mut param_effects = BTreeMap::new();
-    for (file, source) in builtin_interfaces() {
-        let interface_program = parse_source(file, source);
-        collect_program_function_param_effects(&interface_program, &mut param_effects);
-    }
     for interface_program in interface_programs {
         collect_program_function_param_effects(interface_program, &mut param_effects);
     }
@@ -486,9 +468,6 @@ pub(super) fn collect_function_param_defaults(
     interface_programs: &[Program],
 ) -> BTreeMap<String, Vec<Option<crate::syntax::ast::Expr>>> {
     let mut defaults = BTreeMap::new();
-    for (file, source) in builtin_interfaces() {
-        collect_program_function_param_defaults(&parse_source(file, source), &mut defaults);
-    }
     for interface_program in interface_programs {
         collect_program_function_param_defaults(interface_program, &mut defaults);
     }
@@ -519,10 +498,6 @@ pub(super) fn collect_function_retained_params(
     interface_programs: &[Program],
 ) -> BTreeMap<String, BTreeSet<String>> {
     let mut retained_params = BTreeMap::new();
-    for (file, source) in builtin_interfaces() {
-        let interface_program = parse_source(file, source);
-        collect_program_function_retained_params(&interface_program, &mut retained_params);
-    }
     for interface_program in interface_programs {
         collect_program_function_retained_params(interface_program, &mut retained_params);
     }
@@ -588,10 +563,6 @@ pub(super) fn collect_native_boundary_callees(
     interface_programs: &[Program],
 ) -> BTreeSet<String> {
     let mut callees = BTreeSet::new();
-    for (file, source) in builtin_interfaces() {
-        let interface = parse_source(file, source);
-        collect_native_boundary_callees_from_program(&interface, &mut callees);
-    }
     for interface in interface_programs {
         collect_native_boundary_callees_from_program(interface, &mut callees);
     }
@@ -604,10 +575,6 @@ pub(super) fn collect_async_native_boundary_callees(
     interface_programs: &[Program],
 ) -> BTreeSet<String> {
     let mut callees = BTreeSet::new();
-    for (file, source) in builtin_interfaces() {
-        let interface = parse_source(file, source);
-        collect_async_native_boundary_callees_from_program(&interface, &mut callees);
-    }
     for interface in interface_programs {
         collect_async_native_boundary_callees_from_program(interface, &mut callees);
     }

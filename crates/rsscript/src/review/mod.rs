@@ -9,6 +9,7 @@ mod diff;
 mod facts_ast;
 mod facts_hir;
 mod map;
+pub(crate) use map::review_map_semantic_database;
 
 use crate::text_util::{type_arg_names, type_root_name};
 use std::collections::{BTreeMap, BTreeSet, HashMap};

@@ -23,9 +23,33 @@ pub(crate) fn review_map_sources_with_interfaces(
         .map(|(file, source)| parse_source(file, source))
         .collect::<Vec<_>>();
     let hir = Hir::from_syntax_with_interfaces(&merged_program, &interface_programs);
+    review_map_from_parsed_sources(parsed_sources, &hir)
+}
+
+pub(crate) fn review_map_semantic_database(
+    database: &crate::semantic::SemanticDatabase,
+) -> ReviewMap {
+    let parsed_sources = database
+        .sources()
+        .files()
+        .iter()
+        .zip(database.source_programs())
+        .map(|(source, program)| ReviewMapParsedSource {
+            file: source.path().to_string(),
+            total_lines: source.text().lines().count().max(1),
+            program: program.clone(),
+        })
+        .collect::<Vec<_>>();
+    review_map_from_parsed_sources(parsed_sources, database.hir())
+}
+
+fn review_map_from_parsed_sources(
+    parsed_sources: Vec<ReviewMapParsedSource>,
+    hir: &Hir,
+) -> ReviewMap {
     let mut region_drafts = parsed_sources
         .iter()
-        .flat_map(|source| review_map_file_region_drafts(source, &hir))
+        .flat_map(|source| review_map_file_region_drafts(source, hir))
         .collect::<Vec<_>>();
     propagate_review_map_call_classifications(&mut region_drafts);
 

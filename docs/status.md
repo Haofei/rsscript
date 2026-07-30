@@ -53,10 +53,11 @@ host execution into isolation.
 
 ## Open Maintainability Work
 
-- Introduce a sealed semantic database/validated-program boundary.
 - Replace string-based generic type substitution.
-- Continue migrating runtime APIs to `OperationContext`, then an injected
-  execution context.
+- Cache raw source indexes by LSP document revision; the checked semantic
+  database intentionally stores semantic/desugared programs.
+- Continue migrating runtime APIs from `OperationContext` to a mandatory
+  injected execution context.
 - Split LSP, REIR, analyzer, lowering, runtime services, and VM/JIT by
   invariant.
 - Reduce broad public re-exports before declaring API stability.
@@ -74,7 +75,7 @@ This table records the current implementation batch for the refactoring work in
 | --- | --- | --- | --- |
 | R0 | Architecture dependency guards and behavior baselines | Complete | CI rejects forbidden dependency directions and current contract suites remain green |
 | R1 | Complete package/dependency snapshot before review or execution | Complete | Check, review, lower, build, publish, and vendor consume one immutable graph |
-| R2 | `SourceSnapshot`, frontend budget, semantic database, and `ValidatedProgram` | Not started | Review, lowering, VM, and LSP consume checked facts without semantic re-derivation |
+| R2 | `SourceSnapshot`, frontend budget, semantic database, and `ValidatedProgram` | Complete | Review, lowering, VM, and LSP consume one bounded frontend result; executable backends require validated checked facts |
 | R3 | Mandatory `ExecutionContext` and scoped host capabilities | Not started | Restricted execution cannot reach ambient filesystem, network, process, or database authority |
 | R4 | LSP, REIR, runtime, analyzer, package-native, VM, and JIT decomposition | Not started | Modules are split around tested state transitions without behavior changes |
 | R5 | Public API contraction and explicit facades | Not started | Broad glob exports and duplicate compatibility entrypoints are removed |
@@ -89,6 +90,16 @@ begins. Internal captured entrypoints consume only that graph for their full
 lifetime. Public results map diagnostics and package identities back to checkout
 paths, and regression tests cover later source mutation and absolute path
 dependencies without exposing private snapshot paths.
+
+R2 makes one frontend run own immutable source/interface bytes, parsed
+per-file semantic programs, the merged namespace-isolated program, checked HIR,
+diagnostics, and a typed completion state. `ValidatedProgram` is constructible
+only from a complete result without error diagnostics. Register-VM compilation
+consumes checked HIR directly; Rust lowering and package review reuse the same
+parsed programs and no longer reparse built-in interfaces. LSP diagnostics use
+the same result API. Code-generation-only declaration projections remain AST
+projections, not an independent semantic checker; raw source indexes remain an
+R4 LSP decomposition concern.
 
 ## Experimental Status
 

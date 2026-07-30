@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::diagnostic::{Diagnostic, Span, code};
+use crate::semantic::{FrontendCompletion, FrontendStopReason};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct FrontendBudgetLimits {
@@ -265,6 +266,39 @@ impl FrontendBudget {
                 "manual",
             ),
         )
+    }
+
+    pub(crate) fn completion(&self) -> FrontendCompletion {
+        match self.exhausted.get() {
+            None => FrontendCompletion::Complete,
+            Some(ExhaustedBudget::SourceBytes) => {
+                FrontendCompletion::Incomplete(FrontendStopReason::SourceBytes)
+            }
+            Some(ExhaustedBudget::Tokens) => {
+                FrontendCompletion::Incomplete(FrontendStopReason::Tokens)
+            }
+            Some(ExhaustedBudget::ParseDepth) => {
+                FrontendCompletion::Incomplete(FrontendStopReason::ParseDepth)
+            }
+            Some(ExhaustedBudget::AstNodes) => {
+                FrontendCompletion::Incomplete(FrontendStopReason::AstNodes)
+            }
+            Some(ExhaustedBudget::Nodes) => {
+                FrontendCompletion::Incomplete(FrontendStopReason::SemanticNodes)
+            }
+            Some(ExhaustedBudget::Substitutions) => {
+                FrontendCompletion::Incomplete(FrontendStopReason::Substitutions)
+            }
+            Some(ExhaustedBudget::Diagnostics) => {
+                FrontendCompletion::Incomplete(FrontendStopReason::Diagnostics)
+            }
+            Some(ExhaustedBudget::SemanticRecursion) => {
+                FrontendCompletion::Incomplete(FrontendStopReason::SemanticRecursion)
+            }
+            Some(ExhaustedBudget::Cancelled) => {
+                FrontendCompletion::Incomplete(FrontendStopReason::Cancelled)
+            }
+        }
     }
 }
 

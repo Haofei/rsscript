@@ -3,12 +3,12 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::analyzer::{analyze_source_with_core, analyze_sources_with_interfaces_without_core};
+use crate::analyzer::{validate_source, validate_sources_with_interfaces_without_core};
 use crate::diagnostic::Diagnostic;
 use crate::eval_types::CoverageBucket;
 use crate::interfaces::{builtin_interfaces, default_interfaces, standard_package_interfaces};
 use crate::runtime_abi;
-use crate::syntax::ast::{Program, merge_programs};
+use crate::syntax::ast::Program;
 use crate::syntax::parse_source;
 
 mod backend_check;
@@ -213,25 +213,17 @@ pub fn lower_source_to_rust_with_map(
     file: &str,
     source: &str,
 ) -> Result<LoweredRust, Vec<Diagnostic>> {
-    let diagnostics = analyze_source_with_core(file, source);
-    if diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity.is_error())
-    {
-        return Err(diagnostics);
-    }
-
-    let program = parse_source(file, source);
+    let validated = validate_source(file, source)?;
+    let database = validated.database();
+    let program = database.program();
     let lowering_diagnostics = validate_executable_declarations(&program, &BTreeMap::new());
     if !lowering_diagnostics.is_empty() {
         return Err(lowering_diagnostics);
     }
-    let interface_programs = default_interfaces()
-        .map(|(file, source)| parse_source(file, source))
-        .collect::<Vec<_>>();
-    Ok(lower_program_to_rust_with_map_with_interfaces(
-        &program,
-        &interface_programs,
+    Ok(lower_validated_program_to_rust_with_map(
+        program,
+        BTreeMap::new(),
+        database.interface_programs(),
     ))
 }
 
@@ -297,19 +289,9 @@ pub fn lower_sources_to_rust_package_with_options(
         .iter()
         .map(|(path, contents)| (path.as_str(), contents.as_str()))
         .collect::<Vec<_>>();
-    let diagnostics = analyze_sources_with_interfaces_without_core(&source_refs, &interface_refs);
-    if diagnostics
-        .iter()
-        .any(|diagnostic| diagnostic.severity.is_error())
-    {
-        return Err(diagnostics);
-    }
-
-    let program = merge_programs(
-        sources
-            .iter()
-            .map(|(path, source)| parse_source(path, source)),
-    );
+    let validated = validate_sources_with_interfaces_without_core(&source_refs, &interface_refs)?;
+    let database = validated.database();
+    let program = database.program();
     let native_bindings = native_dependencies
         .iter()
         .flat_map(|dependency| dependency.bindings.iter())
@@ -319,14 +301,10 @@ pub fn lower_sources_to_rust_package_with_options(
     if !lowering_diagnostics.is_empty() {
         return Err(lowering_diagnostics);
     }
-    let interface_programs = interface_refs
-        .iter()
-        .map(|(file, source)| parse_source(file, source))
-        .collect::<Vec<_>>();
-    let lowered = lower_program_to_rust_with_map_with_native_bindings(
-        &program,
+    let lowered = lower_validated_program_to_rust_with_map(
+        program,
         native_bindings,
-        &interface_programs,
+        database.interface_programs(),
     );
     let package_name = cargo_package_name(package_name);
     let native_dependency_toml = native_dependencies
@@ -464,15 +442,12 @@ fn lower_program_to_rust_with_map_with_native_bindings(
     RustLowerer::new(&program, native_bindings, interface_programs).lower()
 }
 
-fn lower_program_to_rust_with_map_with_interfaces(
+fn lower_validated_program_to_rust_with_map(
     program: &Program,
+    native_bindings: BTreeMap<String, String>,
     interface_programs: &[Program],
 ) -> LoweredRust {
-    lower_program_to_rust_with_map_with_native_bindings(
-        program,
-        BTreeMap::new(),
-        interface_programs,
-    )
+    RustLowerer::new(program, native_bindings, interface_programs).lower()
 }
 
 #[cfg(test)]

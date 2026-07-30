@@ -2,15 +2,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use crate::analyzer::{
-    analyze_source_with_interfaces, analyze_sources_with_interfaces_without_core, core_interfaces,
+    analyze_source_with_interfaces_result, analyze_sources_with_interfaces_without_core_result,
+    core_interfaces,
 };
 use crate::diagnostic::{Diagnostic, Span, code};
-use crate::hir::{CallResolution, Hir};
+use crate::hir::CallResolution;
 use crate::lint::lint_source;
-use crate::review::{ReviewMap, ReviewMapClassification, review_map_sources_with_interfaces};
+use crate::review::{ReviewMap, ReviewMapClassification, review_map_semantic_database};
 use crate::runtime_abi;
-use crate::syntax::ast::{Block, Callee, Expr, Item, Stmt, TypeKind, merge_programs};
-use crate::syntax::parse_source;
+use crate::syntax::ast::{Block, Callee, Expr, Item, Stmt, TypeKind};
 
 use super::contract::{
     PackageFunctionContract, collect_package_const_contracts, collect_package_function_contracts,
@@ -101,7 +101,8 @@ pub(super) fn review_package_dir_captured_with_features(
                     .filter(|(interface_path, _)| interface_path != path)
                     .copied(),
             );
-            analyze_source_with_interfaces(path, contents, &visible_interfaces)
+            analyze_source_with_interfaces_result(path, contents, &visible_interfaces)
+                .into_diagnostics()
         })
         .collect::<Vec<_>>();
     let interface_diagnostic_exports =
@@ -117,10 +118,10 @@ pub(super) fn review_package_dir_captured_with_features(
     ));
     diagnostics.extend(package_virtual_diagnostics(package_dir, manifest, sources));
     diagnostics.extend(interface_frontend_diagnostics);
-    diagnostics.extend(analyze_sources_with_interfaces_without_core(
-        &source_refs,
-        &source_interfaces,
-    ));
+    diagnostics.extend(
+        analyze_sources_with_interfaces_without_core_result(&source_refs, &source_interfaces)
+            .into_diagnostics(),
+    );
     if !test_refs.is_empty() {
         let mut test_interfaces = source_interfaces.clone();
         let mut seen_test_interfaces = test_interfaces
@@ -138,10 +139,10 @@ pub(super) fn review_package_dir_captured_with_features(
         } else {
             test_interfaces.extend(source_refs.clone());
         }
-        diagnostics.extend(analyze_sources_with_interfaces_without_core(
-            &test_refs,
-            &test_interfaces,
-        ));
+        diagnostics.extend(
+            analyze_sources_with_interfaces_without_core_result(&test_refs, &test_interfaces)
+                .into_diagnostics(),
+        );
     }
     diagnostics.extend(package_interface_contract_diagnostics(
         sources,
@@ -158,13 +159,23 @@ pub(super) fn review_package_dir_captured_with_features(
     ));
     diagnostics.extend(package_lint_diagnostics(sources));
     dedup_diagnostics(&mut diagnostics);
-    let review_map = review_map_sources_with_interfaces(
-        sources
-            .iter()
-            .map(|source| (source.path.as_str(), source.contents.as_str()))
-            .collect(),
+    let review_source_refs = sources
+        .iter()
+        .map(|source| (source.path.as_str(), source.contents.as_str()))
+        .collect::<Vec<_>>();
+    let review_analysis = analyze_sources_with_interfaces_without_core_result(
+        &review_source_refs,
         &source_interfaces,
     );
+    diagnostics.extend(
+        review_analysis
+            .diagnostics()
+            .iter()
+            .filter(|diagnostic| diagnostic.code == code::ANALYSIS_INCOMPLETE)
+            .cloned(),
+    );
+    dedup_diagnostics(&mut diagnostics);
+    let review_map = review_map_semantic_database(review_analysis.database());
 
     let native_rust = manifest
         .native
@@ -174,7 +185,7 @@ pub(super) fn review_package_dir_captured_with_features(
         .map(|native| package_native_rust_review(package_dir, manifest, sources, native))
         .transpose()?;
 
-    let capabilities = package_review_capabilities(manifest, sources);
+    let capabilities = package_review_capabilities(manifest, sources, review_analysis.database());
     let unknown_capability_bindings = capabilities
         .iter()
         .filter(|capability| capability.unknown_reason.is_some())
@@ -201,7 +212,7 @@ pub(super) fn review_package_dir_captured_with_features(
     reasons.sort();
     reasons.dedup();
 
-    let await_sites = collect_package_await_sites(sources);
+    let await_sites = collect_package_await_sites(sources, review_analysis.database());
     let api_summary = package_api_effect_summary(sources, &review_map, &await_sites);
     let risk = if interface_diagnostic_exports.is_empty() {
         package_risk(
@@ -792,8 +803,9 @@ fn package_api_effect_summary(
 fn package_review_capabilities(
     manifest: &Manifest,
     sources: &[PackageSource],
+    database: &crate::semantic::SemanticDatabase,
 ) -> Vec<PackageReviewCapability> {
-    let call_graph = collect_package_call_graph(sources);
+    let call_graph = collect_package_call_graph(sources, database);
     let mut capabilities = BTreeMap::new();
     let mut best_chain_lengths = BTreeMap::new();
 
@@ -956,28 +968,31 @@ struct PackageCallSite {
     span: Span,
 }
 
-fn collect_package_call_graph(sources: &[PackageSource]) -> PackageCallGraph {
+fn collect_package_call_graph(
+    sources: &[PackageSource],
+    database: &crate::semantic::SemanticDatabase,
+) -> PackageCallGraph {
     let mut reverse_calls = BTreeMap::new();
     let mut function_spans = BTreeMap::new();
     let relative_paths = sources
         .iter()
         .map(|source| (source.path.clone(), source.relative_path.clone()))
         .collect::<BTreeMap<_, _>>();
-    let source_program = merge_programs(
-        sources
-            .iter()
-            .filter(|source| source.kind == PackageReviewFileKind::Source)
-            .map(|source| parse_source(&source.path, &source.contents)),
-    );
-    let interface_programs = sources
+    let parsed_sources = database
+        .sources()
+        .files()
         .iter()
-        .filter(|source| source.kind == PackageReviewFileKind::Interface)
-        .map(|source| parse_source(&source.path, &source.contents))
+        .zip(database.source_programs())
+        .filter_map(|(source_snapshot, program)| {
+            sources
+                .iter()
+                .find(|source| source.path == source_snapshot.path())
+                .map(|source| (source, program))
+        })
         .collect::<Vec<_>>();
-    let hir = Hir::from_syntax_with_interfaces(&source_program, &interface_programs);
+    let hir = database.hir();
 
-    for source in sources {
-        let program = parse_source(&source.path, &source.contents);
+    for (source, program) in parsed_sources {
         for item in &program.items {
             let Item::Function(function) = item else {
                 continue;

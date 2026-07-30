@@ -2,13 +2,23 @@ use super::*;
 
 pub(super) fn collect_package_await_sites(
     sources: &[PackageSource],
+    database: &crate::semantic::SemanticDatabase,
 ) -> Vec<PackageReviewAwaitSite> {
-    let context = collect_await_site_context(sources);
-    let mut await_sites = sources
+    let context = collect_await_site_context(database.source_programs());
+    let mut await_sites = database
+        .sources()
+        .files()
         .iter()
-        .filter(|source| source.kind == PackageReviewFileKind::Source)
-        .flat_map(|source| {
-            let program = parse_source(&source.path, &source.contents);
+        .zip(database.source_programs())
+        .filter_map(|(snapshot, program)| {
+            sources
+                .iter()
+                .find(|source| {
+                    source.kind == PackageReviewFileKind::Source && source.path == snapshot.path()
+                })
+                .map(|source| (source, program))
+        })
+        .flat_map(|(source, program)| {
             program
                 .items
                 .iter()
@@ -54,13 +64,14 @@ pub(super) struct AwaitSiteContext {
     async_rss_callees: BTreeSet<String>,
 }
 
-pub(super) fn collect_await_site_context(sources: &[PackageSource]) -> AwaitSiteContext {
+pub(super) fn collect_await_site_context(
+    programs: &[crate::syntax::ast::Program],
+) -> AwaitSiteContext {
     let mut context = AwaitSiteContext {
         async_native_callees: BTreeSet::new(),
         async_rss_callees: BTreeSet::new(),
     };
-    for source in sources {
-        let program = parse_source(&source.path, &source.contents);
+    for program in programs {
         for item in &program.items {
             let Item::Function(function) = item else {
                 continue;

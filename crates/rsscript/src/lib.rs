@@ -37,6 +37,7 @@ mod runtime_abi;
 mod rust_lower;
 #[cfg(test)]
 mod selfhost_parity;
+mod semantic;
 mod symbols;
 pub mod syntax;
 mod text_util;
@@ -44,10 +45,14 @@ mod vm_coverage;
 mod vm_value;
 
 pub use analyzer::{
-    analyze_source, analyze_source_with_core, analyze_source_with_interfaces,
+    analyze_source, analyze_source_result, analyze_source_with_core,
+    analyze_source_with_interfaces, analyze_source_with_interfaces_result,
     analyze_source_with_interfaces_without_core, analyze_source_without_core,
-    analyze_sources_with_interfaces, analyze_sources_with_interfaces_without_core,
-    analyze_syntax_source, core_interfaces, standard_package_interfaces,
+    analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
+    analyze_sources_with_interfaces_without_core,
+    analyze_sources_with_interfaces_without_core_result, analyze_syntax_source, core_interfaces,
+    standard_package_interfaces, validate_source, validate_sources_with_interfaces,
+    validate_sources_with_interfaces_without_core,
 };
 pub use capability::{
     CAPABILITY_CATEGORIES, CapabilityCategory, CapabilityRisk, capability_category,
@@ -107,7 +112,8 @@ pub use package::{
 pub use reg_vm::{
     JitPlan, RegVmExecutable, RegVmExecutable as VmExecutable, VmLimits, reg_vm_compile_package,
     reg_vm_compile_package_input, reg_vm_compile_source as vm_compile_source,
-    reg_vm_compile_source, reg_vm_eval_package_main_with_args as eval_package_main_with_args,
+    reg_vm_compile_source, reg_vm_compile_validated,
+    reg_vm_eval_package_main_with_args as eval_package_main_with_args,
     reg_vm_eval_package_main_with_args_and_native_bindings as eval_package_main_with_args_and_native_bindings,
     reg_vm_eval_package_main_with_args_and_native_bindings_and_limits as eval_package_main_with_args_and_native_bindings_and_limits,
     reg_vm_eval_package_main_with_args_and_native_bindings_streaming_stdout as eval_package_main_with_args_and_native_bindings_streaming_stdout,
@@ -145,6 +151,10 @@ pub use rust_lower::{
     lower_sources_to_rust_package_with_interfaces, lower_sources_to_rust_package_with_options,
     parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json,
     remap_rustc_diagnostic_json_lines, write_generated_rust_package,
+};
+pub use semantic::{
+    AnalysisResult, FrontendCompletion, FrontendStopReason, SemanticDatabase, SourceFileSnapshot,
+    SourceSnapshot, ValidatedProgram,
 };
 pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolInventoryEntry,

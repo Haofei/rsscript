@@ -120,6 +120,30 @@ fn package_name(manifest: &toml::Value) -> &str {
         .expect("workspace member should declare package.name")
 }
 
+fn function_source<'a>(source: &'a str, signature: &str) -> &'a str {
+    let start = source
+        .find(signature)
+        .unwrap_or_else(|| panic!("missing function signature `{signature}`"));
+    let body_start = source[start..]
+        .find('{')
+        .map(|offset| start + offset)
+        .unwrap_or_else(|| panic!("missing function body for `{signature}`"));
+    let mut depth = 0usize;
+    for (offset, character) in source[body_start..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &source[start..=body_start + offset];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("unterminated function body for `{signature}`");
+}
+
 #[test]
 fn syntax_sources_do_not_reference_later_layers() {
     let root = workspace_root();
@@ -231,5 +255,36 @@ fn unsafe_boundary_crates_are_explicit_dependencies() {
         violations.is_empty(),
         "unsafe implementation boundaries must remain crate boundaries:\n{}",
         violations.join("\n")
+    );
+}
+
+#[test]
+fn executable_backends_consume_validated_frontend_results() {
+    let root = workspace_root();
+    let reg_vm = read(&root.join("crates/rsscript/src/reg_vm/mod.rs"));
+    let compile_source = function_source(&reg_vm, "pub fn reg_vm_compile_source");
+    assert!(
+        compile_source.contains("validate_source(file, source)")
+            && compile_source.contains("reg_vm_compile_validated(&validated)"),
+        "register VM source compilation must consume a ValidatedProgram"
+    );
+    let compile_validated = function_source(&reg_vm, "pub fn reg_vm_compile_validated");
+    assert!(
+        compile_validated.contains("validated.database().hir()"),
+        "register VM lowering must consume the checked HIR"
+    );
+
+    let rust_lower = read(&root.join("crates/rsscript/src/rust_lower/mod.rs"));
+    let lower_source = function_source(&rust_lower, "pub fn lower_source_to_rust_with_map");
+    assert!(
+        lower_source.contains("validate_source(file, source)")
+            && lower_source.contains("validated.database()"),
+        "Rust source lowering must consume a ValidatedProgram"
+    );
+
+    let helpers = read(&root.join("crates/rsscript/src/rust_lower/helpers.rs"));
+    assert!(
+        !helpers.contains("parse_source"),
+        "lowering declaration projections must reuse parsed semantic inputs"
     );
 }

@@ -99,6 +99,8 @@ strings, paths, and booleans. Important boundary concepts include:
 ```text
 SourceSnapshot
 ParsedProgram
+SemanticDatabase
+AnalysisResult
 ValidatedProgram
 ValidatedBundle
 AuthorizedPackage
@@ -107,8 +109,9 @@ ExecutionPolicy
 OperationContext
 ```
 
-These names describe the intended invariants. They do not imply that every
-boundary is already fully implemented.
+`SourceSnapshot`, `SemanticDatabase`, `AnalysisResult`, and `ValidatedProgram`
+form the implemented frontend chain. Other names describe intended invariants
+and do not imply that every boundary is already fully implemented.
 
 ## Current Hotspots
 

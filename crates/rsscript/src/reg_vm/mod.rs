@@ -21,19 +21,19 @@ use sha3::{
 };
 
 use self::calls::PureClosurePlan;
-use crate::diagnostic::Severity;
+#[cfg(test)]
+use crate::analyzer::validate_sources_with_interfaces;
+use crate::analyzer::{validate_source, validate_sources_with_interfaces_without_core};
 use crate::eval_types::{EvalError, EvalOutput, NativeInterpreterFn, NativeValue};
 use crate::hir::{
     Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirMatchArm, HirStmt, HirTypeKind,
     ParamEffect, TypeInfo,
 };
 use crate::interfaces::builtin_interfaces;
-#[cfg(test)]
-use crate::interfaces::standard_package_interfaces;
 use crate::package::prepare_package_for_execution;
-use crate::syntax::ast::{
-    BinaryOp, Callee, MatchFieldPattern, MatchLiteral, MatchPattern, merge_programs,
-};
+use crate::semantic::ValidatedProgram;
+use crate::syntax::ast::{BinaryOp, Callee, MatchFieldPattern, MatchLiteral, MatchPattern};
+#[cfg(test)]
 use crate::syntax::parse_source;
 #[cfg(feature = "native-jit")]
 use crate::text_util::string_pad_len;
@@ -1367,31 +1367,10 @@ pub fn reg_vm_compile_package_input(
         .iter()
         .map(|(path, contents)| (path.as_str(), contents.as_str()))
         .collect::<Vec<_>>();
-    let diagnostics =
-        crate::analyze_sources_with_interfaces_without_core(&source_refs, &interface_refs_borrowed);
-    let errors = diagnostics
-        .into_iter()
-        .filter(|diagnostic| diagnostic.severity.is_error())
-        .collect::<Vec<_>>();
-    if !errors.is_empty() {
-        return Err(EvalError::Diagnostics(errors));
-    }
-
-    let mut program = merge_programs(
-        input
-            .sources
-            .iter()
-            .map(|(path, source)| parse_source(path, source)),
-    );
-    crate::syntax::isolate_module_namespaces(&mut program);
-    let interface_programs = interface_refs
-        .iter()
-        .map(|(path, source)| parse_source(path, source))
-        .collect::<Vec<_>>();
-    let hir = Hir::from_syntax_with_interfaces(&program, &interface_programs);
-    Ok(RegVmExecutable {
-        unit: Rc::new(RegUnit::lower(&hir)?),
-    })
+    let validated =
+        validate_sources_with_interfaces_without_core(&source_refs, &interface_refs_borrowed)
+            .map_err(EvalError::Diagnostics)?;
+    reg_vm_compile_validated(&validated)
 }
 
 #[derive(Debug, Clone)]
@@ -1400,20 +1379,15 @@ pub struct RegVmExecutable {
 }
 
 pub fn reg_vm_compile_source(file: &str, source: &str) -> Result<RegVmExecutable, EvalError> {
-    let diagnostics = crate::analyze_source_with_core(file, source);
-    let errors = diagnostics
-        .into_iter()
-        .filter(|diagnostic| diagnostic.severity == Severity::Error)
-        .collect::<Vec<_>>();
-    if !errors.is_empty() {
-        return Err(EvalError::Diagnostics(errors));
-    }
+    let validated = validate_source(file, source).map_err(EvalError::Diagnostics)?;
+    reg_vm_compile_validated(&validated)
+}
 
-    let mut program = parse_source(file, source);
-    crate::syntax::isolate_module_namespaces(&mut program);
-    let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+pub fn reg_vm_compile_validated(
+    validated: &ValidatedProgram,
+) -> Result<RegVmExecutable, EvalError> {
     Ok(RegVmExecutable {
-        unit: Rc::new(RegUnit::lower(&hir)?),
+        unit: Rc::new(RegUnit::lower(validated.database().hir())?),
     })
 }
 
@@ -1421,30 +1395,10 @@ pub fn reg_vm_compile_source(file: &str, source: &str) -> Result<RegVmExecutable
 pub(crate) fn reg_vm_compile_sources(
     sources: &[(&str, &str)],
 ) -> Result<RegVmExecutable, EvalError> {
-    let interface_refs = standard_package_interfaces().collect::<Vec<_>>();
-    let diagnostics = crate::analyze_sources_with_interfaces(sources, &interface_refs);
-    let errors = diagnostics
-        .into_iter()
-        .filter(|diagnostic| diagnostic.severity == Severity::Error)
-        .collect::<Vec<_>>();
-    if !errors.is_empty() {
-        return Err(EvalError::Diagnostics(errors));
-    }
-
-    let mut program = merge_programs(
-        sources
-            .iter()
-            .map(|(path, source)| parse_source(path, source)),
-    );
-    crate::syntax::isolate_module_namespaces(&mut program);
-    let interface_programs = interface_refs
-        .iter()
-        .map(|(path, source)| parse_source(path, source))
-        .collect::<Vec<_>>();
-    let hir = Hir::from_syntax_with_interfaces(&program, &interface_programs);
-    Ok(RegVmExecutable {
-        unit: Rc::new(RegUnit::lower(&hir)?),
-    })
+    let interfaces = crate::interfaces::standard_package_interfaces().collect::<Vec<_>>();
+    let validated =
+        validate_sources_with_interfaces(sources, &interfaces).map_err(EvalError::Diagnostics)?;
+    reg_vm_compile_validated(&validated)
 }
 
 impl RegVmExecutable {

@@ -504,7 +504,9 @@ rss test     [--all] [--json] [--filter <substring>]
 > ./target/release/rss pkg            # or: rss check <package-dir>
 > ```
 >
-> This is a temporary fast path; the durable fix is the parse-once refactor tracked in RSS-11.
+> The frontend now lexes and parses each source once per bounded analysis. The
+> remaining cost is structured generic substitution, tracked in
+> [`docs/status.md`](docs/status.md) as maintainability work.
 
 ### Execution backends
 

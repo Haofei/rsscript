@@ -13,6 +13,7 @@ use crate::hir::{
 };
 use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex_with_budget};
+use crate::semantic::{AnalysisResult, SemanticDatabase, SourceSnapshot, ValidatedProgram};
 use crate::syntax::ast::merge_programs;
 use crate::syntax::ast::{
     AssignStmt, Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, GenericBound,
@@ -93,6 +94,9 @@ struct AnalysisInput<'a> {
 
 struct PreparedAnalysis {
     tokens: Vec<Token>,
+    source_snapshot: SourceSnapshot,
+    interface_snapshot: SourceSnapshot,
+    source_programs: Vec<crate::syntax::ast::Program>,
     syntax_program: crate::syntax::ast::Program,
     interface_programs: Vec<crate::syntax::ast::Program>,
     hir: Hir,
@@ -109,11 +113,15 @@ pub(crate) struct AliasDefinition {
 /// Own the analyzer front-end protocol in one place. Public entrypoints select
 /// only their historical input shape and HIR interface policy.
 fn prepare_analysis(input: AnalysisInput<'_>, budget: Rc<FrontendBudget>) -> PreparedAnalysis {
-    let (tokens, mut syntax_program) = match input.sources {
+    let source_snapshot = match input.sources {
+        AnalysisSources::Single { file, source } => SourceSnapshot::single(file, source),
+        AnalysisSources::Many(sources) => SourceSnapshot::from_sources(sources.iter().copied()),
+    };
+    let (tokens, source_programs) = match input.sources {
         AnalysisSources::Single { file, source } => {
             let tokens = lex_with_budget(file, source, budget.clone());
             let program = crate::syntax::ast::Program::parse_tokens(file, &tokens, budget.clone());
-            (tokens, program)
+            (tokens, vec![program])
         }
         AnalysisSources::Many(sources) => {
             let mut tokens = Vec::new();
@@ -127,15 +135,19 @@ fn prepare_analysis(input: AnalysisInput<'_>, budget: Rc<FrontendBudget>) -> Pre
                 ));
                 tokens.extend(source_tokens);
             }
-            (tokens, merge_programs(programs))
+            (tokens, programs)
         }
     };
+    let mut syntax_program = merge_programs(source_programs.iter().cloned());
     crate::syntax::isolate_module_namespaces(&mut syntax_program);
 
     if matches!(input.flavor, AnalysisFlavor::SyntaxOnly) {
         let hir = Hir::from_syntax(&syntax_program);
         return PreparedAnalysis {
             tokens,
+            source_snapshot,
+            interface_snapshot: SourceSnapshot::from_sources(std::iter::empty()),
+            source_programs,
             syntax_program,
             interface_programs: Vec::new(),
             hir,
@@ -199,8 +211,21 @@ fn prepare_analysis(input: AnalysisInput<'_>, budget: Rc<FrontendBudget>) -> Pre
         | AnalysisFlavor::FullWithoutBuiltinInterfaces => supplied_interface_programs,
         AnalysisFlavor::SyntaxOnly => unreachable!("syntax-only analysis returned above"),
     };
+    let interface_snapshot = match input.flavor {
+        AnalysisFlavor::FullWithStandardPackages => {
+            SourceSnapshot::from_sources(crate::interfaces::default_interfaces())
+        }
+        AnalysisFlavor::FullWithBuiltinInterfaces
+        | AnalysisFlavor::FullWithoutBuiltinInterfaces => {
+            SourceSnapshot::from_sources(input.interfaces.iter().copied())
+        }
+        AnalysisFlavor::SyntaxOnly => unreachable!("syntax-only analysis returned above"),
+    };
     PreparedAnalysis {
         tokens,
+        source_snapshot,
+        interface_snapshot,
+        source_programs,
         syntax_program,
         interface_programs,
         hir,
@@ -210,14 +235,23 @@ fn prepare_analysis(input: AnalysisInput<'_>, budget: Rc<FrontendBudget>) -> Pre
 }
 
 fn analyze_input(input: AnalysisInput<'_>) -> Vec<Diagnostic> {
-    analyze_input_with_budget(input, FrontendBudgetLimits::default(), None)
+    analyze_input_result(input, FrontendBudgetLimits::default(), None).into_diagnostics()
 }
 
+#[cfg(test)]
 fn analyze_input_with_budget(
     input: AnalysisInput<'_>,
     limits: FrontendBudgetLimits,
     cancel: Option<Arc<AtomicBool>>,
 ) -> Vec<Diagnostic> {
+    analyze_input_result(input, limits, cancel).into_diagnostics()
+}
+
+fn analyze_input_result(
+    input: AnalysisInput<'_>,
+    limits: FrontendBudgetLimits,
+    cancel: Option<Arc<AtomicBool>>,
+) -> AnalysisResult {
     let flavor = input.flavor;
     let budget = FrontendBudget::with_cancellation(limits, input.start_span(), cancel);
     let prepared = prepare_analysis(input, budget);
@@ -235,6 +269,22 @@ pub fn analyze_source(file: &str, source: &str) -> Vec<Diagnostic> {
         interfaces: &[],
         flavor: AnalysisFlavor::FullWithStandardPackages,
     })
+}
+
+pub fn analyze_source_result(file: &str, source: &str) -> AnalysisResult {
+    analyze_input_result(
+        AnalysisInput {
+            sources: AnalysisSources::Single { file, source },
+            interfaces: &[],
+            flavor: AnalysisFlavor::FullWithStandardPackages,
+        },
+        FrontendBudgetLimits::default(),
+        None,
+    )
+}
+
+pub fn validate_source(file: &str, source: &str) -> Result<ValidatedProgram, Vec<Diagnostic>> {
+    analyze_source_result(file, source).into_validated()
 }
 
 pub fn analyze_syntax_source(file: &str, source: &str) -> Vec<Diagnostic> {
@@ -277,6 +327,22 @@ pub fn analyze_source_with_interfaces(
     })
 }
 
+pub fn analyze_source_with_interfaces_result(
+    file: &str,
+    source: &str,
+    interfaces: &[(&str, &str)],
+) -> AnalysisResult {
+    analyze_input_result(
+        AnalysisInput {
+            sources: AnalysisSources::Single { file, source },
+            interfaces,
+            flavor: AnalysisFlavor::FullWithBuiltinInterfaces,
+        },
+        FrontendBudgetLimits::default(),
+        None,
+    )
+}
+
 pub fn analyze_source_with_interfaces_without_core(
     file: &str,
     source: &str,
@@ -300,6 +366,28 @@ pub fn analyze_sources_with_interfaces(
     })
 }
 
+pub fn analyze_sources_with_interfaces_result(
+    sources: &[(&str, &str)],
+    interfaces: &[(&str, &str)],
+) -> AnalysisResult {
+    analyze_input_result(
+        AnalysisInput {
+            sources: AnalysisSources::Many(sources),
+            interfaces,
+            flavor: AnalysisFlavor::FullWithBuiltinInterfaces,
+        },
+        FrontendBudgetLimits::default(),
+        None,
+    )
+}
+
+pub fn validate_sources_with_interfaces(
+    sources: &[(&str, &str)],
+    interfaces: &[(&str, &str)],
+) -> Result<ValidatedProgram, Vec<Diagnostic>> {
+    analyze_sources_with_interfaces_result(sources, interfaces).into_validated()
+}
+
 pub fn analyze_sources_with_interfaces_without_core(
     sources: &[(&str, &str)],
     interfaces: &[(&str, &str)],
@@ -311,16 +399,39 @@ pub fn analyze_sources_with_interfaces_without_core(
     })
 }
 
+pub fn analyze_sources_with_interfaces_without_core_result(
+    sources: &[(&str, &str)],
+    interfaces: &[(&str, &str)],
+) -> AnalysisResult {
+    analyze_input_result(
+        AnalysisInput {
+            sources: AnalysisSources::Many(sources),
+            interfaces,
+            flavor: AnalysisFlavor::FullWithoutBuiltinInterfaces,
+        },
+        FrontendBudgetLimits::default(),
+        None,
+    )
+}
+
+pub fn validate_sources_with_interfaces_without_core(
+    sources: &[(&str, &str)],
+    interfaces: &[(&str, &str)],
+) -> Result<ValidatedProgram, Vec<Diagnostic>> {
+    analyze_sources_with_interfaces_without_core_result(sources, interfaces).into_validated()
+}
+
 #[cfg(test)]
 mod entrypoint_tests {
     use super::{
-        AnalysisFlavor, AnalysisInput, AnalysisSources, PreparedAnalysis,
+        AnalysisFlavor, AnalysisInput, AnalysisSources, PreparedAnalysis, analyze_input_result,
         analyze_input_with_budget, analyze_source_with_interfaces,
         analyze_source_with_interfaces_without_core, analyze_sources_with_interfaces,
         analyze_sources_with_interfaces_without_core, prepare_analysis, render_type_ref,
     };
     use crate::checks::budget::{FrontendBudget, FrontendBudgetLimits};
     use crate::diagnostic::code;
+    use crate::semantic::{FrontendCompletion, FrontendStopReason};
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
 
@@ -654,7 +765,7 @@ mod entrypoint_tests {
     #[test]
     fn cancellation_stops_frontend_work() {
         let cancel = Arc::new(AtomicBool::new(true));
-        let diagnostics = analyze_input_with_budget(
+        let result = analyze_input_result(
             AnalysisInput {
                 sources: AnalysisSources::Single {
                     file: "cancelled.rss",
@@ -667,7 +778,12 @@ mod entrypoint_tests {
             Some(cancel),
         );
 
-        assert_incomplete_cause(&diagnostics, "cancellation");
+        assert_eq!(
+            result.completion(),
+            FrontendCompletion::Incomplete(FrontendStopReason::Cancelled)
+        );
+        assert_incomplete_cause(result.diagnostics(), "cancellation");
+        assert!(result.into_validated().is_err());
     }
 
     #[test]
@@ -698,9 +814,12 @@ mod entrypoint_tests {
     }
 }
 
-fn analyze_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
+fn analyze_program(prepared: PreparedAnalysis) -> AnalysisResult {
     let PreparedAnalysis {
         tokens,
+        source_snapshot,
+        interface_snapshot,
+        source_programs,
         syntax_program,
         interface_programs,
         hir,
@@ -724,7 +843,20 @@ fn analyze_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
         &analyzer.syntax_program,
         analyzer.diagnostics.as_mut_slice(),
     );
-    analyzer.diagnostics.into_vec()
+    let completion = analyzer.budget.completion();
+    let diagnostics = analyzer.diagnostics.into_vec();
+    AnalysisResult::new(
+        SemanticDatabase::new(
+            source_snapshot,
+            interface_snapshot,
+            source_programs,
+            analyzer.syntax_program,
+            analyzer.interface_programs,
+            analyzer.hir,
+        ),
+        diagnostics,
+        completion,
+    )
 }
 
 /// Namespaces that the compiler generates and a user declaration must not claim:
@@ -761,9 +893,12 @@ fn collect_type_alias_metadata<'a>(
     type_aliases
 }
 
-fn analyze_syntax_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
+fn analyze_syntax_program(prepared: PreparedAnalysis) -> AnalysisResult {
     let PreparedAnalysis {
         tokens,
+        source_snapshot,
+        interface_snapshot,
+        source_programs,
         syntax_program,
         interface_programs,
         hir,
@@ -787,7 +922,20 @@ fn analyze_syntax_program(prepared: PreparedAnalysis) -> Vec<Diagnostic> {
         &analyzer.syntax_program,
         analyzer.diagnostics.as_mut_slice(),
     );
-    analyzer.diagnostics.into_vec()
+    let completion = analyzer.budget.completion();
+    let diagnostics = analyzer.diagnostics.into_vec();
+    AnalysisResult::new(
+        SemanticDatabase::new(
+            source_snapshot,
+            interface_snapshot,
+            source_programs,
+            analyzer.syntax_program,
+            analyzer.interface_programs,
+            analyzer.hir,
+        ),
+        diagnostics,
+        completion,
+    )
 }
 
 pub(crate) struct Analyzer<'a> {
