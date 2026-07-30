@@ -1,0 +1,8967 @@
+#[cfg(test)]
+mod register_window_tests {
+    #[cfg(feature = "native-jit")]
+    use crate::reg_vm::tier::native_scalar_callee_pending_on_branch_profile;
+
+    use super::super::*;
+
+    /// Build a bare `RegVm` with an empty unit — enough to exercise the
+    /// register-stack helpers (`ensure_regs`/`set_reg`/`prepare_frame`) directly,
+    /// with no program loaded.
+    fn empty_vm() -> RegVm {
+        let unit = RegUnit {
+            functions: Vec::new(),
+            function_ids: HashMap::new(),
+            resource_drop_functions: HashMap::new(),
+            types: HashMap::new(),
+            native_signatures: HashMap::new(),
+            closure_identity_observable: true,
+        };
+        RegVm::new(Rc::new(unit), Vec::new(), HashMap::new())
+    }
+
+    fn connected_tcp_pair() -> (TcpStream, TcpStream) {
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("listener should bind");
+        let address = listener.local_addr().expect("listener address");
+        let client = TcpStream::connect(address).expect("client should connect");
+        let (server, _) = listener.accept().expect("server should accept");
+        (client, server)
+    }
+
+    #[test]
+    fn tcp_read_rejects_oversized_request_before_stream_lookup() {
+        let mut vm = empty_vm();
+        let error = vm
+            .tcp_stream_read(999, MAX_NETWORK_IO_BYTES as i64 + 1)
+            .expect_err("oversized reads must be rejected before allocation");
+
+        let rendered = error.display();
+        assert!(rendered.contains("exceeds"), "{rendered}");
+        assert!(!rendered.contains("unknown TcpStream"), "{rendered}");
+    }
+
+    #[test]
+    fn tcp_read_preflights_vm_memory_budget() {
+        let mut vm = empty_vm();
+        let (client, _server) = connected_tcp_pair();
+        vm.tcp_streams.insert(5, client);
+        vm.set_limits(VmLimits {
+            mem_budget: Some(8),
+            ..VmLimits::default()
+        });
+
+        let error = vm
+            .tcp_stream_read(5, 9)
+            .expect_err("read allocation must respect the VM memory budget");
+
+        assert!(error.display().contains("memory limit exceeded"));
+        assert_eq!(vm.live_bytes, 0);
+    }
+
+    #[test]
+    fn tcp_shutdown_removes_the_stream_handle() {
+        let mut vm = empty_vm();
+        let (client, _server) = connected_tcp_pair();
+        vm.tcp_streams.insert(7, client);
+
+        vm.tcp_stream_shutdown(7)
+            .expect("first shutdown should succeed");
+
+        assert!(!vm.tcp_streams.contains_key(&7));
+        let error = vm
+            .tcp_stream_shutdown(7)
+            .expect_err("closed handle must not remain usable");
+        assert!(error.display().contains("unknown TcpStream id `7`"));
+    }
+
+    #[test]
+    fn websocket_rejects_oversized_declared_payload_before_reading_it() {
+        let mut vm = empty_vm();
+        let (client, mut server) = connected_tcp_pair();
+        vm.websockets.insert(11, client);
+        let oversized = (MAX_NETWORK_IO_BYTES as u64 + 1).to_be_bytes();
+        server
+            .write_all(&[0x82, 127])
+            .expect("frame header should write");
+        server
+            .write_all(&oversized)
+            .expect("extended length should write");
+
+        let error = vm
+            .websocket_recv(11, WebSocketExpectedFrame::Binary)
+            .expect_err("oversized frame must be rejected from its header");
+
+        assert!(error.display().contains("16777216-byte limit"));
+    }
+
+    #[test]
+    fn websocket_close_removes_the_stream_handle() {
+        let mut vm = empty_vm();
+        let (client, _server) = connected_tcp_pair();
+        vm.websockets.insert(13, client);
+
+        vm.websocket_close(13)
+            .expect("first close should send a close frame");
+
+        assert!(!vm.websockets.contains_key(&13));
+        let error = vm
+            .websocket_close(13)
+            .expect_err("closed handle must not remain usable");
+        assert!(error.display().contains("unknown WebSocket id `13`"));
+    }
+
+    #[test]
+    fn websocket_peer_close_removes_the_stream_handle() {
+        let mut vm = empty_vm();
+        let (client, mut server) = connected_tcp_pair();
+        vm.websockets.insert(17, client);
+        server
+            .write_all(&[0x88, 0])
+            .expect("close frame should write");
+
+        let result = vm
+            .websocket_recv(17, WebSocketExpectedFrame::Binary)
+            .expect("close frame should be accepted");
+
+        assert!(result.is_none());
+        assert!(!vm.websockets.contains_key(&17));
+    }
+
+    fn run_budgeted_instruction(
+        code: Vec<RegInstr>,
+        args: Vec<VmValue>,
+    ) -> Result<VmValue, EvalError> {
+        let mut function = RegFunction::placeholder("budgeted_instruction".to_string());
+        function.params = args.len();
+        function.regs = args.len() + 1;
+        function.code = code;
+        let function = Rc::new(function);
+        let unit = Rc::new(RegUnit {
+            functions: vec![Rc::clone(&function)],
+            function_ids: [(function.name.clone(), 0)].into_iter().collect(),
+            resource_drop_functions: HashMap::new(),
+            types: HashMap::new(),
+            native_signatures: HashMap::new(),
+            closure_identity_observable: true,
+        });
+        let mut vm = RegVm::new(Rc::clone(&unit), Vec::new(), HashMap::new());
+        vm.prepare_frame(0, function.regs).expect("register window");
+        for (index, value) in args.into_iter().enumerate() {
+            vm.set_reg(index, value);
+        }
+        vm.set_limits(VmLimits {
+            mem_budget: Some(0),
+            ..VmLimits::default()
+        });
+        vm.run_frame(&unit, function, 0)
+    }
+
+    #[test]
+    fn failed_container_growth_does_not_mutate_shared_state() {
+        let list = Rc::new(RefCell::new(TypedVec::Ints(Vec::new())));
+        let error = run_budgeted_instruction(
+            vec![
+                RegInstr::ListPush {
+                    dst: 2,
+                    list: 0,
+                    value: 1,
+                },
+                RegInstr::Return { src: 2 },
+            ],
+            vec![VmValue::List(Rc::clone(&list)), VmValue::Int(1)],
+        )
+        .expect_err("list growth must exceed a zero-byte budget");
+        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert_eq!(list.borrow().len(), 0);
+        assert_eq!(list.borrow().capacity(), 0);
+
+        let deque = Rc::new(RefCell::new(VecDeque::new()));
+        let error = run_budgeted_instruction(
+            vec![
+                RegInstr::DequePushBack {
+                    dst: 2,
+                    deque: 0,
+                    value: 1,
+                },
+                RegInstr::Return { src: 2 },
+            ],
+            vec![VmValue::Deque(Rc::clone(&deque)), VmValue::Int(1)],
+        )
+        .expect_err("deque growth must exceed a zero-byte budget");
+        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert!(deque.borrow().is_empty());
+        assert_eq!(deque.borrow().capacity(), 0);
+
+        let sorted_set = Rc::new(RefCell::new(TypedVec::Ints(Vec::new())));
+        let error = run_budgeted_instruction(
+            vec![
+                RegInstr::SortedSetInsert {
+                    dst: 2,
+                    set: 0,
+                    value: 1,
+                },
+                RegInstr::Return { src: 2 },
+            ],
+            vec![VmValue::List(Rc::clone(&sorted_set)), VmValue::Int(1)],
+        )
+        .expect_err("sorted-set growth must exceed a zero-byte budget");
+        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert_eq!(sorted_set.borrow().len(), 0);
+        assert_eq!(sorted_set.borrow().capacity(), 0);
+
+        let sorted_map = Rc::new(RefCell::new(TypedVec::Boxed(Vec::new())));
+        let error = run_budgeted_instruction(
+            vec![
+                RegInstr::SortedMapInsert {
+                    dst: 3,
+                    map: 0,
+                    key: 1,
+                    value: 2,
+                },
+                RegInstr::Return { src: 3 },
+            ],
+            vec![
+                VmValue::List(Rc::clone(&sorted_map)),
+                VmValue::Int(1),
+                VmValue::Int(2),
+            ],
+        )
+        .expect_err("sorted-map growth must exceed a zero-byte budget");
+        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert_eq!(sorted_map.borrow().len(), 0);
+        assert_eq!(sorted_map.borrow().capacity(), 0);
+
+        let builder = Rc::new(RefCell::new(VmValue::string(String::new())));
+        let error = run_budgeted_instruction(
+            vec![
+                RegInstr::StringBuilderPush {
+                    dst: 2,
+                    builder: 0,
+                    value: 1,
+                },
+                RegInstr::Return { src: 2 },
+            ],
+            vec![
+                VmValue::Managed(Rc::clone(&builder)),
+                VmValue::string("value".to_string()),
+            ],
+        )
+        .expect_err("string-builder growth must exceed a zero-byte budget");
+        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert!(matches!(&*builder.borrow(), VmValue::String(value) if value.is_empty()));
+    }
+
+    #[test]
+    fn aggregate_constructors_charge_outer_storage_before_publication() {
+        let layout = intern_layout(Rc::from("Box"), vec![Rc::from("value")]);
+        let cases = [
+            vec![
+                RegInstr::MakeStruct {
+                    dst: 1,
+                    layout: Rc::clone(&layout),
+                    fields: vec![("value".to_string(), 0)],
+                },
+                RegInstr::Return { src: 1 },
+            ],
+            vec![
+                RegInstr::MakeVariant {
+                    dst: 1,
+                    layout,
+                    fields: vec![("value".to_string(), 0)],
+                },
+                RegInstr::Return { src: 1 },
+            ],
+            vec![
+                RegInstr::MakeList {
+                    dst: 1,
+                    items: vec![0],
+                },
+                RegInstr::Return { src: 1 },
+            ],
+            vec![
+                RegInstr::MakeObject {
+                    dst: 1,
+                    fields: vec![("value".to_string(), 0)],
+                },
+                RegInstr::Return { src: 1 },
+            ],
+        ];
+        for code in cases {
+            let error = run_budgeted_instruction(code, vec![VmValue::Int(1)])
+                .expect_err("aggregate outer storage must exceed a zero-byte budget");
+            assert!(
+                matches!(&error, EvalError::Runtime(message) if message.contains("memory limit")),
+                "{error:?}"
+            );
+        }
+
+        let error = run_budgeted_instruction(
+            vec![
+                RegInstr::MakeMap {
+                    dst: 2,
+                    entries: vec![(0, 1)],
+                },
+                RegInstr::Return { src: 2 },
+            ],
+            vec![VmValue::Int(1), VmValue::Int(2)],
+        )
+        .expect_err("map outer storage must exceed a zero-byte budget");
+        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+    }
+
+    /// Execution spec §4.1: a reused register window must be *non-retaining*.
+    /// `prepare_frame` clears the written bits AND drops any stale `VmValue` the
+    /// reused slot physically held, so a big heap value allocated by a prior frame
+    /// is released the moment its window is reused — not merely when the slot is
+    /// next overwritten. Without the value-drop this asserts the previous behavior
+    /// (the `Rc` stayed alive at strong_count 2), which is the bug this pins.
+    #[test]
+    fn prepare_frame_releases_stale_heap_value() {
+        let mut vm = empty_vm();
+        vm.ensure_regs(8).expect("grow stack");
+
+        // Simulate a prior frame allocating a large list into its window.
+        let big: Rc<RefCell<TypedVec>> = Rc::new(RefCell::new(TypedVec::from_values(vec![
+                VmValue::Int(0);
+                4096
+            ])));
+        vm.set_reg(3, VmValue::List(Rc::clone(&big)));
+        assert_eq!(
+            Rc::strong_count(&big),
+            2,
+            "the VM register and our test handle should both hold the list",
+        );
+
+        // Reusing the window for a new frame must drop the stale list.
+        vm.prepare_frame(0, 8).expect("prepare reused window");
+        assert_eq!(
+            Rc::strong_count(&big),
+            1,
+            "prepare_frame must drop the stale heap value, leaving only the test handle",
+        );
+        assert!(
+            !vm.written[3],
+            "prepare_frame must clear the written bit of every window slot",
+        );
+    }
+
+    /// `take_reg` already moved the value out and left `Unit`; `prepare_frame` over
+    /// an already-empty window must stay non-retaining and idempotent.
+    #[test]
+    fn prepare_frame_is_noop_on_empty_window() {
+        let mut vm = empty_vm();
+        vm.ensure_regs(4).expect("grow stack");
+        vm.prepare_frame(0, 4).expect("prepare empty window");
+        for index in 0..4 {
+            assert!(matches!(vm.stack[index], VmValue::Unit));
+            assert!(!vm.written[index]);
+        }
+    }
+
+    #[test]
+    fn native_binding_return_respects_memory_budget() {
+        let unit = Rc::new(RegUnit {
+            functions: Vec::new(),
+            function_ids: HashMap::new(),
+            resource_drop_functions: HashMap::new(),
+            types: HashMap::new(),
+            native_signatures: HashMap::new(),
+            closure_identity_observable: true,
+        });
+        let binding = NativeInterpreterFn::new(|_| Ok(NativeValue::String("x".repeat(1024))));
+        let mut vm = RegVm::new(
+            unit,
+            Vec::new(),
+            [("test.big".to_string(), binding)].into_iter().collect(),
+        );
+        vm.set_limits(VmLimits {
+            mem_budget: Some(64),
+            ..VmLimits::default()
+        });
+        let error = vm
+            .call_native_key("test.big", &[], &[], 0)
+            .expect_err("large native result must be rejected before materialization");
+        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+    }
+
+    #[test]
+    fn native_binding_spare_capacity_respects_memory_budget() {
+        let unit = Rc::new(RegUnit {
+            functions: Vec::new(),
+            function_ids: HashMap::new(),
+            resource_drop_functions: HashMap::new(),
+            types: HashMap::new(),
+            native_signatures: HashMap::new(),
+            closure_identity_observable: true,
+        });
+        let string_binding = NativeInterpreterFn::new(|_| {
+            let mut value = String::with_capacity(1 << 20);
+            value.push('x');
+            Ok(NativeValue::String(value))
+        });
+        let json_binding = NativeInterpreterFn::new(|_| {
+            let values = Vec::with_capacity(1 << 16);
+            Ok(NativeValue::Json(serde_json::Value::Array(values)))
+        });
+        let mut vm = RegVm::new(
+            Rc::clone(&unit),
+            Vec::new(),
+            [
+                ("test.string-capacity".to_string(), string_binding),
+                ("test.json-capacity".to_string(), json_binding),
+            ]
+            .into_iter()
+            .collect(),
+        );
+        vm.set_limits(VmLimits {
+            mem_budget: Some(64),
+            ..VmLimits::default()
+        });
+        for key in ["test.string-capacity", "test.json-capacity"] {
+            let error = vm
+                .call_native_key(key, &[], &[], 0)
+                .expect_err("spare native capacity must be charged before publication");
+            assert!(
+                matches!(&error, EvalError::Runtime(message) if message.contains("memory limit")),
+                "{key}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_binding_budget_failure_keeps_mutations_atomic() {
+        let unit = Rc::new(RegUnit {
+            functions: Vec::new(),
+            function_ids: HashMap::new(),
+            resource_drop_functions: HashMap::new(),
+            types: HashMap::new(),
+            native_signatures: HashMap::new(),
+            closure_identity_observable: true,
+        });
+        let binding = NativeInterpreterFn::new(|_| {
+            Ok(NativeValue::List(vec![
+                NativeValue::Unit,
+                NativeValue::String("x".repeat(1024)),
+            ]))
+        });
+        let mut vm = RegVm::new(
+            unit,
+            Vec::new(),
+            [("test.mutate".to_string(), binding)].into_iter().collect(),
+        );
+        vm.set_limits(VmLimits {
+            mem_budget: Some(64),
+            ..VmLimits::default()
+        });
+        vm.prepare_frame(0, 1).expect("register window");
+        vm.set_reg(0, VmValue::Int(7));
+        let error = vm
+            .call_native_key("test.mutate", &[0], &[0], 0)
+            .expect_err("mutation envelope must be rejected atomically");
+        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert_eq!(vm.reg(0), &VmValue::Int(7));
+    }
+
+    #[cfg(feature = "native-jit")]
+    fn native_test_function(
+        name: &str,
+        params: usize,
+        regs: usize,
+        code: Vec<RegInstr>,
+    ) -> RegFunction {
+        RegFunction {
+            name: name.to_string(),
+            params,
+            captures: 0,
+            regs,
+            local_regs: HashMap::new(),
+            code,
+            jit_analysis: std::cell::Cell::new(None),
+            jit_self_recursion_kind: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
+            call_count: std::cell::Cell::new(0),
+            branch_count: std::cell::Cell::new(0),
+            profile: RefCell::new(None),
+            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    fn native_test_layout(name: &str, fields: &[&str]) -> Rc<crate::vm_value::TypeLayout> {
+        intern_layout(
+            Rc::from(name),
+            fields.iter().map(|field| Rc::from(*field)).collect(),
+        )
+    }
+
+    #[cfg(feature = "native-jit")]
+    fn native_test_unit(functions: Vec<RegFunction>) -> RegUnit {
+        RegUnit {
+            functions: functions.into_iter().map(Rc::new).collect(),
+            function_ids: HashMap::new(),
+            resource_drop_functions: HashMap::new(),
+            types: HashMap::new(),
+            native_signatures: HashMap::new(),
+            closure_identity_observable: false,
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn pure_captureless_closure_fast_path_covers_list_pipeline_shapes() {
+        let acc_layout = native_test_layout("Acc", &["total"]);
+        let unit = native_test_unit(vec![
+            native_test_function(
+                "map_value",
+                1,
+                4,
+                vec![
+                    RegInstr::LoadInt { dst: 1, value: 2 },
+                    RegInstr::MulInt {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    RegInstr::LoadInt { dst: 1, value: 1 },
+                    RegInstr::AddInt {
+                        dst: 3,
+                        lhs: 2,
+                        rhs: 1,
+                    },
+                    RegInstr::Return { src: 3 },
+                ],
+            ),
+            native_test_function(
+                "filter_value",
+                1,
+                5,
+                vec![
+                    RegInstr::LoadInt { dst: 1, value: 2 },
+                    RegInstr::DivInt {
+                        dst: 2,
+                        lhs: 0,
+                        rhs: 1,
+                    },
+                    RegInstr::MulInt {
+                        dst: 3,
+                        lhs: 2,
+                        rhs: 1,
+                    },
+                    RegInstr::NotEqual {
+                        dst: 4,
+                        lhs: 3,
+                        rhs: 0,
+                    },
+                    RegInstr::Return { src: 4 },
+                ],
+            ),
+            native_test_function(
+                "fold_acc",
+                2,
+                4,
+                vec![
+                    RegInstr::GetFieldSlot {
+                        dst: 2,
+                        base: 0,
+                        slot: 0,
+                    },
+                    RegInstr::AddInt {
+                        dst: 2,
+                        lhs: 2,
+                        rhs: 1,
+                    },
+                    RegInstr::MakeStruct {
+                        dst: 3,
+                        layout: Rc::clone(&acc_layout),
+                        fields: vec![("total".to_string(), 2)],
+                    },
+                    RegInstr::Return { src: 3 },
+                ],
+            ),
+        ]);
+        let vm = RegVm::new(
+            Rc::new(native_test_unit(Vec::new())),
+            Vec::<String>::new(),
+            std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
+        );
+
+        let map = VmClosure {
+            function: 0,
+            captures: Vec::new(),
+        };
+        let mapped = vm
+            .try_call_captureless_pure_closure(&unit, &map, &[VmValue::Int(20)])
+            .expect("map closure should use pure fast path")
+            .expect("map closure should run");
+        assert_eq!(mapped, VmValue::Int(41));
+
+        let filter = VmClosure {
+            function: 1,
+            captures: Vec::new(),
+        };
+        let keep = vm
+            .try_call_captureless_pure_closure(&unit, &filter, &[VmValue::Int(41)])
+            .expect("filter closure should use pure fast path")
+            .expect("filter closure should run");
+        assert_eq!(keep, VmValue::Bool(true));
+
+        let fold = VmClosure {
+            function: 2,
+            captures: Vec::new(),
+        };
+        let state = VmValue::Struct(Rc::new(VmStruct::with_layout(
+            Rc::clone(&acc_layout),
+            vec![VmValue::Int(10)],
+        )));
+        let folded = vm
+            .try_call_captureless_pure_closure(&unit, &fold, &[state, VmValue::Int(7)])
+            .expect("fold closure should use pure fast path")
+            .expect("fold closure should run");
+        let VmValue::Struct(data) = folded else {
+            panic!("fold closure should return an Acc struct");
+        };
+        assert_eq!(data.get("total"), Some(&VmValue::Int(17)));
+
+        let state = VmValue::Struct(Rc::new(VmStruct::with_layout(
+            Rc::clone(&acc_layout),
+            vec![VmValue::Int(10)],
+        )));
+        let list = Rc::new(RefCell::new(TypedVec::Ints(vec![1, 2, 3, 4])));
+        let folded =
+            RegVm::try_fold_int_list_with_struct_plan_for_test(&unit, &list, &state, &fold)
+                .expect("Int-list + Int-struct fold should use scalar struct fold path")
+                .expect("scalar struct fold should run");
+        let VmValue::Struct(data) = folded else {
+            panic!("scalar struct fold should return an Acc struct");
+        };
+        assert_eq!(data.get("total"), Some(&VmValue::Int(20)));
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_list_pipeline_bench_sources_match_vm_output() {
+        for (file, arg, expected_stdout) in [
+            ("list_closure_pipeline.rss", "64", "4096\n"),
+            ("pipeline_chain.rss", "64", "3008\n"),
+        ] {
+            let source_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../benchmarks/micro")
+                .join(file);
+            let source = std::fs::read_to_string(&source_path)
+                .unwrap_or_else(|error| panic!("failed to read {source_path:?}: {error}"));
+            let executable = reg_vm_compile_source(file, &source).expect("lowering should succeed");
+
+            let vm_out = executable
+                .eval_main_with_args([arg])
+                .expect("VM benchmark source should run");
+            let (native_out, _stats) = executable
+                .eval_main_with_args_native_osr_with_stats([arg])
+                .expect("native benchmark source should run");
+
+            assert_eq!(vm_out.stdout, expected_stdout, "{file} VM stdout changed");
+            assert_eq!(
+                native_out.stdout, vm_out.stdout,
+                "{file} native stdout should match VM"
+            );
+        }
+    }
+
+    #[test]
+    fn lowering_omits_deep_copy_for_scalar_params_only() {
+        let source = r#"
+features: local
+
+fn scalar(n: Int, ok: Bool) -> Int {
+    if ok {
+        return n + 1
+    }
+    return n
+}
+
+fn list_len(xs: read List<Int>) -> Int {
+    return List.len<Int>(list: read xs)
+}
+
+fn main() -> Unit {
+    local xs = List.new<Int>()
+    List.push<Int>(list: mut xs, value: read 1)
+    let a = scalar(n: 41, ok: true)
+    let b = list_len(xs: read xs)
+    Log.write(message: read String.from_int(value: a + b))
+    return Unit
+}
+"#;
+        let executable = reg_vm_compile_source("scalar-param-copy.rss", source)
+            .expect("lowering should succeed");
+        let scalar_id = executable.unit.function_ids["scalar"];
+        let scalar = executable.unit.functions[scalar_id].as_ref();
+        assert!(
+            !scalar
+                .code
+                .iter()
+                .any(|instr| matches!(instr, RegInstr::DeepCopy { .. })),
+            "primitive scalar params should not emit prologue DeepCopy: {:#?}",
+            scalar.code,
+        );
+
+        let list_len_id = executable.unit.function_ids["list_len"];
+        let list_len = executable.unit.functions[list_len_id].as_ref();
+        // A `read` heap/value param always carries a prologue copy-isolation MARKER in
+        // its slot: an eager `DeepCopy` when elision is off, or a neutralized
+        // `DeepCopyElided` when the compile-time elision pass (default ON) proves the
+        // copy redundant. Either way the slot is present (scalars emit neither) — this
+        // is the scalar-vs-heap distinction the test guards, independent of the elision
+        // flag. The elision-specific assertion lives in
+        // `deepcopy_elision_fires_for_read_only_heap_param`.
+        assert!(
+            list_len.code.iter().any(|instr| matches!(
+                instr,
+                RegInstr::DeepCopy { .. } | RegInstr::DeepCopyElided { .. }
+            )),
+            "read heap/value params must carry a copy-isolation marker: {:#?}",
+            list_len.code,
+        );
+        let output = executable
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("program should still run");
+        assert_eq!(output.stdout, "43\n");
+    }
+
+    /// Regression guard for the compile-time `DeepCopy`-elision perf win (the ~16x
+    /// speedup on `benchmarks/vm-jit/kernels/deepcopy_read_param.rss`). Mirrors that
+    /// kernel's hot shape: a NON-`mut` heap param (`g: read Bag`) used only through
+    /// read paths (`GetField` on `g`, then `List.len`/`List.get`), called from another
+    /// function. Under the DEFAULT (`RSS_VM_ELIDE_DEEPCOPY` unset ⇒ elision ON) the
+    /// lowerer must PROVE the prologue `DeepCopy` of `g` redundant and neutralize it to
+    /// `RegInstr::DeepCopyElided` — the marker that turns the per-call deep copy into a
+    /// cheap `Rc` share. If a future change re-introduces the eager copy (elision stops
+    /// firing) `DeepCopyElided` disappears and a raw `DeepCopy` returns, failing this
+    /// test. Run with `RSS_VM_ELIDE_DEEPCOPY=0` to see the guarded regression: the
+    /// elided marker is gone and the eager `DeepCopy` is back.
+    #[test]
+    fn deepcopy_elision_fires_for_read_only_heap_param() {
+        let source = r#"
+features: local
+
+struct Bag {
+    a: List<Int>,
+    b: List<Int>,
+}
+
+fn sum_reads(g: read Bag, i: Int) -> Int {
+    let na = List.len<Int>(list: read g.a)
+    let nb = List.len<Int>(list: read g.b)
+    let va = List.get<Int>(list: read g.a, index: i % na)
+    let vb = List.get<Int>(list: read g.b, index: i % nb)
+    return va + vb
+}
+
+fn caller(g: read Bag) -> Int {
+    return sum_reads(g: read g, i: 0)
+}
+
+fn main() -> Unit {
+    local a = List.new<Int>()
+    List.push<Int>(list: mut a, value: read 7)
+    local b = List.new<Int>()
+    List.push<Int>(list: mut b, value: read 5)
+    let bag = Bag(a: take a, b: take b)
+    Log.write(message: read String.from_int(value: caller(g: read bag)))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("deepcopy-elision.rss", source).expect("lowering should succeed");
+
+        let sum_reads_id = executable.unit.function_ids["sum_reads"];
+        let sum_reads = executable.unit.functions[sum_reads_id].as_ref();
+        let elided = sum_reads
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopyElided { .. }))
+            .count();
+        let eager = sum_reads
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopy { .. }))
+            .count();
+        // Under the default the read-only heap param's copy is elided; the elision is
+        // gated (`elide_deepcopy_enabled`) so an explicit `RSS_VM_ELIDE_DEEPCOPY=0`
+        // process would instead leave the eager `DeepCopy` — which is exactly the
+        // regression this guard is meant to catch.
+        if crate::reg_vm::model::elide_deepcopy_enabled_for_test() {
+            assert!(
+                elided >= 1,
+                "elision ON: read-only heap param DeepCopy should be neutralized to \
+                 DeepCopyElided, got {elided} elided / {eager} eager: {:#?}",
+                sum_reads.code,
+            );
+            assert_eq!(
+                eager, 0,
+                "elision ON: no eager DeepCopy should remain for the read-only heap \
+                 param: {:#?}",
+                sum_reads.code,
+            );
+        } else {
+            assert!(
+                eager >= 1 && elided == 0,
+                "elision OFF: eager DeepCopy must be retained (perf-win regression path): \
+                 got {elided} elided / {eager} eager: {:#?}",
+                sum_reads.code,
+            );
+        }
+
+        // Elision (or its absence) must never change observable behavior.
+        let output = executable
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("program should still run");
+        assert_eq!(output.stdout, "12\n");
+    }
+
+    /// SH-022 regression: a `read List<Char>` param whose only keep-forcing use is
+    /// a pure scalar `Char.*` intrinsic (here `Char.to_code` on a `ListGet`-extracted
+    /// element) must have its prologue `DeepCopy` ELIDED. Before the `Char.*`
+    /// intrinsics were classified `PureFreshReader`, `Char.to_code(c)` pinned the
+    /// copy, so every per-char lexer helper call deep-copied the whole char list —
+    /// a genuine O(n^2) that made the self-hosted lexer ~5000x slower than native.
+    #[test]
+    fn deepcopy_elision_fires_for_char_list_read_param() {
+        let source = r#"
+fn scan(chars: read List<Char>, i: Int) -> Int {
+    let c = List.get<Char>(list: read chars, index: i)
+    return Char.to_code(value: read c)
+}
+
+fn main() -> Unit {
+    let chars = String.chars(value: read "abc")
+    Log.write(message: read String.from_int(value: scan(chars: read chars, i: 1)))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("deepcopy-elision-char.rss", source).expect("lowering succeeds");
+
+        let scan_id = executable.unit.function_ids["scan"];
+        let scan = executable.unit.functions[scan_id].as_ref();
+        let elided = scan
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopyElided { .. }))
+            .count();
+        let eager = scan
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopy { .. }))
+            .count();
+        if crate::reg_vm::model::elide_deepcopy_enabled_for_test() {
+            assert!(
+                elided >= 1 && eager == 0,
+                "elision ON: `read List<Char>` param whose only use is ListGet + \
+                 Char.to_code must be elided, got {elided} elided / {eager} eager: {:#?}",
+                scan.code,
+            );
+        }
+
+        // Elision must not change behavior: scan("abc"[1]) == code of 'b' == 98.
+        let output = executable
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("program should still run");
+        assert_eq!(output.stdout, "98\n");
+    }
+
+    /// Slice 1 generalization (beyond SH-022's Char special-case): a `read
+    /// List<Int>` param whose extracted elements are RETURNED (a keep-forcing use)
+    /// must still have its prologue `DeepCopy` ELIDED. Extracting a `Copy` scalar
+    /// (`Int`) can no longer taint its source collection, so the returned element
+    /// is untainted and nothing pins the copy — even though `Return` of a tainted
+    /// register WOULD force a keep. This is the general kill for the O(n^2)
+    /// `read List<Scalar>` copy class, independent of any per-scalar intrinsic
+    /// classification. No `Char.*` (or any) intrinsic on the element is involved.
+    #[test]
+    fn deepcopy_elision_fires_for_int_list_read_param() {
+        let source = r#"
+features: local
+
+fn scan(xs: read List<Int>, i: Int) -> Int {
+    let a = List.get<Int>(list: read xs, index: i)
+    let b = List.get<Int>(list: read xs, index: i + 1)
+    if a > b {
+        return a
+    }
+    return b
+}
+
+fn main() -> Unit {
+    local xs = List.new<Int>()
+    List.push<Int>(list: mut xs, value: read 3)
+    List.push<Int>(list: mut xs, value: read 7)
+    Log.write(message: read String.from_int(value: scan(xs: read xs, i: 0)))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("deepcopy-elision-int.rss", source).expect("lowering succeeds");
+
+        let scan_id = executable.unit.function_ids["scan"];
+        let scan = executable.unit.functions[scan_id].as_ref();
+        let elided = scan
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopyElided { .. }))
+            .count();
+        let eager = scan
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopy { .. }))
+            .count();
+        if crate::reg_vm::model::elide_deepcopy_enabled_for_test() {
+            assert!(
+                elided >= 1 && eager == 0,
+                "elision ON: `read List<Int>` param whose extracted elements are \
+                 returned must be elided (scalar extraction must not taint the list), \
+                 got {elided} elided / {eager} eager: {:#?}",
+                scan.code,
+            );
+        }
+
+        // Elision must not change behavior: max(xs[0], xs[1]) == max(3, 7) == 7.
+        let output = executable
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("program should still run");
+        assert_eq!(output.stdout, "7\n");
+    }
+
+    /// Slice 2: a scalar payload extracted by a PATTERN bind must not taint the
+    /// scrutinee. Here `pick(opt: read Option<Int>)` unwraps `Some(v)` via
+    /// `UnwrapSome`; because `Int` is a `Copy` scalar the unwrap is a bit-copy that
+    /// cannot alias/escape the `Option`'s `Rc`, so `v` is marked scalar (`note_scalar`)
+    /// and the prologue `DeepCopy` of the `read Option<Int>` param is ELIDED. Before
+    /// Slice 2 the pattern lowerer didn't thread the scrutinee type, so `v` stayed
+    /// tainted and `UnwrapSome` (unclassified) pinned the copy.
+    #[test]
+    fn deepcopy_elision_fires_for_option_scalar_pattern_bind() {
+        let source = r#"
+fn pick(opt: read Option<Int>) -> Int {
+    match read opt {
+        Some(v) => { return read v }
+        None => { return 0 }
+    }
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: pick(opt: read Some(42))))
+    return Unit
+}
+"#;
+        let executable = reg_vm_compile_source("deepcopy-elision-option.rss", source)
+            .expect("lowering succeeds");
+
+        let pick_id = executable.unit.function_ids["pick"];
+        let pick = executable.unit.functions[pick_id].as_ref();
+        let elided = pick
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopyElided { .. }))
+            .count();
+        let eager = pick
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopy { .. }))
+            .count();
+        if crate::reg_vm::model::elide_deepcopy_enabled_for_test() {
+            assert!(
+                elided >= 1 && eager == 0,
+                "elision ON: `read Option<Int>` param whose `Some(v)` scalar payload is \
+                 pattern-bound and returned must be elided (scalar unwrap must not taint \
+                 the scrutinee), got {elided} elided / {eager} eager: {:#?}",
+                pick.code,
+            );
+        }
+
+        // Elision must not change behavior: pick(Some(42)) == 42.
+        let output = executable
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("program should still run");
+        assert_eq!(output.stdout, "42\n");
+    }
+
+    /// Slice 3 (borrow-by-default): a `read String` param whose only use is a
+    /// proven-pure reader (`String.len`, now classified `PureFreshReader`) must have
+    /// its prologue `DeepCopy` ELIDED. Before Slice 3 every `String.*` intrinsic hit
+    /// the conservative `Keep` arm, so `String.len(read s)` pinned the copy and each
+    /// call deep-copied the whole string. `String.len` returns a fresh `Int` and never
+    /// mutates/stores/aliases its arg, so sharing the caller's `Rc` is sound.
+    #[test]
+    fn deepcopy_elision_fires_for_string_read_param() {
+        let source = r#"
+fn measure(s: read String) -> Int {
+    return String.len(value: read s)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: measure(s: read "hello")))
+    return Unit
+}
+"#;
+        let executable = reg_vm_compile_source("deepcopy-elision-string.rss", source)
+            .expect("lowering succeeds");
+
+        let measure_id = executable.unit.function_ids["measure"];
+        let measure = executable.unit.functions[measure_id].as_ref();
+        let elided = measure
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopyElided { .. }))
+            .count();
+        let eager = measure
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopy { .. }))
+            .count();
+        if crate::reg_vm::model::elide_deepcopy_enabled_for_test() {
+            assert!(
+                elided >= 1 && eager == 0,
+                "elision ON: `read String` param whose only use is the pure reader \
+                 `String.len` must be elided, got {elided} elided / {eager} eager: {:#?}",
+                measure.code,
+            );
+        } else {
+            assert!(
+                eager >= 1 && elided == 0,
+                "elision OFF: eager DeepCopy must be retained: got {elided} elided / \
+                 {eager} eager: {:#?}",
+                measure.code,
+            );
+        }
+
+        // Elision must not change behavior: len("hello") == 5.
+        let output = executable
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("program should still run");
+        assert_eq!(output.stdout, "5\n");
+    }
+
+    /// Slice 3 NEGATIVE guard (over-promotion): a `read List<Int>` param that IS STORED
+    /// into a struct (then reloaded and mutated in a loop) must KEEP its prologue
+    /// `DeepCopy`, even though a promoted pure reader (`String.len` on a fresh string
+    /// derived from it) is also called. Storing lowers to `MakeStruct`, an UNCLASSIFIED
+    /// instruction that references the tainted param register and so hits the fail-safe
+    /// `Keep` default — the param stays tainted and the copy is retained. This proves
+    /// Slice 3 widened only the READ-ONLY-SAFE set, not the ESCAPE set: a storing op is
+    /// still caught, and behavior is byte-for-byte unchanged (caller's `xs[0]` stays 7,
+    /// the callee mutated only its own deep copy). Mirrors the shape of the native
+    /// `native_store_reload_mutate_non_mut_heap_param_does_not_leak` leak guard.
+    #[test]
+    fn deepcopy_elision_kept_for_stored_read_param() {
+        let source = r#"
+features: local
+
+struct Box {
+    items: List<Int>
+}
+
+fn stash(xs: read List<Int>, n: Int) -> Int {
+    let probe = String.len(value: read String.from_int(value: List.get<Int>(list: read xs, index: 0)))
+    let b = Box(items: read xs)
+    let mut i = 0
+    while i < n {
+        let mut inner = b.items
+        List.set<Int>(list: mut inner, index: 0, value: read i)
+        i = i + 1
+    }
+    return List.get<Int>(list: read xs, index: 0) + probe
+}
+
+fn main() -> Unit {
+    local xs = List.new<Int>()
+    List.push<Int>(list: mut xs, value: read 7)
+    let r = stash(xs: read xs, n: read 3)
+    Log.write(message: read String.from_int(value: List.get<Int>(list: read xs, index: 0)))
+    Log.write(message: read String.from_int(value: r))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("deepcopy-elision-store.rss", source).expect("lowering succeeds");
+
+        let stash_id = executable.unit.function_ids["stash"];
+        let stash = executable.unit.functions[stash_id].as_ref();
+        let elided = stash
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopyElided { .. }))
+            .count();
+        let eager = stash
+            .code
+            .iter()
+            .filter(|instr| matches!(instr, RegInstr::DeepCopy { .. }))
+            .count();
+        // The store forces the copy to be kept regardless of the elision gate: with the
+        // gate ON the DeepCopy must NOT be neutralized (elided == 0); with it OFF the eager
+        // DeepCopy is likewise retained. Either way, no elision for the stored param.
+        assert_eq!(
+            elided, 0,
+            "over-promotion guard: a `read Map` param stored into a struct must KEEP its \
+             copy (no DeepCopyElided), got {elided} elided / {eager} eager: {:#?}",
+            stash.code,
+        );
+        assert!(
+            eager >= 1,
+            "over-promotion guard: the eager DeepCopy of the stored `read Map` param must \
+             be retained, got {elided} elided / {eager} eager: {:#?}",
+            stash.code,
+        );
+
+        // Soundness check — elision must not leak to the caller: the caller's xs[0] stays 7
+        // (line 1), proving the prologue copy was KEPT. The callee's own xs is a separate deep
+        // copy; via the stored `b.items` alias the loop drives it to 2 (last i in 0..3), so
+        // `xs[0] + probe == 2 + len("7") == 3` (line 2). Deterministic either way.
+        let output = executable
+            .eval_main_with_args(Vec::<String>::new())
+            .expect("program should still run");
+        assert_eq!(output.stdout, "7\n3\n");
+    }
+
+    #[test]
+    fn jit_runs_scalar_self_recursion_on_flat_executor() {
+        let source = r#"
+features: local
+
+fn fib(n: Int) -> Int {
+    if n < 2 {
+        return n
+    }
+    return fib(n: n - 1) + fib(n: n - 2)
+}
+
+fn main() -> Unit {
+    let value = fib(n: 10)
+    Log.write(message: read String.from_int(value: value))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("scalar-recursion.rss", source).expect("lowering should succeed");
+        let output = executable
+            .eval_main_with_args_jit(Vec::<String>::new())
+            .expect("JIT run should succeed");
+        assert_eq!(output.stdout, "55\n");
+        let fib_id = executable.unit.function_ids["fib"];
+        assert_eq!(
+            executable.unit.functions[fib_id]
+                .jit_self_recursion_kind
+                .get(),
+            Some(crate::reg_vm::model::SelfRecursionKind::Int),
+            "fib should be recognized as an Int scalar self-recursive JIT candidate",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_scalar_replaces_whole_function_variant() {
+        let variant_layout = native_test_layout("Boxed", &["value"]);
+        let function = native_test_function(
+            "variant_hot",
+            1,
+            6,
+            vec![
+                RegInstr::LoadInt { dst: 1, value: 7 },
+                RegInstr::MakeVariant {
+                    dst: 2,
+                    layout: Rc::clone(&variant_layout),
+                    fields: vec![("value".to_string(), 0)],
+                },
+                RegInstr::MatchVariant {
+                    src: 2,
+                    expected: "Boxed".to_string(),
+                    match_ip: 3,
+                    else_ip: 6,
+                },
+                RegInstr::UnwrapVariantValue {
+                    dst: 3,
+                    src: 2,
+                    expected: "Boxed".to_string(),
+                },
+                RegInstr::AddInt {
+                    dst: 4,
+                    lhs: 3,
+                    rhs: 1,
+                },
+                RegInstr::Return { src: 4 },
+                RegInstr::LoadInt { dst: 5, value: 0 },
+                RegInstr::Return { src: 5 },
+            ],
+        );
+        let unit = native_test_unit(vec![function]);
+
+        assert!(
+            translate_to_native_jit(&unit, unit.functions[0].as_ref()).is_some(),
+            "whole-function native translation should dissolve user variants before subset checking",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_elides_split_list_when_only_len_is_used() {
+        let function = native_test_function(
+            "split_len_hot",
+            2,
+            4,
+            vec![
+                RegInstr::CallIntrinsic {
+                    intrinsic: RegIntrinsic::StringSplit,
+                    args: vec![0, 1],
+                    dst: 2,
+                },
+                RegInstr::ListLen { dst: 3, list: 2 },
+                RegInstr::Return { src: 3 },
+            ],
+        );
+        let unit = native_test_unit(vec![function]);
+        let (jit, _, _, _, _) = translate_to_native_jit(&unit, unit.functions[0].as_ref())
+            .expect("split+len should translate through the host intrinsic framework");
+
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::StringSplitCount,
+                    ..
+                }
+            )),
+            "split followed only by List.len should lower to the non-allocating count helper",
+        );
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::StringSplit,
+                    ..
+                }
+            )),
+            "the materializing StringSplit helper should be removed when only len is used",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_forwards_adjacent_flat_int_list_store_load() {
+        let function = native_test_function(
+            "flat_list_set_hot",
+            2,
+            5,
+            vec![
+                RegInstr::LoadInt { dst: 2, value: 0 },
+                RegInstr::ListSet {
+                    dst: 3,
+                    list: 0,
+                    index: 2,
+                    value: 1,
+                },
+                RegInstr::ListGet {
+                    dst: 4,
+                    list: 0,
+                    index: 2,
+                },
+                RegInstr::Return { src: 4 },
+            ],
+        );
+        let unit = native_test_unit(vec![function]);
+        let (jit, _, params, _, _) = translate_to_native_jit(&unit, unit.functions[0].as_ref())
+            .expect("flat Int list set/get should translate");
+
+        assert_eq!(params[0], NativeTy::FlatIntMut);
+        assert!(
+            jit.code
+                .iter()
+                .any(|instr| matches!(instr, vm_jit::JitInstr::ListSetIntDirect { .. })),
+            "List.set<Int> on a flat mutable list param should lower to direct write; jit code: {:#?}",
+            jit.code,
+        );
+        assert!(
+            !jit.code
+                .iter()
+                .any(|instr| matches!(instr, vm_jit::JitInstr::ListGetIntDirect { .. })),
+            "an adjacent List.get<Int> of the stored slot should not repeat the direct read; jit code: {:#?}",
+            jit.code,
+        );
+        assert!(
+            jit.code
+                .iter()
+                .any(|instr| matches!(instr, vm_jit::JitInstr::Move { dst: 4, src: 1 })),
+            "the stored value should be forwarded to the List.get destination; jit code: {:#?}",
+            jit.code,
+        );
+        let telemetry = tier::NativeCompileTelemetry::from_jit_function(&jit);
+        assert_eq!(telemetry.direct_list_bounds_check_sites, 1);
+        assert_eq!(telemetry.direct_list_store_load_forwarded_moves, 1);
+        assert_eq!(telemetry.memoized_host_call_sites, 0);
+        assert_eq!(telemetry.host_call_sites, 0);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_does_not_forward_list_store_when_result_clobbers_index() {
+        let function = native_test_function(
+            "flat_list_set_clobbers_index",
+            2,
+            4,
+            vec![
+                RegInstr::LoadInt { dst: 2, value: 1 },
+                RegInstr::ListSet {
+                    dst: 2,
+                    list: 0,
+                    index: 2,
+                    value: 1,
+                },
+                RegInstr::ListGet {
+                    dst: 3,
+                    list: 0,
+                    index: 2,
+                },
+                RegInstr::Return { src: 3 },
+            ],
+        );
+        let unit = native_test_unit(vec![function]);
+        let (jit, _, params, _, _) = translate_to_native_jit(&unit, unit.functions[0].as_ref())
+            .expect("flat Int list set/get should translate");
+
+        assert_eq!(params[0], NativeTy::FlatIntMut);
+        assert!(
+            jit.code
+                .iter()
+                .any(|instr| matches!(instr, vm_jit::JitInstr::ListGetIntDirect { .. })),
+            "the load must remain because ListSet overwrites the index register before it; jit code: {:#?}",
+            jit.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_forwards_adjacent_flat_float_list_store_load() {
+        let function = native_test_function(
+            "flat_float_list_set_hot",
+            2,
+            5,
+            vec![
+                RegInstr::LoadInt { dst: 2, value: 0 },
+                RegInstr::ListGet {
+                    dst: 4,
+                    list: 0,
+                    index: 2,
+                },
+                RegInstr::ListSet {
+                    dst: 3,
+                    list: 0,
+                    index: 2,
+                    value: 1,
+                },
+                RegInstr::ListGet {
+                    dst: 4,
+                    list: 0,
+                    index: 2,
+                },
+                RegInstr::Return { src: 4 },
+            ],
+        );
+        let mut unit = native_test_unit(vec![function]);
+        unit.native_signatures.insert(
+            "flat_float_list_set_hot".to_string(),
+            RegNativeSignature {
+                params: vec!["List<Float>".to_string(), "Float".to_string()],
+                return_type: Some("Float".to_string()),
+            },
+        );
+        let (jit, ret, params, _, _) = translate_to_native_jit(&unit, unit.functions[0].as_ref())
+            .expect("flat Float list set/get should translate");
+
+        assert_eq!(params[0], NativeTy::FlatFloatMut);
+        assert_eq!(ret, NativeTy::Float);
+        assert!(
+            jit.code
+                .iter()
+                .any(|instr| matches!(instr, vm_jit::JitInstr::ListSetFloatDirect { .. })),
+            "List.set<Float> should remain a checked direct write; jit code: {:#?}",
+            jit.code,
+        );
+        assert!(
+            jit.code
+                .iter()
+                .filter(|instr| matches!(instr, vm_jit::JitInstr::ListGetFloatDirect { .. }))
+                .count()
+                == 1,
+            "only the initial Float read should remain; the adjacent post-store read should be forwarded; jit code: {:#?}",
+            jit.code,
+        );
+        assert!(
+            jit.code
+                .iter()
+                .any(|instr| matches!(instr, vm_jit::JitInstr::Move { dst: 4, src: 1 })),
+            "the stored Float should be forwarded to the load destination; jit code: {:#?}",
+            jit.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_pass_elides_readonly_full_list_slice_alias() {
+        let code = vec![
+            RegInstr::LoadInt { dst: 1, value: 0 },
+            RegInstr::ListLen { dst: 2, list: 0 },
+            RegInstr::CallIntrinsic {
+                intrinsic: RegIntrinsic::ListSlice,
+                args: vec![0, 1, 2],
+                dst: 3,
+            },
+            RegInstr::Move { dst: 5, src: 3 },
+            RegInstr::ListGet {
+                dst: 4,
+                list: 5,
+                index: 1,
+            },
+            RegInstr::Return { src: 4 },
+        ];
+
+        let (folded, _, _) =
+            native_elide_readonly_full_list_slices_in_region(&code, 6, 0, code.len())
+                .expect("full read-only slice should be analyzable");
+
+        assert!(
+            !folded.iter().any(|instr| matches!(
+                instr,
+                RegInstr::CallIntrinsic {
+                    intrinsic: RegIntrinsic::ListSlice,
+                    ..
+                }
+            )),
+            "materializing List.slice should be removed: {folded:#?}",
+        );
+        assert!(
+            matches!(folded[2], RegInstr::Move { dst: 3, src: 0 }),
+            "full read-only slice should become a handle alias: {folded:#?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_pass_does_not_elide_full_list_slice_with_branch_conflicting_start() {
+        let code = vec![
+            RegInstr::JumpIfBool {
+                cond: 6,
+                expected: false,
+                target: 3,
+            },
+            RegInstr::LoadInt { dst: 1, value: 5 },
+            RegInstr::Jump { target: 4 },
+            RegInstr::LoadInt { dst: 1, value: 0 },
+            RegInstr::ListLen { dst: 2, list: 0 },
+            RegInstr::CallIntrinsic {
+                intrinsic: RegIntrinsic::ListSlice,
+                args: vec![0, 1, 2],
+                dst: 3,
+            },
+            RegInstr::ListGet {
+                dst: 4,
+                list: 3,
+                index: 1,
+            },
+            RegInstr::Return { src: 4 },
+        ];
+
+        let (folded, _, _) =
+            native_elide_readonly_full_list_slices_in_region(&code, 7, 0, code.len())
+                .expect("region should remain analyzable");
+
+        assert!(
+            matches!(
+                folded[5],
+                RegInstr::CallIntrinsic {
+                    intrinsic: RegIntrinsic::ListSlice,
+                    ..
+                }
+            ),
+            "slice must not be replaced by a whole-list alias when branch facts disagree: {folded:#?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_region_cfg_dedups_and_filters_successors() {
+        let code = vec![
+            RegInstr::JumpIfBool {
+                cond: 0,
+                expected: true,
+                target: 1,
+            },
+            RegInstr::Jump { target: 3 },
+            RegInstr::Return { src: 0 },
+            RegInstr::LoadInt { dst: 1, value: 7 },
+        ];
+
+        let cfg = NativeRegionCfg::new(&code, 0, 3).expect("valid region");
+
+        assert_eq!(
+            cfg.successors(0).unwrap(),
+            &[1],
+            "branch target equal to fallthrough should be deduplicated",
+        );
+        assert_eq!(
+            cfg.successors(1).unwrap(),
+            &[] as &[usize],
+            "successor outside the region must be filtered",
+        );
+        assert_eq!(cfg.successors(2).unwrap(), &[] as &[usize]);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_subset_descriptor_has_precise_footprints() {
+        let instructions = vec![
+            RegInstr::LoadInt { dst: 0, value: 1 },
+            RegInstr::LoadFloat { dst: 0, value: 1.0 },
+            RegInstr::LoadBool {
+                dst: 0,
+                value: true,
+            },
+            RegInstr::LoadString {
+                dst: 0,
+                value: Rc::new("x".to_string()),
+            },
+            RegInstr::Move { dst: 0, src: 1 },
+            RegInstr::DeepCopy { reg: 0 },
+            RegInstr::AddInt {
+                dst: 0,
+                lhs: 1,
+                rhs: 2,
+            },
+            RegInstr::Jump { target: 1 },
+            RegInstr::JumpIfBool {
+                cond: 0,
+                expected: true,
+                target: 2,
+            },
+            RegInstr::JumpIfIntCompare {
+                lhs: 0,
+                rhs: 1,
+                op: RegIntCompare::Less,
+                expected: true,
+                target: 2,
+            },
+            RegInstr::Return { src: 0 },
+            RegInstr::RuntimeError {
+                message: "boom".to_string(),
+            },
+            RegInstr::StringConcat {
+                dst: 0,
+                left: 1,
+                right: 2,
+            },
+            RegInstr::GetFieldSlot {
+                dst: 0,
+                base: 1,
+                slot: 0,
+            },
+            RegInstr::SetFieldSlot {
+                dst: 0,
+                base: 1,
+                slot: 0,
+                value: 2,
+            },
+            RegInstr::ListLen { dst: 0, list: 1 },
+            RegInstr::ListGet {
+                dst: 0,
+                list: 1,
+                index: 2,
+            },
+            RegInstr::ListSet {
+                dst: 0,
+                list: 1,
+                index: 2,
+                value: 3,
+            },
+            RegInstr::ListPush {
+                dst: 0,
+                list: 1,
+                value: 2,
+            },
+            RegInstr::ListSort { dst: 0, list: 1 },
+            RegInstr::MapInsert {
+                dst: 0,
+                map: 1,
+                key: 2,
+                value: 3,
+            },
+            RegInstr::SetInsert {
+                dst: 0,
+                set: 1,
+                value: 2,
+            },
+            RegInstr::SortedSetInsert {
+                dst: 0,
+                set: 1,
+                value: 2,
+            },
+            RegInstr::SortedMapInsert {
+                dst: 0,
+                map: 1,
+                key: 2,
+                value: 3,
+            },
+            RegInstr::DequePushBack {
+                dst: 0,
+                deque: 1,
+                value: 2,
+            },
+            RegInstr::DequePushFront {
+                dst: 0,
+                deque: 1,
+                value: 2,
+            },
+            RegInstr::DequePopFront { dst: 0, deque: 1 },
+            RegInstr::DequePopBack { dst: 0, deque: 1 },
+            RegInstr::MatchMapGet {
+                map: 0,
+                key: 1,
+                value_dst: 2,
+                some_ip: 3,
+                none_ip: 4,
+            },
+            RegInstr::MatchSortedMapGet {
+                map: 0,
+                key: 1,
+                value_dst: 2,
+                some_ip: 3,
+                none_ip: 4,
+            },
+            RegInstr::NativeGuardClosureId {
+                closure: 0,
+                expected: 1,
+            },
+            RegInstr::NativeClosureId { dst: 0, closure: 1 },
+            RegInstr::NativeClosureCapture {
+                dst: 0,
+                closure: 1,
+                index: 0,
+            },
+            RegInstr::NativeFieldClosureId {
+                dst: 0,
+                base: 1,
+                slot: 0,
+            },
+            RegInstr::NativeFieldClosureCapture {
+                dst: 0,
+                base: 1,
+                slot: 0,
+                index: 0,
+            },
+            RegInstr::CallIntrinsic {
+                dst: 0,
+                intrinsic: RegIntrinsic::IntToFloat,
+                args: vec![1],
+            },
+            RegInstr::CallIntrinsic {
+                dst: 0,
+                intrinsic: RegIntrinsic::StringLen,
+                args: vec![1],
+            },
+            RegInstr::CallTypedIntrinsic {
+                dst: 0,
+                intrinsic: RegIntrinsic::ListNew,
+                type_arg: "Int".to_string(),
+                args: vec![],
+            },
+        ];
+
+        for instr in instructions {
+            assert!(
+                native_subset_instruction(&instr),
+                "fixture should be in the native subset: {instr:?}",
+            );
+            assert!(
+                matches!(instr_read_regs(&instr), RegFootprint::Some(_)),
+                "native-subset reads must be precise: {instr:?}",
+            );
+            assert!(
+                matches!(instr_written_reg(&instr), RegFootprint::Some(_)),
+                "native-subset writes must be precise: {instr:?}",
+            );
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_host_intrinsic_registry_matches_backend_helper_signatures() {
+        let cases = [
+            (
+                RegIntrinsic::ListNew,
+                Some("Int"),
+                vm_jit::HostHelper::ListNewInt,
+            ),
+            (
+                RegIntrinsic::StringFromInt,
+                None,
+                vm_jit::HostHelper::StringFromInt,
+            ),
+            (RegIntrinsic::StringLen, None, vm_jit::HostHelper::StringLen),
+            (
+                RegIntrinsic::StringSlice,
+                None,
+                vm_jit::HostHelper::StringSlice,
+            ),
+            (
+                RegIntrinsic::StringPadLeft,
+                None,
+                vm_jit::HostHelper::StringPadLeft,
+            ),
+            (
+                RegIntrinsic::StringSplit,
+                None,
+                vm_jit::HostHelper::StringSplit,
+            ),
+            (
+                RegIntrinsic::StringStartsWith,
+                None,
+                vm_jit::HostHelper::StringStartsWith,
+            ),
+            (
+                RegIntrinsic::ListIsEmpty,
+                None,
+                vm_jit::HostHelper::ListIsEmpty,
+            ),
+            (
+                RegIntrinsic::JsonParseOk,
+                None,
+                vm_jit::HostHelper::JsonParse,
+            ),
+            (
+                RegIntrinsic::JsonFieldOk,
+                None,
+                vm_jit::HostHelper::JsonField,
+            ),
+            (
+                RegIntrinsic::JsonFieldIntOk,
+                None,
+                vm_jit::HostHelper::JsonFieldInt,
+            ),
+            (RegIntrinsic::BytesLen, None, vm_jit::HostHelper::BytesLen),
+            (
+                RegIntrinsic::BytesSlice,
+                None,
+                vm_jit::HostHelper::BytesSlice,
+            ),
+            (
+                RegIntrinsic::SetContains,
+                None,
+                vm_jit::HostHelper::MapContainsInt,
+            ),
+            (
+                RegIntrinsic::MapIsEmpty,
+                None,
+                vm_jit::HostHelper::MapIsEmpty,
+            ),
+            (RegIntrinsic::MapLen, None, vm_jit::HostHelper::MapLen),
+            (
+                RegIntrinsic::SetIsEmpty,
+                None,
+                vm_jit::HostHelper::SetIsEmpty,
+            ),
+            (RegIntrinsic::SetLen, None, vm_jit::HostHelper::SetLen),
+            (
+                RegIntrinsic::SortedSetContains,
+                None,
+                vm_jit::HostHelper::SortedSetContainsInt,
+            ),
+            (
+                RegIntrinsic::SortedSetIsEmpty,
+                None,
+                vm_jit::HostHelper::SortedSetIsEmpty,
+            ),
+            (
+                RegIntrinsic::SortedSetLen,
+                None,
+                vm_jit::HostHelper::ListLen,
+            ),
+            (
+                RegIntrinsic::SortedMapContainsKey,
+                None,
+                vm_jit::HostHelper::SortedMapContainsKeyInt,
+            ),
+            (
+                RegIntrinsic::SortedMapIsEmpty,
+                None,
+                vm_jit::HostHelper::SortedMapIsEmpty,
+            ),
+            (
+                RegIntrinsic::SortedMapLen,
+                None,
+                vm_jit::HostHelper::SortedMapLen,
+            ),
+            (RegIntrinsic::DequeLen, None, vm_jit::HostHelper::DequeLen),
+            (
+                RegIntrinsic::DequeIsEmpty,
+                None,
+                vm_jit::HostHelper::DequeIsEmpty,
+            ),
+        ];
+
+        for (intrinsic, type_arg, expected_helper) in cases {
+            let spec = native_host_typed_intrinsic(intrinsic, type_arg)
+                .unwrap_or_else(|| panic!("{intrinsic:?}/{type_arg:?} should be native-lowered"));
+            assert_eq!(spec.helper, expected_helper, "{intrinsic:?}/{type_arg:?}");
+            assert_eq!(
+                spec.helper.arg_types(),
+                spec.arg_tys()
+                    .iter()
+                    .map(|ty| ty.jit_value_type())
+                    .collect::<Vec<_>>(),
+                "{intrinsic:?}/{type_arg:?} arg types must match backend helper signature",
+            );
+            assert_eq!(
+                spec.helper.result_type(),
+                Some(spec.result_ty.jit_value_type()),
+                "{intrinsic:?}/{type_arg:?} result type must match backend helper signature",
+            );
+            assert_eq!(
+                spec.produces_output_handle(),
+                spec.helper.heap_effect().produces_heap_result(),
+                "{intrinsic:?}/{type_arg:?} heap-result flag must match backend helper effect",
+            );
+            assert_eq!(
+                spec.consumes_output_handles(),
+                spec.helper
+                    .arg_types()
+                    .iter()
+                    .any(|ty| *ty == vm_jit::JitValueType::Handle),
+                "{intrinsic:?}/{type_arg:?} handle-input flag must match backend helper args",
+            );
+        }
+
+        let concat = native_string_concat_host();
+        assert_eq!(concat.helper, vm_jit::HostHelper::StringConcat);
+        assert_eq!(
+            concat.helper.result_type(),
+            Some(concat.result_ty.jit_value_type())
+        );
+        assert_eq!(
+            concat.produces_output_handle(),
+            concat.helper.heap_effect().produces_heap_result()
+        );
+        assert_eq!(
+            concat.consumes_output_handles(),
+            concat
+                .helper
+                .arg_types()
+                .iter()
+                .any(|ty| *ty == vm_jit::JitValueType::Handle)
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_region_liveness_tracks_branch_sensitive_live_ins() {
+        let code = vec![
+            RegInstr::JumpIfBool {
+                cond: 0,
+                expected: true,
+                target: 2,
+            },
+            RegInstr::LoadInt { dst: 1, value: 7 },
+            RegInstr::AddInt {
+                dst: 2,
+                lhs: 1,
+                rhs: 3,
+            },
+            RegInstr::Return { src: 2 },
+        ];
+
+        let analysis =
+            NativeRegionAnalysis::compute_region(&code, 4, 0, code.len()).expect("valid region");
+
+        assert_eq!(
+            analysis.live_in(0, 0),
+            Some(true),
+            "branch condition is read by the branch instruction",
+        );
+        assert_eq!(
+            analysis.live_out(0, 1),
+            Some(true),
+            "reg 1 must remain live on the branch edge that skips its local definition",
+        );
+        assert_eq!(
+            analysis.live_in(2, 1),
+            Some(true),
+            "AddInt reads reg 1 at the join",
+        );
+        assert_eq!(
+            analysis.live_out(2, 1),
+            Some(false),
+            "reg 1 is dead after the AddInt consumes it",
+        );
+        assert_eq!(
+            analysis.live_out(2, 2),
+            Some(true),
+            "AddInt's result is live into the Return",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn profile_cold_blocks_ignore_unreachable_branch_profiles() {
+        let code = vec![
+            RegInstr::JumpIfBool {
+                cond: 0,
+                expected: true,
+                target: 2,
+            },
+            RegInstr::LoadInt { dst: 1, value: 7 },
+            RegInstr::Return { src: 1 },
+            RegInstr::JumpIfBool {
+                cond: 0,
+                expected: true,
+                target: 5,
+            },
+            RegInstr::LoadInt { dst: 2, value: 13 },
+            RegInstr::Return { src: 2 },
+        ];
+        let analysis =
+            NativeRegionAnalysis::compute_prefix(&code, 3, 0, code.len()).expect("valid region");
+        let mut profile = FunctionProfile::default();
+        profile.branch_sites.insert(
+            0,
+            BranchFeedback {
+                taken: PROFILE_BRANCH_MIN_SAMPLES,
+                fallthrough: 0,
+            },
+        );
+        profile.branch_sites.insert(
+            3,
+            BranchFeedback {
+                taken: 0,
+                fallthrough: PROFILE_BRANCH_MIN_SAMPLES,
+            },
+        );
+        let ip_map: Vec<usize> = (0..code.len()).collect();
+
+        let guidance = analysis.profile_guidance(&code, &profile, &ip_map);
+        assert_eq!(
+            guidance.cold_blocks,
+            vec![1],
+            "only the reachable branch's cold edge should affect profile-guided layout",
+        );
+        assert_eq!(
+            guidance.hot_branch_edges.get(&0),
+            Some(&true),
+            "reachable branch profile should expose the hot target edge",
+        );
+        assert!(
+            !guidance.hot_branch_edges.contains_key(&3),
+            "unreachable branch profile must not drive profile-guided side exits",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_branch_profile_pending_uses_reachable_cfg_branches() {
+        fn test_func(code: Vec<RegInstr>) -> RegFunction {
+            RegFunction {
+                name: "f".to_string(),
+                params: 1,
+                captures: 0,
+                regs: 2,
+                local_regs: HashMap::new(),
+                code,
+                jit_analysis: std::cell::Cell::new(None),
+                jit_self_recursion_kind: std::cell::Cell::new(None),
+                native_status: std::cell::Cell::new(0),
+                call_count: std::cell::Cell::new(0),
+                branch_count: std::cell::Cell::new(0),
+                profile: RefCell::new(None),
+                osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
+            }
+        }
+
+        let reachable_branch = test_func(vec![
+            RegInstr::JumpIfBool {
+                cond: 0,
+                expected: true,
+                target: 2,
+            },
+            RegInstr::Return { src: 0 },
+            RegInstr::Return { src: 0 },
+        ]);
+        assert!(
+            native_scalar_callee_pending_on_branch_profile(&reachable_branch),
+            "a reachable conditional branch should still wait for branch-profile warmup",
+        );
+
+        let unreachable_branch = test_func(vec![
+            RegInstr::Jump { target: 2 },
+            RegInstr::JumpIfBool {
+                cond: 0,
+                expected: true,
+                target: 3,
+            },
+            RegInstr::Return { src: 0 },
+            RegInstr::Return { src: 0 },
+        ]);
+        assert!(
+            !native_scalar_callee_pending_on_branch_profile(&unreachable_branch),
+            "dead conditional branches must not stall native-call precompilation",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_option_scalar_replacement_requires_def_on_all_paths_before_read() {
+        let code = vec![
+            RegInstr::JumpIfBool {
+                cond: 6,
+                expected: true,
+                target: 2,
+            },
+            RegInstr::Jump { target: 3 },
+            RegInstr::MakeSome { dst: 1, value: 0 },
+            RegInstr::MatchOption {
+                src: 1,
+                some_ip: 4,
+                none_ip: 5,
+            },
+            RegInstr::UnwrapSome { dst: 2, src: 1 },
+            RegInstr::Return { src: 0 },
+        ];
+
+        assert!(
+            native_scalar_replace_options_in_region(&code, 7, 0, code.len()).is_none(),
+            "Option SR must reject regions where any CFG path reads an Option before an in-region def",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_variant_region_scalar_replacement_emits_live_after_recipe() {
+        let variant_layout = native_test_layout("Boxed", &["value"]);
+        let code = vec![
+            RegInstr::LoadInt { dst: 0, value: 7 },
+            RegInstr::MakeVariant {
+                dst: 2,
+                layout: Rc::clone(&variant_layout),
+                fields: vec![("value".to_string(), 0)],
+            },
+            RegInstr::MatchVariant {
+                src: 2,
+                expected: "Boxed".to_string(),
+                match_ip: 3,
+                else_ip: 4,
+            },
+            RegInstr::UnwrapVariantValue {
+                dst: 3,
+                src: 2,
+                expected: "Boxed".to_string(),
+            },
+            RegInstr::Return { src: 2 },
+        ];
+
+        let (_, _, _, recipes) = native_scalar_replace_variants_in_region(&code, 5, 1, 4)
+            .expect("variant SR should describe a reconstructible live-after value");
+        assert_eq!(recipes.len(), 1);
+        assert_eq!(recipes[0].dst_reg, 2);
+        assert!(matches!(
+            &recipes[0].value,
+            OsrMaterializeValue::Variant {
+                tag_reg: Some(_),
+                arms,
+            } if arms.len() == 1
+                && arms[0].layout.name.as_ref() == "Boxed"
+                && matches!(arms[0].fields.as_slice(), [OsrMaterializeValue::Register(_)])
+        ));
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_aggregate_region_scalar_replacement_rejects_external_write() {
+        let ok_layout = native_test_layout("Ok", &["value"]);
+        let code = vec![
+            RegInstr::LoadInt { dst: 0, value: 7 },
+            RegInstr::MakeVariant {
+                dst: 2,
+                layout: Rc::clone(&ok_layout),
+                fields: vec![("value".to_string(), 0)],
+            },
+            RegInstr::MatchResult {
+                src: 2,
+                ok_ip: 3,
+                err_ip: 4,
+            },
+            RegInstr::UnwrapVariantValue {
+                dst: 3,
+                src: 2,
+                expected: "Ok".to_string(),
+            },
+            RegInstr::Move { dst: 2, src: 0 },
+        ];
+
+        assert!(
+            native_scalar_replace_results_in_region(&code, 5, 1, 4).is_none(),
+            "result SR must reject regions whose original aggregate register is written outside the region",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_pass_does_not_elide_full_list_slice_with_branch_conflicting_len_source() {
+        let code = vec![
+            RegInstr::JumpIfBool {
+                cond: 6,
+                expected: false,
+                target: 3,
+            },
+            RegInstr::ListLen { dst: 2, list: 0 },
+            RegInstr::Jump { target: 4 },
+            RegInstr::ListLen { dst: 2, list: 5 },
+            RegInstr::LoadInt { dst: 1, value: 0 },
+            RegInstr::CallIntrinsic {
+                intrinsic: RegIntrinsic::ListSlice,
+                args: vec![0, 1, 2],
+                dst: 3,
+            },
+            RegInstr::ListGet {
+                dst: 4,
+                list: 3,
+                index: 1,
+            },
+            RegInstr::Return { src: 4 },
+        ];
+
+        let (folded, _, _) =
+            native_elide_readonly_full_list_slices_in_region(&code, 7, 0, code.len())
+                .expect("region should remain analyzable");
+
+        assert!(
+            matches!(
+                folded[5],
+                RegInstr::CallIntrinsic {
+                    intrinsic: RegIntrinsic::ListSlice,
+                    ..
+                }
+            ),
+            "slice must not be replaced when branch facts disagree on List.len source: {folded:#?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_elides_source_split_len_hot_function() {
+        let source = r#"
+fn hot(line: read String, delimiter: read String, limit: Int) -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let parts = String.split(value: read line, delimiter: read delimiter)
+        total = total + List.len<String>(list: read parts)
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let total = hot(line: read "a,b,c", delimiter: read ",", limit: 10)
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let mut program = parse_source("test.rss", source);
+        crate::syntax::isolate_module_namespaces(&mut program);
+        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let hot = unit.function_ids["hot"];
+        let (jit, _, _, _, _) = translate_to_native_jit(&unit, unit.functions[hot].as_ref())
+            .expect("source split+len hot function should translate");
+
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::StringSplitCount,
+                    ..
+                } | vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::StringSplitCount,
+                    ..
+                }
+            )),
+            "source split+len should lower to StringSplitCount; jit code: {:#?}",
+            jit.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_elides_pad_left_string_when_only_len_is_used() {
+        let function = native_test_function(
+            "pad_left_len_hot",
+            3,
+            5,
+            vec![
+                RegInstr::CallIntrinsic {
+                    intrinsic: RegIntrinsic::StringPadLeft,
+                    args: vec![0, 1, 2],
+                    dst: 3,
+                },
+                RegInstr::CallIntrinsic {
+                    intrinsic: RegIntrinsic::StringLen,
+                    args: vec![3],
+                    dst: 4,
+                },
+                RegInstr::Return { src: 4 },
+            ],
+        );
+        let unit = native_test_unit(vec![function]);
+        let (jit, _, _, _, _) = translate_to_native_jit(&unit, unit.functions[0].as_ref())
+            .expect("pad_left+len should translate through the host intrinsic framework");
+
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::StringPadLeftLen,
+                    ..
+                }
+            )),
+            "pad_left followed only by String.len should lower to the non-allocating length helper",
+        );
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::StringPadLeft,
+                    ..
+                }
+            )),
+            "the materializing StringPadLeft helper should be removed when only len is used",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_elides_source_pad_left_len_hot_function() {
+        let source = r#"
+fn hot(line: read String, fill: read String, limit: Int) -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let padded = String.pad_left(value: read line, width: 2, fill: read fill)
+        total = total + String.len(value: read padded)
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let total = hot(line: read "a", fill: read "é", limit: 10)
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let mut program = parse_source("test.rss", source);
+        crate::syntax::isolate_module_namespaces(&mut program);
+        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let hot = unit.function_ids["hot"];
+        let (jit, _, _, _, _) = translate_to_native_jit(&unit, unit.functions[hot].as_ref())
+            .expect("source pad_left+len hot function should translate");
+
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::StringPadLeftLen,
+                    ..
+                } | vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::StringPadLeftLen,
+                    ..
+                }
+            )),
+            "source pad_left+len should lower to StringPadLeftLen; jit code: {:#?}",
+            jit.code,
+        );
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::StringPadLeft,
+                    ..
+                }
+            )),
+            "source pad_left+len should not materialize the padded string",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_memoizes_invariant_string_helpers_in_loop() {
+        let source = r#"
+fn hot(line: read String, delimiter: read String, fill: read String, prefix: read String, limit: Int) -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let parts = String.split(value: read line, delimiter: read delimiter)
+        total = total + List.len<String>(list: read parts)
+        let padded = String.pad_left(value: read line, width: 40, fill: read fill)
+        total = total + String.len(value: read padded)
+        if String.starts_with(value: read line, prefix: read prefix) {
+            total = total + 1
+        }
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let total = hot(line: read "alpha,beta,gamma", delimiter: read ",", fill: read "0", prefix: read "alpha", limit: 10)
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let mut program = parse_source("test.rss", source);
+        crate::syntax::isolate_module_namespaces(&mut program);
+        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let hot = unit.function_ids["hot"];
+        let (jit, _, _, _, _) = translate_to_native_jit(&unit, unit.functions[hot].as_ref())
+            .expect("invariant string helper loop should translate");
+
+        for helper in [
+            vm_jit::HostHelper::StringSplitCount,
+            vm_jit::HostHelper::StringPadLeftLen,
+            vm_jit::HostHelper::StringStartsWith,
+        ] {
+            assert!(
+                jit.code.iter().any(|instr| matches!(
+                    instr,
+                    vm_jit::JitInstr::MemoizedHostCall { helper: h, .. } if *h == helper
+                )),
+                "{helper:?} should lower to a memoized loop-invariant helper; jit code: {:#?}",
+                jit.code,
+            );
+        }
+        let telemetry = tier::NativeCompileTelemetry::from_jit_function(&jit);
+        assert_eq!(telemetry.memoized_host_call_sites, 3);
+        assert_eq!(telemetry.host_call_sites, 0);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_compile_shape_telemetry_is_visible_in_summary_and_json() {
+        let stats = NativeStats {
+            baseline_compiles: 2,
+            optimized_compiles: 1,
+            baseline_calls: 8,
+            optimized_calls: 13,
+            promotions: 1,
+            admission_admitted: 5,
+            admission_admitted_bytes: 4096,
+            admission_rejected: 3,
+            admission_rejected_bytes: 512,
+            direct_list_bounds_check_sites: 4,
+            memoized_host_call_sites: 3,
+            host_call_sites: 2,
+            fused_map_match_helper_sites: 1,
+            direct_list_store_load_forwarded_moves: 1,
+            ..NativeStats::default()
+        };
+        let json = stats.to_json();
+        assert_eq!(json["baseline_compiles"].as_u64(), Some(2));
+        assert_eq!(json["optimized_compiles"].as_u64(), Some(1));
+        assert_eq!(json["baseline_calls"].as_u64(), Some(8));
+        assert_eq!(json["optimized_calls"].as_u64(), Some(13));
+        assert_eq!(json["promotions"].as_u64(), Some(1));
+        assert_eq!(json["direct_list_bounds_check_sites"].as_u64(), Some(4));
+        assert_eq!(json["memoized_host_call_sites"].as_u64(), Some(3));
+        assert_eq!(json["host_call_sites"].as_u64(), Some(2));
+        assert_eq!(json["fused_map_match_helper_sites"].as_u64(), Some(1));
+        assert_eq!(json["admission_admitted"].as_u64(), Some(5));
+        assert_eq!(json["admission_admitted_bytes"].as_u64(), Some(4096));
+        assert_eq!(json["admission_rejected"].as_u64(), Some(3));
+        assert_eq!(json["admission_rejected_bytes"].as_u64(), Some(512));
+        assert_eq!(
+            json["direct_list_store_load_forwarded_moves"].as_u64(),
+            Some(1),
+        );
+        let summary = stats.summary();
+        for field in [
+            "baseline_compiles=2",
+            "optimized_compiles=1",
+            "baseline_calls=8",
+            "optimized_calls=13",
+            "promotions=1",
+            "direct_list_bounds_check_sites=4",
+            "memoized_host_call_sites=3",
+            "host_call_sites=2",
+            "fused_map_match_helper_sites=1",
+            "direct_list_store_load_forwarded_moves=1",
+            "admission_admitted=5",
+            "admission_admitted_bytes=4096",
+            "admission_rejected=3",
+            "admission_rejected_bytes=512",
+        ] {
+            assert!(
+                summary.contains(field),
+                "text summary should expose {field}: {summary}",
+            );
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    fn native_constant_func(name: &str, value: i64) -> RegFunction {
+        native_test_function(
+            name,
+            0,
+            1,
+            vec![
+                RegInstr::LoadInt { dst: 0, value },
+                RegInstr::Return { src: 0 },
+            ],
+        )
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_ladder_promotes_and_prefers_optimized_dispatch() {
+        let mut vm = empty_vm();
+        let mut native = NativeState::new_with_opt(1, false, true, false, true, false, false)
+            .expect("native ladder");
+        native.optimize_work_threshold = u64::MAX;
+        vm.native = Some(native);
+        vm.prepare_frame(0, 1).expect("frame");
+        let func = native_constant_func("promote", 7);
+
+        assert!(matches!(
+            vm.try_native(&func, 0),
+            NativeAttempt::Completed(VmValue::Int(7))
+        ));
+        {
+            let native = vm.native.as_ref().expect("native");
+            assert_eq!(native.stats.baseline_compiles, 1);
+            assert_eq!(native.stats.baseline_calls, 1);
+            assert_eq!(native.stats.optimized_compiles, 0);
+        }
+
+        vm.native.as_mut().expect("native").optimize_work_threshold = 0;
+        for _ in 0..2 {
+            assert!(matches!(
+                vm.try_native(&func, 0),
+                NativeAttempt::Completed(VmValue::Int(7))
+            ));
+        }
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert_eq!(stats.baseline_compiles, 1);
+        assert_eq!(stats.optimized_compiles, 1);
+        assert_eq!(stats.promotions, 1);
+        assert_eq!(stats.baseline_calls, 1);
+        assert_eq!(
+            stats.optimized_calls, 2,
+            "the promoted cache must remain the preferred dispatch"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_ladder_does_not_promote_below_work_threshold() {
+        let mut vm = empty_vm();
+        let mut native = NativeState::new_with_opt(1, false, true, false, true, false, false)
+            .expect("native ladder");
+        native.optimize_work_threshold = u64::MAX;
+        vm.native = Some(native);
+        vm.prepare_frame(0, 1).expect("frame");
+        let func = native_constant_func("stay_baseline", 9);
+
+        for _ in 0..3 {
+            assert!(matches!(
+                vm.try_native(&func, 0),
+                NativeAttempt::Completed(VmValue::Int(9))
+            ));
+        }
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert_eq!(stats.baseline_compiles, 1);
+        assert_eq!(stats.baseline_calls, 3);
+        assert_eq!(stats.optimized_compiles, 0);
+        assert_eq!(stats.optimized_calls, 0);
+        assert_eq!(stats.promotions, 0);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_ladder_shares_admission_budget_across_modules() {
+        let mut vm = empty_vm();
+        let mut native = NativeState::new_with_opt(1, false, true, false, true, false, false)
+            .expect("native ladder");
+        native.optimize_work_threshold = u64::MAX;
+        vm.native = Some(native);
+        vm.prepare_frame(0, 1).expect("frame");
+        let func = native_constant_func("shared_budget", 11);
+
+        assert!(matches!(
+            vm.try_native(&func, 0),
+            NativeAttempt::Completed(VmValue::Int(11))
+        ));
+        let baseline_bytes = vm
+            .native
+            .as_ref()
+            .expect("native")
+            .admission
+            .admitted_code_bytes;
+        {
+            let native = vm.native.as_mut().expect("native");
+            native.admission.max_code_bytes = baseline_bytes;
+            native.optimize_work_threshold = 0;
+        }
+        assert!(matches!(
+            vm.try_native(&func, 0),
+            NativeAttempt::Completed(VmValue::Int(11))
+        ));
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert_eq!(stats.baseline_calls, 2);
+        assert_eq!(stats.optimized_calls, 0);
+        assert_eq!(stats.optimized_compiles, 0);
+        assert_eq!(stats.promotions, 0);
+        assert_eq!(stats.admission_rejected, 1);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn baseline_only_mode_preserves_precise_deopt() {
+        let mut vm = empty_vm();
+        vm.native = Some(
+            NativeState::new_with_opt(0, false, true, true, true, false, false)
+                .expect("baseline-only native module"),
+        );
+        let func = Rc::new(add_then_square_func());
+        let big = 4_000_000_000i64;
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(big));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        assert!(matches!(vm.try_native(&func, 0), NativeAttempt::Resumed));
+        let native = vm.native.as_ref().expect("native");
+        assert!(native.optimized_module.is_none());
+        assert_eq!(native.stats.baseline_compiles, 1);
+        assert_eq!(native.stats.optimized_compiles, 0);
+        assert_eq!(native.stats.promotions, 0);
+        assert_eq!(vm.frames.last().expect("frame").ip, 2);
+        assert_eq!(*vm.reg(1), VmValue::Int(big + 1));
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_ladder_promotes_region() {
+        let source = "\
+fn hot(limit: Int) -> Int {
+    Log.write(message: \"begin\")
+    let mut i = 0
+    let mut total = 0
+    while i < limit {
+        total = total + i * 3 + 1
+        i = i + 1
+    }
+    Log.write(message: \"end\")
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: String.from_int(value: hot(limit: 8)))
+    return Unit
+}
+";
+        let executable = reg_vm_compile_source("osr-ladder.rss", source).expect("source compiles");
+        let mut vm = RegVm::new(
+            Rc::clone(&executable.unit),
+            Vec::new(),
+            HashMap::<String, NativeInterpreterFn>::new(),
+        );
+        let mut native = NativeState::new_with_opt(1, false, true, false, true, true, false)
+            .expect("native ladder");
+        native.optimize_work_threshold = 0;
+        vm.native = Some(native);
+        vm.jit_enabled = true;
+        vm.jit_force_all = true;
+
+        vm.run_program("main").expect("program runs");
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert_eq!(stats.baseline_compiles, 1);
+        assert_eq!(stats.optimized_compiles, 1);
+        assert_eq!(stats.promotions, 1);
+        assert_eq!(stats.baseline_calls, 0);
+        assert_eq!(stats.optimized_calls, 1);
+        assert_eq!(stats.osr_entries, 1);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_admission_budget_bounds_many_functions_and_keeps_existing_dispatch() {
+        let mut vm = empty_vm();
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.prepare_frame(0, 1).expect("frame");
+        let functions: Vec<_> = (0..32)
+            .map(|index| native_constant_func(&format!("constant_{index}"), index))
+            .collect();
+
+        assert!(matches!(
+            vm.try_native(&functions[0], 0),
+            NativeAttempt::Completed(VmValue::Int(0))
+        ));
+        let first_bytes = vm
+            .native
+            .as_ref()
+            .expect("native")
+            .admission
+            .admitted_code_bytes;
+        assert!(first_bytes > 0);
+        vm.native.as_mut().expect("native").admission.max_code_bytes = first_bytes;
+
+        for (index, func) in functions.iter().enumerate().skip(1) {
+            assert!(
+                matches!(vm.try_native(func, 0), NativeAttempt::Fallback),
+                "function {index} should fall back after admission is exhausted",
+            );
+        }
+        assert!(
+            matches!(
+                vm.try_native(&functions[0], 0),
+                NativeAttempt::Completed(VmValue::Int(0))
+            ),
+            "an entry admitted before exhaustion must remain dispatchable",
+        );
+
+        let native = vm.native.as_ref().expect("native");
+        assert_eq!(native.stats.compiled, 1);
+        assert_eq!(native.stats.admission_admitted, 1);
+        assert_eq!(native.stats.admission_admitted_bytes, first_bytes);
+        assert_eq!(native.stats.admission_rejected, 31);
+        assert_eq!(native.stats.admission_rejected_bytes, 0);
+        assert_eq!(native.admission.admitted_code_bytes, first_bytes);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_post_compile_budget_rejection_falls_back_without_admission() {
+        let mut vm = empty_vm();
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.native.as_mut().expect("native").admission.max_code_bytes = 1;
+        vm.prepare_frame(0, 1).expect("frame");
+        let func = native_constant_func("too_large", 7);
+
+        assert!(matches!(vm.try_native(&func, 0), NativeAttempt::Fallback));
+        let second = native_constant_func("blocked_after_oversize", 8);
+        assert!(matches!(vm.try_native(&second, 0), NativeAttempt::Fallback));
+        let native = vm.native.as_ref().expect("native");
+        assert_eq!(native.stats.compiled, 0);
+        assert_eq!(native.stats.admission_admitted, 0);
+        assert_eq!(native.stats.admission_admitted_bytes, 0);
+        assert_eq!(native.stats.admission_rejected, 2);
+        assert!(
+            native.stats.admission_rejected_bytes > 1,
+            "post-compile rejection should report the emitted bytes: {:?}",
+            native.stats,
+        );
+        assert_eq!(native.admission.admitted_code_bytes, 0);
+        assert!(native.admission.code_exhausted);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_zero_compile_time_budget_rejects_before_compilation() {
+        let mut vm = empty_vm();
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.native
+            .as_mut()
+            .expect("native")
+            .admission
+            .max_compile_nanos = 0;
+        vm.prepare_frame(0, 1).expect("frame");
+        let func = native_constant_func("no_compile_time", 9);
+
+        assert!(matches!(vm.try_native(&func, 0), NativeAttempt::Fallback));
+        let native = vm.native.as_ref().expect("native");
+        assert_eq!(native.stats.compiled, 0);
+        assert_eq!(native.stats.compile_nanos, 0);
+        assert_eq!(native.stats.admission_admitted, 0);
+        assert_eq!(native.stats.admission_rejected, 1);
+        assert_eq!(native.stats.admission_rejected_bytes, 0);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_memoizes_read_only_collection_metadata_once() {
+        let source = r#"
+features: local
+
+fn hot(
+    table: read Map<Int, Int>,
+    set: read Set<Int>,
+    sorted: read SortedSet<Int>,
+    sorted_table: read SortedMap<Int, Int>,
+    queue: read Deque<Int>,
+    limit: Int
+) -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        total = total + Map.len<Int, Int>(map: read table)
+        total = total + Set.len<Int>(set: read set)
+        total = total + SortedSet.len<Int>(set: read sorted)
+        total = total + SortedMap.len<Int, Int>(map: read sorted_table)
+        total = total + Deque.len<Int>(deque: read queue)
+        if Map.is_empty<Int, Int>(map: read table) {
+            total = total + 100
+        }
+        if Set.is_empty<Int>(set: read set) {
+            total = total + 100
+        }
+        if SortedSet.is_empty<Int>(set: read sorted) {
+            total = total + 100
+        }
+        if SortedMap.is_empty<Int, Int>(map: read sorted_table) {
+            total = total + 100
+        }
+        if Deque.is_empty<Int>(deque: read queue) {
+            total = total + 100
+        }
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    local table = Map<Int, Int>.new()
+    local set = Set.new<Int>()
+    local sorted = SortedSet.new<Int>()
+    local sorted_table = SortedMap<Int, Int>.new()
+    local queue = Deque<Int>.new()
+    Map.insert<Int, Int>(map: mut table, key: read 1, value: read 1)
+    Set.insert(set: mut set, value: read 1)
+    let _sorted_inserted = SortedSet.insert<Int>(set: mut sorted, value: read 1)
+    SortedMap.insert<Int, Int>(map: mut sorted_table, key: read 1, value: read 1)
+    Deque.push_back<Int>(deque: mut queue, value: read 1)
+    let total = hot(
+        table: read table,
+        set: read set,
+        sorted: read sorted,
+        sorted_table: read sorted_table,
+        queue: read queue,
+        limit: 50
+    )
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("collection-metadata.rss", source).expect("lowering should work");
+        let hot = executable.unit.function_ids["hot"];
+        let (jit, _, _, _, _) =
+            translate_to_native_jit(&executable.unit, executable.unit.functions[hot].as_ref())
+                .expect("read-only collection metadata loop should translate");
+
+        for helper in [
+            vm_jit::HostHelper::MapLen,
+            vm_jit::HostHelper::SetLen,
+            vm_jit::HostHelper::ListLen,
+            vm_jit::HostHelper::SortedMapLen,
+            vm_jit::HostHelper::DequeLen,
+            vm_jit::HostHelper::MapIsEmpty,
+            vm_jit::HostHelper::SetIsEmpty,
+            vm_jit::HostHelper::SortedSetIsEmpty,
+            vm_jit::HostHelper::SortedMapIsEmpty,
+            vm_jit::HostHelper::DequeIsEmpty,
+        ] {
+            assert!(
+                jit.code.iter().any(|instr| matches!(
+                    instr,
+                    vm_jit::JitInstr::MemoizedHostCall { helper: actual, .. }
+                        if *actual == helper
+                )),
+                "{helper:?} should be lazily memoized; code={:#?}",
+                jit.code
+            );
+        }
+
+        reset_jit_collection_metadata_helper_calls();
+        let (output, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert_eq!(output.stdout.trim(), "250");
+        assert!(stats.native_calls > 0, "hot function must run natively");
+        assert_eq!(
+            jit_collection_metadata_helper_calls(),
+            10,
+            "each metadata query site should call its helper once per native invocation"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_nested_loop_memo_resets_once_per_outer_activation() {
+        let source = r#"
+features: local
+
+fn hot(queue: mut Deque<Int>, outer_limit: Int, inner_limit: Int) -> Int {
+    let mut outer = 0
+    let mut total = 0
+    while outer < outer_limit {
+        Deque.push_back<Int>(deque: mut queue, value: read outer)
+        let mut inner = 0
+        while inner < inner_limit {
+            total = total + Deque.len<Int>(deque: read queue)
+            inner = inner + 1
+        }
+        outer = outer + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    local queue = Deque.new<Int>()
+    let total = hot(queue: mut queue, outer_limit: 3, inner_limit: 4)
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("nested-loop-memo.rss", source).expect("lowering should work");
+        let hot = executable.unit.function_ids["hot"];
+        let (jit, _, _, _, _) =
+            translate_to_native_jit(&executable.unit, executable.unit.functions[hot].as_ref())
+                .expect("structured nested loop should translate");
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::DequeLen,
+                    ..
+                }
+            )),
+            "inner-loop Deque.len should be memoized: {:#?}",
+            jit.code
+        );
+        assert_eq!(jit.memo_scopes.len(), 1, "{:#?}", jit.memo_scopes);
+
+        reset_jit_collection_metadata_helper_calls();
+        let (output, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert_eq!(output.stdout.trim(), "24");
+        assert!(stats.native_calls > 0, "hot function must run natively");
+        assert_eq!(
+            jit_collection_metadata_helper_calls(),
+            3,
+            "Deque.len should run once per outer-loop activation"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn collection_len_memoization_respects_projection_writes() {
+        let list_set = vec![vm_jit::JitInstr::HostCall {
+            helper: vm_jit::HostHelper::ListSetInt,
+            dst: 3,
+            args: vec![
+                vm_jit::HostArg::Reg(0),
+                vm_jit::HostArg::Reg(1),
+                vm_jit::HostArg::Reg(2),
+            ],
+        }];
+        assert!(
+            crate::reg_vm::native_loop_preserves_heap_projection(
+                &list_set,
+                0,
+                list_set.len(),
+                vm_jit::HostHeapProjection::CollectionLen,
+            ),
+            "element replacement does not change collection length"
+        );
+
+        let map_insert = vec![vm_jit::JitInstr::HostCall {
+            helper: vm_jit::HostHelper::MapInsertInt,
+            dst: 3,
+            args: vec![
+                vm_jit::HostArg::Reg(0),
+                vm_jit::HostArg::Reg(1),
+                vm_jit::HostArg::Reg(2),
+            ],
+        }];
+        assert!(
+            !crate::reg_vm::native_loop_preserves_heap_projection(
+                &map_insert,
+                0,
+                map_insert.len(),
+                vm_jit::HostHeapProjection::CollectionLen,
+            ),
+            "insertion can change collection length"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_memoizes_length_across_unrelated_fresh_collection_write() {
+        let source = r#"
+features: local
+
+fn hot(values: read List<Int>, limit: Int) -> Int {
+    local scratch = List.new<Int>()
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        total = total + List.len<Int>(list: read values)
+        List.push<Int>(list: mut scratch, value: read index)
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("fresh-collection-alias.rss", source).expect("lowering");
+        let hot = executable.unit.function_ids["hot"];
+        let (jit, _, _, _, _) =
+            translate_to_native_jit(&executable.unit, executable.unit.functions[hot].as_ref())
+                .expect("fresh collection mutation loop should translate");
+
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::ListLen,
+                    ..
+                }
+            )),
+            "a write to a distinct fresh collection cannot invalidate values.len: {:#?}",
+            jit.code
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_external_collection_receivers_may_alias() {
+        let source = r#"
+features: local
+
+fn hot(values: mut List<Int>, other: mut List<Int>, limit: Int) -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        total = total + List.len<Int>(list: read values)
+        List.push<Int>(list: mut other, value: read index)
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("external-collection-alias.rss", source).expect("lowering");
+        let hot = executable.unit.function_ids["hot"];
+        let (jit, _, _, _, _) =
+            translate_to_native_jit(&executable.unit, executable.unit.functions[hot].as_ref())
+                .expect("external collection mutation loop should translate");
+
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::ListLen,
+                    ..
+                }
+            )),
+            "external ABI handles may alias even when they occupy different registers: {:#?}",
+            jit.code
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_list_set_preserves_len_but_push_invalidates_it() {
+        let translate = |name: &str, mutation: &str| {
+            let source = format!(
+                r#"
+features: local
+
+fn hot(values: mut List<Int>, limit: Int) -> Int {{
+    let mut index = 0
+    let mut total = 0
+    while index < limit {{
+        total = total + List.len<Int>(list: read values)
+        {mutation}
+        index = index + 1
+    }}
+    return total
+}}
+
+fn main() -> Unit {{
+    return Unit
+}}
+"#
+            );
+            let executable = reg_vm_compile_source(name, &source).expect("lowering");
+            let hot = executable.unit.function_ids["hot"];
+            translate_to_native_jit(&executable.unit, executable.unit.functions[hot].as_ref())
+                .expect("collection mutation loop should translate")
+                .0
+        };
+
+        let set = translate(
+            "list-set-preserves-len.rss",
+            "List.set<Int>(list: mut values, index: 0, value: read index)",
+        );
+        assert!(
+            set.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::ListLen,
+                    ..
+                } | vm_jit::JitInstr::ListLenDirect { .. }
+            )),
+            "List.set writes elements but preserves a memoized or direct Len: {:#?}",
+            set.code
+        );
+
+        let push = translate(
+            "list-push-invalidates-len.rss",
+            "List.push<Int>(list: mut values, value: read index)",
+        );
+        assert!(
+            !push.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::ListLen,
+                    ..
+                }
+            )),
+            "List.push can change Len: {:#?}",
+            push.code
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn field_slot_write_on_distinct_fresh_receiver_preserves_query() {
+        let code = vec![
+            RegInstr::CallTypedIntrinsic {
+                dst: 0,
+                intrinsic: RegIntrinsic::ListNew,
+                type_arg: "Int".to_string(),
+                args: Vec::new(),
+            },
+            RegInstr::CallTypedIntrinsic {
+                dst: 1,
+                intrinsic: RegIntrinsic::ListNew,
+                type_arg: "Int".to_string(),
+                args: Vec::new(),
+            },
+            RegInstr::GetFieldSlot {
+                dst: 2,
+                base: 0,
+                slot: 0,
+            },
+            RegInstr::SetFieldSlot {
+                dst: 3,
+                base: 1,
+                slot: 0,
+                value: 2,
+            },
+            RegInstr::Jump { target: 2 },
+        ];
+        let query_args = vec![vm_jit::HostArg::Reg(0), vm_jit::HostArg::ImmI64(0)];
+        let jit_code = vec![
+            vm_jit::JitInstr::HostCall {
+                helper: vm_jit::HostHelper::ListNewInt,
+                dst: 0,
+                args: Vec::new(),
+            },
+            vm_jit::JitInstr::HostCall {
+                helper: vm_jit::HostHelper::ListNewInt,
+                dst: 1,
+                args: Vec::new(),
+            },
+            vm_jit::JitInstr::HostCall {
+                helper: vm_jit::HostHelper::FieldInt,
+                dst: 2,
+                args: query_args.clone(),
+            },
+            vm_jit::JitInstr::HostCall {
+                helper: vm_jit::HostHelper::FieldSetInt,
+                dst: 1,
+                args: vec![
+                    vm_jit::HostArg::Reg(1),
+                    vm_jit::HostArg::ImmI64(0),
+                    vm_jit::HostArg::Reg(2),
+                ],
+            },
+            vm_jit::JitInstr::Jump { target: 2 },
+        ];
+
+        assert!(
+            crate::reg_vm::native_loop_preserves_field_slot_for_receiver(
+                &code,
+                &jit_code,
+                &[
+                    NativeTy::Handle,
+                    NativeTy::Handle,
+                    NativeTy::Int,
+                    NativeTy::Int,
+                ],
+                0,
+                &query_args,
+                2,
+                5,
+                2,
+            ),
+            "same field slot on distinct proven-fresh receivers cannot alias"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_does_not_memoize_length_across_insert() {
+        let source = r#"
+features: local
+
+fn hot(table: mut Map<Int, Int>, limit: Int) -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        total = total + Map.len<Int, Int>(map: read table)
+        Map.insert<Int, Int>(map: mut table, key: read index, value: read index)
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("collection-metadata-write.rss", source).expect("lowering");
+        let hot = executable.unit.function_ids["hot"];
+        let (jit, _, _, _, _) =
+            translate_to_native_jit(&executable.unit, executable.unit.functions[hot].as_ref())
+                .expect("collection mutation loop should translate");
+
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::MapLen,
+                    ..
+                }
+            )),
+            "Map.len must remain a real call when insert can change length: {:#?}",
+            jit.code
+        );
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::MapLen,
+                    ..
+                }
+            )),
+            "Map.len cannot be cached across insert"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_does_not_memoize_variant_loop_helper_args() {
+        let source = r#"
+fn hot(prefix: read String, limit: Int) -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let line = String.from_int(value: index)
+        if String.starts_with(value: read line, prefix: read prefix) {
+            total = total + 1
+        }
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let total = hot(prefix: read "1", limit: 10)
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let mut program = parse_source("test.rss", source);
+        crate::syntax::isolate_module_namespaces(&mut program);
+        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let hot = unit.function_ids["hot"];
+        let (jit, _, _, _, _) = translate_to_native_jit(&unit, unit.functions[hot].as_ref())
+            .expect("variant string helper loop should still translate");
+
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::StringStartsWith,
+                    ..
+                }
+            )),
+            "StringStartsWith should not be memoized when an argument changes each iteration; jit code: {:#?}",
+            jit.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_does_not_memoize_field_of_changing_root() {
+        let source = r#"
+struct Box {
+    value: Int
+}
+
+fn hot(first: read Box, second: read Box, limit: Int) -> Int {
+    let mut current = first
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        if index % 2 == 0 {
+            current = first
+        } else {
+            current = second
+        }
+        total = total + current.value
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    return Unit
+}
+"#;
+        let mut program = parse_source("changing-field-root.rss", source);
+        crate::syntax::isolate_module_namespaces(&mut program);
+        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let hot = unit.function_ids["hot"];
+        let (jit, _, _, _, _) = translate_to_native_jit(&unit, unit.functions[hot].as_ref())
+            .expect("changing-root field loop should still translate");
+
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::FieldInt,
+                    ..
+                }
+            )),
+            "a field load whose base changes roots must not be memoized: {:#?}",
+            jit.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_call_invalidates_field_memoization() {
+        let mut module = vm_jit::NativeModule::new(jit_host_helpers()).expect("native module");
+        let callee = module
+            .compile(&vm_jit::JitFunction {
+                n_params: 0,
+                n_regs: 1,
+                reg_types: vec![vm_jit::JitValueType::Int],
+                zero_init_regs: Vec::new(),
+                code: vec![
+                    vm_jit::JitInstr::LoadInt { dst: 0, value: 0 },
+                    vm_jit::JitInstr::Return { src: 0 },
+                ],
+                memo_scopes: Vec::new(),
+                cold_blocks: Vec::new(),
+            })
+            .expect("compile test callee");
+        let args = vec![vm_jit::HostArg::Reg(0), vm_jit::HostArg::ImmI64(0)];
+        let code = vec![
+            vm_jit::JitInstr::HostCall {
+                helper: vm_jit::HostHelper::FieldInt,
+                dst: 1,
+                args: args.clone(),
+            },
+            vm_jit::JitInstr::CallNative {
+                callee,
+                dst: 2,
+                args: Vec::new(),
+            },
+        ];
+
+        assert!(
+            !crate::reg_vm::native_field_load_slot_not_stored_in_loop(&args, &code, 0, code.len()),
+            "an unsummarized native call must kill field-load memoization"
+        );
+        let reg_code = vec![
+            RegInstr::GetFieldSlot {
+                dst: 1,
+                base: 0,
+                slot: 0,
+            },
+            RegInstr::CallNative {
+                dst: 2,
+                key: "unknown".to_string(),
+                args: Vec::new(),
+                mut_args: Vec::new(),
+            },
+        ];
+        assert!(
+            !crate::reg_vm::native_loop_preserves_field_slot_for_receiver(
+                &reg_code,
+                &code,
+                &[NativeTy::Handle, NativeTy::Int, NativeTy::Int],
+                1,
+                &args,
+                0,
+                code.len(),
+                0,
+            ),
+            "the receiver-aware query must also treat an unsummarized call as a universal write"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_scopes_nested_loop_memoization_to_each_activation() {
+        let source = r#"
+fn hot(outer_limit: Int, inner_limit: Int) -> Int {
+    let mut outer = 0
+    let mut total = 0
+    while outer < outer_limit {
+        let line = String.from_int(value: outer)
+        let mut inner = 0
+        while inner < inner_limit {
+            total = total + String.len(value: read line)
+            inner = inner + 1
+        }
+        outer = outer + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    Log.write(message: String.from_int(value: hot(outer_limit: 20, inner_limit: 2)))
+    return Unit
+}
+"#;
+        let mut program = parse_source("test.rss", source);
+        crate::syntax::isolate_module_namespaces(&mut program);
+        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let hot = unit.function_ids["hot"];
+        let (jit, _, _, _, _) = translate_to_native_jit(&unit, unit.functions[hot].as_ref())
+            .expect("nested loop should translate");
+
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::StringLen,
+                    memo_slot: 0,
+                    ..
+                }
+            )),
+            "the invariant helper should be memoized inside the inner loop: {:#?}",
+            jit.code,
+        );
+        assert!(
+            jit.memo_scopes
+                .iter()
+                .any(|scope| scope.memo_slots.as_slice() == [0]),
+            "the memo slot must be reset on each dynamic inner-loop activation: {:#?}",
+            jit.memo_scopes,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_lowers_checked_json_field_int_payload() {
+        let function = native_test_function(
+            "json_field_int_hot",
+            2,
+            4,
+            vec![
+                RegInstr::CallIntrinsic {
+                    intrinsic: RegIntrinsic::JsonFieldInt,
+                    args: vec![0, 1],
+                    dst: 2,
+                },
+                RegInstr::TryResult {
+                    dst: 3,
+                    src: 2,
+                    cleanup: Vec::new(),
+                },
+                RegInstr::Return { src: 3 },
+            ],
+        );
+        let unit = native_test_unit(vec![function]);
+        let (jit, _, _, _, _) = translate_to_native_jit(&unit, unit.functions[0].as_ref())
+            .expect("checked Json.field_int payload should translate");
+
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::JsonFieldInt,
+                    ..
+                }
+            )),
+            "Json.field_int(...)? should lower to the checked native payload helper",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_lowers_string_literals_through_helper_table() {
+        let function = native_test_function(
+            "literal_hot",
+            0,
+            1,
+            vec![
+                RegInstr::LoadString {
+                    dst: 0,
+                    value: Rc::new("id".to_string()),
+                },
+                RegInstr::Return { src: 0 },
+            ],
+        );
+        let unit = native_test_unit(vec![function]);
+        let (jit, ret, _, literals, _) = translate_to_native_jit(&unit, unit.functions[0].as_ref())
+            .expect("string literal return should translate");
+
+        assert_eq!(ret, NativeTy::Handle);
+        assert_eq!(literals.len(), 1);
+        assert_eq!(&*literals[0], "id");
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::StringLiteral,
+                    args,
+                    ..
+                } if args == &vec![vm_jit::HostArg::ImmI64(0)]
+            )),
+            "LoadString should lower to StringLiteral with a per-function literal id",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_classifies_scalar_alias_signatures() {
+        let source = r#"
+type Real = Float
+
+fn add(left: Real, right: Real) -> Real {
+    return left + right
+}
+"#;
+        let executable =
+            reg_vm_compile_source("native-scalar-alias.rss", source).expect("source compiles");
+        let signature = &executable.unit.native_signatures["add"];
+        assert_eq!(signature.params, vec!["Float", "Float"]);
+        assert_eq!(signature.return_type.as_deref(), Some("Float"));
+
+        let add = executable.unit.function_ids["add"];
+        let (_, ret, params, _, _) =
+            translate_to_native_jit(&executable.unit, executable.unit.functions[add].as_ref())
+                .expect("scalar alias function should translate");
+        assert_eq!(params, vec![NativeTy::Float, NativeTy::Float]);
+        assert_eq!(ret, NativeTy::Float);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_preserves_handle_return_compiled_call() {
+        let source = "\
+fn make_text(value: Int) -> String {
+    return String.from_int(value: value + 100)
+}
+
+fn text_len(value: Int) -> Int {
+    let text = make_text(value: read value)
+    return String.len(value: read text)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: text_len(value: read 23)))
+    return Unit
+}
+";
+        let executable = reg_vm_compile_source("native-handle-call-translate.rss", source)
+            .expect("source compiles");
+        let make = executable.unit.function_ids["make_text"];
+        let text_len = executable.unit.function_ids["text_len"];
+        let make_func = executable.unit.functions[make].as_ref();
+        let text_len_func = executable.unit.functions[text_len].as_ref();
+        let (child_jit, child_ret, child_params, _, _) =
+            translate_to_native_jit(&executable.unit, make_func)
+                .expect("handle-return child should translate");
+        assert_eq!(child_ret, NativeTy::Handle);
+
+        let mut module = vm_jit::NativeModule::new(jit_host_helpers()).expect("native module");
+        let child_id = module.compile(&child_jit).expect("compile child");
+        let call_ip = text_len_func
+            .code
+            .iter()
+            .position(|instr| {
+                matches!(
+                    instr,
+                    RegInstr::CallKnown {
+                        function,
+                        mut_args,
+                        ..
+                    } if *function == make && mut_args.is_empty()
+                )
+            })
+            .expect("text_len should call make_text");
+        let compiled = std::collections::HashMap::from([(
+            call_ip,
+            NativeCompiledCallee {
+                id: child_id,
+                ret_ty: child_ret,
+                param_tys: child_params,
+            },
+        )]);
+        let (parent_jit, parent_ret, _, _, _) = translate_to_native_jit_with_compiled_callees(
+            &executable.unit,
+            text_len_func,
+            &compiled,
+        )
+        .expect("parent should preserve handle-return native call");
+        assert_eq!(parent_ret, NativeTy::Int);
+        assert!(
+            parent_jit
+                .code
+                .iter()
+                .any(|instr| matches!(instr, vm_jit::JitInstr::CallNative { .. })),
+            "parent IR should contain CallNative, got {:?}",
+            parent_jit.code
+        );
+        assert!(
+            parent_jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::StringLen,
+                    ..
+                }
+            )),
+            "parent IR should consume the child handle through StringLen, got {:?}",
+            parent_jit.code
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_direct_dispatch_consumes_handle_return_compiled_call() {
+        let source = "\
+fn make_text(value: Int) -> String {
+    return String.from_int(value: value + 100)
+}
+
+fn text_len(value: Int) -> Int {
+    let text = make_text(value: read value)
+    return String.len(value: read text)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: text_len(value: read 23)))
+    return Unit
+}
+";
+        let executable = reg_vm_compile_source("native-handle-call-direct.rss", source)
+            .expect("source compiles");
+        let text_len = executable.unit.function_ids["text_len"];
+        let func = Rc::clone(&executable.unit.functions[text_len]);
+        let mut vm = RegVm::new(
+            Rc::clone(&executable.unit),
+            Vec::<String>::new(),
+            HashMap::new(),
+        );
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(23));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        match vm.try_native(&func, 0) {
+            NativeAttempt::Completed(VmValue::Int(3)) => {}
+            NativeAttempt::Completed(value) => {
+                panic!("text_len completed with wrong value: {value:?}")
+            }
+            NativeAttempt::Resumed => {
+                panic!(
+                    "text_len unexpectedly resumed, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+            NativeAttempt::Fallback => {
+                panic!(
+                    "text_len unexpectedly fell back, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+        }
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert!(
+            stats.native_call_edges >= 1,
+            "parent should compile with a native-to-native handle-return edge, stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_direct_dispatch_passes_float_args_and_return() {
+        let source = "\
+fn scale(value: Float, factor: Float) -> Float {
+    return value * factor
+}
+
+fn parent(seed: Float) -> Float {
+    let scaled = scale(value: read seed, factor: read 2.0)
+    return scaled + 1.25
+}
+
+fn main() -> Unit {
+    Log.write(message: read Float.to_string(value: read parent(seed: read 3.5)))
+    return Unit
+}
+";
+        let executable =
+            reg_vm_compile_source("native-float-call-direct.rss", source).expect("source compiles");
+        let parent = executable.unit.function_ids["parent"];
+        let func = Rc::clone(&executable.unit.functions[parent]);
+        let mut vm = RegVm::new(
+            Rc::clone(&executable.unit),
+            Vec::<String>::new(),
+            HashMap::new(),
+        );
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::Float(3.5));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        match vm.try_native(&func, 0) {
+            NativeAttempt::Completed(VmValue::Float(value))
+                if (value - 8.25).abs() < f64::EPSILON => {}
+            NativeAttempt::Completed(value) => {
+                panic!("parent completed with wrong value: {value:?}")
+            }
+            NativeAttempt::Resumed => {
+                panic!(
+                    "parent unexpectedly resumed, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+            NativeAttempt::Fallback => {
+                panic!(
+                    "parent unexpectedly fell back, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+        }
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert!(
+            stats.native_call_edges >= 1,
+            "parent should compile with a native-to-native float edge, stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_float_comparison_branches_cover_ieee_edges_without_fallback() {
+        let source = r#"
+fn lt(left: Float, right: Float) -> Int { if left < right { return 1 } return 0 }
+fn le(left: Float, right: Float) -> Int { if left <= right { return 1 } return 0 }
+fn gt(left: Float, right: Float) -> Int { if left > right { return 1 } return 0 }
+fn ge(left: Float, right: Float) -> Int { if left >= right { return 1 } return 0 }
+fn eq(left: Float, right: Float) -> Int { if left == right { return 1 } return 0 }
+fn ne(left: Float, right: Float) -> Int { if left != right { return 1 } return 0 }
+
+fn main() -> Unit { return Unit }
+"#;
+        let executable = reg_vm_compile_source("native-float-compare-branches.rss", source)
+            .expect("source compiles");
+        let run = |name: &str, left: f64, right: f64| {
+            let function_id = executable.unit.function_ids[name];
+            let func = Rc::clone(&executable.unit.functions[function_id]);
+            let mut vm = RegVm::new(
+                Rc::clone(&executable.unit),
+                Vec::<String>::new(),
+                HashMap::new(),
+            );
+            vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+            vm.prepare_frame(0, func.regs).expect("frame");
+            vm.set_reg(0, VmValue::Float(left));
+            vm.set_reg(1, VmValue::Float(right));
+            vm.push_frame(Frame {
+                func: Rc::clone(&func),
+                ip: 0,
+                base: 0,
+                ret_dst: usize::MAX,
+                mut_writeback: Vec::new(),
+                tail_calls: 0,
+            })
+            .expect("push frame");
+            match vm.try_native(&func, 0) {
+                NativeAttempt::Completed(VmValue::Int(value)) => value,
+                NativeAttempt::Completed(value) => {
+                    panic!("{name}({left:?}, {right:?}) returned {value:?}")
+                }
+                NativeAttempt::Resumed => {
+                    panic!("{name}({left:?}, {right:?}) resumed instead of completing")
+                }
+                NativeAttempt::Fallback => {
+                    panic!("{name}({left:?}, {right:?}) fell back from native execution")
+                }
+            }
+        };
+        let values = [
+            (-1.0, 2.0),
+            (2.0, -1.0),
+            (3.0, 3.0),
+            (0.0, -0.0),
+            (f64::NEG_INFINITY, f64::INFINITY),
+            (f64::NAN, 1.0),
+            (1.0, f64::NAN),
+            (f64::NAN, f64::NAN),
+        ];
+        for (left, right) in values {
+            for (name, expected) in [
+                ("lt", left < right),
+                ("le", left <= right),
+                ("gt", left > right),
+                ("ge", left >= right),
+                ("eq", left == right),
+                ("ne", left != right),
+            ] {
+                assert_eq!(
+                    run(name, left, right),
+                    i64::from(expected),
+                    "{name}({left:?}, {right:?})"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_direct_dispatch_passes_bool_args_and_return() {
+        let source = "\
+fn matches(flag: Bool, value: Int) -> Bool {
+    let over = value > 10
+    return flag == over
+}
+
+fn parent(seed: Int) -> Int {
+    let ok = matches(flag: read true, value: read seed)
+    if ok {
+        return seed + 1
+    }
+    return 0
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: parent(seed: read 11)))
+    return Unit
+}
+";
+        let executable =
+            reg_vm_compile_source("native-bool-call-direct.rss", source).expect("source compiles");
+        let parent = executable.unit.function_ids["parent"];
+        let func = Rc::clone(&executable.unit.functions[parent]);
+        let mut vm = RegVm::new(
+            Rc::clone(&executable.unit),
+            Vec::<String>::new(),
+            HashMap::new(),
+        );
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(11));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        match vm.try_native(&func, 0) {
+            NativeAttempt::Completed(VmValue::Int(12)) => {}
+            NativeAttempt::Completed(value) => {
+                panic!("parent completed with wrong value: {value:?}")
+            }
+            NativeAttempt::Resumed => {
+                panic!(
+                    "parent unexpectedly resumed, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+            NativeAttempt::Fallback => {
+                panic!(
+                    "parent unexpectedly fell back, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+        }
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert!(
+            stats.native_call_edges >= 1,
+            "parent should compile with a native-to-native bool edge, stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_direct_dispatch_passes_flat_int_arg_to_compiled_call() {
+        let source = "\
+features: local
+
+fn read_at(values: read List<Int>, index: Int) -> Int {
+    return List.get<Int>(list: read values, index: index) + List.len<Int>(list: read values)
+}
+
+fn parent(values: read List<Int>, index: Int) -> Int {
+    return read_at(values: read values, index: read index) + List.len<Int>(list: read values)
+}
+
+fn main() -> Unit {
+    local values = List.new<Int>()
+    List.push<Int>(list: mut values, value: read 5)
+    List.push<Int>(list: mut values, value: read 7)
+    List.push<Int>(list: mut values, value: read 11)
+    Log.write(message: read String.from_int(value: parent(values: read values, index: read 1)))
+    return Unit
+}
+";
+        let executable = reg_vm_compile_source("native-flat-int-param-call-direct.rss", source)
+            .expect("source compiles");
+        let parent = executable.unit.function_ids["parent"];
+        let func = Rc::clone(&executable.unit.functions[parent]);
+        let values = Rc::new(RefCell::new(TypedVec::Ints(vec![5, 7, 11])));
+        let mut vm = RegVm::new(
+            Rc::clone(&executable.unit),
+            Vec::<String>::new(),
+            HashMap::new(),
+        );
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::List(Rc::clone(&values)));
+        vm.set_reg(1, VmValue::Int(1));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        match vm.try_native(&func, 0) {
+            NativeAttempt::Completed(VmValue::Int(13)) => {}
+            NativeAttempt::Completed(value) => {
+                panic!("parent completed with wrong value: {value:?}")
+            }
+            NativeAttempt::Resumed => {
+                panic!(
+                    "parent unexpectedly resumed, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+            NativeAttempt::Fallback => {
+                panic!(
+                    "parent unexpectedly fell back, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+        }
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert!(
+            stats.native_call_edges >= 1,
+            "parent should compile with a native-to-native flat-list edge, stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_direct_dispatch_passes_flat_float_arg_to_compiled_call() {
+        let source = "\
+features: local
+
+fn read_at(values: read List<Float>, index: Int) -> Float {
+    return List.get<Float>(list: read values, index: index) + Int.to_float(value: read List.len<Float>(list: read values))
+}
+
+fn parent(values: read List<Float>, index: Int) -> Float {
+    return read_at(values: read values, index: read index) + List.get<Float>(list: read values, index: 0)
+}
+
+fn main() -> Unit {
+    local values = List.new<Float>()
+    List.push<Float>(list: mut values, value: read 1.25)
+    List.push<Float>(list: mut values, value: read 2.5)
+    List.push<Float>(list: mut values, value: read 3.75)
+    Log.write(message: read Float.to_string(value: read parent(values: read values, index: read 1)))
+    return Unit
+}
+";
+        let executable = reg_vm_compile_source("native-flat-float-param-call-direct.rss", source)
+            .expect("source compiles");
+        let parent = executable.unit.function_ids["parent"];
+        let func = Rc::clone(&executable.unit.functions[parent]);
+        let values = Rc::new(RefCell::new(TypedVec::Floats(vec![1.25, 2.5, 3.75])));
+        let mut vm = RegVm::new(
+            Rc::clone(&executable.unit),
+            Vec::<String>::new(),
+            HashMap::new(),
+        );
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::List(Rc::clone(&values)));
+        vm.set_reg(1, VmValue::Int(1));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        match vm.try_native(&func, 0) {
+            NativeAttempt::Completed(VmValue::Float(value))
+                if (value - 6.75).abs() < f64::EPSILON => {}
+            NativeAttempt::Completed(value) => {
+                panic!("parent completed with wrong value: {value:?}")
+            }
+            NativeAttempt::Resumed => {
+                panic!(
+                    "parent unexpectedly resumed, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+            NativeAttempt::Fallback => {
+                panic!(
+                    "parent unexpectedly fell back, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+        }
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert!(
+            stats.native_call_edges >= 1,
+            "parent should compile with a native-to-native flat-float-list edge, stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_direct_dispatch_passes_flat_int_mut_arg_to_compiled_call() {
+        let source = "\
+features: local
+
+fn write_at(values: mut List<Int>, index: Int, value: Int) -> Int {
+    List.set<Int>(list: mut values, index: index, value: read value)
+    return List.get<Int>(list: read values, index: index)
+}
+
+fn parent(values: mut List<Int>, index: Int, value: Int) -> Int {
+    let written = write_at(values: mut values, index: read index, value: read value)
+    return written + List.get<Int>(list: read values, index: index)
+}
+
+fn main() -> Unit {
+    local values = List.new<Int>()
+    List.push<Int>(list: mut values, value: read 5)
+    List.push<Int>(list: mut values, value: read 7)
+    List.push<Int>(list: mut values, value: read 11)
+    Log.write(message: read String.from_int(value: parent(values: mut values, index: read 1, value: read 42)))
+    return Unit
+}
+";
+        let executable = reg_vm_compile_source("native-flat-int-mut-param-call-direct.rss", source)
+            .expect("source compiles");
+        let parent = executable.unit.function_ids["parent"];
+        let func = Rc::clone(&executable.unit.functions[parent]);
+        let values = Rc::new(RefCell::new(TypedVec::Ints(vec![5, 7, 11])));
+        let mut vm = RegVm::new(
+            Rc::clone(&executable.unit),
+            Vec::<String>::new(),
+            HashMap::new(),
+        );
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::List(Rc::clone(&values)));
+        vm.set_reg(1, VmValue::Int(1));
+        vm.set_reg(2, VmValue::Int(42));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        match vm.try_native(&func, 0) {
+            NativeAttempt::Completed(VmValue::Int(84)) => {}
+            NativeAttempt::Completed(value) => {
+                panic!("parent completed with wrong value: {value:?}")
+            }
+            NativeAttempt::Resumed => {
+                panic!(
+                    "parent unexpectedly resumed, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+            NativeAttempt::Fallback => {
+                panic!(
+                    "parent unexpectedly fell back, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+        }
+        assert!(
+            matches!(&*values.borrow(), TypedVec::Ints(items) if items == &[5, 42, 11]),
+            "native child write should commit to the original list",
+        );
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert!(
+            stats.native_call_edges >= 1,
+            "parent should compile with a native-to-native flat mutable list edge, stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_direct_dispatch_passes_handle_arg_to_compiled_call() {
+        let source = "\
+fn len_text(text: read String) -> Int {
+    return String.len(value: read text)
+}
+
+fn parent(value: Int) -> Int {
+    let text = String.from_int(value: value + 100)
+    return len_text(text: read text)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: parent(value: read 23)))
+    return Unit
+}
+";
+        let executable = reg_vm_compile_source("native-handle-param-call-direct.rss", source)
+            .expect("source compiles");
+        let parent = executable.unit.function_ids["parent"];
+        let func = Rc::clone(&executable.unit.functions[parent]);
+        let mut vm = RegVm::new(
+            Rc::clone(&executable.unit),
+            Vec::<String>::new(),
+            HashMap::new(),
+        );
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(23));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        match vm.try_native(&func, 0) {
+            NativeAttempt::Completed(VmValue::Int(3)) => {}
+            NativeAttempt::Completed(value) => {
+                panic!("parent completed with wrong value: {value:?}")
+            }
+            NativeAttempt::Resumed => {
+                panic!(
+                    "parent unexpectedly resumed, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+            NativeAttempt::Fallback => {
+                panic!(
+                    "parent unexpectedly fell back, stats={:?}",
+                    vm.native.as_ref().expect("native").stats
+                )
+            }
+        }
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert!(
+            stats.native_call_edges >= 1,
+            "parent should compile with a native-to-native handle-param edge, stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_direct_dispatch_rejects_mut_handle_compiled_call() {
+        let source = "\
+struct Box {
+    value: Int
+}
+
+fn set_box(item: mut Box, value: Int) -> Int {
+    item.value = value
+    return item.value
+}
+
+fn parent(item: mut Box, value: Int) -> Int {
+    let result = set_box(item: mut item, value: read value)
+    return result
+}
+
+fn main() -> Unit {
+    return Unit
+}
+";
+        let executable = reg_vm_compile_source("native-mut-handle-call-direct.rss", source)
+            .expect("source compiles");
+        let parent = executable.unit.function_ids["parent"];
+        let func = Rc::clone(&executable.unit.functions[parent]);
+        let layout = native_test_layout("Box", &["value"]);
+        let boxed = VmValue::Struct(Rc::new(VmStruct::with_layout(
+            layout,
+            vec![VmValue::Int(1)],
+        )));
+        let mut vm = RegVm::new(
+            Rc::clone(&executable.unit),
+            Vec::<String>::new(),
+            HashMap::new(),
+        );
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, boxed);
+        vm.set_reg(1, VmValue::Int(99));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        let completed = match vm.try_native(&func, 0) {
+            NativeAttempt::Completed(VmValue::Int(99)) => true,
+            NativeAttempt::Completed(value) => {
+                panic!("parent completed with wrong value: {value:?}")
+            }
+            NativeAttempt::Resumed | NativeAttempt::Fallback => false,
+        };
+        if completed {
+            let VmValue::Struct(updated) = vm.reg(0) else {
+                panic!("expected updated Box in reg 0, got {:?}", vm.reg(0));
+            };
+            assert_eq!(updated.fields.first(), Some(&VmValue::Int(99)));
+        }
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert_eq!(
+            stats.native_call_edges, 0,
+            "the rejected mut-handle edge must not be compiled, stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_region_rewrite_handles_source_json_field_loop() {
+        let source = r#"
+fn hot(profile: read JsonValue, limit: Int) -> Result<Int, JsonError> {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        total = total + Json.field_int(value: read profile, name: read "id")?
+        index = index + 1
+    }
+    return Ok(total)
+}
+
+fn main() -> Result<Unit, JsonError> {
+    let doc = Json.parse(text: read "{\"profile\":{\"id\":41}}")?
+    let profile = Json.field(value: read doc, name: read "profile")?
+    let total = hot(profile: read profile, limit: 10)?
+    Log.write(message: read String.from_int(value: total))
+    return Ok(Unit)
+}
+"#;
+        let mut program = parse_source("test.rss", source);
+        crate::syntax::isolate_module_namespaces(&mut program);
+        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let hot = unit.function_ids["hot"];
+        let func = unit.functions[hot].as_ref();
+        let lp = detect_single_natural_loop(&func.code).expect("hot loop should be detected");
+        let (code, n_regs, _) = native_lower_checked_payload_intrinsics_in_region(
+            &func.code, func.regs, lp.header, lp.exit,
+        )
+        .expect("checked JSON rewrite should run");
+
+        assert!(
+            code.iter().any(|instr| matches!(
+                instr,
+                RegInstr::CallIntrinsic {
+                    intrinsic: RegIntrinsic::JsonFieldIntOk,
+                    ..
+                }
+            )),
+            "source Json.field_int(...)? loop should rewrite to JsonFieldIntOk",
+        );
+
+        let lp = detect_single_natural_loop(&code).expect("rewritten hot loop should be detected");
+        let (jit, _, _, _, _, _, _) =
+            translate_osr_loop(&code, n_regs, func.params, func.captures, lp)
+                .expect("rewritten JSON field loop should translate to OSR native IR");
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::JsonFieldInt,
+                    ..
+                }
+            )),
+            "OSR JSON field loop should memoize invariant JsonFieldInt; jit code: {:#?}",
+            jit.code,
+        );
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::StringLiteral,
+                    ..
+                }
+            )),
+            "allocating StringLiteral helpers must not be memoized; jit code: {:#?}",
+            jit.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_region_does_not_memoize_invariant_json_parse_handle() {
+        let source = r#"
+fn hot(limit: Int) -> Result<Int, JsonError> {
+    let text = "{\"id\":41}"
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        let doc = Json.parse(text: read text)?
+        total = total + Json.field_int(value: read doc, name: read "id")?
+        index = index + 1
+    }
+    return Ok(total)
+}
+
+fn main() -> Result<Unit, JsonError> {
+    let total = hot(limit: 10)?
+    Log.write(message: read String.from_int(value: total))
+    return Ok(Unit)
+}
+"#;
+        let mut program = parse_source("test.rss", source);
+        crate::syntax::isolate_module_namespaces(&mut program);
+        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let hot = unit.function_ids["hot"];
+        let func = unit.functions[hot].as_ref();
+        let lp = detect_single_natural_loop(&func.code).expect("hot loop should be detected");
+        let (code, n_regs, _) = native_lower_checked_payload_intrinsics_in_region(
+            &func.code, func.regs, lp.header, lp.exit,
+        )
+        .expect("checked JSON rewrite should run");
+
+        assert!(
+            code.iter().any(|instr| matches!(
+                instr,
+                RegInstr::CallIntrinsic {
+                    intrinsic: RegIntrinsic::JsonParseOk,
+                    ..
+                }
+            )),
+            "source Json.parse(...)? loop should rewrite to JsonParseOk",
+        );
+
+        let lp = detect_single_natural_loop(&code).expect("rewritten hot loop should be detected");
+        let (jit, _, _, _, _, _, _) =
+            translate_osr_loop(&code, n_regs, func.params, func.captures, lp)
+                .expect("rewritten JSON parse loop should translate to OSR native IR");
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::JsonParse,
+                    ..
+                }
+            )),
+            "allocating JsonParse helpers must not be memoized; jit code: {:#?}",
+            jit.code,
+        );
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::JsonFieldInt,
+                    ..
+                }
+            )),
+            "JsonFieldInt cannot be invariant when its JsonParse input is recomputed; jit code: {:#?}",
+            jit.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_preserves_heap_live_through_scalar_loop() {
+        let source = r#"features: local
+
+fn main() -> Unit {
+    let mut q: Deque<Int> = Deque.new<Int>()
+    Log.write(message: read String.from_int(value: Deque.len(deque: read q)))
+    let mut xs: List<Int> = List.new<Int>()
+    let mut i = 0
+    while i < 1 {
+        let mut tmp = 948
+        i = i + 1
+    }
+    let ys: List<Int> = xs
+    Log.write(message: read String.from_int(value: List.len(list: read ys)))
+    Log.write(message: read String.from_int(value: 766))
+    Log.write(message: read String.from_int(value: 146))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("osr-live-through-heap.rss", source).expect("compile");
+
+        let interp = executable
+            .eval_main_with_args(std::iter::empty::<&str>())
+            .expect("interpreter run");
+        let osr = executable
+            .eval_main_with_args_native_osr(std::iter::empty::<&str>())
+            .expect("native OSR run must preserve live-through heap slots");
+
+        assert_eq!(osr.stdout, interp.stdout);
+        assert_eq!(osr.stdout, "0\n0\n766\n146\n");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_enters_checked_json_payload_loop() {
+        let source = r#"
+fn hot(profile: read JsonValue, limit: Int) -> Result<Int, JsonError> {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        total = total + Json.field_int(value: read profile, name: read "id")?
+        index = index + 1
+    }
+    return Ok(total)
+}
+
+fn main() -> Result<Unit, JsonError> {
+    let doc = Json.parse(text: read "{\"profile\":{\"id\":41}}")?
+    let profile = Json.field(value: read doc, name: read "profile")?
+    let total = hot(profile: read profile, limit: 200)?
+    Log.write(message: read String.from_int(value: total))
+    return Ok(Unit)
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let hot = executable.unit.function_ids["hot"];
+        let func = executable.unit.functions[hot].as_ref();
+        let candidate = super::super::tier::select_osr_candidate_loop(&executable.unit, func)
+            .expect("checked JSON payload loop should be eligible for OSR selection");
+
+        let (out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+
+        assert_eq!(out.stdout, "8200\n");
+        assert!(
+            stats.osr_entries > 0,
+            "checked JSON payload loop should OSR-enter; candidate={candidate:?}; stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_region_does_not_memoize_handle_field_loads() {
+        let source = r#"
+struct Boxed {
+    capacity: Int
+    values: List<Int>
+}
+
+fn hot(box: read Boxed, limit: Int) -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        total = total + box.capacity + List.len<Int>(list: read box.values)
+        index = index + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let values = List<Int>.new()
+    List.push<Int>(list: mut values, value: 1)
+    let box = Boxed(capacity: 16, values: values)
+    let total = hot(box: read box, limit: 10)
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let mut program = parse_source("test.rss", source);
+        crate::syntax::isolate_module_namespaces(&mut program);
+        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let hot = unit.function_ids["hot"];
+        let func = unit.functions[hot].as_ref();
+        let lp = detect_single_natural_loop(&func.code).expect("hot loop should be detected");
+        let (jit, _, _, scalar_fields, _, _, _) =
+            translate_osr_loop(&func.code, func.regs, func.params, func.captures, lp)
+                .expect("read-only field loop should translate to OSR native IR");
+
+        assert!(
+            scalar_fields
+                .iter()
+                .any(|field| field.field_slot == 0 && !field.writeback),
+            "read-only Int field load should become a scalar OSR field; scalar={:#?}; jit code={:#?}",
+            scalar_fields,
+            jit.code,
+        );
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::FieldInt,
+                    ..
+                } | vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::FieldInt,
+                    ..
+                }
+            )),
+            "read-only Int field load should avoid FieldInt helpers; jit code: {:#?}",
+            jit.code,
+        );
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::FieldHandle,
+                    ..
+                }
+            )),
+            "handle-returning FieldHandle helpers must not be memoized; jit code: {:#?}",
+            jit.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_finds_later_native_loop_after_setup_loop() {
+        let source = r#"
+features: local
+
+fn bench_size(default: Int) -> Int {
+    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    match String.parse_int(value: read raw) {
+        Some(value) => {
+            return value
+        }
+        None => {
+            return default
+        }
+    }
+}
+
+fn main() -> Unit {
+    let limit = bench_size(default: 40000)
+    let mut index = 0
+    local values = List<Int>.new()
+
+    while index < limit {
+        List.push<Int>(list: mut values, value: read index)
+        index = index + 1
+    }
+
+    index = 0
+    let mut total = 0
+    while index < List.len<Int>(list: read values) {
+        total = total + List.get<Int>(list: read values, index: index)
+        index = index + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let mut program = parse_source("test.rss", source);
+        crate::syntax::isolate_module_namespaces(&mut program);
+        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let func = unit.functions[unit.function_ids["main"]].as_ref();
+
+        assert!(
+            detect_single_natural_loop(&func.code).is_none(),
+            "legacy single-loop detector should reject a setup loop plus hot loop",
+        );
+        let loops = detect_natural_loops(&func.code);
+        assert!(
+            loops.len() >= 2,
+            "multi-loop detector should find both setup and read loops: {loops:?}",
+        );
+        let native_candidate = super::super::tier::select_osr_candidate_loop(&unit, func)
+            .unwrap_or_else(|| {
+                panic!(
+                    "read-only list loop should be raw native-subset; loops={loops:?}; code={:#?}",
+                    func.code
+                )
+            });
+        assert!(
+            native_candidate.header > loops[0].header,
+            "candidate should be the later read loop, not the List.push setup loop",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_accepts_nonparam_list_push_growth_loop() {
+        // J0.4 #1: a growth loop on a function-LOCAL (non-parameter) list is now a valid
+        // OSR candidate. The local list is handle-accessed (flat-buffer pinning is
+        // params-only), so growing it via the journaled `ListPushInt` helper is safe —
+        // unlike a flat PARAM buffer, which would dangle on realloc and stays vetoed.
+        let source = r#"
+features: local
+
+fn main() -> Unit {
+    let limit = 64
+    let mut index = 0
+    local values = List<Int>.new()
+
+    while index < limit {
+        List.push<Int>(list: mut values, value: read index)
+        index = index + 1
+    }
+
+    Log.write(message: read String.from_int(value: List.len<Int>(list: read values)))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let func = executable.unit.functions[executable.unit.function_ids["main"]].as_ref();
+        assert!(
+            super::super::tier::select_osr_candidate_loop(&executable.unit, func).is_some(),
+            "a non-parameter (handle-accessed) list growth loop should be OSR-eligible; code={:#?}",
+            func.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_enters_later_native_loop_after_setup_loop() {
+        let source = r#"
+features: local
+
+fn main() -> Unit {
+    let limit = 10
+    let mut index = 0
+    local values = List<Int>.new()
+
+    while index < limit {
+        List.push<Int>(list: mut values, value: read index)
+        index = index + 1
+    }
+
+    index = 0
+    let mut total = 0
+    while index < List.len<Int>(list: read values) {
+        total = total + List.get<Int>(list: read values, index: index)
+        index = index + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let func = executable.unit.functions[executable.unit.function_ids["main"]].as_ref();
+        let candidate = super::super::tier::select_osr_candidate_loop(&executable.unit, func)
+            .expect("compiled executable should expose a raw native loop");
+        translate_osr_loop(&func.code, func.regs, func.params, func.captures, candidate)
+            .unwrap_or_else(|| {
+                panic!(
+                    "selected loop should translate to OSR native IR: {candidate:?}; region={:#?}",
+                    &func.code[candidate.header..candidate.exit],
+                )
+            });
+        let expected_header = candidate.header;
+        let mut vm = RegVm::new(
+            Rc::clone(&executable.unit),
+            Vec::<String>::new(),
+            std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
+        );
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        assert_eq!(
+            vm.resolve_osr_candidate(func),
+            Some(expected_header),
+            "resolver should select the later raw native loop",
+        );
+        let (_out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.osr_entries > 0,
+            "later raw native-subset loop should OSR-enter; stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_enters_two_sequential_regions() {
+        let source = r#"
+fn main() -> Unit {
+    let mut first = 0
+    let mut total = 0
+    while first < 80 {
+        total = total + first * 3 + first / 2
+        first = first + 1
+    }
+
+    let mut second = 0
+    while second < 90 {
+        total = total + second * 5 - second / 3
+        second = second + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("osr-sequential-regions.rss", source).expect("compile");
+        let func = executable.unit.functions[executable.unit.function_ids["main"]].as_ref();
+        let candidates = super::super::tier::select_osr_candidate_loops(&executable.unit, func);
+        assert_eq!(
+            candidates.len(),
+            2,
+            "both sequential loops should be bounded OSR candidates: {candidates:?}"
+        );
+        assert_ne!(candidates[0].header, candidates[1].header);
+
+        let reference = executable
+            .eval_main_with_args(std::iter::empty::<&str>())
+            .expect("interpreter run");
+        let (native, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("forced OSR run");
+        assert_eq!(native, reference);
+        assert_eq!(
+            stats.osr_entries, 2,
+            "each sequential loop should enter its distinct region once: {stats:?}"
+        );
+        assert_eq!(
+            stats.compiled, 2,
+            "each sequential loop should compile a distinct RegionKey: {stats:?}"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_outer_decline_does_not_block_nested_inner_region() {
+        let source = r#"
+fn main() -> Unit {
+    let adjust: Fn(Int) -> Int = |value| { return value + 7 }
+    let mut outer = 0
+    let mut total = 0
+    while outer < 2 {
+        let mut inner = 0
+        while inner < 80 {
+            total = total + inner * 3 - inner / 2
+            inner = inner + 1
+        }
+        total = total + adjust(outer)
+        outer = outer + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable = reg_vm_compile_source("osr-nested-fallback.rss", source).expect("compile");
+        let func = executable.unit.functions[executable.unit.function_ids["main"]].as_ref();
+        let candidates = super::super::tier::select_osr_candidate_loops(&executable.unit, func);
+        assert_eq!(
+            candidates.len(),
+            2,
+            "outer and inner loops should both be considered: {candidates:?}"
+        );
+        let outer = *candidates
+            .iter()
+            .find(|lp| {
+                func.code[lp.header..lp.exit]
+                    .iter()
+                    .any(|instr| matches!(instr, RegInstr::CallClosure { .. }))
+            })
+            .expect("outer candidate should contain the cold closure call");
+        let inner = *candidates
+            .iter()
+            .find(|lp| lp.header != outer.header)
+            .expect("inner candidate");
+        assert!(
+            translate_osr_loop(&func.code, func.regs, func.params, func.captures, outer).is_none(),
+            "cold outer closure region should decline direct OSR translation"
+        );
+        translate_osr_loop(&func.code, func.regs, func.params, func.captures, inner)
+            .expect("nested scalar loop should translate");
+
+        let reference = executable
+            .eval_main_with_args(std::iter::empty::<&str>())
+            .expect("interpreter run");
+        let (native, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("forced OSR run");
+        assert_eq!(native, reference);
+        assert_eq!(
+            stats.osr_entries, 2,
+            "the inner region should enter once per outer iteration: {stats:?}"
+        );
+        assert_eq!(
+            stats.compiled - stats.translated,
+            1,
+            "only the inner RegionKey should compile after the outer decline: {stats:?}"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_enters_direct_async_call_await_loop() {
+        let source = r#"
+features: async
+
+async fn step(value: Int) -> Result<Int, String> {
+    return Ok(value + 1)
+}
+
+async fn main() -> Result<Unit, String> {
+    let mut index = 0
+    let mut total = 0
+    while index < 2000 {
+        total = await step(value: total)?
+        index = index + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Ok(Unit)
+}
+"#;
+        let executable =
+            reg_vm_compile_source("async_call_loop.rss", source).expect("lowering should succeed");
+        let func = executable.unit.functions[executable.unit.function_ids["main"]].as_ref();
+        let candidate = super::super::tier::select_osr_candidate_loop(&executable.unit, func)
+            .unwrap_or_else(|| {
+                panic!(
+                    "direct async call/await loop should be selected for OSR; main code={:#?}",
+                    func.code
+                )
+            });
+        let (_out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("direct async call/await loop should run");
+        assert!(
+            stats.osr_entries > 0,
+            "direct async call/await loop should OSR-enter; candidate={candidate:?}; stats={stats:?}; region={:#?}",
+            &func.code[candidate.header..candidate.exit],
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_enters_direct_async_option_call_await_loop() {
+        let source = r#"
+features: async
+
+async fn step(value: Int) -> Option<Int> {
+    return Some(value + 1)
+}
+
+async fn main() -> Option<Unit> {
+    let mut index = 0
+    let mut total = 0
+    while index < 2000 {
+        total = await step(value: total)?
+        index = index + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Some(Unit)
+}
+"#;
+        let executable = reg_vm_compile_source("async_option_call_loop.rss", source)
+            .expect("lowering should succeed");
+        let func = executable.unit.functions[executable.unit.function_ids["main"]].as_ref();
+        let candidate = super::super::tier::select_osr_candidate_loop(&executable.unit, func)
+            .unwrap_or_else(|| {
+                panic!(
+                    "direct async Option call/await loop should be selected for OSR; main code={:#?}",
+                    func.code
+                )
+            });
+        let (_out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("direct async Option call/await loop should run");
+        assert!(
+            stats.osr_entries > 0,
+            "direct async Option call/await loop should OSR-enter; candidate={candidate:?}; stats={stats:?}; region={:#?}",
+            &func.code[candidate.header..candidate.exit],
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_enters_task_group_spawn_loop() {
+        let source_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../benchmarks/vm-jit/kernels/task_group_spawn.rss");
+        let source =
+            std::fs::read_to_string(source_path).expect("task-group benchmark source should exist");
+        let executable = reg_vm_compile_source("task_group_spawn.rss", &source)
+            .expect("lowering should succeed");
+        let main = executable.unit.function_ids["main"];
+        let func = executable.unit.functions[main].as_ref();
+        let candidate = super::super::tier::select_osr_candidate_loop(&executable.unit, func)
+            .unwrap_or_else(|| {
+                panic!(
+                    "task_group loop should be selected for OSR after pure spawn/join inlining; main code={:#?}",
+                    func.code
+                )
+            });
+        let (out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(["2000"])
+            .expect("task-group benchmark should run");
+
+        assert_eq!(out.stdout, "12012000\n");
+        assert!(
+            stats.osr_entries > 0,
+            "task_group spawn/join loop should OSR-enter; candidate={candidate:?}; stats={stats:?}; region={:#?}",
+            &func.code[candidate.header..candidate.exit],
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_selects_and_lowers_readonly_full_list_slice_loop() {
+        let source = r#"
+features: local
+
+fn main() -> Unit {
+    let limit = 10
+    local base = List<Int>.new()
+    let mut k = 0
+    while k < 8 {
+        let v = k * k - k
+        List.push<Int>(list: mut base, value: read v)
+        k = k + 1
+    }
+    let n = List.len<Int>(list: read base)
+
+    let mut index = 0
+    let mut total = 0
+    while index < limit {
+        local copy = List.slice(list: read base, start: 0, len: n)
+        total = total + List.get<Int>(list: read copy, index: 0)
+        index = index + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let func = executable.unit.functions[executable.unit.function_ids["main"]].as_ref();
+        let candidate = super::super::tier::select_osr_candidate_loop(&executable.unit, func)
+            .unwrap_or_else(|| {
+                panic!(
+                    "full-slice read loop should be selected for OSR; code={:#?}",
+                    func.code
+                )
+            });
+        let loops = detect_natural_loops(&func.code);
+        let loop_regions: Vec<_> = loops
+            .iter()
+            .map(|lp| (*lp, &func.code[lp.header..lp.exit]))
+            .collect();
+
+        assert!(
+            func.code[candidate.header..candidate.exit]
+                .iter()
+                .any(|instr| matches!(
+                    instr,
+                    RegInstr::CallIntrinsic {
+                        intrinsic: RegIntrinsic::ListSlice,
+                        ..
+                    }
+                )),
+            "selected loop should be the copy/read loop before the pre-eligibility rewrite; candidate={candidate:?}; loops={:?}; region={:#?}",
+            loop_regions,
+            &func.code[candidate.header..candidate.exit],
+        );
+
+        let (code, n_regs, _) = native_elide_readonly_full_list_slices_in_region(
+            &func.code,
+            func.regs,
+            candidate.header,
+            candidate.exit,
+        )
+        .expect("full read-only slice loop should rewrite");
+        let lp = detect_natural_loop_at(&code, candidate.header)
+            .expect("loop should remain after full-slice elision");
+
+        translate_osr_loop(&code, n_regs, func.params, func.captures, lp).unwrap_or_else(|| {
+            panic!(
+                "full-slice-elided loop should translate to native OSR; region={:#?}",
+                &code[lp.header..lp.exit],
+            )
+        });
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_enters_loop_with_transactional_list_set_int() {
+        let source = r#"
+features: local
+
+fn main() -> Unit {
+    local values = List<Int>.new()
+    let mut i = 0
+    while i < 8 {
+        List.push<Int>(list: mut values, value: read i)
+        i = i + 1
+    }
+
+    i = 0
+    let mut total = 0
+    while i < 32 {
+        let slot = i % 8
+        List.set<Int>(list: mut values, index: slot, value: read i)
+        total = total + List.get<Int>(list: read values, index: slot)
+        i = i + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let (_out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.osr_entries > 0,
+            "List.set<Int> loop should OSR-enter via transactional helper; stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_flat_int_list_direct_write_commits_to_vm_list() {
+        let source = r#"
+features: local
+
+fn hot(values: mut List<Int>, slot: Int, replacement: Int) -> Int {
+    List.set<Int>(list: mut values, index: slot, value: read replacement)
+    return List.get<Int>(list: read values, index: slot)
+}
+
+fn main() -> Unit {
+    local values = List<Int>.new()
+    List.push<Int>(list: mut values, value: read 1)
+    List.push<Int>(list: mut values, value: read 2)
+    List.push<Int>(list: mut values, value: read 3)
+
+    let total = hot(values: mut values, slot: 1, replacement: 7) + List.get<Int>(list: read values, index: 1)
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let (out, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+
+        assert_eq!(
+            out.stdout.trim(),
+            "14",
+            "native direct list write must commit before interpreter reads the list again"
+        );
+        assert!(
+            stats.native_calls > 0,
+            "hot list-write function should run through whole-function native; stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_direct_flat_int_list_write_with_cold_push_trap() {
+        let source = r#"
+features: local
+
+fn hot(values: mut List<Int>, limit: Int) -> Int {
+    let mut i = 0
+    let mut total = 0
+
+    while i < limit {
+        let slot = i % 8
+        if i < 0 {
+            List.push<Int>(list: mut values, value: read i)
+        }
+        List.set<Int>(list: mut values, index: slot, value: read i)
+        total = total + List.get<Int>(list: read values, index: slot)
+        i = i + 1
+    }
+
+    return total
+}
+
+fn main() -> Unit {
+    local values = List<Int>.new()
+    let mut i = 0
+    while i < 8 {
+        List.push<Int>(list: mut values, value: read 0)
+        i = i + 1
+    }
+
+    let total = hot(values: mut values, limit: 32) + List.get<Int>(list: read values, index: 7)
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let hot = executable.unit.function_ids["hot"];
+        let hot_func = executable.unit.functions[hot].as_ref();
+        let candidate = detect_single_natural_loop(&hot_func.code)
+            .expect("hot list loop should be a single natural loop");
+        let (jit, _, _, _, _, _, _) = translate_osr_loop(
+            &hot_func.code,
+            hot_func.regs,
+            hot_func.params,
+            hot_func.captures,
+            candidate,
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "OSR should direct-access steady-state List.set/get and keep push as a cold trap; region={:#?}",
+                &hot_func.code[candidate.header..candidate.exit],
+            )
+        });
+        assert!(
+            jit.code
+                .iter()
+                .any(|instr| matches!(instr, vm_jit::JitInstr::ListSetIntDirect { .. })),
+            "steady-state List.set should lower to direct flat write; jit={:#?}",
+            jit.code,
+        );
+        assert!(
+            !jit.code
+                .iter()
+                .any(|instr| matches!(instr, vm_jit::JitInstr::ListGetIntDirect { .. })),
+            "the adjacent steady-state List.get should forward the stored value; jit={:#?}",
+            jit.code,
+        );
+
+        let (out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert_eq!(out.stdout.trim(), "527");
+        assert!(
+            stats.osr_entries > 0 || stats.native_calls > 0,
+            "flat mutable list loop should run through native whole-function or OSR path; stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_selects_outer_loop_with_list_sort_int() {
+        let source = r#"
+features: local
+
+fn main() -> Unit {
+    let mut outer = 0
+    let mut total = 0
+
+    while outer < 20 {
+        local values = List<Int>.new()
+        let mut i = 0
+        while i < 8 {
+            let v = 8 - i
+            List.push<Int>(list: mut values, value: read v)
+            i = i + 1
+        }
+        List.sort(list: mut values)
+        total = total + List.get<Int>(list: read values, index: 0)
+        outer = outer + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let main = executable.unit.function_ids["main"];
+        let func = executable.unit.functions[main].as_ref();
+        let candidate = super::super::tier::select_osr_candidate_loop(&executable.unit, func)
+            .expect("outer List.sort loop should be selected for OSR");
+        assert!(
+            func.code[candidate.header..candidate.exit]
+                .iter()
+                .any(|instr| matches!(instr, RegInstr::ListSort { .. })),
+            "candidate should include List.sort, not just the inner builder loop; region={:#?}",
+            &func.code[candidate.header..candidate.exit],
+        );
+        translate_osr_loop(&func.code, func.regs, func.params, func.captures, candidate)
+            .unwrap_or_else(|| {
+                panic!(
+                    "List.sort<Int> loop should translate through the native helper framework; region={:#?}",
+                    &func.code[candidate.header..candidate.exit],
+                )
+            });
+        let (out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert_eq!(out.stdout.trim(), "20");
+        assert!(
+            stats.osr_entries > 0,
+            "List.sort<Int> loop should OSR-enter via native helper; stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_enters_loop_with_transactional_map_get_int() {
+        let source = r#"
+features: local
+
+fn main() -> Unit {
+    local table = Map<Int, Int>.new()
+    let mut i = 0
+    while i < 32 {
+        let value = i * 3
+        Map.insert<Int, Int>(map: mut table, key: read i, value: read value)
+        i = i + 1
+    }
+
+    i = 0
+    let mut total = 0
+    while i < 32 {
+        match Map.get<Int, Int>(map: read table, key: read i) {
+            Some(value) => {
+                total = total + value
+            }
+            None => {
+                total = total - 1000
+            }
+        }
+        i = i + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let main = executable.unit.function_ids["main"];
+        let func = executable.unit.functions[main].as_ref();
+        let candidate = super::super::tier::select_osr_candidate_loop(&executable.unit, func)
+            .expect("map read loop should be selected for OSR");
+        translate_osr_loop(&func.code, func.regs, func.params, func.captures, candidate)
+            .unwrap_or_else(|| {
+                panic!(
+                    "selected map loop should translate to OSR native IR; region={:#?}",
+                    &func.code[candidate.header..candidate.exit],
+                )
+            });
+        let (out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.osr_entries > 0,
+            "Map<Int,Int>.get match loop should OSR-enter via collection helpers; stats={stats:?}",
+        );
+        assert_eq!(out.stdout.trim(), "1488");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_enters_loop_with_transactional_set_contains_int() {
+        let source = r#"
+features: local
+
+fn main() -> Unit {
+    local seen = Set.new<Int>()
+    let limit = 2000
+    let mut i = 0
+    while i < limit {
+        Set.insert(set: mut seen, value: read i)
+        i = i + 1
+    }
+
+    i = 0
+    let mut total = 0
+    while i < 32 {
+        if Set.contains(set: read seen, value: read i) {
+            total = total + 1
+        }
+        i = i + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let main = executable.unit.function_ids["main"];
+        let func = executable.unit.functions[main].as_ref();
+        let candidate = super::super::tier::select_osr_candidate_loop(&executable.unit, func)
+            .expect("set contains loop should be selected for OSR");
+        translate_osr_loop(&func.code, func.regs, func.params, func.captures, candidate)
+            .unwrap_or_else(|| {
+                panic!(
+                    "selected set loop should translate to OSR native IR; region={:#?}",
+                    &func.code[candidate.header..candidate.exit],
+                )
+            });
+        let (out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.osr_entries > 0,
+            "Set.contains<Int> loop should OSR-enter via collection helpers; stats={stats:?}",
+        );
+        assert_eq!(out.stdout.trim(), "32");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_enters_loop_with_transactional_sorted_set_contains_int() {
+        let source = r#"
+features: local
+
+fn main() -> Unit {
+    local seen = SortedSet.new<Int>()
+    let limit = 2000
+    let mut i = 0
+    while i < limit {
+        let _inserted = SortedSet.insert<Int>(set: mut seen, value: read i)
+        i = i + 1
+    }
+
+    i = 0
+    let mut total = 0
+    while i < 32 {
+        if SortedSet.contains<Int>(set: read seen, value: read i) {
+            total = total + 1
+        }
+        i = i + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let main = executable.unit.function_ids["main"];
+        let func = executable.unit.functions[main].as_ref();
+        let candidate = super::super::tier::select_osr_candidate_loop(&executable.unit, func)
+            .expect("sorted-set contains loop should be selected for OSR");
+        translate_osr_loop(&func.code, func.regs, func.params, func.captures, candidate)
+            .unwrap_or_else(|| {
+                panic!(
+                    "selected sorted-set loop should translate to OSR native IR; region={:#?}",
+                    &func.code[candidate.header..candidate.exit],
+                )
+            });
+        let (out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.osr_entries > 0,
+            "SortedSet.contains<Int> loop should OSR-enter via collection helpers; stats={stats:?}",
+        );
+        assert_eq!(out.stdout.trim(), "32");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translates_sorted_set_len_int_through_list_len_helper() {
+        let source = r#"
+features: local
+
+fn sum_len(seen: read SortedSet<Int>) -> Int {
+    let mut i = 0
+    let mut total = 0
+    while i < SortedSet.len<Int>(set: read seen) {
+        total = total + i
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    local seen = SortedSet.new<Int>()
+    let mut i = 0
+    while i < 32 {
+        let _inserted = SortedSet.insert<Int>(set: mut seen, value: read i)
+        i = i + 1
+    }
+
+    let total = sum_len(seen: read seen)
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let hot = executable.unit.function_ids["sum_len"];
+        let func = executable.unit.functions[hot].as_ref();
+        let (jit, _, _, _, _) = translate_to_native_jit(&executable.unit, func)
+            .expect("SortedSet.len helper function should translate to native IR");
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::ListLen,
+                    ..
+                }
+            )),
+            "loop-invariant SortedSet.len should lazily memoize the ListLen helper; code={:#?}",
+            jit.code,
+        );
+        let (out, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.translated > 0 && stats.native_calls > 0,
+            "sum_len should run through whole-function native JIT; stats={stats:?}",
+        );
+        assert_eq!(out.stdout.trim(), "496");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translates_collection_is_empty_helpers() {
+        let source = r#"
+features: local
+
+fn collection_empty_score(
+    values: read List<Int>,
+    table: read Map<Int, Int>,
+    set: read Set<Int>,
+    sorted: read SortedSet<Int>,
+    sorted_table: read SortedMap<Int, Int>,
+    queue: read Deque<Int>
+) -> Int {
+    let mut total = 0
+    if List.is_empty<Int>(list: read values) {
+        total = total + 1
+    } else {
+        total = total + 10
+    }
+    if Map.is_empty<Int, Int>(map: read table) {
+        total = total + 2
+    } else {
+        total = total + 20
+    }
+    if Set.is_empty<Int>(set: read set) {
+        total = total + 4
+    } else {
+        total = total + 40
+    }
+    if SortedSet.is_empty<Int>(set: read sorted) {
+        total = total + 8
+    } else {
+        total = total + 80
+    }
+    if SortedMap.is_empty<Int, Int>(map: read sorted_table) {
+        total = total + 16
+    } else {
+        total = total + 160
+    }
+    if Deque.is_empty<Int>(deque: read queue) {
+        total = total + 32
+    } else {
+        total = total + 320
+    }
+    return total
+}
+
+fn main() -> Unit {
+    local values = List<Int>.new()
+    local table = Map<Int, Int>.new()
+    local set = Set.new<Int>()
+    local sorted = SortedSet.new<Int>()
+    local sorted_table = SortedMap<Int, Int>.new()
+    local queue = Deque<Int>.new()
+
+    let empty_score = collection_empty_score(
+        values: read values,
+        table: read table,
+        set: read set,
+        sorted: read sorted,
+        sorted_table: read sorted_table,
+        queue: read queue
+    )
+
+    List.push<Int>(list: mut values, value: read 1)
+    Map.insert<Int, Int>(map: mut table, key: read 1, value: read 2)
+    Set.insert(set: mut set, value: read 3)
+    let _sorted_inserted = SortedSet.insert<Int>(set: mut sorted, value: read 4)
+    SortedMap.insert<Int, Int>(map: mut sorted_table, key: read 5, value: read 6)
+    Deque.push_back<Int>(deque: mut queue, value: read 7)
+
+    let non_empty_score = collection_empty_score(
+        values: read values,
+        table: read table,
+        set: read set,
+        sorted: read sorted,
+        sorted_table: read sorted_table,
+        queue: read queue
+    )
+
+    Log.write(message: read String.from_int(value: empty_score + non_empty_score))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let hot = executable.unit.function_ids["collection_empty_score"];
+        let func = executable.unit.functions[hot].as_ref();
+        let (jit, _, _, _, _) = translate_to_native_jit(&executable.unit, func)
+            .expect("collection is_empty helper function should translate to native IR");
+        for expected in [
+            vm_jit::HostHelper::ListIsEmpty,
+            vm_jit::HostHelper::MapIsEmpty,
+            vm_jit::HostHelper::SetIsEmpty,
+            vm_jit::HostHelper::SortedSetIsEmpty,
+            vm_jit::HostHelper::SortedMapIsEmpty,
+            vm_jit::HostHelper::DequeIsEmpty,
+        ] {
+            assert!(
+                jit.code.iter().any(|instr| matches!(
+                    instr,
+                    vm_jit::JitInstr::HostCall { helper, .. } if *helper == expected
+                )),
+                "{expected:?} should lower through the generic host-helper path; code={:#?}",
+                jit.code,
+            );
+        }
+
+        let (out, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.translated > 0 && stats.native_calls > 0,
+            "collection_empty_score should run through whole-function native JIT; stats={stats:?}",
+        );
+        assert_eq!(out.stdout.trim(), "693");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translates_map_and_set_len_helpers() {
+        let source = r#"
+features: local
+
+fn map_set_len_score(table: read Map<Int, Int>, set: read Set<Int>) -> Int {
+    return (Map.len<Int, Int>(map: read table) * 10) + Set.len<Int>(set: read set)
+}
+
+fn main() -> Unit {
+    local table = Map<Int, Int>.new()
+    local set = Set.new<Int>()
+    let empty_score = map_set_len_score(table: read table, set: read set)
+
+    Map.insert<Int, Int>(map: mut table, key: read 1, value: read 2)
+    Set.insert(set: mut set, value: read 3)
+    let non_empty_score = map_set_len_score(table: read table, set: read set)
+
+    Log.write(message: read String.from_int(value: empty_score + non_empty_score))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let hot = executable.unit.function_ids["map_set_len_score"];
+        let func = executable.unit.functions[hot].as_ref();
+        let (jit, _, _, _, _) = translate_to_native_jit(&executable.unit, func)
+            .expect("Map.len/Set.len helper function should translate to native IR");
+        for expected in [vm_jit::HostHelper::MapLen, vm_jit::HostHelper::SetLen] {
+            assert!(
+                jit.code.iter().any(|instr| matches!(
+                    instr,
+                    vm_jit::JitInstr::HostCall { helper, .. } if *helper == expected
+                )),
+                "{expected:?} should lower through the generic host-helper path; code={:#?}",
+                jit.code,
+            );
+        }
+
+        let (out, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.translated > 0 && stats.native_calls > 0,
+            "map_set_len_score should run through whole-function native JIT; stats={stats:?}",
+        );
+        assert_eq!(out.stdout.trim(), "11");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_folds_non_escaping_bytes_slice_len() {
+        let source = r#"
+features: local
+
+fn bytes_slice_score(data: read Bytes, reps: Int) -> Int {
+    let mut i = 0
+    let mut total = 0
+    while i < reps {
+        let head = Bytes.slice(value: read data, start: 1, len: 4)
+        total = total + Bytes.len(value: read head) + Bytes.len(value: read data)
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let data = Bytes.from_string(value: read "abcdef")
+    let total = bytes_slice_score(data: read data, reps: 3)
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let hot = executable.unit.function_ids["bytes_slice_score"];
+        let func = executable.unit.functions[hot].as_ref();
+        let (jit, _, _, _, _) = translate_to_native_jit(&executable.unit, func)
+            .expect("Bytes.slice/len function should translate to native IR");
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::BytesSlice,
+                    ..
+                } | vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::BytesSlice,
+                    ..
+                }
+            )),
+            "non-escaping Bytes.slice must be dissolved before native lowering; code={:#?}",
+            jit.code,
+        );
+        let memoized_lengths = jit
+            .code
+            .iter()
+            .filter(|instr| {
+                matches!(
+                    instr,
+                    vm_jit::JitInstr::MemoizedHostCall {
+                        helper: vm_jit::HostHelper::BytesLen,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            memoized_lengths, 2,
+            "both invariant source-length reads should execute at most once per invocation"
+        );
+
+        let (out, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.translated > 0 && stats.native_calls > 0,
+            "bytes_slice_score should run through whole-function native JIT; stats={stats:?}",
+        );
+        assert_eq!(out.stdout.trim(), "30");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_folded_bytes_slice_len_matches_clamped_edge_semantics() {
+        let source = r#"
+features: local
+
+fn edge_score(data: read Bytes) -> Int {
+    let negative_start = Bytes.slice(value: read data, start: -5, len: 2)
+    let saturating_len = Bytes.slice(value: read data, start: 1, len: 9223372036854775807)
+    let past_end = Bytes.slice(value: read data, start: 9223372036854775807, len: 3)
+    let negative_len = Bytes.slice(value: read data, start: 2, len: -9)
+    return Bytes.len(value: read negative_start)
+        + Bytes.len(value: read saturating_len)
+        + Bytes.len(value: read past_end)
+        + Bytes.len(value: read negative_len)
+}
+
+fn main() -> Unit {
+    let data = Bytes.from_string(value: read "abcdef")
+    Log.write(message: read String.from_int(value: edge_score(data: read data)))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let hot = executable.unit.function_ids["edge_score"];
+        let func = executable.unit.functions[hot].as_ref();
+        let (jit, _, _, _, _) = translate_to_native_jit(&executable.unit, func)
+            .expect("edge-case Bytes.slice/len function should translate");
+        assert!(
+            !jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::BytesSlice,
+                    ..
+                } | vm_jit::JitInstr::MemoizedHostCall {
+                    helper: vm_jit::HostHelper::BytesSlice,
+                    ..
+                }
+            )),
+            "all non-escaping slices should be scalarized; code={:#?}",
+            jit.code,
+        );
+
+        let (out, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("edge-case program should run natively");
+        assert!(stats.native_calls > 0, "edge_score must enter native code");
+        assert_eq!(out.stdout.trim(), "7");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_keeps_escaping_bytes_slice_allocation() {
+        let source = r#"
+features: local
+
+fn retained_slice(data: read Bytes) -> Bytes {
+    return Bytes.slice(value: read data, start: 1, len: 4)
+}
+
+fn main() -> Unit {
+    let data = Bytes.from_string(value: read "abcdef")
+    let head = retained_slice(data: read data)
+    Log.write(message: read String.from_int(value: Bytes.len(value: read head)))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let hot = executable.unit.function_ids["retained_slice"];
+        let func = executable.unit.functions[hot].as_ref();
+        let (jit, _, _, _, _) = translate_to_native_jit(&executable.unit, func)
+            .expect("escaping Bytes.slice should remain native-helper eligible");
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::BytesSlice,
+                    ..
+                }
+            )),
+            "an escaping Bytes result must retain its allocation; code={:#?}",
+            jit.code,
+        );
+
+        let (out, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("escaping-slice program should run");
+        assert!(
+            stats.native_calls > 0,
+            "retained_slice must enter native code"
+        );
+        assert_eq!(out.stdout.trim(), "4");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_keeps_unrelated_dynamic_bytes_len_translatable() {
+        let source = r#"
+features: local
+
+fn byte_count(data: read Bytes) -> Int {
+    return Bytes.len(value: read data)
+}
+
+fn main() -> Unit {
+    let data = Bytes.from_string(value: read "abcdef")
+    Log.write(message: read String.from_int(value: byte_count(data: read data)))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let hot = executable.unit.function_ids["byte_count"];
+        let func = executable.unit.functions[hot].as_ref();
+        let (jit, _, _, _, _) = translate_to_native_jit(&executable.unit, func)
+            .expect("a direct dynamic Bytes.len must remain native eligible");
+        assert!(
+            jit.code.iter().any(|instr| matches!(
+                instr,
+                vm_jit::JitInstr::HostCall {
+                    helper: vm_jit::HostHelper::BytesLen,
+                    ..
+                }
+            )),
+            "the unrelated length query must remain a validating helper; code={:#?}",
+            jit.code,
+        );
+
+        let (out, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("direct Bytes.len program should run");
+        assert!(stats.native_calls > 0, "byte_count must enter native code");
+        assert_eq!(out.stdout.trim(), "6");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translates_string_slice_helper() {
+        let source = r#"
+features: local
+
+fn string_slice_score(value: read String, reps: Int) -> Int {
+    let mut i = 0
+    let mut total = 0
+    while i < reps {
+        let head = String.slice(value: read value, start: 0, len: 4)
+        total = total + String.len(value: read value) + String.len(value: read head)
+        i = i + 1
+    }
+    return total
+}
+
+fn main() -> Unit {
+    let total = string_slice_score(value: read "abcdef", reps: 3)
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let hot = executable.unit.function_ids["string_slice_score"];
+        let func = executable.unit.functions[hot].as_ref();
+        let (jit, _, _, _, _) = translate_to_native_jit(&executable.unit, func)
+            .expect("String.slice helper function should translate to native IR");
+        for expected in [
+            vm_jit::HostHelper::StringSlice,
+            vm_jit::HostHelper::StringLen,
+        ] {
+            assert!(
+                jit.code.iter().any(|instr| matches!(
+                    instr,
+                    vm_jit::JitInstr::HostCall { helper, .. }
+                        | vm_jit::JitInstr::MemoizedHostCall { helper, .. }
+                        if *helper == expected
+                )),
+                "{expected:?} should lower through the generic host-helper path; code={:#?}",
+                jit.code,
+            );
+        }
+
+        let (out, stats) = executable
+            .eval_main_with_args_native_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.translated > 0 && stats.native_calls > 0,
+            "string_slice_score should run through whole-function native JIT; stats={stats:?}",
+        );
+        assert_eq!(out.stdout.trim(), "30");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_enters_loop_with_transactional_sorted_map_insert_int() {
+        let source = r#"
+features: local
+
+fn main() -> Unit {
+    local table = SortedMap<Int, Int>.new()
+    let mut i = 0
+    while i < 32 {
+        let value = i * 2
+        SortedMap.insert<Int, Int>(map: mut table, key: read i, value: read value)
+        i = i + 1
+    }
+
+    Log.write(message: read String.from_int(value: SortedMap.len<Int, Int>(map: read table)))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let main = executable.unit.function_ids["main"];
+        let func = executable.unit.functions[main].as_ref();
+        let candidate = super::super::tier::select_osr_candidate_loop(&executable.unit, func)
+            .expect("sorted-map insert loop should be selected for OSR");
+        translate_osr_loop(&func.code, func.regs, func.params, func.captures, candidate)
+            .unwrap_or_else(|| {
+                panic!(
+                    "selected sorted-map insert loop should translate to OSR native IR; region={:#?}",
+                    &func.code[candidate.header..candidate.exit],
+                )
+            });
+        let (out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.osr_entries > 0,
+            "SortedMap.insert<Int,Int> loop should OSR-enter via collection helpers; stats={stats:?}",
+        );
+        assert_eq!(out.stdout.trim(), "32");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_enters_loop_with_sorted_map_get_match_int() {
+        let source = r#"
+features: local
+
+fn main() -> Unit {
+    local table = SortedMap<Int, Int>.new()
+    let mut i = 0
+    while i < 32 {
+        let value = i * 3
+        SortedMap.insert<Int, Int>(map: mut table, key: read i, value: read value)
+        i = i + 1
+    }
+
+    i = 0
+    let mut total = 0
+    while i < 32 {
+        match SortedMap.get<Int, Int>(map: read table, key: read i) {
+            Some(value) => {
+                total = total + value
+            }
+            None => {
+                total = total - 1000
+            }
+        }
+        i = i + 1
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let main = executable.unit.function_ids["main"];
+        let func = executable.unit.functions[main].as_ref();
+        let candidate = super::super::tier::select_osr_candidate_loop(&executable.unit, func)
+            .expect("sorted-map get loop should be selected for OSR");
+        let jit = translate_osr_loop(&func.code, func.regs, func.params, func.captures, candidate)
+            .unwrap_or_else(|| {
+                panic!(
+                    "selected sorted-map get loop should translate to OSR native IR; region={:#?}",
+                    &func.code[candidate.header..candidate.exit],
+                )
+            });
+        let telemetry = super::super::tier::NativeCompileTelemetry::from_jit_function(&jit.0);
+        assert_eq!(telemetry.fused_map_match_helper_sites, 1);
+        assert_eq!(
+            telemetry.host_call_sites, 1,
+            "one sorted-map match must cross exactly one host-helper boundary",
+        );
+        let (out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.osr_entries > 0,
+            "SortedMap.get<Int,Int> match loop should OSR-enter via fused helper; stats={stats:?}",
+        );
+        assert_eq!(out.stdout.trim(), "1488");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_map_get_match_int_distinguishes_zero_hit_from_miss() {
+        let mut entries = ValueMap::default();
+        entries.insert(jit_int_key(1), VmValue::Int(0));
+        entries.insert(jit_int_key(2), VmValue::Int(22));
+        let _heap_guard = JitCallCtxGuard::enter();
+        JitCallCtx::push_heap_arg(VmValue::Map(Rc::new(RefCell::new(entries))));
+
+        let mut found = -1;
+        assert_eq!(
+            rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 1, &mut found),
+            0
+        );
+        assert_eq!(found, 1);
+        assert_eq!(
+            rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 2, &mut found),
+            22
+        );
+        assert_eq!(found, 1);
+        assert_eq!(
+            rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 3, &mut found),
+            0
+        );
+        assert_eq!(found, 0);
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_sorted_map_get_int_cache_handles_sequential_scan_and_fallback() {
+        let map = sorted_map_value(vec![
+            (VmValue::Int(1), VmValue::Int(10)),
+            (VmValue::Int(3), VmValue::Int(30)),
+            (VmValue::Int(7), VmValue::Int(70)),
+        ]);
+        let _heap_guard = JitCallCtxGuard::enter();
+        JitCallCtx::push_heap_arg(map);
+        JIT_SORTED_MAP_SCAN_CACHE.with(|cache| {
+            cache.borrow_mut().take();
+        });
+
+        let mut found = -1;
+        assert_eq!(
+            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 1, &mut found),
+            10
+        );
+        assert_eq!(found, 1);
+        assert_eq!(
+            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 3, &mut found),
+            30
+        );
+        assert_eq!(found, 1);
+        assert_eq!(
+            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 7, &mut found),
+            70
+        );
+        assert_eq!(found, 1);
+
+        // Non-sequential access must still fall back to the binary-search path.
+        assert_eq!(
+            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 3, &mut found),
+            30
+        );
+        assert_eq!(found, 1);
+        assert_eq!(
+            rss_jit_sorted_map_get_int(JitCallCtx::active_token(), 0, 4, &mut found),
+            0
+        );
+        assert_eq!(found, 0);
+
+        JIT_SORTED_MAP_SCAN_CACHE.with(|cache| {
+            cache.borrow_mut().take();
+        });
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_closure_input_reads_resolve_current_heap_arg_attempt() {
+        {
+            let _heap_guard = JitCallCtxGuard::enter();
+            JitCallCtx::push_heap_arg(VmValue::Closure(Rc::new(VmClosure {
+                function: 4,
+                captures: vec![VmValue::Int(10)],
+            })));
+            assert_eq!(rss_jit_closure_id(JitCallCtx::active_token(), 0), 4);
+            assert_eq!(
+                rss_jit_closure_capture(JitCallCtx::active_token(), 0, 0),
+                10
+            );
+        }
+
+        {
+            let _heap_guard = JitCallCtxGuard::enter();
+            JitCallCtx::push_heap_arg(VmValue::Closure(Rc::new(VmClosure {
+                function: 9,
+                captures: vec![VmValue::Int(30)],
+            })));
+            assert_eq!(
+                rss_jit_closure_id(JitCallCtx::active_token(), 0),
+                9,
+                "handle 0 in a new native attempt must resolve the new closure, not a stale cached one",
+            );
+            assert_eq!(
+                rss_jit_closure_capture(JitCallCtx::active_token(), 0, 0),
+                30
+            );
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_input_only_closure_read_rejects_output_handles() {
+        let mut tx = JitHeapTransactionGuard::begin();
+        let handle = rss_jit_string_from_int(JitCallCtx::active_token(), 42);
+        assert!(handle < 0, "string helper should return an output handle");
+        assert_eq!(
+            rss_jit_closure_id(JitCallCtx::active_token(), handle),
+            -1,
+            "closure-id helper is input-handle-only and must not resolve output handles",
+        );
+        tx.abort();
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_field_closure_reads_do_not_materialize_field_handle() {
+        let _heap_guard = JitCallCtxGuard::enter();
+        JitCallCtx::push_heap_arg(VmValue::Struct(Rc::new(VmStruct::from_named(
+            Rc::from("Op"),
+            vec![(
+                "apply".to_string(),
+                VmValue::Closure(Rc::new(VmClosure {
+                    function: 12,
+                    captures: vec![VmValue::Int(77)],
+                })),
+            )],
+        ))));
+
+        assert_eq!(
+            rss_jit_field_closure_id(JitCallCtx::active_token(), 0, 0),
+            12
+        );
+        assert_eq!(
+            rss_jit_field_closure_capture(JitCallCtx::active_token(), 0, 0, 0),
+            77
+        );
+        assert_eq!(
+            rss_jit_field_closure_id(JitCallCtx::active_token(), 0, 99),
+            -1,
+            "field closure id is total like closure_id",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_map_handle_cache_clears_between_heap_arg_attempts() {
+        let first = Rc::new(RefCell::new(ValueMap::default()));
+        first.borrow_mut().insert(jit_int_key(1), VmValue::Int(10));
+        {
+            let mut tx = JitHeapTransactionGuard::begin();
+            let _heap_guard = JitCallCtxGuard::enter();
+            JitCallCtx::push_heap_arg(VmValue::Map(Rc::clone(&first)));
+            let mut found = -1;
+            assert_eq!(
+                rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 1, &mut found),
+                10
+            );
+            assert_eq!(found, 1);
+            assert_eq!(
+                rss_jit_map_insert_int(JitCallCtx::active_token(), 0, 2, 20),
+                0
+            );
+            assert_eq!(first.borrow().get(&jit_int_key(2)), Some(&VmValue::Int(20)));
+            tx.commit_scalar_with_writebacks(&[])
+                .expect("map helper transaction should commit");
+        }
+
+        let second = Rc::new(RefCell::new(ValueMap::default()));
+        second.borrow_mut().insert(jit_int_key(1), VmValue::Int(30));
+        {
+            let mut tx = JitHeapTransactionGuard::begin();
+            let _heap_guard = JitCallCtxGuard::enter();
+            JitCallCtx::push_heap_arg(VmValue::Map(Rc::clone(&second)));
+            let mut found = -1;
+            assert_eq!(
+                rss_jit_map_get_match_int(JitCallCtx::active_token(), 0, 1, &mut found),
+                30,
+                "handle 0 in a new native attempt must resolve the new heap arg, not the cached prior map",
+            );
+            assert_eq!(found, 1);
+            assert_eq!(
+                rss_jit_map_insert_int(JitCallCtx::active_token(), 0, 2, 40),
+                0
+            );
+            assert_eq!(
+                second.borrow().get(&jit_int_key(2)),
+                Some(&VmValue::Int(40))
+            );
+            assert_eq!(
+                first.borrow().get(&jit_int_key(2)),
+                Some(&VmValue::Int(20)),
+                "new-attempt writes must not hit the stale cached map",
+            );
+            tx.commit_scalar_with_writebacks(&[])
+                .expect("map helper transaction should commit");
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_deque_handle_cache_clears_between_heap_arg_attempts() {
+        let first = Rc::new(RefCell::new(VecDeque::from(vec![
+            VmValue::Int(1),
+            VmValue::Int(2),
+        ])));
+        {
+            let mut tx = JitHeapTransactionGuard::begin();
+            let _heap_guard = JitCallCtxGuard::enter();
+            JitCallCtx::push_heap_arg(VmValue::Deque(Rc::clone(&first)));
+            assert_eq!(rss_jit_deque_len(JitCallCtx::active_token(), 0), 2);
+            assert_eq!(
+                rss_jit_deque_push_back_int(JitCallCtx::active_token(), 0, 3),
+                0
+            );
+            assert_eq!(first.borrow().len(), 3);
+            tx.commit_scalar_with_writebacks(&[])
+                .expect("deque helper transaction should commit");
+        }
+
+        let second = Rc::new(RefCell::new(VecDeque::from(vec![VmValue::Int(10)])));
+        {
+            let mut tx = JitHeapTransactionGuard::begin();
+            let _heap_guard = JitCallCtxGuard::enter();
+            JitCallCtx::push_heap_arg(VmValue::Deque(Rc::clone(&second)));
+            assert_eq!(
+                rss_jit_deque_len(JitCallCtx::active_token(), 0),
+                1,
+                "handle 0 in a new native attempt must resolve the new heap arg, not the cached prior deque",
+            );
+            assert_eq!(
+                rss_jit_deque_push_back_int(JitCallCtx::active_token(), 0, 11),
+                0
+            );
+            assert_eq!(second.borrow().len(), 2);
+            assert_eq!(
+                first.borrow().len(),
+                3,
+                "new-attempt writes must not hit the stale cached deque",
+            );
+            tx.commit_scalar_with_writebacks(&[])
+                .expect("deque helper transaction should commit");
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_list_handle_cache_clears_between_heap_arg_attempts() {
+        let first = Rc::new(RefCell::new(TypedVec::from_values(vec![
+            VmValue::Int(1),
+            VmValue::Int(2),
+        ])));
+        {
+            let mut tx = JitHeapTransactionGuard::begin();
+            let _heap_guard = JitCallCtxGuard::enter();
+            JitCallCtx::push_heap_arg(VmValue::List(Rc::clone(&first)));
+            assert_eq!(rss_jit_list_len(JitCallCtx::active_token(), 0), 2);
+            assert_eq!(rss_jit_list_push_int(JitCallCtx::active_token(), 0, 3), 0);
+            assert_eq!(first.borrow().len(), 3);
+            tx.commit_scalar_with_writebacks(&[])
+                .expect("list helper transaction should commit");
+        }
+
+        let second = Rc::new(RefCell::new(TypedVec::from_values(vec![VmValue::Int(10)])));
+        {
+            let mut tx = JitHeapTransactionGuard::begin();
+            let _heap_guard = JitCallCtxGuard::enter();
+            JitCallCtx::push_heap_arg(VmValue::List(Rc::clone(&second)));
+            assert_eq!(
+                rss_jit_list_len(JitCallCtx::active_token(), 0),
+                1,
+                "handle 0 in a new native attempt must resolve the new heap arg, not the cached prior list",
+            );
+            assert_eq!(rss_jit_list_push_int(JitCallCtx::active_token(), 0, 11), 0);
+            assert_eq!(second.borrow().len(), 2);
+            assert_eq!(
+                first.borrow().len(),
+                3,
+                "new-attempt writes must not hit the stale cached list",
+            );
+            tx.commit_scalar_with_writebacks(&[])
+                .expect("list helper transaction should commit");
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_list_handle_cache_clears_output_handles_when_transaction_resets() {
+        {
+            let mut tx = JitHeapTransactionGuard::begin();
+            let first = rss_jit_list_new_int(JitCallCtx::active_token());
+            assert!(first < 0, "new list helper should return an output handle");
+            assert_eq!(
+                rss_jit_list_push_int(JitCallCtx::active_token(), first, 1),
+                0
+            );
+            assert_eq!(rss_jit_list_len(JitCallCtx::active_token(), first), 1);
+            tx.abort();
+        }
+
+        {
+            let mut tx = JitHeapTransactionGuard::begin();
+            let second = rss_jit_list_new_int(JitCallCtx::active_token());
+            assert!(second < 0, "new list helper should return an output handle");
+            assert_eq!(
+                rss_jit_list_len(JitCallCtx::active_token(), second),
+                0,
+                "reused output handle must resolve the new staged list, not a stale cached list",
+            );
+            tx.abort();
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_enters_loop_with_transactional_deque_pop_front_int() {
+        let source = r#"
+features: local
+
+fn main() -> Unit {
+    local q = Deque<Int>.new()
+    let mut i = 0
+    while i < 32 {
+        Deque.push_back<Int>(deque: mut q, value: read i)
+        i = i + 1
+    }
+
+    let mut total = 0
+    while Deque.len<Int>(deque: read q) > 0 {
+        match Deque.pop_front<Int>(deque: mut q) {
+            Some(value) => {
+                total = total + value
+            }
+            None => {
+                total = total - 1000
+            }
+        }
+    }
+
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let main = executable.unit.function_ids["main"];
+        let func = executable.unit.functions[main].as_ref();
+        let candidate = super::super::tier::select_osr_candidate_loop(&executable.unit, func)
+            .expect("deque pop loop should be selected for OSR");
+        let mut vm = RegVm::new(
+            Rc::clone(&executable.unit),
+            Vec::<String>::new(),
+            std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
+        );
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        assert_eq!(
+            vm.resolve_osr_candidate(func),
+            Some(candidate.header),
+            "resolver should arm the selected deque loop",
+        );
+        let (code, n_regs, ip_map, _) = native_scalar_replace_options_in_region(
+            &func.code,
+            func.regs,
+            candidate.header,
+            candidate.exit,
+        )
+        .expect("deque option loop should scalar-replace");
+        let transformed_header = ip_map
+            .iter()
+            .position(|&old_ip| old_ip == candidate.header)
+            .expect("transformed code should preserve the loop header");
+        let transformed_loop = detect_natural_loop_at(&code, transformed_header)
+            .expect("transformed deque loop should remain reducible");
+        translate_osr_loop(&code, n_regs, func.params, func.captures, transformed_loop)
+            .unwrap_or_else(|| {
+                panic!(
+                    "transformed deque loop should translate to OSR native IR; region={:#?}",
+                    &code[transformed_loop.header..transformed_loop.exit],
+                )
+            });
+        let (out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.osr_entries > 0,
+            "Deque.pop_front<Int> loop should OSR-enter via collection helpers; stats={stats:?}",
+        );
+        assert_eq!(out.stdout.trim(), "496");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_enters_loop_with_field_set_int_handle_update() {
+        let source = r#"
+struct Box {
+    value: Int
+}
+
+fn main() -> Unit {
+    let mut box = Box(value: 0)
+    let mut i = 0
+    let mut total = 0
+    while i < 32 {
+        box.value = i
+        total = total + box.value
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: total))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let (_out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.osr_entries > 0,
+            "SetFieldSlot<Int> loop should OSR-enter via copy-on-write helper; stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_restores_field_set_int_handle_live_after_loop() {
+        let source = r#"
+struct Box {
+    value: Int
+}
+
+fn main() -> Unit {
+    let mut box = Box(value: 0)
+    let mut i = 0
+    while i < 32 {
+        box.value = i
+        i = i + 1
+    }
+    Log.write(message: read String.from_int(value: box.value))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let (out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.osr_entries > 0,
+            "copy-updated struct handle live-out should OSR-enter and restore through heap writeback; stats={stats:?}",
+        );
+        assert_eq!(out.stdout.trim(), "31");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_field_set_int_on_mut_parameter_writes_back_to_caller() {
+        let source = r#"
+struct Box {
+    value: Int
+}
+
+fn bump(box: mut Box) -> Int {
+    box.value = box.value + 1
+    return box.value
+}
+
+fn main() -> Unit {
+    let mut box = Box(value: 0)
+    let _value = bump(box: mut box)
+    Log.write(message: read String.from_int(value: box.value))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let bump = executable.unit.function_ids["bump"];
+        let bump_func = executable.unit.functions[bump].as_ref();
+        assert!(
+            translate_to_native_jit(&executable.unit, bump_func).is_some(),
+            "SetFieldSlot on a parameter should be native once heap writeback materialization exists; code={:#?}",
+            bump_func.code,
+        );
+        let (out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.native_calls > 0,
+            "bump should run whole-function native; stats={stats:?}"
+        );
+        assert_eq!(out.stdout.trim(), "1");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_field_set_int_on_mut_parameter_writes_back_to_caller() {
+        let source = r#"
+struct Box {
+    value: Int
+}
+
+fn bump_loop(box: mut Box, limit: Int) -> Unit {
+    let mut i = 0
+    while i < limit {
+        box.value = i
+        i = i + 1
+    }
+    return Unit
+}
+
+fn main() -> Unit {
+    let mut box = Box(value: 0)
+    bump_loop(box: mut box, limit: 32)
+    Log.write(message: read String.from_int(value: box.value))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let bump_loop = executable.unit.function_ids["bump_loop"];
+        let func = executable.unit.functions[bump_loop].as_ref();
+        let candidate = detect_natural_loops(&func.code)
+            .into_iter()
+            .find(|lp| {
+                func.code
+                    .get(lp.header..lp.exit)
+                    .is_some_and(|region| region.iter().all(native_subset_instruction))
+            })
+            .expect("test should expose a raw native-subset loop");
+        assert!(
+            translate_osr_loop(&func.code, func.regs, func.params, func.captures, candidate)
+                .is_some(),
+            "SetFieldSlot on a parameter should be OSR-native once heap writeback materialization exists",
+        );
+        let (out, stats) = executable
+            .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
+            .expect("program should run");
+        assert!(
+            stats.osr_entries > 0,
+            "bump_loop should OSR-enter; stats={stats:?}"
+        );
+        assert_eq!(out.stdout.trim(), "31");
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translates_bool_returning_mut_struct_list_write_helper() {
+        let source = r#"
+features: local
+
+struct MailboxInt {
+    capacity: Int
+    head: Int
+    count: Int
+    values: List<Int>
+}
+
+fn mailbox_send(m: mut MailboxInt, value: Int) -> Bool {
+    if m.count >= m.capacity {
+        return false
+    }
+    let tail = (m.head + m.count) % m.capacity
+    if tail < List.len<Int>(list: read m.values) {
+        List.set<Int>(list: mut m.values, index: tail, value: read value)
+    } else {
+        List.push<Int>(list: mut m.values, value: read value)
+    }
+    m.count = m.count + 1
+    return true
+}
+
+fn mailbox_take(m: mut MailboxInt) -> Option<Int> {
+    if m.count <= 0 {
+        return None
+    }
+    let value = List.get<Int>(list: read m.values, index: m.head)
+    m.head = (m.head + 1) % m.capacity
+    m.count = m.count - 1
+    return Some(value)
+}
+
+fn hot(x: Int) -> Int {
+    return x
+}
+
+fn main() -> Unit {
+    let value = hot(x: 1)
+    Log.write(message: read String.from_int(value: value))
+    return Unit
+}
+"#;
+        let executable =
+            reg_vm_compile_source("test.rss", source).expect("lowering should succeed");
+        let send = executable.unit.function_ids["mailbox_send"];
+        let send_func = executable.unit.functions[send].as_ref();
+        let take = executable.unit.function_ids.get("mailbox_take").copied();
+        if let Some(take) = take {
+            let take_func = executable.unit.functions[take].as_ref();
+            assert!(
+                native_callee_inlinable_j3(take_func, take_func.params),
+                "mailbox_take should be J3-inlinable; code={:#?}",
+                take_func.code,
+            );
+        }
+        assert!(
+            translate_to_native_jit(&executable.unit, send_func).is_some(),
+            "mailbox_send should translate with Bool return, list writes, and mut-struct writeback; code={:#?}",
+            send_func.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_inlines_mailbox_send_and_take_in_hot_loop() {
+        let source_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../benchmarks/vm-jit/kernels/mailbox_ring_only.rss");
+        let source =
+            std::fs::read_to_string(source_path).expect("mailbox benchmark source should exist");
+        let executable = reg_vm_compile_source("mailbox_ring_only.rss", &source)
+            .expect("lowering should succeed");
+        let hot = executable.unit.function_ids["hot"];
+        let hot_func = executable.unit.functions[hot].as_ref();
+        let candidate = detect_natural_loops(&hot_func.code)
+            .into_iter()
+            .find(|lp| {
+                hot_func.code.get(lp.header..lp.exit).is_some_and(|region| {
+                    region
+                        .iter()
+                        .any(|instr| matches!(instr, RegInstr::CallKnown { .. }))
+                })
+            })
+            .expect("hot loop should contain calls before inlining");
+        let (code, n_regs, _ip_map) = native_inline_leaf_calls(
+            &executable.unit,
+            hot_func,
+            true,
+            Some((candidate.header, candidate.exit)),
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "hot loop calls should be J3-inlinable; region={:#?}",
+                &hot_func.code[candidate.header..candidate.exit],
+            )
+        });
+        let inlined_loop = detect_natural_loops(&code)
+            .into_iter()
+            .find(|lp| {
+                code.get(lp.header..lp.exit).is_some_and(|region| {
+                    region
+                        .iter()
+                        .any(|instr| matches!(instr, RegInstr::MatchOption { .. }))
+                })
+            })
+            .expect("inlined hot loop should still be detectable and contain Option match");
+        assert!(
+            !code[inlined_loop.header..inlined_loop.exit]
+                .iter()
+                .any(|instr| matches!(instr, RegInstr::CallKnown { .. })),
+            "hot loop should not contain CallKnown after J3 inlining; region={:#?}",
+            &code[inlined_loop.header..inlined_loop.exit],
+        );
+        let (code, n_regs, _) = native_lower_checked_payload_intrinsics_in_region(
+            &code,
+            n_regs,
+            inlined_loop.header,
+            inlined_loop.exit,
+        )
+        .expect("checked payload pass should accept inlined hot loop");
+        let lp = detect_natural_loops(&code)
+            .into_iter()
+            .next()
+            .expect("loop should remain after checked payload pass");
+        let (code, n_regs, _, _) =
+            native_scalar_replace_results_in_region(&code, n_regs, lp.header, lp.exit)
+                .expect("result SR should accept inlined hot loop");
+        let lp = detect_natural_loops(&code)
+            .into_iter()
+            .next()
+            .expect("loop should remain after result SR");
+        let (code, n_regs, _, _) =
+            native_scalar_replace_options_in_region(&code, n_regs, lp.header, lp.exit)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "option SR should accept inlined hot loop; region={:#?}",
+                        &code[lp.header..lp.exit],
+                    )
+                });
+        let lp = detect_natural_loops(&code)
+            .into_iter()
+            .next()
+            .expect("loop should remain after option SR");
+        let (code, n_regs, _, _) =
+            native_scalar_replace_variants_in_region(&code, n_regs, lp.header, lp.exit)
+                .expect("variant SR should accept inlined hot loop");
+        let lp = detect_natural_loops(&code)
+            .into_iter()
+            .next()
+            .expect("loop should remain after variant SR");
+        let (code, n_regs, _, _) =
+            native_scalar_replace_structs_in_region(&code, n_regs, lp.header, lp.exit)
+                .expect("struct SR should accept inlined hot loop");
+        let lp = detect_natural_loops(&code)
+            .into_iter()
+            .next()
+            .expect("loop should remain after struct SR");
+        let (code, n_regs, _) =
+            native_loop_carried_struct_in_region(&code, n_regs, lp.header, lp.exit)
+                .unwrap_or_else(|| (code.clone(), n_regs, (0..code.len()).collect()));
+        let lp = detect_natural_loops(&code)
+            .into_iter()
+            .next()
+            .expect("loop should remain after loop-carried struct pass");
+        let (jit, _, derived_liveins, scalar_fields, _, _, _) = translate_osr_loop(
+            &code,
+            n_regs,
+            hot_func.params,
+            hot_func.captures,
+            lp,
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "fully transformed mailbox hot loop should lower to OSR native IR; region={:#?}",
+                &code[lp.header..lp.exit],
+            )
+        });
+        let memoized_field_slot = |helper, slot| {
+            jit.code.iter().any(|instr| {
+                matches!(
+                    instr,
+                    vm_jit::JitInstr::MemoizedHostCall {
+                        helper: h,
+                        args,
+                        ..
+                    } if *h == helper
+                        && matches!(args.get(1), Some(vm_jit::HostArg::ImmI64(s)) if *s == slot)
+                )
+            })
+        };
+        let host_helper = |helper| {
+            jit.code.iter().any(|instr| {
+                matches!(
+                    instr,
+                    vm_jit::JitInstr::HostCall { helper: h, .. }
+                        | vm_jit::JitInstr::MemoizedHostCall { helper: h, .. }
+                        if *h == helper
+                )
+            })
+        };
+        let scalar_slot = |slot, writeback| {
+            scalar_fields
+                .iter()
+                .any(|field| field.field_slot == slot && field.writeback == writeback)
+        };
+        assert!(
+            scalar_slot(0, false) && scalar_slot(1, true) && scalar_slot(2, true),
+            "capacity/head/count fields should be scalar OSR fields; scalar={:#?}; jit code={:#?}",
+            scalar_fields,
+            jit.code,
+        );
+        assert!(
+            derived_liveins
+                .iter()
+                .filter(|livein| livein.field_slot == 3)
+                .count()
+                >= 3,
+            "values-list field aliases should be derived OSR live-ins; derived={:#?}; jit code={:#?}",
+            derived_liveins,
+            jit.code,
+        );
+        assert!(
+            !host_helper(vm_jit::HostHelper::ListLen)
+                && !host_helper(vm_jit::HostHelper::ListSetInt)
+                && !host_helper(vm_jit::HostHelper::ListGetInt),
+            "values-list len/set/get operations should avoid per-iteration list helpers; jit code: {:#?}",
+            jit.code,
+        );
+        assert!(
+            jit.code
+                .iter()
+                .any(|instr| matches!(instr, vm_jit::JitInstr::ListLenDirect { .. }))
+                && jit
+                    .code
+                    .iter()
+                    .any(|instr| matches!(instr, vm_jit::JitInstr::ListSetIntDirect { .. }))
+                && jit
+                    .code
+                    .iter()
+                    .any(|instr| matches!(instr, vm_jit::JitInstr::ListGetIntDirect { .. })),
+            "values-list field should lower to direct len/set/get operations; jit code: {:#?}",
+            jit.code,
+        );
+        assert!(
+            !memoized_field_slot(vm_jit::HostHelper::FieldInt, 1)
+                && !memoized_field_slot(vm_jit::HostHelper::FieldInt, 2),
+            "mutated head/count fields must not be memoized; jit code: {:#?}",
+            jit.code,
+        );
+        assert!(
+            !host_helper(vm_jit::HostHelper::FieldInt)
+                && !host_helper(vm_jit::HostHelper::FieldSetInt),
+            "scalar mailbox fields should avoid per-iteration field helpers; jit code: {:#?}",
+            jit.code,
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_scalarizes_struct_field_rw_loop() {
+        let source_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../benchmarks/micro/struct_field_rw.rss");
+        let source =
+            std::fs::read_to_string(source_path).expect("struct benchmark source should exist");
+        let executable =
+            reg_vm_compile_source("struct_field_rw.rss", &source).expect("lowering should succeed");
+        let main = executable.unit.function_ids["main"];
+        let func = executable.unit.functions[main].as_ref();
+        let lp = crate::reg_vm::tier::select_osr_candidate_loop(&executable.unit, func)
+            .or_else(|| detect_natural_loops(&func.code).into_iter().next())
+            .expect("struct benchmark hot loop should be selected");
+        let (code, n_regs, _) =
+            native_inline_leaf_calls(&executable.unit, func, true, Some((lp.header, lp.exit)))
+                .expect("struct benchmark loop should inline");
+        let lp = detect_natural_loops(&code)
+            .into_iter()
+            .next()
+            .expect("loop should remain after inlining");
+        let (code, n_regs, _, _) =
+            native_scalar_replace_structs_in_region(&code, n_regs, lp.header, lp.exit)
+                .expect("loop-local struct pass should accept or return identity");
+        let lp = detect_natural_loops(&code)
+            .into_iter()
+            .next()
+            .expect("loop should remain after struct pass");
+        let (code, n_regs, _) = native_loop_carried_struct_in_region(
+            &code, n_regs, lp.header, lp.exit,
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "loop-carried struct pass should scalarize struct_field_rw; region={:#?}",
+                &code[lp.header..lp.exit],
+            )
+        });
+        let lp = detect_natural_loops(&code)
+            .into_iter()
+            .next()
+            .expect("loop should remain after loop-carried struct pass");
+        assert!(
+            !code[lp.header..lp.exit].iter().any(|instr| matches!(
+                instr,
+                RegInstr::GetFieldSlot { .. } | RegInstr::SetFieldSlot { .. }
+            )),
+            "scalarized struct loop should not retain field helpers; region={:#?}",
+            &code[lp.header..lp.exit],
+        );
+        translate_osr_loop(&code, n_regs, func.params, func.captures, lp).unwrap_or_else(|| {
+            panic!(
+                "scalarized struct_field_rw loop should translate to OSR native IR; region={:#?}",
+                &code[lp.header..lp.exit],
+            )
+        });
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_profiles_stored_polymorphic_closure_call() {
+        let source_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../benchmarks/vm-jit/kernels/dynamic_closure_call.rss");
+        let source = std::fs::read_to_string(source_path)
+            .expect("dynamic closure benchmark source should exist");
+        let executable = reg_vm_compile_source("dynamic_closure_call.rss", &source)
+            .expect("lowering should succeed");
+        let main = executable.unit.function_ids["main"];
+        let main_func = executable.unit.functions[main].as_ref();
+        let call_idx = main_func
+            .code
+            .iter()
+            .position(|instr| matches!(instr, RegInstr::CallClosure { .. }))
+            .expect("main loop should contain a stored closure call");
+        let candidate = detect_natural_loops(&main_func.code)
+            .into_iter()
+            .find(|lp| {
+                main_func
+                    .code
+                    .get(lp.header..lp.exit)
+                    .is_some_and(|region| {
+                        region
+                            .iter()
+                            .any(|instr| matches!(instr, RegInstr::CallClosure { .. }))
+                    })
+            })
+            .expect("dynamic closure loop should be detected");
+        assert_eq!(
+            super::super::tier::select_osr_candidate_loop(&executable.unit, main_func)
+                .map(|lp| lp.header),
+            Some(candidate.header),
+            "cold auto OSR selection should arm the transformable closure loop"
+        );
+
+        executable
+            .eval_main_with_args(vec!["400".to_string()])
+            .expect("benchmark should run and warm profile");
+
+        {
+            let profile = main_func.profile.borrow();
+            let feedback = profile
+                .as_ref()
+                .and_then(|profile| profile.call_sites.get(&call_idx))
+                .unwrap_or_else(|| panic!("profile should contain feedback for call {call_idx}"));
+            assert_eq!(feedback.state(), MonoState::Polymorphic);
+            assert_eq!(feedback.observed.len(), 2);
+            assert!(feedback.captures_all_scalar);
+        }
+        assert!(
+            polymorphic_closure_inline_targets(&executable.unit, main_func, call_idx).is_some(),
+            "stored two-target closure call should qualify for J2 polymorphic inline"
+        );
+
+        assert_eq!(
+            super::super::tier::select_osr_candidate_loop(&executable.unit, main_func)
+                .map(|lp| lp.header),
+            Some(candidate.header),
+            "auto OSR selection should arm the transformable closure loop"
+        );
+        let (code, n_regs, _) = native_inline_leaf_calls(
+            &executable.unit,
+            main_func,
+            true,
+            Some((candidate.header, candidate.exit)),
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "stored polymorphic closure call should inline; region={:#?}",
+                &main_func.code[candidate.header..candidate.exit],
+            )
+        });
+        let (code, n_regs, _) = native_fuse_field_closure_metadata_reads(&code, n_regs)
+            .expect("stored closure helper fusion should run");
+        assert!(
+            code.iter()
+                .any(|instr| matches!(instr, RegInstr::NativeFieldClosureId { .. })),
+            "stored closure field metadata should fuse away the intermediate FieldHandle; code={code:#?}",
+        );
+        let lp = detect_natural_loops(&code)
+            .into_iter()
+            .find(|lp| {
+                code.get(lp.header..lp.exit).is_some_and(|region| {
+                    region
+                        .iter()
+                        .any(|instr| matches!(instr, RegInstr::NativeFieldClosureId { .. }))
+                })
+            })
+            .expect("inlined closure loop should remain detectable");
+        translate_osr_loop(&code, n_regs, main_func.params, main_func.captures, lp).unwrap_or_else(
+            || {
+                panic!(
+                    "polymorphic closure-dispatch loop should lower to OSR native IR; region={:#?}",
+                    &code[lp.header..lp.exit],
+                )
+            },
+        );
+
+        main_func.osr_state.set(OsrTrigger::Unknown);
+        let mut vm = RegVm::new(
+            Rc::clone(&executable.unit),
+            Vec::<String>::new(),
+            std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
+        );
+        assert_eq!(
+            vm.resolve_osr_candidate(main_func),
+            Some(candidate.header),
+            "native VM resolver should arm the stored closure loop"
+        );
+        main_func.osr_state.set(OsrTrigger::Unknown);
+        let (_out, stats) = executable
+            .eval_main_with_args_native_with_stats(["2000"])
+            .expect("adaptive native run should succeed");
+        assert!(
+            stats.osr_entries > 0,
+            "warmed stored polymorphic closure loop should OSR-enter; stats={stats:?}; osr_state={:?}; call_count={}",
+            main_func.osr_state.get(),
+            main_func.call_count.get(),
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_fuses_field_closure_metadata_reads_when_handle_is_dead() {
+        let code = vec![
+            RegInstr::GetFieldSlot {
+                dst: 2,
+                base: 1,
+                slot: 0,
+            },
+            RegInstr::NativeClosureId { dst: 3, closure: 2 },
+            RegInstr::NativeClosureCapture {
+                dst: 4,
+                closure: 2,
+                index: 0,
+            },
+            RegInstr::Return { src: 3 },
+        ];
+
+        let (fused, n_regs, ip_map) =
+            native_fuse_field_closure_metadata_reads(&code, 5).expect("pass should run");
+        assert_eq!(n_regs, 5);
+        assert_eq!(ip_map, vec![0, 1, 2, 3]);
+        assert!(matches!(fused[0], RegInstr::Move { dst: 2, src: 1 }));
+        assert!(matches!(
+            fused[1],
+            RegInstr::NativeFieldClosureId {
+                dst: 3,
+                base: 1,
+                slot: 0
+            }
+        ));
+        assert!(matches!(
+            fused[2],
+            RegInstr::NativeFieldClosureCapture {
+                dst: 4,
+                base: 1,
+                slot: 0,
+                index: 0
+            }
+        ));
+
+        let escaping = vec![
+            RegInstr::GetFieldSlot {
+                dst: 2,
+                base: 1,
+                slot: 0,
+            },
+            RegInstr::NativeClosureId { dst: 3, closure: 2 },
+            RegInstr::Return { src: 2 },
+        ];
+        let (not_fused, _, _) =
+            native_fuse_field_closure_metadata_reads(&escaping, 4).expect("pass should run");
+        assert!(matches!(not_fused[0], RegInstr::GetFieldSlot { .. }));
+        assert!(matches!(not_fused[1], RegInstr::NativeClosureId { .. }));
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_osr_selects_selfhost_mailbox_hot_loop() {
+        let source_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../benchmarks/micro/selfhost_mailbox_bench.rss");
+        let source = std::fs::read_to_string(source_path)
+            .expect("selfhost mailbox benchmark source should exist");
+        let executable = reg_vm_compile_source("selfhost_mailbox_bench.rss", &source)
+            .expect("lowering should succeed");
+        let main = executable.unit.function_ids["main"];
+        let main_func = executable.unit.functions[main].as_ref();
+        let loops = detect_natural_loops(&main_func.code);
+        let selected = super::super::tier::select_osr_candidate_loop(&executable.unit, main_func);
+        let hot_loop = loops
+            .iter()
+            .copied()
+            .find(|lp| {
+                let region = &main_func.code[lp.header..lp.exit];
+                region
+                    .iter()
+                    .filter(|instr| matches!(instr, RegInstr::CallKnown { .. }))
+                    .count()
+                    >= 3
+            })
+            .expect("main cycles loop should be detected");
+        assert_eq!(
+            selected.map(|lp| lp.header),
+            Some(hot_loop.header),
+            "OSR selection should prefer the large hot mailbox loop over setup/drain loops",
+        );
+        let (code, n_regs, ip_map) = native_inline_leaf_calls(
+            &executable.unit,
+            main_func,
+            true,
+            Some((hot_loop.header, hot_loop.exit)),
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "selfhost mailbox hot loop calls should inline; region={:#?}",
+                &main_func.code[hot_loop.header..hot_loop.exit],
+            )
+        });
+        let header = ip_map
+            .iter()
+            .position(|&old| old == hot_loop.header)
+            .expect("inlined header should map from original hot loop");
+        let lp = detect_natural_loop_at(&code, header).unwrap_or_else(|| {
+            panic!(
+                "inlined selfhost mailbox hot loop should remain detectable; header={header}; code={code:#?}"
+            )
+        });
+        let (code, n_regs, _) =
+            native_lower_checked_payload_intrinsics_in_region(&code, n_regs, lp.header, lp.exit)
+                .expect("checked payload pass should accept selfhost mailbox hot loop");
+        let lp = detect_natural_loop_at(&code, lp.header)
+            .expect("loop should remain after checked payload pass");
+        let (code, n_regs, _, _) =
+            native_scalar_replace_results_in_region(&code, n_regs, lp.header, lp.exit)
+                .expect("result SR should accept selfhost mailbox hot loop");
+        let lp =
+            detect_natural_loop_at(&code, lp.header).expect("loop should remain after result SR");
+        let (code, n_regs, _, _) =
+            native_scalar_replace_options_in_region(&code, n_regs, lp.header, lp.exit)
+                .expect("option SR should accept selfhost mailbox hot loop");
+        let lp =
+            detect_natural_loop_at(&code, lp.header).expect("loop should remain after option SR");
+        let (code, n_regs, _, _) =
+            native_scalar_replace_variants_in_region(&code, n_regs, lp.header, lp.exit)
+                .expect("variant SR should accept selfhost mailbox hot loop");
+        let lp =
+            detect_natural_loop_at(&code, lp.header).expect("loop should remain after variant SR");
+        let (code, n_regs, _, _) =
+            native_scalar_replace_structs_in_region(&code, n_regs, lp.header, lp.exit)
+                .expect("struct SR should accept selfhost mailbox hot loop");
+        let lp =
+            detect_natural_loop_at(&code, lp.header).expect("loop should remain after struct SR");
+        let (code, n_regs, _) =
+            native_loop_carried_struct_in_region(&code, n_regs, lp.header, lp.exit)
+                .unwrap_or_else(|| (code.clone(), n_regs, (0..code.len()).collect()));
+        let lp = detect_natural_loop_at(&code, lp.header)
+            .expect("loop should remain after loop-carried struct pass");
+        translate_osr_loop(&code, n_regs, main_func.params, main_func.captures, lp).unwrap_or_else(
+            || {
+                panic!(
+                    "selfhost mailbox hot loop should lower to OSR native IR; region={:#?}",
+                    &code[lp.header..lp.exit],
+                )
+            },
+        );
+        main_func.osr_state.set(OsrTrigger::Unknown);
+        let (_out, stats) = executable
+            .eval_main_with_args_native_with_stats(["2000"])
+            .expect("adaptive native selfhost mailbox run should succeed");
+        assert!(
+            stats.osr_entries > 0,
+            "selfhost mailbox hot loop should OSR-enter; stats={stats:?}; osr_state={:?}",
+            main_func.osr_state.get(),
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_scalar_replaces_whole_function_result() {
+        let ok_layout = native_test_layout("Ok", &["value"]);
+        let function = native_test_function(
+            "result_hot",
+            1,
+            6,
+            vec![
+                RegInstr::LoadInt { dst: 1, value: 7 },
+                RegInstr::MakeVariant {
+                    dst: 2,
+                    layout: Rc::clone(&ok_layout),
+                    fields: vec![("value".to_string(), 0)],
+                },
+                RegInstr::MatchResult {
+                    src: 2,
+                    ok_ip: 3,
+                    err_ip: 6,
+                },
+                RegInstr::UnwrapVariantValue {
+                    dst: 3,
+                    src: 2,
+                    expected: "Ok".to_string(),
+                },
+                RegInstr::AddInt {
+                    dst: 4,
+                    lhs: 3,
+                    rhs: 1,
+                },
+                RegInstr::Return { src: 4 },
+                RegInstr::LoadInt { dst: 5, value: 0 },
+                RegInstr::Return { src: 5 },
+            ],
+        );
+        let unit = native_test_unit(vec![function]);
+
+        assert!(
+            translate_to_native_jit(&unit, unit.functions[0].as_ref()).is_some(),
+            "whole-function native translation should dissolve always-Ok Results before subset checking",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_scalar_replaces_whole_function_option() {
+        let function = native_test_function(
+            "option_hot",
+            1,
+            6,
+            vec![
+                RegInstr::LoadInt { dst: 1, value: 7 },
+                RegInstr::MakeSome { dst: 2, value: 0 },
+                RegInstr::MatchOption {
+                    src: 2,
+                    some_ip: 3,
+                    none_ip: 6,
+                },
+                RegInstr::UnwrapSome { dst: 3, src: 2 },
+                RegInstr::AddInt {
+                    dst: 4,
+                    lhs: 3,
+                    rhs: 1,
+                },
+                RegInstr::Return { src: 4 },
+                RegInstr::LoadInt { dst: 5, value: 0 },
+                RegInstr::Return { src: 5 },
+            ],
+        );
+        let unit = native_test_unit(vec![function]);
+
+        assert!(
+            translate_to_native_jit(&unit, unit.functions[0].as_ref()).is_some(),
+            "whole-function native translation should dissolve scalar Options before subset checking",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_scalar_replaces_whole_function_struct() {
+        let struct_layout = native_test_layout("Pair", &["a", "b"]);
+        let function = native_test_function(
+            "struct_hot",
+            1,
+            6,
+            vec![
+                RegInstr::LoadInt { dst: 1, value: 3 },
+                RegInstr::MakeStruct {
+                    dst: 2,
+                    layout: Rc::clone(&struct_layout),
+                    fields: vec![("a".to_string(), 0), ("b".to_string(), 1)],
+                },
+                RegInstr::GetFieldSlot {
+                    dst: 3,
+                    base: 2,
+                    slot: 0,
+                },
+                RegInstr::GetFieldSlot {
+                    dst: 4,
+                    base: 2,
+                    slot: 1,
+                },
+                RegInstr::AddInt {
+                    dst: 5,
+                    lhs: 3,
+                    rhs: 4,
+                },
+                RegInstr::Return { src: 5 },
+            ],
+        );
+        let unit = native_test_unit(vec![function]);
+
+        assert!(
+            translate_to_native_jit(&unit, unit.functions[0].as_ref()).is_some(),
+            "whole-function native translation should dissolve structs before subset checking",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_translation_sinks_whole_function_closure_allocation() {
+        let callee = native_test_function(
+            "mapper",
+            1,
+            4,
+            vec![
+                RegInstr::LoadInt { dst: 1, value: 2 },
+                RegInstr::MulInt {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                RegInstr::LoadInt { dst: 3, value: 1 },
+                RegInstr::AddInt {
+                    dst: 2,
+                    lhs: 2,
+                    rhs: 3,
+                },
+                RegInstr::Return { src: 2 },
+            ],
+        );
+        let caller = native_test_function(
+            "closure_hot",
+            1,
+            3,
+            vec![
+                RegInstr::MakeClosure {
+                    dst: 1,
+                    function: 0,
+                    captures: Vec::new(),
+                },
+                RegInstr::CallClosure {
+                    dst: 2,
+                    closure: 1,
+                    args: vec![0],
+                    mut_args: Vec::new(),
+                },
+                RegInstr::Return { src: 2 },
+            ],
+        );
+        let unit = native_test_unit(vec![callee, caller]);
+
+        assert!(
+            translate_to_native_jit(&unit, unit.functions[1].as_ref()).is_some(),
+            "whole-function native translation should sink local closure allocation and inline the call",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn tier0_jit_pure_leaf_call_still_obeys_logical_depth_limit() {
+        let callee = native_test_function(
+            "plus_one",
+            1,
+            3,
+            vec![
+                RegInstr::LoadInt { dst: 1, value: 1 },
+                RegInstr::AddInt {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                RegInstr::Return { src: 2 },
+            ],
+        );
+        let caller = native_test_function(
+            "caller",
+            1,
+            2,
+            vec![
+                RegInstr::CallKnown {
+                    dst: 1,
+                    function: 0,
+                    args: vec![0],
+                    mut_args: Vec::new(),
+                },
+                RegInstr::Return { src: 1 },
+            ],
+        );
+        let unit = Rc::new(native_test_unit(vec![callee, caller]));
+        let mut vm = RegVm::new(Rc::clone(&unit), Vec::new(), HashMap::new());
+        vm.set_limits(VmLimits {
+            max_depth: 0,
+            ..VmLimits::default()
+        });
+        let caller = Rc::clone(&unit.functions[1]);
+        vm.prepare_frame(0, caller.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(41));
+
+        let error = vm
+            .run_jit(&unit, caller.as_ref(), 0)
+            .expect_err("an unframed pure leaf call is still a logical call");
+
+        assert!(matches!(
+            error,
+            EvalError::Runtime(message)
+                if message.contains("recursion depth limit exceeded (0 frames)")
+        ));
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_prefilter_keeps_scalar_replaceable_aggregates_for_translation() {
+        let variant_layout = native_test_layout("Boxed", &["value"]);
+        let struct_layout = native_test_layout("Pair", &["a", "b"]);
+        let functions = vec![
+            native_test_function(
+                "variant_hot",
+                1,
+                5,
+                vec![
+                    RegInstr::MakeVariant {
+                        dst: 1,
+                        layout: Rc::clone(&variant_layout),
+                        fields: vec![("value".to_string(), 0)],
+                    },
+                    RegInstr::MatchVariant {
+                        src: 1,
+                        expected: "Boxed".to_string(),
+                        match_ip: 2,
+                        else_ip: 4,
+                    },
+                    RegInstr::UnwrapVariantValue {
+                        dst: 2,
+                        src: 1,
+                        expected: "Boxed".to_string(),
+                    },
+                    RegInstr::Return { src: 2 },
+                    RegInstr::Return { src: 0 },
+                ],
+            ),
+            native_test_function(
+                "struct_hot",
+                1,
+                5,
+                vec![
+                    RegInstr::LoadInt { dst: 1, value: 3 },
+                    RegInstr::MakeStruct {
+                        dst: 2,
+                        layout: Rc::clone(&struct_layout),
+                        fields: vec![("a".to_string(), 0), ("b".to_string(), 1)],
+                    },
+                    RegInstr::GetFieldSlot {
+                        dst: 3,
+                        base: 2,
+                        slot: 0,
+                    },
+                    RegInstr::Return { src: 3 },
+                ],
+            ),
+        ];
+
+        mark_predictably_native_ineligible(&functions);
+
+        assert_eq!(
+            functions[0].native_status.get(),
+            0,
+            "scalar-replaceable variants must reach the real native translator",
+        );
+        assert_eq!(
+            functions[1].native_status.get(),
+            0,
+            "scalar-replaceable structs must reach the real native translator",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_prefilter_keeps_sinkable_closures_for_translation() {
+        let callee = native_test_function(
+            "mapper",
+            1,
+            3,
+            vec![
+                RegInstr::LoadInt { dst: 1, value: 1 },
+                RegInstr::AddInt {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                RegInstr::Return { src: 2 },
+            ],
+        );
+        let caller = native_test_function(
+            "closure_hot",
+            1,
+            3,
+            vec![
+                RegInstr::MakeClosure {
+                    dst: 1,
+                    function: 0,
+                    captures: Vec::new(),
+                },
+                RegInstr::CallClosure {
+                    dst: 2,
+                    closure: 1,
+                    args: vec![0],
+                    mut_args: Vec::new(),
+                },
+                RegInstr::Return { src: 2 },
+            ],
+        );
+        let functions = vec![callee, caller];
+
+        mark_predictably_native_ineligible(&functions);
+
+        assert_eq!(
+            functions[1].native_status.get(),
+            0,
+            "sinkable local closures must reach the real native translator",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_prefilter_marks_structurally_unsupported_functions_not_eligible() {
+        let functions = vec![native_test_function(
+            "build_list",
+            0,
+            2,
+            vec![
+                RegInstr::LoadInt { dst: 0, value: 1 },
+                RegInstr::MakeList {
+                    dst: 1,
+                    items: vec![0],
+                },
+                RegInstr::Return { src: 0 },
+            ],
+        )];
+
+        mark_predictably_native_ineligible(&functions);
+
+        assert_eq!(
+            functions[0].native_status.get(),
+            NATIVE_STATUS_NOT_ELIGIBLE,
+            "reachable heap construction cannot translate to the native read-only subset",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_prefilter_keeps_inlinable_callers_for_translation() {
+        let callee = native_test_function(
+            "clampish",
+            3,
+            3,
+            vec![
+                RegInstr::JumpIfIntCompare {
+                    lhs: 0,
+                    rhs: 1,
+                    op: RegIntCompare::Less,
+                    expected: true,
+                    target: 3,
+                },
+                RegInstr::JumpIfIntCompare {
+                    lhs: 0,
+                    rhs: 2,
+                    op: RegIntCompare::Greater,
+                    expected: true,
+                    target: 4,
+                },
+                RegInstr::Return { src: 0 },
+                RegInstr::Return { src: 1 },
+                RegInstr::Return { src: 2 },
+            ],
+        );
+        let caller = native_test_function(
+            "caller",
+            1,
+            4,
+            vec![
+                RegInstr::LoadInt { dst: 1, value: 0 },
+                RegInstr::LoadInt { dst: 2, value: 10 },
+                RegInstr::CallKnown {
+                    dst: 3,
+                    function: 0,
+                    args: vec![0, 1, 2],
+                    mut_args: Vec::new(),
+                },
+                RegInstr::Return { src: 3 },
+            ],
+        );
+        let functions = vec![callee, caller];
+
+        mark_predictably_native_ineligible(&functions);
+
+        assert_eq!(
+            functions[0].native_status.get(),
+            0,
+            "branchy scalar callees are still native-inlinable",
+        );
+        assert_eq!(
+            functions[1].native_status.get(),
+            0,
+            "callers that only leave the subset through an inlinable CallKnown must still reach the translator",
+        );
+    }
+
+    /// Execution spec §6.2 (Model A): native (Cranelift) code polls neither the
+    /// step budget nor the cancel flag, so dispatching to it while either is armed
+    /// would let a hot loop bypass the limit. `try_native` MUST refuse to dispatch
+    /// in that case and fall back to the ticking tier-0/interpreter path. The guard
+    /// is the very first thing in `try_native`, so it returns before any tiering or
+    /// stat bookkeeping — `considered`/`tier_deferred` stay at 0, proving the
+    /// function never even entered the native machinery.
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn try_native_refuses_dispatch_while_step_budget_armed() {
+        let mut vm = empty_vm();
+        // threshold 0 => without the gate this function would tier up on the first
+        // call; collect_stats so we can observe the native machinery never runs.
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.limits = VmLimits {
+            step_budget: Some(1_000),
+            ..VmLimits::default()
+        };
+        let func = RegFunction::placeholder("hot".to_string());
+        assert!(
+            matches!(vm.try_native(&func, 0), NativeAttempt::Fallback),
+            "an armed step_budget must make native dispatch refuse",
+        );
+        let stats = &vm.native.as_ref().unwrap().stats;
+        assert_eq!(stats.considered, 0, "gate must return before tiering");
+        assert_eq!(stats.tier_deferred, 0, "gate must return before tiering");
+        assert_eq!(stats.native_calls, 0);
+    }
+
+    /// Same gate for the ambient `cancel` hook: a watchdog flag that can fire mid-
+    /// run also makes native ineligible (it cannot poll the flag).
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn try_native_refuses_dispatch_while_cancel_armed() {
+        let mut vm = empty_vm();
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        vm.limits = VmLimits {
+            cancel: Some(Arc::new(AtomicBool::new(false))),
+            ..VmLimits::default()
+        };
+        let func = RegFunction::placeholder("hot".to_string());
+        assert!(
+            matches!(vm.try_native(&func, 0), NativeAttempt::Fallback),
+            "a present cancel hook must make native dispatch refuse",
+        );
+        assert_eq!(vm.native.as_ref().unwrap().stats.considered, 0);
+    }
+
+    /// Builds a structurally native-eligible unary function `f(x) = x + 1`. The
+    /// native type-predictor sees `x` combined with an `Int` via `AddInt`, so it
+    /// infers the parameter as `Int` and the function compiles. Calling it with a
+    /// non-`Int` (heap) argument therefore bails at the arg-marshal site on *every*
+    /// call. Used to exercise the predict-and-skip give-up path.
+    #[cfg(feature = "native-jit")]
+    fn always_arg_mismatch_func() -> RegFunction {
+        // reg 0 = param `x`; reg 1 = constant 1.
+        let code = vec![
+            RegInstr::LoadInt { dst: 1, value: 1 },
+            RegInstr::AddInt {
+                dst: 0,
+                lhs: 0,
+                rhs: 1,
+            },
+            RegInstr::Return { src: 0 },
+        ];
+        RegFunction {
+            name: "f".to_string(),
+            params: 1,
+            captures: 0,
+            regs: 2,
+            local_regs: HashMap::new(),
+            code,
+            jit_analysis: std::cell::Cell::new(None),
+            jit_self_recursion_kind: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
+            call_count: std::cell::Cell::new(0),
+            branch_count: std::cell::Cell::new(0),
+            profile: RefCell::new(None),
+            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
+        }
+    }
+
+    /// Predict-and-skip bail: a function that PASSES the
+    /// structural predictor (it compiles) but bails at runtime on *every* call must
+    /// not re-compile/marshal/bail forever. After `NATIVE_BAIL_GIVEUP_THRESHOLD`
+    /// consecutive bails the native tier gives up on that shape and negative-caches
+    /// its version, so costly marshalling failures plateau at the threshold even
+    /// though hot calls continue consulting the shape cache. Here the bail is an
+    /// arg-type mismatch (Int param, heap argument).
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_gives_up_after_consecutive_bails() {
+        let mut vm = empty_vm();
+        // threshold 0 => compile/attempt on the very first call; collect_stats so we
+        // can observe the attempt count.
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        let func = always_arg_mismatch_func();
+
+        // Place a heap (List) value in the function's single parameter register, so
+        // marshalling the `Int`-typed param fails on every native attempt.
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::List(Rc::new(RefCell::new(TypedVec::new()))));
+
+        const CALLS: usize = 50;
+        for _ in 1..=CALLS {
+            // Native is never chosen (it bails), so the result is always `None`
+            // (fall back to the interpreter).
+            assert!(
+                matches!(vm.try_native(&func, 0), NativeAttempt::Fallback),
+                "always-mismatching native call must bail to the interpreter",
+            );
+        }
+
+        assert_ne!(
+            func.native_status.get(),
+            NATIVE_STATUS_NOT_ELIGIBLE,
+            "runtime mismatch must not globally demote a structurally eligible function",
+        );
+
+        let stats = &vm.native.as_ref().unwrap().stats;
+        // The shape lookup is still considered on every hot call, but expensive
+        // marshalling failures plateau once the version is negative-cached.
+        assert_eq!(
+            stats.considered, CALLS as u64,
+            "hot calls still consult the bounded shape cache",
+        );
+        assert_eq!(
+            stats.arg_mismatch, NATIVE_BAIL_GIVEUP_THRESHOLD as u64,
+            "bail count must plateau at the give-up threshold",
+        );
+        let native = vm.native.as_ref().unwrap();
+        let version_key = NativeVersionKey {
+            function: &func as *const RegFunction as usize,
+            shape: ShapeKey::from_values([vm.reg(0)]),
+        };
+        assert_eq!(
+            native.cache.get(&version_key),
+            Some(&None),
+            "failing shape must be negative-cached on give-up",
+        );
+    }
+
+    /// A native-eligible function `f(x) = { let a = x + 1; return a * a }`. The
+    /// `MulInt` overflows i64 for a large `x`, so native bails inside that guard —
+    /// a REAL, mapped safepoint *after* `a` (reg 1) has been computed. `a` is a
+    /// non-param live register, so the J0.2 precise path must restore it and
+    /// resume AT the multiply.
+    #[cfg(feature = "native-jit")]
+    fn add_then_square_func() -> RegFunction {
+        // reg 0 = param `x`; reg 1 = const 1 then `a = x + 1`; reg 2 = `a * a`.
+        let code = vec![
+            RegInstr::LoadInt { dst: 1, value: 1 },
+            RegInstr::AddInt {
+                dst: 1,
+                lhs: 0,
+                rhs: 1,
+            },
+            RegInstr::MulInt {
+                dst: 2,
+                lhs: 1,
+                rhs: 1,
+            },
+            RegInstr::Return { src: 2 },
+        ];
+        RegFunction {
+            name: "f".to_string(),
+            params: 1,
+            captures: 0,
+            regs: 3,
+            local_regs: HashMap::new(),
+            code,
+            jit_analysis: std::cell::Cell::new(None),
+            jit_self_recursion_kind: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
+            call_count: std::cell::Cell::new(0),
+            branch_count: std::cell::Cell::new(0),
+            profile: RefCell::new(None),
+            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
+        }
+    }
+
+    /// J0.2 white-box: with `precise_deopt` on, a real native guard bail must
+    /// return [`NativeAttempt::Resumed`], set the active frame's `ip` to the
+    /// bailing instruction's `resume_ip`, and reconstruct the captured non-param
+    /// live registers into the window (params are left untouched). This is the
+    /// mechanical proof that resume-at-safepoint engages (a black-box output test
+    /// can't distinguish it from re-run-from-top, since the subset is
+    /// side-effect-free and both produce the same value by design).
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn precise_deopt_resumes_at_safepoint_and_restores_live_regs() {
+        let mut vm = empty_vm();
+        // threshold 0 => compile/attempt on the first call; precise_deopt on.
+        vm.native = Some(
+            NativeState::new_with_opt(0, false, true, false, true, false, false)
+                .expect("native module"),
+        );
+        let func = Rc::new(add_then_square_func());
+
+        // Window at base 0; push an active frame so the precise path can set its
+        // `ip`. A large `x` makes `a * a` overflow i64 → real guard bail.
+        let big: i64 = 4_000_000_000;
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(big));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        let outcome = vm.try_native(&func, 0);
+        assert!(
+            matches!(outcome, NativeAttempt::Resumed),
+            "a real guard bail under precise_deopt must resume at the safepoint",
+        );
+
+        // The frame ip must now be the bailing instruction's resume_ip: the
+        // `MulInt` at code index 2.
+        let frame_ip = vm.frames.last().expect("frame").ip;
+        assert_eq!(
+            frame_ip, 2,
+            "frame ip must be set to the bailing instruction's resume_ip (the MulInt)",
+        );
+
+        // The non-param live register `a` (reg 1) must be reconstructed to the
+        // native-computed `x + 1`; the param (reg 0) is left as the window held it.
+        assert_eq!(
+            *vm.reg(1),
+            VmValue::Int(big + 1),
+            "non-param live register must be restored from the captured deopt value",
+        );
+        assert_eq!(
+            *vm.reg(0),
+            VmValue::Int(big),
+            "param register must be left untouched by precise reconstruction",
+        );
+    }
+
+    /// B2 (FIXED by J0.1 heap-aware deopt state maps): the reg VM binds params as
+    /// locals, so `n = n + 1` rewrites the param register. A native scalar function
+    /// that REASSIGNS a param still live at a safepoint must, on precise deopt, restore
+    /// the param to its native-computed value. The deopt state map distinguishes
+    /// reconstructible scalars (`Int`/`Float`) from heap refs (`Handle`/`FlatInt`/
+    /// `FlatFloat`): `decode_deopt_live` drops the latter (the frame already holds
+    /// their `VmValue`), so `restore_native_deopt_live_regs` can restore ALL scalar
+    /// regs — params included — without the old `< n_params` skip that lost reassigned
+    /// scalar params. (Skipping only `Handle` and not `FlatInt`/`FlatFloat` corrupts
+    /// flat-buffer params — see `native_heap_reads`/`tv2_direct_flat_reads`.)
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn precise_deopt_restores_reassigned_scalar_param() {
+        let big: i64 = 4_000_000_000;
+        // reg 0 = param x (runtime `big`); reg 0 = x + 1 (REASSIGN, live past the
+        // safepoint); reg 2 = reg0 * reg0 -> runtime overflow guard bail; reg 2 =
+        // reg0 + reg2 keeps reg 0 live at the MulInt safepoint.
+        let func = Rc::new(native_test_function(
+            "reassign",
+            1,
+            3,
+            vec![
+                RegInstr::LoadInt { dst: 1, value: 1 },
+                RegInstr::AddInt {
+                    dst: 0,
+                    lhs: 0,
+                    rhs: 1,
+                },
+                RegInstr::MulInt {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 0,
+                },
+                RegInstr::AddInt {
+                    dst: 2,
+                    lhs: 0,
+                    rhs: 2,
+                },
+                RegInstr::Return { src: 2 },
+            ],
+        ));
+        let mut vm = empty_vm();
+        vm.native = Some(
+            NativeState::new_with_opt(0, false, true, false, true, false, false)
+                .expect("native module"),
+        );
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(big));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        let outcome = vm.try_native(&func, 0);
+        assert!(
+            matches!(outcome, NativeAttempt::Resumed),
+            "the overflow guard must precisely resume",
+        );
+        assert_eq!(
+            *vm.reg(0),
+            VmValue::Int(big + 1),
+            "a reassigned scalar param must be restored to its native-computed value \
+             (big + 1), not the stale call-time `big`",
+        );
+    }
+
+    /// Staged native-call ABI: when a scalar native callee deopts, RSScript must
+    /// reconstruct the logical caller+callee interpreter frames instead of
+    /// resuming at the caller's `CallKnown` site or falling back from the top.
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn precise_deopt_with_child_native_frame_resumes_child_safepoint() {
+        let child = add_then_square_func();
+        let caller = native_test_function(
+            "caller",
+            1,
+            2,
+            vec![
+                RegInstr::CallKnown {
+                    dst: 1,
+                    function: 0,
+                    args: vec![0],
+                    mut_args: Vec::new(),
+                },
+                RegInstr::Return { src: 1 },
+            ],
+        );
+        let unit = Rc::new(native_test_unit(vec![child, caller]));
+        let caller = Rc::clone(&unit.functions[1]);
+
+        let mut vm = RegVm::new(Rc::clone(&unit), Vec::new(), HashMap::new());
+        vm.native = Some(
+            NativeState::new_with_opt(0, false, true, false, true, false, false)
+                .expect("native module"),
+        );
+
+        let big: i64 = 4_000_000_000;
+        vm.prepare_frame(0, caller.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(big));
+        vm.push_frame(Frame {
+            func: Rc::clone(&caller),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        let outcome = vm.try_native(&caller, 0);
+        assert!(
+            matches!(outcome, NativeAttempt::Resumed),
+            "nested native callee deopt must reconstruct the interpreter frame chain",
+        );
+        assert_eq!(
+            vm.frames.len(),
+            2,
+            "resume should leave caller suspended below the deopted child frame",
+        );
+        assert_eq!(
+            vm.frames[0].ip, 1,
+            "caller frame should resume after its CallKnown once the child returns",
+        );
+        assert_eq!(
+            vm.frames[1].ip, 2,
+            "child frame should resume at the overflowing MulInt safepoint",
+        );
+        assert_eq!(
+            *vm.reg(caller.regs + 1),
+            VmValue::Int(big + 1),
+            "child non-param live register should be restored from the nested payload",
+        );
+
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert_eq!(stats.native_bails, 1);
+        assert_eq!(
+            stats.native_child_bails, 1,
+            "nested callee deopt should be visible in native telemetry",
+        );
+        assert_eq!(
+            stats.native_child_resumes, 1,
+            "nested callee deopt should be counted as a frame-chain resume",
+        );
+        assert!(
+            stats.native_call_edges >= 1,
+            "caller should compile with a native-to-native edge, stats={stats:?}",
+        );
+    }
+
+    /// Staged native-call ABI: a nested native call chain must preserve the full
+    /// deopt frame chain, not just the first child frame. This pins the RSScript
+    /// embedding of vm-jit's nested `DeoptFrame` payloads.
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn precise_deopt_with_nested_child_native_frames_resumes_leaf_safepoint() {
+        let leaf = add_then_square_func();
+        let middle = native_test_function(
+            "middle",
+            1,
+            3,
+            vec![
+                RegInstr::CallKnown {
+                    dst: 2,
+                    function: 0,
+                    args: vec![0],
+                    mut_args: Vec::new(),
+                },
+                RegInstr::Return { src: 2 },
+            ],
+        );
+        let top = native_test_function(
+            "top",
+            1,
+            2,
+            vec![
+                RegInstr::CallKnown {
+                    dst: 1,
+                    function: 1,
+                    args: vec![0],
+                    mut_args: Vec::new(),
+                },
+                RegInstr::Return { src: 1 },
+            ],
+        );
+        let unit = Rc::new(native_test_unit(vec![leaf, middle, top]));
+        let top = Rc::clone(&unit.functions[2]);
+
+        let mut vm = RegVm::new(Rc::clone(&unit), Vec::new(), HashMap::new());
+        vm.native = Some(
+            NativeState::new_with_opt(0, false, true, false, true, false, false)
+                .expect("native module"),
+        );
+
+        let big: i64 = 4_000_000_000;
+        vm.prepare_frame(0, top.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(big));
+        vm.push_frame(Frame {
+            func: Rc::clone(&top),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        let outcome = vm.try_native(&top, 0);
+        assert!(
+            matches!(outcome, NativeAttempt::Resumed),
+            "nested native leaf deopt must reconstruct all interpreter frames",
+        );
+        assert_eq!(
+            vm.frames.len(),
+            3,
+            "resume should leave top, middle, and deopted leaf frames",
+        );
+        assert_eq!(
+            vm.frames[0].ip, 1,
+            "top frame should resume after its CallKnown once middle returns",
+        );
+        assert_eq!(
+            vm.frames[1].ip, 1,
+            "middle frame should resume after its CallKnown once leaf returns",
+        );
+        assert_eq!(
+            vm.frames[2].ip, 2,
+            "leaf frame should resume at the overflowing MulInt safepoint",
+        );
+
+        let leaf_base = top.regs + unit.functions[1].regs;
+        assert_eq!(
+            *vm.reg(leaf_base + 1),
+            VmValue::Int(big + 1),
+            "leaf non-param live register should be restored from the nested payload",
+        );
+
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert_eq!(stats.native_bails, 1);
+        assert_eq!(
+            stats.native_child_bails, 1,
+            "nested leaf deopt should be visible in native telemetry",
+        );
+        assert_eq!(
+            stats.native_child_resumes, 1,
+            "nested leaf deopt should be counted as one frame-chain resume",
+        );
+        assert!(
+            stats.native_call_edges >= 2 && stats.native_call_depth_max >= 2,
+            "top should compile as a nested native-call chain, stats={stats:?}",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_deopt_every_env_parser_is_fail_closed() {
+        assert!(!jit_native_deopt_every_from_env_value(None));
+        assert!(!jit_native_deopt_every_from_env_value(Some("")));
+        assert!(!jit_native_deopt_every_from_env_value(Some("0")));
+        assert!(!jit_native_deopt_every_from_env_value(Some("false")));
+        assert!(!jit_native_deopt_every_from_env_value(Some("FALSE")));
+        assert!(jit_native_deopt_every_from_env_value(Some("1")));
+        assert!(jit_native_deopt_every_from_env_value(Some("true")));
+        assert!(jit_native_deopt_every_from_env_value(Some("yes")));
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn forced_native_safepoints_match_interpreter_output() {
+        let source = r#"
+fn calc(x: Int) -> Int {
+    let a = x + 1
+    let b = a * 3
+    let c = b / 2
+    return c + a
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: calc(x: read 7)))
+    return Unit
+}
+"#;
+        let expected = reg_vm_eval_source_main_with_args(
+            "forced-safepoint.rss",
+            source,
+            std::iter::empty::<&str>(),
+        )
+        .expect("interpreter");
+        for safepoint in 1..=4 {
+            let actual = reg_vm_eval_source_main_native_force_safepoint(
+                "forced-safepoint.rss",
+                source,
+                std::iter::empty::<&str>(),
+                safepoint,
+            )
+            .unwrap_or_else(|error| panic!("forced safepoint {safepoint} failed: {error:?}"));
+            assert_eq!(
+                actual.stdout, expected.stdout,
+                "forced safepoint {safepoint} must preserve observable output",
+            );
+            assert_eq!(
+                actual.value, expected.value,
+                "forced safepoint {safepoint} must preserve main value",
+            );
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn forced_all_native_safepoints_match_interpreter_output() {
+        let source = r#"
+fn calc(x: Int) -> Int {
+    let a = x + 1
+    let b = a * 3
+    let c = b / 2
+    return c + a
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: calc(x: read 7)))
+    return Unit
+}
+"#;
+        let expected = reg_vm_eval_source_main_with_args(
+            "forced-all-safepoints.rss",
+            source,
+            std::iter::empty::<&str>(),
+        )
+        .expect("interpreter");
+        let actual = reg_vm_eval_source_main_native_force_all_safepoints(
+            "forced-all-safepoints.rss",
+            source,
+            std::iter::empty::<&str>(),
+        )
+        .expect("native deopt-every-safepoint run");
+        assert_eq!(
+            actual.stdout, expected.stdout,
+            "deopt-every-safepoint mode must preserve observable stdout",
+        );
+        assert_eq!(
+            actual.value, expected.value,
+            "deopt-every-safepoint mode must preserve main value",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn forced_child_native_safepoint_resumes_and_returns_through_caller() {
+        let source = r#"
+fn child(x: Int) -> Int {
+    let a = x + 1
+    return a * a
+}
+
+fn caller(x: Int) -> Int {
+    return child(x: read x) + 1
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: caller(x: read 4)))
+    return Unit
+}
+"#;
+        let expected = reg_vm_eval_source_main_with_args(
+            "forced-child-safepoint.rss",
+            source,
+            std::iter::empty::<&str>(),
+        )
+        .expect("interpreter");
+        let actual = reg_vm_eval_source_main_native_force_safepoint(
+            "forced-child-safepoint.rss",
+            source,
+            std::iter::empty::<&str>(),
+            2,
+        )
+        .expect("native precise child safepoint");
+        assert_eq!(actual.stdout, "26\n");
+        assert_eq!(
+            actual.stdout, expected.stdout,
+            "child-frame precise deopt must resume, return into caller, and preserve stdout",
+        );
+        assert_eq!(
+            actual.value, expected.value,
+            "child-frame precise deopt must preserve main value",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn forced_all_native_safepoints_exercises_child_native_deopt() {
+        let source = r#"
+fn child(x: Int) -> Int {
+    let a = x + 1
+    return a * a
+}
+
+fn caller(x: Int) -> Int {
+    return child(x: read x)
+}
+
+fn main() -> Unit {
+    Log.write(message: read String.from_int(value: caller(x: read 4)))
+    return Unit
+}
+"#;
+        let expected = reg_vm_eval_source_main_with_args(
+            "forced-all-child-safepoint.rss",
+            source,
+            std::iter::empty::<&str>(),
+        )
+        .expect("interpreter");
+        let executable =
+            reg_vm_compile_source("forced-all-child-safepoint.rss", source).expect("compile");
+        let (actual, stats) = executable
+            .eval_main_with_args_native_inner(
+                std::iter::empty::<&str>(),
+                0,
+                false,
+                true,
+                true,
+                false,
+                None,
+                true,
+            )
+            .expect("native deopt-every child call");
+
+        assert_eq!(actual.stdout, "25\n");
+        assert_eq!(
+            actual.stdout, expected.stdout,
+            "deopt-every-safepoint mode must preserve stdout through a child native call",
+        );
+        assert_eq!(
+            actual.value, expected.value,
+            "deopt-every-safepoint mode must preserve main value through a child native call",
+        );
+        assert!(
+            stats.native_call_edges >= 1 && stats.native_child_bails >= 1,
+            "test must exercise a native-to-native child deopt, stats={stats:?}",
+        );
+        assert!(
+            stats.native_child_resumes >= 1,
+            "child deopt should resume through the native frame chain, stats={stats:?}",
+        );
+    }
+
+    /// Flag-off default: the SAME real guard bail must take the safe fallback
+    /// (re-run-from-top), leaving the frame `ip` at 0 — byte-identical to today.
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn deopt_without_precise_flag_falls_back_from_top() {
+        let mut vm = empty_vm();
+        // precise_deopt OFF (the last arg).
+        vm.native = Some(
+            NativeState::new_with_opt(0, false, true, false, false, false, false)
+                .expect("native module"),
+        );
+        let func = Rc::new(add_then_square_func());
+
+        let big: i64 = 4_000_000_000;
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(big));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        let outcome = vm.try_native(&func, 0);
+        assert!(
+            matches!(outcome, NativeAttempt::Fallback),
+            "with the flag off, a guard bail must fall back to re-run-from-top",
+        );
+        assert_eq!(
+            vm.frames.last().expect("frame").ip,
+            0,
+            "fallback must leave the frame ip at 0 (re-run from the top)",
+        );
+    }
+
+    /// A native pass-through `fn id(xs) { let _ = List.len(xs); return xs }`: the
+    /// `ListLen` types `xs` (reg 0) as a `Handle` parameter, and the function returns
+    /// that handle unchanged. This is the original heap-result pass-through
+    /// producer: NO allocation and NO mutation (native just returns a value it was
+    /// given). `dst` reg 1 holds the (discarded) length.
+    #[cfg(feature = "native-jit")]
+    fn list_passthrough_func() -> RegFunction {
+        let code = vec![
+            RegInstr::ListLen { dst: 1, list: 0 },
+            RegInstr::Return { src: 0 },
+        ];
+        RegFunction {
+            name: "id".to_string(),
+            params: 1,
+            captures: 0,
+            regs: 2,
+            local_regs: HashMap::new(),
+            code,
+            jit_analysis: std::cell::Cell::new(None),
+            jit_self_recursion_kind: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
+            call_count: std::cell::Cell::new(0),
+            branch_count: std::cell::Cell::new(0),
+            profile: RefCell::new(None),
+            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    fn string_from_int_return_func() -> RegFunction {
+        let code = vec![
+            RegInstr::CallIntrinsic {
+                intrinsic: RegIntrinsic::StringFromInt,
+                args: vec![0],
+                dst: 1,
+            },
+            RegInstr::Return { src: 1 },
+        ];
+        RegFunction {
+            name: "to_string".to_string(),
+            params: 1,
+            captures: 0,
+            regs: 2,
+            local_regs: HashMap::new(),
+            code,
+            jit_analysis: std::cell::Cell::new(None),
+            jit_self_recursion_kind: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
+            call_count: std::cell::Cell::new(0),
+            branch_count: std::cell::Cell::new(0),
+            profile: RefCell::new(None),
+            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    fn string_from_int_len_func() -> RegFunction {
+        let code = vec![
+            RegInstr::CallIntrinsic {
+                intrinsic: RegIntrinsic::StringFromInt,
+                args: vec![0],
+                dst: 1,
+            },
+            RegInstr::CallIntrinsic {
+                intrinsic: RegIntrinsic::StringLen,
+                args: vec![1],
+                dst: 2,
+            },
+            RegInstr::Return { src: 2 },
+        ];
+        RegFunction {
+            name: "to_string_len".to_string(),
+            params: 1,
+            captures: 0,
+            regs: 3,
+            local_regs: HashMap::new(),
+            code,
+            jit_analysis: std::cell::Cell::new(None),
+            jit_self_recursion_kind: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
+            call_count: std::cell::Cell::new(0),
+            branch_count: std::cell::Cell::new(0),
+            profile: RefCell::new(None),
+            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
+        }
+    }
+
+    #[cfg(feature = "native-jit")]
+    fn string_concat_len_func() -> RegFunction {
+        let code = vec![
+            RegInstr::CallIntrinsic {
+                intrinsic: RegIntrinsic::StringFromInt,
+                args: vec![1],
+                dst: 2,
+            },
+            RegInstr::StringConcat {
+                dst: 3,
+                left: 0,
+                right: 2,
+            },
+            RegInstr::CallIntrinsic {
+                intrinsic: RegIntrinsic::StringLen,
+                args: vec![3],
+                dst: 4,
+            },
+            RegInstr::Return { src: 4 },
+        ];
+        RegFunction {
+            name: "concat_len".to_string(),
+            params: 2,
+            captures: 0,
+            regs: 5,
+            local_regs: HashMap::new(),
+            code,
+            jit_analysis: std::cell::Cell::new(None),
+            jit_self_recursion_kind: std::cell::Cell::new(None),
+            native_status: std::cell::Cell::new(0),
+            call_count: std::cell::Cell::new(0),
+            branch_count: std::cell::Cell::new(0),
+            profile: RefCell::new(None),
+            osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
+        }
+    }
+
+    /// Heap-result return ABI pass-through: a native function that returns a heap
+    /// PARAMETER unchanged produces the interpreter-identical heap value, while the
+    /// output table remains a clean per-call scratch area. Also asserts both tables
+    /// are cleared on exit — the §7.2 invariant.
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_heap_result_passthrough_round_trips() {
+        let mut vm = empty_vm();
+        // threshold 0 => compile/attempt on the first call.
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        let func = Rc::new(list_passthrough_func());
+
+        // Distinct list value so identity is observable through the round-trip.
+        let list: Rc<RefCell<TypedVec>> = Rc::new(RefCell::new(TypedVec::from_values(vec![
+            VmValue::Int(11),
+            VmValue::Int(22),
+            VmValue::Int(33),
+        ])));
+        let arg = VmValue::List(Rc::clone(&list));
+
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, arg.clone());
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        let outcome = vm.try_native(&func, 0);
+        match outcome {
+            NativeAttempt::Completed(value) => {
+                // The native result must equal the interpreter's: the same list (same
+                // backing `Rc`, same contents).
+                match value {
+                    VmValue::List(got) => {
+                        assert!(
+                            Rc::ptr_eq(&got, &list),
+                            "pass-through must return the SAME backing list",
+                        );
+                        assert_eq!(
+                            got.borrow().len(),
+                            3,
+                            "round-tripped list must have its original contents",
+                        );
+                    }
+                    other => panic!("expected a List result, got {other:?}"),
+                }
+            }
+            NativeAttempt::Resumed => {
+                panic!("pass-through must complete with a heap result, got Resumed")
+            }
+            NativeAttempt::Fallback => {
+                panic!("pass-through must complete with a heap result, got Fallback")
+            }
+        }
+
+        // §7.2 invariant: the output table is cleared on EVERY exit, so nothing is
+        // retained past the call (and the input table too).
+        JIT_CALL_CTX.with(|ctx| {
+            assert!(
+                ctx.borrow().heap_results.is_empty(),
+                "output table must be cleared on exit"
+            )
+        });
+        JIT_CALL_CTX.with(|ctx| {
+            assert!(
+                ctx.borrow().heap_args.is_empty(),
+                "input table must be cleared on exit"
+            )
+        });
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_heap_transaction_commits_clean_handle_result() {
+        let mut tx = JitHeapTransactionGuard::begin();
+
+        let handle = rss_jit_string_from_int(JitCallCtx::active_token(), 42);
+        JIT_CALL_CTX.with(|ctx| {
+            assert_eq!(
+                ctx.borrow().heap_results.len(),
+                1,
+                "helper allocation should be staged before commit"
+            )
+        });
+
+        match tx.commit_handle_with_writebacks(handle, &[]) {
+            Some((VmValue::String(value), writebacks)) => {
+                assert_eq!(&*value, "42");
+                assert!(writebacks.is_empty());
+            }
+            Some((other, _)) => panic!("expected committed String result, got {other:?}"),
+            None => panic!("expected staged handle to commit"),
+        }
+        JIT_CALL_CTX.with(|ctx| {
+            assert!(
+                ctx.borrow().heap_results.is_empty(),
+                "commit must clear staged heap results"
+            )
+        });
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_heap_transaction_abort_discards_staged_helper_result() {
+        {
+            let mut tx = JitHeapTransactionGuard::begin();
+
+            let handle = rss_jit_string_from_int(JitCallCtx::active_token(), 7);
+            assert!(
+                handle < 0,
+                "heap-producing helper should return an output-table handle"
+            );
+            JIT_CALL_CTX.with(|ctx| {
+                assert_eq!(
+                    ctx.borrow().heap_results.len(),
+                    1,
+                    "helper allocation should be staged before abort"
+                )
+            });
+
+            tx.abort();
+        }
+
+        JIT_CALL_CTX.with(|ctx| {
+            assert!(
+                ctx.borrow().heap_results.is_empty(),
+                "abort must discard staged helper allocations"
+            )
+        });
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_helpers_fail_closed_outside_active_call_context() {
+        {
+            let _heap_guard = JitCallCtxGuard::enter();
+            JitCallCtx::push_heap_arg(VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
+                vec![VmValue::Int(1), VmValue::Int(2)],
+            )))));
+            assert_eq!(rss_jit_list_len(JitCallCtx::active_token(), 0), 2);
+        }
+
+        JIT_CALL_CTX.with(|ctx| {
+            let ctx = ctx.borrow();
+            assert_eq!(
+                ctx.active_depth, 0,
+                "test should be outside a native context"
+            );
+            assert!(
+                ctx.heap_args.is_empty(),
+                "dropping the call guard must clear heap inputs",
+            );
+        });
+
+        assert_eq!(
+            rss_jit_list_len(JitCallCtx::active_token(), 0),
+            0,
+            "a helper read outside an active native context must fail closed",
+        );
+        assert_eq!(
+            rss_jit_string_from_int(JitCallCtx::active_token(), 7),
+            0,
+            "a helper allocation outside an active native context must not stage output",
+        );
+        assert_eq!(
+            rss_jit_list_set_int(JitCallCtx::active_token(), 0, 0, 99),
+            0,
+            "a mutating helper outside an active native context must fail closed",
+        );
+        JIT_CALL_CTX.with(|ctx| {
+            assert!(
+                ctx.borrow().heap_results.is_empty(),
+                "inactive helper allocation must not leave staged heap output",
+            );
+        });
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_helpers_reject_wrong_active_context_token() {
+        let _heap_guard = JitCallCtxGuard::enter();
+        let list = Rc::new(RefCell::new(TypedVec::from_values(vec![
+            VmValue::Int(1),
+            VmValue::Int(2),
+        ])));
+        JitCallCtx::push_heap_arg(VmValue::List(Rc::clone(&list)));
+
+        let token = JitCallCtx::active_token();
+        assert_ne!(token, 0);
+        assert_eq!(rss_jit_list_len(token, 0), 2);
+
+        let wrong_token = token.wrapping_add(1).max(1);
+        assert_ne!(wrong_token, token);
+        assert_eq!(
+            rss_jit_list_len(wrong_token, 0),
+            0,
+            "a helper read with the wrong active token must fail closed",
+        );
+        assert_eq!(
+            rss_jit_list_set_int(wrong_token, 0, 0, 99),
+            0,
+            "a mutating helper with the wrong active token must fail closed",
+        );
+        assert_eq!(
+            list.borrow().get(0),
+            Some(VmValue::Int(1)),
+            "wrong-token mutation must not reach the list",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_heap_transaction_abort_restores_list_set_int_write() {
+        let mut values = Vec::with_capacity(32);
+        values.extend([1, 2, 3]);
+        let list: Rc<RefCell<TypedVec>> = Rc::new(RefCell::new(TypedVec::Ints(values)));
+        let original_capacity = match &*list.borrow() {
+            TypedVec::Ints(values) => values.capacity(),
+            _ => unreachable!(),
+        };
+        let _heap_guard = JitCallCtxGuard::enter();
+        JitCallCtx::push_heap_arg(VmValue::List(Rc::clone(&list)));
+
+        let mut tx = JitHeapTransactionGuard::begin();
+        assert_eq!(
+            rss_jit_list_set_int(JitCallCtx::active_token(), 0, 1, 99),
+            0
+        );
+        assert_eq!(
+            list.borrow().get(1),
+            Some(VmValue::Int(99)),
+            "native helper should mutate during the transaction"
+        );
+
+        tx.abort();
+        assert_eq!(
+            list.borrow().get(1),
+            Some(VmValue::Int(2)),
+            "abort should restore the pre-native list contents"
+        );
+        let mut restored = list.borrow_mut();
+        let restored_capacity = match &*restored {
+            TypedVec::Ints(values) => values.capacity(),
+            _ => unreachable!(),
+        };
+        assert_eq!(restored_capacity, original_capacity);
+        assert_eq!(
+            restored.checked_push_accounted(VmValue::Int(4)),
+            Ok(0),
+            "interpreter replay must retain spare capacity and avoid a false growth charge",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_snapshot_refuses_inactive_call_context() {
+        let list: Rc<RefCell<TypedVec>> = Rc::new(RefCell::new(TypedVec::from_values(vec![
+            VmValue::Int(1),
+            VmValue::Int(2),
+        ])));
+
+        JIT_CALL_CTX.with(|ctx| {
+            assert_eq!(
+                ctx.borrow().active_depth,
+                0,
+                "test should start outside a native context"
+            );
+        });
+        assert!(
+            !jit_snapshot_list_before_write(0, &list),
+            "snapshot registration must fail closed outside a native call frame",
+        );
+        JIT_HEAP_WRITE_UNDO.with(|undo| {
+            assert!(
+                undo.borrow().is_empty(),
+                "inactive snapshot attempts must not create undo entries",
+            );
+        });
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_heap_transaction_abort_restores_direct_flat_int_write() {
+        let list: Rc<RefCell<TypedVec>> = Rc::new(RefCell::new(TypedVec::from_values(vec![
+            VmValue::Int(1),
+            VmValue::Int(2),
+            VmValue::Int(3),
+        ])));
+
+        let mut tx = JitHeapTransactionGuard::begin();
+        assert!(
+            jit_snapshot_list_before_write(0, &list),
+            "direct flat writes must be journaled inside a native transaction",
+        );
+        {
+            let mut borrowed = list.borrow_mut();
+            let slice = borrowed
+                .as_ints_mut_slice()
+                .expect("test list should use flat Int storage");
+            assert_eq!(slice.len(), 3);
+            slice[1] = 99;
+        }
+        assert_eq!(
+            list.borrow().get(1),
+            Some(VmValue::Int(99)),
+            "direct native write should mutate during the transaction"
+        );
+
+        tx.abort();
+        assert_eq!(
+            list.borrow().get(1),
+            Some(VmValue::Int(2)),
+            "abort should restore direct flat-list writes"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn precise_deopt_after_native_heap_write_falls_back_from_top() {
+        let mut vm = empty_vm();
+        vm.native = Some(
+            NativeState::new_with_opt(0, false, true, false, true, false, false)
+                .expect("native module"),
+        );
+        let func = Rc::new(native_test_function(
+            "write_then_overflow",
+            1,
+            5,
+            vec![
+                RegInstr::LoadInt { dst: 1, value: 0 },
+                RegInstr::LoadInt { dst: 2, value: 99 },
+                RegInstr::ListSet {
+                    dst: 3,
+                    list: 0,
+                    index: 1,
+                    value: 2,
+                },
+                RegInstr::LoadInt {
+                    dst: 4,
+                    value: i64::MAX,
+                },
+                RegInstr::AddInt {
+                    dst: 4,
+                    lhs: 4,
+                    rhs: 2,
+                },
+                RegInstr::Return { src: 4 },
+            ],
+        ));
+        let list: Rc<RefCell<TypedVec>> =
+            Rc::new(RefCell::new(TypedVec::from_values(vec![VmValue::Int(1)])));
+
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::List(Rc::clone(&list)));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        let outcome = vm.try_native(&func, 0);
+        assert!(
+            matches!(outcome, NativeAttempt::Fallback),
+            "a guard bail after a native heap write must re-run from the top, not precise-resume",
+        );
+        assert_eq!(
+            vm.frames.last().expect("frame").ip,
+            0,
+            "fallback path must leave the interpreter at the function entry",
+        );
+        assert_eq!(
+            list.borrow().get(0),
+            Some(VmValue::Int(1)),
+            "heap transaction abort must restore the native write before fallback",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn flat_int_mut_alias_detects_list_hidden_inside_heap_input() {
+        let list: Rc<RefCell<TypedVec>> =
+            Rc::new(RefCell::new(TypedVec::from_values(vec![VmValue::Int(1)])));
+        let layout = native_test_layout("Box", &["items"]);
+        let heap_input = VmValue::Struct(Rc::new(VmStruct::with_layout(
+            layout,
+            vec![VmValue::List(Rc::clone(&list))],
+        )));
+        let _heap_guard = JitCallCtxGuard::enter();
+        JitCallCtx::push_heap_arg(heap_input);
+
+        assert!(
+            jit_heap_inputs_alias_flat_mut(&[(0, 0)], &[Rc::clone(&list)]),
+            "a handle input containing the same list Rc as a FlatIntMut arg must force fallback",
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_string_from_int_return_allocates_heap_result() {
+        let mut vm = empty_vm();
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        let func = Rc::new(string_from_int_return_func());
+
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(42));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        match vm.try_native(&func, 0) {
+            NativeAttempt::Completed(VmValue::String(value)) => assert_eq!(&*value, "42"),
+            NativeAttempt::Completed(_) => panic!("expected native String(\"42\") completion"),
+            NativeAttempt::Resumed => panic!("expected native completion, got Resumed"),
+            NativeAttempt::Fallback => panic!("expected native completion, got Fallback"),
+        }
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert_eq!(
+            stats.translated, 1,
+            "function should translate to native IR"
+        );
+        assert_eq!(
+            stats.native_calls, 1,
+            "function should complete in native code"
+        );
+        JIT_CALL_CTX.with(|ctx| {
+            assert!(
+                ctx.borrow().heap_results.is_empty(),
+                "output table must be cleared after materialization"
+            )
+        });
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_string_from_int_handle_feeds_string_len() {
+        let mut vm = empty_vm();
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        let func = Rc::new(string_from_int_len_func());
+
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::Int(12345));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        match vm.try_native(&func, 0) {
+            NativeAttempt::Completed(VmValue::Int(value)) => assert_eq!(value, 5),
+            NativeAttempt::Completed(_) => panic!("expected native Int length completion"),
+            NativeAttempt::Resumed => panic!("expected native completion, got Resumed"),
+            NativeAttempt::Fallback => panic!("expected native completion, got Fallback"),
+        }
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert_eq!(
+            stats.translated, 1,
+            "function should translate to native IR"
+        );
+        assert_eq!(
+            stats.native_calls, 1,
+            "function should complete in native code"
+        );
+    }
+
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_string_concat_handle_feeds_string_len() {
+        let mut vm = empty_vm();
+        vm.native = Some(NativeState::new(0, false, true).expect("native module"));
+        let func = Rc::new(string_concat_len_func());
+
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::string("item-"));
+        vm.set_reg(1, VmValue::Int(42));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        match vm.try_native(&func, 0) {
+            NativeAttempt::Completed(VmValue::Int(value)) => assert_eq!(value, 7),
+            NativeAttempt::Completed(_) => panic!("expected native Int length completion"),
+            NativeAttempt::Resumed => panic!("expected native completion, got Resumed"),
+            NativeAttempt::Fallback => panic!("expected native completion, got Fallback"),
+        }
+        let stats = &vm.native.as_ref().expect("native").stats;
+        assert_eq!(
+            stats.translated, 1,
+            "function should translate to native IR"
+        );
+        assert_eq!(
+            stats.native_calls, 1,
+            "function should complete in native code"
+        );
+        assert_eq!(
+            stats.native_bails, 0,
+            "concat helper should not force a native bail"
+        );
+    }
+
+    /// §7.2 force-deopt twin: the SAME pass-through under the force-bail backend must
+    /// `Fallback` (bail at entry) — NOT produce a heap result — and leave the output
+    /// table empty. The interpreter re-run is then the sole source of the value, so
+    /// the bailed native attempt has no observable effect (no leaked/double-
+    /// materialized heap result). This is the mechanical proof of the §7.2 argument
+    /// for the new return ABI.
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_heap_result_force_deopt_leaves_output_table_empty() {
+        let mut vm = empty_vm();
+        // force_bail = true: pretend native bailed at its first guard (entry).
+        vm.native = Some(NativeState::new(0, true, true).expect("native module"));
+        let func = Rc::new(list_passthrough_func());
+
+        let list: Rc<RefCell<TypedVec>> =
+            Rc::new(RefCell::new(TypedVec::from_values(vec![VmValue::Int(7)])));
+
+        vm.prepare_frame(0, func.regs).expect("frame");
+        vm.set_reg(0, VmValue::List(Rc::clone(&list)));
+        vm.push_frame(Frame {
+            func: Rc::clone(&func),
+            ip: 0,
+            base: 0,
+            ret_dst: usize::MAX,
+            mut_writeback: Vec::new(),
+            tail_calls: 0,
+        })
+        .expect("push frame");
+
+        let outcome = vm.try_native(&func, 0);
+        assert!(
+            matches!(outcome, NativeAttempt::Fallback),
+            "force-deopt must bail (no heap result materialized), got a non-Fallback",
+        );
+        // The decisive §7.2 assertion: a bailed attempt leaves NO heap result behind.
+        JIT_CALL_CTX.with(|ctx| {
+            assert!(
+                ctx.borrow().heap_results.is_empty(),
+                "a bailed attempt must leave the output table empty (no leaked result)",
+            )
+        });
+    }
+
+    /// Consecutive (not cumulative) semantics: a single successful native
+    /// completion RESETS the bail counter, so a function that bails only
+    /// intermittently keeps its native fast path. We drive `record_bail` /
+    /// reset-on-success directly on the `NativeState` to prove the counter logic in
+    /// isolation, since constructing an intermittently-bailing compiled function
+    /// from scratch is far more fragile.
+    #[cfg(feature = "native-jit")]
+    #[test]
+    fn native_bail_counter_resets_on_success() {
+        let mut native = NativeState::new(0, false, true).expect("native module");
+        let function = 7;
+        let key = NativeVersionKey {
+            function,
+            shape: ShapeKey::from_shapes([NativeParamShape::Int]),
+        };
+        let successful_key = NativeVersionKey {
+            function,
+            shape: ShapeKey::from_shapes([NativeParamShape::Bool]),
+        };
+
+        // Two consecutive bails — one short of the give-up threshold (3).
+        native.record_bail(&key);
+        native.record_bail(&key);
+        assert_eq!(native.bail_counts.get(&key), Some(&2));
+
+        // A success resets the counter (mirrors the `Some(bits)` arm in try_native).
+        native.bail_counts.insert(key.clone(), 0);
+        assert_eq!(native.bail_counts.get(&key), Some(&0));
+        native.bail_counts.insert(successful_key.clone(), 0);
+
+        // It now takes a full fresh run of `threshold` bails to disable this version.
+        for _ in 0..NATIVE_BAIL_GIVEUP_THRESHOLD {
+            native.record_bail(&key);
+        }
+        assert_eq!(
+            native.cache.get(&key),
+            Some(&None),
+            "failed shape must be negative-cached",
+        );
+        assert_eq!(
+            native.bail_counts.get(&successful_key),
+            Some(&0),
+            "one shape's failure must not alter another version's success state",
+        );
+    }
+}
+

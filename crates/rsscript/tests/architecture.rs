@@ -148,6 +148,91 @@ fn function_source<'a>(source: &'a str, signature: &str) -> &'a str {
 }
 
 #[test]
+fn register_vm_test_domains_remain_separate_modules() {
+    let root = workspace_root();
+    let aggregator = root.join("crates/rsscript/src/reg_vm/tests.rs");
+    let source = read(&aggregator);
+    let expected = [
+        "intrinsic_registry",
+        "resource_boundary",
+        "register_window",
+        "closure_cache",
+        "j1_profiling",
+    ];
+
+    assert!(
+        source.lines().count() <= expected.len() + 2,
+        "reg_vm/tests.rs must remain a composition root"
+    );
+    for domain in expected {
+        assert!(
+            source.contains(&format!("tests/{domain}.rs")),
+            "reg_vm test composition root is missing `{domain}`"
+        );
+        assert!(
+            root.join(format!("crates/rsscript/src/reg_vm/tests/{domain}.rs"))
+                .is_file(),
+            "reg_vm test domain `{domain}` must have its own module"
+        );
+    }
+}
+
+#[test]
+fn jit_acceptance_domains_remain_separate_modules() {
+    let root = workspace_root();
+    let aggregator = root.join("crates/rsscript/tests/jit_acceptance.rs");
+    let source = read(&aggregator);
+    let expected = ["core", "optimization", "limits"];
+
+    assert!(
+        source.lines().count() <= expected.len() + 12,
+        "jit_acceptance.rs must remain a composition root"
+    );
+    for domain in expected {
+        assert!(
+            source.contains(&format!("jit_acceptance/{domain}.rs")),
+            "JIT acceptance composition root is missing `{domain}`"
+        );
+        assert!(
+            root.join(format!("crates/rsscript/tests/jit_acceptance/{domain}.rs"))
+                .is_file(),
+            "JIT acceptance domain `{domain}` must have its own module"
+        );
+    }
+}
+
+#[test]
+fn selfhost_parity_domains_remain_separate_modules() {
+    let root = workspace_root();
+    let aggregator = root.join("crates/rsscript/src/selfhost_parity.rs");
+    let source = read(&aggregator);
+    let expected = [
+        "lexer",
+        "parser",
+        "checker",
+        "package_contract",
+        "ast_oracle",
+        "ast_parity",
+    ];
+
+    assert!(
+        source.lines().count() <= expected.len() + 10,
+        "selfhost_parity.rs must remain a composition root"
+    );
+    for domain in expected {
+        assert!(
+            source.contains(&format!("selfhost_parity/{domain}.rs")),
+            "self-host parity composition root is missing `{domain}`"
+        );
+        assert!(
+            root.join(format!("crates/rsscript/src/selfhost_parity/{domain}.rs"))
+                .is_file(),
+            "self-host parity domain `{domain}` must have its own module"
+        );
+    }
+}
+
+#[test]
 fn syntax_sources_do_not_reference_later_layers() {
     let root = workspace_root();
     let mut files = rust_files_below(&root.join("crates/rsscript/src/syntax"));

@@ -78,7 +78,7 @@ This table records the current implementation batch for the refactoring work in
 | R9 | Explicit service ownership and session lifetimes | Complete | Stateful runtime and native services have explicit owners, instance isolation, and deterministic close/shutdown paths |
 | R10 | Opaque host capability handles | Complete | Concrete host authorization returns execution-scoped path, endpoint, executable, and database handles |
 | R11 | REIR adapter convergence | Complete | Adapters share bounded evidence construction, provenance, and explicit unknown coverage |
-| R12 | Test-domain organization | Pending | Large test aggregations are split by semantic domain without reducing coverage |
+| R12 | Test-domain organization | Complete | Register-VM, JIT acceptance, and self-host parity suites are composed from independently owned semantic domains |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -155,6 +155,13 @@ inference now performs recursive substitution over structural types, including
 arbitrary declared parameter names such as `U` and `W`; rendered type strings
 remain compatibility projections at diagnostics and emission boundaries.
 
+R8 makes `vm-jit/lib.rs` a composition root over host ABI, public IR, sealed
+validation proofs, analysis, code generation, deoptimization, module ownership,
+and executable-memory accounting. Register-VM native passes are likewise split
+by intrinsic facts, semantics, region optimization, scalar replacement, and
+inlining. Raw IR cannot reach code generation without a mode-specific borrowed
+`ValidatedJitFunction`.
+
 R9 introduces explicit owners for SQLite and SQLx adapters, native-library
 loading, Metal dispatch, process concurrency, HTTP, and the Tokio-backed runtime
 services. Instance APIs own caches, limits, and shutdown; compatibility free
@@ -168,6 +175,17 @@ R10 replaces successful concrete authorization results with opaque
 `ExecutionScopeId` that issued it, and cross-scope reuse is rejected. Restricted
 VM host effects remain fail-closed until their adapter accepts the corresponding
 handle; trusted-local compatibility does not weaken restricted construction.
+
+R11 routes RSScript and Terraform evidence through one bounded builder with
+operation, fact, and string budgets. Producer provenance is validated at the
+construction boundary, and unsupported Terraform resources produce explicit
+unknown coverage instead of disappearing from the evidence set.
+
+R12 leaves the test entrypoints as short composition roots. Register-VM tests
+are divided into registry, resource, register-window, closure-cache, and
+profiling domains; self-host parity is divided by compiler phase; JIT acceptance
+is divided into core, optimization, and resource-limit contracts. Architecture
+tests prevent those aggregators from growing back into monoliths.
 
 ## Experimental Status
 
