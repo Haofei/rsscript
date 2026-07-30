@@ -28,8 +28,7 @@ lto = "thin"
 codegen-units = 1
 # Tooling, the LSP, and native adapters need a recoverable panic boundary in
 # release builds. Native ABI dispatch catches unwinds before returning across its
-# C boundary; VM program faults remain Result/EvalError values. Dedicated worker
-# binaries may choose abort independently when process isolation is intentional.
+# C boundary; VM program faults remain Result/EvalError values.
 panic = "unwind"
 
 # Test builds are used as a fast feedback loop, not for debugger sessions. Full

@@ -34,6 +34,8 @@ The binding support and deployment matrix is [support.md](support.md).
 - REIR reconciliation has indexed exact matching and an operation budget.
 - CI pins actions/toolchains, audits dependencies, separates Core and
   Experimental coverage, and promotes the same validated release artifact.
+- Third-party packages stop at static check, review, semantic diff, and REIR
+  evidence. The project has no untrusted package execution profile or worker.
 
 These controls reduce mistakes and denial-of-service exposure. They do not turn
 host execution into isolation.
@@ -42,8 +44,7 @@ host execution into isolation.
 
 | Area | Current limitation | Required closure |
 | --- | --- | --- |
-| Windows | Secure cache ACL and atomic Job attachment remain incomplete | SID/DACL validation and suspended process launch |
-| Isolated execution portability | Verified worker launch is Linux/bubblewrap only; Metal has no verified macOS isolation backend | Add audited platform launchers without weakening fail-closed policy |
+| Windows artifact integrity | Secure cache ACL validation remains incomplete for trusted native artifacts | SID/DACL validation or fail-closed cache disablement |
 | Host authority | Trusted-local compatibility APIs outside the register VM still accept raw paths, URLs, commands, and DSNs | Migrate hosted adapters to `ScopedHostAdapters`; do not expose raw compatibility APIs to restricted execution |
 | Capability evidence | Some native capability facts are author declarations | Independent verification and provenance |
 | External integrations | Live PostgreSQL and broader hardware coverage are environment-gated | Dedicated, auditable integration runners |
@@ -51,8 +52,6 @@ host execution into isolation.
 ## Open Maintainability Work
 
 - Replace remaining global registries with explicit owner/session lifetimes.
-- Extend isolated workers to audited Windows and macOS launchers without
-  treating process limits or an ordinary container as equivalent isolation.
 
 These are not reported as correctness fixes until executable invariants and
 regression tests exist.
@@ -70,7 +69,7 @@ This table records the current implementation batch for the refactoring work in
 | R3 | Mandatory `ExecutionContext` and scoped host capabilities | Complete | Restricted execution cannot reach ambient filesystem, network, process, or database authority |
 | R4 | LSP, REIR, runtime, analyzer, package-native, VM, and JIT decomposition | Complete | Modules are split around tested state transitions without behavior changes |
 | R5 | Public API contraction and explicit facades | Complete | Broad glob exports and duplicate compatibility entrypoints are removed |
-| R6 | Out-of-process native, JIT, and GPU execution | Complete | Untrusted execution uses killable workers with bounded IPC and OS policy |
+| R6 | Former out-of-process execution experiment | Superseded | Removed from the supported product and codebase by R20 |
 | R7 | Interned structural type semantics | Complete | Semantic signatures and fields use shared structural facts; generic substitution no longer depends on parameter-name heuristics |
 | R8 | VM/JIT invariant boundary decomposition | Complete | Validation, executable memory, ABI, optimization, and deoptimization boundaries are independently testable |
 | R9 | Explicit service ownership and session lifetimes | Complete | Stateful runtime and native services have explicit owners, instance isolation, and deterministic close/shutdown paths |
@@ -84,6 +83,7 @@ This table records the current implementation batch for the refactoring work in
 | R17 | Large test-domain decomposition | Complete | Remaining register-window, JIT, and backend suites have independently owned semantic domains |
 | R18 | Host capability adapter enforcement | Complete | Canonical filesystem, network, process, and database adapters consume scoped authorized handles |
 | R19 | Revision-scoped LSP index cache | Complete | Semantic indexes are reused only for matching document and package generations |
+| R20 | Remove third-party safe-execution scope | Complete | No untrusted profile, worker protocol, worker binary, sandbox launcher, release artifact, or execution API remains |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -114,8 +114,8 @@ filesystem, environment, process, network, database, native, JIT, and GPU
 effects before side effects occur. Capability objects support exact grants, but
 the VM remains deliberately conservative: a restricted intrinsic stays denied
 until that intrinsic validates its concrete resource through the scoped API.
-Rust AOT remains denied outside `LocalTrusted`; untrusted execution is available
-only through the R6 proof-gated worker entrypoints.
+Rust AOT remains denied outside `LocalTrusted`. No untrusted execution entrypoint
+exists.
 
 R4 turns the largest orchestration files into composition roots and invariant
 owners without changing public behavior. LSP now separates documents, text,
@@ -140,18 +140,10 @@ blanket exports with a generated-code ABI manifest plus curated `api::v1`,
 removed aliases. These versioned namespaces control API growth but do not
 declare `0.1.x` SemVer stability.
 
-R6 adds a dependency-neutral, versioned, length-bounded worker protocol and a
-single-request execution worker for the reference VM, native JIT, digest-pinned
-native ABI calls, and Metal operations. The host client validates request and
-response identities, preserves complete VM output, bounds process stderr,
-enforces a wall deadline, and kills the guarded process tree on every failure.
-`UntrustedIsolated` cannot construct an in-process context and has no fallback.
-On Linux, workers launch through a verified root-owned bubblewrap binary with
-new user/PID/IPC/UTS/network namespaces, no capabilities or environment, a
-private filesystem, explicit read-only inputs, and strict process limits.
-Unsupported launchers and platforms fail closed. Metal transport and worker
-dispatch are complete, but untrusted Metal execution remains unavailable until
-an equivalent verified macOS launcher exists.
+R6 historically introduced an isolated execution experiment. R20 supersedes
+that batch and removes its protocol, worker, launcher, public authorization
+surface, CI jobs, and release artifact. It is retained in this table only so
+existing Git history and old review references remain understandable.
 
 R7 adds an interned `TypeId`/`ResolvedType` arena owned by
 `SemanticDatabase`. Function signatures and declared fields are captured once
@@ -244,6 +236,14 @@ inputs advances the relevant cache identity; work started against an old
 generation cannot publish back into the cache. Hover, navigation, references,
 rename, call hierarchy, workspace symbols, and semantic tokens share the same
 index while diagnostics retain their existing cancellation and debounce model.
+
+R20 contracts execution to operator-controlled source. The
+`UntrustedIsolated` deployment profile, isolated execution library API, worker
+wire protocol, worker binary, process-guard sandbox launcher, CI jobs, and
+release assets were deleted. `LocalTrusted` remains the normal execution mode;
+`TrustedCI` remains a deny-all-host pure-VM convenience for reviewed
+organization repositories. Third-party packages are static-analysis inputs
+only.
 
 ## Experimental Status
 

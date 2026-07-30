@@ -49,25 +49,25 @@ Promotion to Core requires a documented compatibility contract, inclusion in the
 default supported surface, per-PR coverage on supported platforms, and closure
 of threat-model debt relevant to the promoted feature.
 
-### Unsupported-for-untrusted
+### Trusted-only execution
 
-`Unsupported-for-untrusted` is a security qualifier, not a lower maturity tier.
-It applies whenever input can be controlled by an attacker and the operation can
-execute, compile, or load that input. Core status does not override this label.
+`Trusted-only` is a security qualifier, not a lower maturity tier. It applies
+whenever an operation executes, compiles, or loads input. Core status does not
+override this label.
 
-The following are unsupported for untrusted input:
+The following are trusted-only:
 
 - generated Cargo builds, build scripts, and executable package dependencies;
 - in-process native plugins or native wrappers;
 - in-process tier-0/native JIT execution and dynamically supplied GPU shaders;
 - host filesystem, environment, network, process, database, or device access;
-- multi-tenant execution based only on RSScript capabilities, VM budgets,
-  process limits, a container, or the review action.
+- execution based only on RSScript capabilities, VM budgets, process limits, a
+  container, or the review action.
 
-Outside the Linux `UntrustedIsolated` worker profile, static inspection is the
-only project-supported operation for third-party source: do not build
-dependencies, run hooks, load native code, execute shaders, or provide ambient
-credentials. RSScript and REIR evidence alone does not enforce OS isolation.
+Static inspection is the only project-supported operation for third-party
+source: do not build dependencies, run hooks, load native code, execute shaders,
+or provide ambient credentials. RSScript and REIR evidence do not authorize
+execution and do not enforce OS isolation.
 
 ## Deployment Profiles
 
@@ -75,26 +75,18 @@ credentials. RSScript and REIR evidence alone does not enforce OS isolation.
 | --- | --- | --- | --- |
 | `LocalTrusted` | Source and dependencies controlled by the developer; Core execution and explicitly enabled Experimental paths | Review native/build-script changes; acknowledge trusted native execution; keep normal resource budgets unless deliberately debugging | Supported for development, not an adversarial boundary |
 | `TrustedCI` | Reviewed organization repositories in disposable CI; Core gates and dedicated Experimental jobs | Immutable action/tool pins, locked dependencies, least-privilege token, no secrets for fork PR code, protected-base policy, isolated ephemeral runner, explicit native/JIT/Metal jobs | Supported for CI experiments; not a production authorization system |
-| `UntrustedIsolated` | Bounded source evaluation and explicit worker operations; no in-process fallback | Immutable input, no ambient secrets or network, private filesystem, strict resource/time limits, killable process tree, verified launcher | Experimental on Linux with root-owned `/usr/bin/bwrap`; unsupported elsewhere |
 
-The `rss run --deployment-profile` spellings are `local-trusted`, `trusted-ci`,
-and `untrusted-isolated`. `TrustedCI` may run bounded pure code in the reference
-VM. That path carries an explicit deny-all host context and rejects every
-host-touching intrinsic before dispatch. It does not permit AOT, native, JIT,
-GPU, process, network, database, environment, or filesystem effects.
-`UntrustedIsolated` routes `rss run --vm` through the separate
-`rss-execution-worker`; the absolute worker path is supplied through
-`RSS_EXECUTION_WORKER`. The library also exposes isolated native-JIT,
-digest-pinned native-call, and Metal request entrypoints. Every operation uses
-one bounded request/response exchange and has no in-process fallback. Native
-package builds remain denied in this profile.
+The `rss run --deployment-profile` spellings are `local-trusted` and
+`trusted-ci`. `TrustedCI` may run bounded pure code in the reference VM. That
+path carries an explicit deny-all host context and rejects every host-touching
+intrinsic before dispatch. It does not permit AOT, native, JIT, GPU, process,
+network, database, environment, or filesystem effects. This is a controlled-CI
+convenience for repositories the operator already trusts, not an untrusted-code
+execution boundary.
 
-The implemented Linux boundary requires a verified root-owned bubblewrap
-launcher and fails closed when user namespaces or required process limits are
-unavailable. This is an Experimental hostile-workload boundary, not a claim
-that RSScript is an audited production multi-tenant sandbox. Windows and macOS
-execution remain unavailable; in particular, Metal requests cannot run as
-`UntrustedIsolated` until macOS has an equivalent verified launcher.
+RSScript has no `UntrustedIsolated` profile, worker protocol, sandbox launcher,
+or third-party execution API. Projects that need hostile-code execution must
+provide and audit a separate system outside this repository.
 
 ## CI Contract
 

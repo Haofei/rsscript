@@ -13,19 +13,15 @@ These items block stronger deployment claims:
 2. Carry one mandatory execution policy through VM intrinsics, generated AOT
    programs, native loading, JIT, GPU, process, network, filesystem, and
    database capabilities.
-3. Extend the completed Linux killable-worker boundary to audited Windows and
-   macOS launchers without weakening bounded IPC, credential denial, filesystem
-   policy, or process-tree termination.
-4. Complete Windows secure-store SID/DACL validation and suspended
-   create/Job-assign/resume process launch.
-5. Replace path/string authority with scoped handles where host resources are
+3. Complete Windows secure-store SID/DACL validation for trusted package
+   artifacts.
+4. Replace path/string authority with scoped handles where host resources are
    exposed.
 
 The bounded reference VM carries a mandatory context and supports pure
 `trusted-ci` execution with no ambient host authority. AOT and host effects
-remain fail-closed for that profile. Linux `untrusted-isolated` execution uses
-the versioned worker protocol and verified bubblewrap launcher; unsupported
-platforms and launchers fail closed.
+remain fail-closed for that profile. Third-party packages are inspected
+statically and are never built or executed by the supported product.
 
 ## Priority 1: Strengthen The Core Product
 
@@ -81,7 +77,8 @@ measured workload that justifies the additional verification matrix.
 ### Metal And Native Plugins
 
 Do not broaden dynamic shader or in-process plugin surfaces. The next meaningful
-security feature is worker isolation, not more heuristic source classification.
+work is reducing trusted-only surface and strengthening provenance, not adding
+heuristic source classification or an untrusted execution subsystem.
 
 ### Self-Hosting
 

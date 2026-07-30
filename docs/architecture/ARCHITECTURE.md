@@ -58,15 +58,10 @@ The `runtime` crate owns the host-facing runtime contract and resource
 accounting. Network, process, filesystem, database, native, JIT, and GPU
 facilities are adapters with explicit trust and resource policies.
 
-The runtime is not a sandbox. Untrusted execution requires an isolated worker
-and operating-system enforcement.
-
-`rss-worker-protocol` owns the dependency-neutral bounded wire contract.
-`rss-execution-worker` converts validated wire requests at the process boundary
-and dispatches one reference-VM, native-JIT, native-ABI, or Metal operation.
-`rss-process-guard` is the only component allowed to mint worker-isolation
-proofs. The host authorizes an untrusted operation only after receiving that
-opaque proof, validates the matching response, and never retries in process.
+The runtime is not a sandbox. Runtime execution is restricted to source and
+dependencies controlled by the operator. Third-party package support ends at
+static check, review, semantic diff, and evidence generation; no architecture
+component authorizes or executes third-party code.
 
 ### Applications
 

@@ -312,11 +312,11 @@ leak tests, and any future `Resourceful` value would observe ghost retention.
 
 ---
 
-## 6. Sandbox and Hardening Contract
+## 6. Execution Bounds and Hardening Contract
 
-The reg-VM is a bounded reference evaluator for untrusted/AI-generated programs,
-not an operating-system sandbox. Strong isolation requires the separately
-specified worker boundary. Two VM invariants hold.
+The reg-VM is a bounded reference evaluator for reviewed programs and tests, not
+an operating-system sandbox. This specification does not define or provide
+hostile-code isolation. Two VM invariants hold.
 
 **Invariant 1 — embedded VM/JIT program faults are values, never panics.** In the
 interpreter, tier-0, native JIT helpers, and embedding APIs, a program-level fault

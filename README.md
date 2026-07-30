@@ -68,19 +68,19 @@ raw artifact.
 ### Support and deployment profiles
 
 The maintained product surface is classified as `Core`, `Experimental`, or
-`Unsupported-for-untrusted`. Deployments are classified independently as
-`LocalTrusted`, `TrustedCI`, or `UntrustedIsolated`.
+`Trusted-only`. Deployments are classified independently as `LocalTrusted` or
+`TrustedCI`.
 
 | Profile | Current commitment |
 | --- | --- |
 | `LocalTrusted` | Supported development on source and dependencies you control |
 | `TrustedCI` | Supported CI experiments on reviewed repositories with pinned tools, least privilege, and disposable isolated runners |
-| `UntrustedIsolated` | Experimental bounded worker execution on Linux with verified bubblewrap; fail-closed elsewhere |
 
 In-process native plugins, generated Cargo builds, JIT code, dynamic GPU
-shaders, and ambient host capabilities are unsupported for untrusted input.
-Linux can route bounded operations through the separate worker boundary;
-unsupported platforms never fall back in process. See the binding
+shaders, and ambient host capabilities are trusted-only. Third-party package
+support is static inspection: check, review, semantic diff, and REIR evidence.
+RSScript does not build or execute third-party packages and does not provide an
+untrusted execution profile. See the binding
 [support and deployment policy](docs/support.md) for the surface matrix, required
 controls, and CI contract.
 
@@ -492,15 +492,12 @@ rss test     [--all] [--json] [--filter <substring>]
 - `rss pkg ci` is the CI-facing package check entrypoint. It uses the same package health rules as `rss pkg`, with stable `--json` output for automation.
 - `rss pkg publish --dry-run` runs pre-publish checks without uploading and reports whether the package is ready.
 - `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package, builds it in a reduced environment, and then executes the emitted binary as a separately bounded child (10-minute deadline and 16 MiB cap per output stream). Unix children receive CPU, file-size, and descriptor limits; Linux/Android add an address-space limit and macOS applies a best-effort data-segment limit. Windows children run in a kill-on-close Job Object with process-tree memory limits. Native package execution is denied by default; `--trusted-native` is the explicit acknowledgement that native Rust/build scripts have full host authority. Package lowering then carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--vm` runs the same input through the register VM for fast feedback with default step, memory, output, host-call, recursion, and 60-second wall-clock limits; `--trusted-unlimited` explicitly restores the embedding API's unlimited VM budgets. `--vm` cannot be combined with AOT-only flags (`--release`, `--dry-run`, or `--out-dir`). Single-file CLI input is capped at 16 MiB. `--dry-run` prints the generated `Cargo.toml`, lowered Rust, build invocation, and program invocation without executing them; `--release` delegates to Cargo's release profile, `--out-dir` keeps the generated package, and arguments after `--` reach the program through the core `Args` API.
-- `--deployment-profile` accepts `local-trusted` (the default), `trusted-ci`, or
-  `untrusted-isolated`. `trusted-ci` can execute bounded, pure register-VM code
+- `--deployment-profile` accepts `local-trusted` (the default) or `trusted-ci`.
+  `trusted-ci` can execute bounded, pure register-VM code
   with a deny-all host capability context; filesystem, environment, process,
   network, database, native, JIT, and GPU effects fail before dispatch.
-  Trusted-CI AOT remains denied. On Linux, `untrusted-isolated --vm` requires an
-  absolute `RSS_EXECUTION_WORKER` path and runs through a verified root-owned
-  bubblewrap launcher with bounded IPC, no network or ambient environment, a
-  private filesystem, and strict process limits. Other platforms and missing
-  launchers fail closed; there is no in-process fallback.
+  Trusted-CI AOT remains denied. There is no third-party or untrusted execution
+  profile.
 
 > **Performance — use a release-built `rss` for package-scale checking.** On large, generics-heavy packages, `rss check` / `rss pkg` can be noticeably slow when run from a **debug** build of the compiler, because generic type-argument substitution currently re-parses type strings at each nesting level (a known, deferred ~O(n³) path in generic substitution). The debug build leaves that path unoptimized; a release build optimizes it enough to be comfortable. For repeated package-wide validation (e.g. an inner edit→check loop on a big codebase), build the compiler once in release and use that binary:
 >
