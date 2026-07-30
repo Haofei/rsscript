@@ -68,8 +68,9 @@ pub use diagnostic::{
 pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
 pub use eval_types::{CoverageBucket, EvalError, EvalOutput, NativeInterpreterFn, NativeValue};
 pub use execution_policy::{
-    DeploymentProfile, ExecutionCapability, ExecutionPolicyError, ParseDeploymentProfileError,
-    SupportLevel,
+    AuthorityError, DeploymentProfile, ExecutionCapability, ExecutionContext,
+    ExecutionContextError, ExecutionPolicyError, ExecutionScopeId, HostAuthority, HostCapabilities,
+    NetworkEndpointGrant, ParseDeploymentProfileError, SupportLevel,
 };
 pub use formatter::{format_program, format_source};
 pub use generate::{
@@ -125,7 +126,7 @@ pub use reg_vm::{
     reg_vm_eval_source_main_with_args_and_native_bindings,
     reg_vm_eval_source_main_with_args_and_native_bindings_and_limits,
     reg_vm_eval_source_main_with_args_streaming_stdout as eval_source_main_with_args_streaming_stdout,
-    reg_vm_eval_source_main_with_limits,
+    reg_vm_eval_source_main_with_context_and_limits, reg_vm_eval_source_main_with_limits,
 };
 #[cfg(feature = "native-jit")]
 pub use reg_vm::{

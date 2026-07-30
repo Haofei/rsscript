@@ -16,10 +16,11 @@ use std::process::Command;
 use std::thread;
 
 use rsscript::{
-    EvalError, NativeInterpreterFn, NativeRustDependency, NativeValue, eval_package_main_with_args,
-    eval_source_main, eval_source_main_with_args, eval_source_main_with_args_and_native_bindings,
+    EvalError, ExecutionContext, HostCapabilities, NativeInterpreterFn, NativeRustDependency,
+    NativeValue, VmLimits, eval_package_main_with_args, eval_source_main,
+    eval_source_main_with_args, eval_source_main_with_args_and_native_bindings,
     lower_source_to_rust_package, lower_sources_to_rust_package_with_options,
-    write_generated_rust_package,
+    reg_vm_eval_source_main_with_context_and_limits, write_generated_rust_package,
 };
 
 #[test]
@@ -37,6 +38,53 @@ fn main() -> Int {
     assert_eq!(output.value, "14");
     assert_eq!(output.display_value, "14");
     assert_eq!(output.native_value, Some(NativeValue::Int(14)));
+}
+
+#[test]
+fn restricted_execution_context_runs_pure_vm_code() {
+    let output = reg_vm_eval_source_main_with_context_and_limits(
+        "restricted-pure.rss",
+        "fn main() -> Int { return 6 * 7 }",
+        std::iter::empty::<String>(),
+        ExecutionContext::trusted_ci(HostCapabilities::deny_all()),
+        VmLimits::safe_default(),
+    )
+    .expect("pure code should not require host authority");
+
+    assert_eq!(output.native_value, Some(NativeValue::Int(42)));
+}
+
+#[test]
+fn restricted_execution_context_denies_filesystem_before_side_effect() {
+    let root = common::unique_temp_dir("rsscript-restricted-context");
+    let target = root.join("denied.txt");
+    let source = r#"
+features: native, local
+
+fn main() -> Result<Unit, FileError> {
+    let path = Path.from_string(value: read Args.get(index: 0)?)
+    File.write_string_to_path(path: read path, text: read "must-not-exist")?
+    return Ok(Unit)
+}
+"#;
+
+    let error = reg_vm_eval_source_main_with_context_and_limits(
+        "restricted-filesystem.rss",
+        source,
+        [target.display().to_string()],
+        ExecutionContext::trusted_ci(HostCapabilities::deny_all()),
+        VmLimits::safe_default(),
+    )
+    .expect_err("restricted execution must deny ambient filesystem access");
+
+    assert!(matches!(error, EvalError::Runtime(message) if message.contains("Filesystem")));
+    assert!(
+        !target.exists(),
+        "authorization must run before file creation"
+    );
+    if root.exists() {
+        fs::remove_dir_all(root).expect("temporary directory cleanup");
+    }
 }
 
 #[test]

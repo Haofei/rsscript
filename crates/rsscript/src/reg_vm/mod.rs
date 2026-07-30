@@ -134,6 +134,19 @@ pub fn reg_vm_eval_source_main_with_limits(
     reg_vm_compile_source(file, source)?.eval_main_with_limits(args, limits)
 }
 
+/// Compile and run `source` with an explicit execution authority and resource
+/// limits. Restricted embedders should use this entry point; the older helpers
+/// are explicit trusted-local compatibility APIs.
+pub fn reg_vm_eval_source_main_with_context_and_limits(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    context: crate::ExecutionContext,
+    limits: VmLimits,
+) -> Result<EvalOutput, EvalError> {
+    reg_vm_compile_source(file, source)?.eval_main_with_context_and_limits(args, context, limits)
+}
+
 pub fn reg_vm_eval_source_main_with_args_and_native_bindings_and_limits(
     file: &str,
     source: &str,
@@ -2022,6 +2035,35 @@ impl RegVmExecutable {
         })
     }
 
+    /// Run the reference VM with explicit host authority and resource limits.
+    ///
+    /// Native bindings are intentionally unavailable on this path: in-process
+    /// native code cannot be constrained by [`ExecutionContext`].
+    pub fn eval_main_with_context_and_limits(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        context: crate::ExecutionContext,
+        limits: VmLimits,
+    ) -> Result<EvalOutput, EvalError> {
+        let mut vm = RegVm::new_with_context(
+            Rc::clone(&self.unit),
+            args.into_iter().map(Into::into).collect(),
+            std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
+            context,
+        );
+        vm.set_limits(limits);
+        let value = vm.run_program("main")?;
+        let display_value = value.display();
+        let native_value = value.native_value();
+        Ok(EvalOutput {
+            value: display_value.clone(),
+            display_value,
+            native_value,
+            stdout: vm.stdout,
+            stderr: vm.stderr,
+        })
+    }
+
     pub fn eval_main_with_args_and_native_bindings(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
@@ -2341,6 +2383,7 @@ struct RegVm {
     unit: Rc<RegUnit>,
     args: Vec<String>,
     native_bindings: HashMap<String, NativeInterpreterFn>,
+    execution_context: crate::ExecutionContext,
     stdout: String,
     /// When set, complete lines appended to `stdout` are also written live to the
     /// real process stdout (line-flushed). `stream_flushed` tracks how many bytes

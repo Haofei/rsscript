@@ -11,10 +11,25 @@ impl RegVm {
         args: Vec<String>,
         native_bindings: HashMap<String, NativeInterpreterFn>,
     ) -> Self {
+        Self::new_with_context(
+            unit,
+            args,
+            native_bindings,
+            crate::ExecutionContext::trusted_local(),
+        )
+    }
+
+    pub(super) fn new_with_context(
+        unit: Rc<RegUnit>,
+        args: Vec<String>,
+        native_bindings: HashMap<String, NativeInterpreterFn>,
+        execution_context: crate::ExecutionContext,
+    ) -> Self {
         Self {
             unit,
             args,
             native_bindings,
+            execution_context,
             stdout: String::new(),
             stream_stdout: false,
             stream_flushed: 0,
@@ -78,6 +93,24 @@ impl RegVm {
     /// unaffected and only agent-facing entry points need call this).
     pub(super) fn set_limits(&mut self, limits: VmLimits) {
         self.limits = limits;
+    }
+
+    pub(super) fn authorize_host_authority(
+        &self,
+        authority: crate::HostAuthority,
+    ) -> Result<(), EvalError> {
+        // Restricted VM execution is deny-by-default until each intrinsic
+        // validates its concrete path, endpoint, executable, or database id.
+        // A coarse category grant alone must never authorize arbitrary values.
+        if !self.execution_context.is_ambient() {
+            return Err(EvalError::Runtime(format!(
+                "execution scope {} denied {authority:?} host authority: scoped intrinsic authorization is required",
+                self.execution_context.scope_id().get()
+            )));
+        }
+        self.execution_context
+            .authorize_host_authority(authority)
+            .map_err(|error| EvalError::Runtime(error.to_string()))
     }
 
     /// Push a call frame, enforcing the recursion-depth cap first. `frames.len()`

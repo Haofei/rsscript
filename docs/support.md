@@ -79,14 +79,12 @@ OS isolation.
 | `UntrustedIsolated` | Static inspection by default; execution only in an externally supplied hostile-workload sandbox | Separate OS identity or VM boundary, immutable input snapshot, no ambient secrets, deny-by-default network/filesystem/device access, strict resource/time limits, killable process tree, no in-process native/JIT/GPU escape | Execution profile is not implemented; static inspection only |
 
 The `rss run --deployment-profile` spellings are `local-trusted`, `trusted-ci`,
-and `untrusted-isolated`. The CLI enforces the current matrix conservatively:
-only `LocalTrusted` executes programs. `TrustedCI` and `UntrustedIsolated`
-permit non-executing `--dry-run` lowering but reject VM/AOT execution. This is
-intentional: embedding APIs do not yet carry one mandatory profile context
-across every process, network, database, GPU, native, and JIT capability.
-Allowing a nominally bounded backend before that propagation exists would
-create a policy bypass, so CLI enforcement must not be generalized into a
-runtime sandbox claim.
+and `untrusted-isolated`. `TrustedCI` may run bounded pure code in the reference
+VM. That path carries an explicit deny-all host context and rejects every
+host-touching intrinsic before dispatch. It does not permit AOT, native, JIT,
+GPU, process, network, database, environment, or filesystem effects.
+`UntrustedIsolated` still permits only static inspection and dry-run lowering
+until killable workers exist. This VM policy boundary is not an OS sandbox.
 
 An ordinary container or child-process limit is defense in depth, not sufficient
 implementation of `UntrustedIsolated`. Until the project ships and tests a

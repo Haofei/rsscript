@@ -492,10 +492,11 @@ rss test     [--all] [--json] [--filter <substring>]
 - `rss pkg publish --dry-run` runs pre-publish checks without uploading and reports whether the package is ready.
 - `rss run` lowers a single file (or a package with `src/main.rss`) to a temporary Rust package, builds it in a reduced environment, and then executes the emitted binary as a separately bounded child (10-minute deadline and 16 MiB cap per output stream). Unix children receive CPU, file-size, and descriptor limits; Linux/Android add an address-space limit and macOS applies a best-effort data-segment limit. Windows children run in a kill-on-close Job Object with process-tree memory limits. Native package execution is denied by default; `--trusted-native` is the explicit acknowledgement that native Rust/build scripts have full host authority. Package lowering then carries enabled `[native.rust]` wrappers through as generated Cargo path dependencies and maps `native/bindings.rssbind.toml` call bindings into generated Rust calls. `--vm` runs the same input through the register VM for fast feedback with default step, memory, output, host-call, recursion, and 60-second wall-clock limits; `--trusted-unlimited` explicitly restores the embedding API's unlimited VM budgets. `--vm` cannot be combined with AOT-only flags (`--release`, `--dry-run`, or `--out-dir`). Single-file CLI input is capped at 16 MiB. `--dry-run` prints the generated `Cargo.toml`, lowered Rust, build invocation, and program invocation without executing them; `--release` delegates to Cargo's release profile, `--out-dir` keeps the generated package, and arguments after `--` reach the program through the core `Args` API.
 - `--deployment-profile` accepts `local-trusted` (the default), `trusted-ci`, or
-  `untrusted-isolated`. Only `local-trusted` currently executes programs.
-  `trusted-ci` and `untrusted-isolated` permit non-executing `--dry-run`
-  lowering, but fail closed for VM/AOT execution until deployment policy is
-  enforced through every generated-program and VM host capability.
+  `untrusted-isolated`. `trusted-ci` can execute bounded, pure register-VM code
+  with a deny-all host capability context; filesystem, environment, process,
+  network, database, native, JIT, and GPU effects fail before dispatch.
+  Trusted-CI AOT and all `untrusted-isolated` execution remain fail closed until
+  isolated workers enforce the same policy outside the host process.
 
 > **Performance — use a release-built `rss` for package-scale checking.** On large, generics-heavy packages, `rss check` / `rss pkg` can be noticeably slow when run from a **debug** build of the compiler, because generic type-argument substitution currently re-parses type strings at each nesting level (a known, deferred ~O(n³) path in generic substitution). The debug build leaves that path unoptimized; a release build optimizes it enough to be comfortable. For repeated package-wide validation (e.g. an inner edit→check loop on a big codebase), build the compiler once in release and use that binary:
 >

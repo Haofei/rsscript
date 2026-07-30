@@ -5,11 +5,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rsscript::{
-    DeploymentProfile, EvalError, EvalOutput, ExecutionCapability, NativeValue, VmLimits,
-    check_generated_rust_package, configure_reduced_build_environment, format_diagnostics_human,
-    format_diagnostics_json, load_authorized_package_native_bindings, parse_runtime_diagnostics,
+    DeploymentProfile, EvalError, EvalOutput, ExecutionCapability, ExecutionContext,
+    HostCapabilities, NativeValue, VmLimits, check_generated_rust_package,
+    configure_reduced_build_environment, format_diagnostics_human, format_diagnostics_json,
+    load_authorized_package_native_bindings, parse_runtime_diagnostics,
     prepare_package_for_execution, reg_vm_compile_package_input, reg_vm_eval_source_main_with_args,
-    reg_vm_eval_source_main_with_limits, write_generated_rust_package,
+    write_generated_rust_package,
 };
 
 use super::{
@@ -158,6 +159,7 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
             options.json,
             options.trusted_unlimited,
             options.trusted_native,
+            options.deployment_profile,
         );
     }
     let runtime_path = match default_runtime_path() {
@@ -269,6 +271,7 @@ fn run_via_vm(
     json: bool,
     trusted_unlimited: bool,
     trusted_native: bool,
+    deployment_profile: DeploymentProfile,
 ) -> ExitCode {
     let limits = if trusted_unlimited {
         VmLimits::default()
@@ -276,7 +279,13 @@ fn run_via_vm(
         cli_vm_limits()
     };
     let result = if is_package_directory(path) {
-        run_package_via_vm(path, program_args, limits, trusted_native)
+        run_package_via_vm(
+            path,
+            program_args,
+            limits,
+            trusted_native,
+            deployment_profile,
+        )
     } else {
         let source = match read_cli_source(Path::new(path)) {
             Ok(source) => source,
@@ -285,7 +294,7 @@ fn run_via_vm(
                 return ExitCode::from(2);
             }
         };
-        run_source_via_vm(path, &source, program_args, limits)
+        run_source_via_vm(path, &source, program_args, limits, deployment_profile)
     };
     finish_vm_run(result, json)
 }
@@ -308,11 +317,19 @@ fn run_source_via_vm(
     source: &str,
     program_args: &[&str],
     limits: VmLimits,
+    deployment_profile: DeploymentProfile,
 ) -> Result<EvalOutput, EvalError> {
-    if limits.step_budget.is_none() {
+    if deployment_profile == DeploymentProfile::LocalTrusted && limits.step_budget.is_none() {
         reg_vm_eval_source_main_with_args(path, source, program_args.iter().copied())
     } else {
-        reg_vm_eval_source_main_with_limits(path, source, program_args.iter().copied(), limits)
+        let context = execution_context(deployment_profile)?;
+        rsscript::reg_vm_eval_source_main_with_context_and_limits(
+            path,
+            source,
+            program_args.iter().copied(),
+            context,
+            limits,
+        )
     }
 }
 
@@ -321,6 +338,7 @@ fn run_package_via_vm(
     program_args: &[&str],
     limits: VmLimits,
     trusted_native: bool,
+    deployment_profile: DeploymentProfile,
 ) -> Result<EvalOutput, EvalError> {
     let package_dir = Path::new(path);
     let prepared = prepare_package_for_execution(package_dir).map_err(EvalError::Runtime)?;
@@ -340,14 +358,36 @@ fn run_package_via_vm(
             "native package execution is disabled by default; pass `--trusted-native` only for code you trust with full host-process authority".to_string(),
         ));
     };
-    if limits.step_budget.is_none() {
+    if trusted_native {
+        debug_assert_eq!(deployment_profile, DeploymentProfile::LocalTrusted);
+    }
+    if deployment_profile == DeploymentProfile::LocalTrusted && limits.step_budget.is_none() {
         executable.eval_main_with_args_and_native_bindings(program_args.iter().copied(), bindings)
+    } else if bindings.is_empty() {
+        executable.eval_main_with_context_and_limits(
+            program_args.iter().copied(),
+            execution_context(deployment_profile)?,
+            limits,
+        )
     } else {
         executable.eval_main_with_args_and_native_bindings_and_limits(
             program_args.iter().copied(),
             bindings,
             limits,
         )
+    }
+}
+
+fn execution_context(profile: DeploymentProfile) -> Result<ExecutionContext, EvalError> {
+    match profile {
+        DeploymentProfile::LocalTrusted => Ok(ExecutionContext::trusted_local()),
+        DeploymentProfile::TrustedCi => {
+            Ok(ExecutionContext::trusted_ci(HostCapabilities::deny_all()))
+        }
+        DeploymentProfile::UntrustedIsolated => {
+            ExecutionContext::restricted(profile, HostCapabilities::deny_all())
+                .map_err(|error| EvalError::Runtime(error.to_string()))
+        }
     }
 }
 
@@ -754,13 +794,12 @@ mod tests {
     }
 
     #[test]
-    fn trusted_ci_profile_is_static_only() {
+    fn trusted_ci_profile_allows_only_bounded_reference_vm_execution() {
         let bounded = args(&["--vm", "--deployment-profile", "trusted-ci", "demo.rss"]);
-        let error = super::parse_run_args(&bounded).expect_err("CI execution must fail closed");
-        assert!(
-            error.contains("denies bounded reference VM execution"),
-            "{error}"
-        );
+        let options =
+            super::parse_run_args(&bounded).expect("bounded CI reference VM should be allowed");
+        assert!(options.vm);
+        assert_eq!(options.deployment_profile, DeploymentProfile::TrustedCi);
 
         let native = args(&[
             "--vm",

@@ -21,8 +21,10 @@ These items block stronger deployment claims:
 5. Replace path/string authority with scoped handles where host resources are
    exposed.
 
-Until these ship, `trusted-ci` and `untrusted-isolated` execution remain
-fail-closed.
+The bounded reference VM now carries a mandatory context and supports pure
+`trusted-ci` execution with no ambient host authority. AOT and host effects
+remain fail-closed for that profile. `untrusted-isolated` execution remains
+fail-closed until the worker boundary ships.
 
 ## Priority 1: Strengthen The Core Product
 

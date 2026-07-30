@@ -76,7 +76,7 @@ This table records the current implementation batch for the refactoring work in
 | R0 | Architecture dependency guards and behavior baselines | Complete | CI rejects forbidden dependency directions and current contract suites remain green |
 | R1 | Complete package/dependency snapshot before review or execution | Complete | Check, review, lower, build, publish, and vendor consume one immutable graph |
 | R2 | `SourceSnapshot`, frontend budget, semantic database, and `ValidatedProgram` | Complete | Review, lowering, VM, and LSP consume one bounded frontend result; executable backends require validated checked facts |
-| R3 | Mandatory `ExecutionContext` and scoped host capabilities | Not started | Restricted execution cannot reach ambient filesystem, network, process, or database authority |
+| R3 | Mandatory `ExecutionContext` and scoped host capabilities | Complete | Restricted execution cannot reach ambient filesystem, network, process, or database authority |
 | R4 | LSP, REIR, runtime, analyzer, package-native, VM, and JIT decomposition | Not started | Modules are split around tested state transitions without behavior changes |
 | R5 | Public API contraction and explicit facades | Not started | Broad glob exports and duplicate compatibility entrypoints are removed |
 | R6 | Out-of-process native, JIT, and GPU execution | Not started | Untrusted execution uses killable workers with bounded IPC and OS policy |
@@ -100,6 +100,17 @@ parsed programs and no longer reparse built-in interfaces. LSP diagnostics use
 the same result API. Code-generation-only declaration projections remain AST
 projections, not an independent semantic checker; raw source indexes remain an
 R4 LSP decomposition concern.
+
+R3 gives every register-VM instance an explicit execution context and a unique
+scope identity. Legacy embedding helpers construct a named trusted-local
+context; restricted callers use the context-aware entrypoint. Every
+host-touching intrinsic is classified and checked before dispatch. Trusted-CI
+VM execution defaults to no host grants, can run pure bounded code, and denies
+filesystem, environment, process, network, database, native, JIT, and GPU
+effects before side effects occur. Capability objects support exact grants, but
+the VM remains deliberately conservative: a restricted intrinsic stays denied
+until that intrinsic validates its concrete resource through the scoped API.
+Rust AOT and `UntrustedIsolated` execution remain denied pending R6 workers.
 
 ## Experimental Status
 

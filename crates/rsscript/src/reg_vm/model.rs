@@ -1850,6 +1850,132 @@ pub(crate) enum RegIntrinsic {
     WeakUpgrade,
 }
 
+impl RegIntrinsic {
+    pub(crate) const fn host_authority(self) -> Option<crate::HostAuthority> {
+        use crate::HostAuthority;
+        match self {
+            Self::ConfigLoad
+            | Self::CsvOpenRead
+            | Self::CsvReadInto
+            | Self::CsvRows
+            | Self::DirectoryCopyFile
+            | Self::DirectoryCreate
+            | Self::DirectoryCreateAll
+            | Self::DirectoryCreateDirAll
+            | Self::DirectoryExists
+            | Self::DirectoryIsDir
+            | Self::DirectoryIsFile
+            | Self::DirectoryListFiles
+            | Self::DirectoryListPaths
+            | Self::DirectoryMetadata
+            | Self::DirectoryReadString
+            | Self::DirectoryRemoveDirAll
+            | Self::DirectoryRemoveFile
+            | Self::DirectoryRename
+            | Self::DirectoryWriteString
+            | Self::FileAppendBytes
+            | Self::FileAppendString
+            | Self::FileBytesStream
+            | Self::FileExists
+            | Self::FileOpen
+            | Self::FileOpenRead
+            | Self::FileOpenWrite
+            | Self::FileReadAll
+            | Self::FileReadAllAsync
+            | Self::FileReadAllString
+            | Self::FileReadAllStringAsync
+            | Self::FileReadBytes
+            | Self::FileReadInto
+            | Self::FileReadString
+            | Self::FileRemove
+            | Self::FileWrite
+            | Self::FileWriteAsync
+            | Self::FileWriteAtomic
+            | Self::FileWriteBytes
+            | Self::FileWriteBytesView
+            | Self::FileWriteBuffer
+            | Self::FileWriteBufferView
+            | Self::FileWriteString
+            | Self::FileWriteStringAsync
+            | Self::FileWriteStringToPath
+            | Self::HashSha256File
+            | Self::ImageInspect
+            | Self::ImageLoad
+            | Self::ImageSave
+            | Self::JsonParseFile
+            | Self::PathExists
+            | Self::PathIsDir
+            | Self::PathIsFile
+            | Self::PathListFiles
+            | Self::PathListPaths
+            | Self::PathReadString
+            | Self::PathWriteString
+            | Self::RuleLoaderLoadRules
+            | Self::TempDirKeep
+            | Self::TempDirNew
+            | Self::TempDirNewIn
+            | Self::TomlParseFile
+            | Self::YamlParseFile => Some(HostAuthority::Filesystem),
+            Self::EnvCurrentDir
+            | Self::EnvGet
+            | Self::EnvGetOrDefault
+            | Self::EnvHomeDir
+            | Self::EnvRunWorkspaceRoot
+            | Self::EnvSet
+            | Self::EnvSetCurrentDir
+            | Self::EnvTempDir => Some(HostAuthority::Environment),
+            Self::HttpGet
+            | Self::HttpGetAsync
+            | Self::HttpGetRetryAsync
+            | Self::HttpGetTimeoutAsync
+            | Self::HttpPostForm
+            | Self::HttpPostFormAsync
+            | Self::HttpPostJson
+            | Self::HttpPostJsonAsync
+            | Self::HttpPostJsonBearerRetryAsync
+            | Self::HttpPostJsonRetryAsync
+            | Self::HttpPostJsonTimeoutAsync
+            | Self::HttpSendAsync
+            | Self::TcpConnect
+            | Self::TcpStreamRead
+            | Self::TcpStreamShutdown
+            | Self::TcpStreamWrite
+            | Self::TcpStreamWriteAll
+            | Self::WebSocketClose
+            | Self::WebSocketConnect
+            | Self::WebSocketRecvBytes
+            | Self::WebSocketRecvText
+            | Self::WebSocketSendBytes
+            | Self::WebSocketSendText => Some(HostAuthority::Network),
+            Self::ProcessRun
+            | Self::ProcessRunAsync
+            | Self::ProcessRunManyStdout
+            | Self::ProcessRunManyStdoutAsync
+            | Self::ProcessRunManyStdoutTimeout
+            | Self::ProcessRunManyStdoutTimeoutAsync
+            | Self::ProcessRunRequest
+            | Self::ProcessRunRequestAsync
+            | Self::ProcessRunRequestCancellableAsync
+            | Self::ProcessRunStdout
+            | Self::ProcessRunStdoutAsync
+            | Self::ProcessRunStdoutTimeout
+            | Self::ProcessRunStdoutTimeoutAsync
+            | Self::ProcessRunTimeout
+            | Self::ProcessRunTimeoutAsync
+            | Self::ProcessStream => Some(HostAuthority::Process),
+            Self::DbClose
+            | Self::DbConnectionOpen
+            | Self::DbConnectionQuery
+            | Self::DbConnectionTryOpen => Some(HostAuthority::Database),
+            Self::TensorGpuRunMsl
+            | Self::TensorMatmulMetal
+            | Self::TensorMetalAvailable
+            | Self::TensorMetalDeviceName => Some(HostAuthority::Gpu),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum RegIntCompare {
     Less,

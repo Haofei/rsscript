@@ -288,3 +288,30 @@ fn executable_backends_consume_validated_frontend_results() {
         "lowering declaration projections must reuse parsed semantic inputs"
     );
 }
+
+#[test]
+fn restricted_vm_authority_is_mandatory_and_precedes_intrinsic_dispatch() {
+    let root = workspace_root();
+    let vm_model = read(&root.join("crates/rsscript/src/reg_vm/model.rs"));
+    assert!(
+        vm_model.contains("fn host_authority")
+            && vm_model.contains("HostAuthority::Filesystem")
+            && vm_model.contains("HostAuthority::Network")
+            && vm_model.contains("HostAuthority::Process")
+            && vm_model.contains("HostAuthority::Database"),
+        "host-touching intrinsics must carry an explicit authority classification"
+    );
+
+    let vm = read(&root.join("crates/rsscript/src/reg_vm/mod.rs"));
+    assert!(
+        vm.contains("execution_context: crate::ExecutionContext"),
+        "every RegVm instance must own an execution context"
+    );
+    let intrinsics = read(&root.join("crates/rsscript/src/reg_vm/intrinsics/mod.rs"));
+    let dispatch = function_source(&intrinsics, "pub(super) fn call_intrinsic");
+    assert!(
+        dispatch.contains("intrinsic.host_authority()")
+            && dispatch.contains("self.authorize_host_authority(authority)?"),
+        "authority must be checked before intrinsic dispatch"
+    );
+}
