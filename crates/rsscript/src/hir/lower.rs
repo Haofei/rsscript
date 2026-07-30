@@ -21,7 +21,13 @@ impl Hir {
         builtin_interfaces: &[SyntaxProgram],
         interfaces: &[SyntaxProgram],
     ) -> Self {
-        let mut hir = Self::default();
+        let mut hir = Self {
+            semantic_types: Arc::new(SemanticTypeFacts::from_programs(
+                program,
+                builtin_interfaces.iter().chain(interfaces),
+            )),
+            ..Self::default()
+        };
         for interface in builtin_interfaces {
             hir.insert_builtin_interface(interface);
         }
@@ -38,6 +44,14 @@ impl Hir {
         hir.collect_resource_drop_bodies(program);
         hir.collect_body_facts(program);
         hir
+    }
+
+    pub(crate) fn semantic_types(&self) -> &SemanticTypeFacts {
+        &self.semantic_types
+    }
+
+    pub(crate) fn semantic_types_arc(&self) -> Arc<SemanticTypeFacts> {
+        Arc::clone(&self.semantic_types)
     }
 
     /// Record top-level `const` initializers so references can be inlined during
@@ -1386,7 +1400,7 @@ fn lower_hir_expr(
                     name: name.clone(),
                     span: span.clone(),
                     type_name: resolved.map(|(type_info, type_name, field)| {
-                        substituted_field_type(type_info, type_name, field)
+                        substituted_field_type(hir, type_info, type_name, field)
                     }),
                     is_handle: resolved
                         .is_some_and(|(_, _, field)| field.is_handle || field.is_weak),
@@ -2215,7 +2229,7 @@ fn collect_body_facts_in_expr(
                 name: name.clone(),
                 span: span.clone(),
                 type_name: resolved.map(|(type_info, type_name, field)| {
-                    substituted_field_type(type_info, type_name, field)
+                    substituted_field_type(hir, type_info, type_name, field)
                 }),
                 is_handle: resolved.is_some_and(|(_, _, field)| field.is_handle || field.is_weak),
                 is_weak: resolved.is_some_and(|(_, _, field)| field.is_weak),

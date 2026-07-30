@@ -2,9 +2,11 @@ use crate::text_util::{
     split_top_level_type_args, strip_fresh_type, type_arg_names, type_root_name,
 };
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::diagnostic::Span;
 use crate::interfaces::{builtin_interfaces, standard_package_interfaces};
+use crate::semantic::SemanticTypeFacts;
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl,
     GenericBound, Item, LetKind, MatchPattern, Param, Program as SyntaxProgram, ProtocolImpl, Stmt,
@@ -480,6 +482,7 @@ pub struct HirFunctionBody {
 
 #[derive(Debug, Default)]
 pub struct Hir {
+    semantic_types: Arc<SemanticTypeFacts>,
     signatures: HashMap<String, FunctionSig>,
     types: HashMap<String, TypeInfo>,
     type_aliases: HashMap<String, (Vec<String>, String)>,

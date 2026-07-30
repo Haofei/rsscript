@@ -6,7 +6,7 @@ use crate::syntax::ast::Program;
 
 #[path = "semantic_types.rs"]
 mod semantic_types;
-pub(crate) use semantic_types::{ResolvedType, SemanticTypeFacts};
+pub(crate) use semantic_types::{ResolvedType, ResolvedTypeKind, SemanticTypeFacts};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrontendStopReason {
@@ -87,7 +87,7 @@ pub struct SemanticDatabase {
     program: Program,
     interface_programs: Vec<Program>,
     hir: Hir,
-    types: SemanticTypeFacts,
+    types: Arc<SemanticTypeFacts>,
 }
 
 impl SemanticDatabase {
@@ -99,7 +99,7 @@ impl SemanticDatabase {
         interface_programs: Vec<Program>,
         hir: Hir,
     ) -> Self {
-        let types = SemanticTypeFacts::from_programs(&program, &interface_programs);
+        let types = hir.semantic_types_arc();
         Self {
             sources,
             interfaces,
@@ -140,7 +140,7 @@ impl SemanticDatabase {
     }
 
     pub(crate) fn types(&self) -> &SemanticTypeFacts {
-        &self.types
+        self.types.as_ref()
     }
 
     pub fn interned_type_count(&self) -> usize {

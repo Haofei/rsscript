@@ -432,10 +432,13 @@ pub struct SemanticTypeFacts {
 }
 
 impl SemanticTypeFacts {
-    pub(crate) fn from_programs(program: &Program, interfaces: &[Program]) -> Self {
+    pub(crate) fn from_programs<'a>(
+        program: &Program,
+        interfaces: impl IntoIterator<Item = &'a Program>,
+    ) -> Self {
         let mut facts = Self::default();
         for item in interfaces
-            .iter()
+            .into_iter()
             .flat_map(|interface| interface.items.iter())
             .chain(program.items.iter())
         {
@@ -529,6 +532,10 @@ impl SemanticTypeFacts {
         self.functions
             .iter()
             .map(|(name, facts)| (name.as_str(), facts))
+    }
+
+    pub(crate) fn function(&self, name: &str) -> Option<&FunctionTypeFacts> {
+        self.functions.get(name)
     }
 
     pub fn named_type(&self, name: &str) -> Option<&NamedTypeFacts> {
