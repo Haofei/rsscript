@@ -96,6 +96,7 @@ This table records the current implementation batch for the refactoring work in
 | R31 | Split native tier state machines | Complete | Precise deopt reconstruction and Tier-0/recursive JIT execution live in dedicated modules; `tier.rs` retains admission, promotion, and OSR orchestration |
 | R32 | Runtime operation-scoped ownership | Complete | Canonical runtime operations own explicit services; the compatibility owner is weak and cannot keep services alive process-wide |
 | R33 | Structural HIR signatures and fields | Complete | Function parameters, returns, and declared fields store `ResolvedType`; inference no longer reparses those facts from display strings |
+| R35 | Native translation post-pass decomposition | Complete | Loop-region discovery and JIT post-passes have dedicated modules while translation order, OSR, deopt, and JIT entrypoints remain unchanged |
 | R36 | Immutable Register-VM execution plans | Complete | Evaluation snapshots limits, output mode, tier policy, native deopt/OSR controls, and compile admission before execution starts |
 
 Update this table in the same commit that changes a batch state. Do not create a
@@ -338,6 +339,13 @@ structurally, generic substitution consumes them without fallback parsing, and
 protocol `Self` comparison is structural. Diagnostics, review output, and VM
 metadata render a type only at their text or ABI boundary. Expression and local
 binding type projections remain a separate whole-HIR migration.
+
+R35 extracts natural-loop discovery and the native JIT post-pass pipeline from
+the translation facade. Store forwarding, loop-invariant helper memoization,
+heap alias/invariant analysis, and their tests now live in `translate/jit_post`;
+OSR loop metadata and detection live in `translate/loop_regions`. Translation
+order, IP-map direction, native entrypoints, OSR, and deopt behavior are
+unchanged, and JIT remains a mandatory experimental track.
 
 R36 introduces an internal immutable `ExecutionPlan` shared by reference,
 Tier-0, and native evaluation. Public compatibility entrypoints retain their
