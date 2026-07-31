@@ -96,12 +96,6 @@ pub(super) fn collect_function_body_facts(
                 span: param.span.clone(),
             });
         }
-        collect_feature_uses_in_type_ref(
-            Some(&function.name),
-            &param.ty,
-            HirFeatureUseKind::ResourcePool,
-            facts,
-        );
         let param_type = type_ref_name(&param.ty);
         value_types.insert(param.name.clone(), param_type.clone());
         facts.bindings.push(HirBinding {
@@ -112,14 +106,6 @@ pub(super) fn collect_function_body_facts(
             span: param.span.clone(),
             type_name: Some(param_type),
         });
-    }
-    if let Some(return_ty) = &function.return_ty {
-        collect_feature_uses_in_type_ref(
-            Some(&function.name),
-            return_ty,
-            HirFeatureUseKind::ResourcePool,
-            facts,
-        );
     }
     // Store protocol bounds for receiver-call shorthand resolution.
     // Convention: "__protocol_bound__<TypeParam>" -> "<ProtocolName>"
@@ -142,30 +128,6 @@ pub(super) fn collect_function_body_facts(
         ),
     );
     collect_body_facts_in_block(hir, &function.name, &function.body, &mut value_types, facts);
-}
-
-pub(super) fn collect_type_feature_uses(type_decl: &TypeDecl, facts: &mut BodyFacts) {
-    for field in &type_decl.fields {
-        collect_feature_uses_in_type_ref(None, &field.ty, HirFeatureUseKind::ResourcePool, facts);
-    }
-}
-
-pub(super) fn collect_feature_uses_in_type_ref(
-    function_name: Option<&str>,
-    ty: &TypeRef,
-    kind: HirFeatureUseKind,
-    facts: &mut BodyFacts,
-) {
-    if ty.name == "ResourcePool" {
-        facts.feature_uses.push(HirFeatureUse {
-            function_name: function_name.map(str::to_string),
-            kind,
-            span: ty.span.clone(),
-        });
-    }
-    for arg in &ty.args {
-        collect_feature_uses_in_type_ref(function_name, arg, kind, facts);
-    }
 }
 
 pub(super) fn lower_hir_block(

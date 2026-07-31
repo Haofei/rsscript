@@ -596,9 +596,8 @@ fn add_review_line(facts: PackageReviewFacts, line: String) -> fresh PackageRevi
     let is_api = is_fn || is_native_fn
     let has_mut = String.contains(value: trimmed, needle: " mut ")
     let has_retains = String.contains(value: trimmed, needle: "effects(retains")
-    let has_resource_pool = String.contains(value: trimmed, needle: "ResourcePool")
     let has_resource_name = String.contains(value: trimmed, needle: "resource")
-    let has_resource = has_resource_pool || has_resource_name
+    let has_resource = has_resource_name
     let has_fresh = String.contains(value: trimmed, needle: "fresh ")
     let has_native = is_native_fn || String.contains(value: trimmed, needle: "effects(native")
     let has_parallel = String.contains(value: trimmed, needle: "parallel")

@@ -108,31 +108,6 @@ fn build() -> Unit {
 }
 
 #[test]
-fn resource_pool_read_parameter_must_be_local_capability() {
-    let source = r#"
-features: local
-
-resource DbConnection {
-    fd: Int
-
-    drop {
-        Db.close(fd: fd)
-    }
-}
-
-fn bad_pool(pool: read ResourcePool<DbConnection>) -> Unit {
-    DbConnection.count(pool: read pool)
-}
-"#;
-    let codes = analyze_source("resourcepool-read-param.rss", source)
-        .into_iter()
-        .map(|diagnostic| diagnostic.code)
-        .collect::<Vec<_>>();
-
-    assert!(codes.contains(&"RS0705".to_string()));
-}
-
-#[test]
 fn checker_can_disable_bundled_core_interfaces() {
     let source = r#"
 fn log(value: read String) -> Unit {

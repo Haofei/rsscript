@@ -252,8 +252,9 @@ pub(crate) fn split_top_level_type_args(args: &str) -> Vec<&str> {
 /// `Result -> ["K","V"]` copy weakened error-combinator substitution).
 pub(crate) fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
     match root {
-        "List" | "Set" | "Option" | "ResourcePool" | "Channel" | "Sender" | "Receiver"
-        | "Stream" | "Pipeline" => Some(vec!["T"]),
+        "List" | "Set" | "Option" | "Channel" | "Sender" | "Receiver" | "Stream" | "Pipeline" => {
+            Some(vec!["T"])
+        }
         "FalliblePipeline" => Some(vec!["T", "E"]),
         "Capability" => Some(vec!["P"]),
         "Map" => Some(vec!["K", "V"]),

@@ -127,27 +127,3 @@ pub(super) fn is_file_open_read_callee(callee: &Callee) -> bool {
 pub(super) fn is_file_open_write_callee(callee: &Callee) -> bool {
     matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "File" && type_root_name(name) == "open_write")
 }
-
-pub(super) fn is_resource_pool_borrow_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "borrow")
-}
-
-pub(super) fn is_resource_pool_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "new")
-}
-
-pub(super) fn is_resource_pool_try_new_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "try_new")
-}
-
-pub(super) fn is_resource_pool_lazy_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "lazy")
-}
-
-pub(super) fn is_resource_pool_try_lazy_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "try_lazy")
-}
-
-pub(super) fn is_resource_pool_try_borrow_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" && type_root_name(name) == "try_borrow")
-}

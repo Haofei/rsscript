@@ -751,14 +751,13 @@ impl<'a> RustLowerer<'a> {
     }
 
     /// Generic / fallthrough call dispatch: string-concat and weak intrinsics,
-    /// native-bound free functions, resource-pool constructors and borrows,
-    /// capability-from-protocol, protocol callees, and the default
+    /// native-bound free functions, capability-from-protocol, protocol callees, and the default
     /// `callee(args...)` form (including trailing defaulted-parameter fill-in).
     pub(in crate::rust_lower) fn lower_call_dispatch(
         &mut self,
         callee: &Callee,
         args: &[CallArg],
-        span: &Span,
+        _span: &Span,
     ) -> String {
         if is_string_concat_callee(callee) {
             return lower_string_concat_call(self, args);
@@ -781,18 +780,6 @@ impl<'a> RustLowerer<'a> {
                 .join(", ");
             return format!("{native_target}({args})");
         }
-        if is_resource_pool_new_callee(callee) {
-            return lower_resource_pool_new_call(self, args, span);
-        }
-        if is_resource_pool_try_new_callee(callee) {
-            return lower_resource_pool_try_new_call(self, args, span);
-        }
-        if is_resource_pool_lazy_callee(callee) {
-            return lower_resource_pool_lazy_call(self, args, span);
-        }
-        if is_resource_pool_try_lazy_callee(callee) {
-            return lower_resource_pool_try_lazy_call(self, args, span);
-        }
         if let Some(protocol) = capability_from_protocol(callee) {
             return self.lower_capability_from_call(protocol, args);
         }
@@ -806,22 +793,12 @@ impl<'a> RustLowerer<'a> {
                 .join(", ");
             return format!("{lowered_callee}({args})");
         }
-        let is_resource_pool_borrow = is_resource_pool_borrow_callee(callee);
-        let lowered_callee = if is_resource_pool_borrow {
-            "rsscript_runtime::ResourcePool::borrow_at".to_string()
-        } else if is_resource_pool_try_borrow_callee(callee) {
-            "rsscript_runtime::ResourcePool::try_borrow".to_string()
-        } else {
-            lower_callee(callee)
-        };
-        let mut args = args
+        let lowered_callee = lower_callee(callee);
+        let args = args
             .iter()
             .enumerate()
             .map(|(index, arg)| self.lower_call_arg_for_callee(callee, arg, index))
             .collect::<Vec<_>>();
-        if is_resource_pool_borrow {
-            args.push(lower_source_span(span));
-        }
         let args = args.join(", ");
         format!("{lowered_callee}({args})")
     }

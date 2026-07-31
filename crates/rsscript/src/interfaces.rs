@@ -138,10 +138,6 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../../../stdlib/date/date.rssi"),
     ),
     (
-        "stdlib/db/db.rssi",
-        include_str!("../../../stdlib/db/db.rssi"),
-    ),
-    (
         "stdlib/diff/diff.rssi",
         include_str!("../../../stdlib/diff/diff.rssi"),
     ),
@@ -224,10 +220,6 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     (
         "stdlib/regex/regex.rssi",
         include_str!("../../../stdlib/regex/regex.rssi"),
-    ),
-    (
-        "stdlib/resource/resource_pool.rssi",
-        include_str!("../../../stdlib/resource/resource_pool.rssi"),
     ),
     (
         "stdlib/result/result.rssi",

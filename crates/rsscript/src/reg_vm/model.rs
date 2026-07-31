@@ -920,10 +920,6 @@ pub(crate) enum RegIntrinsic {
     DirectoryRemoveFile,
     DirectoryRename,
     DirectoryWriteString,
-    DbClose,
-    DbConnectionOpen,
-    DbConnectionQuery,
-    DbConnectionTryOpen,
     DurationAdd,
     DurationAsMs,
     DurationAsSeconds,
@@ -1224,11 +1220,6 @@ pub(crate) enum RegIntrinsic {
     PersistentMapRemove,
     PipelineCollect,
     PipelineEach,
-    PoolErrorMessage,
-    PoolStatsAvailable,
-    PoolStatsCapacity,
-    PoolStatsCreated,
-    PoolStatsInUse,
     PipelineTryMap,
     ProcessRun,
     ProcessRunAsync,
@@ -1280,14 +1271,6 @@ pub(crate) enum RegIntrinsic {
     RowBufferNew,
     RowFieldString,
     RuleLoaderLoadRules,
-    ResourcePoolBorrow,
-    ResourcePoolDiscard,
-    ResourcePoolLazy,
-    ResourcePoolNew,
-    ResourcePoolStats,
-    ResourcePoolTryBorrow,
-    ResourcePoolTryLazy,
-    ResourcePoolTryNew,
     SetContains,
     SetDifference,
     SetIntersection,
@@ -1495,9 +1478,6 @@ impl RegIntrinsic {
             | Self::ProcessRunTimeout
             | Self::ProcessRunTimeoutAsync
             | Self::ProcessStream => Some(HostAuthority::Process),
-            Self::DbConnectionOpen | Self::DbConnectionQuery | Self::DbConnectionTryOpen => {
-                Some(HostAuthority::Database)
-            }
             _ => None,
         }
     }

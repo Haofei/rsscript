@@ -27,7 +27,7 @@ mod closure_captures;
 mod effects;
 mod fresh;
 mod place;
-mod resource_pool;
+mod resources;
 mod semantics;
 mod try_checks;
 
@@ -37,7 +37,7 @@ use closure_captures::*;
 use effects::*;
 use fresh::*;
 use place::*;
-use resource_pool::*;
+use resources::*;
 use semantics::*;
 use try_checks::*;
 
@@ -74,17 +74,14 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
             if let Some(block) = body.block.as_ref() {
                 check_await_placement(analyzer, block, function.is_async);
             }
-            check_resource_pool_bindings(analyzer, body);
             check_local_class_bindings(analyzer, body);
             check_uninferable_unused_bindings(analyzer, body);
             if let Some(block) = body.block.as_ref() {
-                check_resource_pool_discards(analyzer, block, &mut Vec::new());
                 let bindings: std::collections::HashMap<String, HirBindingKind> = body
                     .bindings
                     .iter()
                     .map(|binding| (binding.name.clone(), binding.kind))
                     .collect();
-                check_lazy_factory_captures_block(analyzer, block, &bindings);
                 let binding_names = bindings.keys().cloned().collect::<HashSet<_>>();
                 check_explicit_closure_captures_block(analyzer, block, &binding_names);
             }

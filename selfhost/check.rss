@@ -798,72 +798,6 @@ fn collect_surface_references(toks: List<Tok>, out: mut List<Int>) -> Bool {
     return hit
 }
 
-// RS0708: an eager `ResourcePool<T>.new(...)` allocates up front, so its `max_size` must be a
-// positive literal or a `const` (a `.lazy(...)` pool sizes on demand and is exempt). Message:
-// "`ResourcePool.new` requires a positive literal `max_size`." Fire when the `max_size` value
-// is `0`/negative, a runtime binding (not a `const`), or any non-literal expression.
-
-// Names declared with `const` (or `pub const`) in the file.
-fn collect_const_names(toks: List<Tok>) -> Set<String> {
-    let mut names = Set.new<String>()
-    let ntok = List.len(list: toks)
-    let mut i = 0
-    while i < ntok {
-        if at_ident(toks: toks, i: i, wid: WORD_CONST) && is_ident_tok(toks: toks, i: (i + 1)) {
-            let nm = tk_text(toks, i: (i + 1))
-            Set.insert<String>(set: mut names, value: nm)
-        }
-        i = i + 1
-    }
-    return names
-}
-
-// Whether the `max_size` value in [vs, ve) is not an accepted eager size: OK only when it is a
-// single positive integer literal or a single `const` identifier.
-fn maxsize_value_bad(toks: List<Tok>, vs: Int, ve: Int, consts: Set<String>) -> Bool {
-    if (ve - vs) == 1 {
-        if tk_kind(toks: toks, i: vs) == TOK_NUMBER {
-            return tk_text(toks, i: vs) == "0"
-        }
-        if is_ident_tok(toks: toks, i: vs) {
-            return Set.contains<String>(set: consts, value: tk_text(toks, i: vs)) == false
-        }
-        return true
-    }
-    return true
-}
-
-fn collect_resourcepool_maxsize_bad_tokens(toks: List<Tok>, out: mut List<Int>) -> Bool {
-    let ntok = List.len(list: toks)
-    let consts = collect_const_names(toks)
-    let mut i = 0
-    let mut hit = false
-    while i < ntok {
-        if tk_text(toks, i) == "ResourcePool" && at_symbol(toks: toks, i: (i + 1), code: SYM_LANGLE) {
-            let rangle = find_matching(toks: toks, open: (i + 1), openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
-            if rangle >= 0 && at_symbol(toks: toks, i: (rangle + 1), code: SYM_DOT) && tk_text(toks, i: (rangle + 2)) == "new" && at_symbol(toks: toks, i: (rangle + 3), code: SYM_LPAREN) {
-                let callClose = find_matching(toks: toks, open: (rangle + 3), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-                if callClose >= 0 {
-                    let mut k = rangle + 4
-                    while k < callClose {
-                        if tk_text(toks, i: k) == "max_size" && at_symbol(toks: toks, i: (k + 1), code: SYM_COLON) {
-                            let vs = k + 2
-                            let ve = arg_end(toks, start: vs, limit: callClose)
-                            if maxsize_value_bad(toks, vs, ve, consts) {
-                                List.push<Int>(list: mut out, value: k)
-                                hit = true
-                            }
-                        }
-                        k = k + 1
-                    }
-                }
-            }
-        }
-        i = i + 1
-    }
-    return hit
-}
-
 // End of the field type that starts at `ts`: the next top-level (nesting-depth 0) `name:`
 // field header, or bodyClose. `< ( [` open and `> ) ]` close a nesting level.
 fn field_type_end(toks: List<Tok>, ts: Int, bodyClose: Int) -> Int {
@@ -2400,160 +2334,6 @@ fn collect_fn_closure_capture_bad(
     return result
 }
 
-// RS0711: a ResourcePool<..>.lazy(…)/.try_lazy(…) factory closure captures a non-owned binding
-// (a parameter or managed `let`) instead of only owned `local` bindings.
-fn collect_fn_lazy_capture_tokens(toks: List<Tok>, start: Int, out: mut List<Int>) -> Bool {
-    let ns = fn_name_start(toks, i: start)
-    let sigEnd = function_signature_end(toks: toks, start: (ns - 1))
-    if at_symbol(toks: toks, i: sigEnd, code: SYM_LBRACE) == false { return false }
-    let bodyClose = find_matching(toks: toks, open: sigEnd, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
-    if bodyClose < 0 { return false }
-    // parameter names (scan the first `(` directly — find_top_sym can't match an opening paren)
-    let mut nonOwned = Set.new<String>()
-    let mut popen = 0 - 1
-    let mut pf = ns
-    while pf < sigEnd {
-        if at_symbol(toks: toks, i: pf, code: SYM_LPAREN) {
-            popen = pf
-            pf = sigEnd
-        } else {
-            pf = pf + 1
-        }
-    }
-    if popen > 0 {
-        let pclose = find_matching(toks: toks, open: popen, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-        if pclose > 0 {
-            let mut depth = 0
-            let mut q = popen + 1
-            while q < pclose {
-                if at_symbol(toks: toks, i: q, code: SYM_LPAREN) || at_symbol(toks: toks, i: q, code: SYM_LANGLE) || at_symbol(toks: toks, i: q, code: SYM_LBRACKET) {
-                    depth = depth + 1
-                } else if at_symbol(toks: toks, i: q, code: SYM_RPAREN) || at_symbol(toks: toks, i: q, code: SYM_RANGLE) || at_symbol(toks: toks, i: q, code: SYM_RBRACKET) {
-                    if depth > 0 { depth = depth - 1 }
-                } else if depth == 0 && is_ident_tok(toks: toks, i: q) && at_symbol(toks: toks, i: (q + 1), code: SYM_COLON) {
-                    Set.insert<String>(set: mut nonOwned, value: tk_text(toks, i: q))
-                }
-                q = q + 1
-            }
-        }
-    }
-    let mut letImmut = Set.new<String>()
-    let mut letMut = Set.new<String>()
-    collect_let_kinds(toks, bodyOpen: sigEnd, bodyClose, immut: mut letImmut, mutable: mut letMut)
-    let mut hit = false
-    let mut k = sigEnd + 1
-    while k < bodyClose {
-        if tk_text(toks, i: k) == "ResourcePool" {
-            let mut mpos = k + 1
-            if at_symbol(toks: toks, i: (k + 1), code: SYM_LANGLE) {
-                let rangle = find_matching(toks: toks, open: (k + 1), openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
-                if rangle >= 0 { mpos = rangle + 1 }
-            }
-            if at_symbol(toks: toks, i: mpos, code: SYM_DOT) {
-                let method = tk_text(toks, i: (mpos + 1))
-                if (method == "lazy" || method == "try_lazy") && at_symbol(toks: toks, i: (mpos + 2), code: SYM_LPAREN) {
-                    let callOpen = mpos + 2
-                    let callClose = find_matching(toks: toks, open: callOpen, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-                    if callClose > 0 {
-                        let mut op1 = 0 - 1
-                        let mut s = callOpen + 1
-                        while s < callClose {
-                            if at_symbol(toks: toks, i: s, code: SYM_PIPE) {
-                                op1 = s
-                                s = callClose
-                            } else {
-                                s = s + 1
-                            }
-                        }
-                        if op1 > 0 {
-                            let mut closep = 0 - 1
-                            let mut t = op1 + 1
-                            while t < callClose {
-                                if at_symbol(toks: toks, i: t, code: SYM_PIPE) {
-                                    closep = t
-                                    t = callClose
-                                } else {
-                                    t = t + 1
-                                }
-                            }
-                            if closep > 0 {
-                                let mut cparams = Set.new<String>()
-                                let mut cp = op1 + 1
-                                while cp < closep {
-                                    if is_ident_tok(toks: toks, i: cp) { Set.insert<String>(set: mut cparams, value: tk_text(toks, i: cp)) }
-                                    cp = cp + 1
-                                }
-                                let mut bodyStart = closep + 1
-                                let mut bodyEnd = callClose
-                                if at_symbol(toks: toks, i: (closep + 1), code: SYM_LBRACE) {
-                                    let bclose = find_matching(toks: toks, open: (closep + 1), openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
-                                    if bclose > 0 {
-                                        bodyStart = closep + 2
-                                        bodyEnd = bclose
-                                    }
-                                } else {
-                                    let mut d2 = 0
-                                    let mut e = closep + 1
-                                    let mut findEnd = true
-                                    while findEnd {
-                                        if e >= callClose {
-                                            bodyEnd = callClose
-                                            findEnd = false
-                                        } else if at_symbol(toks: toks, i: e, code: SYM_LPAREN) || at_symbol(toks: toks, i: e, code: SYM_LBRACE) || at_symbol(toks: toks, i: e, code: SYM_LBRACKET) {
-                                            d2 = d2 + 1
-                                            e = e + 1
-                                        } else if at_symbol(toks: toks, i: e, code: SYM_RPAREN) || at_symbol(toks: toks, i: e, code: SYM_RBRACE) || at_symbol(toks: toks, i: e, code: SYM_RBRACKET) {
-                                            if d2 > 0 {
-                                                d2 = d2 - 1
-                                                e = e + 1
-                                            } else {
-                                                bodyEnd = e
-                                                findEnd = false
-                                            }
-                                        } else if d2 == 0 && at_symbol(toks: toks, i: e, code: SYM_COMMA) {
-                                            bodyEnd = e
-                                            findEnd = false
-                                        } else {
-                                            e = e + 1
-                                        }
-                                    }
-                                }
-                                let mut declaredInside = Set.new<String>()
-                                let mut d = bodyStart
-                                while d < bodyEnd {
-                                    if (is_kw_text(toks, i: d, word: "let") || is_kw_text(toks, i: d, word: "local")) {
-                                        let mut dn = d + 1
-                                        if is_kw_text(toks, i: dn, word: "mut") { dn = dn + 1 }
-                                        if is_ident_tok(toks: toks, i: dn) {
-                                            Set.insert<String>(set: mut declaredInside, value: tk_text(toks, i: dn))
-                                        }
-                                    }
-                                    d = d + 1
-                                }
-                                let mut m = bodyStart
-                                while m < bodyEnd {
-                                    // a real capture is a value, not an argument label (`host:`) or a
-                                    // field/method access base (`x.f`)
-                                    if is_ident_tok(toks: toks, i: m) && at_symbol(toks: toks, i: (m + 1), code: SYM_COLON) == false && at_symbol(toks: toks, i: (m - 1), code: SYM_DOT) == false {
-                                        let nm = tk_text(toks, i: m)
-                                        if (Set.contains<String>(set: nonOwned, value: nm) || Set.contains<String>(set: letImmut, value: nm) || Set.contains<String>(set: letMut, value: nm)) && Set.contains<String>(set: cparams, value: nm) == false && Set.contains<String>(set: declaredInside, value: nm) == false {
-                                            List.push<Int>(list: mut out, value: m)
-                                            hit = true
-                                        }
-                                    }
-                                    m = m + 1
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        k = k + 1
-    }
-    return hit
-}
-
 // The container head immediately enclosing the type-arg at `pos` (ident before the opening `<` of
 // the innermost generic clause containing `pos`), or "".
 fn enclosing_generic_head(toks: List<Tok>, pos: Int) -> String {
@@ -2596,8 +2376,8 @@ fn seg_generic_kind(toks: List<Tok>, segStart: Int, resParams: mut Set<String>) 
     return false
 }
 
-// RS0704 sub-rule A: a file-declared resource used as a generic type-argument of a non-pool
-// container. Exempt under ResourcePool<…>, and Result<Resource, E> at arg-0 in a return type.
+// RS0704 sub-rule A: a file-declared resource used as a generic type argument.
+// Result<Resource, E> at arg 0 in a return type remains valid.
 fn collect_resource_generic_arg_tokens(toks: List<Tok>, resources: Set<String>, out: mut List<Int>) -> Bool {
     let n = List.len(list: toks)
     let mut k = 0
@@ -2606,9 +2386,7 @@ fn collect_resource_generic_arg_tokens(toks: List<Tok>, resources: Set<String>, 
         if is_ident_tok(toks: toks, i: k) && Set.contains<String>(set: resources, value: tk_text(toks, i: k)) && k >= 1 && (at_symbol(toks: toks, i: (k - 1), code: SYM_LANGLE) || at_symbol(toks: toks, i: (k - 1), code: SYM_COMMA)) {
             let head = enclosing_generic_head(toks, pos: k)
             let mut skip = false
-            if head == "ResourcePool" {
-                skip = true
-            } else if head == "Result" && at_symbol(toks: toks, i: (k - 1), code: SYM_LANGLE) {
+            if head == "Result" && at_symbol(toks: toks, i: (k - 1), code: SYM_LANGLE) {
                 let mut bp = k - 3
                 if is_kw_text(toks, i: bp, word: "fresh") { bp = bp - 1 }
                 if at_symbol(toks: toks, i: bp, code: SYM_ARROW) { skip = true }
@@ -2624,7 +2402,7 @@ fn collect_resource_generic_arg_tokens(toks: List<Tok>, resources: Set<String>, 
 }
 
 // RS0704 sub-rules B1/B2: a `resource Name<params>` with an unbounded param (B1), or a
-// Resource-bounded param used directly (not under ResourcePool) in a field type (B2).
+// Resource-bounded param used directly in a field type (B2).
 fn collect_resource_decl_generic_bad_tokens(toks: List<Tok>, out: mut List<Int>) -> Bool {
     let n = List.len(list: toks)
     let mut k = 0
@@ -2673,10 +2451,8 @@ fn collect_resource_decl_generic_bad_tokens(toks: List<Tok>, out: mut List<Int>)
                         let mut f = bOpen + 1
                         while f < bClose {
                             if is_ident_tok(toks: toks, i: f) && Set.contains<String>(set: resParams, value: tk_text(toks, i: f)) && f >= 1 && (at_symbol(toks: toks, i: (f - 1), code: SYM_COLON) || at_symbol(toks: toks, i: (f - 1), code: SYM_LANGLE) || at_symbol(toks: toks, i: (f - 1), code: SYM_COMMA)) {
-                                if enclosing_generic_head(toks, pos: f) != "ResourcePool" {
-                                    List.push<Int>(list: mut out, value: f)
-                                    hit = true
-                                }
+                                List.push<Int>(list: mut out, value: f)
+                                hit = true
                             }
                             f = f + 1
                         }
@@ -2739,41 +2515,6 @@ fn nonresource_generic_param(toks: List<Tok>, name: String) -> Bool {
         k = k + 1
     }
     return found
-}
-
-// RS0703: any `ResourcePool<X>` whose argument X is a declared/stdlib non-resource type or a
-// non-Resource-bounded generic parameter. Unknown/undeclared X → OK.
-fn collect_resource_pool_type_bad_sites(source: String, toks: List<Tok>, resources: Set<String>, declared: Set<String>, out: mut List<DiagnosticSite>) -> Bool {
-    let n = List.len(list: toks)
-    let mut k = 0
-    let mut hit = false
-    while k < n {
-        if tk_text(toks, i: k) == "ResourcePool" && at_symbol(toks: toks, i: (k + 1), code: SYM_LANGLE) && is_ident_tok(toks: toks, i: (k + 2)) {
-            let x = tk_text(toks, i: (k + 2))
-            let mut fire = false
-            if x == "Resource" {
-                fire = false
-            } else if Set.contains<String>(set: resources, value: x) {
-                fire = false
-            } else if Set.contains<String>(set: declared, value: x) {
-                fire = true
-            } else if nonresource_generic_param(toks, name: x) {
-                fire = true
-            }
-            if fire {
-                let mut start = k + 2
-                let mut finish = k + 2
-                if at_symbol(toks: toks, i: (k + 3), code: SYM_RANGLE) && at_symbol(toks: toks, i: (k + 4), code: SYM_DOT) && tk_text(toks, i: (k + 5)) == "new" && at_symbol(toks: toks, i: (k + 6), code: SYM_LPAREN) {
-                    start = k
-                    finish = k
-                }
-                List.push<DiagnosticSite>(list: mut out, value: token_range_diagnostic_site(source, toks, start, endInclusive: finish))
-                hit = true
-            }
-        }
-        k = k + 1
-    }
-    return hit
 }
 
 // The aggregate access effect of `name` across an explicit closure body: "take" > "mut" > "read",
@@ -3018,51 +2759,6 @@ fn collect_producer_fns(toks: List<Tok>, resources: Set<String>) -> Set<String> 
     return out
 }
 
-// M3: ResourcePool.borrow/.try_borrow lease used outside a `with` resource slot.
-fn collect_pool_lease_escape_tokens(toks: List<Tok>, out: mut List<Int>) -> Bool {
-    let n = List.len(list: toks)
-    let mut m = 0
-    let mut hit = false
-    while m < n {
-        let mt = tk_text(toks, i: m)
-        if (mt == "borrow" || mt == "try_borrow") && m >= 2 && at_symbol(toks: toks, i: (m - 1), code: SYM_DOT) {
-            let mut root = m - 2
-            if at_symbol(toks: toks, i: (m - 2), code: SYM_RANGLE) {
-                let mut depth = 0
-                let mut b = m - 2
-                let mut going = true
-                while going {
-                    if b <= 0 {
-                        going = false
-                    } else if at_symbol(toks: toks, i: b, code: SYM_RANGLE) {
-                        depth = depth + 1
-                        b = b - 1
-                    } else if at_symbol(toks: toks, i: b, code: SYM_LANGLE) {
-                        depth = depth - 1
-                        if depth == 0 {
-                            root = b - 1
-                            going = false
-                        } else {
-                            b = b - 1
-                        }
-                    } else {
-                        b = b - 1
-                    }
-                }
-            }
-            if tk_text(toks, i: root) == "ResourcePool" && is_kw_text(toks, i: (root - 1), word: "with") == false {
-                List.push<Int>(list: mut out, value: root)
-                // A bare pool lease is both an unscoped lease and an escaping
-                // resource producer in the production checker.
-                List.push<Int>(list: mut out, value: root)
-                hit = true
-            }
-        }
-        m = m + 1
-    }
-    return hit
-}
-
 // M4: a resource producer (a producer-fn call or a resource constructor `R(`) that is not the
 // resource expression of a `with` (its root ident is not immediately preceded by `with`), and is
 // not the producer fn's own declaration (`fn R.open(...)`).
@@ -3072,8 +2768,7 @@ fn collect_producer_escape_tokens(toks: List<Tok>, resources: Set<String>, produ
     let mut hit = false
     while k < n {
         if is_ident_tok(toks: toks, i: k) && (is_kw_text(toks, i: (k - 1), word: "return") || at_symbol(toks: toks, i: (k - 1), code: SYM_EQ)) {
-            // only a producer that is directly returned or bound (`let x = producer`) escapes — one
-            // used as a sub-expression (e.g. a factory `create: || Producer.open(...)` closure) is OK
+            // Only a producer that is directly returned or bound (`let x = producer`) escapes.
             // resource constructor `R(`
             let mut isProducer = false
             if Set.contains<String>(set: resources, value: tk_text(toks, i: k)) && at_symbol(toks: toks, i: (k + 1), code: SYM_LPAREN) {
@@ -3150,8 +2845,7 @@ fn collect_with_binding_escape_tokens(toks: List<Tok>, bodyOpen: Int, bodyClose:
     return hit
 }
 
-// M2/M5: within a `with … as B { body }`, a closure captures B. A stored `let` closure (M2) or a
-// ResourcePool factory `create:` closure (M5) fires; a bare `local` closure does not.
+// Within a `with … as B { body }`, reject a stored closure that captures B.
 fn collect_with_binding_closure_capture_tokens(toks: List<Tok>, bodyOpen: Int, bodyClose: Int, name: String, out: mut List<Int>) -> Bool {
     let mut k = bodyOpen + 1
     let mut hit = false
@@ -3171,7 +2865,7 @@ fn collect_with_binding_closure_capture_tokens(toks: List<Tok>, bodyOpen: Int, b
                     m = m + 1
                 }
                 if refsB {
-                    // stored-let closure, or a factory closure (`create:` / preceded by a label:)
+                    // A stored `let` closure can outlive the resource scope.
                     let mut bpos = op - 1
                     if is_effect_kw(toks, i: bpos) { bpos = bpos - 1 }
                     // see through a `Some(`/`Ok(`/`Err(` wrapper around the closure
@@ -3183,10 +2877,6 @@ fn collect_with_binding_closure_capture_tokens(toks: List<Tok>, bodyOpen: Int, b
                         let mut kw = bpos - 2
                         if is_kw_text(toks, i: kw, word: "mut") { kw = kw - 1 }
                         if is_kw_text(toks, i: kw, word: "let") { List.push<Int>(list: mut out, value: op); hit = true }
-                    } else if at_symbol(toks: toks, i: bpos, code: SYM_COLON) {
-                        // a labelled closure argument (create: || …) — factory capture
-                        List.push<Int>(list: mut out, value: op)
-                        hit = true
                     }
                 }
             }
@@ -3197,47 +2887,9 @@ fn collect_with_binding_closure_capture_tokens(toks: List<Tok>, bodyOpen: Int, b
     return hit
 }
 
-// M5: within a `with … as B { body }`, a ResourcePool factory (.new/.try_new/.lazy/.try_lazy)
-// `create` closure (expression- or block-bodied) references B.
-fn collect_with_body_factory_capture_tokens(toks: List<Tok>, bodyOpen: Int, bodyClose: Int, name: String, out: mut List<Int>) -> Bool {
-    let mut k = bodyOpen + 1
-    let mut hit = false
-    while k < bodyClose {
-        if tk_text(toks, i: k) == "ResourcePool" {
-            let mut mpos = k + 1
-            if at_symbol(toks: toks, i: (k + 1), code: SYM_LANGLE) {
-                let rangle = find_matching(toks: toks, open: (k + 1), openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
-                if rangle >= 0 { mpos = rangle + 1 }
-            }
-            if at_symbol(toks: toks, i: mpos, code: SYM_DOT) {
-                let method = tk_text(toks, i: (mpos + 1))
-                if (method == "new" || method == "try_new" || method == "lazy" || method == "try_lazy") && at_symbol(toks: toks, i: (mpos + 2), code: SYM_LPAREN) {
-                    let callOpen = mpos + 2
-                    let callClose = find_matching(toks: toks, open: callOpen, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-                    if callClose > 0 {
-                        // scan the whole factory-call arg region for a bare reference to B
-                        let mut m = callOpen + 1
-                        while m < callClose {
-                            if is_ident_tok(toks: toks, i: m) && tk_text(toks, i: m) == name && at_symbol(toks: toks, i: (m - 1), code: SYM_DOT) == false && at_symbol(toks: toks, i: (m + 1), code: SYM_COLON) == false {
-                                List.push<Int>(list: mut out, value: m)
-                                hit = true
-                            }
-                            m = m + 1
-                        }
-                        k = callClose
-                    }
-                }
-            }
-        }
-        k = k + 1
-    }
-    return hit
-}
-
 // RS0702 whole-file predicate combining all five paths.
 fn collect_resource_escape_tokens(toks: List<Tok>, resources: Set<String>, retains: Set<String>, out: mut List<Int>) -> Bool {
     let mut hit = false
-    if collect_pool_lease_escape_tokens(toks, out: mut out) { hit = true }
     let producerFns = collect_producer_fns(toks, resources)
     if collect_producer_escape_tokens(toks, resources, producerFns, out: mut out) { hit = true }
     // M1/M2/M5: iterate `with EXPR as B { body }`
@@ -3265,7 +2917,6 @@ fn collect_resource_escape_tokens(toks: List<Tok>, resources: Set<String>, retai
                 if bodyClose > 0 {
                     if collect_with_binding_escape_tokens(toks, bodyOpen, bodyClose, name, retains, out: mut out) { hit = true }
                     if collect_with_binding_closure_capture_tokens(toks, bodyOpen, bodyClose, name, out: mut out) { hit = true }
-                    if collect_with_body_factory_capture_tokens(toks, bodyOpen, bodyClose, name, out: mut out) { hit = true }
                 }
             }
         } else if is_kw_text(toks, i: k, word: "view") && is_ident_tok(toks: toks, i: (k + 1)) && at_symbol(toks: toks, i: (k + 2), code: SYM_EQ) {
@@ -3472,191 +3123,6 @@ fn collect_missing_try_producer_tokens(toks: List<Tok>, fallible: Set<String>, o
                     }
                     if !hasTry  {
                         List.push<Int>(list: mut out, value: (k + 1))
-                        hit = true
-                    }
-                }
-            }
-        }
-        k = k + 1
-    }
-    return hit
-}
-
-// RS0707: `.new` demands an infallible factory and `.try_new` demands a
-// fallible one. Each constructor contributes at most one diagnostic.
-fn collect_factory_contract_tokens(toks: List<Tok>, fallible: Set<String>, out: mut List<Int>) -> Bool {
-    let n = List.len(list: toks)
-    let mut k = 0
-    let mut hit = false
-    while k < n {
-        let ctor = tk_text(toks, i: k)
-        if (ctor == "new" || ctor == "try_new") && at_symbol(toks: toks, i: (k - 1), code: SYM_DOT) && at_symbol(toks: toks, i: (k + 1), code: SYM_LPAREN) {
-            let root = pool_receiver_root(toks, dot: (k - 1))
-            if tk_text(toks, i: root) == "ResourcePool" {
-                let close = find_matching(toks: toks, open: (k + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-                if close > 0 {
-                    let mut factoryStart = k + 2
-                    let mut factoryEnd = arg_end(toks, start: factoryStart, limit: close)
-                    let mut a = k + 2
-                    while a < close {
-                        if tk_text(toks, i: a) == "create" && at_symbol(toks: toks, i: (a + 1), code: SYM_COLON) {
-                            factoryStart = a + 2
-                            factoryEnd = arg_end(toks, start: factoryStart, limit: close)
-                            a = close
-                        } else {
-                            a = a + 1
-                        }
-                    }
-                    let mut producer = 0 - 1
-                    let mut m = factoryStart
-                    while m < factoryEnd && producer < 0 {
-                        if is_ident_tok(toks: toks, i: m) && at_symbol(toks: toks, i: (m - 1), code: SYM_DOT) == false {
-                            let de = dotted_end(toks, i: m)
-                            if de > m && at_symbol(toks: toks, i: de, code: SYM_LPAREN) && Set.contains<String>(set: fallible, value: dotted_name_text(toks, i: m)) {
-                                producer = m
-                            }
-                        }
-                        m = m + 1
-                    }
-                    if ctor == "new" && producer >= 0 {
-                        List.push<Int>(list: mut out, value: producer)
-                        hit = true
-                    } else if ctor == "try_new" && producer < 0 {
-                        List.push<Int>(list: mut out, value: factoryStart)
-                        hit = true
-                    }
-                }
-            }
-        }
-        k = k + 1
-    }
-    return hit
-}
-
-// receiver root of a `.method` — walks back over a `Name<…>` generic clause.
-fn pool_receiver_root(toks: List<Tok>, dot: Int) -> Int {
-    let mut root = dot - 1
-    if at_symbol(toks: toks, i: (dot - 1), code: SYM_RANGLE) {
-        let mut depth = 0
-        let mut b = dot - 1
-        let mut going = true
-        while going {
-            if b <= 0 {
-                going = false
-            } else if at_symbol(toks: toks, i: b, code: SYM_RANGLE) {
-                depth = depth + 1
-                b = b - 1
-            } else if at_symbol(toks: toks, i: b, code: SYM_LANGLE) {
-                depth = depth - 1
-                if depth == 0 { root = b - 1; going = false } else { b = b - 1 }
-            } else {
-                b = b - 1
-            }
-        }
-    }
-    return root
-}
-
-// pool value of a `ResourcePool.borrow(pool: <effect> P)` call — returns the ident P, or -1.
-fn borrow_pool_value(toks: List<Tok>, open: Int, close: Int) -> Int {
-    let mut m = open + 1
-    while m < close {
-        if tk_text(toks, i: m) == "pool" && at_symbol(toks: toks, i: (m + 1), code: SYM_COLON) {
-            let mut v = m + 2
-            if is_effect_kw(toks, i: v) { v = v + 1 }
-            if is_ident_tok(toks: toks, i: v) { return v }
-        }
-        m = m + 1
-    }
-    return 0 - 1
-}
-
-// RS0709: a `with ResourcePool.borrow(pool: mut P) as _ { … }` nested inside another borrow of the SAME P.
-fn collect_active_lease_conflict_tokens(toks: List<Tok>, out: mut List<Int>) -> Bool {
-    let n = List.len(list: toks)
-    let mut k = 0
-    let mut hit = false
-    while k < n {
-        if (tk_text(toks, i: k) == "borrow" || tk_text(toks, i: k) == "try_borrow") && at_symbol(toks: toks, i: (k - 1), code: SYM_DOT) && at_symbol(toks: toks, i: (k + 1), code: SYM_LPAREN) {
-            let root = pool_receiver_root(toks, dot: (k - 1))
-            if tk_text(toks, i: root) == "ResourcePool" && is_kw_text(toks, i: (root - 1), word: "with") {
-                let close = find_matching(toks: toks, open: (k + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-                let pv = borrow_pool_value(toks, open: (k + 1), close)
-                if close > 0 && pv >= 0 {
-                    let pname = tk_text(toks, i: pv)
-                    // Every explicit place effect on the active pool is forbidden.
-                    // A nested borrow is represented by its `mut pool` argument,
-                    // so it follows the same path as ordinary read/take/manage uses.
-                    let mut b = close + 1
-                    while b < n && at_symbol(toks: toks, i: b, code: SYM_LBRACE) == false { b = b + 1 }
-                    if b < n {
-                        let bodyClose = find_matching(toks: toks, open: b, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
-                        if bodyClose > 0 {
-                            let mut m = b + 1
-                            while m < bodyClose {
-                                if (is_effect_kw(toks, i: m) || is_kw_text(toks, i: m, word: "manage")) && is_ident_tok(toks: toks, i: (m + 1)) && tk_text(toks, i: (m + 1)) == pname {
-                                    List.push<Int>(list: mut out, value: m)
-                                    hit = true
-                                }
-                                m = m + 1
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        k = k + 1
-    }
-    return hit
-}
-
-fn is_named_pool_lease_at(toks: List<Tok>, name: String, useIndex: Int) -> Bool {
-    let n = List.len(list: toks)
-    let mut k = 0
-    while k < n {
-        if is_kw_text(toks, i: k, word: "with") && tk_text(toks, i: (k + 1)) == "ResourcePool" && at_symbol(toks: toks, i: (k + 2), code: SYM_DOT) && (tk_text(toks, i: (k + 3)) == "borrow" || tk_text(toks, i: (k + 3)) == "try_borrow") {
-            let mut a = k + 4
-            let mut named = false
-            while a < n && at_symbol(toks: toks, i: a, code: SYM_LBRACE) == false {
-                if is_kw_text(toks, i: a, word: "as") && is_ident_tok(toks: toks, i: (a + 1)) && tk_text(toks, i: (a + 1)) == name { named = true }
-                a = a + 1
-            }
-            if named && a < n {
-                let bodyClose = find_matching(toks: toks, open: a, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
-                if useIndex > a && useIndex < bodyClose { return true }
-            }
-        }
-        k = k + 1
-    }
-    return false
-}
-
-// RS0710: `ResourcePool.discard(lease: <effect> X)` where X is not bound by a `with …borrow… as X`.
-fn collect_discard_non_lease_tokens(toks: List<Tok>, out: mut List<Int>) -> Bool {
-    let n = List.len(list: toks)
-    let mut k = 0
-    let mut hit = false
-    while k < n {
-        if tk_text(toks, i: k) == "discard" && at_symbol(toks: toks, i: (k - 1), code: SYM_DOT) && at_symbol(toks: toks, i: (k + 1), code: SYM_LPAREN) {
-            let root = pool_receiver_root(toks, dot: (k - 1))
-            if tk_text(toks, i: root) == "ResourcePool" {
-                let close = find_matching(toks: toks, open: (k + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-                // lease arg value
-                let mut lv = k + 2
-                if is_effect_kw(toks, i: lv) { lv = lv + 1 }
-                let mut m = k + 2
-                while m < close {
-                    if tk_text(toks, i: m) == "lease" && at_symbol(toks: toks, i: (m + 1), code: SYM_COLON) {
-                        let mut v = m + 2
-                        if is_effect_kw(toks, i: v) { v = v + 1 }
-                        if is_ident_tok(toks: toks, i: v) { lv = v }
-                    }
-                    m = m + 1
-                }
-                if lv >= 0 {
-                    let lname = tk_text(toks, i: lv)
-                    if is_named_pool_lease_at(toks, name: lname, useIndex: root) == false {
-                        List.push<Int>(list: mut out, value: root)
                         hit = true
                     }
                 }
@@ -4260,7 +3726,7 @@ fn collect_fn_pure_resource_return_token(toks: List<Tok>, start: Int, resources:
 
 // Stdlib resource types (the `resource` Item::Type decls in the .rssi interfaces).
 fn is_stdlib_resource(name: String) -> Bool {
-    return name == "File" || name == "DbConnection" || name == "TempDir"
+    return name == "File" || name == "TempDir"
 }
 
 // A qualified call `Ns.method(...)` is pure-allowed iff Ns is a known type.
@@ -4465,14 +3931,14 @@ fn region_has_text(toks: List<Tok>, s: Int, e: Int, word: String) -> Bool {
 
 // The hardcoded builtin nominal type set (mirror check_unknown_types).
 fn is_builtin_type(name: String) -> Bool {
-    return name == "Unit" || name == "Bool" || name == "Byte" || name == "Char" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Float" || name == "Float32" || name == "Float64" || name == "String" || name == "StringView" || name == "Url" || name == "Fd" || name == "Bytes" || name == "BytesView" || name == "Buffer" || name == "BufferView" || name == "Path" || name == "Result" || name == "Option" || name == "List" || name == "Map" || name == "Set" || name == "Capability" || name == "Fn" || name == "Closure" || name == "Cache" || name == "FileError" || name == "IOError" || name == "HttpError" || name == "ConfigError" || name == "DbError" || name == "ImageError" || name == "JsonError" || name == "CsvError" || name == "NetworkError"
+    return name == "Unit" || name == "Bool" || name == "Byte" || name == "Char" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Float" || name == "Float32" || name == "Float64" || name == "String" || name == "StringView" || name == "Url" || name == "Fd" || name == "Bytes" || name == "BytesView" || name == "Buffer" || name == "BufferView" || name == "Path" || name == "Result" || name == "Option" || name == "List" || name == "Map" || name == "Set" || name == "Capability" || name == "Fn" || name == "Closure" || name == "Cache" || name == "FileError" || name == "IOError" || name == "HttpError" || name == "ConfigError" || name == "ImageError" || name == "JsonError" || name == "CsvError" || name == "NetworkError"
 }
 
 // Nominal types the analyzer preloads from the stdlib/package `.rssi` interfaces
 // (every `struct`/`resource` Item::Type across CORE + STANDARD package interfaces).
 // These live in hir.type_info and so count as known types for RS0024.
 fn is_stdlib_type(name: String) -> Bool {
-    return name == "CancellationSource" || name == "CancellationToken" || name == "Channel" || name == "ChannelError" || name == "Config" || name == "ConfigStore" || name == "ConfigValue" || name == "Counter" || name == "DbConnection" || name == "Deadline" || name == "DecodeError" || name == "Deque" || name == "Duration" || name == "Environment" || name == "FalliblePipeline" || name == "File" || name == "FileMetadata" || name == "FunctionObject" || name == "GlobalConfig" || name == "HttpRequest" || name == "HttpResponse" || name == "Image" || name == "Instant" || name == "JsonLiteral" || name == "JsonValue" || name == "PersistentMap" || name == "Pipeline" || name == "PoolError" || name == "PoolStats" || name == "ProcessEnv" || name == "ProcessEvent" || name == "ProcessOutput" || name == "ProcessRequest" || name == "Receiver" || name == "Regex" || name == "RegexError" || name == "Request" || name == "ResourcePool" || name == "Response" || name == "Row" || name == "RowBuffer" || name == "Rule" || name == "Sender" || name == "SortedMap" || name == "SortedSet" || name == "Stream" || name == "StringBuilder" || name == "TcpError" || name == "TcpStream" || name == "TempDir" || name == "TimerError" || name == "WebSocket" || name == "WebSocketError"
+    return name == "CancellationSource" || name == "CancellationToken" || name == "Channel" || name == "ChannelError" || name == "Config" || name == "ConfigStore" || name == "ConfigValue" || name == "Counter" || name == "Deadline" || name == "DecodeError" || name == "Deque" || name == "Duration" || name == "Environment" || name == "FalliblePipeline" || name == "File" || name == "FileMetadata" || name == "FunctionObject" || name == "GlobalConfig" || name == "HttpRequest" || name == "HttpResponse" || name == "Image" || name == "Instant" || name == "JsonLiteral" || name == "JsonValue" || name == "PersistentMap" || name == "Pipeline" || name == "ProcessEnv" || name == "ProcessEvent" || name == "ProcessOutput" || name == "ProcessRequest" || name == "Receiver" || name == "Regex" || name == "RegexError" || name == "Request" || name == "Response" || name == "Row" || name == "RowBuffer" || name == "Rule" || name == "Sender" || name == "SortedMap" || name == "SortedSet" || name == "Stream" || name == "StringBuilder" || name == "TcpError" || name == "TcpStream" || name == "TempDir" || name == "TimerError" || name == "WebSocket" || name == "WebSocketError"
 }
 
 // Generic-param names in scope for an item whose `<...>` clause opens at nameEnd
@@ -6041,8 +5507,7 @@ fn collect_invalid_weak_fields(toks: List<Tok>, out: mut List<Int>) -> Bool {
     return hit
 }
 
-// RS0306 LOCAL_CLASS_BINDING: a `local` binding whose value is a class instance
-// (oracle checks/body/resource_pool.rs) — classes are managed handles, not locals.
+// RS0306 LOCAL_CLASS_BINDING: a `local` binding whose value is a class instance.
 // FP-safe subset: the direct-constructor form `local [mut] NAME = ClassName(...)`
 // where ClassName is a class declared in this file; indirect (fn-returned) class
 // values are a safe false-negative (no corpus file needs them).
@@ -6070,8 +5535,8 @@ fn collect_local_class_bindings(toks: List<Tok>, out: mut List<Int>) -> Bool {
 }
 
 // RS0701 RESOURCE_FIELD: a non-resource type with a field whose (outer) type is a
-// declared resource (oracle analyzer/resource_types.rs) — resources must live behind
-// `with`/`ResourcePool`, not as plain fields. FP-safe: fire only when the field type
+// declared resource (oracle analyzer/resource_types.rs) — resources must be used through
+// `with`, not as plain fields. FP-safe: fire only when the field type
 // root is a KNOWN resource; the containing type must not itself be a resource.
 fn collect_type_body_resource_fields(toks: List<Tok>, bodyOpen: Int, resources: Set<String>, out: mut List<Int>) -> Bool {
     let close = find_matching(toks: toks, open: bodyOpen, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
@@ -6244,104 +5709,6 @@ fn collect_fresh_requires_local_sites(source: String, toks: List<Tok>, out: mut 
             }
         }
         k = k + 1
-    }
-    return hit
-}
-
-// RS0705 RESOURCE_POOL_NOT_LOCAL: a ResourcePool binding that is not `local` (oracle
-// checks/body/resource_pool.rs). A binding is local iff it is a `local` binding OR a
-// `mut`/`take` param. So a `let` binding of `ResourcePool<...>.new(...)`, or a
-// `read`/no-effect param typed `ResourcePool<...>`, fires.
-fn collect_fn_pool_param_bad_tokens(toks: List<Tok>, start: Int, out: mut List<Int>) -> Bool {
-    let ns = fn_name_start(toks, i: start)
-    let mut p = dotted_end(toks, i: ns)
-    if at_symbol(toks: toks, i: p, code: SYM_LANGLE) {
-        let gc = find_matching(toks: toks, open: p, openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
-        if gc < 0 { return false }
-        p = gc + 1
-    }
-    if at_symbol(toks: toks, i: p, code: SYM_LPAREN) == false { return false }
-    let pclose = find_matching(toks: toks, open: p, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-    if pclose < 0 { return false }
-    let mut depth = 0
-    let mut k = p + 1
-    let mut hit = false
-    while k < pclose {
-        if at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACE) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) {
-            depth = depth + 1
-        } else if at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACE) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) {
-            depth = depth - 1
-        } else if depth == 0 && is_ident_tok(toks: toks, i: k) && at_symbol(toks: toks, i: (k + 1), code: SYM_COLON) {
-            let mut t = k + 2
-            let mut eff = ""
-            if is_kw_text(toks, i: t, word: "read") || is_kw_text(toks, i: t, word: "mut") || is_kw_text(toks, i: t, word: "take") {
-                eff = tk_text(toks, i: t)
-                t = t + 1
-            }
-            if is_ident_tok(toks: toks, i: t) && tk_text(toks, i: t) == "ResourcePool" {
-                if eff != "mut" && eff != "take" {
-                    List.push<Int>(list: mut out, value: k)
-                    hit = true
-                }
-            }
-        }
-        k = k + 1
-    }
-    return hit
-}
-
-fn collect_resourcepool_not_local_tokens(toks: List<Tok>, out: mut List<Int>) -> Bool {
-    let ntok = List.len(list: toks)
-    let mut hit = false
-    let mut j = 0
-    let mut running = true
-    while running {
-        if j >= ntok {
-            running = false
-        } else if tk_kind(toks: toks, i: j) == TOK_EOF {
-            running = false
-        } else {
-            let cls = classify_top(toks: toks, i: j)
-            let isPub = cls.isPub
-            if cls.isFeatures {
-                j = declaration_line_end(toks: toks, start: j)
-            } else if cls.isProfile {
-                j = declaration_line_end(toks: toks, start: j)
-            } else if starts_fn_like(toks: toks, i: j, isPub: isPub) {
-                let r = parse_function_decl(toks: toks, i: j)
-                if r < 0 {
-                    running = false
-                } else {
-                    if collect_fn_pool_param_bad_tokens(toks, start: j, out: mut out) { hit = true }
-                    j = r
-                }
-            } else {
-                j = j + 1
-            }
-        }
-    }
-    let mut i = 0
-    while i < ntok {
-        if is_kw_text(toks, i, word: "let") {
-            let mut q = i + 1
-            if is_kw_text(toks, i: q, word: "mut") { q = q + 1 }
-            if is_ident_tok(toks: toks, i: q) && at_symbol(toks: toks, i: (q + 1), code: SYM_EQ) && is_ident_tok(toks: toks, i: (q + 2)) {
-                if tk_text(toks, i: (q + 2)) == "ResourcePool" {
-                    let mut r = q + 3
-                    if at_symbol(toks: toks, i: r, code: SYM_LANGLE) {
-                        let gc = find_matching(toks: toks, open: r, openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
-                        if gc >= 0 { r = gc + 1 }
-                    }
-                    if at_symbol(toks: toks, i: r, code: SYM_DOT) && is_ident_tok(toks: toks, i: (r + 1)) {
-                        if tk_text(toks, i: (r + 1)) == "new" {
-                            List.push<Int>(list: mut out, value: i)
-                            hit = true
-                        }
-                    }
-                }
-            }
-        }
-        i = i + 1
     }
     return hit
 }
@@ -6723,8 +6090,7 @@ fn collect_weak_field_bad_init_tokens(toks: List<Tok>, out: mut List<Int>) -> Bo
 // exists (the checker compares a code SET, so only presence matters). Three
 // oracle sources are reproduced:
 //   * checks/features.rs feature_uses — construct -> required feature:
-//       local  : `local` let/closure, `manage` expr, `take` data-effect,
-//                `ResourcePool<T>` type/callee
+//       local  : `local` let/closure, `manage` expr, `take` data-effect
 //       native : a fn with `effects(native)`
 //       unsafe : a fn with `effects(unsafe)`
 //       async  : `async fn`/`async let`/`async for`, `spawn`, `await`,
@@ -6776,7 +6142,7 @@ fn kw_not_dotted(toks: List<Tok>, i: Int, word: String) -> Bool {
 }
 
 // A `local`-feature construct anywhere in the file: a `local` let/closure, a
-// `manage` expr, a `take` data-effect, or a `ResourcePool<T>` type/callee. The
+// `manage` expr, or a `take` data-effect. The
 // `take` effect is distinguished from a `.take(` method (preceded by `.`) and a
 // binding/field named `take` (followed by `:`).
 fn file_local_use(toks: List<Tok>) -> Bool {
@@ -6789,8 +6155,6 @@ fn file_local_use(toks: List<Tok>) -> Bool {
         } else if kw_not_dotted(toks, i, word: "manage") {
             hit = true
         } else if kw_not_dotted(toks, i, word: "take") && at_symbol(toks: toks, i: (i + 1), code: SYM_COLON) == false {
-            hit = true
-        } else if is_ident_tok(toks: toks, i: i) && tk_text(toks, i) == "ResourcePool" {
             hit = true
         }
         i = i + 1
@@ -6826,9 +6190,6 @@ fn collect_feature_use_tokens(
                     let mut site = i
                     if at_symbol(toks: toks, i: (i - 1), code: SYM_COLON) && is_ident_tok(toks: toks, i: (i - 2)) { site = i - 2 }
                     List.push<Int>(list: mut out, value: site)
-                    hit = true
-                } else if is_ident_tok(toks: toks, i: i) && tk_text(toks, i) == "ResourcePool" {
-                    List.push<Int>(list: mut out, value: i)
                     hit = true
                 }
             }
@@ -8772,8 +8133,8 @@ fn collect_return_type_mismatch_tokens(toks: List<Tok>, out: mut List<Int>) -> B
 // Generated stdlib parameter types are intentionally consumed through an FP-safe
 // allowlist. The generated `selfhost.interfaces` table is broader than the
 // current self-host type model: enabling it wholesale adds RS0207 alongside
-// primary diagnostics (for example ResourcePool generics and malformed
-// `&mut Buffer` surface syntax). The allowlist owns only "which call shapes are
+// primary diagnostics (for example malformed `&mut Buffer` surface syntax).
+// The allowlist owns only "which call shapes are
 // safe"; the actual type strings come from the real `.rssi` metadata.
 fn stdlib_param_type_is_safe(ns: String, method: String, label: String) -> Bool {
     if ns == "Log" && method == "write" && label == "message" { return true }
@@ -9061,9 +8422,6 @@ fn call_arg_type_bad(toks: List<Tok>, ns: String, callee: String, open: Int, clo
         if depth == 0 && atArgStart && is_ident_tok(toks: toks, i: k) && at_symbol(toks: toks, i: (k + 1), code: SYM_COLON) {
             let label = tk_text(toks, i: k)
             let mut parameterType = resolve_param_type(toks, ns, name: callee, label, fnIdx)
-            if String.len(value: parameterType) == 0 && ns == "ResourcePool" && callee == "new" && label == "create" && String.len(value: recvGeneric) > 0 {
-                parameterType = String.concat(left: "Fn() -> ", right: recvGeneric)
-            }
             if String.len(value: parameterType) > 0 {
                 let expected = expand_type_alias(aliasIdx, ty: parameterType)
                 if str_is_unresolved_generic(s: expected) == false {
@@ -9112,9 +8470,6 @@ fn collect_call_arg_type_bad_tokens(toks: List<Tok>, ns: String, callee: String,
         if depth == 0 && atArgStart && is_ident_tok(toks: toks, i: k) && at_symbol(toks: toks, i: (k + 1), code: SYM_COLON) {
             let label = tk_text(toks, i: k)
             let mut pt0 = resolve_param_type(toks, ns, name: callee, label, fnIdx)
-            if String.len(value: pt0) == 0 && ns == "ResourcePool" && callee == "new" && label == "create" && String.len(value: recvGeneric) > 0 {
-                pt0 = String.concat(left: "Fn() -> ", right: recvGeneric)
-            }
             if String.len(value: pt0) > 0 {
                 let pt = expand_type_alias(aliasIdx, ty: pt0)
                 if str_is_unresolved_generic(s: pt) == false {
@@ -10547,7 +9902,7 @@ fn collect_fn_unnamed_arg_tokens(toks: List<Tok>, start: Int, pubFns: Set<String
 // qualified call to any other namespace (`List.get`, `Set.insert`, …) short-circuits
 // before the arg list is split — the hot path over a large file.
 fn is_effect_stdlib_ns(ns: String) -> Bool {
-    return ns == "Log" || ns == "File" || ns == "Image" || ns == "ResourcePool"
+    return ns == "Log" || ns == "File" || ns == "Image"
 }
 
 // The last-segment method names of same-file `fn <Type>.method(...)` decls. A cheap
@@ -10577,7 +9932,7 @@ fn stdlib_param_effect(ns: String, method: String, pname: String) -> String {
 }
 
 // True iff `name` begins with an uppercase ASCII letter — the rss convention for a
-// type or function-namespace (`Log`, `File`, `ResourcePool`). Lowercase heads are
+// type or function-namespace (`Log`, `File`, `Image`). Lowercase heads are
 // value bindings, so `head.method(...)` is a receiver call rather than a qualified one.
 fn is_upper_head(name: String) -> Bool {
     let cs = String.chars(value: name)
@@ -11443,9 +10798,6 @@ fn main() -> Unit {
     // RS1004: surface reference syntax (`&T`/`&mut T`) is not part of RSScript.
     let mut surfaceRefTokens = List<Int>.new()
     let surfaceRef = collect_surface_references(toks, out: mut surfaceRefTokens)
-    // RS0708: eager ResourcePool<T>.new needs a positive-literal / const max_size.
-    let mut poolMaxSizeTokens = List<Int>.new()
-    let poolMaxSize = collect_resourcepool_maxsize_bad_tokens(toks, out: mut poolMaxSizeTokens)
     // RS0037: a positional variant pattern binding != the variant's declared arity.
     let mut variantArity = false
     // RS0902: a `weak` field whose type is a known non-class.
@@ -11463,18 +10815,12 @@ fn main() -> Unit {
     // RS0805: an explicit closure's captures(...) contract doesn't match its body's external uses.
     let mut captureContractTokens = List<Int>.new()
     let captureContract = collect_capture_contract_bad_tokens(toks, out: mut captureContractTokens)
-    // RS0703: a ResourcePool<X> whose X is a non-resource type or non-Resource-bounded generic param.
-    let mut resourcePoolTypeBadSites = List<DiagnosticSite>.new()
-    let resourcePoolTypeBad = collect_resource_pool_type_bad_sites(source, toks, resources, declared, out: mut resourcePoolTypeBadSites)
     // RS0704: a resource used as a generic argument, or a bad resource-decl generic param.
     let mut resourceGenericBadTokens = List<Int>.new()
     let tokenResourceGenericBad = collect_resource_generic_bad_tokens(toks, resources, out: mut resourceGenericBadTokens)
     // RS0604: a fresh-returning call used directly with mut/take.
     let mut freshMutSites = List<DiagnosticSite>.new()
     let freshMut = collect_fresh_requires_local_sites(source, toks, out: mut freshMutSites)
-    // RS0705: a ResourcePool value bound with let instead of local.
-    let mut poolNotLocalTokens = List<Int>.new()
-    let poolNotLocal = collect_resourcepool_not_local_tokens(toks, out: mut poolNotLocalTokens)
     // RS1002: a cast-style `as` conversion (not a with/use binding).
     let mut implicitConvTokens = List<Int>.new()
     let implicitConv = collect_implicit_conversions(toks, out: mut implicitConvTokens)
@@ -11562,8 +10908,6 @@ fn main() -> Unit {
     let mut closureCapture0804 = false
     let mut closureCapture0801Tokens = List<Int>.new()
     let mut closureCapture0804Tokens = List<Int>.new()
-    let mut lazyCaptureBad = false
-    let mut lazyCaptureTokens = List<Int>.new()
     let mut noescapeEscape = false
     let mut localClosureEscape = false
     let mut noescapeEscapeTokens = List<Int>.new()
@@ -11582,12 +10926,6 @@ fn main() -> Unit {
     add_builtin_fallible_producers(out: mut fallibleProducers, allFns)
     let mut missingTryTokens = List<Int>.new()
     let missingTry = collect_missing_try_producer_tokens(toks, fallible: fallibleProducers, out: mut missingTryTokens)
-    let mut factoryContractTokens = List<Int>.new()
-    let fallibleFactory = collect_factory_contract_tokens(toks, fallible: fallibleProducers, out: mut factoryContractTokens)
-    let mut leaseConflictTokens = List<Int>.new()
-    let leaseConflict = collect_active_lease_conflict_tokens(toks, out: mut leaseConflictTokens)
-    let mut discardNonLeaseTokens = List<Int>.new()
-    let discardNonLease = collect_discard_non_lease_tokens(toks, out: mut discardNonLeaseTokens)
     let mut nonTransferPayloadTokens = List<Int>.new()
     let nonTransferPayload = collect_nontransferable_channel_tokens(toks, out: mut nonTransferPayloadTokens)
     let assignTypeMismatch = DiagnosticBag.has_code(self: typeDiagnostics, code: "RS0313")
@@ -11729,7 +11067,6 @@ fn main() -> Unit {
                     if bit_set(mask: pcMask, bitval: 8) { placeConflict0302 = true }
                     if bit_set(mask: pcMask, bitval: 16) { placeConflict0304 = true }
                     if collect_fn_fresh_return_bad_sites(source, toks, start: i, handleFields: handleFieldNames, retains: retainsReg, freshFns: freshFnReg, out: mut freshReturnBadSites) { freshReturnBad = true }
-                    if collect_fn_lazy_capture_tokens(toks, start: i, out: mut lazyCaptureTokens) { lazyCaptureBad = true }
                     if collect_fn_noescape_escape_tokens(toks, start: i, noescape: noescapeReg, out: mut noescapeEscapeTokens) { noescapeEscape = true }
                     if collect_fn_local_closure_escape_tokens(toks, start: i, noescape: noescapeReg, out: mut localClosureEscapeTokens) { localClosureEscape = true }
                     let ccMask = collect_fn_closure_capture_bad(
@@ -11884,20 +11221,13 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_sites(code: "RS0601", sites: freshReturnBadSites)
         emitted = emitted + emit_diagnostic_sites(code: "RS0604", sites: freshMutSites)
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0603")
-        emitted = emitted + emit_diagnostic_sites(code: "RS0703", sites: resourcePoolTypeBadSites)
         emitted = emitted + emit_diagnostic_records(code: "RS0704", toks, tokenIndices: resourceGenericBadTokens)
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0704")
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS1301")
         emitted = emitted + emit_diagnostic_records(code: "RS0212", toks, tokenIndices: resourceDeriveTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS0306", toks, tokenIndices: localClassTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS0701", toks, tokenIndices: resourceFieldTokens)
-        emitted = emitted + emit_diagnostic_records(code: "RS0705", toks, tokenIndices: poolNotLocalTokens)
-        emitted = emitted + emit_diagnostic_records(code: "RS0708", toks, tokenIndices: poolMaxSizeTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS0706", toks, tokenIndices: missingTryTokens)
-        emitted = emitted + emit_diagnostic_records(code: "RS0707", toks, tokenIndices: factoryContractTokens)
-        emitted = emitted + emit_diagnostic_records(code: "RS0709", toks, tokenIndices: leaseConflictTokens)
-        emitted = emitted + emit_diagnostic_records(code: "RS0710", toks, tokenIndices: discardNonLeaseTokens)
-        emitted = emitted + emit_diagnostic_records(code: "RS0711", toks, tokenIndices: lazyCaptureTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS0902", toks, tokenIndices: invalidWeakTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS0901", toks, tokenIndices: takeHandleTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS0903", toks, tokenIndices: weakReadTokens)
@@ -12030,9 +11360,6 @@ fn main() -> Unit {
     if surfaceRef {
         Log.write(message: "RS1004")
     }
-    if poolMaxSize {
-        Log.write(message: "RS0708")
-    }
     if variantArity && !structured  {
         Log.write(message: "RS0037")
     }
@@ -12105,17 +11432,11 @@ fn main() -> Unit {
     if captureContract && !structured  {
         Log.write(message: "RS0805")
     }
-    if resourcePoolTypeBad {
-        Log.write(message: "RS0703")
-    }
     if resourceGenericBad {
         Log.write(message: "RS0704")
     }
     if protocolImplBad {
         Log.write(message: "RS1301")
-    }
-    if lazyCaptureBad {
-        Log.write(message: "RS0711")
     }
     if noescapeEscape && !structured  {
         Log.write(message: "RS0802")
@@ -12129,15 +11450,6 @@ fn main() -> Unit {
     if missingTry {
         Log.write(message: "RS0706")
     }
-    if fallibleFactory {
-        Log.write(message: "RS0707")
-    }
-    if leaseConflict {
-        Log.write(message: "RS0709")
-    }
-    if discardNonLease {
-        Log.write(message: "RS0710")
-    }
     if nonTransferPayload && !structured  {
         Log.write(message: "RS0036")
     }
@@ -12149,9 +11461,6 @@ fn main() -> Unit {
     }
     if invalidFreshRet {
         Log.write(message: "RS0603")
-    }
-    if poolNotLocal {
-        Log.write(message: "RS0705")
     }
     if implicitConv {
         Log.write(message: "RS1002")
@@ -12187,7 +11496,7 @@ fn main() -> Unit {
     if featureViol && !structured  {
         Log.write(message: "RS0101")
     }
-    let anyDiag = duplicateFound || hasUnknownFeat || hasDupFeat || headerCount > 0 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || pureBad || nonExhaustive || badAwait || invalidTry || unsupportedSyntax || fdSurface || lowerConflict || unknownProtocol || protocolImplBad || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || poolNotLocal || implicitConv || operatorOverload || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || poolMaxSize || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourcePoolTypeBad || resourceGenericBad || lazyCaptureBad || resourceEscape || noescapeEscape || localClosureEscape || missingTry || fallibleFactory || leaseConflict || discardNonLease || nonTransferPayload || takeHandle || weakInit || weakRead
+    let anyDiag = duplicateFound || hasUnknownFeat || hasDupFeat || headerCount > 0 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || pureBad || nonExhaustive || badAwait || invalidTry || unsupportedSyntax || fdSurface || lowerConflict || unknownProtocol || protocolImplBad || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || implicitConv || operatorOverload || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourceGenericBad || resourceEscape || noescapeEscape || localClosureEscape || missingTry || nonTransferPayload || takeHandle || weakInit || weakRead
     if !anyDiag  {
         Log.write(message: "CLEAN")
     }

@@ -298,14 +298,6 @@ pub(super) fn review_map_region_draft(
                 param.name
             ));
         }
-        if type_ref_contains_name(&param.ty, "ResourcePool") {
-            reasons.push(format!("ResourcePool parameter `{}`", param.name));
-        }
-    }
-    if let Some(return_ty) = &function.return_ty
-        && type_ref_contains_name(return_ty, "ResourcePool")
-    {
-        reasons.push("ResourcePool return type".to_string());
     }
     if function.returns_fresh {
         reasons.push("fresh guarantee boundary".to_string());
@@ -372,9 +364,6 @@ pub(super) fn review_map_region_draft(
     }
     if facts.has_mut {
         reasons.push("mut call-site effect".to_string());
-    }
-    if facts.has_resource_pool {
-        reasons.push("ResourcePool usage".to_string());
     }
     if facts.has_handle_field_write {
         reasons.push("writes through handle field".to_string());
@@ -446,7 +435,6 @@ pub(super) struct ReviewMapFacts {
     pub(super) has_with: bool,
     pub(super) has_mut: bool,
     pub(super) has_take: bool,
-    pub(super) has_resource_pool: bool,
     pub(super) has_handle_field_write: bool,
     pub(super) has_managed_state_write: bool,
     pub(super) has_error_boundary: bool,
@@ -643,14 +631,6 @@ pub(super) fn review_expr_label(expr: &Expr) -> String {
     }
 }
 
-pub(super) fn is_resource_pool_callee(callee: &Callee) -> bool {
-    match callee {
-        Callee::Name(name) => type_root_name(name) == "ResourcePool",
-        Callee::Qualified { namespace, .. } => type_root_name(namespace) == "ResourcePool",
-        Callee::ReceiverCall { .. } => false,
-    }
-}
-
 pub(super) fn is_capability_from_callee(callee: &Callee) -> bool {
     matches!(
         callee,
@@ -686,10 +666,6 @@ pub(super) fn expr_ident_name(expr: &Expr) -> Option<&str> {
         Expr::Effect { value, .. } | Expr::Try { value, .. } => expr_ident_name(value),
         _ => None,
     }
-}
-
-pub(super) fn type_ref_contains_name(ty: &TypeRef, name: &str) -> bool {
-    ty.name == name || ty.args.iter().any(|arg| type_ref_contains_name(arg, name))
 }
 
 pub(super) fn review_map_match_binding_type(

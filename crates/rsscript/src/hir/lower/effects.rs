@@ -364,13 +364,6 @@ pub(super) fn collect_body_facts_in_expr(
                     span: span.clone(),
                 });
             }
-            if is_resource_pool_callee(callee) {
-                facts.feature_uses.push(HirFeatureUse {
-                    function_name: Some(function_name.to_string()),
-                    kind: HirFeatureUseKind::ResourcePool,
-                    span: span.clone(),
-                });
-            }
             facts.call_sites.push(HirCallSite {
                 function_name: function_name.to_string(),
                 callee: callee.clone(),
@@ -509,11 +502,6 @@ pub(super) fn collect_body_facts_in_expr(
         | Expr::MultilineString(_, _)
         | Expr::Unknown(_) => {}
     }
-}
-
-pub(super) fn is_resource_pool_callee(callee: &Callee) -> bool {
-    matches!(callee, Callee::Name(name) if type_root_name(name) == "ResourcePool")
-        || matches!(callee, Callee::Qualified { namespace, .. } if type_root_name(namespace) == "ResourcePool")
 }
 
 pub(super) fn direct_effect_retained_binding(

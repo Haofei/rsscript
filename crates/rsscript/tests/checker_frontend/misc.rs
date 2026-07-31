@@ -373,55 +373,6 @@ fn char_literal_is_a_real_char_value_and_type_checks() {
 }
 
 #[test]
-fn diagnostic_explanations_are_available_by_code() {
-    let explanation = explain_diagnostic_code("RS0401").expect("RS0401 should be registered");
-    let formatted = format_diagnostic_explanation(explanation);
-    let fresh_unknown = explain_diagnostic_code("RS0602").expect("RS0602 should be registered");
-    let pool_contract = explain_diagnostic_code("RS0707").expect("RS0707 should be registered");
-    let unknown_type = explain_diagnostic_code("RS0024").expect("RS0024 should be registered");
-    let unknown_field = explain_diagnostic_code("RS0025").expect("RS0025 should be registered");
-    let unknown_binding = explain_diagnostic_code("RS0026").expect("RS0026 should be registered");
-    let type_mismatch = explain_diagnostic_code("RS0207").expect("RS0207 should be registered");
-    let return_mismatch = explain_diagnostic_code("RS0208").expect("RS0208 should be registered");
-    let control_flow_mismatch =
-        explain_diagnostic_code("RS0209").expect("RS0209 should be registered");
-    let operator_mismatch = explain_diagnostic_code("RS0210").expect("RS0210 should be registered");
-
-    assert_eq!(explanation.title, "use after manage");
-    assert!(formatted.contains("RS0401"));
-    assert!(formatted.contains("manage"));
-    assert!(fresh_unknown.explanation.contains("clean inline fields"));
-    assert_eq!(unknown_type.title, "unknown type");
-    assert!(unknown_type.explanation.contains("before Rust lowering"));
-    assert_eq!(unknown_field.title, "unknown field");
-    assert!(unknown_field.explanation.contains("deferred"));
-    assert_eq!(unknown_binding.title, "unknown binding");
-    assert!(unknown_binding.explanation.contains("visible parameter"));
-    assert_eq!(type_mismatch.title, "argument type mismatch");
-    assert!(
-        type_mismatch
-            .explanation
-            .contains("resolved parameter type")
-    );
-    assert_eq!(return_mismatch.title, "return type mismatch");
-    assert!(return_mismatch.explanation.contains("declared return type"));
-    assert_eq!(control_flow_mismatch.title, "control-flow type mismatch");
-    assert!(
-        control_flow_mismatch
-            .explanation
-            .contains("conditions must be `Bool`")
-    );
-    assert_eq!(operator_mismatch.title, "operator type mismatch");
-    assert!(operator_mismatch.explanation.contains("Equality requires"));
-    assert_eq!(
-        pool_contract.title,
-        "ResourcePool factory contract violation"
-    );
-    assert!(pool_contract.explanation.contains("ResourcePool.try_new"));
-    assert!(explain_diagnostic_code("RS9999").is_none());
-}
-
-#[test]
 fn checker_accepts_none_for_option_arguments() {
     let source = r#"
 fn accept(value: read Option<Int>) -> Unit

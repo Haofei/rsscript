@@ -2450,13 +2450,6 @@ fn standard_library_export_capabilities(export: &RsScriptPackageExport) -> Vec<C
             categories.push(CapabilityCategory::ComputeHash);
             categories.push(CapabilityCategory::FilesystemRead);
         }
-        "DbConnection.open" | "DbConnection.try_open" => {
-            categories.push(CapabilityCategory::DatabaseRead);
-        }
-        "DbConnection.query" => {
-            categories.push(CapabilityCategory::DatabaseRead);
-            categories.push(CapabilityCategory::DatabaseWrite);
-        }
         "Regex.compile" | "Regex.is_match" | "Regex.find" | "Regex.captures"
         | "Regex.replace_all" | "Regex.split" => categories.push(CapabilityCategory::ComputeRegex),
         "Log.write" => categories.push(CapabilityCategory::TelemetryEmit),

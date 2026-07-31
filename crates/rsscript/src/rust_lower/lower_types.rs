@@ -218,7 +218,6 @@ impl RustLowerer<'_> {
             "SortedSet",
             "Option",
             "Result",
-            "ResourcePool",
             "Capability",
         ];
         let canonical = self.canonical_type_ref(ty);
@@ -370,8 +369,6 @@ impl RustLowerer<'_> {
             "TcpError" => "rsscript_runtime::TcpError".to_string(),
             "WebSocket" => "rsscript_runtime::RssWebSocket".to_string(),
             "WebSocketError" => "rsscript_runtime::WebSocketError".to_string(),
-            "PoolStats" => "rsscript_runtime::PoolStats".to_string(),
-            "PoolError" => "rsscript_runtime::PoolError".to_string(),
             "Regex" => "rsscript_runtime::RssRegex".to_string(),
             "RegexError" => "rsscript_runtime::RegexError".to_string(),
             "TempDir" => "rsscript_runtime::TempDir".to_string(),
@@ -392,8 +389,6 @@ impl RustLowerer<'_> {
             "ConfigValue" => "rsscript_runtime::ConfigValue".to_string(),
             "ConfigStore" => "rsscript_runtime::ConfigStore".to_string(),
             "ConfigError" => "rsscript_runtime::ConfigError".to_string(),
-            "DbConnection" => "rsscript_runtime::DbConnection".to_string(),
-            "DbError" => "rsscript_runtime::DbError".to_string(),
             "Image" => "rsscript_runtime::Image".to_string(),
             "ImageError" => "rsscript_runtime::ImageError".to_string(),
             "JsonValue" => "rsscript_runtime::JsonValue".to_string(),
@@ -449,10 +444,6 @@ impl RustLowerer<'_> {
                     self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
                 )
             }
-            "ResourcePool" if ty.args.len() == 1 => format!(
-                "rsscript_runtime::ResourcePool<{}>",
-                self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
-            ),
             "Capability" if ty.args.len() == 1 => capability_enum_name(&ty.args[0].name),
             _ => {
                 let name = rust_ident(&ty.name);

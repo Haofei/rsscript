@@ -322,9 +322,6 @@ pub(super) fn collect_review_map_facts_expr(
     // effects, which the walker now drives.
     match expr {
         Expr::Call { callee, args, span } => {
-            if is_resource_pool_callee(callee) {
-                facts.has_resource_pool = true;
-            }
             if is_capability_from_callee(callee) {
                 facts.has_capability_object = true;
             }

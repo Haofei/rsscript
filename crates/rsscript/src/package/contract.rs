@@ -1217,7 +1217,7 @@ pub(super) fn package_type_name_has_resource_boundary(
         .split(|character: char| {
             !(character.is_ascii_alphanumeric() || character == '_' || character == '.')
         })
-        .any(|part| part == "ResourcePool" || resource_types.contains(part))
+        .any(|part| resource_types.contains(part))
 }
 
 fn package_type_contract(type_decl: &TypeDecl) -> PackageTypeContract {

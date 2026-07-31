@@ -311,13 +311,6 @@ mod tests {
                 normalized_effects: Vec::new(),
             },
             RsScriptPackageExport {
-                name: "DbConnection.query".to_owned(),
-                kind: "function".to_owned(),
-                classification: "review_if_changed".to_owned(),
-                reasons: vec!["public function".to_owned()],
-                normalized_effects: Vec::new(),
-            },
-            RsScriptPackageExport {
                 name: "Image.load".to_owned(),
                 kind: "function".to_owned(),
                 classification: "review_if_changed".to_owned(),
@@ -391,8 +384,6 @@ mod tests {
         }));
         assert!(categories.contains(&CapabilityCategory::ComputeHash));
         assert!(categories.contains(&CapabilityCategory::RandomRead));
-        assert!(categories.contains(&CapabilityCategory::DatabaseRead));
-        assert!(categories.contains(&CapabilityCategory::DatabaseWrite));
         assert!(!bundle.facts.iter().any(|fact| {
             fact.kind == FactKind::Capability
                 && fact.subject.id == "demo_pkg::public::function::File.read_to_string"
@@ -426,12 +417,6 @@ mod tests {
                 .slices
                 .iter()
                 .any(|slice| slice.kind == SliceKind::RandomnessSlice)
-        );
-        assert!(
-            bundle
-                .slices
-                .iter()
-                .any(|slice| slice.kind == SliceKind::DatabaseSlice)
         );
     }
 

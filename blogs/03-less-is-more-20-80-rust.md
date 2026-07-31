@@ -83,7 +83,7 @@ with File.open_write(path: read path)? as file {
 }
 ```
 
-The file is open exactly inside the braces and closed at the closing brace, including on the early return that `?` might trigger. A reviewer doesn't trace lifetimes to find the release point; the release point is *the brace they're already looking at*. It's the same idea as `using` in Python, `defer` in Swift, RAII in C++ — but lifted into visible structure instead of inferred from scope, because "when is this released" is a review question and review questions belong in the syntax. Pooled resources work the same way: `with ResourcePool.borrow(pool: mut pool) as conn { ... }` borrows for the block and returns the connection at the brace. The pattern is uniform, and uniform patterns are cheap to review because you learn the shape once.
+The file is open exactly inside the braces and closed at the closing brace, including on the early return that `?` might trigger. A reviewer doesn't trace lifetimes to find the release point; the release point is *the brace they're already looking at*. It's the same idea as `using` in Python, `defer` in Swift, RAII in C++ — but lifted into visible structure instead of inferred from scope, because "when is this released" is a review question and review questions belong in the syntax. The pattern is uniform, and uniform patterns are cheap to review because you learn the shape once.
 
 ## Writer cost stays small, reader gain is large
 

@@ -882,12 +882,6 @@ pub(super) fn lower_callee(callee: &Callee) -> String {
             let canonical = type_root_name(name);
             lower_name_override(canonical).unwrap_or_else(|| rust_ident(canonical))
         }
-        Callee::Qualified { namespace, name } if type_root_name(namespace) == "ResourcePool" => {
-            format!(
-                "rsscript_runtime::ResourcePool::{}",
-                rust_ident(type_root_name(name))
-            )
-        }
         Callee::Qualified { namespace, name } => rust_qualified_function_ident(namespace, name),
         Callee::ReceiverCall { method, .. } => rust_ident(type_root_name(method)),
     }
@@ -984,80 +978,6 @@ pub(super) fn lower_call_arg(
         .or_else(|| args.get(index))
         .map(|arg| lowerer.lower_expr(&arg.value))
         .unwrap_or_else(|| default.to_string())
-}
-
-pub(super) fn is_resource_pool_borrow_expr(expr: &Expr) -> bool {
-    matches!(expr, Expr::Call { callee, .. } if is_resource_pool_borrow_callee(callee))
-}
-
-pub(super) fn lower_required_call_arg(
-    lowerer: &mut RustLowerer<'_>,
-    args: &[CallArg],
-    name: &str,
-    index: usize,
-    call_span: &Span,
-) -> String {
-    args.iter()
-        .find(|arg| arg.name.as_deref() == Some(name))
-        .or_else(|| args.get(index))
-        .map(|arg| lowerer.lower_expr(&arg.value))
-        .unwrap_or_else(|| unreachable_lowering("validated call argument", call_span))
-}
-
-pub(super) fn lower_resource_pool_new_call(
-    lowerer: &mut RustLowerer<'_>,
-    args: &[CallArg],
-    call_span: &Span,
-) -> String {
-    let create = lower_required_call_arg(lowerer, args, "create", 0, call_span);
-    let max_size = lower_required_call_arg(lowerer, args, "max_size", 1, call_span);
-    format!("rsscript_runtime::ResourcePool::from_factory({max_size}, {create})")
-}
-
-pub(super) fn lower_resource_pool_try_new_call(
-    lowerer: &mut RustLowerer<'_>,
-    args: &[CallArg],
-    call_span: &Span,
-) -> String {
-    let create = lower_required_call_arg(lowerer, args, "create", 0, call_span);
-    let max_size = lower_required_call_arg(lowerer, args, "max_size", 1, call_span);
-    format!("rsscript_runtime::ResourcePool::try_from_factory({max_size}, {create})")
-}
-
-pub(super) fn lower_resource_pool_lazy_call(
-    lowerer: &mut RustLowerer<'_>,
-    args: &[CallArg],
-    call_span: &Span,
-) -> String {
-    let create = lower_resource_pool_owning_factory(lowerer, args, call_span);
-    let max_size = lower_required_call_arg(lowerer, args, "max_size", 1, call_span);
-    format!("rsscript_runtime::ResourcePool::lazy_from_factory({max_size}, {create})")
-}
-
-pub(super) fn lower_resource_pool_try_lazy_call(
-    lowerer: &mut RustLowerer<'_>,
-    args: &[CallArg],
-    call_span: &Span,
-) -> String {
-    let create = lower_resource_pool_owning_factory(lowerer, args, call_span);
-    let max_size = lower_required_call_arg(lowerer, args, "max_size", 1, call_span);
-    format!("rsscript_runtime::ResourcePool::try_lazy_from_factory({max_size}, {create})")
-}
-
-/// A lazy factory is stored in the pool and must own its captures (`'static`), so
-/// its closure is lowered with `move`. The eager factories run immediately and
-/// keep borrowing semantics.
-fn lower_resource_pool_owning_factory(
-    lowerer: &mut RustLowerer<'_>,
-    args: &[CallArg],
-    call_span: &Span,
-) -> String {
-    let create = lower_required_call_arg(lowerer, args, "create", 0, call_span);
-    if create.trim_start().starts_with('|') {
-        format!("move {create}")
-    } else {
-        create
-    }
 }
 
 pub(super) fn lower_builtin_value_ident(name: &str) -> Option<&'static str> {

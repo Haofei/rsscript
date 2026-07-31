@@ -80,15 +80,8 @@ pub mod code {
     pub const FRESH_REQUIRES_LOCAL_BINDING: &str = "RS0604";
     pub const RESOURCE_FIELD: &str = "RS0701";
     pub const RESOURCE_ESCAPE: &str = "RS0702";
-    pub const INVALID_RESOURCE_POOL_TYPE: &str = "RS0703";
     pub const RESOURCE_GENERIC_ARGUMENT: &str = "RS0704";
-    pub const RESOURCE_POOL_NOT_LOCAL: &str = "RS0705";
     pub const RESOURCE_PRODUCER_MISSING_TRY: &str = "RS0706";
-    pub const RESOURCE_POOL_FALLIBLE_FACTORY: &str = "RS0707";
-    pub const RESOURCE_POOL_INVALID_MAX_SIZE: &str = "RS0708";
-    pub const RESOURCE_POOL_ACTIVE_LEASE_CONFLICT: &str = "RS0709";
-    pub const RESOURCE_POOL_DISCARD_NOT_LEASE: &str = "RS0710";
-    pub const RESOURCE_POOL_LAZY_FACTORY_CAPTURE: &str = "RS0711";
     pub const LOCAL_CAPTURED_BY_MANAGED_CLOSURE: &str = "RS0801";
     pub const NOESCAPE_CALLBACK_ESCAPE: &str = "RS0802";
     pub const LOCAL_CLOSURE_ESCAPE: &str = "RS0803";
@@ -185,7 +178,6 @@ pub(crate) const SELFHOST_CHECKER_TARGET_CODES: &[&str] = &[
     code::WEAK_FIELD_REQUIRES_WEAK_HANDLE,
     code::WEAK_FIELD_REQUIRES_UPGRADE,
     code::INVALID_FRESH_RETURN_TYPE,
-    code::RESOURCE_POOL_NOT_LOCAL,
     code::IMPLICIT_CONVERSION_ATTEMPT,
     code::RETURN_TYPE_MISMATCH,
     code::ARGUMENT_TYPE_MISMATCH,
@@ -194,7 +186,6 @@ pub(crate) const SELFHOST_CHECKER_TARGET_CODES: &[&str] = &[
     code::DERIVE_FIELD_UNSUPPORTED,
     code::PROTOCOL_NOT_SATISFIED,
     code::SURFACE_REFERENCE_ATTEMPT,
-    code::RESOURCE_POOL_INVALID_MAX_SIZE,
     code::ASSIGNMENT_TYPE_MISMATCH,
     code::ASSIGNMENT_TARGET_DEFERRED,
     code::INVALID_MANAGE_OPERAND,
@@ -211,16 +202,11 @@ pub(crate) const SELFHOST_CHECKER_TARGET_CODES: &[&str] = &[
     code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,
     code::NOESCAPE_CONSUMES_CAPTURE,
     code::CLOSURE_CAPTURE_CONTRACT,
-    code::INVALID_RESOURCE_POOL_TYPE,
     code::RESOURCE_GENERIC_ARGUMENT,
-    code::RESOURCE_POOL_LAZY_FACTORY_CAPTURE,
     code::RESOURCE_ESCAPE,
     code::NOESCAPE_CALLBACK_ESCAPE,
     code::LOCAL_CLOSURE_ESCAPE,
     code::RESOURCE_PRODUCER_MISSING_TRY,
-    code::RESOURCE_POOL_FALLIBLE_FACTORY,
-    code::RESOURCE_POOL_ACTIVE_LEASE_CONFLICT,
-    code::RESOURCE_POOL_DISCARD_NOT_LEASE,
     code::OPERATOR_OVERLOAD_ATTEMPT,
     code::PACKAGE_INTERFACE_MISMATCH,
 ];
@@ -675,7 +661,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::FEATURE_VIOLATION,
         title: "feature violation",
-        explanation: "Files must declare review-relevant capabilities before using them. `local`, `manage`, `take`, `ResourcePool<T>`, `native`, `unsafe`, and `async` boundaries require matching `features:` entries, and `native fn` declarations must also spell the boundary as `effects(native)`.",
+        explanation: "Files must declare review-relevant capabilities before using them. `local`, `manage`, `take`, `native`, `unsafe`, and `async` boundaries require matching `features:` entries, and `native fn` declarations must also spell the boundary as `effects(native)`.",
     },
     DiagnosticExplanation {
         code: code::UNNAMED_ARGUMENT,
@@ -840,7 +826,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::RESOURCE_FIELD,
         title: "resource field",
-        explanation: "Resource values cannot be stored directly in ordinary class or struct fields. Use `with` or an approved resource container such as `ResourcePool<T>`.",
+        explanation: "Resource values cannot be stored directly in ordinary class or struct fields. Use them through `with`.",
     },
     DiagnosticExplanation {
         code: code::RESOURCE_ESCAPE,
@@ -848,49 +834,14 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         explanation: "A resource introduced by `with` must not escape the block through return, managed binding, manage, retention, or managed closure capture.",
     },
     DiagnosticExplanation {
-        code: code::INVALID_RESOURCE_POOL_TYPE,
-        title: "invalid ResourcePool type",
-        explanation: "`ResourcePool<T>` is only valid when `T` is a resource type.",
-    },
-    DiagnosticExplanation {
         code: code::RESOURCE_GENERIC_ARGUMENT,
         title: "resource in ordinary generic type",
-        explanation: "Resource values may only be held by explicit resource APIs such as `ResourcePool<T: Resource>`; ordinary generic containers must not be instantiated with resource types.",
-    },
-    DiagnosticExplanation {
-        code: code::RESOURCE_POOL_NOT_LOCAL,
-        title: "ResourcePool must be local",
-        explanation: "`ResourcePool<T>` must be held in a local binding so its resource lifetime and pool ownership stay explicit.",
+        explanation: "Ordinary generic containers must not be instantiated with resource types.",
     },
     DiagnosticExplanation {
         code: code::RESOURCE_PRODUCER_MISSING_TRY,
         title: "Result resource producer missing try",
         explanation: "A `with` resource context consuming `Result<Resource, E>` must use explicit `?` on the producer expression.",
-    },
-    DiagnosticExplanation {
-        code: code::RESOURCE_POOL_FALLIBLE_FACTORY,
-        title: "ResourcePool factory contract violation",
-        explanation: "`ResourcePool.new` is the v0.7 eager noescape infallible constructor and requires a factory returning a bare resource. `ResourcePool.try_new` is the matching fallible constructor and requires a factory returning `Result<Resource, E>`.",
-    },
-    DiagnosticExplanation {
-        code: code::RESOURCE_POOL_INVALID_MAX_SIZE,
-        title: "ResourcePool max_size not statically positive",
-        explanation: "Eager pools (`ResourcePool.new`/`try_new`) allocate every resource up front, so `max_size` must be a statically known positive value: a positive `Int` literal, or a reference to a positive `Int` `const`. Lazy pools (`ResourcePool.lazy`/`try_lazy`) create on demand and accept any `Int`, including a configuration-derived value.",
-    },
-    DiagnosticExplanation {
-        code: code::RESOURCE_POOL_ACTIVE_LEASE_CONFLICT,
-        title: "ResourcePool active lease conflict",
-        explanation: "While a `ResourcePool.borrow` lease is active, the same pool root cannot be read, mutated, taken, managed, or borrowed again inside the lease body.",
-    },
-    DiagnosticExplanation {
-        code: code::RESOURCE_POOL_DISCARD_NOT_LEASE,
-        title: "discard requires a pool lease",
-        explanation: "`ResourcePool.discard` evicts a checked-out lease, so its argument must be the binding of an enclosing `with ResourcePool.borrow(...) as name` / `with ResourcePool.try_borrow(...)? as name`. It cannot be applied to an ordinary resource value, which is not a lease and would not have the lease handle the runtime requires.",
-    },
-    DiagnosticExplanation {
-        code: code::RESOURCE_POOL_LAZY_FACTORY_CAPTURE,
-        title: "lazy factory capture",
-        explanation: "A lazy pool factory (`ResourcePool.lazy`/`try_lazy`, an `owned Fn`) is stored in the pool and called on demand, so it must own what it captures: only an owned `local` may be captured (it is moved into the factory). A parameter is borrowed, and a managed binding is shared/refcounted, so neither may be captured; names that are not bindings (globals, consts, functions) are `'static` and fine. Bind an owned `local` from the parameter/managed value first and capture that.",
     },
     DiagnosticExplanation {
         code: code::LOCAL_CAPTURED_BY_MANAGED_CLOSURE,

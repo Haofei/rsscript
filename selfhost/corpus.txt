@@ -114,7 +114,6 @@ crates/rsscript/tests/fixtures/fail/cancellation-token-in-async-fn.rss
 crates/rsscript/tests/fixtures/fail/const-non-literal-initializer.rss
 crates/rsscript/tests/fixtures/fail/constructor-field-arguments.rss
 crates/rsscript/tests/fixtures/fail/constructor-inline-managed-field.rss
-crates/rsscript/tests/fixtures/fail/default-features-resourcepool-type.rss
 crates/rsscript/tests/fixtures/fail/default-features-take-argument.rss
 crates/rsscript/tests/fixtures/fail/derive-float-not-ordered.rss
 crates/rsscript/tests/fixtures/fail/derive-handle-field-eq.rss
@@ -163,7 +162,6 @@ crates/rsscript/tests/fixtures/fail/generic-binding-type-mismatch.rss
 crates/rsscript/tests/fixtures/fail/generic-qualified-call-missing-effect.rss
 crates/rsscript/tests/fixtures/fail/generic-resource-nested-resource-param.rss
 crates/rsscript/tests/fixtures/fail/generic-resource-unbounded.rss
-crates/rsscript/tests/fixtures/fail/generic-resourcepool-managed-param.rss
 crates/rsscript/tests/fixtures/fail/handle-field-to-local.rss
 crates/rsscript/tests/fixtures/fail/handle-field-wrapper-to-local.rss
 crates/rsscript/tests/fixtures/fail/implicit-conversion-as.rss
@@ -275,21 +273,6 @@ crates/rsscript/tests/fixtures/fail/resource-retained-in-with.rss
 crates/rsscript/tests/fixtures/fail/resource-take-escape.rss
 crates/rsscript/tests/fixtures/fail/resource-wrapped-managed-closure-capture.rss
 crates/rsscript/tests/fixtures/fail/resource-wrapper-escape.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-active-lease-conflict.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-discard-non-lease.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-eager-runtime-max-size.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-factory-captures-resource.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-invalid-max-size.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-lazy-factory-captures-managed.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-lazy-factory-captures-param.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-lease-escape.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-managed-binding.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-new-fallible-factory.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-new-non-resource.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-non-resource-parameter.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-read-parameter.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-try-borrow-escape.rss
-crates/rsscript/tests/fixtures/fail/resourcepool-try-factory-captures-resource.rss
 crates/rsscript/tests/fixtures/fail/result-binding-payload-type-mismatch.rss
 crates/rsscript/tests/fixtures/fail/result-resource-producer-binding.rss
 crates/rsscript/tests/fixtures/fail/result-type-called-as-variant.rss
@@ -353,7 +336,6 @@ crates/rsscript/tests/fixtures/pass/const-declarations.rss
 crates/rsscript/tests/fixtures/pass/core-common-helpers.rss
 crates/rsscript/tests/fixtures/pass/core-receiver-call.rss
 crates/rsscript/tests/fixtures/pass/csv-stream-local-buffer.rss
-crates/rsscript/tests/fixtures/pass/database-resource-pool.rss
 crates/rsscript/tests/fixtures/pass/default-arguments.rss
 crates/rsscript/tests/fixtures/pass/default-non-copy-read-param.rss
 crates/rsscript/tests/fixtures/pass/default-read-parameter.rss
@@ -436,7 +418,6 @@ crates/rsscript/tests/fixtures/pass/receiver-call-basic.rss
 crates/rsscript/tests/fixtures/pass/receiver-call-default-read.rss
 crates/rsscript/tests/fixtures/pass/receiver-call-protocol.rss
 crates/rsscript/tests/fixtures/pass/receiver-call-read-effect.rss
-crates/rsscript/tests/fixtures/pass/resourcepool-const-max-size.rss
 crates/rsscript/tests/fixtures/pass/retaining-managed-shadowed-local.rss
 crates/rsscript/tests/fixtures/pass/selfhost-package-diff.rss
 crates/rsscript/tests/fixtures/pass/selfhost-package-exports.rss
@@ -511,8 +492,6 @@ examples/scripts/core/cache_retention.rss
 examples/scripts/core/config_reload.rss
 examples/scripts/core/counter.rss
 examples/scripts/core/csv_read.rss
-examples/scripts/core/db_pool.rss
-examples/scripts/core/db_pool_lazy.rss
 examples/scripts/core/file_copy.rss
 examples/scripts/core/file_copy_buffer.rss
 examples/scripts/core/http_handler.rss

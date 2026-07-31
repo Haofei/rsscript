@@ -112,7 +112,6 @@ fn restricted_host_dispatch_stays_behind_scoped_adapters() {
         ".filesystem_path(&authorized)",
         ".network_endpoint(&authorized)",
         ".process_executable(&authorized)",
-        ".database(&authorized)",
     ] {
         assert!(
             adapters.contains(capability),

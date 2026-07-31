@@ -408,8 +408,7 @@ fn restricted_vm_authority_is_mandatory_and_precedes_intrinsic_dispatch() {
         vm_model.contains("fn host_authority")
             && vm_model.contains("HostAuthority::Filesystem")
             && vm_model.contains("HostAuthority::Network")
-            && vm_model.contains("HostAuthority::Process")
-            && vm_model.contains("HostAuthority::Database"),
+            && vm_model.contains("HostAuthority::Process"),
         "host-touching intrinsics must carry an explicit authority classification"
     );
 
@@ -429,8 +428,7 @@ fn restricted_vm_authority_is_mandatory_and_precedes_intrinsic_dispatch() {
         adapters.contains("intrinsic.host_authority()")
             && adapters.contains(".filesystem_path(&authorized)")
             && adapters.contains(".network_endpoint(&authorized)")
-            && adapters.contains(".process_executable(&authorized)")
-            && adapters.contains(".database(&authorized)"),
+            && adapters.contains(".process_executable(&authorized)"),
         "restricted dispatch must consume exact scope-bound host capabilities"
     );
 }

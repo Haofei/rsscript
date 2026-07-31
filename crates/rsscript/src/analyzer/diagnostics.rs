@@ -1,27 +1,6 @@
 use super::*;
 
 impl Analyzer<'_> {
-    pub(super) fn invalid_resource_pool_type_diagnostic(
-        &mut self,
-        summary: impl Into<String>,
-        span: crate::diagnostic::Span,
-    ) {
-        self.diagnostics.push(
-            Diagnostic::error(
-                code::INVALID_RESOURCE_POOL_TYPE,
-                summary,
-                span,
-                "invalid ResourcePool type",
-            )
-            .with_cause("`ResourcePool<T>` is the privileged container for long-lived resource values, so `T` must be a resource.")
-            .with_fix(
-                "use_resource_type",
-                "Use a resource type argument or a non-resource container for ordinary values.",
-                "manual",
-            ),
-        );
-    }
-
     pub(super) fn fd_surface_diagnostic(
         &mut self,
         span: crate::diagnostic::Span,
@@ -176,10 +155,10 @@ impl Analyzer<'_> {
                 span.clone(),
                 "resource generic argument",
             )
-            .with_cause("Only explicit resource APIs such as `ResourcePool<T: Resource>` may hold resources.")
+            .with_cause("Generic containers cannot hold resource values.")
             .with_fix(
                 "use_resource_api",
-                "Use `with`, `ResourcePool<T: Resource>`, or a non-resource value type.",
+                "Use the resource through `with`, or use a non-resource value type.",
                 "manual",
             ),
         );
@@ -204,7 +183,7 @@ impl Analyzer<'_> {
             .with_cause(cause)
             .with_fix(
                 "add_or_change_resource_bound",
-                "Use explicit `T: Resource` only with approved resource APIs such as `ResourcePool<T>`.",
+                "Do not store `T: Resource` in a generic value.",
                 "manual",
             ),
         );

@@ -1411,7 +1411,7 @@ async fn main() -> Result<Unit, FileError> {
 }
 
 #[test]
-fn reg_vm_runs_time_db_and_fallible_pipeline_intrinsics_like_interpreter() {
+fn reg_vm_runs_time_and_fallible_pipeline_intrinsics_like_interpreter() {
     let source = r#"
 features: native
 
@@ -1497,27 +1497,7 @@ fn main() -> Result<Unit, String> {
 }
 "#;
 
-    assert_reg_vm_matches_compiled_backend("reg-vm-time-db-fallible-pipeline.rss", source, []);
-}
-
-#[test]
-fn reg_vm_runs_db_connection_intrinsics_like_interpreter() {
-    let source = r#"
-features: native
-
-fn main() -> Result<Unit, DbError> {
-    let url = Url.from_string(value: read "db://vm")
-    with DbConnection.open(url: read url) as conn {
-        DbConnection.query(conn: mut conn, sql: read "select 1")?
-    }
-    with DbConnection.try_open(url: read url)? as conn {
-        DbConnection.query(conn: mut conn, sql: read "select 2")?
-    }
-    return Ok(Unit)
-}
-"#;
-
-    assert_reg_vm_matches_compiled_backend("reg-vm-db-connection.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-time-fallible-pipeline.rss", source, []);
 }
 
 #[test]

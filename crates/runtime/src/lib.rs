@@ -24,7 +24,6 @@ mod process;
 mod random;
 mod regex;
 mod resource_budget;
-mod resource_pool;
 #[cfg(feature = "net")]
 mod socket;
 mod string_helpers;
@@ -115,24 +114,23 @@ macro_rules! runtime_abi_exports {
             install_runtime_diagnostic_panic_hook,
         };
         pub use crate::domain::{
-            Cache, Config, ConfigError, ConfigStore, ConfigValue, Counter, CsvError, DbConnection,
-            DbError, Environment, FunctionObject, GlobalConfig, HttpError, HttpRequest, Image,
-            ImageError, Request, Response, Row, RowBuffer, Rule, RuntimeEnvironmentHandle,
-            RuntimeEnvironmentMut, RuntimeFunctionHandle, RuntimeImageRef, TimerError, cache_get,
-            cache_insert, cache_lookup, cache_new, config_load, config_name, config_new,
-            config_rule_count, config_store_name, config_store_new, config_store_replace,
-            counter_add, counter_new, counter_value, csv_open_read, csv_parse_row, csv_read_into,
-            csv_read_into_with_budget, csv_rows, db_close, db_connection_open, db_connection_query,
-            db_connection_try_open, environment_bind_function, environment_child,
-            environment_has_function, environment_has_parent, environment_root,
-            function_object_has_closure, function_object_new, global_config_new,
-            global_config_replace, global_config_rule_count, http_error_message,
-            http_request_debug_summary, http_request_json, http_request_with_header,
-            http_request_with_retry, http_request_with_timeout, http_response_bytes,
-            http_response_is_success, http_response_lines, http_response_status,
-            http_response_text, image_debug_summary, image_inspect, image_load, image_normalize,
-            image_resize, image_save, image_sharpen, request_new, request_path, response_body,
-            response_ok, response_status, row_buffer_new, row_field_string, rule_loader_load_rules,
+            Cache, Config, ConfigError, ConfigStore, ConfigValue, Counter, CsvError, Environment,
+            FunctionObject, GlobalConfig, HttpError, HttpRequest, Image, ImageError, Request,
+            Response, Row, RowBuffer, Rule, RuntimeEnvironmentHandle, RuntimeEnvironmentMut,
+            RuntimeFunctionHandle, RuntimeImageRef, TimerError, cache_get, cache_insert,
+            cache_lookup, cache_new, config_load, config_name, config_new, config_rule_count,
+            config_store_name, config_store_new, config_store_replace, counter_add, counter_new,
+            counter_value, csv_open_read, csv_parse_row, csv_read_into, csv_read_into_with_budget,
+            csv_rows, environment_bind_function, environment_child, environment_has_function,
+            environment_has_parent, environment_root, function_object_has_closure,
+            function_object_new, global_config_new, global_config_replace,
+            global_config_rule_count, http_error_message, http_request_debug_summary,
+            http_request_json, http_request_with_header, http_request_with_retry,
+            http_request_with_timeout, http_response_bytes, http_response_is_success,
+            http_response_lines, http_response_status, http_response_text, image_debug_summary,
+            image_inspect, image_load, image_normalize, image_resize, image_save, image_sharpen,
+            request_new, request_path, response_body, response_ok, response_status, row_buffer_new,
+            row_field_string, rule_loader_load_rules,
         };
         #[cfg(feature = "net")]
         pub use crate::domain::{
@@ -230,11 +228,6 @@ macro_rules! runtime_abi_exports {
         };
         pub use crate::resource_budget::{
             RUNTIME_ALLOCATION_CEILING_BYTES, ResourceBudget, ResourceBudgetError,
-        };
-        pub use crate::resource_pool::{
-            PoolError, PoolStats, ResourceLease, ResourcePool, pool_error_message, pool_stats,
-            pool_stats_available, pool_stats_capacity, pool_stats_created, pool_stats_in_use,
-            resource_lease_discard,
         };
         #[cfg(feature = "net")]
         pub use crate::socket::{

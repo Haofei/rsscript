@@ -391,33 +391,6 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "message",
         "rsscript_runtime::channel_error_message",
     ),
-    runtime_intrinsic("ResourcePool", "stats", "rsscript_runtime::pool_stats"),
-    runtime_intrinsic(
-        "ResourcePool",
-        "discard",
-        "rsscript_runtime::resource_lease_discard",
-    ),
-    runtime_intrinsic(
-        "PoolStats",
-        "capacity",
-        "rsscript_runtime::pool_stats_capacity",
-    ),
-    runtime_intrinsic(
-        "PoolStats",
-        "created",
-        "rsscript_runtime::pool_stats_created",
-    ),
-    runtime_intrinsic(
-        "PoolStats",
-        "available",
-        "rsscript_runtime::pool_stats_available",
-    ),
-    runtime_intrinsic("PoolStats", "in_use", "rsscript_runtime::pool_stats_in_use"),
-    runtime_intrinsic(
-        "PoolError",
-        "message",
-        "rsscript_runtime::pool_error_message",
-    ),
     runtime_intrinsic(
         "Deadline",
         "after_ms",
@@ -438,22 +411,6 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     runtime_intrinsic("Csv", "parse_row", "rsscript_runtime::csv_parse_row"),
     runtime_intrinsic("Csv", "read_into", "rsscript_runtime::csv_read_into"),
     runtime_intrinsic("Csv", "rows", "rsscript_runtime::csv_rows"),
-    runtime_intrinsic("Db", "close", "rsscript_runtime::db_close"),
-    runtime_intrinsic(
-        "DbConnection",
-        "open",
-        "rsscript_runtime::db_connection_open",
-    ),
-    runtime_intrinsic(
-        "DbConnection",
-        "query",
-        "rsscript_runtime::db_connection_query",
-    ),
-    runtime_intrinsic(
-        "DbConnection",
-        "try_open",
-        "rsscript_runtime::db_connection_try_open",
-    ),
     runtime_intrinsic("Date", "add_days", "rsscript_runtime::date_add_days"),
     runtime_intrinsic("Date", "add_ms", "rsscript_runtime::date_add_ms"),
     runtime_intrinsic("Date", "day", "rsscript_runtime::date_day"),

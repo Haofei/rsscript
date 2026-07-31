@@ -68,7 +68,7 @@ pub fn fetch_user<'a>(
 
 A reviewer reads that and wants to know: *fetch a user, return it or an error.* Two bits. The signature gives you those two bits behind a thick wall of `Pin`, `Box`, `dyn`, `Future`, `Output`, `Box<dyn Error + Send + Sync + 'static>`, `Send`, `'a`. Each piece is technically meaningful, but stacked together they form a barrier that you have to *parse and discard* before you can think about whether the function does the right thing.
 
-The honest version is `async fn fetch_user(...) -> Result<User, DbError>`. The model knows about `async fn`. It still writes the desugared form anyway, because the desugared form is what shows up most often in the libraries it learned from.
+The honest version is `async fn fetch_user(...) -> Result<User, ServiceError>`. The model knows about `async fn`. It still writes the desugared form anyway, because the desugared form is what shows up most often in the libraries it learned from.
 
 ## 4. Retention buried three call levels down
 

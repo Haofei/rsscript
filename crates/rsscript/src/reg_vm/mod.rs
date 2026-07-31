@@ -1826,8 +1826,6 @@ struct RegVm {
     tcp_streams: HashMap<i64, TcpStream>,
     next_websocket_id: i64,
     websockets: HashMap<i64, TcpStream>,
-    next_pool_id: i64,
-    pools: HashMap<i64, VmResourcePool>,
     /// Tier-0 JIT: when set, JIT-eligible functions run via the specializing
     /// executor `run_jit` (which reuses the interpreter's value/register
     /// semantics, so it is gap-free by construction).
@@ -6780,22 +6778,6 @@ impl VmChannel {
     }
 }
 
-#[derive(Debug, Clone)]
-struct VmResourcePool {
-    capacity: i64,
-    created: i64,
-    in_use: i64,
-    idle: Vec<VmValue>,
-    factory: Option<Rc<VmClosure>>,
-    factory_returns_result: bool,
-}
-
-struct VmResourcePoolLease {
-    pool_id: i64,
-    discarded: bool,
-    value: VmValue,
-}
-
 fn intrinsic_arg<'a>(
     stack: &'a [VmValue],
     base: usize,
@@ -6938,97 +6920,6 @@ fn peel_select_operation(operation: &HirExpr) -> (&HirExpr, bool) {
             other => return (other, has_try),
         }
     }
-}
-
-const POOL_LEASE_ID_FIELD: &str = "__rsscript_vm_pool_id";
-const POOL_LEASE_DISCARDED_FIELD: &str = "__rsscript_vm_pool_discarded";
-
-fn pool_error_message(value: &VmValue) -> Option<String> {
-    match value {
-        VmValue::Struct(data) if data.name().as_ref() == "PoolError" => data
-            .get("message")
-            .and_then(|value| expect_string_ref(value).ok())
-            .map(str::to_string),
-        _ => None,
-    }
-}
-
-fn mark_pool_lease(value: VmValue, pool_id: i64) -> Result<VmValue, String> {
-    let VmValue::Struct(data) = value else {
-        return Err(format!(
-            "ResourcePool can only lease resource structs in the VM, got `{}`",
-            value.display()
-        ));
-    };
-    let mut fields: Vec<(Rc<str>, VmValue)> = data
-        .iter()
-        .map(|(name, v)| (name.clone(), v.clone()))
-        .collect();
-    fields.push((Rc::from(POOL_LEASE_ID_FIELD), VmValue::Int(pool_id)));
-    fields.push((Rc::from(POOL_LEASE_DISCARDED_FIELD), VmValue::Bool(false)));
-    Ok(VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::clone(data.name()),
-        fields,
-    ))))
-}
-
-fn mark_pool_lease_discarded(value: VmValue) -> Result<VmValue, EvalError> {
-    let VmValue::Struct(data) = value else {
-        return Err(EvalError::Runtime(format!(
-            "ResourcePool.discard expected an active pool lease, got `{}`.",
-            value.display()
-        )));
-    };
-    if !data.contains(POOL_LEASE_ID_FIELD) {
-        return Err(EvalError::Runtime(format!(
-            "ResourcePool.discard expected an active pool lease, got `{}`.",
-            VmValue::Struct(Rc::clone(&data)).display()
-        )));
-    }
-    let fields: Vec<(Rc<str>, VmValue)> = data
-        .iter()
-        .map(|(name, v)| {
-            if name.as_ref() == POOL_LEASE_DISCARDED_FIELD {
-                (name.clone(), VmValue::Bool(true))
-            } else {
-                (name.clone(), v.clone())
-            }
-        })
-        .collect();
-    Ok(VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::clone(data.name()),
-        fields,
-    ))))
-}
-
-fn split_pool_lease(value: VmValue) -> Result<Option<VmResourcePoolLease>, EvalError> {
-    let VmValue::Struct(data) = value else {
-        return Ok(None);
-    };
-    let Some(pool_id) = data.get(POOL_LEASE_ID_FIELD).cloned() else {
-        return Ok(None);
-    };
-    let discarded = data
-        .get(POOL_LEASE_DISCARDED_FIELD)
-        .map(expect_bool_ref)
-        .transpose()?
-        .unwrap_or(false);
-    // Rebuild the underlying resource struct without the lease bookkeeping fields.
-    let fields: Vec<(Rc<str>, VmValue)> = data
-        .iter()
-        .filter(|(name, _)| {
-            name.as_ref() != POOL_LEASE_ID_FIELD && name.as_ref() != POOL_LEASE_DISCARDED_FIELD
-        })
-        .map(|(name, v)| (name.clone(), v.clone()))
-        .collect();
-    Ok(Some(VmResourcePoolLease {
-        pool_id: expect_int_ref(&pool_id)?,
-        discarded,
-        value: VmValue::Struct(Rc::new(VmStruct::from_named(
-            Rc::clone(data.name()),
-            fields,
-        ))),
-    }))
 }
 
 fn clock_system_unix_ms() -> i64 {

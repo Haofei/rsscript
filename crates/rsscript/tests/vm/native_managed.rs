@@ -176,69 +176,6 @@ fn main() -> Unit {
 }
 
 #[test]
-fn reg_vm_runs_resource_drop_cleanup_like_interpreter() {
-    let source = r#"
-features: local
-
-resource FileHandle {
-    fd: Int
-
-    drop {
-        Log.write(message: read "file-drop")
-        OS.close(fd: fd)
-    }
-}
-
-resource DbHandle {
-    fd: Int
-
-    drop {
-        Log.write(message: read "db-drop")
-        Db.close(fd: fd)
-    }
-}
-
-fn main() -> Unit {
-    with FileHandle(fd: 0) as file {
-        Log.write(message: read "file-body")
-        Log.write(message: read String.from_int(value: file.fd))
-    }
-    with DbHandle(fd: 0) as db {
-        Log.write(message: read "db-body")
-        Log.write(message: read String.from_int(value: db.fd))
-    }
-    return Unit
-}
-"#;
-
-    assert_reg_vm_matches_compiled_backend("reg-vm-resource-drop-cleanup.rss", source, []);
-}
-
-#[test]
-fn reg_vm_runs_resource_pool_try_new_like_backend() {
-    let source = r#"
-features: local native
-
-fn main() -> Result<Unit, DbError> {
-    let url = Url.from_string(value: read "db://vm-resource-pool")
-    local eager = ResourcePool<DbConnection>.try_new(
-        create: || {
-            return DbConnection.try_open(url: read url)
-        },
-        max_size: 2,
-    )?
-    with ResourcePool.borrow(pool: mut eager) as session {
-        DbConnection.query(conn: mut session, sql: read "select eager")?
-    }
-
-    return Ok(Unit)
-}
-"#;
-
-    assert_reg_vm_matches_compiled_backend("reg-vm-resource-pool-try-new.rss", source, []);
-}
-
-#[test]
 fn reg_vm_runs_resource_drop_unwind_like_interpreter() {
     let source = r#"
 features: local

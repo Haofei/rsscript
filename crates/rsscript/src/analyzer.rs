@@ -1356,12 +1356,6 @@ impl Analyzer<'_> {
     }
 }
 
-fn resource_pool_namespace_arg(namespace: &str) -> Option<&str> {
-    namespace
-        .strip_prefix("ResourcePool<")
-        .and_then(|rest| rest.strip_suffix('>'))
-}
-
 fn generic_namespace_args(namespace: &str) -> Option<(&str, Vec<&str>)> {
     let (root, rest) = namespace.split_once('<')?;
     let args = rest.strip_suffix('>')?;
@@ -2137,7 +2131,6 @@ pub(crate) fn is_builtin_type_name(name: &str) -> bool {
             | "IOError"
             | "HttpError"
             | "ConfigError"
-            | "DbError"
             | "ImageError"
             | "JsonError"
             | "CsvError"

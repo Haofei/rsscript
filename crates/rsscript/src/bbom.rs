@@ -334,14 +334,7 @@ fn collect_function_behaviors(
 fn type_ref_is_resource_like(ty: &TypeRef) -> bool {
     matches!(
         ty.name.as_str(),
-        "File"
-            | "Directory"
-            | "DbConnection"
-            | "HttpClient"
-            | "ResourcePool"
-            | "TcpStream"
-            | "UdpSocket"
-            | "Process"
+        "File" | "Directory" | "HttpClient" | "TcpStream" | "UdpSocket" | "Process"
     )
 }
 

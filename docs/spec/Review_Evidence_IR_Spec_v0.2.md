@@ -1507,7 +1507,7 @@ The RSScript frontend may emit authoritative REIR facts for:
 read / mut / take data effects
 retention effects: retains(x)
 managed closure capture retention
-resource open / with / ResourcePool behavior
+resource open / with behavior
 fresh return contracts
 local / manage transitions
 native boundaries
@@ -1783,8 +1783,6 @@ Example:
 "RuleLoader.load_rules" = ["filesystem.read"]
 "Image.load" = ["filesystem.read"]
 "Image.save" = ["filesystem.write"]
-"DbConnection.open" = ["database.read"]
-"DbConnection.query" = ["database.read", "database.write"]
 "Hash.sha256_string" = ["compute.hash"]
 "Hash.sha256_bytes" = ["compute.hash"]
 "Hash.sha256_file" = ["compute.hash", "filesystem.read"]
@@ -1814,11 +1812,10 @@ REIR capability facts when they appear in package review metadata. Examples:
 `network.client`, `Clock.now`, `Clock.system_unix_ms`, and `Instant.elapsed`
 require `time.read`, `Random.bytes` and `Uuid.new_v4` require `random.read`,
 `Csv.open_read`, `Config.load`, and `RuleLoader.load_rules` require
-`filesystem.read`, `Image.load` requires `filesystem.read`, `Image.save`
-requires `filesystem.write`, `DbConnection.open` requires `database.read`, and
-`DbConnection.query` conservatively requires both `database.read` and
-`database.write` because the package-review contract surface does not parse SQL
-intent. `Hash.sha256_string` and `Hash.sha256_bytes` require `compute.hash`,
+`filesystem.read`, `Image.load` requires `filesystem.read`, and `Image.save`
+requires `filesystem.write`. Database evidence uses the generic
+`database.read` and `database.write` categories emitted by database-aware
+adapters. `Hash.sha256_string` and `Hash.sha256_bytes` require `compute.hash`,
 `Hash.sha256_file` requires both `compute.hash` and `filesystem.read`,
 `Regex.compile`, `Regex.is_match`, `Regex.find`, `Regex.captures`,
 `Regex.replace_all`, and `Regex.split` require `compute.regex`, `Log.write`

@@ -1,6 +1,6 @@
 //! Resource-value constructor free functions and their supporting data structs,
-//! split out of `reg_vm/mod.rs` (channels/senders/receivers/pools/instants/
-//! configs/requests/responses/http/ws/db/process/file/directory/image/tempdir/
+//! split out of `reg_vm/mod.rs` (channels/senders/receivers/instants/
+//! configs/requests/responses/http/ws/process/file/directory/image/tempdir/
 //! stream builders). The VM core calls these via `use resources::*`.
 
 use super::*;
@@ -49,40 +49,6 @@ pub(super) fn receiver_value(channel_id: i64, closed: bool) -> VmValue {
         ("closed".to_string(), VmValue::Bool(closed)),
     ];
     VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Receiver"), fields)))
-}
-
-#[derive(Debug, Clone)]
-pub(super) struct VmResourcePoolState {
-    pub(super) id: i64,
-}
-
-pub(super) fn resource_pool_value(id: i64) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![("id".to_string(), VmValue::Int(id))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::from("ResourcePool"),
-        fields,
-    )))
-}
-
-pub(super) fn pool_stats_value(
-    capacity: i64,
-    created: i64,
-    available: i64,
-    in_use: i64,
-) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("capacity".to_string(), VmValue::Int(capacity)),
-        ("created".to_string(), VmValue::Int(created)),
-        ("available".to_string(), VmValue::Int(available)),
-        ("in_use".to_string(), VmValue::Int(in_use)),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("PoolStats"), fields)))
-}
-
-pub(super) fn pool_error_value(message: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> =
-        vec![("message".to_string(), VmValue::string(message.into()))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("PoolError"), fields)))
 }
 
 pub(super) fn instant_value(unix_ms: i64) -> VmValue {
@@ -197,26 +163,6 @@ pub(super) fn http_request_value(
 pub(super) struct WebSocketFrame {
     pub(super) opcode: u8,
     pub(super) payload: Vec<u8>,
-}
-
-pub(super) fn db_connection_value(url: impl Into<String>, queries: Vec<String>) -> VmValue {
-    let mut fields: Vec<(String, VmValue)> = vec![("url".to_string(), VmValue::string(url.into()))];
-    fields.push((
-        "queries".to_string(),
-        VmValue::List(Rc::new(RefCell::new(
-            queries.into_iter().map(VmValue::string).collect(),
-        ))),
-    ));
-    VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::from("DbConnection"),
-        fields,
-    )))
-}
-
-pub(super) fn db_error_value(message: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> =
-        vec![("message".to_string(), VmValue::string(message.into()))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("DbError"), fields)))
 }
 
 #[derive(Debug, Clone)]

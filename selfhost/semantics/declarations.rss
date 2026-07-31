@@ -180,7 +180,7 @@ fn collect_program_resource_generic_diagnostics(program: Program, diagnostics: m
             let mut fieldIndex = 0
             while fieldIndex < List.len(list: item.fields) {
                 let field = List.get<Field>(list: item.fields, index: fieldIndex)
-                if Set.contains<String>(set: resourceParams, value: field.typeSyntax.base) && field.typeSyntax.base != "ResourcePool" {
+                if Set.contains<String>(set: resourceParams, value: field.typeSyntax.base) {
                     DiagnosticBag.add(self: mut diagnostics, code: "RS0704", line: field.typeLine, column: field.typeColumn, length: field.typeLength)
                 }
                 fieldIndex = fieldIndex + 1

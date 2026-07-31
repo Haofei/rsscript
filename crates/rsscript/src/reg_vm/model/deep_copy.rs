@@ -411,7 +411,7 @@ enum IntrinsicTaintClass {
     /// the aliased result correctly pins the copy.
     AliasReturner,
     /// Not proven read-only-and-non-storing: conservatively force-keep if it touches a tainted
-    /// register. Covers Tier-3 (channels/streams/IO/resource-pool/json/string/…) and every
+    /// register. Covers Tier-3 (channels/streams/IO/json/string/...) and every
     /// variant not explicitly whitelisted below. This is the DEFAULT arm — soundness rests on it.
     Keep,
 }

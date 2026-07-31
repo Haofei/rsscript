@@ -413,8 +413,7 @@ fn parse_review_region(value: JsonValue) -> Result<fresh ReviewFacts, JsonError>
         has_unknown_call: classification == "unknown",
         has_native_boundary: Json.array_contains_prefix(value: reasons, prefix: "native")?,
         has_unsafe_boundary: Json.array_contains_prefix(value: reasons, prefix: "unsafe")?,
-        has_resource_boundary: Json.array_contains_prefix(value: reasons, prefix: "resource ")?
-            || Json.array_contains_prefix(value: reasons, prefix: "ResourcePool")?,
+        has_resource_boundary: Json.array_contains_prefix(value: reasons, prefix: "resource ")?,
         has_retains: Json.array_contains_prefix(value: reasons, prefix: "retains ")?
             || Json.array_contains_prefix(value: reasons, prefix: "retention ")?
             || Json.array_contains_prefix(value: reasons, prefix: "managed closure retains")?,
@@ -477,10 +476,6 @@ fn reason_is_modeled(reason: String) -> Bool {
     }
 
     if String.starts_with(value: reason, prefix: "resource ") {
-        return true
-    }
-
-    if String.starts_with(value: reason, prefix: "ResourcePool") {
         return true
     }
 

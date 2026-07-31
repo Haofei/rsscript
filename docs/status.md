@@ -87,6 +87,7 @@ This table records the current implementation batch for the refactoring work in
 | R21 | Remove Metal/GPU and tensor execution surfaces | Complete | No Metal crate, tensor runtime, GPU ABI, language interface, VM lowering, test domain, or release job remains |
 | R22 | Remove package publish, vendor, and hosted-registry preview surfaces | Complete | No publish/vendor CLI, RSScript API/model, REIR collector, preview badge, archive-manifest, fixture, or package-manager prototype surface remains |
 | R23 | Contract native package ecosystem demos | Complete | One dependency-free native ABI fixture covers mutable list write-back; SQLite, SQLx, Rayon, CLI, Crypto, and HTTP native package trees are removed |
+| R24 | Remove fake database runtime and generic pooling | Complete | No synthetic database connection/error runtime, generic pooling language feature, compiler/VM model, stdlib interface, fixture, or generated crate remains |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -269,6 +270,11 @@ deterministic mutable-list operation. It preserves package checking, native
 binding generation, dynamic ABI dispatch, review gating, and `mut List<Int>`
 write-back coverage without shipping database, parallelism, CLI, cryptography,
 or HTTP demo adapters.
+
+R24 removes the synthetic executable database connection model and the generic
+pooling language/runtime feature. Core `resource` declarations and `with`
+ownership remain, as do the abstract `database.read`/`database.write`
+capability taxonomy and Terraform/PostgreSQL review evidence demos.
 
 ## Experimental Status
 

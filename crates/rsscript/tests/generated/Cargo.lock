@@ -990,13 +990,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-generated-resource-pool"
-version = "0.1.0"
-dependencies = [
- "rsscript-runtime",
-]
-
-[[package]]
 name = "rsscript-generated-result"
 version = "0.1.0"
 dependencies = [

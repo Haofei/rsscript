@@ -861,10 +861,6 @@ impl VmStruct {
             .and_then(|slot| self.fields.get(slot))
     }
 
-    pub(crate) fn contains(&self, field: &str) -> bool {
-        self.layout.slot(field).is_some()
-    }
-
     pub(crate) fn is_empty(&self) -> bool {
         self.fields.is_empty()
     }

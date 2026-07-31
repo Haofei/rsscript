@@ -37,7 +37,6 @@ fn audit_step(callback: noescape Fn()) -> Unit {
 fn HttpError.from_config(error: ConfigError) -> HttpError
 fn HttpError.from_json(error: JsonError) -> HttpError
 fn HttpError.from_image(error: ImageError) -> HttpError
-fn HttpError.from_db(error: DbError) -> HttpError
 
 fn parse_plan(request: Request) -> Result<fresh UploadPlan, JsonError> {
     let body = Request.path(request)
@@ -114,19 +113,6 @@ fn refresh_config(path: Path, store: mut ConfigStore) -> Result<Unit, ConfigErro
     return Ok(Unit)
 }
 
-fn run_audit_query(url: Url, trace_id: String) -> Result<Unit, DbError> {
-    local pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.open(url),
-        max_size: 2,
-    )
-
-    with ResourcePool.borrow(pool: mut pool) as conn {
-        DbConnection.query(conn: mut conn, sql: trace_id)?
-    }
-
-    return Ok(Unit)
-}
-
 fn refresh_config_http(path: Path, store: mut ConfigStore) -> Result<Unit, HttpError> {
     match refresh_config(path, store: mut store) {
         Ok(unit) => {
@@ -163,15 +149,9 @@ fn process_image_http(plan: UploadPlan, cache: mut RetainedImageStore) -> Result
     }
 }
 
-fn run_audit_query_http(url: Url, trace_id: String) -> Result<Unit, HttpError> {
-    match run_audit_query(url, trace_id) {
-        Ok(unit) => {
-            return Ok(Unit)
-        }
-        Err(error) => {
-            return Err(HttpError.from_db(error))
-        }
-    }
+fn record_audit(trace_id: String) -> Result<Unit, HttpError> {
+    Log.write(message: trace_id)
+    return Ok(Unit)
 }
 
 fn persist_trace(cache: mut Cache, trace_id: String, status: String) -> Unit {
@@ -186,7 +166,6 @@ fn handle_request(
     config_store: mut ConfigStore,
     status_cache: mut Cache,
     counter: mut Counter,
-    db_url: Url,
 ) -> Result<fresh Response, HttpError> {
     let config_path = Path.from_string(value: "config.json")
     refresh_config_http(path: config_path, store: mut config_store)?
@@ -194,7 +173,7 @@ fn handle_request(
     let item = build_work_item_http(request, owner_id)?
     inspect_session(session: item.session)
     process_image_http(plan: item.plan, cache: mut image_store)?
-    run_audit_query_http(url: db_url, trace_id: item.plan.trace_id)?
+    record_audit(trace_id: item.plan.trace_id)?
 
     let status = ConfigStore.name(store: config_store)
     persist_trace(cache: mut status_cache, trace_id: item.plan.trace_id, status)

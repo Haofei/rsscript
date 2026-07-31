@@ -359,40 +359,12 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(crate) fn check_generic_resource_pool_type_ref(
-        &mut self,
-        ty: &TypeRef,
-        bounds: &HashMap<String, Option<GenericBound>>,
-    ) {
-        if ty.name == "ResourcePool"
-            && let Some(arg) = ty.args.first()
-            && let Some(bound) = bounds.get(&arg.name)
-            && bound.as_ref() != Some(&GenericBound::Resource)
-        {
-            self.invalid_resource_pool_type_diagnostic(
-                format!(
-                    "ResourcePool<{}> requires `{}` to be explicitly bounded by Resource.",
-                    arg.name, arg.name
-                ),
-                arg.span.clone(),
-            );
-        }
-        for arg in &ty.args {
-            self.check_generic_resource_pool_type_ref(arg, bounds);
-        }
-    }
-
     pub(crate) fn check_resource_type_param_field(
         &mut self,
         ty: &TypeRef,
         bounds: &HashMap<String, Option<GenericBound>>,
-        in_resource_pool: bool,
     ) {
-        let next_in_resource_pool =
-            in_resource_pool || self.is_approved_resource_container(&ty.name);
-        if !next_in_resource_pool
-            && bounds.get(&ty.name).and_then(Option::as_ref) == Some(&GenericBound::Resource)
-        {
+        if bounds.get(&ty.name).and_then(Option::as_ref) == Some(&GenericBound::Resource) {
             self.generic_resource_argument_diagnostic(
                 &ty.name,
                 &ty.name,
@@ -401,7 +373,7 @@ impl Analyzer<'_> {
             );
         }
         for arg in &ty.args {
-            self.check_resource_type_param_field(arg, bounds, next_in_resource_pool);
+            self.check_resource_type_param_field(arg, bounds);
         }
     }
 }

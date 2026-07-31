@@ -126,7 +126,6 @@
             "local binding",
             "resource with block",
             "mut call-site effect",
-            "ResourcePool usage",
             "writes to managed state",
             "error handling boundary"
           ]

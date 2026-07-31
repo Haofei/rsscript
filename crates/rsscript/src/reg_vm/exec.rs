@@ -52,8 +52,6 @@ impl RegVm {
             tcp_streams: HashMap::new(),
             next_websocket_id: 1,
             websockets: HashMap::new(),
-            next_pool_id: 1,
-            pools: HashMap::new(),
             jit_enabled: false,
             jit_force_all: false,
             limits: VmLimits::default(),

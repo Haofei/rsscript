@@ -20,7 +20,6 @@ use crate::{
 use std::io::{BufRead, Read};
 use std::str::Utf8Error;
 
-use crate::diagnostics::Resource;
 use crate::fs::{File, RuntimePath, file_open_read};
 use crate::json::JsonError;
 use crate::managed::{Managed, WeakManaged, manage, weak};
@@ -193,35 +192,6 @@ impl From<std::io::Error> for ConfigError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DbConnection {
-    url: String,
-    queries: Vec<String>,
-}
-
-impl Resource for DbConnection {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DbError {
-    message: String,
-}
-
-impl DbError {
-    fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for DbError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}", self.message)
-    }
-}
-
-impl std::error::Error for DbError {}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpError {
     message: String,
 }
@@ -261,14 +231,6 @@ impl From<ConfigError> for HttpError {
 
 impl From<CsvError> for HttpError {
     fn from(error: CsvError) -> Self {
-        Self {
-            message: error.to_string(),
-        }
-    }
-}
-
-impl From<DbError> for HttpError {
-    fn from(error: DbError) -> Self {
         Self {
             message: error.to_string(),
         }
@@ -1192,33 +1154,6 @@ pub fn function_object_new(closure: &impl RuntimeEnvironmentHandle) -> FunctionO
 
 pub fn function_object_has_closure(function: &impl RuntimeFunctionHandle) -> bool {
     function.function_has_closure()
-}
-
-pub fn db_connection_open(url: &str) -> DbConnection {
-    DbConnection {
-        url: url.to_string(),
-        queries: Vec::new(),
-    }
-}
-
-pub fn db_connection_try_open(url: &str) -> Result<DbConnection, DbError> {
-    if url.trim().is_empty() {
-        return Err(DbError::new("database URL is empty"));
-    }
-    Ok(db_connection_open(url))
-}
-
-pub fn db_connection_query(conn: &mut DbConnection, sql: &str) -> Result<(), DbError> {
-    if sql.trim().is_empty() {
-        return Err(DbError::new("SQL query is empty"));
-    }
-    conn.queries.push(sql.to_string());
-    println!("db query on {}: {sql}", conn.url);
-    Ok(())
-}
-
-pub fn db_close(fd: i64) {
-    let _ = fd;
 }
 
 pub fn image_load<P: RuntimePath + ?Sized>(path: &P) -> Result<Image, ImageError> {

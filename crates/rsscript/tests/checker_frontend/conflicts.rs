@@ -640,32 +640,6 @@ fn run() -> Int {
 }
 
 #[test]
-fn checker_allows_lazy_factory_internal_bindings_without_treating_them_as_captures() {
-    let source = r#"
-features: local
-
-fn run(max_connections: Int) -> Result<Unit, PoolError> {
-    local pool = ResourcePool<DbConnection>.lazy(
-        create: || {
-            local host = Url.from_string(value: read "db://local")
-            DbConnection.open(url: read host)
-        },
-        max_size: max_connections,
-    )
-    return Ok(Unit)
-}
-"#;
-    let diagnostics = analyze_source("lazy-internal-binding.rss", source);
-
-    assert!(
-        diagnostics
-            .iter()
-            .all(|diagnostic| diagnostic.code != "RS0711"),
-        "{diagnostics:?}"
-    );
-}
-
-#[test]
 fn type_alias_chain_resolves_correctly() {
     let source = r#"
 type MyString = String

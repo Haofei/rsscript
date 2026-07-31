@@ -150,7 +150,6 @@ pub enum HirFeatureUseKind {
     LocalClosure,
     Manage,
     Take,
-    ResourcePool,
     Native,
     Unsafe,
     Async,

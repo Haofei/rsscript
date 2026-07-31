@@ -453,20 +453,13 @@ impl Analyzer<'_> {
                             }
                         }
                         for field in &decl.fields {
-                            self.check_resource_type_param_field(&field.ty, &bounds, false);
+                            self.check_resource_type_param_field(&field.ty, &bounds);
                         }
-                    }
-                    for field in &decl.fields {
-                        self.check_generic_resource_pool_type_ref(&field.ty, &bounds);
                     }
                 }
                 Item::Function(function) => {
                     let bounds = generic_bounds(&function.type_params);
-                    for param in &function.params {
-                        self.check_generic_resource_pool_type_ref(&param.ty, &bounds);
-                    }
                     if let Some(return_ty) = &function.return_ty {
-                        self.check_generic_resource_pool_type_ref(return_ty, &bounds);
                         if function.returns_fresh {
                             self.check_fresh_generic_return_bound(
                                 &function.name,

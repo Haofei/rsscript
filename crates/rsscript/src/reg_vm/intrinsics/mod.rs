@@ -249,7 +249,6 @@ impl RegVm {
             | RegIntrinsic::DecodeErrorMessage
             | RegIntrinsic::FileErrorMessage
             | RegIntrinsic::HttpErrorMessage
-            | RegIntrinsic::PoolErrorMessage
             | RegIntrinsic::TcpErrorMessage
             | RegIntrinsic::WebSocketErrorMessage => {
                 read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "message")
@@ -476,39 +475,6 @@ impl RegVm {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let content = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 Ok(file_result_unit(std::fs::write(path, content)))
-            }
-            RegIntrinsic::DbClose => {
-                let _ = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Unit)
-            }
-            RegIntrinsic::DbConnectionOpen => {
-                let url = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(db_connection_value(url, Vec::new()))
-            }
-            RegIntrinsic::DbConnectionQuery => {
-                let conn_reg = *args.first().ok_or_else(|| {
-                    EvalError::Runtime("reg VM DbConnection.query missing conn.".to_string())
-                })?;
-                let sql =
-                    expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_string();
-                let mut conn = expect_db_connection_ref(self.reg(base + conn_reg))?;
-                Ok(json_result(if sql.trim().is_empty() {
-                    Err(db_error_value("SQL query is empty"))
-                } else {
-                    self.push_stdout(&format!("db query on {}: {sql}\n", conn.url))?;
-                    conn.queries.push(sql);
-                    self.set_reg(base + conn_reg, conn.to_value());
-                    Ok(VmValue::Unit)
-                }))
-            }
-            RegIntrinsic::DbConnectionTryOpen => {
-                let url =
-                    expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string();
-                Ok(json_result(if url.trim().is_empty() {
-                    Err(db_error_value("database URL is empty"))
-                } else {
-                    Ok(db_connection_value(url, Vec::new()))
-                }))
             }
             RegIntrinsic::DurationAdd => {
                 let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -1593,61 +1559,6 @@ impl RegVm {
                 let key = intrinsic_arg(&self.stack, base, args, 1)?;
                 sorted_map_remove(&mut entries, key);
                 Ok(sorted_map_value(entries))
-            }
-            RegIntrinsic::PoolStatsAvailable => {
-                read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "available")
-            }
-            RegIntrinsic::PoolStatsCapacity => {
-                read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "capacity")
-            }
-            RegIntrinsic::PoolStatsCreated => {
-                read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "created")
-            }
-            RegIntrinsic::PoolStatsInUse => {
-                read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "in_use")
-            }
-            RegIntrinsic::ResourcePoolBorrow => {
-                self.resource_pool_borrow(unit, args, base, next_base, false)
-            }
-            RegIntrinsic::ResourcePoolDiscard => {
-                let lease_reg = *args.first().ok_or_else(|| {
-                    EvalError::Runtime("reg VM ResourcePool.discard missing lease.".to_string())
-                })?;
-                let lease = self.reg(base + lease_reg).clone();
-                self.set_reg(base + lease_reg, mark_pool_lease_discarded(lease)?);
-                Ok(VmValue::Unit)
-            }
-            RegIntrinsic::ResourcePoolLazy => {
-                self.resource_pool_new(unit, args, base, next_base, true, false)
-            }
-            RegIntrinsic::ResourcePoolNew => {
-                self.resource_pool_new(unit, args, base, next_base, false, false)
-            }
-            RegIntrinsic::ResourcePoolStats => {
-                let pool = expect_resource_pool_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let stats = self.pools.get(&pool.id).cloned().unwrap_or(VmResourcePool {
-                    capacity: 0,
-                    created: 0,
-                    in_use: 0,
-                    idle: Vec::new(),
-                    factory: None,
-                    factory_returns_result: false,
-                });
-                Ok(pool_stats_value(
-                    stats.capacity,
-                    stats.created,
-                    stats.idle.len() as i64,
-                    stats.in_use,
-                ))
-            }
-            RegIntrinsic::ResourcePoolTryBorrow => {
-                self.resource_pool_borrow(unit, args, base, next_base, true)
-            }
-            RegIntrinsic::ResourcePoolTryLazy => {
-                self.resource_pool_new(unit, args, base, next_base, true, true)
-            }
-            RegIntrinsic::ResourcePoolTryNew => {
-                self.resource_pool_new(unit, args, base, next_base, false, true)
             }
             RegIntrinsic::RandomBool => {
                 let mut rng = rand::thread_rng();

@@ -24,13 +24,11 @@ impl RegVm {
             crate::HostAuthority::Process => {
                 self.authorize_process_intrinsic(intrinsic, args, base)
             }
-            crate::HostAuthority::Database => {
-                self.authorize_database_intrinsic(intrinsic, args, base)
-            }
             crate::HostAuthority::Environment => {
                 self.authorize_environment_intrinsic(intrinsic, args, base)
             }
-            crate::HostAuthority::TempDirectory
+            crate::HostAuthority::Database
+            | crate::HostAuthority::TempDirectory
             | crate::HostAuthority::Native
             | crate::HostAuthority::Jit => self.authorize_host_authority(authority),
         }
@@ -213,32 +211,6 @@ impl RegVm {
             }
             _ => Err(scoped_authorization_unavailable(intrinsic)),
         }
-    }
-
-    fn authorize_database_intrinsic(
-        &self,
-        intrinsic: RegIntrinsic,
-        args: &[Reg],
-        base: usize,
-    ) -> Result<(), EvalError> {
-        let logical_id = match intrinsic {
-            RegIntrinsic::DbConnectionOpen | RegIntrinsic::DbConnectionTryOpen => {
-                expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_owned()
-            }
-            RegIntrinsic::DbConnectionQuery => {
-                expect_db_connection_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.url
-            }
-            _ => return Err(scoped_authorization_unavailable(intrinsic)),
-        };
-        let authorized = self
-            .execution_context
-            .authorize_database(&logical_id)
-            .map_err(host_authority_error)?;
-        self.execution_context
-            .host_adapters()
-            .database(&authorized)
-            .map(|_| ())
-            .map_err(host_authority_error)
     }
 
     fn authorize_environment_intrinsic(

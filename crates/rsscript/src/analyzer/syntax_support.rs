@@ -238,7 +238,7 @@ impl Analyzer<'_> {
                     self.unsupported_syntax(
                         drop_body.span.clone(),
                         "unsupported managed drop",
-                        "Managed class and struct values do not have user-observable destructors in v0.7. Use `resource` with `with` or `ResourcePool` for deterministic cleanup.",
+                        "Managed class and struct values do not have user-observable destructors in v0.7. Use `resource` with `with` for deterministic cleanup.",
                     );
                 }
             }

@@ -46,29 +46,6 @@ fn main() -> Unit {
 }
 
 #[test]
-fn parity_db_connection_intrinsics() {
-    let source = r#"
-features: native
-
-fn main() -> Result<Unit, DbError> {
-    let url = Url.from_string(value: read "db://parity")
-    with DbConnection.open(url: read url) as conn {
-        DbConnection.query(conn: mut conn, sql: read "select 1")?
-    }
-    with DbConnection.try_open(url: read url)? as conn {
-        DbConnection.query(conn: mut conn, sql: read "select 2")?
-    }
-    return Ok(Unit)
-}
-"#;
-    common::assert_vm_eval_matches_backend(
-        "parity-db-connection.rss",
-        "rsscript_parity_db_connection",
-        source,
-    );
-}
-
-#[test]
 fn parity_args_intrinsics() {
     let source = r#"
 features: native

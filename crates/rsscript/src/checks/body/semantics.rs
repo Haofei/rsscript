@@ -46,7 +46,6 @@ pub(super) fn check_stmt_semantics(
                     check_expr_semantics(analyzer, local_analysis, value, stmt_state, live_after);
                 }
                 if check_resource_contexts {
-                    check_resource_pool_lease_expr(analyzer, value, false);
                     check_resource_producer_expr(analyzer, value, false);
                 }
             }
@@ -57,7 +56,6 @@ pub(super) fn check_stmt_semantics(
             if let Some(value) = value {
                 check_expr_semantics(analyzer, local_analysis, value, state, live_after);
                 if check_resource_contexts {
-                    check_resource_pool_lease_expr(analyzer, value, false);
                     check_resource_producer_expr(analyzer, value, false);
                 }
             }
@@ -72,15 +70,9 @@ pub(super) fn check_stmt_semantics(
         } => {
             check_expr_semantics(analyzer, local_analysis, resource, state, live_after);
             if check_resource_contexts {
-                check_resource_pool_lease_expr(analyzer, resource, true);
                 check_result_resource_with_has_try(analyzer, resource);
                 check_resource_producer_expr(analyzer, resource, true);
                 check_resource_escape(analyzer, local_analysis, span);
-            }
-            if check_resource_contexts
-                && let Some(pool_path) = resource_pool_borrow_pool_path(resource)
-            {
-                check_resource_pool_active_lease_block(analyzer, &pool_path, body);
             }
             let mut scoped_state = state.clone();
             scoped_state.bind_resource(binding.clone());
@@ -102,7 +94,6 @@ pub(super) fn check_stmt_semantics(
             check_bool_condition(analyzer, condition, "if");
             check_expr_semantics(analyzer, local_analysis, condition, state, live_after);
             if check_resource_contexts {
-                check_resource_pool_lease_expr(analyzer, condition, false);
                 check_resource_producer_expr(analyzer, condition, false);
             }
             apply_expr_effects(condition, state);
@@ -140,7 +131,6 @@ pub(super) fn check_stmt_semantics(
                 check_bool_condition(analyzer, condition, "while");
                 check_expr_semantics(analyzer, local_analysis, condition, state, live_after);
                 if check_resource_contexts {
-                    check_resource_pool_lease_expr(analyzer, condition, false);
                     check_resource_producer_expr(analyzer, condition, false);
                 }
                 apply_expr_effects(condition, state);
@@ -177,7 +167,6 @@ pub(super) fn check_stmt_semantics(
             check_for_iterable_type(analyzer, iterable, iterable_type_name.as_deref(), *is_async);
             check_expr_semantics(analyzer, local_analysis, iterable, state, live_after);
             if check_resource_contexts {
-                check_resource_pool_lease_expr(analyzer, iterable, false);
                 check_resource_producer_expr(analyzer, iterable, false);
             }
             apply_expr_effects(iterable, state);
@@ -218,7 +207,6 @@ pub(super) fn check_stmt_semantics(
             }
             check_expr_semantics(analyzer, local_analysis, value, state, live_after);
             if check_resource_contexts {
-                check_resource_pool_lease_expr(analyzer, value, false);
                 check_resource_producer_expr(analyzer, value, false);
             }
             apply_expr_effects(value, state);
@@ -252,7 +240,6 @@ pub(super) fn check_stmt_semantics(
             for arm in arms {
                 check_expr_semantics(analyzer, local_analysis, &arm.operation, state, live_after);
                 if check_resource_contexts {
-                    check_resource_pool_lease_expr(analyzer, &arm.operation, false);
                     check_resource_producer_expr(analyzer, &arm.operation, false);
                 }
                 apply_expr_effects(&arm.operation, state);
@@ -283,7 +270,6 @@ pub(super) fn check_stmt_semantics(
         HirStmt::Expr(expr) | HirStmt::Assign { value: expr, .. } => {
             check_expr_semantics(analyzer, local_analysis, expr, state, live_after);
             if check_resource_contexts {
-                check_resource_pool_lease_expr(analyzer, expr, false);
                 check_resource_producer_expr(analyzer, expr, false);
             }
             Flow::Fallthrough
@@ -1199,10 +1185,6 @@ pub(super) fn check_expr_semantics_with_context(
             check_async_call_consumed(analyzer, callee, resolution, span, async_call_consumed);
             check_constructor_field_initializers(analyzer, callee, args, expr, state);
             check_call_place_conflicts(analyzer, args, resolution, state);
-            check_resource_pool_new_factory_contract(analyzer, callee, args);
-            check_resource_pool_try_new_factory_contract(analyzer, callee, args);
-            check_resource_pool_constructor_max_size_contract(analyzer, callee, args);
-            check_resource_pool_factory_resource_captures(analyzer, callee, args, state);
             let weak_upgrade = is_weak_upgrade_callee(callee);
             let mut arg_live_after = live_after.clone();
             for arg in args.iter().rev() {

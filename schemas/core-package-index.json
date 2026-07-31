@@ -390,19 +390,6 @@
       "types": []
     },
     {
-      "path": "stdlib/db/db.rssi",
-      "module": "db.db",
-      "functions": [
-        "Db.close",
-        "DbConnection.open",
-        "DbConnection.query",
-        "DbConnection.try_open"
-      ],
-      "types": [
-        "DbConnection"
-      ]
-    },
-    {
       "path": "stdlib/diff/diff.rssi",
       "module": "diff.diff",
       "functions": [
@@ -834,30 +821,6 @@
       "types": [
         "Regex",
         "RegexError"
-      ]
-    },
-    {
-      "path": "stdlib/resource/resource_pool.rssi",
-      "module": "resource.resource_pool",
-      "functions": [
-        "PoolError.message",
-        "PoolStats.available",
-        "PoolStats.capacity",
-        "PoolStats.created",
-        "PoolStats.in_use",
-        "ResourcePool.borrow",
-        "ResourcePool.discard",
-        "ResourcePool.lazy",
-        "ResourcePool.new",
-        "ResourcePool.stats",
-        "ResourcePool.try_borrow",
-        "ResourcePool.try_lazy",
-        "ResourcePool.try_new"
-      ],
-      "types": [
-        "PoolError",
-        "PoolStats",
-        "ResourcePool"
       ]
     },
     {

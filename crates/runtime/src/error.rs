@@ -8,8 +8,6 @@ pub enum RuntimeErrorKind {
     ManagedReadConflict,
     ManagedWriteConflict,
     AssertionFailed,
-    ResourcePoolBorrowConflict,
-    ResourcePoolEmpty,
     InvalidArgument,
     IntegerOverflow,
 }
@@ -61,8 +59,6 @@ impl RuntimeErrorKind {
             Self::ManagedReadConflict => "managed_read_conflict",
             Self::ManagedWriteConflict => "managed_write_conflict",
             Self::AssertionFailed => "assertion_failed",
-            Self::ResourcePoolBorrowConflict => "resource_pool_borrow_conflict",
-            Self::ResourcePoolEmpty => "resource_pool_empty",
             Self::InvalidArgument => "invalid_argument",
             Self::IntegerOverflow => "integer_overflow",
         }

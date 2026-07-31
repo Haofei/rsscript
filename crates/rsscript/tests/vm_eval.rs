@@ -136,33 +136,6 @@ fn main() -> Result<Unit, FileError> {
 }
 
 #[test]
-fn restricted_execution_context_uses_scoped_database_grant() {
-    let source = r#"
-features: native
-
-fn main() -> Result<Unit, DbError> {
-    let url = Url.from_string(value: read "db://primary")
-    with DbConnection.open(url: read url) as conn {
-        DbConnection.query(conn: mut conn, sql: read "select 1")?
-    }
-    return Ok(Unit)
-}
-"#;
-    let capabilities = HostCapabilities::deny_all()
-        .grant_database("db://primary")
-        .expect("database grant");
-
-    reg_vm_eval_source_main_with_context_and_limits(
-        "scoped-database.rss",
-        source,
-        std::iter::empty::<String>(),
-        ExecutionContext::trusted_ci(capabilities),
-        VmLimits::safe_default(),
-    )
-    .expect("exact database grant should execute");
-}
-
-#[test]
 fn eval_runs_user_function_and_assignment() {
     let source = r#"
 fn add(a: Int, b: Int) -> Int {
@@ -1219,8 +1192,6 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Deque.clear runtime:Deque.is_empty runtime:Deque.len runtime:Deque.new
 // parity: runtime:Deque.pop_back runtime:Deque.pop_front runtime:Deque.push_back
 // parity: runtime:Deque.push_front runtime:Deque.to_list
-// parity: runtime:Db.close runtime:DbConnection.open runtime:DbConnection.query
-// parity: runtime:DbConnection.try_open
 // parity: runtime:Directory.create runtime:Directory.create_all runtime:Directory.create_dir_all
 // parity: runtime:Directory.exists runtime:Directory.is_dir runtime:Directory.is_file
 // parity: runtime:Directory.list_files runtime:Directory.list_paths runtime:Directory.metadata
@@ -1376,14 +1347,10 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Ord.compare runtime:OS.close
 // parity: runtime:Request.new runtime:Request.path
 // parity: runtime:Response.body runtime:Response.ok runtime:Response.status
-// parity: runtime:ResourcePool.discard runtime:ResourcePool.stats
 // parity: runtime:Result.err runtime:Result.err_message runtime:Result.is_err
 // parity: runtime:Result.is_ok runtime:Result.ok runtime:Result.unwrap_or runtime:Result.unwrap_or_else
 // parity: runtime:Row.field_string runtime:RowBuffer.new
 // parity: runtime:RuleLoader.load_rules
-// parity: runtime:PoolError.message
-// parity: runtime:PoolStats.available runtime:PoolStats.capacity
-// parity: runtime:PoolStats.created runtime:PoolStats.in_use
 // parity: runtime:Set.clear runtime:Set.contains runtime:Set.difference runtime:Set.for_each
 // parity: runtime:Set.insert runtime:Set.intersection runtime:Set.is_empty runtime:Set.is_subset
 // parity: runtime:Set.len runtime:Set.new runtime:Set.remove runtime:Set.to_list runtime:Set.union

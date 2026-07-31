@@ -50,7 +50,6 @@ fn audit_step(callback: noescape Fn()) -> Unit {
 fn HttpError.from_config(error: ConfigError) -> HttpError
 fn HttpError.from_json(error: JsonError) -> HttpError
 fn HttpError.from_image(error: ImageError) -> HttpError
-fn HttpError.from_db(error: DbError) -> HttpError
 fn HttpError.from_csv(error: CsvError) -> HttpError
 
 fn parse_plan(request: Request) -> Result<fresh UploadPlan, JsonError> {
@@ -169,32 +168,6 @@ fn initialize_global_rules(path: Path) -> Result<fresh GlobalConfig, ConfigError
     return GlobalConfig.new(value: config)
 }
 
-fn run_audit_query(url: Url, trace_id: String) -> Result<Unit, DbError> {
-    local pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.open(url),
-        max_size: 2,
-    )
-
-    with ResourcePool.borrow(pool: mut pool) as conn {
-        DbConnection.query(conn: mut conn, sql: trace_id)?
-    }
-
-    return Ok(Unit)
-}
-
-fn run_status_query(url: Url, status: String) -> Result<Unit, DbError> {
-    local pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.open(url),
-        max_size: 1,
-    )
-
-    with ResourcePool.borrow(pool: mut pool) as conn {
-        DbConnection.query(conn: mut conn, sql: status)?
-    }
-
-    return Ok(Unit)
-}
-
 fn persist_trace(cache: mut Cache, trace_id: String, status: String) -> Unit {
     Cache.insert(cache: mut cache, key: trace_id, value: status)
     return Unit
@@ -271,15 +244,9 @@ fn process_image_http(plan: UploadPlan, cache: mut RetainedImageStore) -> Result
     }
 }
 
-fn run_audit_query_http(url: Url, trace_id: String) -> Result<Unit, HttpError> {
-    match run_audit_query(url, trace_id) {
-        Ok(unit) => {
-            return Ok(Unit)
-        }
-        Err(error) => {
-            return Err(HttpError.from_db(error))
-        }
-    }
+fn record_audit_http(trace_id: String) -> Result<Unit, HttpError> {
+    Log.write(message: trace_id)
+    return Ok(Unit)
 }
 
 fn decode_row_status_http(path: Path) -> Result<String, HttpError> {
@@ -293,15 +260,9 @@ fn decode_row_status_http(path: Path) -> Result<String, HttpError> {
     }
 }
 
-fn run_status_query_http(url: Url, status: String) -> Result<Unit, HttpError> {
-    match run_status_query(url, status) {
-        Ok(unit) => {
-            return Ok(Unit)
-        }
-        Err(error) => {
-            return Err(HttpError.from_db(error))
-        }
-    }
+fn record_status_http(status: String) -> Result<Unit, HttpError> {
+    Log.write(message: status)
+    return Ok(Unit)
 }
 
 fn consume_local_buffer() -> Unit {
@@ -373,7 +334,6 @@ fn complete_request(
     rules_global: mut GlobalConfig,
     status_cache: mut Cache,
     counter: mut Counter,
-    db_url: Url,
     csv_path: Path,
 ) -> Result<fresh Response, HttpError> {
     let config_path = Path.from_string(value: "config.json")
@@ -385,10 +345,10 @@ fn complete_request(
     inspect_session(session: item.session)
 
     process_image_http(plan: item.plan, cache: mut image_store)?
-    run_audit_query_http(url: db_url, trace_id: item.plan.trace_id)?
+    record_audit_http(trace_id: item.plan.trace_id)?
 
     let csv_status = decode_row_status_http(path: csv_path)?
-    run_status_query_http(url: db_url, status: csv_status)?
+    record_status_http(status: csv_status)?
 
     let status = ConfigStore.name(store: config_store)
     let record = build_audit_record(trace_id: item.plan.trace_id, status)
@@ -413,7 +373,6 @@ fn main_handler(
     rules_global: mut GlobalConfig,
     status_cache: mut Cache,
     counter: mut Counter,
-    db_url: Url,
     csv_path: Path,
 ) -> Result<fresh Response, HttpError> {
     let image_store = build_image_store()
@@ -430,7 +389,6 @@ fn main_handler(
         rules_global: mut rules_global,
         status_cache: mut status_cache,
         counter: mut counter,
-        db_url,
         csv_path,
     )?
 }

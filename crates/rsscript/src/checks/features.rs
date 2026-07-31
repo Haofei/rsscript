@@ -24,8 +24,7 @@ fn required_feature(kind: HirFeatureUseKind) -> FileFeature {
         HirFeatureUseKind::LocalLet
         | HirFeatureUseKind::LocalClosure
         | HirFeatureUseKind::Manage
-        | HirFeatureUseKind::Take
-        | HirFeatureUseKind::ResourcePool => FileFeature::Local,
+        | HirFeatureUseKind::Take => FileFeature::Local,
         HirFeatureUseKind::Native => FileFeature::Native,
         HirFeatureUseKind::Unsafe => FileFeature::Unsafe,
         HirFeatureUseKind::Async => FileFeature::Async,
@@ -38,7 +37,6 @@ fn feature_violation_summary(kind: HirFeatureUseKind) -> &'static str {
         HirFeatureUseKind::LocalClosure => "local closures require `features: local`.",
         HirFeatureUseKind::Manage => "`manage` requires `features: local`.",
         HirFeatureUseKind::Take => "`take` requires `features: local`.",
-        HirFeatureUseKind::ResourcePool => "`ResourcePool<T>` requires `features: local`.",
         HirFeatureUseKind::Native => "`native` boundaries require `features: native`.",
         HirFeatureUseKind::Unsafe => "`unsafe` effects require `features: unsafe`.",
         HirFeatureUseKind::Async => "`async fn`, `await`, and `spawn` require `features: async`.",

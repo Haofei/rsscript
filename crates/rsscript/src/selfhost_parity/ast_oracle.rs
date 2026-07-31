@@ -918,8 +918,8 @@ fn astdump_shared_body_control_flow_parity() {
 
 #[test]
 fn astdump_shared_body_with_parity() {
-    let source = r#"fn borrow(pool: Pool) -> Int {
-    with pool.acquire() as lease {
+    let source = r#"fn read(path: Path) -> Int {
+    with File.open_read(path) as file {
         return 1
     }
 }
@@ -1082,4 +1082,3 @@ fn ast_oracle_total_over_corpus() {
         empty.len()
     );
 }
-

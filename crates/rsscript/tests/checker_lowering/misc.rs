@@ -357,31 +357,6 @@ pub fn make_point(x: Int, y: Int) -> fresh Point {
 }
 
 #[test]
-fn rust_lowering_targets_runtime_crate_hooks() {
-    let source = r#"
-features: local
-
-resource TestConnection {
-    fd: Int
-
-    drop {
-        OS.close(fd: fd)
-    }
-}
-
-fn pooled(pool: mut ResourcePool<TestConnection>) -> Unit
-"#;
-    let rust = lower_source_to_rust("pool.rssi", source).expect("source should lower");
-
-    assert!(rust.contains("impl rsscript_runtime::Resource for TestConnection"));
-    assert!(rust.contains("impl Drop for TestConnection"));
-    assert!(rust.contains("rsscript_runtime::os_close(self.fd);"));
-    assert!(!rust.contains("pub fn pooled"));
-    assert!(!rust.contains("RSScript declaration has no generated implementation"));
-    assert!(!rust.contains("todo!"));
-}
-
-#[test]
 fn rust_lowering_mangles_qualified_user_functions() {
     let source = r#"
 struct User {

@@ -248,57 +248,6 @@ fn wrapper(cache: read Cache, value: read Payload) -> Unit {
 }
 
 #[test]
-fn review_map_marks_resourcepool_and_fresh_boundaries() {
-    let source = r#"
-features: local
-
-resource DbConnection {
-    fd: Int
-
-    drop {
-        OS.close(fd: fd)
-    }
-}
-
-struct Image {
-    pixels: Buffer
-}
-
-struct Buffer
-
-fn make_image() -> fresh Image {
-    return Image(pixels: Buffer())
-}
-
-fn pooled(pool: mut ResourcePool<DbConnection>) -> Unit {
-    with ResourcePool.borrow(pool: mut pool) as conn {
-        return Unit
-    }
-}
-"#;
-    let map = review_map_sources(vec![("resourcepool.rss", source)]);
-
-    assert_eq!(map.summary.total_functions, 2);
-    assert_eq!(map.summary.review_required.functions, 2);
-    assert!(map.files[0].regions.iter().any(|region| {
-        region.function == "make_image"
-            && region.classification == ReviewMapClassification::ReviewRequired
-            && region
-                .reasons
-                .iter()
-                .any(|reason| reason == "fresh guarantee boundary")
-    }));
-    assert!(map.files[0].regions.iter().any(|region| {
-        region.function == "pooled"
-            && region.classification == ReviewMapClassification::ReviewRequired
-            && region
-                .reasons
-                .iter()
-                .any(|reason| reason == "ResourcePool usage")
-    }));
-}
-
-#[test]
 fn review_map_marks_runtime_guarantee_boundaries() {
     let source = r#"
 fn checksum(data: read Bytes) -> UInt64

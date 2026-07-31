@@ -124,6 +124,5 @@ fn alias_dependencies(
 pub(crate) fn check_resource_shapes(analyzer: &mut Analyzer<'_>) {
     analyzer.check_resource_fields();
     analyzer.check_weak_fields();
-    analyzer.check_resource_pool_type_arguments();
     analyzer.check_resource_generic_arguments();
 }

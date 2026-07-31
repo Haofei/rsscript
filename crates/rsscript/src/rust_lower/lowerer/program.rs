@@ -146,9 +146,7 @@ impl<'a> RustLowerer<'a> {
             }
             Stmt::With(stmt) => {
                 let resource = self.lower_expr(&stmt.resource);
-                let resource = if is_resource_pool_borrow_expr(&stmt.resource) {
-                    format!("rsscript_runtime::unwrap_runtime({resource})")
-                } else if is_file_open_expr(&stmt.resource) {
+                let resource = if is_file_open_expr(&stmt.resource) {
                     format!("{resource}?")
                 } else {
                     resource

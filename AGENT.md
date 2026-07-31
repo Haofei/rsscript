@@ -193,8 +193,8 @@ if count == 1 {
     Log.write(message: read "many")
 }
 
-for query in queries {            // `for` iterates a `List<T>` only
-    DbConnection.query(conn: mut conn, sql: read query.sql)?
+for path in paths {               // `for` iterates a `List<T>` only
+    Log.write(message: read path)
 }
 
 loop { ... }                      // infinite loop (no condition); exit with `break`
@@ -269,7 +269,7 @@ struct Config {              // value/struct type
     parent: weak Node            // `weak`: non-owning handle, must be upgraded to use
 }
 
-resource DbConnection { ... }   // a resource: must be acquired/released via `with`
+resource File { ... }           // a resource: must be acquired/released via `with`
 
 struct ReadArgs derives(Clone, JsonDecode) {   // derives are explicit & listed
     path: Option<String>

@@ -12,8 +12,8 @@ directions are in §20.1.
 ```text
 Core execution:
   - Managed application code, local values under `features: local`, fresh struct
-    returns, read/mut/take effects, resources through `with`,
-    `ResourcePool<T: Resource>`, and bodyless native declarations (Chapters 3–15).
+    returns, read/mut/take effects, resources through `with`, and bodyless native
+    declarations (Chapters 3–15).
   - Executable async MVP: `async fn` bodies with `await` in statement and
     expression positions (nested awaits are hoisted to `let` bindings; §14.6.2),
     structured concurrency `task_group { async let ... }`, `select`, `await for`,
@@ -177,7 +177,7 @@ Chapter 5A  Statements and control flow
 Chapter 8   Places, conflict roots, and same-call conflicts
 Chapter 9   Call-like expressions, constructors, and variants
 Chapter 10  Data effects, retention, and managed closure capture
-Chapter 12  Resources, with, and ResourcePool
+Chapter 12  Resources and with
 Chapter 17  Diagnostics and source mapping
 ```
 
@@ -653,7 +653,6 @@ default parameter values
 `?` early-return on Option and Result
 generated-namespace isolation via module declarations; #lower_name pin
 resource values through with
-ResourcePool<T: Resource>
 bodyless native declarations through package binding metadata
 async fn bodies: await in statement and expression positions (nested awaits hoisted)
 structured concurrency: task_group { async let ... }, select, await for
@@ -1706,7 +1705,7 @@ struct Logger {
 }
 ```
 
-Use `with` or `ResourcePool<T: Resource>`.
+Use `with`.
 
 ### 6.8 Copy types
 
@@ -2160,9 +2159,8 @@ cannot escape it, §10.9). Its captured `read`/`mut`/`take`/`manage` uses of
 places are therefore synthetic accesses of the enclosing call-like expression and
 take part in the same-call conflict check of section 8.4, exactly as if they were
 written as direct arguments. This includes a `manage` of a captured place (a
-move, conflicting with any other use of that place) and a `mut` access such as
-`ResourcePool.borrow(pool: mut pool)` inside the closure body (a synthetic `mut`
-on `pool`).
+move, conflicting with any other use of that place) and a `mut` access inside
+the closure body (a synthetic `mut` on the captured place).
 
 ```rust
 apply(
@@ -2242,8 +2240,6 @@ struct constructors
 class constructors
 standard enum-like variants such as Ok(...), Err(...), Some(...), None
 user-defined `sum` variant constructors such as Circle(radius: ...), North
-ResourcePool factory calls
-immediate resource lease APIs
 ```
 
 Every call-like expression participates in:
@@ -2592,11 +2588,8 @@ fn build(callback: noescape Fn() -> Result<String, BuildError>) -> Unit
 
 The callback's known return expression must match the declared `Fn` return type
 before lowering. `callback: || Ok(42)` is rejected for the example above because
-the `Ok` payload is `Int`, not `String`. This rule is generic: standard APIs
-such as `ResourcePool<T>.new(create: noescape Fn() -> T, ...)` and
-`ResourcePool<T>.try_new(create: noescape Fn() -> Result<T, E>, ...)` use the
-same callback return contract rather than a ResourcePool-only type shortcut.
-Nested callback wrapper payloads are checked recursively under the same rule:
+the `Ok` payload is `Int`, not `String`. This rule is generic. Nested callback
+wrapper payloads are checked recursively under the same rule:
 `noescape Fn() -> Result<Option<String>, E>` rejects `callback: || Ok(Some(42))`
 before Rust lowering.
 Freshness is also part of the callback return contract. A
@@ -2661,8 +2654,7 @@ example `callback: |value| String.len(value: read value)` is rejected for
 `Fn(Int) -> Int` because the `String.len` argument expects `String`, not `Int`.
 
 v0.7 `noescape Fn` closures are **non-consuming**: a callee may call the closure
-any number of times (for example `ResourcePool.new` calls its factory `max_size`
-times), so the closure may `read` or `mut` a captured local but must not `take`
+any number of times, so the closure may `read` or `mut` a captured local but must not `take`
 or `manage` a captured local — that would move it on the first call and leave it
 gone on the next. Taking or managing a captured local in a `noescape` closure is
 a diagnostic. A consuming `FnOnce`-style parameter is a future feature.
@@ -2672,9 +2664,11 @@ created inside a `noescape` callback still cannot be passed to an
 boundary.
 
 ```rust
+fn repeat(callback: noescape Fn()) -> Unit
+
 local seed = Buffer.new(size: 1024)
 // rejected: `take seed` inside a closure the callee may call repeatedly
-ResourcePool<Conn>.new(create: || Conn.from_seed(seed: take seed), max_size: 16)
+repeat(callback: || Buffer.consume(buffer: take seed))
 ```
 
 The frontend reports this as `RS0804`; source that relies on a noescape closure
@@ -2776,28 +2770,13 @@ All return branches of a `fresh` function must return fresh values.
 
 ---
 
-## 12. Resources, `with`, and `ResourcePool`
+## 12. Resources and `with`
 
 ### 12.1 Resource values are transient
 
-A resource-producing expression may return `R` or `Result<R, E>` only if the resource value is immediately consumed by an approved resource context.
-
-Legal contexts:
-
-```text
-with File.open(...)? as file { ... }
-ResourcePool<T>.new(...)
-approved resource container insertion
-immediate resource lease APIs
-```
-
-In v0.7 these last two are concrete and closed: the only approved resource
-container is `ResourcePool<T: Resource>`, and the only standard immediate resource
-lease API is `ResourcePool.borrow`. There is no general mechanism for a package to
-declare a new approved container or lease API in v0.7; any other container or
-lease API is rejected by the v0.7 checker. The extension points are reserved for a
-future version, which must define how approval is expressed in `.rssi` and how the
-checker recognizes it.
+A resource-producing expression may return `R` or `Result<R, E>` only if the
+resource value is immediately consumed by `with`. Resources cannot be stored in
+ordinary bindings, fields, or generic containers.
 
 Invalid:
 
@@ -2855,158 +2834,6 @@ captured by a managed closure
 stored in an ordinary container
 ```
 
-### 12.3 `ResourcePool<T: Resource>`
-
-`ResourcePool<T: Resource>` is the standard-library escape hatch for long-lived resources.
-
-Hard rules:
-
-```text
-ResourcePool itself must be local.
-ResourcePool is allowed only with features: local.
-ResourcePool is the privileged long-lived resource container in v0.7.
-Pool drop releases all held resources.
-Borrow returns a with-compatible resource lease.
-Resource values cannot escape the pool lease.
-```
-
-This is an exception to the default materialization rules in Chapter 5. Although
-`ResourcePool.new` returns `fresh ResourcePool<T>`, a `ResourcePool<T>` may only
-materialize in a `local` binding context. Materializing it into a `let` (managed)
-binding, a managed container, or a managed field is rejected (diagnostic RS0705),
-because a pool owns long-lived resources and must not be hidden behind a managed
-binding. The general "let x = fresh_expr materializes as managed" rule does not
-apply to `ResourcePool<T>`.
-
-### 12.4 ResourcePool factory contract
-
-This is a hard implementation boundary.
-
-The v0.7 standard ResourcePool factory is eager and noescape.
-
-Conceptual contract for the v0.7 constructor:
-
-```rust
-fn ResourcePool<T: Resource>.new(
-    create: noescape Fn() -> T,
-    max_size: Int,
-) -> fresh ResourcePool<T>
-```
-
-`new` is the v0.7 constructor and requires an **infallible** factory: `create` must return a resource `T`, never `Result<T, E>`. Construction is eager and exact: the runtime calls `create` exactly `max_size` times, stores the `max_size` resources in the local pool, then discards the factory closure. In v0.7, `max_size` must be a positive `Int` literal; a non-positive literal is a diagnostic (RS0708), not a runtime condition — this keeps `new` infallible without needing a `Result` for a degenerate pool size. Because construction cannot fail, `new` returns the pool directly, not a `Result`. "Eager" and "exactly `max_size`" together remove any ambiguity with lazy replenishment: the pool never creates a resource after construction.
-
-Implementation note (non-normative): a prototype runtime may defensively diagnose
-invalid or empty pools, but this is not RSScript source semantics. A conforming
-v0.7 frontend rejects non-positive `max_size` literals (RS0708) before lowering.
-
-A fallible factory passed to `new` is rejected (diagnostic RS0707): hiding a creation failure inside `new` would violate no-hidden-behavior, since failure is represented by a return type (section 14.3). The closure literal is checked against the expected `noescape Fn() -> T` parameter contract, including its result type: the user need not annotate the closure's return type, but the checker takes the expected result `T` from the parameter and rejects a factory whose result is `Result<T, E>` (that is the RS0707 case). The `-> T` in the contract is the expected result the checker enforces, not mere documentation.
-
-The canonical example below uses `DbConnection.open` as an *infallible* factory — it returns `DbConnection`, not `Result`, which is what makes it valid with `new`. This is a deliberate simplification: most real poolable resources (database connections, sockets, file handles) fail to create and need the fallible constructor below.
-
-#### Fallible construction: `try_new`
-
-The realistic case is a factory that can fail. `try_new` is part of the v0.7
-executable MVP because resource allocation failure must stay explicit instead
-of being hidden behind an infallible pool constructor.
-
-```rust
-fn ResourcePool<T: Resource>.try_new<E>(
-    create: noescape Fn() -> Result<T, E>,
-    max_size: Int,
-) -> Result<fresh ResourcePool<T>, E>
-```
-
-`try_new` is eager like `new`, but because `create` can fail, construction can fail, so it returns a `Result` and the caller writes `?`. Binding semantics for v0.7 lowering and the reference runtime:
-
-```text
-1. eager: create is called up to max_size times at construction.
-2. on the first create() returning Err, construction stops and returns that Err.
-3. partial-construction cleanup: every resource already created before the
-   failure must be dropped (its resource cleanup runs) before Err is returned;
-   no resource leaks and no half-built pool is exposed.
-4. the factory closure is discarded after construction, like new.
-```
-
-The constructor space has two axes — eager/lazy and infallible/fallible: `new` is eager+infallible, `try_new` is eager+fallible, and a lazy variant would be a distinct name (`lazy_new` / `retained_new`) with its own contract. A constructor must never silently change which cell it occupies behind the same `.rssi` signature.
-
-Because `create` is not retained by the pool:
-
-```text
-managed captures of create are not retained beyond construction
-local captures are allowed only under ordinary noescape closure rules
-resource or with-bound captures are rejected
-review metadata reports ResourcePool construction, but not post-construction factory retention
-```
-
-An implementation may not silently change `ResourcePool.new` into a retained or lazy factory API behind the same `.rssi` signature. If a future API retains the factory for lazy replenishment, it must use a distinct name and contract such as `ResourcePool.lazy_new` or `ResourcePool.retained_new`, and it must declare retention with `effects(retains(create))`.
-
-Canonical example:
-
-```rust
-features: local
-
-fn run_queries(url: read Url, queries: read List<Query>) -> Result<Unit, DbError> {
-    local pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.open(url: read url),
-        max_size: 16,
-    )
-
-    for query in queries {
-        with ResourcePool.borrow(pool: mut pool) as conn {
-            DbConnection.query(conn: mut conn, sql: read query.sql)?
-        }
-    }
-
-    return Ok(Unit)
-}
-```
-
-### 12.5 ResourcePool borrow
-
-`ResourcePool.borrow(pool: mut pool)` returns a resource lease that must be consumed by `with`.
-
-```rust
-with ResourcePool.borrow(pool: mut pool) as conn {
-    DbConnection.query(conn: mut conn, sql: read sql)?
-}
-```
-
-The lease cannot escape the `with` body, be returned through `Ok`/`Some`, be captured by a managed closure, or be stored in managed data.
-
-Exhaustion and nesting, made precise for v0.7:
-
-```text
-- borrow does not return Result and must not block.
-- a lease is tied to the pool that produced it. While a lease from a pool is
-  active, the same pool is held `mut` for the lease's `with` scope, so any
-  read/mut/take/manage use of the same pool root inside the lease body is
-  rejected (this includes a nested borrow, but also Pool.stats(pool: read pool),
-  Pool.reset(pool: mut pool), etc.). A future API may explicitly permit
-  introspection or multi-borrow; until then, use one lease per pool at a time.
-```
-
-Exhaustion is not expected in ordinary v0.7 source: `max_size` is a positive
-literal and nested same-pool borrow is rejected, so a single sequential lease per
-pool cannot exhaust it. Borrowing from an exhausted pool is therefore a
-**defensive** runtime diagnostic (with a source span, not a block and not a
-silent failure) that covers runtime/native/compiler bugs, prototype
-non-conformance, or future multi-borrow APIs — not a case ordinary RSScript code
-is expected to handle. This is why `borrow` need not return a `Result`.
-
-```rust
-with ResourcePool.borrow(pool: mut pool) as a {
-    with ResourcePool.borrow(pool: mut pool) as b {   // rejected in v0.7
-        ...
-    }
-}
-```
-
-*v0.7 enforcement status: exhausted borrow is enforced at runtime (an empty pool
-produces a resource-pool-empty diagnostic with a source span). The static active
-lease rule is a frontend obligation: nested borrow and any other read/mut/take
-or manage use of the same pool root inside the lease body are diagnostics before
-lowering.*
-
 ---
 
 ## 13. Containers
@@ -3061,13 +2888,10 @@ local buffers = LocalVec<Buffer>.new()
 
 Local containers may hold local struct values. Container elements do not participate in language-level partial access; element splitting must be expressed through explicit library APIs such as `with_two_mut` or `split_at_mut`.
 
-### 13.3 Resource containers
+### 13.3 Resources are not container elements
 
-Only approved resource containers may store resources. In v0.7, the standard resource container is:
-
-```text
-ResourcePool<T: Resource>
-```
+Resources cannot be stored in managed or local containers. They remain transient
+values whose ownership is scoped by `with`.
 
 ---
 
@@ -3456,8 +3280,8 @@ Consequences:
 - fresh T and local T require T: Struct, because only struct shells are fresh or
   local; a plain T: Managed cannot be returned `fresh T` (a class cannot be
   fresh, §6.2), which is why Result<fresh T, E> on a generic T requires T: Struct.
-- Resource generics (ResourcePool<T: Resource>) are a separate world; resource
-  types never satisfy Managed or Struct and never enter ordinary containers.
+- Resource types are a separate world; they never satisfy `Managed`
+  or Struct and never enter ordinary containers.
 ```
 
 ### 14.6 Protocols are capability contracts
@@ -3949,8 +3773,8 @@ spellings that would increase review surface area.
 Opaque interface types are distinct from empty ordinary declarations. Their kind
 is explicit (`struct`, `class`, or `resource`) and the ordinary kind rules still
 apply: classes are managed identity objects, structs are value objects eligible
-for freshness/local handling, and resources obey `with`/`ResourcePool` escape
-rules. Opaque resource types must use `opaque resource`, not `opaque struct`.
+for freshness/local handling, and resources obey `with` escape rules. Opaque
+resource types must use `opaque resource`, not `opaque struct`.
 
 Package features declared in `rsspkg.toml` are package-selection features, not
 RSScript file features. A package feature may cause additional `.rssi` files to
@@ -4180,7 +4004,6 @@ local bindings
 manage
 parameter: take T
 local closure
-ResourcePool<T: Resource>
 local containers
 ```
 
@@ -4225,7 +4048,9 @@ must preserve source location hooks where applicable
 
 `unsafe` is separate from `native`. A native wrapper may expose safe RSScript contracts, and an unsafe function may be implemented without a native wrapper boundary.
 
-The safe RSScript surface has no specified undefined behavior. Managed aliasing conflicts, resource-pool borrow conflicts, and runtime ownership conflicts must become diagnostics or runtime errors, not unchecked memory behavior.
+The safe RSScript surface has no specified undefined behavior. Managed aliasing
+conflicts and runtime ownership conflicts must become diagnostics or runtime
+errors, not unchecked memory behavior.
 
 #### 15.4.1 v0.7 unsafe enforcement
 
@@ -4333,7 +4158,6 @@ manage operation
 effects(retains(...))
 managed closure capture retention
 with resource
-ResourcePool
 file features local/native/unsafe/async/device/ffi/reflection
 native boundary
 unsafe boundary
@@ -4375,7 +4199,6 @@ no take parameters
 no retains effects
 no managed closure capture retention
 no with resources
-no ResourcePool
 no manage operation
 no native or unsafe boundary
 no unknown calls
@@ -4430,9 +4253,6 @@ resource wrapped in Ok/Some and escaping
 resource-producing expression used outside resource context
 Result-returning resource producer missing explicit ?
 invalid resource type in ordinary Result/Option/container context
-ResourcePool factory contract violation
-ResourcePool max_size not a positive Int literal
-ResourcePool active lease conflict
 managed object field-split conflict
 noescape callback return type mismatch
 noescape callback parameter count mismatch
@@ -4481,7 +4301,7 @@ RS03xx  local / move / same-call conflict; managed->local; manage/take operands
 RS04xx  manage boundary (use-after-manage)
 RS05xx  retention (local value retained by a retaining API)
 RS06xx  freshness
-RS07xx  resources, with, and ResourcePool
+RS07xx  resources and with
 RS08xx  closures and closure capture (managed-capture, noescape, local closure)
 RS09xx  weak and handle fields
 RS10xx  forbidden constructs (operator overload, implicit conversion, surface
@@ -4505,8 +4325,9 @@ ranges above. A future per-call `unsafe` marker diagnostic (§15.4.2) would also
 sit in RS01xx with the other feature/boundary codes.
 
 Every diagnostic class listed in §17.1 is allocated a stable code within the
-range matching its concern above (for example the new ResourcePool/`?` classes
-sit in RS07xx and RS02xx respectively). Review-map *facts* that are not
+range matching its concern above (for example resource and resource-producer
+`?` classes sit in RS07xx, while call-argument classes sit in RS02xx).
+Review-map *facts* that are not
 diagnostics — such as a "removed guarantee" surfaced by package diff
 (§16.3) — are review metadata, not RS-coded diagnostics, and do not consume a
 code. A complete class→code table is a conformance artifact to be generated from
@@ -4588,8 +4409,6 @@ part of the specification contract: implementations must not present a
 | Resource escape, resource-in-container rejection, and `with` scope boundaries | static | frontend checker |
 | Deterministic resource drop on ordinary control-flow exits | dynamic | generated Rust/runtime lowering contract |
 | Resource cleanup after isolate abort or runtime termination | unsupported | no v0.7 guarantee |
-| `ResourcePool<T>` local-only materialization, eager/noescape factory, and positive literal `max_size` | static | frontend checker |
-| Exhausted `ResourcePool.borrow` | dynamic defensive diagnostic | runtime, for non-conforming or future multi-borrow cases |
 | Weak field target kind and explicit upgrade requirement | static | frontend checker |
 | Managed alias conflicts not visible from source roots | dynamic | runtime managed-access diagnostics |
 | `no_panic`, `noalloc`, `no_block`, and `pure` over RSScript-known calls | static over known constructs; review-only over native/runtime internals | frontend checker + trusted signatures |
@@ -4666,7 +4485,6 @@ Csv
 Config / RulesConfig
 Counter
 Weak
-ResourcePool<T: Resource>
 Diagnostic
 Span
 Log
@@ -5312,7 +5130,9 @@ emits semantic review metadata
 invokes Cargo for Rust native wrapper implementation builds
 ```
 
-It must not infer RSScript semantic contracts from Rust signatures and must not weaken language checks such as conflict roots, constructor/variant call-like checking, ResourcePool factory contracts, or managed closure capture retention.
+It must not infer RSScript semantic contracts from Rust signatures and must not
+weaken language checks such as conflict roots, constructor/variant call-like
+checking, or managed closure capture retention.
 
 Package features declared in `rsspkg.toml` are package selection features. They are not the same as RSScript file features declared with `features:`. If a package feature changes the public surface, package tooling selects a different effective `.rssi` interface and the compiler frontend validates that interface; the package manager still does not define language semantics.
 
@@ -5407,28 +5227,7 @@ fn load_config(path: read Path) -> Result<fresh Config, ConfigError> {
 }
 ```
 
-### 19.5 Resource pool
-
-```rust
-features: local
-
-fn run_queries(url: read Url, queries: read List<Query>) -> Result<Unit, DbError> {
-    local pool = ResourcePool<DbConnection>.new(
-        create: || DbConnection.open(url: read url),
-        max_size: 16,
-    )
-
-    for query in queries {
-        with ResourcePool.borrow(pool: mut pool) as conn {
-            DbConnection.query(conn: mut conn, sql: read query.sql)?
-        }
-    }
-
-    return Ok(Unit)
-}
-```
-
-### 19.6 Receiver-call shorthand
+### 19.5 Receiver-call shorthand
 
 The same examples above written with receiver-call shorthand (§14.6.1). Both
 forms are semantically identical; the compiler expands the shorthand to the
@@ -5863,8 +5662,8 @@ automatic managed-cycle collection (removing the need for weak)
 
 This option stays open only while one invariant holds: **managed `class` and
 `struct` values have no user-observable destructor**. Deterministic cleanup is
-expressed exclusively through `resource`, `with`, and `ResourcePool`, which are
-orthogonal to the managed memory strategy. As long as managed objects expose no
+expressed exclusively through `resource` and `with`, which are orthogonal to the
+managed memory strategy. As long as managed objects expose no
 user-visible finalization order, "reference counted vs garbage collected" is an
 unobservable backend choice and may change between major versions. If managed
 objects ever gain side-effecting user destructors, the language would be welded
@@ -5884,15 +5683,14 @@ Reviewers should evaluate v0.7 by asking:
 5. Do constructor and variant expressions participate in call-like checking?
 6. Are conflict roots hard enough around handle/weak/index boundaries?
 7. Are fresh and manage semantics clear?
-8. Are ResourcePool factory contracts explicit about eager/noescape versus retained/lazy behavior?
-9. Are managed closure captures reported as retention and blocked for local/resource captures?
-10. Are partial local access rules implementable?
-11. Are container element restrictions conservative enough?
-12. Does Rust lowering preserve RSScript diagnostics?
-13. Are runtime crate surfaces defined before lowering?
-14. Are generated Rust diagnostics source-mapped?
-15. Do package review/diff artifacts cover both diff and map modes?
-16. Is the spec free of domain-specific agent core pollution?
+8. Are managed closure captures reported as retention and blocked for local/resource captures?
+9. Are partial local access rules implementable?
+10. Are container element restrictions conservative enough?
+11. Does Rust lowering preserve RSScript diagnostics?
+12. Are runtime crate surfaces defined before lowering?
+13. Are generated Rust diagnostics source-mapped?
+14. Do package review/diff artifacts cover both diff and map modes?
+15. Is the spec free of domain-specific agent core pollution?
 ```
 
 ---
@@ -5911,7 +5709,6 @@ retains for post-call retention
 constructors and variants are call-like
 conflict roots stop at handle/weak/index boundaries
 managed closure captures are retention
-ResourcePool factory contracts are explicit
 semantic review by diff and map
 Rust source lowering as primary backend
 ```

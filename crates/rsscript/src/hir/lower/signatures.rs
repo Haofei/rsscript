@@ -664,7 +664,7 @@ impl Hir {
         for item in &program.items {
             match item {
                 Item::Function(function) => collect_function_body_facts(self, function, &mut facts),
-                Item::Type(type_decl) => collect_type_feature_uses(type_decl, &mut facts),
+                Item::Type(_) => {}
                 Item::Module(_)
                 | Item::Use(_)
                 | Item::SumType(_)

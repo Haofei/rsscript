@@ -39,18 +39,6 @@ impl VmHttpRequest {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct VmDbConnection {
-    pub(super) url: String,
-    pub(super) queries: Vec<String>,
-}
-
-impl VmDbConnection {
-    pub(super) fn to_value(&self) -> VmValue {
-        db_connection_value(self.url.clone(), self.queries.clone())
-    }
-}
-
-#[derive(Debug, Clone)]
 pub(super) struct VmFileState {
     pub(super) path: String,
     pub(super) mode: String,

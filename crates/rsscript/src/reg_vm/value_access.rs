@@ -90,27 +90,6 @@ pub(super) fn expect_deadline_unix_ms(value: &VmValue) -> Result<i64, EvalError>
     }
 }
 
-pub(super) fn expect_db_connection_ref(value: &VmValue) -> Result<VmDbConnection, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name().as_ref() == "DbConnection" => {
-            let url = data.get("url").ok_or_else(|| {
-                EvalError::Runtime("DbConnection value is missing url.".to_string())
-            })?;
-            let queries = data.get("queries").ok_or_else(|| {
-                EvalError::Runtime("DbConnection value is missing queries.".to_string())
-            })?;
-            Ok(VmDbConnection {
-                url: expect_string_ref(url)?.to_string(),
-                queries: expect_string_list_ref(queries)?,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected DbConnection, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
 pub(super) fn expect_cancellation_id_ref(
     value: &VmValue,
     expected_name: &str,
@@ -193,23 +172,6 @@ pub(super) fn expect_receiver_ref(value: &VmValue) -> Result<VmReceiver, EvalErr
         }
         other => Err(EvalError::Runtime(format!(
             "expected Receiver, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-pub(super) fn expect_resource_pool_ref(value: &VmValue) -> Result<VmResourcePoolState, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name().as_ref() == "ResourcePool" => {
-            let id = data.get("id").ok_or_else(|| {
-                EvalError::Runtime("ResourcePool value is missing id.".to_string())
-            })?;
-            Ok(VmResourcePoolState {
-                id: expect_int_ref(id)?,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected ResourcePool, got `{}`.",
             other.display()
         ))),
     }
