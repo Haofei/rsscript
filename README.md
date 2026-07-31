@@ -222,7 +222,7 @@ Not stable:
 
 - RSS syntax
 - REIR ontology details
-- package registry metadata
+- package dependency and semantic-lock metadata
 
 ---
 

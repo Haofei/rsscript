@@ -11,8 +11,8 @@ These items block stronger deployment claims:
 1. Capture a complete immutable package and dependency snapshot before review,
    lowering, or build.
 2. Carry one mandatory execution policy through VM intrinsics, generated AOT
-   programs, native loading, JIT, process, network, filesystem, and
-   database capabilities.
+   programs, native loading, JIT, process, network, and filesystem
+   capabilities.
 3. Complete Windows secure-store SID/DACL validation for trusted package
    artifacts.
 4. Replace path/string authority with scoped handles where host resources are
@@ -46,7 +46,7 @@ Decompose by invariant, not by line count:
 1. Native loader/build/snapshot boundaries.
 2. LSP document store, scheduler, analysis, publication, and features.
 3. REIR model, indexing, reconciliation, I/O, and rendering.
-4. Runtime process/network/database services and explicit injected context.
+4. Runtime process/network services and explicit injected context.
 5. Analyzer and Rust lowering around a sealed validated semantic model.
 6. VM/JIT validation, ABI, executable memory, deopt, OSR, and code generation.
 

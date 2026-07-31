@@ -30,7 +30,7 @@ verified facts, or make the runtime a sandbox.
 ### Experimental
 
 `Experimental` is opt-in, narrower than the reference semantics, or dependent on
-specialized hardware/toolchains. It may change without compatibility guarantees.
+specialized toolchains. It may change without compatibility guarantees.
 Matching code paths run dedicated CI on pull requests and pushes; the complete
 experimental matrix also runs nightly and for releases. A matching pull-request
 failure and every release validation failure are blocking. A nightly failure is
@@ -59,13 +59,13 @@ The following are trusted-only:
 - generated Cargo builds, build scripts, and executable package dependencies;
 - in-process native plugins or native wrappers;
 - in-process tier-0/native JIT execution;
-- host filesystem, environment, network, process, or device access;
+- host filesystem, environment, network, or process access;
 - execution based only on RSScript capabilities, VM budgets, process limits, a
   container, or the review action.
 
 Static inspection is the only project-supported operation for third-party
-source: do not build dependencies, run hooks, load native code, execute shaders,
-or provide ambient credentials. RSScript and REIR evidence do not authorize
+source: do not build dependencies, run hooks, load native code, or provide
+ambient credentials. RSScript and REIR evidence do not authorize
 execution and do not enforce OS isolation.
 
 ## Deployment Profiles

@@ -25,7 +25,7 @@ The binding support and deployment matrix is [support.md](support.md).
   digest-verified artifacts from private storage.
 - VM and process paths have default time, output, memory/work, host-call, and
   process-tree controls. Unlimited/native modes require explicit trusted flags.
-- Runtime network, HTTP, filesystem, database, channel, and stream paths have
+- Runtime network, HTTP, filesystem, channel, and stream paths have
   bounded variants and typed errors.
 - Native ABI buffers are shape-checked before ownership transfer and released
   through RAII on valid success paths.
@@ -45,9 +45,8 @@ host execution into isolation.
 | Area | Current limitation | Required closure |
 | --- | --- | --- |
 | Windows artifact integrity | Secure cache ACL validation remains incomplete for trusted native artifacts | SID/DACL validation or fail-closed cache disablement |
-| Host authority | Trusted-local compatibility APIs outside the register VM still accept raw paths, URLs, commands, and DSNs | Migrate hosted adapters to `ScopedHostAdapters`; do not expose raw compatibility APIs to restricted execution |
+| Host authority | Trusted-local compatibility APIs outside the register VM still accept raw paths, URLs, and commands | Migrate hosted adapters to `ScopedHostAdapters`; do not expose raw compatibility APIs to restricted execution |
 | Capability evidence | Some native capability facts are author declarations | Independent verification and provenance |
-| External integrations | Live PostgreSQL and broader hardware coverage are environment-gated | Dedicated, auditable integration runners |
 
 ## Open Maintainability Work
 
@@ -66,7 +65,7 @@ This table records the current implementation batch for the refactoring work in
 | R0 | Architecture dependency guards and behavior baselines | Complete | CI rejects forbidden dependency directions and current contract suites remain green |
 | R1 | Complete package/dependency snapshot before review or execution | Complete | Check, review, lock, tree, lower, and build consume one immutable graph |
 | R2 | `SourceSnapshot`, frontend budget, semantic database, and `ValidatedProgram` | Complete | Review, lowering, VM, and LSP consume one bounded frontend result; executable backends require validated checked facts |
-| R3 | Mandatory `ExecutionContext` and scoped host capabilities | Complete | Restricted execution cannot reach ambient filesystem, network, process, or database authority |
+| R3 | Mandatory `ExecutionContext` and scoped host capabilities | Complete | Restricted execution cannot reach ambient filesystem, network, or process authority |
 | R4 | LSP, REIR, runtime, analyzer, package-native, VM, and JIT decomposition | Complete | Modules are split around tested state transitions without behavior changes |
 | R5 | Public API contraction and explicit facades | Complete | Broad glob exports and duplicate compatibility entrypoints are removed |
 | R6 | Former out-of-process execution experiment | Superseded | Removed from the supported product and codebase by R20 |
@@ -90,6 +89,7 @@ This table records the current implementation batch for the refactoring work in
 | R24 | Remove fake database runtime and generic pooling | Complete | No synthetic database connection/error runtime, generic pooling language feature, compiler/VM model, stdlib interface, fixture, or generated crate remains |
 | R25 | Remove simulated domain runtime facades | Complete | No bundled image, cache, config, counter, interpreter-object, or local HTTP handler facade remains; the real HTTP client, File/JSON/CSV, JIT, and self-host framework remain |
 | R26 | Remove dormant database execution authority | Complete | No database host authority, grant, scope handle, adapter, public API, or execution-policy test remains; database evidence taxonomy is unchanged |
+| R27 | Converge documentation after product contraction | Complete | Current boundary documents distinguish executable host surfaces from abstract review evidence and no longer present removed database, GPU, worker, publish, or vendor infrastructure as active products |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -286,6 +286,11 @@ coverage.
 R26 removes the database-specific execution authority left behind after R24.
 The compiler still models database capabilities as review evidence, but no
 runtime grant, scoped database handle, host adapter, or execution API exists.
+
+R27 reconciles current documentation with the contracted implementation. It
+keeps abstract database and registry evidence where REIR still models them, but
+removes stale claims about executable database adapters, DSN authority, dynamic
+shaders, hardware integration runners, and package publication infrastructure.
 
 ## Experimental Status
 

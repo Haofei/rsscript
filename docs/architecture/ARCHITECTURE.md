@@ -130,7 +130,6 @@ recorded in [status](../status.md) and [support](../support.md).
 - Package tooling must not introduce unimplemented language semantics.
 - Lowering must not accept code the frontend cannot explain.
 - Unknown review regions must not be classified as safe.
-- In-process native code, JIT machine code, and dynamic shaders are not
-  security sandboxes.
+- In-process native code and JIT machine code are not security sandboxes.
 - Experimental execution features do not become supported solely because an
   implementation exists.
