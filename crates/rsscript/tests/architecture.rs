@@ -103,6 +103,24 @@ fn hir_inference_uses_structural_type_queries() {
     }
 }
 
+#[test]
+fn native_tier_state_machines_have_explicit_module_boundaries() {
+    let root = workspace_root();
+    let tier = read(&root.join("crates/rsscript/src/reg_vm/tier.rs"));
+    assert!(tier.contains("mod deopt_resume;"));
+    assert!(tier.contains("mod jit_entry;"));
+    assert!(!tier.contains("fn restore_native_deopt_live_regs("));
+    assert!(!tier.contains("fn run_jit_pure_leaf("));
+
+    let deopt = read(&root.join("crates/rsscript/src/reg_vm/tier/deopt_resume.rs"));
+    assert!(deopt.contains("fn try_resume_native_child_deopt_chain("));
+    assert!(deopt.contains("fn restore_native_deopt_live_regs("));
+
+    let entry = read(&root.join("crates/rsscript/src/reg_vm/tier/jit_entry.rs"));
+    assert!(entry.contains("fn run_jit("));
+    assert!(entry.contains("fn run_jit_self_recursive_int("));
+}
+
 fn rust_files_below(root: &Path) -> Vec<PathBuf> {
     fn visit(directory: &Path, files: &mut Vec<PathBuf>) {
         let mut entries = fs::read_dir(directory)

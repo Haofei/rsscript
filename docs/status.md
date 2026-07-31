@@ -93,6 +93,7 @@ This table records the current implementation batch for the refactoring work in
 | R28 | Generate intrinsic registries from one structured catalog | Complete | Internal VM identities, public aliases, AOT runtime targets, and direct/special lowering classifications come from `crates/rsscript/intrinsics.toml`; build tooling no longer scrapes Rust implementation source |
 | R29 | Generate self-host known-type metadata | Complete | The self-host checker consumes core builtin names from the analyzer's canonical list and stdlib nominal types parsed from `.rssi`; handwritten RSS type allowlists are removed |
 | R30 | Replace HIR ad hoc type-string decomposition | Complete | HIR inference queries `ResolvedType` for function returns, container payloads, capability parameters, and match payloads; legacy rendered HIR fields remain an explicit compatibility boundary |
+| R31 | Split native tier state machines | Complete | Precise deopt reconstruction and Tier-0/recursive JIT execution live in dedicated modules; `tier.rs` retains admission, promotion, and OSR orchestration |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -313,6 +314,13 @@ structural root, argument, function-return, and qualifier queries used by call,
 await/try/for, capability, and pattern inference. Existing rendered fields on
 `FunctionSig`, `ParamSig`, and `FieldInfo` remain compatibility projections and
 are not presented as a completed whole-HIR storage migration.
+
+R31 extracts native deoptimization reconstruction into
+`reg_vm/tier/deopt_resume.rs` and Tier-0 plus recursive JIT entry execution into
+`reg_vm/tier/jit_entry.rs`. The split follows state-machine invariants rather
+than backend syntax: code admission and OSR remain in `tier.rs`, while frame
+reconstruction and synchronous execution each have an independently testable
+ownership boundary. JIT and self-host support remain mandatory.
 
 ## Experimental Status
 
