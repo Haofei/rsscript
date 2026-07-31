@@ -1,0 +1,2583 @@
+// Conservative checker-local type model and type diagnostic collectors.
+module selfhost.checker.type_model
+
+use selfhost.checker.diagnostics.syntax_declarations.*
+use selfhost.checker.diagnostics.effects_calls.*
+use selfhost.checker.output.*
+use selfhost.checker.support.*
+use selfhost.interfaces.*
+use selfhost.scan.*
+use selfhost.syntax.ast.*
+use selfhost.syntax.parser_items.*
+use selfhost.syntax.token_ranges.*
+use selfhost.types.*
+
+fn number_literal_root(text: String) -> String {
+    let cs = String.chars(value: text)
+    let n = List.len(list: cs)
+    let mut i = 0
+    let mut isFloat = false
+    while i < n {
+        if Char.to_code(value: List.get(list: cs, index: i)) == 46 { isFloat = true }
+        i = i + 1
+    }
+    if isFloat { return "Float" }
+    return "Int"
+}
+
+// Conservative expression type-of: the type ROOT of the region [s0,e), or "" when
+// not provably known. Only the SURE forms are typed:
+//   * String / number / Char literal      · true|false -> Bool
+//   * null -> JsonLiteral · Unit -> Unit  · None -> Option
+//   * Some(...) -> Option · Ok|Err(...) -> Result
+//   * a sum variant head -> its owning sum
+//   * an unqualified call name(...) -> same-file fn return root, or a declared
+//     type name it constructs
+//   * a bare ident -> a let-typed local (recursively) or a declared-type param
+// Anything else (Binary / Index / Field / qualified or receiver call / object /
+// array / closure) -> "".
+fn expr_type_root(toks: List<Tok>, s0: Int, e: Int, bodyOpen: Int, exprPos: Int, popen: Int, pclose: Int, declared: Set<String>, allFns: Set<String>) -> String {
+    let mut s = s0
+    if is_effect_kw(toks, i: s) { s = s + 1 }
+    if s >= e { return "" }
+    let k0 = tk_kind(toks: toks, i: s)
+    if (s + 1) == e {
+        if k0 == TOK_STRING { return "String" }
+        if k0 == TOK_NUMBER { return number_literal_root(text: tk_text(toks, i: s)) }
+        if k0 == TOK_CHAR { return "Char" }
+    }
+    if is_ident_tok(toks: toks, i: s) == false { return "" }
+    let head = tk_text(toks, i: s)
+    if (s + 1) == e {
+        if head == "true" || head == "false" { return "Bool" }
+        if head == "null" { return "JsonLiteral" }
+        if head == "Unit" { return "Unit" }
+        if head == "None" { return "Option" }
+    }
+    let after = dotted_end(toks, i: s)
+    // A constructor / unqualified call spanning the whole region: `head ( ... )`.
+    if after == (s + 1) && at_symbol(toks: toks, i: (s + 1), code: SYM_LPAREN) {
+        let close = find_matching(toks: toks, open: (s + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+        if close != (e - 1) { return "" }
+        if head == "Some" { return "Option" }
+        if head == "Ok" || head == "Err" { return "Result" }
+        let owner = variant_owner(toks, vname: head)
+        if String.len(value: owner) > 0 { return owner }
+        if Set.contains<String>(set: allFns, value: head) {
+            return fn_return_root(toks, fnName: head)
+        }
+        if Set.contains<String>(set: declared, value: head) { return head }
+        return ""
+    }
+    // A bare, unqualified ident spanning the whole region.
+    if after == (s + 1) && (s + 1) == e {
+        let owner = variant_owner(toks, vname: head)
+        if String.len(value: owner) > 0 { return owner }
+        let lr = find_let_rhs_start(toks, bodyOpen, matchPos: exprPos, name: head)
+        if lr >= 0 {
+            let re = next_line_or_block_end(toks: toks, start: lr, end: exprPos)
+            return expr_type_root(toks, s0: lr, e: re, bodyOpen, exprPos: lr, popen, pclose, declared, allFns)
+        }
+        if popen >= 0 && pclose >= 0 {
+            return param_type_root(toks, open: popen, close: pclose, name: head)
+        }
+        return ""
+    }
+    return ""
+}
+
+// The type root of a `?`-operand ending just before the `?` at `qPos`. Only the
+// two operand shapes whose start is unambiguous token-level are typed: a call
+// `name(...)?` (unqualified only) and a bare ident `x?`; anything else (qualified
+// call, index, field, literal) -> "" (unknown => FP-safe).
+fn try_operand_root(toks: List<Tok>, qPos: Int, bodyOpen: Int, popen: Int, pclose: Int, declared: Set<String>, allFns: Set<String>) -> String {
+    let prev = qPos - 1
+    if prev <= bodyOpen { return "" }
+    if at_symbol(toks: toks, i: prev, code: SYM_RPAREN) {
+        let mut d = 0
+        let mut j = prev
+        let mut op = -1
+        while j > bodyOpen && op < 0 {
+            if at_symbol(toks: toks, i: j, code: SYM_RPAREN) {
+                d = d + 1
+            } else if at_symbol(toks: toks, i: j, code: SYM_LPAREN) {
+                d = d - 1
+                if d == 0 { op = j }
+            }
+            j = j - 1
+        }
+        if op <= bodyOpen { return "" }
+        let callee = op - 1
+        if is_ident_tok(toks: toks, i: callee) == false { return "" }
+        if at_symbol(toks: toks, i: (callee - 1), code: SYM_DOT) { return "" }
+        return expr_type_root(toks, s0: callee, e: qPos, bodyOpen, exprPos: callee, popen, pclose, declared, allFns)
+    }
+    if is_ident_tok(toks: toks, i: prev) {
+        if at_symbol(toks: toks, i: (prev - 1), code: SYM_DOT) { return "" }
+        return expr_type_root(toks, s0: prev, e: qPos, bodyOpen, exprPos: prev, popen, pclose, declared, allFns)
+    }
+    return ""
+}
+
+// ===================================================================
+// RS0208 RETURN_TYPE_MISMATCH — type-inference engine.
+// Ports crates/rsscript/src/checks/calls.rs check_return_type/expr/payload +
+// argument_type_matches. Baked into CHECKER_TARGET_CODES.
+// ===================================================================
+
+// The token range [ts, te) of a fn's declared return type (after `->`, up to the
+// body `{` / `effects`). ok=false when the fn declares no return type.
+struct RetRange {
+    ts: Int
+    te: Int
+    ok: Bool
+}
+
+struct FileTypeModel {
+    fnIdx: handle Map<String, Int>
+    aliasIdx: handle Map<String, String>
+    declared: handle Set<String>
+    prefix: String
+}
+
+struct BodyTypeModel {
+    locals: handle Map<String, List<Int>>
+    bodyOpen: Int
+    bodyClose: Int
+    paramOpen: Int
+    paramClose: Int
+}
+
+// Canonical string of a type token range, mirroring text_util type_ref_name:
+// `Root<A, B>` (args joined ", "), `fresh X` / `owned X` / `noescape X` prefixes.
+fn type_token_string(toks: List<Tok>, ts: Int, te: Int) -> String {
+    let mut sb = ""
+    let mut i = ts
+    while i < te {
+        if at_symbol(toks: toks, i: i, code: SYM_COMMA) {
+            sb = String.concat(left: sb, right: ", ")
+        } else if at_symbol(toks: toks, i: i, code: SYM_LANGLE) {
+            sb = String.concat(left: sb, right: "<")
+        } else if at_symbol(toks: toks, i: i, code: SYM_RANGLE) {
+            sb = String.concat(left: sb, right: ">")
+        } else if at_symbol(toks: toks, i: i, code: SYM_LPAREN) {
+            sb = String.concat(left: sb, right: "(")
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) {
+            sb = String.concat(left: sb, right: ")")
+        } else if at_symbol(toks: toks, i: i, code: SYM_ARROW) {
+            sb = String.concat(left: sb, right: " -> ")
+        } else if is_ident_tok(toks: toks, i: i) {
+            let t = tk_text(toks, i)
+            if t == "fresh" || t == "owned" || t == "noescape" {
+                sb = String.concat(left: String.concat(left: sb, right: t), right: " ")
+            } else {
+                sb = String.concat(left: sb, right: t)
+            }
+        }
+        i = i + 1
+    }
+    return sb
+}
+
+// Declaration generic parameters are not type expressions: bounds belong to
+// the parameter declaration, not to the substitution key. Serialize only each
+// top-level segment's leading identifier (`T: Struct` -> `T`).
+fn type_parameter_name_string(toks: List<Tok>, ts: Int, te: Int) -> String {
+    let mut out = ""
+    let mut i = ts
+    let mut angle = 0
+    let mut paren = 0
+    let mut atStart = true
+    while i < te {
+        if atStart && angle == 0 && paren == 0 && is_ident_tok(toks: toks, i: i) {
+            if String.len(value: out) > 0 {
+                out = String.concat(left: out, right: ", ")
+            }
+            out = String.concat(left: out, right: tk_text(toks, i: i))
+            atStart = false
+        }
+        if at_symbol(toks: toks, i: i, code: SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if at_symbol(toks: toks, i: i, code: SYM_LPAREN) {
+            paren = paren + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) {
+            if paren > 0 { paren = paren - 1 }
+        } else if at_symbol(toks: toks, i: i, code: SYM_COMMA) && angle == 0 && paren == 0 {
+            atStart = true
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// The enclosing module path (`module rss.package.review` -> "rss.package.review"),
+// or "" if the file declares no module. The analyzer canonicalizes a return-type
+// annotation's module-local type names to this prefix (see qualified_type_string).
+fn module_prefix(toks: List<Tok>) -> String {
+    let n = List.len(list: toks)
+    let mut i = 0
+    while i < n {
+        if is_kw_text(toks, i, word: "module") {
+            if i == 0 || tk_line(toks: toks, i: (i - 1)) < tk_line(toks: toks, i: i) {
+                return dotted_name_text(toks, i: (i + 1))
+            }
+        }
+        i = i + 1
+    }
+    return ""
+}
+
+// Like type_token_string, but a bare identifier naming a module-local declared type
+// is canonicalized to `prefix.Name` — mirroring how the analyzer resolves a return
+// annotation's type names to their module-qualified form. A name already preceded by
+// a `.` (already qualified / a member) is left alone. Value typing does NOT qualify,
+// so a generic-arg-derived value (`List<InterfaceSnapshot>.new()`) stays unqualified
+// and correctly mismatches the qualified annotation.
+fn qualified_type_string(toks: List<Tok>, ts: Int, te: Int, prefix: String, declared: Set<String>) -> String {
+    let mut sb = ""
+    let mut i = ts
+    while i < te {
+        if at_symbol(toks: toks, i: i, code: SYM_COMMA) {
+            sb = String.concat(left: sb, right: ", ")
+        } else if at_symbol(toks: toks, i: i, code: SYM_LANGLE) {
+            sb = String.concat(left: sb, right: "<")
+        } else if at_symbol(toks: toks, i: i, code: SYM_RANGLE) {
+            sb = String.concat(left: sb, right: ">")
+        } else if at_symbol(toks: toks, i: i, code: SYM_LPAREN) {
+            sb = String.concat(left: sb, right: "(")
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) {
+            sb = String.concat(left: sb, right: ")")
+        } else if at_symbol(toks: toks, i: i, code: SYM_DOT) {
+            sb = String.concat(left: sb, right: ".")
+        } else if at_symbol(toks: toks, i: i, code: SYM_ARROW) {
+            sb = String.concat(left: sb, right: " -> ")
+        } else if is_ident_tok(toks: toks, i: i) {
+            let t = tk_text(toks, i)
+            if t == "fresh" || t == "owned" || t == "noescape" {
+                sb = String.concat(left: String.concat(left: sb, right: t), right: " ")
+            } else {
+                let prevDot = i > ts && at_symbol(toks: toks, i: (i - 1), code: SYM_DOT)
+                if String.len(value: prefix) > 0 && !prevDot  && Set.contains<String>(set: declared, value: t) {
+                    sb = String.concat(left: sb, right: String.concat(left: String.concat(left: prefix, right: "."), right: t))
+                } else {
+                    sb = String.concat(left: sb, right: t)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return sb
+}
+
+// Index every file alias `type NAME<P...> = RHS`: NAME -> the canonical RHS type
+// string. Built ONCE per file so expand_type_alias is O(1) map lookups instead of an O(n)
+// token scan per lookup (which is O(calls * n) when typing every call argument for RS0207 —
+// the same perf wall as the fn/local indices). Keeps the FIRST decl of a name, exactly as
+// the former type_alias_rhs first-match scan did. A synthetic ` params:<NAME>` entry stores
+// the generic parameters as `Params<P...>` for structural substitution at lookup time.
+fn collect_type_alias_index(toks: List<Tok>) -> Map<String, String> {
+    let n = List.len(list: toks)
+    let mut m = Map<String, String>.new()
+    let mut i = 0
+    while i < n {
+        if is_kw_text(toks, i, word: "type") {
+            let a = i + 1
+            if is_ident_tok(toks: toks, i: a) {
+                let nm = tk_text(toks, i: a)
+                let ee = next_line_or_block_end(toks: toks, start: (a + 1), end: n)
+                let eq = find_top_sym(toks, start: (a + 1), end: ee, code: SYM_EQ)
+                if eq >= 0 && Map.contains_key<String, String>(map: m, key: nm) == false {
+                    let rhs = type_token_string(toks, ts: (eq + 1), te: ee)
+                    Map.insert<String, String>(map: mut m, key: nm, value: rhs)
+                    if at_symbol(toks: toks, i: (a + 1), code: SYM_LANGLE) {
+                        let close = find_matching(toks: toks, open: (a + 1), openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
+                        if close >= 0 && close < eq {
+                            let params = type_parameter_name_string(toks, ts: (a + 2), te: close)
+                            let paramSpec = String.concat(left: String.concat(left: "Params<", right: params), right: ">")
+                            let paramKey = String.concat(left: " params:", right: nm)
+                            Map.insert<String, String>(map: mut m, key: paramKey, value: paramSpec)
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return m
+}
+
+fn alias_cycle_edge(from: String, to: String) -> String {
+    return String.concat(left: String.concat(left: from, right: "\n"), right: to)
+}
+
+// Build the declaration-level alias dependency graph. Generic arguments are
+// deliberately ignored for cycle identity: `A<T> = A<List<T>>` is a cycle in
+// alias `A`, even though every instantiated type string is different.
+fn collect_cyclic_type_alias_tokens(toks: List<Tok>, out: mut List<Int>) -> Bool {
+    let n = List.len(list: toks)
+    let mut names = Set<String>.new()
+    let mut nameTokens = Map<String, Int>.new()
+    let mut i = 0
+    while i < n {
+        if is_kw_text(toks, i, word: "type") && is_ident_tok(toks: toks, i: (i + 1)) {
+            let name = tk_text(toks, i: (i + 1))
+            Set.insert<String>(set: mut names, value: name)
+            if Map.contains_key<String, Int>(map: nameTokens, key: name) == false {
+                Map.insert<String, Int>(map: mut nameTokens, key: name, value: i)
+            }
+        }
+        i = i + 1
+    }
+
+    let mut edges = Set<String>.new()
+    i = 0
+    while i < n {
+        if is_kw_text(toks, i, word: "type") && is_ident_tok(toks: toks, i: (i + 1)) {
+            let name = tk_text(toks, i: (i + 1))
+            let lineEnd = next_line_or_block_end(toks: toks, start: (i + 2), end: n)
+            let eq = find_top_sym(toks, start: (i + 2), end: lineEnd, code: SYM_EQ)
+            if eq >= 0 {
+                let mut bound = Set<String>.new()
+                if at_symbol(toks: toks, i: (i + 2), code: SYM_LANGLE) {
+                    let close = find_matching(toks: toks, open: (i + 2), openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
+                    if close >= 0 && close < eq {
+                        let mut p = i + 3
+                        while p < close {
+                            if is_ident_tok(toks: toks, i: p) {
+                                Set.insert<String>(set: mut bound, value: tk_text(toks, i: p))
+                            }
+                            p = p + 1
+                        }
+                    }
+                }
+                let mut p = eq + 1
+                while p < lineEnd {
+                    if is_ident_tok(toks: toks, i: p) {
+                        let dependency = tk_text(toks, i: p)
+                        if Set.contains<String>(set: names, value: dependency)
+                            && Set.contains<String>(set: bound, value: dependency) == false {
+                            Set.insert<String>(
+                                set: mut edges,
+                                value: alias_cycle_edge(from: name, to: dependency)
+                            )
+                        }
+                    }
+                    p = p + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+
+    let aliases = Map.keys<String, Int>(map: nameTokens)
+    let mut aliasIndex = 0
+    let mut hit = false
+    while aliasIndex < List.len(list: aliases) {
+        let start = List.get(list: aliases, index: aliasIndex)
+        let mut queue = List<String>.new()
+        let mut seen = Set<String>.new()
+        List.push<String>(list: mut queue, value: start)
+        Set.insert<String>(set: mut seen, value: start)
+        let mut q = 0
+        let mut cyclic = false
+        while q < List.len(list: queue) && cyclic == false {
+            let current = List.get(list: queue, index: q)
+            let mut candidateIndex = 0
+            while candidateIndex < List.len(list: aliases) && cyclic == false {
+                let candidate = List.get(list: aliases, index: candidateIndex)
+                if Set.contains<String>(
+                    set: edges,
+                    value: alias_cycle_edge(from: current, to: candidate)
+                ) {
+                    if candidate == start {
+                        cyclic = true
+                    } else if Set.contains<String>(set: seen, value: candidate) == false {
+                        Set.insert<String>(set: mut seen, value: candidate)
+                        List.push<String>(list: mut queue, value: candidate)
+                    }
+                }
+                candidateIndex = candidateIndex + 1
+            }
+            q = q + 1
+        }
+        if cyclic {
+            match Map.get<String, Int>(map: nameTokens, key: start) {
+                Some(tokenIndex) => {
+                    List.push<Int>(list: mut out, value: tokenIndex)
+                    hit = true
+                }
+                None => {}
+            }
+        }
+        aliasIndex = aliasIndex + 1
+    }
+    return hit
+}
+
+const SELFHOST_ALIAS_EXPANSION_LIMIT: Int = 100
+
+fn expand_type_alias_inner(aliasIdx: Map<String, String>, ty: String, visiting: mut Set<String>, depth: Int) -> String {
+    let trimmed = str_trim(s: ty)
+    if depth >= SELFHOST_ALIAS_EXPANSION_LIMIT { return trimmed }
+    let body = strip_type_prefixes(s: trimmed)
+    let prefixLen = String.len(value: trimmed) - String.len(value: body)
+    let prefix = String.slice(value: trimmed, start: 0, len: prefixLen)
+    let root = str_type_root(s: body)
+
+    let mut normalizedBody = body
+    let fnArity = fn_type_arity(body: body)
+    if fnArity >= 0 {
+        normalizedBody = "Fn("
+        let mut i = 0
+        while i < fnArity {
+            if i > 0 {
+                normalizedBody = String.concat(left: normalizedBody, right: ", ")
+            }
+            normalizedBody = String.concat(
+                left: normalizedBody,
+                right: expand_type_alias_inner(
+                    aliasIdx: aliasIdx,
+                    ty: fn_type_arg_at(body: body, which: i),
+                    visiting: mut visiting,
+                    depth: (depth + 1)
+                )
+            )
+            i = i + 1
+        }
+        normalizedBody = String.concat(left: normalizedBody, right: ")")
+        let ret = fn_type_return(body: body)
+        if String.len(value: ret) > 0 {
+            normalizedBody = String.concat(
+                left: String.concat(left: normalizedBody, right: " -> "),
+                right: expand_type_alias_inner(
+                    aliasIdx: aliasIdx,
+                    ty: ret,
+                    visiting: mut visiting,
+                    depth: (depth + 1)
+                )
+            )
+        }
+    } else {
+        let argCount = str_type_arg_count(s: body)
+        if argCount > 0 {
+            normalizedBody = String.concat(left: root, right: "<")
+            let mut i = 0
+            while i < argCount {
+                if i > 0 {
+                    normalizedBody = String.concat(left: normalizedBody, right: ", ")
+                }
+                normalizedBody = String.concat(
+                    left: normalizedBody,
+                    right: expand_type_alias_inner(
+                        aliasIdx: aliasIdx,
+                        ty: str_top_arg(s: body, which: i),
+                        visiting: mut visiting,
+                        depth: (depth + 1)
+                    )
+                )
+                i = i + 1
+            }
+            normalizedBody = String.concat(left: normalizedBody, right: ">")
+        }
+    }
+
+    let rhs0 = Map.get_or_default<String, String>(map: aliasIdx, key: root, default: "")
+    if String.len(value: rhs0) == 0 {
+        return String.concat(left: prefix, right: normalizedBody)
+    }
+    if Set.contains<String>(set: visiting, value: root) {
+        return String.concat(left: prefix, right: normalizedBody)
+    }
+    Set.insert<String>(set: mut visiting, value: root)
+    let paramKey = String.concat(left: " params:", right: root)
+    let params = Map.get_or_default<String, String>(map: aliasIdx, key: paramKey, default: "")
+    let mut rhs = rhs0
+    let mut paramIndex = 0
+    let mut substituting = String.len(value: params) > 0
+    while substituting {
+        let param = str_top_arg(s: params, which: paramIndex)
+        let argument = str_top_arg(s: normalizedBody, which: paramIndex)
+        if String.len(value: param) == 0 || String.len(value: argument) == 0 {
+            substituting = false
+        } else {
+            rhs = str_replace_type_ident(s: rhs, name: param, replacement: argument)
+            paramIndex = paramIndex + 1
+        }
+    }
+    let expanded = expand_type_alias_inner(
+        aliasIdx: aliasIdx,
+        ty: rhs,
+        visiting: mut visiting,
+        depth: (depth + 1)
+    )
+    Set.remove<String>(set: mut visiting, value: root)
+    return String.concat(left: prefix, right: expanded)
+}
+
+// Expand aliases structurally through generic arguments and Fn components.
+fn expand_type_alias(aliasIdx: Map<String, String>, ty: String) -> String {
+    let mut visiting = Set<String>.new()
+    return expand_type_alias_inner(aliasIdx: aliasIdx, ty: ty, visiting: mut visiting, depth: 0)
+}
+
+fn build_file_type_model(toks: List<Tok>) -> FileTypeModel {
+    return FileTypeModel(
+        fnIdx: read collect_fn_decl_index(toks),
+        aliasIdx: read collect_type_alias_index(toks),
+        declared: read collect_declared_types(toks),
+        prefix: module_prefix(toks)
+    )
+}
+
+// The declared-return-type token range of a fn (handles fn generics `<...>`).
+fn fn_return_range(toks: List<Tok>, start: Int) -> RetRange {
+    let ns = fn_name_start(toks, i: start)
+    let mut p = dotted_end(toks, i: ns)
+    if at_symbol(toks: toks, i: p, code: SYM_LANGLE) {
+        let gc = find_matching(toks: toks, open: p, openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
+        if gc < 0 { return RetRange(ts: 0, te: 0, ok: false) }
+        p = gc + 1
+    }
+    if at_symbol(toks: toks, i: p, code: SYM_LPAREN) == false { return RetRange(ts: 0, te: 0, ok: false) }
+    let close = find_matching(toks: toks, open: p, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+    if close < 0 { return RetRange(ts: 0, te: 0, ok: false) }
+    if at_symbol(toks: toks, i: (close + 1), code: SYM_ARROW) == false { return RetRange(ts: 0, te: 0, ok: false) }
+    let rts = close + 2
+    let n = List.len(list: toks)
+    let mut e = rts
+    let mut depth = 0
+    let mut scanning = true
+    while scanning {
+        if e >= n {
+            scanning = false
+        } else if depth == 0 && at_symbol(toks: toks, i: e, code: SYM_LBRACE) {
+            scanning = false
+        } else if depth == 0 && is_kw_text(toks, i: e, word: "effects") {
+            scanning = false
+        } else if depth == 0 && is_decl_start_kw(toks, i: e) {
+            scanning = false
+        } else {
+            if at_symbol(toks: toks, i: e, code: SYM_LANGLE) || at_symbol(toks: toks, i: e, code: SYM_LPAREN) {
+                depth = depth + 1
+            } else if at_symbol(toks: toks, i: e, code: SYM_RANGLE) || at_symbol(toks: toks, i: e, code: SYM_RPAREN) {
+                depth = depth - 1
+            }
+            e = e + 1
+        }
+    }
+    return RetRange(ts: rts, te: e, ok: true)
+}
+
+// A token that begins a top-level declaration — used to bound a body-less fn
+// signature's return type (which ends at the next decl, not a `{`).
+fn is_decl_start_kw(toks: List<Tok>, i: Int) -> Bool {
+    return is_kw_text(toks, i, word: "fn") || is_kw_text(toks, i, word: "pub") || is_kw_text(toks, i, word: "struct") || is_kw_text(toks, i, word: "class") || is_kw_text(toks, i, word: "resource") || is_kw_text(toks, i, word: "const") || is_kw_text(toks, i, word: "module") || is_kw_text(toks, i, word: "use") || is_kw_text(toks, i, word: "protocol") || is_kw_text(toks, i, word: "impl") || is_kw_text(toks, i, word: "native") || is_kw_text(toks, i, word: "opaque") || is_kw_text(toks, i, word: "async") || is_kw_text(toks, i, word: "features")
+}
+
+// (declared_fn_return / declared_qualified_return were replaced by the O(1)
+// collect_fn_decl_index + return_type_at_fn lookups used inside return_actual_type.)
+
+// The OPERATION range of a select-arm binding `name = OP => { ... }` before matchPos,
+// or ok=false. Reuses RetRange as (opStart, fatArrowPos, ok).
+fn find_select_binding(toks: List<Tok>, bodyOpen: Int, matchPos: Int, name: String) -> RetRange {
+    let mut k = bodyOpen + 1
+    let mut result = RetRange(ts: 0, te: 0, ok: false)
+    while k < matchPos {
+        if is_ident_tok(toks: toks, i: k) && tk_text(toks, i: k) == name && at_symbol(toks: toks, i: (k + 1), code: SYM_EQ) {
+            let mut j = k + 2
+            let mut depth = 0
+            let mut fat = 0 - 1
+            let mut scanning = true
+            while scanning {
+                if j >= matchPos {
+                    scanning = false
+                } else if depth == 0 && at_symbol(toks: toks, i: j, code: SYM_FATARROW) {
+                    fat = j
+                    scanning = false
+                } else {
+                    if at_symbol(toks: toks, i: j, code: SYM_LPAREN) || at_symbol(toks: toks, i: j, code: SYM_LBRACKET) || at_symbol(toks: toks, i: j, code: SYM_LBRACE) {
+                        depth = depth + 1
+                    } else if at_symbol(toks: toks, i: j, code: SYM_RPAREN) || at_symbol(toks: toks, i: j, code: SYM_RBRACKET) || at_symbol(toks: toks, i: j, code: SYM_RBRACE) {
+                        depth = depth - 1
+                    }
+                    j = j + 1
+                }
+            }
+            if fat > (k + 2) { result = RetRange(ts: k + 2, te: fat, ok: true) }
+        }
+        k = k + 1
+    }
+    return result
+}
+
+// The EXPR range of a `with EXPR as name { ... }` binding before matchPos, or ok=false.
+// Reuses RetRange as (exprStart, asPos, ok).
+fn with_binding_expr(toks: List<Tok>, bodyOpen: Int, matchPos: Int, name: String) -> RetRange {
+    let mut k = bodyOpen + 1
+    let mut result = RetRange(ts: 0, te: 0, ok: false)
+    while k < matchPos {
+        if is_kw_text(toks, i: k, word: "with") {
+            let exprStart = k + 1
+            let mut j = k + 1
+            let mut depth = 0
+            let mut asPos = 0 - 1
+            let mut scanning = true
+            while scanning {
+                if j >= matchPos {
+                    scanning = false
+                } else if depth == 0 && at_symbol(toks: toks, i: j, code: SYM_LBRACE) {
+                    scanning = false
+                } else if depth == 0 && is_kw_text(toks, i: j, word: "as") {
+                    asPos = j
+                    scanning = false
+                } else {
+                    if at_symbol(toks: toks, i: j, code: SYM_LPAREN) || at_symbol(toks: toks, i: j, code: SYM_LBRACKET) || at_symbol(toks: toks, i: j, code: SYM_LBRACE) {
+                        depth = depth + 1
+                    } else if at_symbol(toks: toks, i: j, code: SYM_RPAREN) || at_symbol(toks: toks, i: j, code: SYM_RBRACKET) || at_symbol(toks: toks, i: j, code: SYM_RBRACE) {
+                        depth = depth - 1
+                    }
+                    j = j + 1
+                }
+            }
+            if asPos >= 0 && is_ident_tok(toks: toks, i: (asPos + 1)) && tk_text(toks, i: (asPos + 1)) == name {
+                result = RetRange(ts: exprStart, te: asPos, ok: true)
+            }
+        }
+        k = k + 1
+    }
+    return result
+}
+
+// Index every file `fn` declaration: key -> the `fn` token index. An unqualified
+// `fn foo` is keyed "foo"; a qualified `fn Ns.method` is keyed "Ns.method". Built ONCE
+// per file so the return/param-type lookups inside return_actual_type are O(1) instead
+// of an O(n) token scan per call/argument (which is otherwise O(calls * n) — the perf
+// wall that reverted RS0207). Mirrors the fn-matching shape of declared_fn_return /
+// declared_qualified_return; keeps the FIRST decl of a name (same as those scanners).
+fn collect_fn_decl_index(toks: List<Tok>) -> Map<String, Int> {
+    let n = List.len(list: toks)
+    let mut m = Map<String, Int>.new()
+    let mut i = 0
+    while i < n {
+        if at_ident(toks: toks, i: i, wid: WORD_FN) {
+            let a = i + 1
+            if is_ident_tok(toks: toks, i: a) {
+                if at_symbol(toks: toks, i: (a + 1), code: SYM_DOT) && is_ident_tok(toks: toks, i: (a + 2)) {
+                    let key = String.concat(left: String.concat(left: tk_text(toks, i: a), right: "."), right: tk_text(toks, i: (a + 2)))
+                    if Map.contains_key<String, Int>(map: m, key) == false { Map.insert<String, Int>(map: mut m, key, value: i) }
+                } else {
+                    let key2 = tk_text(toks, i: a)
+                    if Map.contains_key<String, Int>(map: m, key: key2) == false { Map.insert<String, Int>(map: mut m, key: key2, value: i) }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return m
+}
+
+// The full canonical return type of the fn whose declaration begins at token `fnTok`
+// (a `fn` keyword), or "" if it has no explicit return annotation. Mirrors the
+// fn_return_range + type_token_string body of declared_fn_return / declared_qualified_return.
+fn return_type_at_fn(toks: List<Tok>, fnTok: Int) -> String {
+    let rr = fn_return_range(toks, start: fnTok)
+    if rr.ok { return type_token_string(toks, ts: rr.ts, te: rr.te) }
+    return ""
+}
+
+// The type of parameter `label` of the fn whose declaration begins at token `fnTok`
+// (a `fn` keyword), or "" if it has no such labeled parameter.
+fn param_type_at_fn(toks: List<Tok>, fnTok: Int, label: String) -> String {
+    let a = fnTok + 1
+    let mut pp = dotted_end(toks, i: a)
+    if at_symbol(toks: toks, i: pp, code: SYM_LANGLE) {
+        let gc = find_matching(toks: toks, open: pp, openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
+        if gc >= 0 { pp = gc + 1 }
+    }
+    if at_symbol(toks: toks, i: pp, code: SYM_LPAREN) {
+        let pc = find_matching(toks: toks, open: pp, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+        if pc >= 0 { return param_type_string(toks, open: pp, close: pc, name: label) }
+    }
+    return ""
+}
+
+// Per-fn local index: name -> ascending list of the `let/local` keyword token indices
+// that declare it, over [bodyOpen, bodyClose). Built ONCE per fn body so that resolving a
+// bare-ident's binding is O(occurrences-of-name) instead of find_let_rhs_start's O(body)
+// token scan per lookup. The stored positions are exactly the `k` values find_let_rhs_start
+// would visit as candidates for that name (same `mut` skip, same is_ident test), so
+// find_let_rhs_fast reproduces its result byte-for-byte — including redeclaration, since
+// the lookup replays the same stmtEnd/eq computation bounded by matchPos.
+fn build_local_index(toks: List<Tok>, bodyOpen: Int, bodyClose: Int) -> Map<String, List<Int>> {
+    let mut m = Map<String, List<Int>>.new()
+    let empty = List<Int>.new()
+    let mut hasWithSel = false
+    let mut k = bodyOpen + 1
+    while k < bodyClose {
+        let isLet = is_kw_text(toks, i: k, word: "let") || is_kw_text(toks, i: k, word: "local")
+        if isLet {
+            let mut j = k + 1
+            if is_kw_text(toks, i: j, word: "mut") { j = j + 1 }
+            if is_ident_tok(toks: toks, i: j) {
+                let nm = tk_text(toks, i: j)
+                let mut cur = Map.get_or_default<String, List<Int>>(map: m, key: nm, default: empty)
+                List.push<Int>(list: mut cur, value: k)
+                Map.insert<String, List<Int>>(map: mut m, key: nm, value: cur)
+            }
+        }
+        if is_kw_text(toks, i: k, word: "with") || is_kw_text(toks, i: k, word: "select") { hasWithSel = true }
+        k = k + 1
+    }
+    // Sentinel (key " ws" — a space is not a valid identifier char, so it cannot
+    // collide with a real local) records whether the body uses `with`/`select`, so
+    // return_actual_type can skip the O(body) with_binding_expr / find_select_binding
+    // scans entirely for the common case (they are otherwise hit per non-local ident).
+    if hasWithSel { Map.insert<String, List<Int>>(map: mut m, key: " ws", value: empty) }
+    return m
+}
+
+fn build_body_type_model(toks: List<Tok>, fnStart: Int) -> BodyTypeModel {
+    let ns = fn_name_start(toks, i: fnStart)
+    let bo = function_signature_end(toks: toks, start: (ns - 1))
+    if at_symbol(toks: toks, i: bo, code: SYM_LBRACE) == false {
+        let empty = Map<String, List<Int>>.new()
+        return BodyTypeModel(locals: read empty, bodyOpen: 0 - 1, bodyClose: 0 - 1, paramOpen: 0 - 1, paramClose: 0 - 1)
+    }
+    let bc = find_matching(toks: toks, open: bo, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+    if bc < 0 {
+        let empty2 = Map<String, List<Int>>.new()
+        return BodyTypeModel(locals: read empty2, bodyOpen: 0 - 1, bodyClose: 0 - 1, paramOpen: 0 - 1, paramClose: 0 - 1)
+    }
+    let mut pp = dotted_end(toks, i: ns)
+    if at_symbol(toks: toks, i: pp, code: SYM_LANGLE) {
+        let gc = find_matching(toks: toks, open: pp, openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
+        if gc >= 0 { pp = gc + 1 }
+    }
+    let mut popen = 0 - 1
+    let mut pclose = 0 - 1
+    if at_symbol(toks: toks, i: pp, code: SYM_LPAREN) {
+        let pc = find_matching(toks: toks, open: pp, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+        if pc >= 0 {
+            popen = pp
+            pclose = pc
+        }
+    }
+    return BodyTypeModel(
+        locals: read build_local_index(toks, bodyOpen: bo, bodyClose: bc),
+        bodyOpen: bo,
+        bodyClose: bc,
+        paramOpen: popen,
+        paramClose: pclose
+    )
+}
+
+fn body_type_model_ok(body: BodyTypeModel) -> Bool {
+    return body.bodyOpen >= 0 && body.bodyClose >= 0
+}
+
+// O(1)-amortized replacement for find_let_rhs_start using the per-fn local index: the
+// RHS-start of the MOST RECENT `let/local name` declaration before matchPos, or -1. Visits
+// only the recorded declarations of `name` (ascending), replaying find_let_rhs_start's exact
+// per-candidate rule (mut skip, next_line_or_block_end bounded by matchPos, find_top_sym for
+// the same-statement `=`), so the result is identical to the O(body) scan.
+fn find_let_rhs_fast(toks: List<Tok>, matchPos: Int, name: String, locals: Map<String, List<Int>>) -> Int {
+    let mut best = 0 - 1
+    match Map.get<String, List<Int>>(map: locals, key: name) {
+        Some(list) => {
+            let cnt = List.len<Int>(list)
+            let mut idx = 0
+            let mut scanning = true
+            while scanning {
+                if idx >= cnt {
+                    scanning = false
+                } else {
+                    let k = List.get<Int>(list, index: idx)
+                    if k >= matchPos {
+                        scanning = false
+                    } else {
+                        let mut j = k + 1
+                        if is_kw_text(toks, i: j, word: "mut") { j = j + 1 }
+                        if is_ident_tok(toks: toks, i: j) && tk_text(toks, i: j) == name {
+                            let stmtEnd = next_line_or_block_end(toks: toks, start: k, end: matchPos)
+                            let eq = find_top_sym(toks, start: j, end: stmtEnd, code: SYM_EQ)
+                            if eq >= 0 { best = eq + 1 }
+                        }
+                        idx = idx + 1
+                    }
+                }
+            }
+        }
+        None => {
+        }
+    }
+    return best
+}
+
+// hir_expr_type_name for the FP-safe subset (literals, builtins, variant-call
+// wildcards). Everything else -> "" (unknown); we never over-claim a type, so we
+// never false-positive — at worst a false-negative that keeps the code unbaked.
+// fnIdx / locals are the precomputed O(1) indices (see collect_fn_decl_index /
+// build_local_index) that replace the former O(n)/O(body) declared_fn_return /
+// declared_qualified_return / find_let_rhs_start scans; results are unchanged.
+fn return_actual_type(toks: List<Tok>, s0: Int, e: Int, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>) -> String {
+    let mut s = s0
+    if is_effect_kw(toks, i: s) { s = s + 1 }
+    if is_kw_text(toks, i: s, word: "manage") { s = s + 1 }
+    if is_kw_text(toks, i: s, word: "await") || is_kw_text(toks, i: s, word: "spawn") { s = s + 1 }
+    if s >= e { return "" }
+    let k0 = tk_kind(toks: toks, i: s)
+    if (s + 1) == e {
+        if k0 == TOK_STRING { return "String" }
+        if k0 == TOK_NUMBER { return number_literal_root(text: tk_text(toks, i: s)) }
+        if k0 == TOK_CHAR { return "Char" }
+    }
+    if is_ident_tok(toks: toks, i: s) == false { return "" }
+    let head = tk_text(toks, i: s)
+    if (s + 1) == e {
+        if head == "true" || head == "false" { return "Bool" }
+        if head == "null" { return "JsonLiteral" }
+        if head == "Unit" { return "Unit" }
+        if head == "None" { return "Option<?>" }
+        // Local `let/local NAME = ...` SHADOWS a same-named parameter, so resolve the
+        // local FIRST (matchPos-bounded: only a decl before this reference wins). Falls
+        // through to the parameter only when no local shadow precedes the reference. This
+        // mirrors the analyzer's scoping (a param-first order mis-typed a shadowed ident).
+        if bodyOpen >= 0 {
+            let lr = find_let_rhs_fast(toks, matchPos: s0, name: head, locals)
+            if lr >= 0 {
+                let re2 = stmt_expr_end(toks, start: lr, end: s0)
+                return return_actual_type(toks, s0: lr, e: re2, popen, pclose, bodyOpen, fnIdx, locals)
+            }
+        }
+        if popen >= 0 && pclose >= 0 {
+            let pt = param_type_string(toks, open: popen, close: pclose, name: head)
+            if String.len(value: pt) > 0 { return pt }
+        }
+        if bodyOpen >= 0 {
+            if Map.contains_key<String, List<Int>>(map: locals, key: " ws") {
+                let wb = with_binding_expr(toks, bodyOpen, matchPos: s0, name: head)
+                if wb.ok {
+                    let te2 = wb.te
+                    if te2 > wb.ts && at_symbol(toks: toks, i: (te2 - 1), code: SYM_QUESTION) {
+                        // `with EXPR? as name`: name binds the Ok payload of EXPR, fresh-stripped.
+                        let inner = return_actual_type(toks, s0: wb.ts, e: (te2 - 1), popen, pclose, bodyOpen, fnIdx, locals)
+                        let payload = str_top_arg(s: inner, which: 0)
+                        if String.len(value: payload) > 0 { return str_strip_fresh(s: payload) }
+                    } else {
+                        // `with EXPR as name` (no `?`): name binds the whole EXPR value type.
+                        let whole = return_actual_type(toks, s0: wb.ts, e: te2, popen, pclose, bodyOpen, fnIdx, locals)
+                        if String.len(value: whole) > 0 { return whole }
+                    }
+                }
+                let sb = find_select_binding(toks, bodyOpen, matchPos: s0, name: head)
+                if sb.ok {
+                    return return_actual_type(toks, s0: sb.ts, e: sb.te, popen, pclose, bodyOpen, fnIdx, locals)
+                }
+            }
+        }
+    }
+    // Method chain `EXPR.ok()`: Result<T, E> -> Option<T>.
+    if (e - s) >= 4 && at_symbol(toks: toks, i: (e - 1), code: SYM_RPAREN) && at_symbol(toks: toks, i: (e - 2), code: SYM_LPAREN) && is_ident_tok(toks: toks, i: (e - 3)) && tk_text(toks, i: (e - 3)) == "ok" && at_symbol(toks: toks, i: (e - 4), code: SYM_DOT) {
+        let inner = return_actual_type(toks, s0: s, e: (e - 4), popen, pclose, bodyOpen, fnIdx, locals)
+        if str_type_root(s: inner) == "Result" {
+            let t = str_top_arg(s: inner, which: 0)
+            if String.len(value: t) > 0 { return String.concat(left: String.concat(left: "Option<", right: t), right: ">") }
+        }
+    }
+    let after = dotted_end(toks, i: s)
+    if after == (s + 1) && at_symbol(toks: toks, i: (s + 1), code: SYM_LPAREN) {
+        let close = find_matching(toks: toks, open: (s + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+        if close == (e - 1) {
+            if head == "Some" { return "Option<?>" }
+            if head == "Ok" || head == "Err" { return "Result<?>" }
+            let ft = Map.get_or_default<String, Int>(map: fnIdx, key: head, default: (0 - 1))
+            if ft >= 0 {
+                let dr = return_type_at_fn(toks, fnTok: ft)
+                if String.len(value: dr) > 0 { return dr }
+            }
+        }
+    }
+    // Qualified stdlib call `Ns.method(...)` spanning the whole region.
+    if after > (s + 1) && at_symbol(toks: toks, i: after, code: SYM_LPAREN) {
+        let close = find_matching(toks: toks, open: after, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+        if close == (e - 1) {
+            let method = tk_text(toks, i: (after - 1))
+            let qkey = String.concat(left: String.concat(left: head, right: "."), right: method)
+            let qt = Map.get_or_default<String, Int>(map: fnIdx, key: qkey, default: (0 - 1))
+            if qt >= 0 {
+                let declared = return_type_at_fn(toks, fnTok: qt)
+                if String.len(value: declared) > 0 { return declared }
+            }
+            let rt = stdlib_return_type(ns: head, method)
+            if String.len(value: rt) > 0 { return rt }
+        }
+    }
+    // Generic stdlib call `List.fold<A, Acc>(...)` -> Acc: the accumulator type is
+    // the last explicit generic argument, typed from its syntactic (unqualified) form.
+    if after > (s + 1) && at_symbol(toks: toks, i: after, code: SYM_LANGLE) {
+        let gcf = find_matching(toks: toks, open: after, openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
+        if gcf >= 0 && at_symbol(toks: toks, i: (gcf + 1), code: SYM_LPAREN) {
+            let closef = find_matching(toks: toks, open: (gcf + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+            if closef == (e - 1) {
+                let methodf = tk_text(toks, i: (after - 1))
+                if head == "List" && methodf == "fold" {
+                    let cpos = find_top_sym(toks, start: (after + 1), end: gcf, code: SYM_COMMA)
+                    if cpos >= 0 { return type_token_string(toks, ts: (cpos + 1), te: gcf) }
+                }
+            }
+        }
+    }
+    // Generic constructor `Ns<Args>.new(...)` -> `Ns<Args>` (collection constructors
+    // return their own generic type).
+    if at_symbol(toks: toks, i: (s + 1), code: SYM_LANGLE) {
+        let gc = find_matching(toks: toks, open: (s + 1), openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
+        if gc >= 0 && at_symbol(toks: toks, i: (gc + 1), code: SYM_DOT) && is_ident_tok(toks: toks, i: (gc + 2)) && tk_text(toks, i: (gc + 2)) == "new" && at_symbol(toks: toks, i: (gc + 3), code: SYM_LPAREN) {
+            let close2 = find_matching(toks: toks, open: (gc + 3), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+            if close2 == (e - 1) {
+                return type_token_string(toks, ts: s, te: (gc + 1))
+            }
+        }
+    }
+    return ""
+}
+
+// enum_variant_payload (calls.rs): a bare `None`, or a single-unnamed-arg
+// `Ok(x)`/`Err(x)`/`Some(x)` call (leading effect unwrapped). Result fields:
+// name = variant or "", hasPayload, and payload range [ps, pe).
+struct VarPay {
+    name: String
+    hasPayload: Bool
+    ps: Int
+    pe: Int
+}
+
+fn variant_payload(toks: List<Tok>, s0: Int, e: Int) -> VarPay {
+    let mut s = s0
+    if is_effect_kw(toks, i: s) { s = s + 1 }
+    if s >= e { return VarPay(name: "", hasPayload: false, ps: 0, pe: 0) }
+    if is_ident_tok(toks: toks, i: s) == false { return VarPay(name: "", hasPayload: false, ps: 0, pe: 0) }
+    let head = tk_text(toks, i: s)
+    if (s + 1) == e && head == "None" { return VarPay(name: "None", hasPayload: false, ps: 0, pe: 0) }
+    let isVar = head == "Ok" || head == "Err" || head == "Some"
+    if !isVar  { return VarPay(name: "", hasPayload: false, ps: 0, pe: 0) }
+    if at_symbol(toks: toks, i: (s + 1), code: SYM_LPAREN) == false { return VarPay(name: "", hasPayload: false, ps: 0, pe: 0) }
+    let close = find_matching(toks: toks, open: (s + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+    if close != (e - 1) { return VarPay(name: "", hasPayload: false, ps: 0, pe: 0) }
+    // single unnamed arg: no top-level comma, and no leading `label :`
+    let ps = s + 2
+    let pe = close
+    if ps >= pe { return VarPay(name: "", hasPayload: false, ps: 0, pe: 0) }
+    if find_top_sym(toks, start: ps, end: pe, code: SYM_COMMA) >= 0 {
+        return VarPay(name: "", hasPayload: false, ps: 0, pe: 0)
+    }
+    if is_ident_tok(toks: toks, i: ps) && at_symbol(toks: toks, i: (ps + 1), code: SYM_COLON) {
+        return VarPay(name: "", hasPayload: false, ps: 0, pe: 0)
+    }
+    return VarPay(name: head, hasPayload: true, ps: ps, pe: pe)
+}
+
+// The analyzer resolves a call to a function declared in this source file through
+// the file's module path. `return_actual_type` deliberately keeps value types
+// unqualified, so compare their terminal nominal names only when the returned
+// expression is an exact call to a function indexed in this same file. This is
+// narrower than a general suffix match: unrelated imported names still remain
+// unknown or mismatching as before.
+fn terminal_type_name(ty: String) -> String {
+    let root = str_type_root(s: ty)
+    let chars = String.chars(value: root)
+    let mut start = 0
+    let mut i = 0
+    while i < List.len(list: chars) {
+        if List.get(list: chars, index: i) == '.' { start = i + 1 }
+        i = i + 1
+    }
+    return String.slice(value: root, start, len: (List.len(list: chars) - start))
+}
+
+fn direct_file_local_call(toks: List<Tok>, s: Int, e: Int, fnIdx: Map<String, Int>) -> Bool {
+    if s >= e || is_ident_tok(toks: toks, i: s) == false { return false }
+    let after = dotted_end(toks, i: s)
+    if at_symbol(toks: toks, i: after, code: SYM_LPAREN) == false { return false }
+    let close = find_matching(toks: toks, open: after, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+    if close != (e - 1) { return false }
+    let mut key = tk_text(toks, i: s)
+    if after > (s + 1) {
+        let method = tk_text(toks, i: (after - 1))
+        key = String.concat(left: String.concat(left: key, right: "."), right: method)
+    }
+    return Map.contains_key<String, Int>(map: fnIdx, key)
+}
+
+fn return_type_matches(toks: List<Tok>, s: Int, e: Int, expected: String, actual: String, fnIdx: Map<String, Int>) -> Bool {
+    if arg_type_matches(expected: expected, actual: actual) { return true }
+    if direct_file_local_call(toks, s, e, fnIdx) {
+        let expectedRoot = str_type_root(s: expected)
+        let actualRoot = terminal_type_name(ty: actual)
+        let prefix = module_prefix(toks)
+        if String.len(value: prefix) == 0 { return expectedRoot == actualRoot }
+        let localRoot = String.concat(left: String.concat(left: prefix, right: "."), right: actualRoot)
+        return expectedRoot == localRoot
+    }
+    return false
+}
+
+// expected_variant_payload_type (calls.rs): the payload type a variant expects,
+// given the enclosing Option/Result type string. "" when not applicable.
+fn expected_variant_payload(expected: String, variant: String) -> String {
+    let root = str_type_root(s: expected)
+    if root == "Option" && variant == "None" { return "Unit" }
+    if root == "Option" && variant == "Some" { return str_top_arg(s: expected, which: 0) }
+    if root == "Result" && variant == "Ok" { return str_top_arg(s: expected, which: 0) }
+    if root == "Result" && variant == "Err" { return str_top_arg(s: expected, which: 1) }
+    return ""
+}
+
+// check_return_payload_type (calls.rs): recursively validate a variant payload
+// against its expected type. Returns the first token of the deepest mismatching
+// payload, or -1. This is also the analyzer's diagnostic anchor.
+fn payload_mismatch_token(toks: List<Tok>, ps: Int, pe: Int, expected: String, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>) -> Int {
+    let vp = variant_payload(toks, s0: ps, e: pe)
+    let ep = expected_variant_payload(expected, variant: vp.name)
+    if String.len(value: vp.name) > 0 && String.len(value: ep) > 0 {
+        if vp.hasPayload {
+            return payload_mismatch_token(toks, ps: vp.ps, pe: vp.pe, expected: ep, popen, pclose, bodyOpen, fnIdx, locals)
+        }
+        if ep != "Unit" { return ps }
+        return -1
+    }
+    let actual = return_actual_type(toks, s0: ps, e: pe, popen, pclose, bodyOpen, fnIdx, locals)
+    if String.len(value: actual) == 0 { return -1 }
+    if str_is_unresolved_generic(s: actual) { return -1 }
+    if return_type_matches(toks, s: ps, e: pe, expected, actual, fnIdx) == false { return ps }
+    return -1
+}
+
+// check_return_expr_type (calls.rs) for one `return <expr>` at [s, e). Returns
+// the analyzer-compatible diagnostic token, or -1 when the expression matches.
+fn return_expr_mismatch_token(toks: List<Tok>, s: Int, e: Int, expected: String, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>) -> Int {
+    let root = str_type_root(s: expected)
+    let a0 = str_top_arg(s: expected, which: 0)
+    let a1 = str_top_arg(s: expected, which: 1)
+    if root == "Result" && String.len(value: a1) > 0 {
+        let vp = variant_payload(toks, s0: s, e)
+        if vp.name == "Ok" {
+            if vp.hasPayload { return payload_mismatch_token(toks, ps: vp.ps, pe: vp.pe, expected: a0, popen, pclose, bodyOpen, fnIdx, locals) }
+            if a0 != "Unit" { return s }
+            return -1
+        }
+        if vp.name == "Err" {
+            if vp.hasPayload { return payload_mismatch_token(toks, ps: vp.ps, pe: vp.pe, expected: a1, popen, pclose, bodyOpen, fnIdx, locals) }
+            if a1 != "Unit" { return s }
+            return -1
+        }
+        let actual = return_actual_type(toks, s0: s, e, popen, pclose, bodyOpen, fnIdx, locals)
+        if String.len(value: actual) == 0 { return -1 }
+        if str_is_unresolved_generic(s: actual) { return -1 }
+        if str_type_root(s: actual) == "Result" {
+            if return_type_matches(toks, s, e, expected, actual, fnIdx) == false { return s }
+            return -1
+        }
+        if return_type_matches(toks, s, e, expected: a0, actual, fnIdx) == false { return s }
+        return -1
+    }
+    if root == "Option" && String.len(value: a0) > 0 {
+        let vp = variant_payload(toks, s0: s, e)
+        if vp.name == "Some" {
+            if vp.hasPayload { return payload_mismatch_token(toks, ps: vp.ps, pe: vp.pe, expected: a0, popen, pclose, bodyOpen, fnIdx, locals) }
+            if a0 != "Unit" { return s }
+            return -1
+        }
+        if vp.name == "None" { return -1 }
+        let actual = return_actual_type(toks, s0: s, e, popen, pclose, bodyOpen, fnIdx, locals)
+        if String.len(value: actual) == 0 { return -1 }
+        if str_is_unresolved_generic(s: actual) { return -1 }
+        if return_type_matches(toks, s, e, expected, actual, fnIdx) == false { return s }
+        return -1
+    }
+    let actual = return_actual_type(toks, s0: s, e, popen, pclose, bodyOpen, fnIdx, locals)
+    if String.len(value: actual) == 0 { return -1 }
+    if str_is_unresolved_generic(s: actual) { return -1 }
+    // A variant wildcard (`Result<?>`/`Option<?>`) against a non-Result/Option
+    // expected type may be a type alias that expands to Result/Option; we do not
+    // expand aliases, so treat it as unknown (FP-safe) rather than a mismatch.
+    if actual == "Result<?>" || actual == "Option<?>" { return -1 }
+    if return_type_matches(toks, s, e, expected, actual, fnIdx) == false { return s }
+    return -1
+}
+
+fn return_expr_mismatch(toks: List<Tok>, s: Int, e: Int, expected: String, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>) -> Bool {
+    return return_expr_mismatch_token(toks, s, e, expected, popen, pclose, bodyOpen, fnIdx, locals) >= 0
+}
+
+// Conservative fallthrough test for collect_return_type_mismatch_tokens.
+fn body_falls_through(toks: List<Tok>, bodyOpen: Int, bodyClose: Int) -> Bool {
+    let mut i = bodyOpen + 1
+    let mut depth = 0
+    let mut result = true
+    let mut scanning = true
+    while scanning {
+        if i >= bodyClose {
+            scanning = false
+        } else if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) {
+            depth = depth + 1
+            i = i + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) || at_symbol(toks: toks, i: i, code: SYM_RBRACE) {
+            depth = depth - 1
+            i = i + 1
+        } else if depth == 0 && (is_kw_text(toks, i, word: "return") || is_kw_text(toks, i, word: "break") || is_kw_text(toks, i, word: "continue") || is_kw_text(toks, i, word: "if") || is_kw_text(toks, i, word: "match") || is_kw_text(toks, i, word: "select") || is_kw_text(toks, i, word: "with")) {
+            result = false
+            scanning = false
+        } else {
+            i = i + 1
+        }
+    }
+    return result
+}
+
+// A `{` that opens a closure body: preceded by `|` (param-list close), or by an
+// explicit `|...| -> Type {` return annotation. Returns inside a closure belong to
+// the closure, not the enclosing fn, so they must be skipped.
+fn is_closure_brace(toks: List<Tok>, b: Int) -> Bool {
+    let p = b - 1
+    if p < 0 { return false }
+    if at_symbol(toks: toks, i: p, code: SYM_PIPE) { return true }
+    let mut q = p
+    let mut guard = 0
+    let mut scanning = true
+    while scanning {
+        if q < 0 || guard >= 30 {
+            scanning = false
+        } else if at_symbol(toks: toks, i: q, code: SYM_ARROW) {
+            if q >= 1 && at_symbol(toks: toks, i: (q - 1), code: SYM_PIPE) { return true }
+            return false
+        } else if is_ident_tok(toks: toks, i: q) || at_symbol(toks: toks, i: q, code: SYM_DOT) || at_symbol(toks: toks, i: q, code: SYM_LANGLE) || at_symbol(toks: toks, i: q, code: SYM_RANGLE) || at_symbol(toks: toks, i: q, code: SYM_COMMA) {
+            q = q - 1
+            guard = guard + 1
+        } else {
+            scanning = false
+        }
+    }
+    return false
+}
+
+// True iff the closure whose body brace is `b` has an EMPTY parameter list (`|| {` or
+// `|| -> T {`). Such a closure introduces no bindings that could shadow an enclosing
+// name, so the RS0207 arg walker can safely descend into it and resolve captured
+// identifiers against the enclosing fn scope (a parameterized closure is still skipped,
+// since its params would mis-resolve). Detects adjacent param pipes (`| |`).
+fn closure_paramless(toks: List<Tok>, b: Int) -> Bool {
+    let mut q = b - 1
+    let mut guard = 0
+    let mut scanning = true
+    let mut pipePos = 0 - 1
+    while scanning {
+        if q < 0 || guard >= 30 {
+            scanning = false
+        } else if at_symbol(toks: toks, i: q, code: SYM_PIPE) {
+            pipePos = q
+            scanning = false
+        } else if is_ident_tok(toks: toks, i: q) || at_symbol(toks: toks, i: q, code: SYM_DOT) || at_symbol(toks: toks, i: q, code: SYM_LANGLE) || at_symbol(toks: toks, i: q, code: SYM_RANGLE) || at_symbol(toks: toks, i: q, code: SYM_COMMA) || at_symbol(toks: toks, i: q, code: SYM_ARROW) {
+            q = q - 1
+            guard = guard + 1
+        } else {
+            scanning = false
+        }
+    }
+    if pipePos < 1 { return false }
+    return at_symbol(toks: toks, i: (pipePos - 1), code: SYM_PIPE)
+}
+
+// Collect every RS0208 anchor. Presence and structured output deliberately use
+// this single traversal, so a new return case cannot update one protocol only.
+fn collect_return_type_mismatch_tokens(toks: List<Tok>, out: mut List<Int>) -> Bool {
+    let ntok = List.len(list: toks)
+    // File type model: built ONCE, shared across all fns for O(1) return/type lookups.
+    let model = build_file_type_model(toks)
+    let mut i = 0
+    let mut running = true
+    let mut hit = false
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: toks, i: i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: toks, i: i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                i = declaration_line_end(toks: toks, start: i)
+            } else if cls.isProfile {
+                i = declaration_line_end(toks: toks, start: i)
+            } else if starts_type_decl(toks: toks, i: i, isPub: isPub) {
+                let r = parse_type_decl(toks: toks, i: i)
+                if r < 0 { running = false } else { i = r }
+            } else if starts_fn_like(toks: toks, i: i, isPub: isPub) {
+                let r = parse_function_decl(toks: toks, i: i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let rr = fn_return_range(toks, start: i)
+                    if rr.ok == true {
+                        let expected = qualified_type_string(toks, ts: rr.ts, te: rr.te, prefix: model.prefix, declared: model.declared)
+                        let body = build_body_type_model(toks, fnStart: i)
+                        if str_is_unresolved_generic(s: expected) == false && body_type_model_ok(body) {
+                            let mut j = body.bodyOpen + 1
+                            while j < body.bodyClose {
+                                if at_symbol(toks: toks, i: j, code: SYM_LBRACE) && is_closure_brace(toks, b: j) {
+                                    let cc = find_matching(toks: toks, open: j, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+                                    if cc < 0 { j = body.bodyClose } else { j = cc + 1 }
+                                } else if is_kw_text(toks, i: j, word: "return") {
+                                    let re = stmt_expr_end(toks, start: (j + 1), end: body.bodyClose)
+                                    if (j + 1) < re {
+                                        let bad = return_expr_mismatch_token(toks, s: (j + 1), e: re, expected, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals)
+                                        if bad >= 0 { List.push<Int>(list: mut out, value: bad); hit = true }
+                                    }
+                                    j = j + 1
+                                } else {
+                                    j = j + 1
+                                }
+                            }
+                            if str_type_root(s: expected) != "Unit" && body_falls_through(toks, bodyOpen: body.bodyOpen, bodyClose: body.bodyClose) {
+                                List.push<Int>(list: mut out, value: i)
+                                hit = true
+                            }
+                        }
+                    }
+                    i = r
+                }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return hit
+}
+
+// Generated stdlib parameter types are intentionally consumed through an FP-safe
+// allowlist. The generated `selfhost.interfaces` table is broader than the
+// current self-host type model: enabling it wholesale adds RS0207 alongside
+// primary diagnostics (for example malformed `&mut Buffer` surface syntax).
+// The allowlist owns only "which call shapes are
+// safe"; the actual type strings come from the real `.rssi` metadata.
+fn stdlib_param_type_is_safe(ns: String, method: String, label: String) -> Bool {
+    if ns == "Log" && method == "write" && label == "message" { return true }
+    if ns == "String" && method == "concat" && label == "left" { return true }
+    if ns == "String" && method == "concat" && label == "right" { return true }
+    if ns == "String" && method == "len" && label == "value" { return true }
+    if ns == "File" && method == "write" && label == "data" { return true }
+    return false
+}
+
+fn stdlib_param_type(ns: String, method: String, label: String) -> String {
+    if stdlib_param_type_is_safe(ns, method, label) {
+        return generated_stdlib_param_type(ns: ns, method: method, pname: label)
+    }
+    return ""
+}
+
+// Count the comma-separated parameters of a closure whose param pipes are at
+// openPipe and closePipe (0 for `||`). Commas nested in ()/[]/<> don't separate.
+fn closure_param_count(toks: List<Tok>, openPipe: Int, closePipe: Int) -> Int {
+    if closePipe <= openPipe + 1 { return 0 }
+    let mut i = openPipe + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut count = 1
+    while i < closePipe {
+        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: toks, i: i, code: SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: toks, i: i, code: SYM_COMMA) {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+// RS0207 callback check: an argument `[as0, ae)` passed to a `Fn(...)-> ret` parameter
+// should be a closure whose arity and return type match. Fires on (a) arity mismatch
+// (closure params vs Fn arity) or (b) a closure-return expression whose inferred type is
+// incompatible with the Fn return type (reusing return_expr_mismatch — Ok/Some-payload
+// aware). A non-Fn param, a non-closure arg, or an un-typeable return => no fire
+// (FP-safe). Closure PARAMS are not typed, so a return expr that uses them stays untyped.
+// Map each closure parameter name (between openPipe and closePipe, e.g. `|value|` or
+// `|a, b|`) to its type taken positionally from the Fn parameter type `fntype`
+// (`Fn(Int) -> ..` => value:Int). Closure params carry no annotation, so the Fn type is
+// the only type source. Params whose Fn arg type is unknown are omitted (=> not checked).
+fn closure_param_types(toks: List<Tok>, openPipe: Int, closePipe: Int, fntype: String) -> Map<String, String> {
+    let mut m = Map<String, String>.new()
+    if closePipe <= openPipe + 1 { return m }
+    let mut i = openPipe + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segStart = openPipe + 1
+    let mut idx = 0
+    while i <= closePipe {
+        let atEnd = i == closePipe
+        let isComma = depth == 0 && angle == 0 && at_symbol(toks: toks, i: i, code: SYM_COMMA)
+        if atEnd || isComma {
+            if is_ident_tok(toks: toks, i: segStart) {
+                let ty = fn_type_arg_at(body: fntype, which: idx)
+                if String.len(value: ty) > 0 {
+                    Map.insert<String, String>(map: mut m, key: tk_text(toks, i: segStart), value: ty)
+                }
+            }
+            idx = idx + 1
+            segStart = i + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: toks, i: i, code: SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        }
+        i = i + 1
+    }
+    return m
+}
+
+// Within a closure body [bodyStart, bodyEnd), find calls whose LABELED argument is a bare
+// closure parameter (optionally `read`/`mut`/`take`-prefixed) whose Fn-derived type
+// mismatches the callee's declared parameter type. This is the narrow-but-common
+// "closure param passed straight into a call" case (RS0207 in a callback body), handled
+// without threading closure-param types through return_actual_type. FP-safe: fires only
+// when the callee param type and the closure-param type are both concrete and incompatible.
+fn closure_body_arg_bad(toks: List<Tok>, cptypes: Map<String, String>, bodyStart: Int, bodyEnd: Int, fnIdx: Map<String, Int>) -> Bool {
+    let mut i = bodyStart
+    let mut bad = false
+    while i < bodyEnd {
+        if is_ident_tok(toks: toks, i: i) && at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) {
+            let mut ns = ""
+            if i >= 2 && at_symbol(toks: toks, i: (i - 1), code: SYM_DOT) && is_ident_tok(toks: toks, i: (i - 2)) {
+                ns = tk_text(toks, i: (i - 2))
+            }
+            let callee = tk_text(toks, i)
+            let cclose = find_matching(toks: toks, open: (i + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+            if cclose >= 0 {
+                let mut k = i + 2
+                let mut depth = 0
+                let mut atArg = true
+                while k < cclose {
+                    if depth == 0 && atArg && is_ident_tok(toks: toks, i: k) && at_symbol(toks: toks, i: (k + 1), code: SYM_COLON) {
+                        let label = tk_text(toks, i: k)
+                        let cm = find_top_sym(toks, start: (k + 2), end: cclose, code: SYM_COMMA)
+                        let mut ve = cclose
+                        if cm >= 0 { ve = cm }
+                        let mut vs = k + 2
+                        if is_effect_kw(toks, i: vs) { vs = vs + 1 }
+                        if (vs + 1) == ve && is_ident_tok(toks: toks, i: vs) {
+                            let actual = Map.get_or_default<String, String>(map: cptypes, key: tk_text(toks, i: vs), default: "")
+                            if String.len(value: actual) > 0 {
+                                let expected = resolve_param_type(toks, ns, name: callee, label, fnIdx)
+                                if String.len(value: expected) > 0 && str_is_unresolved_generic(s: expected) == false {
+                                    if arg_type_matches(expected: expected, actual: actual) == false { bad = true }
+                                }
+                            }
+                        }
+                    }
+                    atArg = false
+                    if at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACE) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) {
+                        depth = depth + 1
+                    } else if at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACE) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) {
+                        depth = depth - 1
+                    } else if depth == 0 && at_symbol(toks: toks, i: k, code: SYM_COMMA) {
+                        atArg = true
+                    }
+                    k = k + 1
+                }
+            }
+        }
+        i = i + 1
+    }
+    return bad
+}
+
+// True iff [s, e) is a single (optionally effect-prefixed) identifier that is NOT one of
+// the closure's own parameters — i.e. a value CAPTURED from the enclosing scope. A closure
+// that returns such a value cannot produce a `fresh` result (captured values are borrowed,
+// not fresh), so returning one where a `fresh T` is required is RS0207. FP-safe: valid code
+// never returns a captured value as fresh (a fresh result must be produced inside).
+fn is_bare_captured(toks: List<Tok>, s: Int, e: Int, cptypes: Map<String, String>) -> Bool {
+    let mut vs = s
+    if is_effect_kw(toks, i: vs) { vs = vs + 1 }
+    if (vs + 1) != e { return false }
+    if is_ident_tok(toks: toks, i: vs) == false { return false }
+    let ct = Map.get_or_default<String, String>(map: cptypes, key: tk_text(toks, i: vs), default: "")
+    if String.len(value: ct) > 0 { return false }
+    return true
+}
+
+fn callback_arg_bad(toks: List<Tok>, as0: Int, ae: Int, pt: String, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>) -> Bool {
+    let body = strip_type_prefixes(s: pt)
+    let fnArity = fn_type_arity(body: body)
+    if fnArity < 0 { return false }
+    if at_symbol(toks: toks, i: as0, code: SYM_PIPE) == false { return false }
+    let mut p = as0 + 1
+    let mut cp = 0 - 1
+    let mut sc = true
+    while sc {
+        if p >= ae {
+            sc = false
+        } else if at_symbol(toks: toks, i: p, code: SYM_PIPE) {
+            cp = p
+            sc = false
+        } else {
+            p = p + 1
+        }
+    }
+    if cp < 0 { return false }
+    let clArity = closure_param_count(toks, openPipe: as0, closePipe: cp)
+    if clArity != fnArity { return true }
+    let ret = fn_type_return(body: body)
+    if String.len(value: ret) == 0 { return false }
+    let bs = cp + 1
+    if bs >= ae { return false }
+    // A parameterized closure: type its params from the Fn arg types and check any call in
+    // the body that passes a bare closure param whose type mismatches the callee's param.
+    let cptypes = closure_param_types(toks, openPipe: as0, closePipe: cp, fntype: body)
+    if at_symbol(toks: toks, i: bs, code: SYM_LBRACE) {
+        let bc = find_matching(toks: toks, open: bs, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+        if bc < 0 { return false }
+        if closure_body_arg_bad(toks, cptypes, bodyStart: (bs + 1), bodyEnd: bc, fnIdx) { return true }
+        let freshRet = String.starts_with(value: ret, prefix: "fresh ")
+        let mut i = bs + 1
+        while i < bc {
+            if is_kw_text(toks, i, word: "return") {
+                let re = stmt_expr_end(toks, start: (i + 1), end: bc)
+                if (i + 1) < re {
+                    if freshRet && is_bare_captured(toks, s: (i + 1), e: re, cptypes) { return true }
+                    if return_expr_mismatch(toks, s: (i + 1), e: re, expected: ret, popen, pclose, bodyOpen, fnIdx, locals) { return true }
+                }
+            }
+            i = i + 1
+        }
+        return false
+    }
+    if closure_body_arg_bad(toks, cptypes, bodyStart: bs, bodyEnd: ae, fnIdx) { return true }
+    if String.starts_with(value: ret, prefix: "fresh ") && is_bare_captured(toks, s: bs, e: ae, cptypes) { return true }
+    return return_expr_mismatch(toks, s: bs, e: ae, expected: ret, popen, pclose, bodyOpen, fnIdx, locals)
+}
+
+// Resolve a call parameter's declared type via the O(1) fn index: unqualified callee =>
+// file fn; qualified callee => file `fn ns.method` (shadowing) else the generated
+// stdlib interface table through the FP-safe allowlist above. A callee not in the
+// index is stdlib/unknown (O(1)).
+fn resolve_param_type(toks: List<Tok>, ns: String, name: String, label: String, fnIdx: Map<String, Int>) -> String {
+    if String.len(value: ns) == 0 {
+        let ft = Map.get_or_default<String, Int>(map: fnIdx, key: name, default: (0 - 1))
+        if ft < 0 { return "" }
+        return param_type_at_fn(toks, fnTok: ft, label)
+    }
+    let key = String.concat(left: String.concat(left: ns, right: "."), right: name)
+    let qt = Map.get_or_default<String, Int>(map: fnIdx, key, default: (0 - 1))
+    if qt >= 0 {
+        let d = param_type_at_fn(toks, fnTok: qt, label)
+        if String.len(value: d) > 0 { return d }
+    }
+    return stdlib_param_type(ns, method: name, label)
+}
+
+// True iff the param segment [s, e) is a bare `name` (optionally effect-prefixed) with
+// NO `: type` — i.e. an untyped parameter. The analyzer assigns such a param the empty
+// type "", so passing it to a typed parameter fires RS0207 with actual == "".
+fn seg_is_untyped_named(toks: List<Tok>, s: Int, e: Int, name: String) -> Bool {
+    let mut t = s
+    if t < e && is_effect_kw(toks, i: t) { t = t + 1 }
+    if t >= e { return false }
+    if is_ident_tok(toks: toks, i: t) == false { return false }
+    if tk_text(toks, i: t) != name { return false }
+    if (t + 1) >= e { return true }
+    return false
+}
+
+// True iff `name` is a parameter of the fn whose param parens are (popen, pclose) and it
+// was declared WITHOUT a type annotation. Only malformed signatures have untyped params
+// (a valid fn types every param — RS0002/0003 otherwise), so firing on this is FP-safe.
+fn is_untyped_param(toks: List<Tok>, popen: Int, pclose: Int, name: String) -> Bool {
+    if popen < 0 || pclose <= popen { return false }
+    let mut i = popen + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segStart = popen + 1
+    while i < pclose {
+        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) || at_symbol(toks: toks, i: i, code: SYM_RBRACE) {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: toks, i: i, code: SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: toks, i: i, code: SYM_COMMA) {
+            if seg_is_untyped_named(toks, s: segStart, e: i, name) { return true }
+            segStart = i + 1
+        }
+        i = i + 1
+    }
+    return seg_is_untyped_named(toks, s: segStart, e: pclose, name)
+}
+
+// Presence fallback for RS0207 cases that still require token-local generic,
+// callback, interpolation, alias, or moved-value state.
+fn call_arg_type_bad(toks: List<Tok>, ns: String, callee: String, open: Int, close: Int, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>, aliasIdx: Map<String, String>, recvGeneric: String) -> Bool {
+    let mut depth = 0
+    let mut atArgStart = true
+    let mut bad = false
+    let mut k = open + 1
+    while k < close {
+        if depth == 0 && atArgStart && is_ident_tok(toks: toks, i: k) && at_symbol(toks: toks, i: (k + 1), code: SYM_COLON) {
+            let label = tk_text(toks, i: k)
+            let mut parameterType = resolve_param_type(toks, ns, name: callee, label, fnIdx)
+            if String.len(value: parameterType) > 0 {
+                let expected = expand_type_alias(aliasIdx, ty: parameterType)
+                if str_is_unresolved_generic(s: expected) == false {
+                    let comma = find_top_sym(toks, start: (k + 2), end: close, code: SYM_COMMA)
+                    let mut argEnd = close
+                    if comma >= 0 { argEnd = comma }
+                    if (k + 2) < argEnd {
+                        if callback_arg_bad(toks, as0: (k + 2), ae: argEnd, expected, popen, pclose, bodyOpen, fnIdx, locals) { bad = true }
+                        let actual0 = return_actual_type(toks, s0: (k + 2), e: argEnd, popen, pclose, bodyOpen, fnIdx, locals)
+                        let actual = expand_type_alias(aliasIdx, ty: actual0)
+                        if String.len(value: actual) > 0 && str_is_unresolved_generic(s: actual) == false {
+                            if arg_type_matches(expected: expected, actual: actual) == false { bad = true }
+                        } else if String.len(value: actual) == 0 {
+                            let mut argument = k + 2
+                            if is_effect_kw(toks, i: argument) { argument = argument + 1 }
+                            if (argument + 1) == argEnd && is_ident_tok(toks: toks, i: argument) {
+                                if is_untyped_param(toks, popen, pclose, name: tk_text(toks, i: argument)) { bad = true }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        atArgStart = false
+        if at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACE) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACE) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && at_symbol(toks: toks, i: k, code: SYM_COMMA) {
+            atArgStart = true
+        }
+        k = k + 1
+    }
+    return bad
+}
+
+// Structured counterpart of call_arg_type_bad. The type resolution and
+// conservative skip rules are intentionally identical; only the diagnostic
+// anchor changes from a file-level boolean to the offending argument value.
+fn collect_call_arg_type_bad_tokens(toks: List<Tok>, ns: String, callee: String, open: Int, close: Int, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>, aliasIdx: Map<String, String>, recvGeneric: String, out: mut List<Int>) -> Bool {
+    let mut depth = 0
+    let mut atArgStart = true
+    let mut hit = false
+    let mut k = open + 1
+    while k < close {
+        if depth == 0 && atArgStart && is_ident_tok(toks: toks, i: k) && at_symbol(toks: toks, i: (k + 1), code: SYM_COLON) {
+            let label = tk_text(toks, i: k)
+            let mut pt0 = resolve_param_type(toks, ns, name: callee, label, fnIdx)
+            if String.len(value: pt0) > 0 {
+                let pt = expand_type_alias(aliasIdx, ty: pt0)
+                if str_is_unresolved_generic(s: pt) == false {
+                    let cm = find_top_sym(toks, start: (k + 2), end: close, code: SYM_COMMA)
+                    let mut ae = close
+                    if cm >= 0 { ae = cm }
+                    if (k + 2) < ae {
+                        let callbackBad = callback_arg_bad(toks, as0: (k + 2), ae, pt, popen, pclose, bodyOpen, fnIdx, locals)
+                        let at0 = return_actual_type(toks, s0: (k + 2), e: ae, popen, pclose, bodyOpen, fnIdx, locals)
+                        let at = expand_type_alias(aliasIdx, ty: at0)
+                        let mut mismatch = callbackBad
+                        if String.len(value: at) > 0 && str_is_unresolved_generic(s: at) == false {
+                            if arg_type_matches(expected: pt, actual: at) == false { mismatch = true }
+                        } else if String.len(value: at) == 0 {
+                            let mut ai = k + 2
+                            if is_effect_kw(toks, i: ai) { ai = ai + 1 }
+                            if (ai + 1) == ae && is_ident_tok(toks: toks, i: ai) {
+                                if is_untyped_param(toks, popen, pclose, name: tk_text(toks, i: ai)) { mismatch = true }
+                            }
+                        }
+                        if mismatch {
+                            List.push<Int>(list: mut out, value: (k + 2))
+                            hit = true
+                        }
+                    }
+                }
+            }
+        }
+        atArgStart = false
+        if at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACE) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) { depth = depth + 1 }
+        else if at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACE) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) { depth = depth - 1 }
+        else if depth == 0 && at_symbol(toks: toks, i: k, code: SYM_COMMA) { atArgStart = true }
+        k = k + 1
+    }
+    return hit
+}
+
+// RS0207 ARGUMENT_TYPE_MISMATCH — Slice 1: an annotated binding
+// `let/local NAME: TYPE = EXPR` whose initializer type is incompatible with the
+// annotation (oracle check_binding_type, same argument_type_matches primitive as
+// RS0208). Expected = the annotation (module-qualified); actual = return_actual_type
+// of the initializer. Reuses return_expr_mismatch (Result/Option payload aware).
+// UNKNOWN-biased: an un-typeable initializer yields "" => no fire, matching the
+// oracle's skip-bias. Slice 2: each labeled call argument against the callee's declared
+// parameter type (call_arg_type_bad), for qualified `ns.method(...)` and unqualified
+// `callee(...)` call sites.
+// --- Binary-operator parsing (ported from astdump.rss) — shared by the operator/
+// control-flow type checks (RS0210, and future RS0209 arm typing). ---
+
+// Two consecutive symbol tokens a,b at i (both within end).
+fn two_sym(toks: List<Tok>, i: Int, end: Int, a: Int, b: Int) -> Bool {
+    if i + 1 >= end { return false }
+    return at_symbol(toks: toks, i: i, code: a) && at_symbol(toks: toks, i: (i + 1), code: b)
+}
+
+// Token `open` is `<` opening a generic argument list (ident before, matching `>` followed
+// by `.` or `(`), not a comparison — so its `<`/`>` are excluded from operator scanning.
+fn is_generic_angle(toks: List<Tok>, start: Int, end: Int, open: Int) -> Bool {
+    if open <= start { return false }
+    if is_ident_tok(toks: toks, i: (open - 1)) == false { return false }
+    if at_symbol(toks: toks, i: open, code: SYM_LANGLE) == false { return false }
+    let mut depth = 0
+    let mut i = open
+    while i < end {
+        if at_symbol(toks: toks, i: i, code: SYM_LANGLE) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: i, code: SYM_RANGLE) {
+            depth = depth - 1
+            if depth == 0 {
+                return at_symbol(toks: toks, i: (i + 1), code: SYM_DOT) || at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN)
+            }
+        }
+        i = i + 1
+    }
+    return false
+}
+
+// Does the operator at token i belong to precedence `tier`?
+// tier: 1=|| 2=&& 3=| 4=^ 5=& 6=cmp(== != <= >= < >) 7=shift(<< >>) 8=+ - 9=* / %
+fn op_matches_tier(toks: List<Tok>, i: Int, end: Int, tier: Int) -> Bool {
+    if tier == 1 { return two_sym(toks, i, end, a: SYM_PIPE, b: SYM_PIPE) }
+    if tier == 2 { return two_sym(toks, i, end, a: SYM_AMP, b: SYM_AMP) }
+    if tier == 3 {
+        return at_symbol(toks: toks, i: i, code: SYM_PIPE) && two_sym(toks, i, end, a: SYM_PIPE, b: SYM_PIPE) == false
+    }
+    if tier == 4 { return at_symbol(toks: toks, i: i, code: SYM_CARET) }
+    if tier == 5 {
+        return at_symbol(toks: toks, i: i, code: SYM_AMP) && two_sym(toks, i, end, a: SYM_AMP, b: SYM_AMP) == false
+    }
+    if tier == 6 {
+        if two_sym(toks, i, end, a: SYM_EQ, b: SYM_EQ) { return true }
+        if two_sym(toks, i, end, a: SYM_BANG, b: SYM_EQ) { return true }
+        if two_sym(toks, i, end, a: SYM_LANGLE, b: SYM_EQ) { return true }
+        if two_sym(toks, i, end, a: SYM_RANGLE, b: SYM_EQ) { return true }
+        if at_symbol(toks: toks, i: i, code: SYM_LANGLE) && two_sym(toks, i, end, a: SYM_LANGLE, b: SYM_LANGLE) == false { return true }
+        if at_symbol(toks: toks, i: i, code: SYM_RANGLE) && two_sym(toks, i, end, a: SYM_RANGLE, b: SYM_RANGLE) == false { return true }
+        return false
+    }
+    if tier == 7 {
+        if two_sym(toks, i, end, a: SYM_LANGLE, b: SYM_LANGLE) { return true }
+        if two_sym(toks, i, end, a: SYM_RANGLE, b: SYM_RANGLE) { return true }
+        return false
+    }
+    if tier == 8 {
+        return at_symbol(toks: toks, i: i, code: SYM_PLUS) || at_symbol(toks: toks, i: i, code: SYM_MINUS)
+    }
+    if tier == 9 {
+        return at_symbol(toks: toks, i: i, code: SYM_STAR) || at_symbol(toks: toks, i: i, code: SYM_SLASH) || at_symbol(toks: toks, i: i, code: SYM_PERCENT)
+    }
+    return false
+}
+
+// Last top-level operator index for precedence `tier` in [start, end), or -1. Tracks
+// (){}[] depth and generic `<...>` angles so only real depth-0 operators count.
+fn scan_last_top_op(toks: List<Tok>, start: Int, end: Int, tier: Int) -> Int {
+    let mut depth = 0
+    let mut angle = 0
+    let mut idx = start
+    let mut found = 0 - 1
+    while idx < end {
+        if at_symbol(toks: toks, i: idx, code: SYM_LPAREN) || at_symbol(toks: toks, i: idx, code: SYM_LBRACE) || at_symbol(toks: toks, i: idx, code: SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: idx, code: SYM_RPAREN) || at_symbol(toks: toks, i: idx, code: SYM_RBRACE) || at_symbol(toks: toks, i: idx, code: SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && angle == 0 && at_symbol(toks: toks, i: idx, code: SYM_LANGLE) && is_generic_angle(toks, start, end, open: idx) {
+            angle = angle + 1
+        } else if depth == 0 && angle > 0 {
+            if at_symbol(toks: toks, i: idx, code: SYM_LANGLE) { angle = angle + 1 }
+            else if at_symbol(toks: toks, i: idx, code: SYM_RANGLE) { angle = angle - 1 }
+        } else if depth == 0 {
+            if op_matches_tier(toks, i: idx, end, tier) {
+                found = idx
+            }
+        }
+        idx = idx + 1
+    }
+    return found
+}
+
+// Token width (1 or 2) of the operator at i.
+fn binop_width_at(toks: List<Tok>, i: Int, end: Int) -> Int {
+    if two_sym(toks, i, end, a: SYM_EQ, b: SYM_EQ) { return 2 }
+    if two_sym(toks, i, end, a: SYM_BANG, b: SYM_EQ) { return 2 }
+    if two_sym(toks, i, end, a: SYM_LANGLE, b: SYM_EQ) { return 2 }
+    if two_sym(toks, i, end, a: SYM_RANGLE, b: SYM_EQ) { return 2 }
+    if two_sym(toks, i, end, a: SYM_LANGLE, b: SYM_LANGLE) { return 2 }
+    if two_sym(toks, i, end, a: SYM_RANGLE, b: SYM_RANGLE) { return 2 }
+    if two_sym(toks, i, end, a: SYM_PIPE, b: SYM_PIPE) { return 2 }
+    if two_sym(toks, i, end, a: SYM_AMP, b: SYM_AMP) { return 2 }
+    return 1
+}
+
+// Lowest-precedence top-level operator split index in [start, end), or -1.
+fn find_binop(toks: List<Tok>, start: Int, end: Int) -> Int {
+    let mut tier = 1
+    while tier <= 9 {
+        let hit = scan_last_top_op(toks, start, end, tier)
+        if hit >= 0 { return hit }
+        tier = tier + 1
+    }
+    return 0 - 1
+}
+
+// RS0210 (OPERATOR_TYPE_MISMATCH): the top-level comparison operator in [start, end) has
+// left and right operands of concrete, incompatible root types (`1 == "1"` => Int vs
+// String). FP-safe: fires only when both operands type to concrete, non-generic, DIFFERENT
+// roots — an un-typeable operand (nested expr, unknown ident) yields "" and is skipped.
+// Type an operator operand [s, e). A single (effect-stripped) identifier that is a closure
+// parameter (present in cptypes) resolves to its Fn-derived type; everything else goes
+// through return_actual_type. cptypes is empty for ordinary (non-closure) contexts.
+fn operand_type_cp(toks: List<Tok>, s: Int, e: Int, cptypes: Map<String, String>, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>) -> String {
+    let mut vs = s
+    if is_effect_kw(toks, i: vs) { vs = vs + 1 }
+    if (vs + 1) == e && is_ident_tok(toks: toks, i: vs) {
+        let ct = Map.get_or_default<String, String>(map: cptypes, key: tk_text(toks, i: vs), default: "")
+        if String.len(value: ct) > 0 { return ct }
+    }
+    return return_actual_type(toks, s0: s, e, popen, pclose, bodyOpen, fnIdx, locals)
+}
+
+fn type_is_numeric(ty: String) -> Bool {
+    let root = str_type_root(s: ty)
+    return root == "Int" || root == "Int8" || root == "Int16" || root == "Int32" || root == "Int64" || root == "UInt" || root == "UInt8" || root == "UInt16" || root == "UInt32" || root == "UInt64" || root == "Float" || root == "Float32" || root == "Float64"
+}
+
+fn op_is_arithmetic(toks: List<Tok>, op: Int, end: Int) -> Bool {
+    return op_matches_tier(toks, i: op, end, tier: 3) || op_matches_tier(toks, i: op, end, tier: 4) || op_matches_tier(toks, i: op, end, tier: 5) || op_matches_tier(toks, i: op, end, tier: 7) || op_matches_tier(toks, i: op, end, tier: 8) || op_matches_tier(toks, i: op, end, tier: 9)
+}
+
+fn collect_operator_overloads_in_expr(toks: List<Tok>, start: Int, end: Int, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>, out: mut List<Int>) -> Bool {
+    if start >= end { return false }
+    let op = find_binop(toks, start, end)
+    if op < 0 { return false }
+    let width = binop_width_at(toks, i: op, end)
+    if op <= start || (op + width) >= end { return false }
+    let noCp = Map<String, String>.new()
+    let lt = operand_type_cp(toks, s: start, e: op, cptypes: noCp, popen, pclose, bodyOpen, fnIdx, locals)
+    let rt = operand_type_cp(toks, s: (op + width), e: end, cptypes: noCp, popen, pclose, bodyOpen, fnIdx, locals)
+    let mut hit = false
+    if op_is_arithmetic(toks, op, end) {
+        let leftBad = String.len(value: lt) > 0 && str_is_unresolved_generic(s: lt) == false && type_is_numeric(ty: lt) == false
+        let rightBad = String.len(value: rt) > 0 && str_is_unresolved_generic(s: rt) == false && type_is_numeric(ty: rt) == false
+        if leftBad || rightBad {
+            List.push<Int>(list: mut out, value: op)
+            hit = true
+        }
+    }
+    if collect_operator_overloads_in_expr(toks, start, end: op, popen, pclose, bodyOpen, fnIdx, locals, out: mut out) { hit = true }
+    if collect_operator_overloads_in_expr(toks, start: (op + width), end, popen, pclose, bodyOpen, fnIdx, locals, out: mut out) { hit = true }
+    return hit
+}
+
+fn operator_type_bad_token(toks: List<Tok>, start: Int, end: Int, cptypes: Map<String, String>, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>) -> Int {
+    if start >= end { return -1 }
+    let op = find_binop(toks, start, end)
+    if op < 0 { return -1 }
+    let isCmp = op_matches_tier(toks, i: op, end, tier: 6)
+    let isLogical = op_matches_tier(toks, i: op, end, tier: 1) || op_matches_tier(toks, i: op, end, tier: 2)
+    if !isCmp  && !isLogical  { return -1 }
+    let width = binop_width_at(toks, i: op, end)
+    if op <= start { return -1 }
+    if (op + width) >= end { return -1 }
+    let lo2 = op + width
+    let lt = operand_type_cp(toks, s: start, e: op, cptypes, popen, pclose, bodyOpen, fnIdx, locals)
+    let rt = operand_type_cp(toks, s: lo2, e: end, cptypes, popen, pclose, bodyOpen, fnIdx, locals)
+    if isLogical {
+        // `&&` / `||`: each concrete operand must be Bool.
+        if String.len(value: lt) > 0 && str_is_unresolved_generic(s: lt) == false && str_strip_fresh(s: lt) != "Bool" { return op }
+        if String.len(value: rt) > 0 && str_is_unresolved_generic(s: rt) == false && str_strip_fresh(s: rt) != "Bool" { return op }
+        return -1
+    }
+    // comparison: both operands must share a concrete root type.
+    if String.len(value: lt) == 0 || str_is_unresolved_generic(s: lt) { return -1 }
+    if String.len(value: rt) == 0 || str_is_unresolved_generic(s: rt) { return -1 }
+    if str_strip_fresh(s: lt) == str_strip_fresh(s: rt) { return -1 }
+    return op
+}
+
+// A closure argument `|params| body` passed where a `Fn(..)` is expected: type its params
+// from the Fn arg types and check the (single-expr) body for an operator-type mismatch
+// (`|value| value == "x"` with `Fn(Int) -> Bool` => value:Int vs String). Block bodies are
+// not scanned here (the fn-body operator walker covers non-closure code).
+fn closure_arg_operator_bad_token(toks: List<Tok>, argStart: Int, argEnd: Int, fnType: String, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>) -> Int {
+    if at_symbol(toks: toks, i: argStart, code: SYM_PIPE) == false { return -1 }
+    let body = strip_type_prefixes(s: fnType)
+    if fn_type_arity(body: body) < 0 { return -1 }
+    let mut p = argStart + 1
+    let mut cp = 0 - 1
+    let mut sc = true
+    while sc {
+        if p >= argEnd {
+            sc = false
+        } else if at_symbol(toks: toks, i: p, code: SYM_PIPE) {
+            cp = p
+            sc = false
+        } else {
+            p = p + 1
+        }
+    }
+    if cp < 0 { return -1 }
+    let cptypes = closure_param_types(toks, openPipe: argStart, closePipe: cp, fntype: body)
+    let bs = cp + 1
+    if bs >= argEnd { return -1 }
+    if at_symbol(toks: toks, i: bs, code: SYM_LBRACE) { return -1 }
+    return operator_type_bad_token(toks, start: bs, end: argEnd, cptypes, popen, pclose, bodyOpen, fnIdx, locals)
+}
+
+// Scan a call's labeled arguments for a closure passed to a `Fn`-typed parameter whose body
+// has an operator-type mismatch (RS0210). Mirrors call_arg_type_bad's arg iteration.
+fn collect_call_closure_operator_bad_tokens(toks: List<Tok>, ns: String, callee: String, open: Int, close: Int, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>, aliasIdx: Map<String, String>, out: mut List<Int>) -> Bool {
+    let mut k = open + 1
+    let mut depth = 0
+    let mut atArg = true
+    let mut bad = false
+    while k < close {
+        if depth == 0 && atArg && is_ident_tok(toks: toks, i: k) && at_symbol(toks: toks, i: (k + 1), code: SYM_COLON) {
+            let label = tk_text(toks, i: k)
+            let pt0 = resolve_param_type(toks, ns, name: callee, label, fnIdx)
+            if String.len(value: pt0) > 0 {
+                let pt = expand_type_alias(aliasIdx, ty: pt0)
+                let cm = find_top_sym(toks, start: (k + 2), end: close, code: SYM_COMMA)
+                let mut ae = close
+                if cm >= 0 { ae = cm }
+                if (k + 2) < ae {
+                    let badToken = closure_arg_operator_bad_token(toks, argStart: (k + 2), argEnd: ae, fnType: pt, popen, pclose, bodyOpen, fnIdx, locals)
+                    if badToken >= 0 { List.push<Int>(list: mut out, value: badToken); bad = true }
+                }
+            }
+        }
+        atArg = false
+        if at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACE) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACE) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) {
+            depth = depth - 1
+        } else if depth == 0 && at_symbol(toks: toks, i: k, code: SYM_COMMA) {
+            atArg = true
+        }
+        k = k + 1
+    }
+    return bad
+}
+
+// Matching top-level `}` for an interpolation `{` opening at `start`, or -1 (ported from
+// astdump.rss interp_end / find_interpolation_end): string literals are skipped; ([{ nest.
+fn interp_end(cs: List<Char>, n: Int, start: Int) -> Int {
+    let mut i = start
+    let mut depth = 0
+    while i < n {
+        let c = code_at(chars: cs, n: n, i: i)
+        if c == 34 {
+            i = i + 1
+            let mut inStr = true
+            while i < n && inStr {
+                let sc = code_at(chars: cs, n: n, i: i)
+                if sc == 92 {
+                    i = i + 2
+                } else if sc == 34 {
+                    i = i + 1
+                    inStr = false
+                } else {
+                    i = i + 1
+                }
+            }
+        } else if c == 40 || c == 91 || c == 123 {
+            depth = depth + 1
+            i = i + 1
+        } else if c == 41 || c == 93 {
+            if depth > 0 { depth = depth - 1 }
+            i = i + 1
+        } else if c == 125 {
+            if depth == 0 { return i }
+            depth = depth - 1
+            i = i + 1
+        } else {
+            i = i + 1
+        }
+    }
+    return 0 - 1
+}
+
+// Type one embedded interpolation expression (its text). Returns true if it resolves to a
+// concrete non-String type — interpolation desugars to String.format over a List<String>,
+// so a non-String interpolated value is RS0207 ("list literal item has type X, expected
+// String"). A bare identifier is resolved by NAME against the enclosing scope (param, then
+// local); other forms are typed via a fresh tokenization (literals, by-name calls).
+// Un-typeable / String => false (FP-safe: valid code interpolates only Strings).
+fn interp_nonstring_item(toks: List<Tok>, itemText: String, tokIdx: Int, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>) -> Bool {
+    let trimmed = str_trim(s: itemText)
+    if String.len(value: trimmed) == 0 { return false }
+    let sub = tokenize(source: trimmed)
+    let ns2 = List.len<Tok>(list: sub)
+    let mut stop = 0
+    while stop < ns2 && tk_kind(toks: sub, i: stop) != TOK_EOF {
+        stop = stop + 1
+    }
+    if stop == 0 { return false }
+    let mut ty = ""
+    if stop == 1 && tk_kind(toks: sub, i: 0) == TOK_IDENT {
+        let name = tk_text(toks: sub, i: 0)
+        if popen >= 0 && pclose >= 0 {
+            ty = param_type_string(toks, open: popen, close: pclose, name)
+        }
+        if String.len(value: ty) == 0 && bodyOpen >= 0 {
+            let lr = find_let_rhs_fast(toks, matchPos: tokIdx, name, locals)
+            if lr >= 0 {
+                let re2 = stmt_expr_end(toks, start: lr, end: tokIdx)
+                ty = return_actual_type(toks, s0: lr, e: re2, popen, pclose, bodyOpen, fnIdx, locals)
+            }
+        }
+    } else {
+        let empty = Map<String, List<Int>>.new()
+        ty = return_actual_type(toks: sub, s0: 0, e: stop, popen: (0 - 1), pclose: (0 - 1), bodyOpen: (0 - 1), fnIdx, locals: empty)
+    }
+    if String.len(value: ty) == 0 { return false }
+    if str_is_unresolved_generic(s: ty) { return false }
+    if str_strip_fresh(s: ty) == "String" { return false }
+    return true
+}
+
+fn interp_has_nonstring(toks: List<Tok>, tokIdx: Int, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>) -> Bool {
+    let text = tk_text(toks, i: tokIdx)
+    let chars = String.chars(value: text)
+    let count = List.len<Char>(list: chars)
+    let mut index = 0
+    while index < count {
+        let code = code_at(chars: chars, n: count, i: index)
+        if code == 92 {
+            index = index + 2
+        } else if code == 123 && code_at(chars: chars, n: count, i: (index + 1)) == 123 {
+            index = index + 2
+        } else if code == 125 && code_at(chars: chars, n: count, i: (index + 1)) == 125 {
+            index = index + 2
+        } else if code == 123 {
+            let close = interp_end(chars, count, start: (index + 1))
+            if close < 0 {
+                index = index + 1
+            } else {
+                let item = slice(chars: chars, from: (index + 1), to: close)
+                if interp_nonstring_item(toks, itemText: item, tokIdx, popen, pclose, bodyOpen, fnIdx, locals) { return true }
+                index = close + 1
+            }
+        } else {
+            index = index + 1
+        }
+    }
+    return false
+}
+
+fn fn_has_legacy_binding_type_mismatch(toks: List<Tok>, start: Int, model: FileTypeModel) -> Bool {
+    let body = build_body_type_model(toks, fnStart: start)
+    if body_type_model_ok(body) == false { return false }
+    let mut index = body.bodyOpen + 1
+    let mut hit = false
+    while index < body.bodyClose {
+        if at_symbol(toks: toks, i: index, code: SYM_LBRACE) && is_closure_brace(toks, b: index) && closure_paramless(toks, b: index) == false {
+            let close = find_matching(toks: toks, open: index, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+            if close < 0 { index = body.bodyClose } else { index = close + 1 }
+        } else if tk_kind(toks: toks, i: index) == TOK_INTERP {
+            if interp_has_nonstring(toks, tokIdx: index, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals) { hit = true }
+            index = index + 1
+        } else if is_kw_text(toks, index, word: "let") || is_kw_text(toks, index, word: "local") {
+            let mut name = index + 1
+            if is_kw_text(toks, i: name, word: "mut") { name = name + 1 }
+            if is_ident_tok(toks: toks, i: name) && at_symbol(toks: toks, i: (name + 1), code: SYM_COLON) {
+                let statementEnd = next_line_or_block_end(toks: toks, start: index, end: body.bodyClose)
+                let equal = find_top_sym(toks, start: (name + 2), end: statementEnd, code: SYM_EQ)
+                if equal >= 0 {
+                    let annotated = qualified_type_string(toks, ts: (name + 2), te: equal, prefix: model.prefix, declared: model.declared)
+                    let expected = expand_type_alias(aliasIdx: model.aliasIdx, ty: annotated)
+                    if str_is_unresolved_generic(s: expected) == false && String.len(value: expected) > 0 {
+                        let expressionEnd = stmt_expr_end(toks, start: (equal + 1), end: body.bodyClose)
+                        if (equal + 1) < expressionEnd
+                            && return_expr_mismatch(toks, s: (equal + 1), e: expressionEnd, expected, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals) {
+                            hit = true
+                        }
+                    }
+                }
+            }
+            index = index + 1
+        } else if is_ident_tok(toks: toks, i: index)
+            && at_symbol(toks: toks, i: (index + 1), code: SYM_LPAREN)
+            && at_symbol(toks: toks, i: (index - 1), code: SYM_DOT)
+            && is_ident_tok(toks: toks, i: (index - 2)) {
+            let namespace = tk_text(toks, i: (index - 2))
+            let method = tk_text(toks, i: index)
+            let close = find_matching(toks: toks, open: (index + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+            if close >= 0
+                && call_arg_type_bad(toks, ns: namespace, callee: method, open: (index + 1), close, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, aliasIdx: model.aliasIdx, recvGeneric: "") {
+                hit = true
+            }
+            index = index + 1
+        } else if is_ident_tok(toks: toks, i: index)
+            && at_symbol(toks: toks, i: (index + 1), code: SYM_LPAREN)
+            && at_symbol(toks: toks, i: (index - 1), code: SYM_DOT)
+            && at_symbol(toks: toks, i: (index - 2), code: SYM_RANGLE) {
+            let method = tk_text(toks, i: index)
+            let mut cursor = index - 2
+            let mut depth = 0
+            let mut genericOpen = -1
+            let mut scanning = true
+            while scanning {
+                if cursor < 0 {
+                    scanning = false
+                } else if at_symbol(toks: toks, i: cursor, code: SYM_RANGLE) {
+                    depth = depth + 1
+                    cursor = cursor - 1
+                } else if at_symbol(toks: toks, i: cursor, code: SYM_LANGLE) {
+                    depth = depth - 1
+                    if depth == 0 {
+                        genericOpen = cursor
+                        scanning = false
+                    } else {
+                        cursor = cursor - 1
+                    }
+                } else {
+                    cursor = cursor - 1
+                }
+            }
+            if genericOpen > 0 && is_ident_tok(toks: toks, i: (genericOpen - 1)) {
+                let namespace = tk_text(toks, i: (genericOpen - 1))
+                let generic = type_token_string(toks, ts: (genericOpen + 1), te: (index - 2))
+                let close = find_matching(toks: toks, open: (index + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+                if close >= 0
+                    && call_arg_type_bad(toks, ns: namespace, callee: method, open: (index + 1), close, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, aliasIdx: model.aliasIdx, recvGeneric: generic) {
+                    hit = true
+                }
+            }
+            index = index + 1
+        } else if is_ident_tok(toks: toks, i: index)
+            && at_symbol(toks: toks, i: (index + 1), code: SYM_LPAREN)
+            && at_symbol(toks: toks, i: (index - 1), code: SYM_DOT) == false
+            && is_kw_text(toks, i: (index - 1), word: "fn") == false {
+            let callee = tk_text(toks, i: index)
+            let close = find_matching(toks: toks, open: (index + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+            if close >= 0
+                && call_arg_type_bad(toks, ns: "", callee, open: (index + 1), close, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, aliasIdx: model.aliasIdx, recvGeneric: "") {
+                hit = true
+            }
+            index = index + 1
+        } else {
+            index = index + 1
+        }
+    }
+    return hit
+}
+
+fn has_legacy_binding_type_mismatch(toks: List<Tok>) -> Bool {
+    let model = build_file_type_model(toks)
+    let mut index = 0
+    while index < List.len(list: toks) && tk_kind(toks: toks, i: index) != TOK_EOF {
+        let classified = classify_top(toks: toks, i: index)
+        if starts_fn_like(toks: toks, i: index, isPub: classified.isPub) {
+            let end = parse_function_decl(toks: toks, i: index)
+            if end < 0 { return false }
+            if fn_has_legacy_binding_type_mismatch(toks, start: index, model) { return true }
+            index = end
+        } else if classified.isFeatures || classified.isProfile {
+            index = declaration_line_end(toks: toks, start: index)
+        } else if starts_type_decl(toks: toks, i: index, isPub: classified.isPub) {
+            let end = parse_type_decl(toks: toks, i: index)
+            if end < 0 { return false }
+            index = end
+        } else {
+            index = index + 1
+        }
+    }
+    return false
+}
+
+// Structured RS0207 collector for the same binding and call paths as the
+// remaining binding, generic, and callback paths not yet owned by SemanticIndex.
+fn collect_fn_binding_type_mismatch_tokens(toks: List<Tok>, start: Int, model: FileTypeModel, out: mut List<Int>) -> Bool {
+    let body = build_body_type_model(toks, fnStart: start)
+    if body_type_model_ok(body) == false { return false }
+    let mut i = body.bodyOpen + 1
+    let mut hit = false
+    while i < body.bodyClose {
+        if at_symbol(toks: toks, i: i, code: SYM_LBRACE) && is_closure_brace(toks, b: i) && closure_paramless(toks, b: i) == false {
+            let cc = find_matching(toks: toks, open: i, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+            if cc < 0 { i = body.bodyClose } else { i = cc + 1 }
+        } else if is_kw_text(toks, i, word: "let") || is_kw_text(toks, i, word: "local") {
+            let mut j = i + 1
+            if is_kw_text(toks, i: j, word: "mut") { j = j + 1 }
+            if is_ident_tok(toks: toks, i: j) && at_symbol(toks: toks, i: (j + 1), code: SYM_COLON) {
+                let stmtEnd = next_line_or_block_end(toks: toks, start: i, end: body.bodyClose)
+                let eq = find_top_sym(toks, start: (j + 2), end: stmtEnd, code: SYM_EQ)
+                if eq >= 0 {
+                    let annotated = qualified_type_string(toks, ts: (j + 2), te: eq, prefix: model.prefix, declared: model.declared)
+                    let expected = expand_type_alias(aliasIdx: model.aliasIdx, ty: annotated)
+                    if str_is_unresolved_generic(s: expected) == false && String.len(value: expected) > 0 {
+                        let ee = stmt_expr_end(toks, start: (eq + 1), end: body.bodyClose)
+                        if (eq + 1) < ee && return_expr_mismatch(toks, s: (eq + 1), e: ee, expected, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals) {
+                            List.push<Int>(list: mut out, value: (eq + 1))
+                            hit = true
+                        }
+                    }
+                }
+            }
+            i = i + 1
+        } else if is_ident_tok(toks: toks, i: i) && at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) && at_symbol(toks: toks, i: (i - 1), code: SYM_DOT) && is_ident_tok(toks: toks, i: (i - 2)) {
+            let callNs = tk_text(toks, i: (i - 2))
+            let method = tk_text(toks, i)
+            let cclose = find_matching(toks: toks, open: (i + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+            if cclose >= 0 && collect_call_arg_type_bad_tokens(toks, ns: callNs, callee: method, open: (i + 1), close: cclose, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, aliasIdx: model.aliasIdx, recvGeneric: "", out: mut out) { hit = true }
+            i = i + 1
+        } else if is_ident_tok(toks: toks, i: i) && at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) && at_symbol(toks: toks, i: (i - 1), code: SYM_DOT) == false && is_kw_text(toks, i: (i - 1), word: "fn") == false {
+            let callee = tk_text(toks, i)
+            let cclose = find_matching(toks: toks, open: (i + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+            if cclose >= 0 && collect_call_arg_type_bad_tokens(toks, ns: "", callee, open: (i + 1), close: cclose, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, aliasIdx: model.aliasIdx, recvGeneric: "", out: mut out) { hit = true }
+            i = i + 1
+        } else { i = i + 1 }
+    }
+    return hit
+}
+
+fn collect_binding_type_mismatch_tokens(toks: List<Tok>, out: mut List<Int>) -> Bool {
+    let ntok = List.len(list: toks)
+    let model = build_file_type_model(toks)
+    let mut i = 0
+    let mut running = true
+    let mut hit = false
+    while running {
+        if i >= ntok || tk_kind(toks: toks, i: i) == TOK_EOF { running = false }
+        else {
+            let cls = classify_top(toks: toks, i: i)
+            let isPub = cls.isPub
+            if cls.isFeatures || cls.isProfile { i = declaration_line_end(toks: toks, start: i) }
+            else if starts_type_decl(toks: toks, i: i, isPub: isPub) {
+                let r = parse_type_decl(toks: toks, i: i)
+                if r < 0 { running = false } else { i = r }
+            } else if starts_fn_like(toks: toks, i: i, isPub: isPub) {
+                let r = parse_function_decl(toks: toks, i: i)
+                if r < 0 { running = false }
+                else {
+                    if collect_fn_binding_type_mismatch_tokens(toks, start: i, model, out: mut out) { hit = true }
+                    i = r
+                }
+            } else { i = i + 1 }
+        }
+    }
+    return hit
+}
+
+// RS0210: scan a fn body for `if`/`while` conditions whose top-level comparison has
+// operands of incompatible concrete types. Shares the param/local setup of the RS0207
+// walker so operands resolve against the fn's params and locals.
+fn collect_fn_operator_type_mismatch_tokens(toks: List<Tok>, start: Int, model: FileTypeModel, out: mut List<Int>) -> Bool {
+    let body = build_body_type_model(toks, fnStart: start)
+    if body_type_model_ok(body) == false { return false }
+    let noCp = Map<String, String>.new()
+    let mut i = body.bodyOpen + 1
+    let mut hit = false
+    while i < body.bodyClose {
+        if at_symbol(toks: toks, i: i, code: SYM_LBRACE) && is_closure_brace(toks, b: i) && closure_paramless(toks, b: i) == false {
+            // Skip a parameterized closure body — its params aren't in this fn's scope
+            // (the callback operator case is handled in callback_arg_bad instead).
+            let cc = find_matching(toks: toks, open: i, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+            if cc < 0 { i = body.bodyClose } else { i = cc + 1 }
+        } else if is_kw_text(toks, i, word: "if") || is_kw_text(toks, i, word: "while") {
+            let lo = i + 1
+            let ce = cond_expr_end(toks, start: lo, limit: body.bodyClose)
+            if ce > lo {
+                let bad = operator_type_bad_token(toks, start: lo, end: ce, cptypes: noCp, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals)
+                if bad >= 0 { List.push<Int>(list: mut out, value: bad); hit = true }
+            }
+            i = i + 1
+        } else if is_kw_text(toks, i, word: "let") || is_kw_text(toks, i, word: "local") {
+            let se = next_line_or_block_end(toks: toks, start: i, end: body.bodyClose)
+            let eq = find_top_sym(toks, start: (i + 1), end: se, code: SYM_EQ)
+            if eq >= 0 {
+                let vs = eq + 1
+                let ee = stmt_expr_end(toks, start: vs, end: body.bodyClose)
+                if ee > vs {
+                    let bad = operator_type_bad_token(toks, start: vs, end: ee, cptypes: noCp, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals)
+                    if bad >= 0 { List.push<Int>(list: mut out, value: bad); hit = true }
+                }
+            }
+            i = i + 1
+        } else if is_kw_text(toks, i, word: "return") {
+            let vs = i + 1
+            let ee = stmt_expr_end(toks, start: vs, end: body.bodyClose)
+            if ee > vs {
+                let bad = operator_type_bad_token(toks, start: vs, end: ee, cptypes: noCp, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals)
+                if bad >= 0 { List.push<Int>(list: mut out, value: bad); hit = true }
+            }
+            i = i + 1
+        } else if is_ident_tok(toks: toks, i: i) && at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) {
+            // A call: check any closure argument (`|p| body`) passed to a Fn param for an
+            // operator-type mismatch in its body (the closure has no enclosing-scope params).
+            let mut cns = ""
+            if i >= 2 && at_symbol(toks: toks, i: (i - 1), code: SYM_DOT) && is_ident_tok(toks: toks, i: (i - 2)) {
+                cns = tk_text(toks, i: (i - 2))
+            }
+            let cclose = find_matching(toks: toks, open: (i + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+            if cclose >= 0 {
+                if collect_call_closure_operator_bad_tokens(toks, ns: cns, callee: tk_text(toks, i), open: (i + 1), close: cclose, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, aliasIdx: model.aliasIdx, out: mut out) { hit = true }
+            }
+            i = i + 1
+        } else {
+            i = i + 1
+        }
+    }
+    return hit
+}
+
+// Collect every RS0210 operator span. Presence and structured output share this
+// traversal so callback and ordinary-expression paths cannot drift apart.
+fn collect_operator_type_mismatch_tokens(toks: List<Tok>, out: mut List<Int>) -> Bool {
+    let ntok = List.len(list: toks)
+    let model = build_file_type_model(toks)
+    let mut i = 0
+    let mut running = true
+    let mut hit = false
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: toks, i: i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: toks, i: i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                i = declaration_line_end(toks: toks, start: i)
+            } else if cls.isProfile {
+                i = declaration_line_end(toks: toks, start: i)
+            } else if starts_type_decl(toks: toks, i: i, isPub: isPub) {
+                let r = parse_type_decl(toks: toks, i: i)
+                if r < 0 { running = false } else { i = r }
+            } else if starts_fn_like(toks: toks, i: i, isPub: isPub) {
+                let r = parse_function_decl(toks: toks, i: i)
+                if r < 0 {
+                    running = false
+                } else {
+                    if collect_fn_operator_type_mismatch_tokens(toks, start: i, model, out: mut out) { hit = true }
+                    i = r
+                }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return hit
+}
+
+fn collect_fn_operator_overload_tokens(toks: List<Tok>, start: Int, model: FileTypeModel, out: mut List<Int>) -> Bool {
+    let body = build_body_type_model(toks, fnStart: start)
+    if body_type_model_ok(body) == false { return false }
+    let mut i = body.bodyOpen + 1
+    let mut hit = false
+    while i < body.bodyClose {
+        if is_kw_text(toks, i, word: "if") || is_kw_text(toks, i, word: "while") {
+            let lo = i + 1
+            let ee = cond_expr_end(toks, start: lo, limit: body.bodyClose)
+            if ee > lo {
+                if collect_operator_overloads_in_expr(toks, start: lo, end: ee, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, out: mut out) { hit = true }
+            }
+        } else if is_kw_text(toks, i, word: "let") || is_kw_text(toks, i, word: "local") {
+            let se = next_line_or_block_end(toks: toks, start: i, end: body.bodyClose)
+            let eq = find_top_sym(toks, start: (i + 1), end: se, code: SYM_EQ)
+            if eq >= 0 {
+                let vs = eq + 1
+                let ee = stmt_expr_end(toks, start: vs, end: body.bodyClose)
+                if ee > vs {
+                    if collect_operator_overloads_in_expr(toks, start: vs, end: ee, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, out: mut out) { hit = true }
+                }
+            }
+        } else if is_kw_text(toks, i, word: "return") {
+            let vs = i + 1
+            let ee = stmt_expr_end(toks, start: vs, end: body.bodyClose)
+            if ee > vs {
+                if collect_operator_overloads_in_expr(toks, start: vs, end: ee, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals, out: mut out) { hit = true }
+            }
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+fn collect_operator_overload_tokens(toks: List<Tok>, out: mut List<Int>) -> Bool {
+    let ntok = List.len(list: toks)
+    let model = build_file_type_model(toks)
+    let mut i = 0
+    let mut hit = false
+    while i < ntok {
+        let cls = classify_top(toks: toks, i: i)
+        if starts_fn_like(toks: toks, i: i, isPub: cls.isPub) {
+            let r = parse_function_decl(toks: toks, i: i)
+            if r < 0 { return hit }
+            if collect_fn_operator_overload_tokens(toks, start: i, model, out: mut out) { hit = true }
+            i = r
+        } else {
+            i = i + 1
+        }
+    }
+    return hit
+}
+
+// RS0209 (CONTROL_FLOW_TYPE_MISMATCH), non-Bool-condition case: an `if`/`while` condition
+// [start, end) whose whole expression types to a concrete non-Bool. A condition with a
+// top-level comparison/logical operator (`==`, `&&`, …) or a leading `!` is Bool by
+// construction and skipped; only a plainly-typed non-Bool value (`if "yes"`, `if count`)
+// fires. FP-safe: an un-typeable condition yields "" and is skipped.
+fn cond_non_bool_token(toks: List<Tok>, start: Int, end: Int, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>) -> Int {
+    if start >= end { return -1 }
+    if at_symbol(toks: toks, i: start, code: SYM_BANG) { return -1 }
+    let op = find_binop(toks, start, end)
+    if op >= 0 {
+        if op_matches_tier(toks, i: op, end, tier: 1) { return -1 }
+        if op_matches_tier(toks, i: op, end, tier: 2) { return -1 }
+        if op_matches_tier(toks, i: op, end, tier: 6) { return -1 }
+    }
+    let ty = return_actual_type(toks, s0: start, e: end, popen, pclose, bodyOpen, fnIdx, locals)
+    if String.len(value: ty) == 0 { return -1 }
+    if str_is_unresolved_generic(s: ty) { return -1 }
+    if str_strip_fresh(s: ty) == "Bool" { return -1 }
+    return start
+}
+
+// A concrete scalar (non-iterable) type: String/Int/Bool/Float/Char. "" / generics / a
+// collection root (List/Map/Set/user type) yield false.
+fn is_scalar_root(ty: String) -> Bool {
+    if String.len(value: ty) == 0 { return false }
+    if str_is_unresolved_generic(s: ty) { return false }
+    let r = str_type_root(s: ty)
+    return r == "String" || r == "Int" || r == "Bool" || r == "Float" || r == "Char"
+}
+
+// RS0209, match case: a `match` whose scrutinee type is incompatible with its patterns.
+// Two FP-safe checks over a concrete scrutinee type (root, `<..>` stripped):
+//   * enum-variant: `Some`/`None` patterns imply the scrutinee is `Option`, `Ok`/`Err`
+//     imply `Result` — a concrete scrutinee of a different root fires.
+//   * literal pattern: a single literal pattern (`1`, `"x"`, `'c'`) whose scalar type
+//     differs from the scrutinee root fires.
+// Arm-result-type consistency is NOT checked here (it needs pattern-binding typing).
+// Arm-iteration mirrors astdump.rss emit_match_arms.
+fn collect_match_bad_tokens(toks: List<Tok>, scrutStart: Int, braceOpen: Int, braceClose: Int, scrutTy: String, declared: Set<String>, popen: Int, pclose: Int, bodyOpen: Int, fnIdx: Map<String, Int>, locals: Map<String, List<Int>>, out: mut List<Int>) -> Bool {
+    if String.len(value: scrutTy) == 0 { return false }
+    if str_is_unresolved_generic(s: scrutTy) { return false }
+    let scrutRoot = str_type_root(s: scrutTy)
+    // A matchable scrutinee is Option/Result/List, a scalar, or a type DECLARED in this file
+    // (the analyzer resolves each file in isolation, so an imported type is unknown here and
+    // is not matchable — tools.rss: `match runtime` where `runtime: ToolRuntime` and the sum
+    // ToolRuntime lives in another file).
+    let isTuple = String.starts_with(value: scrutTy, prefix: "(")
+    let matchable = isTuple || scrutRoot == "Option" || scrutRoot == "Result" || scrutRoot == "List" || is_scalar_root(ty: scrutTy) || Set.contains<String>(set: declared, value: scrutRoot)
+    let mut hit = false
+    if !matchable  { List.push<Int>(list: mut out, value: scrutStart); hit = true }
+    let innerTy = str_top_arg(s: scrutTy, which: 0)
+    // Arm-result-type consistency: the first arm that produces a concrete value sets the
+    // expected type; a later arm of a different concrete type fires.
+    let mut firstArmTy = ""
+    let mut i = braceOpen + 1
+    while i < braceClose {
+        if at_symbol(toks: toks, i: i, code: SYM_SEMI) || at_symbol(toks: toks, i: i, code: SYM_COMMA) {
+            i = i + 1
+        } else {
+            let lineEnd = next_line_or_block_end(toks: toks, start: i, end: braceClose)
+            let arrow = find_top_sym(toks, start: i, end: lineEnd, code: SYM_FATARROW)
+            if arrow < 0 {
+                if lineEnd > i { i = lineEnd } else { i = i + 1 }
+            } else {
+                let ifPos = find_top_if(toks, start: i, end: arrow)
+                let mut patEnd = arrow
+                if ifPos >= 0 { patEnd = ifPos }
+                // Per-arm binding: `Some(x)`/`Ok(x)` bind x to the scrutinee's first generic.
+                let armCp = Map<String, String>.new()
+                if i < patEnd {
+                    let ph = tk_text(toks, i)
+                    if (ph == "Some" || ph == "None") && scrutRoot != "Option" { List.push<Int>(list: mut out, value: i); hit = true }
+                    if (ph == "Ok" || ph == "Err") && scrutRoot != "Result" { List.push<Int>(list: mut out, value: i); hit = true }
+                    if (ph == "Some" || ph == "Ok") && at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) && is_ident_tok(toks: toks, i: (i + 2)) && String.len(value: innerTy) > 0 {
+                        Map.insert<String, String>(map: mut armCp, key: tk_text(toks, i: (i + 2)), value: innerTy)
+                    }
+                    if (i + 1) == patEnd {
+                        let k0 = tk_kind(toks: toks, i: i)
+                        if k0 == TOK_NUMBER && scrutRoot != "Int" { List.push<Int>(list: mut out, value: i); hit = true }
+                        if k0 == TOK_STRING && scrutRoot != "String" { List.push<Int>(list: mut out, value: i); hit = true }
+                        if k0 == TOK_CHAR && scrutRoot != "Char" { List.push<Int>(list: mut out, value: i); hit = true }
+                    }
+                    // A tuple pattern `(..)` can't match a scalar scrutinee; a list pattern
+                    // `[..]` only matches a List.
+                    if at_symbol(toks: toks, i: i, code: SYM_LPAREN) && is_scalar_root(ty: scrutTy) { List.push<Int>(list: mut out, value: i); hit = true }
+                    if at_symbol(toks: toks, i: i, code: SYM_LBRACKET) && scrutRoot != "List" { List.push<Int>(list: mut out, value: i); hit = true }
+                    // A scalar scrutinee (Int/String/…) admits only literal patterns and `_`;
+                    // a bare-identifier pattern (`other`) cannot match it (`true`/`false` are
+                    // the Bool literals, not bindings).
+                    if is_scalar_root(ty: scrutTy) && (i + 1) == patEnd && tk_kind(toks: toks, i: i) == TOK_IDENT {
+                        let pn = tk_text(toks, i)
+                        if pn != "_" && pn != "true" && pn != "false" { List.push<Int>(list: mut out, value: i); hit = true }
+                    }
+                }
+                let bodyStart = arrow + 1
+                // Produced value range [pvs, pve) — a block's single statement (skipped if it
+                // `return`s, i.e. diverges) or a bare expr arm.
+                let mut pvs = 0 - 1
+                let mut pve = 0 - 1
+                if at_symbol(toks: toks, i: bodyStart, code: SYM_LBRACE) {
+                    let bclose = find_matching(toks: toks, open: bodyStart, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+                    if bclose < 0 {
+                        i = braceClose
+                    } else {
+                        let cs2 = bodyStart + 1
+                        if cs2 < bclose && is_kw_text(toks, i: cs2, word: "return") == false && next_line_or_block_end(toks: toks, start: cs2, end: bclose) >= bclose {
+                            pvs = cs2
+                            pve = bclose
+                        }
+                        i = bclose + 1
+                    }
+                } else {
+                    let bEnd = next_line_or_block_end(toks: toks, start: bodyStart, end: braceClose)
+                    if is_kw_text(toks, i: bodyStart, word: "return") == false {
+                        pvs = bodyStart
+                        pve = bEnd
+                    }
+                    if bEnd > i { i = bEnd } else { i = i + 1 }
+                }
+                if pvs >= 0 && pve > pvs {
+                    let at2 = operand_type_cp(toks, s: pvs, e: pve, cptypes: armCp, popen, pclose, bodyOpen, fnIdx, locals)
+                    if String.len(value: at2) > 0 && str_is_unresolved_generic(s: at2) == false {
+                        let ar = str_strip_fresh(s: at2)
+                        if String.len(value: firstArmTy) == 0 {
+                            firstArmTy = ar
+                        } else if ar != firstArmTy {
+                            // Match-expression arm typing is diagnosed on the
+                            // expression's closing brace by the Rust frontend.
+                            List.push<Int>(list: mut out, value: braceClose)
+                            hit = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return hit
+}
+
+// RS0209 per-fn walker: `if`/`while` conditions that are non-Bool.
+fn condition_site_key(line: Int, column: Int, length: Int) -> String {
+    return String.concat(left: String.concat(left: String.concat(left: String.from_int(value: line), right: ":"), right: String.from_int(value: column)), right: String.concat(left: ":", right: String.from_int(value: length)))
+}
+
+fn filter_owned_token_sites(toks: List<Tok>, tokenIndices: List<Int>, ownedSites: Set<String>) -> List<Int> {
+    let mut filtered = List<Int>.new()
+    let mut index = 0
+    while index < List.len(list: tokenIndices) {
+        let tokenIndex = List.get<Int>(list: tokenIndices, index: index)
+        if tokenIndex >= 0 && tokenIndex < List.len(list: toks) {
+            let token = List.get<Tok>(list: toks, index: tokenIndex)
+            let key = condition_site_key(line: token.line, column: token.col, length: token.len)
+            if Set.contains<String>(set: ownedSites, value: key) == false {
+                List.push<Int>(list: mut filtered, value: tokenIndex)
+            }
+        }
+        index = index + 1
+    }
+    return filtered
+}
+
+fn filter_owned_diagnostic_sites(sites: List<DiagnosticSite>, ownedSites: Set<String>) -> List<DiagnosticSite> {
+    let mut filtered = List<DiagnosticSite>.new()
+    let mut index = 0
+    while index < List.len(list: sites) {
+        let site = List.get<DiagnosticSite>(list: sites, index: index)
+        let key = condition_site_key(line: site.line, column: site.column, length: site.length)
+        if Set.contains<String>(set: ownedSites, value: key) == false {
+            List.push<DiagnosticSite>(list: mut filtered, value: site)
+        }
+        index = index + 1
+    }
+    return filtered
+}
+
+fn collect_fn_control_flow_mismatch_tokens(toks: List<Tok>, start: Int, model: FileTypeModel, astControlSites: Set<String>, astMatchExpressionSites: Set<String>, out: mut List<Int>) -> Bool {
+    let body = build_body_type_model(toks, fnStart: start)
+    if body_type_model_ok(body) == false { return false }
+    let mut i = body.bodyOpen + 1
+    let mut hit = false
+    while i < body.bodyClose {
+        if is_kw_text(toks, i, word: "if") || is_kw_text(toks, i, word: "while") {
+            let lo = i + 1
+            let ce = cond_expr_end(toks, start: lo, limit: body.bodyClose)
+            if ce > lo {
+                let condition = List.get<Tok>(list: toks, index: lo)
+                let key = condition_site_key(line: condition.line, column: condition.col, length: condition.len)
+                if Set.contains<String>(set: astControlSites, value: key) == false {
+                    let bad = cond_non_bool_token(toks, start: lo, end: ce, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals)
+                    if bad >= 0 { List.push<Int>(list: mut out, value: bad); hit = true }
+                }
+            }
+        } else if is_kw_text(toks, i, word: "match") {
+            // Every match statement and expression is materialized in Program.
+            // RS0209 ownership belongs to selfhost.semantics.check_types; the
+            // token walker cannot resolve imported generic return types safely.
+            i = i + 1
+        } else if is_kw_text(toks, i, word: "for") {
+            // Find the `in` keyword, then type the loop subject; a concrete scalar
+            // (String/Int/Bool/Float/Char) is not iterable => RS0209 (for-unsupported).
+            let fbo = cond_expr_end(toks, start: (i + 1), limit: body.bodyClose)
+            if fbo > (i + 1) {
+                let mut inPos = 0 - 1
+                let mut j = i + 1
+                while j < fbo {
+                    if is_kw_text(toks, i: j, word: "in") { inPos = j }
+                    j = j + 1
+                }
+                if inPos >= 0 {
+                    let ss = inPos + 1
+                    if ss < fbo {
+                        let subject = List.get<Tok>(list: toks, index: ss)
+                        let key = condition_site_key(line: subject.line, column: subject.col, length: subject.len)
+                        if Set.contains<String>(set: astControlSites, value: key) == false {
+                            let subjTy = return_actual_type(toks, s0: ss, e: fbo, popen: body.paramOpen, pclose: body.paramClose, bodyOpen: body.bodyOpen, fnIdx: model.fnIdx, locals: body.locals)
+                            if is_scalar_root(ty: subjTy) { List.push<Int>(list: mut out, value: ss); hit = true }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    return hit
+}
+
+// Collect every RS0209 anchor. Conditions, loop subjects, scrutinees, patterns,
+// and mismatching match arms all use their analyzer-compatible first token.
+fn collect_control_flow_mismatch_tokens(toks: List<Tok>, astControlSites: Set<String>, astMatchExpressionSites: Set<String>, out: mut List<Int>) -> Bool {
+    // All control-flow nodes are materialized by syntax/parser_stmts.rss and
+    // diagnosed by selfhost.semantics.check_types. Keeping the old token walk
+    // here made generic qualified calls look like non-Bool conditions.
+    return false
+}
+
+// Stdlib signatures are generated from the real `.rssi` interfaces by the test
+// harness as `selfhost.interfaces`; absent Ns.method yields "" (unknown => no
+// diagnostic => FP-safe).

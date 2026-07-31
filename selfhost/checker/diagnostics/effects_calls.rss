@@ -1,0 +1,1216 @@
+// Try, call, variant, and data-effect diagnostic collectors.
+module selfhost.checker.diagnostics.effects_calls
+
+use selfhost.checker.diagnostics.syntax_declarations.*
+use selfhost.checker.output.*
+use selfhost.checker.support.*
+use selfhost.checker.type_model.*
+use selfhost.interfaces.*
+use selfhost.scan.*
+use selfhost.syntax.ast.*
+use selfhost.syntax.parser_items.*
+use selfhost.syntax.token_ranges.*
+use selfhost.types.*
+
+fn stdlib_return_type(ns: String, method: String) -> String {
+    return generated_stdlib_return_type(ns: ns, method: method)
+}
+
+fn stdlib_error_type(ns: String, method: String) -> String {
+    return generated_stdlib_error_type(ns: ns, method: method)
+}
+
+// Second (error) type-arg root of a `Result<T, E>` return type for the fn whose
+// keyword-anchor sits at `fnkw`, or "" when the return is not a 2-arg Result.
+// Mirrors return_type_root_at but yields E instead of the head root.
+fn return_error_type_at(toks: List<Tok>, fnkw: Int) -> String {
+    let sigEnd = function_signature_end(toks: toks, start: fnkw)
+    let open = find_param_open(toks, from: fnkw, end: sigEnd)
+    if open < 0 { return "" }
+    let close = find_matching(toks: toks, open: open, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+    if close < 0 { return "" }
+    if at_symbol(toks: toks, i: (close + 1), code: SYM_ARROW) == false { return "" }
+    let rs = close + 2
+    let mut re = rs
+    let mut scanning = true
+    while scanning {
+        let stop = at_ident(toks: toks, i: re, wid: WORD_EFFECTS) || at_symbol(toks: toks, i: re, code: SYM_LBRACE) || at_symbol(toks: toks, i: re, code: SYM_EQ)
+        if re < sigEnd && !stop  {
+            re = re + 1
+        } else {
+            scanning = false
+        }
+    }
+    return result_error_root(toks, s: rs, e: re)
+}
+
+// Error root of a `Result< T , E >` type region [s,e): the root of its second
+// top-level type argument, or "" when the region is not a 2-arg Result.
+fn result_error_root(toks: List<Tok>, s: Int, e: Int) -> String {
+    let p = skip_type_prefixes(toks, s, e)
+    if p >= e { return "" }
+    if is_ident_tok(toks: toks, i: p) == false { return "" }
+    if tk_text(toks, i: p) != "Result" { return "" }
+    let lt = p + 1
+    if at_symbol(toks: toks, i: lt, code: SYM_LANGLE) == false { return "" }
+    let mut k = lt + 1
+    let mut angle = 0
+    let mut depth = 0
+    let mut commaPos = -1
+    let mut rangle = -1
+    while k < e && rangle < 0 {
+        if at_symbol(toks: toks, i: k, code: SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RANGLE) {
+            if angle == 0 { rangle = k } else { angle = angle - 1 }
+        } else if at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) {
+            if depth > 0 { depth = depth - 1 }
+        } else if angle == 0 && depth == 0 && at_symbol(toks: toks, i: k, code: SYM_COMMA) {
+            if commaPos < 0 { commaPos = k }
+        }
+        k = k + 1
+    }
+    if commaPos < 0 || rangle < 0 { return "" }
+    return type_region_root(toks, s: (commaPos + 1), e: rangle)
+}
+
+// Error root of the `Result<T, E>` return of the first unqualified same-file
+// `fn fnName(...)`, or "". Mirrors fn_return_root but yields E.
+fn fn_error_type_by_name(toks: List<Tok>, fnName: String) -> String {
+    let n = List.len(list: toks)
+    let mut i = 0
+    let mut result = ""
+    let mut done = false
+    while i < n && !done  {
+        if at_ident(toks: toks, i: i, wid: WORD_FN) {
+            let nameIdx = i + 1
+            let named = is_ident_tok(toks: toks, i: nameIdx) && tk_text(toks, i: nameIdx) == fnName
+            if named && at_symbol(toks: toks, i: (nameIdx + 1), code: SYM_DOT) == false {
+                result = return_error_type_at(toks, fnkw: i)
+                done = true
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// Result error type of the `?`-operand ending just before the `?` at `qPos`, or
+// "" when it is not confidently known. Only two operand shapes yield an error
+// type: a qualified stdlib call `Ns.method(...)?` (via the namespace map) and an
+// unqualified same-file call `name(...)?` (via that fn's declared error type).
+// Anything else (bare ident, index, field, Ok/Err/Some literal) -> "" (FP-safe).
+fn try_operand_error_type(toks: List<Tok>, qPos: Int, bodyOpen: Int, allFns: Set<String>) -> String {
+    let prev = qPos - 1
+    if prev <= bodyOpen { return "" }
+    if at_symbol(toks: toks, i: prev, code: SYM_RPAREN) == false { return "" }
+    let mut d = 0
+    let mut j = prev
+    let mut op = -1
+    while j > bodyOpen && op < 0 {
+        if at_symbol(toks: toks, i: j, code: SYM_RPAREN) {
+            d = d + 1
+        } else if at_symbol(toks: toks, i: j, code: SYM_LPAREN) {
+            d = d - 1
+            if d == 0 { op = j }
+        }
+        j = j - 1
+    }
+    if op <= bodyOpen { return "" }
+    let callee = op - 1
+    if is_ident_tok(toks: toks, i: callee) == false { return "" }
+    let method = tk_text(toks, i: callee)
+    if at_symbol(toks: toks, i: (callee - 1), code: SYM_DOT) {
+        let nsPos = callee - 2
+        if is_ident_tok(toks: toks, i: nsPos) == false { return "" }
+        if at_symbol(toks: toks, i: (nsPos - 1), code: SYM_DOT) { return "" }
+        return stdlib_error_type(ns: tk_text(toks, i: nsPos), method)
+    }
+    if Set.contains<String>(set: allFns, value: method) {
+        return fn_error_type_by_name(toks, fnName: method)
+    }
+    return ""
+}
+
+// RS0013 INVALID_TRY_OPERATOR (sub-rules A + B + C): true iff the fn at `start`
+// uses `?` in a way that is invalid. (A) any `?` in a fn whose return root is not
+// Result/Option (check_try_operator_result_returns). (B) a `?` whose operand has
+// a confidently-known concrete non-Result/Option type (check_try_value_is_result).
+// (C) inside a fn returning `Result<T, E>`, a `?` whose operand's Result error
+// type is confidently known and differs from E (check_try_error_types).
+fn collect_fn_invalid_try_tokens(toks: List<Tok>, start: Int, declared: Set<String>, allFns: Set<String>, out: mut List<Int>) -> Bool {
+    let ns = fn_name_start(toks, i: start)
+    let sigEnd = function_signature_end(toks: toks, start: (ns - 1))
+    if at_symbol(toks: toks, i: sigEnd, code: SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: toks, open: sigEnd, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let popen = find_param_open(toks, from: ns, end: sigEnd)
+    let mut pclose = -1
+    if popen >= 0 {
+        pclose = find_matching(toks: toks, open: popen, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+    }
+    let retRoot = return_type_root_at(toks, fnkw: (ns - 1))
+    let returnsResult = retRoot == "Result" || retRoot == "Option"
+    let fnErr = return_error_type_at(toks, fnkw: (ns - 1))
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        if at_symbol(toks: toks, i: k, code: SYM_QUESTION) {
+            if !returnsResult  {
+                List.push<Int>(list: mut out, value: k)
+                hit = true
+            }
+            let root = try_operand_root(toks, qPos: k, bodyOpen: sigEnd, popen, pclose, declared, allFns)
+            if String.len(value: root) > 0 && root != "Result" && root != "Option" {
+                List.push<Int>(list: mut out, value: k)
+                hit = true
+            }
+            if retRoot == "Result" && String.len(value: fnErr) > 0 {
+                let opErr = try_operand_error_type(toks, qPos: k, bodyOpen: sigEnd, allFns)
+                if String.len(value: opErr) > 0 && opErr != fnErr {
+                    List.push<Int>(list: mut out, value: k)
+                    hit = true
+                }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}
+
+// ---------------------------------------------------------------------------
+// RS0201 UNNAMED_ARGUMENT (check_argument_naming, checks/calls.rs).
+//
+// A call argument passed WITHOUT a `name:` label where the callee requires named
+// arguments. Named args are REQUIRED for public same-file functions, and for
+// core/native/stdlib qualified calls (`Ns.method(...)`); they are NOT required
+// for receiver-call shorthand (`value.method(...)`), private same-file helpers,
+// enum-variant constructors (`Ok`/`Some`/user variants), or type constructors
+// (which also permit field shorthand). The parser (syntax/parser/expr.rs
+// is_qualified_namespace_receiver) treats an UPPERCASE dotted head as a qualified
+// namespace call and a lowercase head as a receiver call — replicated here by the
+// first-character-uppercase test. FILE-LEVEL: emit once if ANY resolved call site
+// carries an unnamed argument. Conservative on anything not confidently a
+// named-required call (skip => no false positive).
+// ---------------------------------------------------------------------------
+
+// Index of the `<` that matches the `>` at `closePos`, scanning backwards, or -1.
+fn back_match_angle(toks: List<Tok>, closePos: Int) -> Int {
+    let mut depth = 0
+    let mut k = closePos
+    let mut res = -1
+    while k >= 0 && res < 0 {
+        if at_symbol(toks: toks, i: k, code: SYM_RANGLE) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_LANGLE) {
+            depth = depth - 1
+            if depth == 0 { res = k }
+        }
+        k = k - 1
+    }
+    return res
+}
+
+// Collect same-file fn name sets: `pubFns` = unqualified fn names declared `pub`;
+// `dottedFns` = full dotted names of same-file dotted fns (e.g. `Cache.put`), used
+// to treat a qualified call to a same-file method as positional-allowed.
+fn collect_call_fn_sigs(toks: List<Tok>, pubFns: mut Set<String>, dottedFns: mut Set<String>) -> Unit {
+    let n = List.len(list: toks)
+    let mut i = 0
+    while i < n {
+        if at_ident(toks: toks, i: i, wid: WORD_FN) {
+            let nameIdx = i + 1
+            if is_ident_tok(toks: toks, i: nameIdx) {
+                let full = dotted_name_text(toks, i: nameIdx)
+                let isDotted = at_symbol(toks: toks, i: (nameIdx + 1), code: SYM_DOT)
+                let mut isPub = false
+                let mut b = i - 1
+                let mut scanning = true
+                while scanning {
+                    if at_ident(toks: toks, i: b, wid: WORD_PUB) {
+                        isPub = true
+                        b = b - 1
+                    } else if at_ident(toks: toks, i: b, wid: WORD_ASYNC) || at_ident(toks: toks, i: b, wid: WORD_NATIVE) {
+                        b = b - 1
+                    } else {
+                        scanning = false
+                    }
+                }
+                if isDotted {
+                    Set.insert<String>(set: mut dottedFns, value: full)
+                } else if isPub {
+                    Set.insert<String>(set: mut pubFns, value: full)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return Unit
+}
+
+// Core function-namespaces whose qualified calls (`Ns.method(...)`) require named
+// arguments. Curated (measure-first) to the namespaces the corpus oracle actually
+// flags: broadening to every stdlib/builtin type would risk false positives on
+// stdlib sum-variant construction (`JsonValue.String(...)`) and on unknown/imported
+// namespaces (`ChatMessage.system(...)`, which the oracle leaves as UNKNOWN_CALLEE
+// with no naming diagnostic). See checks/calls.rs check_argument_naming.
+fn is_core_named_namespace(head: String) -> Bool {
+    return head == "String" || head == "Log"
+}
+
+// True iff the call whose arg-list `(` is at `op` requires named arguments: a
+// public same-file unqualified fn, or a core qualified call to a curated
+// function-namespace. Bails (false) on receiver calls, private same-file helpers,
+// variant/type constructors, and any callee shape it cannot resolve confidently.
+fn call_requires_named(toks: List<Tok>, op: Int, pubFns: Set<String>, dottedFns: Set<String>) -> Bool {
+    let mut nameLast = op - 1
+    if at_symbol(toks: toks, i: nameLast, code: SYM_RANGLE) {
+        let openAngle = back_match_angle(toks, closePos: nameLast)
+        if openAngle < 0 { return false }
+        nameLast = openAngle - 1
+    }
+    if is_ident_tok(toks: toks, i: nameLast) == false { return false }
+    if at_symbol(toks: toks, i: (nameLast - 1), code: SYM_DOT) {
+        if is_ident_tok(toks: toks, i: (nameLast - 2)) == false { return false }
+        let dotHead = nameLast - 2
+        if at_symbol(toks: toks, i: (dotHead - 1), code: SYM_DOT) { return false }
+        let head = tk_text(toks, i: dotHead)
+        let full = String.concat(left: String.concat(left: head, right: "."), right: tk_text(toks, i: nameLast))
+        if Set.contains<String>(set: dottedFns, value: full) { return false }
+        return is_core_named_namespace(head)
+    }
+    let name = tk_text(toks, i: nameLast)
+    return Set.contains<String>(set: pubFns, value: name)
+}
+
+// True iff a call-arg segment [s,e) is an unnamed argument: empty (a malformed
+// slot from a leading/double comma), or a value not prefixed by a `name:` label.
+fn seg_is_unnamed(toks: List<Tok>, s: Int, e: Int) -> Bool {
+    if s >= e { return true }
+    if is_ident_tok(toks: toks, i: s) && at_symbol(toks: toks, i: (s + 1), code: SYM_COLON) {
+        return false
+    }
+    return true
+}
+
+// Generated from the real `.rssi` interfaces. This keeps same-name argument
+// punning aligned with the Rust HIR instead of carrying a per-method allowlist.
+fn stdlib_param_name_at(ns: String, method: String, index: Int) -> String {
+    return generated_stdlib_param_name_at(ns: ns, method: method, index: index)
+}
+
+// Parameter name at a zero-based position in one same-file signature, or ""
+// when the segment is absent/malformed. The signature scanner is shared with
+// the data-effect lookup below, so commas nested in type arguments do not split
+// parameters.
+fn sig_param_name_at(toks: List<Tok>, open: Int, close: Int, wanted: Int) -> String {
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segStart = open + 1
+    let mut index = 0
+    while k < close {
+        let opener = at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) || at_symbol(toks: toks, i: k, code: SYM_LBRACE)
+        let closer = at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) || at_symbol(toks: toks, i: k, code: SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: toks, i: k, code: SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: toks, i: k, code: SYM_COMMA) {
+            if index == wanted && is_ident_tok(toks: toks, i: segStart) { return tk_text(toks, i: segStart) }
+            index = index + 1
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if index == wanted && is_ident_tok(toks: toks, i: segStart) { return tk_text(toks, i: segStart) }
+    return ""
+}
+
+// The Rust HIR normalizes a bare identifier into a named argument only when it
+// equals the resolved parameter at the same position and that parameter is
+// default-read. This is deliberately narrower than positional calling.
+fn is_default_read_name_pun(toks: List<Tok>, op: Int, s: Int, e: Int, index: Int, pubFns: Set<String>) -> Bool {
+    if (e - s) != 1 || is_ident_tok(toks: toks, i: s) == false { return false }
+    let actual = tk_text(toks, i: s)
+    let nameLast = callee_name_last(toks, op: op)
+    if nameLast < 0 { return false }
+    if at_symbol(toks: toks, i: (nameLast - 1), code: SYM_DOT) {
+        let nsPos = nameLast - 2
+        if is_ident_tok(toks: toks, i: nsPos) == false || at_symbol(toks: toks, i: (nsPos - 1), code: SYM_DOT) { return false }
+        let ns = tk_text(toks, i: nsPos)
+        let method = tk_text(toks, i: nameLast)
+        let expected = stdlib_param_name_at(ns: ns, method: method, index: index)
+        return expected == actual && stdlib_param_effect(ns: ns, method: method, pname: expected) == "read"
+    }
+    let name = tk_text(toks, i: nameLast)
+    if Set.contains<String>(set: pubFns, value: name) == false { return false }
+    let open = function_decl_param_open(toks, name: name)
+    if open < 0 { return false }
+    let close = find_matching(toks: toks, open: open, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+    if close < 0 { return false }
+    let expected = sig_param_name_at(toks, open: open, close: close, wanted: index)
+    return expected == actual && sig_param_effect(toks, open: open, close: close, pname: expected) == "read"
+}
+
+// True iff the arg list [op+1, close) has any unnamed argument. A single trailing
+// empty segment (trailing comma) does NOT count; empty leading/middle segments do.
+fn collect_unnamed_arg_tokens(toks: List<Tok>, op: Int, close: Int, pubFns: Set<String>, out: mut List<Int>) -> Bool {
+    let mut k = op + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut inPipe = false
+    let mut segStart = op + 1
+    let mut argIndex = 0
+    let mut hit = false
+    while k < close {
+        let opener = at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) || at_symbol(toks: toks, i: k, code: SYM_LBRACE)
+        let closer = at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) || at_symbol(toks: toks, i: k, code: SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: toks, i: k, code: SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: toks, i: k, code: SYM_PIPE) {
+            inPipe = !inPipe
+        } else if depth == 0 && angle == 0 && !inPipe  && at_symbol(toks: toks, i: k, code: SYM_COMMA) {
+            if seg_is_unnamed(toks, s: segStart, e: k) && is_default_read_name_pun(toks, op: op, s: segStart, e: k, index: argIndex, pubFns: pubFns) == false {
+                if segStart < k { List.push<Int>(list: mut out, value: segStart) }
+                hit = true
+            }
+            segStart = k + 1
+            argIndex = argIndex + 1
+        }
+        k = k + 1
+    }
+    if segStart < close {
+        if seg_is_unnamed(toks, s: segStart, e: close) && is_default_read_name_pun(toks, op: op, s: segStart, e: close, index: argIndex, pubFns: pubFns) == false {
+            List.push<Int>(list: mut out, value: segStart)
+            hit = true
+        }
+    }
+    return hit
+}
+
+// RS0201 over a fn body [sigEnd+1, bodyClose): any resolved named-required call
+// site with an unnamed argument.
+fn collect_fn_unnamed_arg_tokens(toks: List<Tok>, start: Int, pubFns: Set<String>, dottedFns: Set<String>, out: mut List<Int>) -> Bool {
+    let ns = fn_name_start(toks, i: start)
+    let sigEnd = function_signature_end(toks: toks, start: (ns - 1))
+    if at_symbol(toks: toks, i: sigEnd, code: SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: toks, open: sigEnd, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let mut op = sigEnd + 1
+    let mut hit = false
+    while op < bodyClose {
+        if at_symbol(toks: toks, i: op, code: SYM_LPAREN) {
+            if call_requires_named(toks, op, pubFns, dottedFns) {
+                let close = find_matching(toks: toks, open: op, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+                if close >= 0 && close <= bodyClose {
+                    if collect_unnamed_arg_tokens(toks, op, close, pubFns, out: mut out) { hit = true }
+                }
+            }
+        }
+        op = op + 1
+    }
+    return hit
+}
+
+// ---------------------------------------------------------------------------
+// RS0202 MISSING_DATA_EFFECT — a FILE-LEVEL OR over four oracle sub-cases:
+//   (1) argument-effect      — a resolved call arg whose callee param declares a
+//                              data effect, supplied with the wrong (or no) effect
+//                              (checks/calls.rs check_argument_effects);
+//   (2) receiver self-effect — `recv.method(...)` whose visible receiver effect
+//                              disagrees with the method's `self` effect
+//                              (checks/calls.rs check_receiver_call_self_effect);
+//   (3) constructor inline managed field — a non-Copy, non-`handle`, non-`weak`
+//                              INLINE struct/class field initialized from a managed
+//                              binding (checks/body/fresh.rs, managed-inline branch);
+//   (4) match scrutinee      — a structured (`[...]`/tuple/`Name {...}`) match arm
+//                              pattern with no `read`/`mut`/`take` scrutinee effect
+//                              (checks/body/semantics.rs check_match_pattern_effects).
+// Callee param effects come from same-file signatures (parsed on demand) plus a
+// curated (measure-first) stdlib method→param-effect map. Managed bindings are the
+// plain-`let` names of the enclosing body (a `let` is always a managed binding;
+// `local` is not). Value-model pieces reused by later type codes (RS0207-0210).
+// ---------------------------------------------------------------------------
+
+// The namespaces the curated stdlib param-effect map knows about. Cheap gate so a
+// qualified call to any other namespace (`List.get`, `Set.insert`, …) short-circuits
+// before the arg list is split — the hot path over a large file.
+fn is_effect_stdlib_ns(ns: String) -> Bool {
+    return ns == "Log" || ns == "File"
+}
+
+// The last-segment method names of same-file `fn <Type>.method(...)` decls. A cheap
+// membership gate so a receiver call only pays the full method-resolution scan when a
+// same-file method of that name actually exists.
+fn collect_method_names(toks: List<Tok>) -> Set<String> {
+    let n = List.len(list: toks)
+    let mut names = Set<String>.new()
+    let mut i = 0
+    while i < n {
+        if at_ident(toks: toks, i: i, wid: WORD_FN) {
+            let nameIdx = i + 1
+            if is_ident_tok(toks: toks, i: nameIdx) && at_symbol(toks: toks, i: (nameIdx + 1), code: SYM_DOT) {
+                let de = dotted_end(toks, i: nameIdx)
+                Set.insert<String>(set: mut names, value: tk_text(toks, i: (de - 1)))
+            }
+        }
+        i = i + 1
+    }
+    return names
+}
+
+// Stdlib method parameter effects are generated from the real `.rssi` interfaces.
+// Returns the required call-site effect for `ns.method(pname:)`, or "" (no rule).
+fn stdlib_param_effect(ns: String, method: String, pname: String) -> String {
+    return generated_stdlib_param_effect(ns: ns, method: method, pname: pname)
+}
+
+// True iff `name` begins with an uppercase ASCII letter — the rss convention for a
+// type or function-namespace (`Log`, `File`, `Image`). Lowercase heads are
+// value bindings, so `head.method(...)` is a receiver call rather than a qualified one.
+fn is_upper_head(name: String) -> Bool {
+    let cs = String.chars(value: name)
+    if List.len(list: cs) == 0 { return false }
+    let f = Char.to_code(value: List.get(list: cs, index: 0))
+    return f >= 65 && f <= 90
+}
+
+// The supplied call-site data effect at value-start `vs` ("read"/"mut"/"take"), or
+// "" if the value has no leading effect keyword.
+fn value_effect(toks: List<Tok>, vs: Int) -> String {
+    if is_effect_kw(toks, i: vs) { return tk_text(toks, i: vs) }
+    return ""
+}
+
+// The semantic data effect of a parameter segment. An omitted effect defaults to
+// read for ordinary non-Copy values; only mut and take must be written.
+fn param_segment_effect(toks: List<Tok>, segStart: Int, segEnd: Int) -> String {
+    if segStart >= segEnd || at_symbol(toks: toks, i: (segStart + 1), code: SYM_COLON) == false { return "" }
+    let typeStart = segStart + 2
+    let written = value_effect(toks, vs: typeStart)
+    if String.len(value: written) > 0 { return written }
+    if region_has_text(toks, s: typeStart, e: segEnd, word: "noescape") || region_has_text(toks, s: typeStart, e: segEnd, word: "owned") || region_has_text(toks, s: typeStart, e: segEnd, word: "Fd") { return "" }
+    let mut p = typeStart
+    while p < segEnd && (tk_text(toks, i: p) == "fresh" || tk_text(toks, i: p) == "handle" || tk_text(toks, i: p) == "weak" || tk_text(toks, i: p) == "&") {
+        p = p + 1
+    }
+    if p >= segEnd { return "" }
+    let base = tk_text(toks, i: p)
+    if base == "share" || base == "Closure" || base == "Fd" || is_scalar_name(name: base) { return "" }
+    return "read"
+}
+
+// The semantic data effect of param `pname` in a same-file signature param list
+// [open,close] ("read"/"mut"/"take"), or "" if the param is absent or exempt.
+fn sig_param_effect(toks: List<Tok>, open: Int, close: Int, pname: String) -> String {
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segStart = open + 1
+    let mut result = ""
+    while k < close {
+        let opener = at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) || at_symbol(toks: toks, i: k, code: SYM_LBRACE)
+        let closer = at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) || at_symbol(toks: toks, i: k, code: SYM_RBRACE)
+        if opener {
+            depth = depth + 1
+        } else if closer {
+            if depth > 0 { depth = depth - 1 }
+        } else if at_symbol(toks: toks, i: k, code: SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: toks, i: k, code: SYM_COMMA) {
+            if seg_name_matches(toks, segStart, name: pname) {
+                result = param_segment_effect(toks, segStart, segEnd: k)
+            }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if seg_name_matches(toks, segStart, name: pname) {
+        result = param_segment_effect(toks, segStart, segEnd: close)
+    }
+    return result
+}
+
+// The index of the last token of the callee name whose arg-list `(` is at `op`
+// (skipping a trailing generic `<...>` clause), or -1 for a shape we do not handle.
+fn callee_name_last(toks: List<Tok>, op: Int) -> Int {
+    let mut nameLast = op - 1
+    if at_symbol(toks: toks, i: nameLast, code: SYM_RANGLE) {
+        let openAngle = back_match_angle(toks, closePos: nameLast)
+        if openAngle < 0 { return -1 }
+        nameLast = openAngle - 1
+    }
+    if is_ident_tok(toks: toks, i: nameLast) == false { return -1 }
+    return nameLast
+}
+
+// The param-list open `(` of the first same-file `fn <Type>.method(...)` decl whose
+// last dotted name segment is `method`, or -1 if none. Used to resolve a receiver
+// call to its method signature (self effect + per-param effects).
+fn method_decl_param_open(toks: List<Tok>, method: String) -> Int {
+    let n = List.len(list: toks)
+    let mut i = 0
+    let mut result = -1
+    while i < n && result < 0 {
+        if at_ident(toks: toks, i: i, wid: WORD_FN) {
+            let nameIdx = i + 1
+            if is_ident_tok(toks: toks, i: nameIdx) && at_symbol(toks: toks, i: (nameIdx + 1), code: SYM_DOT) {
+                let de = dotted_end(toks, i: nameIdx)
+                if tk_text(toks, i: (de - 1)) == method {
+                    let sigEnd = function_signature_end(toks: toks, start: i)
+                    result = find_param_open(toks, from: nameIdx, end: sigEnd)
+                }
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// The param-list open of a same-file unqualified function declaration.
+fn function_decl_param_open(toks: List<Tok>, name: String) -> Int {
+    let n = List.len(list: toks)
+    let mut i = 0
+    let mut result = -1
+    while i < n && result < 0 {
+        if at_ident(toks: toks, i: i, wid: WORD_FN) {
+            let nameIdx = i + 1
+            if is_ident_tok(toks: toks, i: nameIdx) && tk_text(toks, i: nameIdx) == name && at_symbol(toks: toks, i: (nameIdx + 1), code: SYM_DOT) == false {
+                let sigEnd = function_signature_end(toks: toks, start: i)
+                result = find_param_open(toks, from: nameIdx, end: sigEnd)
+            }
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// One arg segment [s,e): RS0202 iff it is a named arg `pname: value` whose callee
+// param demands an effect and whose supplied effect differs. Positional args and
+// params with no declared effect are skipped (conservative — no false positive).
+fn arg_seg_effect_bad(toks: List<Tok>, s: Int, e: Int, mode: Int, ns: String, method: String, sopen: Int, sclose: Int) -> Bool {
+    if s >= e { return false }
+    if is_ident_tok(toks: toks, i: s) == false { return false }
+    if at_symbol(toks: toks, i: (s + 1), code: SYM_COLON) == false { return false }
+    let pname = tk_text(toks, i: s)
+    let mut expected = ""
+    if mode == 0 {
+        expected = stdlib_param_effect(ns, method, pname)
+    } else {
+        expected = sig_param_effect(toks, open: sopen, close: sclose, pname)
+    }
+    if String.len(value: expected) == 0 { return false }
+    let supplied = value_effect(toks, vs: (s + 2))
+    if expected == "read" && (String.len(value: supplied) == 0 || supplied == "read") { return false }
+    return supplied != expected
+}
+
+// The first `{` of a same-file `struct`/`class`/`resource` decl named `typeName`,
+// or -1. The name always immediately follows the type keyword.
+fn type_body_open(toks: List<Tok>, typeName: String) -> Int {
+    let n = List.len(list: toks)
+    let mut i = 0
+    let mut result = -1
+    while i < n && result < 0 {
+        let isType = at_ident(toks: toks, i: i, wid: WORD_STRUCT) || at_ident(toks: toks, i: i, wid: WORD_CLASS) || at_ident(toks: toks, i: i, wid: WORD_RESOURCE)
+        if isType && is_ident_tok(toks: toks, i: (i + 1)) && tk_text(toks, i: (i + 1)) == typeName {
+            result = find_body_open(toks, i, end: n)
+        }
+        i = i + 1
+    }
+    return result
+}
+
+// The inline type-root of field `field` in the type body [ob,close), or "" when the
+// field is absent OR declared `handle`/`weak` (handle/weak fields are non-owning, so
+// they are NOT inline-managed and never drive sub-case 3).
+fn struct_field_inline_root(toks: List<Tok>, ob: Int, close: Int, field: String) -> String {
+    let mut k = ob + 1
+    let mut paren = 0
+    let mut br = 0
+    let mut ang = 0
+    let mut brace = 0
+    let mut result = ""
+    let mut done = false
+    while k < close && !done  {
+        let atTop = paren == 0 && br == 0 && ang == 0 && brace == 0
+        if atTop && at_symbol(toks: toks, i: (k + 1), code: SYM_COLON) && is_ident_tok(toks: toks, i: k) && tk_text(toks, i: k) == field {
+            let ts = k + 2
+            if tk_text(toks, i: ts) == "handle" || tk_text(toks, i: ts) == "weak" {
+                result = ""
+            } else {
+                result = type_region_root(toks, s: ts, e: close)
+            }
+            done = true
+        } else if at_symbol(toks: toks, i: k, code: SYM_LPAREN) {
+            paren = paren + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RPAREN) {
+            if paren > 0 { paren = paren - 1 }
+        } else if at_symbol(toks: toks, i: k, code: SYM_LBRACKET) {
+            br = br + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RBRACKET) {
+            if br > 0 { br = br - 1 }
+        } else if at_symbol(toks: toks, i: k, code: SYM_LANGLE) {
+            ang = ang + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RANGLE) {
+            if ang > 0 { ang = ang - 1 }
+        } else if at_symbol(toks: toks, i: k, code: SYM_LBRACE) {
+            brace = brace + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RBRACE) {
+            if brace > 0 { brace = brace - 1 }
+        }
+        k = k + 1
+    }
+    return result
+}
+
+// True iff `fieldType` is a known-type-kind (declared struct/class/resource/sum or
+// stdlib) non-Copy type — i.e. `type_kind(fieldType).is_some() && !is_copy(...)`.
+fn is_managed_field_type(fieldType: String, declared: Set<String>) -> Bool {
+    if is_scalar_name(name: fieldType) { return false }
+    return Set.contains<String>(set: declared, value: fieldType) || is_stdlib_type(name: fieldType)
+}
+
+// The plain-`let` binding names of the body [bodyOpen,bodyClose) — the managed
+// bindings (a plain `let` is always a managed binding; `local` is excluded).
+fn collect_managed_names(toks: List<Tok>, bodyOpen: Int, bodyClose: Int) -> Set<String> {
+    let mut managed = Set<String>.new()
+    let mut k = bodyOpen + 1
+    while k < bodyClose {
+        if is_kw_text(toks, i: k, word: "let") {
+            let mut nameIdx = k + 1
+            if is_kw_text(toks, i: nameIdx, word: "mut") { nameIdx = nameIdx + 1 }
+            if is_ident_tok(toks: toks, i: nameIdx) {
+                Set.insert<String>(set: mut managed, value: tk_text(toks, i: nameIdx))
+            }
+        }
+        k = k + 1
+    }
+    return managed
+}
+
+// True iff the value at [vs,ve) is a managed place: a plain ident/field path whose
+// base binding is managed (after stripping a leading data effect). Call/literal
+// values are not places and are conservatively treated as non-managed.
+fn value_is_managed(toks: List<Tok>, vs: Int, managed: Set<String>) -> Bool {
+    let mut s = vs
+    if is_effect_kw(toks, i: s) { s = s + 1 }
+    if is_ident_tok(toks: toks, i: s) == false { return false }
+    return Set.contains<String>(set: managed, value: tk_text(toks, i: s))
+}
+
+// One constructor field arg [s,e): RS0202 iff it is `field: value` where `field` is an
+// inline non-Copy known-type-kind field (looked up in the type body [ob,obClose)) and
+// `value` is a managed place.
+fn ctor_field_seg_bad(toks: List<Tok>, s: Int, e: Int, ob: Int, obClose: Int, declared: Set<String>, managed: Set<String>) -> Bool {
+    if s >= e { return false }
+    if is_ident_tok(toks: toks, i: s) == false { return false }
+    if at_symbol(toks: toks, i: (s + 1), code: SYM_COLON) == false { return false }
+    let field = tk_text(toks, i: s)
+    let fieldType = struct_field_inline_root(toks, ob, close: obClose, field)
+    if String.len(value: fieldType) == 0 { return false }
+    if is_managed_field_type(fieldType, declared) == false { return false }
+    return value_is_managed(toks, vs: (s + 2), managed)
+}
+
+// True iff any arm pattern in [braceOpen+1,braceClose) is structured (`[...]` list,
+// `(...)` tuple, or `Name {...}` struct) — the shapes that project fields and so
+// require a scrutinee effect (MatchPattern::List | MatchPattern::Struct).
+fn match_has_structured_arm(toks: List<Tok>, braceOpen: Int, braceClose: Int) -> Bool {
+    let mut i = braceOpen + 1
+    let mut hit = false
+    while i < braceClose {
+        if at_symbol(toks: toks, i: i, code: SYM_SEMI) || at_symbol(toks: toks, i: i, code: SYM_COMMA) {
+            i = i + 1
+        } else {
+            let lineEnd = next_line_or_block_end(toks: toks, start: i, end: braceClose)
+            let arrow = find_top_sym(toks, start: i, end: lineEnd, code: SYM_FATARROW)
+            if arrow < 0 {
+                if lineEnd > i { i = lineEnd } else { i = i + 1 }
+            } else {
+                let ifPos = find_top_if(toks, start: i, end: arrow)
+                let pe = arrow
+                if pattern_is_structured(toks, ps: i, pe) { hit = true }
+                let bodyStart = arrow + 1
+                if at_symbol(toks: toks, i: bodyStart, code: SYM_LBRACE) {
+                    let bclose = find_matching(toks: toks, open: bodyStart, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+                    if bclose < 0 { i = braceClose } else { i = bclose + 1 }
+                } else {
+                    let bEnd = next_line_or_block_end(toks: toks, start: bodyStart, end: braceClose)
+                    if bEnd > i { i = bEnd } else { i = i + 1 }
+                }
+            }
+        }
+    }
+    return hit
+}
+
+// True iff the guardless pattern [ps,pe) is a List (`[...]`), tuple (`(...)`), or
+// struct (`Name {...}`) pattern. Variant patterns (`Some(x)`, `Ok(e)`), bare idents,
+// literals and `_` are NOT structured.
+fn pattern_is_structured(toks: List<Tok>, ps: Int, pe: Int) -> Bool {
+    if ps >= pe { return false }
+    if at_symbol(toks: toks, i: ps, code: SYM_LBRACKET) { return true }
+    if at_symbol(toks: toks, i: ps, code: SYM_LPAREN) { return true }
+    if is_ident_tok(toks: toks, i: ps) {
+        let after = dotted_end(toks, i: ps)
+        if at_symbol(toks: toks, i: after, code: SYM_LBRACE) { return true }
+    }
+    return false
+}
+
+// --- RS0037: positional variant-pattern arity mismatch ----------------------
+
+// Comma-separated top-level segment count of the paren group (open,close). Empty => 0.
+fn count_top_segments(toks: List<Tok>, open: Int, close: Int) -> Int {
+    if (open + 1) >= close { return 0 }
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut segs = 1
+    while k < close {
+        if at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) || at_symbol(toks: toks, i: k, code: SYM_LBRACE) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) || at_symbol(toks: toks, i: k, code: SYM_RBRACE) {
+            depth = depth - 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: toks, i: k, code: SYM_COMMA) {
+            segs = segs + 1
+        }
+        k = k + 1
+    }
+    return segs
+}
+
+// True iff the paren group (open,close) has a top-level `:` — a named/struct-style
+// pattern (`V(field: p)`), which the oracle does NOT positional-arity-check.
+fn region_has_top_colon(toks: List<Tok>, open: Int, close: Int) -> Bool {
+    let mut k = open + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut hit = false
+    while k < close {
+        if at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) || at_symbol(toks: toks, i: k, code: SYM_LBRACE) {
+            depth = depth + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) || at_symbol(toks: toks, i: k, code: SYM_RBRACE) {
+            depth = depth - 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_LANGLE) {
+            angle = angle + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RANGLE) {
+            if angle > 0 { angle = angle - 1 }
+        } else if depth == 0 && angle == 0 && at_symbol(toks: toks, i: k, code: SYM_COLON) {
+            hit = true
+        }
+        k = k + 1
+    }
+    return hit
+}
+
+// The Set key encoding a variant's declared arity: `Name:arity`.
+fn arity_key(name: String, arity: Int) -> String {
+    return String.concat(left: String.concat(left: name, right: ":"), right: String.from_int(value: arity))
+}
+
+// Look up variant `name`'s declared arity in the precomputed set, or -1 if absent.
+// Arities are small, so a bounded probe (0..11) beats storing/reading a map value.
+fn variant_arity_of(arities: Set<String>, name: String) -> Int {
+    let mut a = 0
+    let mut result = -1
+    while a < 12 {
+        if Set.contains<String>(set: arities, value: arity_key(name, arity: a)) {
+            result = a
+            a = 12
+        } else {
+            a = a + 1
+        }
+    }
+    return result
+}
+
+// Insert `Name:arity` for every variant in one sum body `{...}` (bodyOpen is the `{`).
+fn collect_variant_arities_in_body(toks: List<Tok>, bodyOpen: Int, arities: mut Set<String>) -> Unit {
+    let close = find_matching(toks: toks, open: bodyOpen, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+    if close < 0 { return Unit }
+    let mut k = bodyOpen + 1
+    while k < close {
+        if is_ident_tok(toks: toks, i: k) {
+            let vname = tk_text(toks, i: k)
+            if at_symbol(toks: toks, i: (k + 1), code: SYM_LPAREN) {
+                let pclose = find_matching(toks: toks, open: (k + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+                if pclose < 0 {
+                    k = close
+                } else {
+                    let a = count_top_segments(toks, open: (k + 1), close: pclose)
+                    Set.insert<String>(set: mut arities, value: arity_key(name: vname, arity: a))
+                    k = pclose + 1
+                }
+            } else {
+                Set.insert<String>(set: mut arities, value: arity_key(name: vname, arity: 0))
+                k = k + 1
+            }
+        } else {
+            k = k + 1
+        }
+    }
+    return Unit
+}
+
+// Precompute the whole file's variant->arity table ONCE (as `Name:arity` keys), so
+// per-pattern arity lookup is O(1) instead of re-walking every declaration (which is
+// O(patterns * tokens) — pathological on the 4k-line self-hosted tools).
+fn collect_variant_arities(toks: List<Tok>) -> Set<String> {
+    let ntok = List.len(list: toks)
+    let mut arities = Set<String>.new()
+    let mut i = 0
+    let mut running = true
+    while running {
+        if i >= ntok {
+            running = false
+        } else if tk_kind(toks: toks, i: i) == TOK_EOF {
+            running = false
+        } else {
+            let cls = classify_top(toks: toks, i: i)
+            let isPub = cls.isPub
+            if cls.isFeatures {
+                i = declaration_line_end(toks: toks, start: i)
+            } else if cls.isProfile {
+                i = declaration_line_end(toks: toks, start: i)
+            } else if cls.isSum {
+                let r = parse_sum_decl(toks: toks, i: i)
+                if r < 0 {
+                    running = false
+                } else {
+                    let ob = find_body_open(toks, i, end: r)
+                    if ob >= 0 {
+                        collect_variant_arities_in_body(toks, bodyOpen: ob, arities: mut arities)
+                    }
+                    i = r
+                }
+            } else if starts_type_decl(toks: toks, i: i, isPub: isPub) {
+                let r = parse_type_decl(toks: toks, i: i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: toks, i: i, wid: WORD_PROTOCOL) {
+                let r = parse_protocol_decl(toks: toks, i: i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: toks, i: i, wid: WORD_IMPL) {
+                let r = parse_impl_decl(toks: toks, i: i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isNativeMod {
+                let r = parse_native_module_decl(toks: toks, i: i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isTypeAlias {
+                let r = parse_type_alias_decl(toks: toks, i: i)
+                if r < 0 { running = false } else { i = r }
+            } else if cls.isConst {
+                let r = parse_const_decl(toks: toks, i: i)
+                if r < 0 { running = false } else { i = r }
+            } else if at_ident(toks: toks, i: i, wid: WORD_MODULE) {
+                let r = parse_module_decl(toks: toks, i: i)
+                if r < 0 { i = i + 1 } else { i = r }
+            } else if at_ident(toks: toks, i: i, wid: WORD_USE) {
+                let r = parse_use_decl(toks: toks, i: i)
+                if r < 0 { i = i + 1 } else { i = r }
+            } else if starts_fn_like(toks: toks, i: i, isPub: isPub) {
+                let r = parse_function_decl(toks: toks, i: i)
+                if r < 0 { running = false } else { i = r }
+            } else {
+                i = i + 1
+            }
+        }
+    }
+    return arities
+}
+
+// One arm pattern [ps,pe): RS0037 iff it is a positional `Variant(b1,…,bn)` whose
+// head is a known sum variant, is not named (`field:`), binds n>0 sub-patterns, and
+// n != the variant's declared field count.
+fn arm_pattern_arity_bad(toks: List<Tok>, ps: Int, pe: Int, arities: Set<String>) -> Bool {
+    if ps >= pe { return false }
+    if is_ident_tok(toks: toks, i: ps) == false { return false }
+    if at_symbol(toks: toks, i: (ps + 1), code: SYM_LPAREN) == false { return false }
+    let close = find_matching(toks: toks, open: (ps + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+    if close < 0 || close > pe { return false }
+    if region_has_top_colon(toks, open: (ps + 1), close) { return false }
+    let arity = variant_arity_of(arities, name: tk_text(toks, i: ps))
+    if arity < 0 { return false }
+    let found = count_top_segments(toks, open: (ps + 1), close)
+    if found == 0 { return false }
+    return found != arity
+}
+
+// One match's arm brace [braceOpen,braceClose]: any positional-arity-bad arm.
+fn collect_match_arm_arity_bad_tokens(
+    toks: List<Tok>,
+    braceOpen: Int,
+    braceClose: Int,
+    arities: Set<String>,
+    out: mut List<Int>
+) -> Bool {
+    let mut i = braceOpen + 1
+    let mut hit = false
+    while i < braceClose {
+        if at_symbol(toks: toks, i: i, code: SYM_SEMI) || at_symbol(toks: toks, i: i, code: SYM_COMMA) {
+            i = i + 1
+        } else {
+            let lineEnd = next_line_or_block_end(toks: toks, start: i, end: braceClose)
+            let arrow = find_top_sym(toks, start: i, end: lineEnd, code: SYM_FATARROW)
+            if arrow < 0 {
+                if lineEnd > i { i = lineEnd } else { i = i + 1 }
+            } else {
+                if arm_pattern_arity_bad(toks, ps: i, pe: arrow, arities) {
+                    List.push<Int>(list: mut out, value: i)
+                    hit = true
+                }
+                let bodyStart = arrow + 1
+                if at_symbol(toks: toks, i: bodyStart, code: SYM_LBRACE) {
+                    let bclose = find_matching(toks: toks, open: bodyStart, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+                    if bclose < 0 { i = braceClose } else { i = bclose + 1 }
+                } else {
+                    let bEnd = next_line_or_block_end(toks: toks, start: bodyStart, end: braceClose)
+                    if bEnd > i { i = bEnd } else { i = i + 1 }
+                }
+            }
+        }
+    }
+    return hit
+}
+
+// RS0037 over the whole file: any `match` with a positional-arity-bad variant arm.
+fn collect_variant_arity_mismatch_tokens(toks: List<Tok>, out: mut List<Int>) -> Bool {
+    let arities = collect_variant_arities(toks)
+    let ntok = List.len(list: toks)
+    let mut k = 0
+    let mut hit = false
+    while k < ntok {
+        if tk_kind(toks: toks, i: k) == TOK_EOF {
+            k = ntok
+        } else if is_kw_text(toks, i: k, word: "match") && (k == 0 || at_symbol(toks: toks, i: (k - 1), code: SYM_DOT) == false) {
+            let braceOpen = find_match_arms_open(toks, start: (k + 1), end: ntok)
+            if braceOpen >= 0 {
+                let braceClose = find_matching(toks: toks, open: braceOpen, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+                if braceClose >= 0 {
+                    if collect_match_arm_arity_bad_tokens(
+                        toks,
+                        braceOpen,
+                        braceClose,
+                        arities,
+                        out: mut out
+                    ) { hit = true }
+                }
+            }
+            k = k + 1
+        } else {
+            k = k + 1
+        }
+    }
+    return hit
+}
+
+// Sub-case 2: the receiver whose head ident is at `head`, resolving to a method whose
+// self param list is [popen,pclose]. RS0202 iff the method's `self` effect exists and
+// differs from the visible receiver effect (the leading `read`/`mut`/`take`, default
+// `read`).
+fn receiver_self_effect_bad(toks: List<Tok>, head: Int, popen: Int, pclose: Int) -> Bool {
+    let selfEffect = value_effect(toks, vs: (popen + 3))
+    if is_ident_tok(toks: toks, i: (popen + 1)) == false { return false }
+    if tk_text(toks, i: (popen + 1)) != "self" { return false }
+    if String.len(value: selfEffect) == 0 { return false }
+    // Walk back over a dotted receiver path `a.b.c` to its base ident.
+    let mut rstart = head
+    let mut going = true
+    while going {
+        if at_symbol(toks: toks, i: (rstart - 1), code: SYM_DOT) && is_ident_tok(toks: toks, i: (rstart - 2)) {
+            rstart = rstart - 2
+        } else {
+            going = false
+        }
+    }
+    let mut visible = "read"
+    if is_effect_kw(toks, i: (rstart - 1)) { visible = tk_text(toks, i: (rstart - 1)) }
+    return selfEffect != visible
+}
+
+// Structured RS0202 output uses the production diagnostic anchors: argument and
+// constructor values, the receiver base, and the structured pattern head.
+// Keep the boolean helpers above for the legacy code-presence protocol.
+fn collect_arg_effect_sites(source: String, toks: List<Tok>, op: Int, close: Int, mode: Int, ns: String, method: String, sopen: Int, sclose: Int, out: mut List<DiagnosticSite>) -> Bool {
+    let mut k = op + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut inPipe = false
+    let mut segStart = op + 1
+    let mut hit = false
+    while k < close {
+        let opener = at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) || at_symbol(toks: toks, i: k, code: SYM_LBRACE)
+        let closer = at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) || at_symbol(toks: toks, i: k, code: SYM_RBRACE)
+        if opener { depth = depth + 1 }
+        else if closer { if depth > 0 { depth = depth - 1 } }
+        else if at_symbol(toks: toks, i: k, code: SYM_LANGLE) { angle = angle + 1 }
+        else if at_symbol(toks: toks, i: k, code: SYM_RANGLE) { if angle > 0 { angle = angle - 1 } }
+        else if depth == 0 && angle == 0 && at_symbol(toks: toks, i: k, code: SYM_PIPE) { inPipe = !inPipe  }
+        else if depth == 0 && angle == 0 && !inPipe  && at_symbol(toks: toks, i: k, code: SYM_COMMA) {
+            if arg_seg_effect_bad(toks, s: segStart, e: k, mode, ns, method, sopen, sclose) {
+                List.push<DiagnosticSite>(list: mut out, value: token_range_diagnostic_site(source, toks, start: (segStart + 2), endInclusive: (segStart + 2)))
+                hit = true
+            }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if arg_seg_effect_bad(toks, s: segStart, e: close, mode, ns, method, sopen, sclose) {
+        List.push<DiagnosticSite>(list: mut out, value: token_range_diagnostic_site(source, toks, start: (segStart + 2), endInclusive: (segStart + 2)))
+        hit = true
+    }
+    return hit
+}
+
+fn collect_ctor_managed_sites(source: String, toks: List<Tok>, op: Int, close: Int, ob: Int, obClose: Int, declared: Set<String>, managed: Set<String>, out: mut List<DiagnosticSite>) -> Bool {
+    let mut k = op + 1
+    let mut depth = 0
+    let mut angle = 0
+    let mut inPipe = false
+    let mut segStart = op + 1
+    let mut hit = false
+    while k < close {
+        let opener = at_symbol(toks: toks, i: k, code: SYM_LPAREN) || at_symbol(toks: toks, i: k, code: SYM_LBRACKET) || at_symbol(toks: toks, i: k, code: SYM_LBRACE)
+        let closer = at_symbol(toks: toks, i: k, code: SYM_RPAREN) || at_symbol(toks: toks, i: k, code: SYM_RBRACKET) || at_symbol(toks: toks, i: k, code: SYM_RBRACE)
+        if opener { depth = depth + 1 }
+        else if closer { if depth > 0 { depth = depth - 1 } }
+        else if at_symbol(toks: toks, i: k, code: SYM_LANGLE) { angle = angle + 1 }
+        else if at_symbol(toks: toks, i: k, code: SYM_RANGLE) { if angle > 0 { angle = angle - 1 } }
+        else if depth == 0 && angle == 0 && at_symbol(toks: toks, i: k, code: SYM_PIPE) { inPipe = !inPipe  }
+        else if depth == 0 && angle == 0 && !inPipe  && at_symbol(toks: toks, i: k, code: SYM_COMMA) {
+            if ctor_field_seg_bad(toks, s: segStart, e: k, ob, obClose, declared, managed) {
+                List.push<DiagnosticSite>(list: mut out, value: token_range_diagnostic_site(source, toks, start: (segStart + 2), endInclusive: (segStart + 2)))
+                hit = true
+            }
+            segStart = k + 1
+        }
+        k = k + 1
+    }
+    if ctor_field_seg_bad(toks, s: segStart, e: close, ob, obClose, declared, managed) {
+        List.push<DiagnosticSite>(list: mut out, value: token_range_diagnostic_site(source, toks, start: (segStart + 2), endInclusive: (segStart + 2)))
+        hit = true
+    }
+    return hit
+}
+
+fn collect_match_effect_sites(source: String, toks: List<Tok>, braceOpen: Int, braceClose: Int, out: mut List<DiagnosticSite>) -> Bool {
+    let mut i = braceOpen + 1
+    let mut hit = false
+    while i < braceClose {
+        if at_symbol(toks: toks, i: i, code: SYM_SEMI) || at_symbol(toks: toks, i: i, code: SYM_COMMA) { i = i + 1 }
+        else {
+            let lineEnd = next_line_or_block_end(toks: toks, start: i, end: braceClose)
+            let arrow = find_top_sym(toks, start: i, end: lineEnd, code: SYM_FATARROW)
+            if arrow < 0 { if lineEnd > i { i = lineEnd } else { i = i + 1 } }
+            else {
+                if pattern_is_structured(toks, ps: i, pe: arrow) {
+                    List.push<DiagnosticSite>(list: mut out, value: token_range_diagnostic_site(source, toks, start: i, endInclusive: i))
+                    hit = true
+                }
+                let bodyStart = arrow + 1
+                if at_symbol(toks: toks, i: bodyStart, code: SYM_LBRACE) {
+                    let bclose = find_matching(toks: toks, open: bodyStart, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+                    if bclose < 0 { i = braceClose } else { i = bclose + 1 }
+                } else {
+                    let bEnd = next_line_or_block_end(toks: toks, start: bodyStart, end: braceClose)
+                    if bEnd > i { i = bEnd } else { i = i + 1 }
+                }
+            }
+        }
+    }
+    return hit
+}
+
+fn collect_fn_data_effect_sites(source: String, toks: List<Tok>, start: Int, declared: Set<String>, methodNames: Set<String>, out: mut List<DiagnosticSite>) -> Bool {
+    let ns = fn_name_start(toks, i: start)
+    let sigEnd = function_signature_end(toks: toks, start: (ns - 1))
+    if at_symbol(toks: toks, i: sigEnd, code: SYM_LBRACE) == false { return false }
+    let bodyClose = find_matching(toks: toks, open: sigEnd, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+    if bodyClose < 0 { return false }
+    let managed = collect_managed_names(toks, bodyOpen: sigEnd, bodyClose)
+    let mut k = sigEnd + 1
+    let mut hit = false
+    while k < bodyClose {
+        if at_symbol(toks: toks, i: k, code: SYM_LPAREN) {
+            let nameLast = callee_name_last(toks, op: k)
+            if nameLast >= 0 {
+                let method = tk_text(toks, i: nameLast)
+                let close = find_matching(toks: toks, open: k, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+                if close >= 0 && close <= bodyClose {
+                    if at_symbol(toks: toks, i: (nameLast - 1), code: SYM_DOT) == false {
+                        let fOpen = function_decl_param_open(toks, name: method)
+                        if fOpen >= 0 {
+                            let fClose = find_matching(toks: toks, open: fOpen, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+                            if fClose >= 0 && collect_arg_effect_sites(source, toks, op: k, close, mode: 1, ns: "", method, sopen: fOpen, sclose: fClose, out: mut out) { hit = true }
+                        } else if Set.contains<String>(set: declared, value: method) {
+                            let ob = type_body_open(toks, typeName: method)
+                            if ob >= 0 {
+                                let obClose = find_matching(toks: toks, open: ob, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+                                if obClose >= 0 && collect_ctor_managed_sites(source, toks, op: k, close, ob, obClose, declared, managed, out: mut out) { hit = true }
+                            }
+                        }
+                    } else {
+                        let mut head = nameLast - 2
+                        if at_symbol(toks: toks, i: head, code: SYM_RANGLE) {
+                            let openAngle = back_match_angle(toks, closePos: head)
+                            if openAngle >= 0 { head = openAngle - 1 }
+                        }
+                        if is_ident_tok(toks: toks, i: head) {
+                            let headText = tk_text(toks, i: head)
+                            let headChained = at_symbol(toks: toks, i: (head - 1), code: SYM_DOT)
+                            if !headChained  && is_upper_head(name: headText) {
+                                if is_effect_stdlib_ns(ns: headText) && collect_arg_effect_sites(source, toks, op: k, close, mode: 0, ns: headText, method, sopen: 0, sclose: 0, out: mut out) { hit = true }
+                            } else if Set.contains<String>(set: methodNames, value: method) {
+                                let popen = method_decl_param_open(toks, method)
+                                if popen >= 0 {
+                                    let pclose = find_matching(toks: toks, open: popen, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
+                                    if pclose >= 0 {
+                                        if collect_arg_effect_sites(source, toks, op: k, close, mode: 1, ns: "", method, sopen: popen, sclose: pclose, out: mut out) { hit = true }
+                                        if receiver_self_effect_bad(toks, head, popen, pclose) {
+                                            let mut rstart = head
+                                            let mut going = true
+                                            while going {
+                                                if at_symbol(toks: toks, i: (rstart - 1), code: SYM_DOT) && is_ident_tok(toks: toks, i: (rstart - 2)) { rstart = rstart - 2 }
+                                                else { going = false }
+                                            }
+                                            List.push<DiagnosticSite>(list: mut out, value: token_range_diagnostic_site(source, toks, start: rstart, endInclusive: rstart))
+                                            hit = true
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } else if is_kw_text(toks, i: k, word: "match") && at_symbol(toks: toks, i: (k - 1), code: SYM_DOT) == false && is_effect_kw(toks, i: (k + 1)) == false {
+            let braceOpen = find_match_arms_open(toks, start: (k + 1), end: bodyClose)
+            if braceOpen >= 0 {
+                let braceClose = find_matching(toks: toks, open: braceOpen, openSym: SYM_LBRACE, closeSym: SYM_RBRACE)
+                if braceClose >= 0 && collect_match_effect_sites(source, toks, braceOpen, braceClose, out: mut out) { hit = true }
+            }
+        }
+        k = k + 1
+    }
+    return hit
+}

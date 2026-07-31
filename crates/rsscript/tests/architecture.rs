@@ -84,6 +84,62 @@ fn selfhost_known_type_sets_are_generated() {
 }
 
 #[test]
+fn selfhost_checker_entry_is_orchestration_only() {
+    let root = workspace_root();
+    let checker = read(&root.join("selfhost/check.rss"));
+    let declarations = checker
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            line.starts_with("fn ") || line.starts_with("struct ") || line.starts_with("const ")
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(declarations, ["fn main() -> Unit {"]);
+    assert!(checker.lines().count() < 1_000);
+    for import in [
+        "use selfhost.checker.support.*",
+        "use selfhost.checker.output.*",
+        "use selfhost.checker.type_model.*",
+        "use selfhost.checker.diagnostics.syntax_declarations.*",
+        "use selfhost.checker.diagnostics.effects_calls.*",
+    ] {
+        assert!(
+            checker.contains(import),
+            "checker entry must retain {import}"
+        );
+    }
+
+    for (path, module) in [
+        (
+            "selfhost/checker/support.rss",
+            "module selfhost.checker.support",
+        ),
+        (
+            "selfhost/checker/output.rss",
+            "module selfhost.checker.output",
+        ),
+        (
+            "selfhost/checker/type_model.rss",
+            "module selfhost.checker.type_model",
+        ),
+        (
+            "selfhost/checker/diagnostics/syntax_declarations.rss",
+            "module selfhost.checker.diagnostics.syntax_declarations",
+        ),
+        (
+            "selfhost/checker/diagnostics/effects_calls.rss",
+            "module selfhost.checker.diagnostics.effects_calls",
+        ),
+    ] {
+        assert!(
+            read(&root.join(path)).contains(module),
+            "{path} must declare {module}"
+        );
+    }
+}
+
+#[test]
 fn hir_inference_uses_structural_type_queries() {
     let root = workspace_root();
     let inference = read(&root.join("crates/rsscript/src/hir/infer.rs"));

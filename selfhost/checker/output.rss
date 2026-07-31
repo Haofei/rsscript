@@ -1,0 +1,133 @@
+// Structured and code-only diagnostic output helpers.
+module selfhost.checker.output
+
+use selfhost.checker.support.*
+use selfhost.scan.*
+use selfhost.semantics.diagnostics.*
+use selfhost.syntax.ast.*
+
+fn emit_diagnostic_record(code: String, toks: List<Tok>, tokenIndex: Int) -> Unit {
+    let token = List.get(list: toks, index: tokenIndex)
+    let line = String.from_int(value: token.line)
+    let column = String.from_int(value: token.col)
+    let length = String.from_int(value: token.len)
+    let a = String.concat(left: String.concat(left: code, right: "\t"), right: line)
+    let b = String.concat(left: String.concat(left: a, right: "\t"), right: column)
+    let record = String.concat(left: String.concat(left: b, right: "\t"), right: length)
+    Log.write(message: record)
+    return Unit
+}
+
+fn emit_diagnostic_records(code: String, toks: List<Tok>, tokenIndices: List<Int>) -> Int {
+    let mut i = 0
+    while i < List.len(list: tokenIndices) {
+        emit_diagnostic_record(code, toks, tokenIndex: List.get(list: tokenIndices, index: i))
+        i = i + 1
+    }
+    return i
+}
+
+struct DiagnosticSite {
+    line: Int
+    column: Int
+    length: Int
+}
+
+fn source_scalar_offset(source: String, targetLine: Int, targetColumn: Int) -> Int {
+    let chars = String.chars(value: source)
+    let mut line = 1
+    let mut column = 1
+    let mut i = 0
+    while i < List.len(list: chars) {
+        if line == targetLine && column == targetColumn { return i }
+        let ch = List.get(list: chars, index: i)
+        if ch == '\n' {
+            line = line + 1
+            column = 1
+        } else {
+            column = column + 1
+        }
+        i = i + 1
+    }
+    return i
+}
+
+fn token_range_diagnostic_site(source: String, toks: List<Tok>, start: Int, endInclusive: Int) -> DiagnosticSite {
+    let first = List.get(list: toks, index: start)
+    let last = List.get(list: toks, index: endInclusive)
+    let begin = source_scalar_offset(source, targetLine: first.line, targetColumn: first.col)
+    let end = source_scalar_offset(source, targetLine: last.line, targetColumn: (last.col + last.len))
+    return DiagnosticSite(line: first.line, column: first.col, length: end - begin)
+}
+
+fn emit_diagnostic_site(code: String, site: DiagnosticSite) -> Unit {
+    let line = String.from_int(value: site.line)
+    let column = String.from_int(value: site.column)
+    let length = String.from_int(value: site.length)
+    let a = String.concat(left: String.concat(left: code, right: "\t"), right: line)
+    let b = String.concat(left: String.concat(left: a, right: "\t"), right: column)
+    let record = String.concat(left: String.concat(left: b, right: "\t"), right: length)
+    Log.write(message: record)
+    return Unit
+}
+
+fn emit_diagnostic_sites(code: String, sites: List<DiagnosticSite>) -> Int {
+    let mut i = 0
+    while i < List.len(list: sites) {
+        emit_diagnostic_site(code, site: List.get(list: sites, index: i))
+        i = i + 1
+    }
+    return i
+}
+
+fn collect_program_payloadless_sums(program: Program) -> Set<String> {
+    let mut sums = Set<String>.new()
+    let mut itemIndex = 0
+    while itemIndex < Program.len(self: program) {
+        let item = List.get<Item>(list: program.items, index: itemIndex)
+        if item.kind == ITEM_SUM {
+            let mut payloadless = true
+            let mut variantIndex = 0
+            while variantIndex < List.len(list: item.variants) {
+                let variant = List.get<Variant>(list: item.variants, index: variantIndex)
+                if List.len(list: variant.fields) > 0 { payloadless = false }
+                variantIndex = variantIndex + 1
+            }
+            if payloadless { Set.insert<String>(set: mut sums, value: item.name) }
+        }
+        itemIndex = itemIndex + 1
+    }
+    return sums
+}
+
+fn emit_bag_code(diagnostics: DiagnosticBag, code: String) -> Int {
+    let mut i = 0
+    let mut emitted = 0
+    while i < List.len(list: diagnostics.items) {
+        let diagnostic = List.get<Diagnostic>(list: diagnostics.items, index: i)
+        if diagnostic.code == code {
+            let site = DiagnosticSite(line: diagnostic.line, column: diagnostic.column, length: diagnostic.length)
+            emit_diagnostic_site(code: diagnostic.code, site)
+            emitted = emitted + 1
+        }
+        i = i + 1
+    }
+    return emitted
+}
+
+fn count_bag_code(diagnostics: DiagnosticBag, code: String) -> Int {
+    let mut i = 0
+    let mut count = 0
+    while i < List.len(list: diagnostics.items) {
+        let diagnostic = List.get<Diagnostic>(list: diagnostics.items, index: i)
+        if diagnostic.code == code { count = count + 1 }
+        i = i + 1
+    }
+    return count
+}
+
+// ---------------------------------------------------------------------------
+// Driver.
+// ---------------------------------------------------------------------------
+
+// True if token i is a data-effect keyword (read/mut/take) — parse_data_effect.

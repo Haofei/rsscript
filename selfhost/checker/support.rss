@@ -1,0 +1,159 @@
+// Shared token and declaration helpers for the self-hosted checker.
+module selfhost.checker.support
+
+use selfhost.scan.*
+
+const SYM_SEMI: Int = 59
+
+// '?' — the try-operator symbol code (single-char symbol, val = code point).
+const SYM_QUESTION: Int = 63
+
+// '|' — the closure-parameter delimiter (single-char symbol). Used by the RS0201
+// arg-splitter to skip commas inside a closure param list `|a, b|`.
+const SYM_PIPE: Int = 124
+
+// Binary-operator symbol codes (single-char val = code point), mirroring astdump.rss.
+// Multi-char operators (`==`, `!=`, `<=`, `>=`, `&&`, `||`, `<<`, `>>`) are two adjacent
+// single-char symbol tokens (the scanner only fuses `->`/`=>`), matched via two_sym.
+const SYM_BANG: Int = 33         // '!'
+const SYM_PERCENT: Int = 37      // '%'
+const SYM_AMP: Int = 38          // '&'
+const SYM_PLUS: Int = 43         // '+'
+const SYM_MINUS: Int = 45        // '-'
+const SYM_SLASH: Int = 47        // '/'
+const SYM_CARET: Int = 94        // '^'
+
+fn tk_text(toks: List<Tok>, i: Int) -> String {
+    if i < 0 { return "" }
+    if i >= List.len(list: toks) { return "" }
+    let t = List.get(list: toks, index: i)
+    return t.text
+}
+
+// ---------------------------------------------------------------------------
+// Name / field extraction for the duplicate-declaration checker.
+// ---------------------------------------------------------------------------
+
+// Full dotted declaration name text starting at the name's first token index.
+fn dotted_name_text(toks: List<Tok>, i: Int) -> String {
+    if is_ident_tok(toks: toks, i: i) == false {
+        return ""
+    }
+    let mut out = tk_text(toks, i)
+    let mut j = i + 1
+    let mut going = true
+    while going {
+        let dot = at_symbol(toks: toks, i: j, code: SYM_DOT)
+        let nextIdent = is_ident_tok(toks: toks, i: (j + 1))
+        if dot && nextIdent {
+            out = String.concat(left: out, right: ".")
+            out = String.concat(left: out, right: tk_text(toks, i: (j + 1)))
+            j = j + 2
+        } else {
+            going = false
+        }
+    }
+    return out
+}
+
+// Index of the name token for a type decl (after optional pub, opaque, kind kw).
+fn type_name_start(toks: List<Tok>, i: Int) -> Int {
+    let mut j = i
+    if at_ident(toks: toks, i: j, wid: WORD_PUB) {
+        j = j + 1
+    }
+    if at_ident(toks: toks, i: j, wid: WORD_OPAQUE) {
+        j = j + 1
+    }
+    j = j + 1
+    return j
+}
+
+// Index of the name token for a sum decl (after optional pub, sum kw).
+fn sum_name_start(toks: List<Tok>, i: Int) -> Int {
+    let mut j = i
+    if at_ident(toks: toks, i: j, wid: WORD_PUB) {
+        j = j + 1
+    }
+    j = j + 1
+    return j
+}
+
+// Index of the name token for a fn decl (after attrs, modifiers, fn kw).
+fn fn_name_start(toks: List<Tok>, i: Int) -> Int {
+    let mut j = i
+    let mut attrs = true
+    while attrs {
+        if at_symbol(toks: toks, i: j, code: SYM_HASH) {
+            j = j + 5
+        } else {
+            attrs = false
+        }
+    }
+    let mut mods = true
+    while mods {
+        let isMod = at_ident(toks: toks, i: j, wid: WORD_PUB) || at_ident(toks: toks, i: j, wid: WORD_ASYNC) || at_ident(toks: toks, i: j, wid: WORD_NATIVE)
+        if isMod {
+            j = j + 1
+        } else {
+            mods = false
+        }
+    }
+    j = j + 1
+    return j
+}
+
+// First `{` in the token range [i, end), or -1 if none.
+fn find_body_open(toks: List<Tok>, i: Int, end: Int) -> Int {
+    let mut k = i
+    while k < end {
+        if at_symbol(toks: toks, i: k, code: SYM_LBRACE) {
+            return k
+        }
+        k = k + 1
+    }
+    return -1
+}
+
+// Collect every duplicate field occurrence, preserving the second and later
+// declaration spans for structured diagnostic parity.
+fn collect_duplicate_field_tokens(toks: List<Tok>, ob: Int, close: Int, out: mut List<Int>) -> Bool {
+    let mut seen = Set<String>.new()
+    let mut dup = false
+    let mut paren = 0
+    let mut br = 0
+    let mut ang = 0
+    let mut brace = 0
+    let mut k = ob + 1
+    while k < close {
+        let isColon = at_symbol(toks: toks, i: k, code: SYM_COLON)
+        let atTop = paren == 0 && br == 0 && ang == 0 && brace == 0
+        if isColon && atTop && is_ident_tok(toks: toks, i: (k - 1)) {
+            let name = tk_text(toks, i: (k - 1))
+            if Set.contains<String>(set: seen, value: name) {
+                dup = true
+                List.push<Int>(list: mut out, value: (k - 1))
+            }
+            Set.insert<String>(set: mut seen, value: name)
+        }
+        if at_symbol(toks: toks, i: k, code: SYM_LPAREN) {
+            paren = paren + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RPAREN) {
+            if paren > 0 { paren = paren - 1 }
+        } else if at_symbol(toks: toks, i: k, code: SYM_LBRACKET) {
+            br = br + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RBRACKET) {
+            if br > 0 { br = br - 1 }
+        } else if at_symbol(toks: toks, i: k, code: SYM_LANGLE) {
+            ang = ang + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RANGLE) {
+            if ang > 0 { ang = ang - 1 }
+        } else if at_symbol(toks: toks, i: k, code: SYM_LBRACE) {
+            brace = brace + 1
+        } else if at_symbol(toks: toks, i: k, code: SYM_RBRACE) {
+            if brace > 0 { brace = brace - 1 }
+        }
+        k = k + 1
+    }
+    return dup
+}

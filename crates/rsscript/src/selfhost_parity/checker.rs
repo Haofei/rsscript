@@ -104,6 +104,39 @@ fn compile_checker() -> Result<RegVmExecutable, String> {
     compile_selfhost_tool("check.rss", "checker")
 }
 
+#[test]
+fn checker_module_loading_is_transitive_and_unique() {
+    let sources = tool_sources("check.rss").expect("checker modules should load");
+    let paths = sources
+        .iter()
+        .map(|(path, _)| path.as_str())
+        .collect::<BTreeSet<_>>();
+
+    assert_eq!(paths.len(), sources.len(), "checker modules must load once");
+    for (path, source) in &sources {
+        for import in selfhost_imports(path, source) {
+            let imported_path = format!("selfhost/{import}");
+            assert!(
+                paths.contains(imported_path.as_str()),
+                "{path} import {import} was not loaded"
+            );
+        }
+    }
+    for expected in [
+        "selfhost/checker/support.rss",
+        "selfhost/checker/output.rss",
+        "selfhost/checker/type_model.rss",
+        "selfhost/checker/diagnostics/syntax_declarations.rss",
+        "selfhost/checker/diagnostics/effects_calls.rss",
+        "selfhost/scan.rss",
+        "selfhost/semantics/check_types.rss",
+        "selfhost/semantics/check_bindings.rss",
+        "selfhost/semantics/check_calls.rss",
+    ] {
+        assert!(paths.contains(expected), "checker did not load {expected}");
+    }
+}
+
 /// Run the rss checker; parse the target codes it reports (`CLEAN` => none).
 fn run_checker(exe: &RegVmExecutable, source: &str) -> Result<Vec<String>, String> {
     let output = exe
@@ -277,6 +310,21 @@ fn checker_record_parser_is_strict_and_preserves_duplicates() {
     assert!(parse_checker_records("RS0005\t2\t1\n").is_err());
     assert!(parse_checker_records("RS0005\ttwo\t1\t2\n").is_err());
     assert!(parse_checker_records("RS9999\t2\t1\t2\n").is_err());
+}
+
+#[test]
+fn checker_preserves_raw_diagnostic_family_order() {
+    let source = "fn broken(value)\n    effects(mystery)\n{\n    return Unit\n}\n";
+    let checker = compile_checker().expect("checker should compile");
+    let output = checker
+        .eval_main_with_args([source.to_string()])
+        .expect("checker should run");
+    let jit_output = checker
+        .eval_main_with_args_jit([source.to_string()])
+        .expect("checker should run under the JIT");
+
+    assert_eq!(output.stdout, "RS0002\nRS0003\nRS0004\n");
+    assert_eq!(jit_output.stdout, output.stdout);
 }
 
 #[test]
@@ -3288,4 +3336,3 @@ fn checker_parity_corpus() {
         mismatches.len()
     );
 }
-
