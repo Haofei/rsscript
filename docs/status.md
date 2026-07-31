@@ -322,12 +322,21 @@ than backend syntax: code admission and OSR remain in `tier.rs`, while frame
 reconstruction and synchronous execution each have an independently testable
 ownership boundary. JIT and self-host support remain mandatory.
 
+R32 removes the process-static strong owner of `RuntimeServices`. The legacy
+generated ABI compatibility registry now retains only a `Weak` reference;
+operation contexts, native pending values, and process permits own service
+lifetimes explicitly. TCP and WebSocket context APIs dispatch through the
+injected services and return a shutdown error instead of falling back to a
+different runtime. Default ABI entrypoints remain a compatibility factory, not
+a separate execution authority.
+
 ## Experimental Status
 
 - Native JIT has dedicated path-triggered, nightly, and release validation. It
   is not Core.
-- Self-hosting proves substantial lexer/parser/checker parity but is not an
-  independent compiler or release requirement.
+- Self-hosting proves substantial lexer/parser/checker parity. It and native
+  JIT remain mandatory experimental tracks; neither may be removed as product
+  contraction work.
 - True multi-isolate execution and declarative rewrite
   systems are research, not committed product surface.
 

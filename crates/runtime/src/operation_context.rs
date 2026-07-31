@@ -23,7 +23,7 @@ impl OperationContext {
             deadline,
             cancellation,
             byte_budget,
-            Arc::clone(crate::compatibility::runtime_services()),
+            crate::compatibility::runtime_services(),
         )
     }
 

@@ -47,19 +47,31 @@ fn canonical_facades_exclude_compatibility_entrypoints() {
 }
 
 #[test]
-fn process_wide_runtime_owner_is_isolated_to_compatibility_module() {
+fn compatibility_runtime_registry_does_not_own_services() {
     let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let compatibility = source_dir.join("compatibility.rs");
     let compatibility_source =
         fs::read_to_string(&compatibility).expect("compatibility module should be readable");
-    assert!(
-        compatibility_source.contains("OnceLock<Arc<RuntimeServices>>"),
-        "compatibility module should own the sole process-wide runtime service"
-    );
+    assert!(compatibility_source.contains("Weak<RuntimeServices>"));
+    assert!(!compatibility_source.contains("OnceLock<Arc<RuntimeServices>>"));
 
     let async_runtime = fs::read_to_string(source_dir.join("async_runtime.rs"))
         .expect("async runtime source should be readable");
     assert!(!async_runtime.contains("COMPATIBILITY_RUNTIME"));
     assert!(!async_runtime.contains("fn default_runtime_services"));
     assert!(!async_runtime.contains("fn tokio_native_runtime("));
+}
+
+#[test]
+fn explicit_network_contexts_do_not_use_the_compatibility_spawner() {
+    let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    for module in ["socket.rs", "websocket.rs"] {
+        let source =
+            fs::read_to_string(source_dir.join(module)).expect("module should be readable");
+        assert!(
+            !source.contains("spawn_tokio_native("),
+            "{module} bypasses OperationContext"
+        );
+        assert!(source.contains("spawn_tokio_native_with_services"));
+    }
 }

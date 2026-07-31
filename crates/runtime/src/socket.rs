@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use crate::network::{NetworkEndpoint, NetworkOperationContext, authorize_resolved_target};
 use crate::{
-    NativeAsyncPending, OperationContext, ResourceBudget, cancellation_never, deadline_after_ms,
-    spawn_tokio_native,
+    CancellationToken, NativeAsyncPending, OperationContext, ResourceBudget, cancellation_never,
+    deadline_after_ms, native_async_pending, spawn_tokio_native_with_services,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -36,6 +36,7 @@ pub fn tcp_error_message(error: &TcpError) -> String {
 pub struct RssTcpStream {
     reader: Arc<tokio::sync::Mutex<tokio::net::tcp::OwnedReadHalf>>,
     writer: Arc<tokio::sync::Mutex<tokio::net::tcp::OwnedWriteHalf>>,
+    services: Arc<crate::RuntimeServices>,
 }
 
 pub fn tcp_connect(host: &str, port: i64) -> NativeAsyncPending<Result<RssTcpStream, TcpError>> {
@@ -74,7 +75,8 @@ fn tcp_connect_inner(
     context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<RssTcpStream, TcpError>> {
     let host = host.to_string();
-    spawn_tokio_native(async move {
+    let stream_services = Arc::clone(context.services());
+    spawn_tcp(context, |context| async move {
         let endpoint = NetworkEndpoint::from_host_and_port(&host, port)
             .ok_or_else(|| TcpError::new("TCP port must be between 1 and 65535"))?;
         let addresses = tcp_with_controls(
@@ -100,6 +102,7 @@ fn tcp_connect_inner(
         Ok(RssTcpStream {
             reader: Arc::new(tokio::sync::Mutex::new(reader)),
             writer: Arc::new(tokio::sync::Mutex::new(writer)),
+            services: stream_services,
         })
     })
 }
@@ -111,10 +114,11 @@ pub fn tcp_stream_read(
     tcp_stream_read_with_context(
         stream,
         max_bytes,
-        OperationContext::new(
+        OperationContext::with_services(
             deadline_after_ms(DEFAULT_TCP_OPERATION_TIMEOUT_MS),
             cancellation_never(),
             ResourceBudget::new(MAX_TCP_READ_BYTES as u64),
+            Arc::clone(&stream.services),
         ),
     )
 }
@@ -133,7 +137,7 @@ fn tcp_stream_read_inner_pending(
     context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<Vec<u8>, TcpError>> {
     let reader = Arc::clone(&stream.reader);
-    spawn_tokio_native(async move {
+    spawn_tcp(context, |context| async move {
         tcp_with_controls(
             tcp_stream_read_inner(reader, max_bytes, context.byte_budget()),
             &context,
@@ -179,10 +183,11 @@ pub fn tcp_stream_write(
     tcp_stream_write_with_context(
         stream,
         data,
-        OperationContext::new(
+        OperationContext::with_services(
             deadline_after_ms(DEFAULT_TCP_OPERATION_TIMEOUT_MS),
             cancellation_never(),
             ResourceBudget::new(MAX_TCP_WRITE_BYTES as u64),
+            Arc::clone(&stream.services),
         ),
     )
 }
@@ -202,7 +207,7 @@ fn tcp_stream_write_inner_pending(
 ) -> NativeAsyncPending<Result<i64, TcpError>> {
     let writer = Arc::clone(&stream.writer);
     let data = data.to_vec();
-    spawn_tokio_native(async move {
+    spawn_tcp(context, |context| async move {
         if data.len() > MAX_TCP_WRITE_BYTES {
             return Err(TcpError::new("TCP write exceeds the runtime ceiling"));
         }
@@ -231,10 +236,11 @@ pub fn tcp_stream_write_all(
     tcp_stream_write_all_with_context(
         stream,
         data,
-        OperationContext::new(
+        OperationContext::with_services(
             deadline_after_ms(DEFAULT_TCP_OPERATION_TIMEOUT_MS),
             cancellation_never(),
             ResourceBudget::new(MAX_TCP_WRITE_BYTES as u64),
+            Arc::clone(&stream.services),
         ),
     )
 }
@@ -254,7 +260,7 @@ fn tcp_stream_write_all_inner_pending(
 ) -> NativeAsyncPending<Result<(), TcpError>> {
     let writer = Arc::clone(&stream.writer);
     let data = data.to_vec();
-    spawn_tokio_native(async move {
+    spawn_tcp(context, |context| async move {
         if data.len() > MAX_TCP_WRITE_BYTES {
             return Err(TcpError::new("TCP write_all exceeds the runtime ceiling"));
         }
@@ -281,10 +287,11 @@ fn tcp_stream_write_all_inner_pending(
 pub fn tcp_stream_shutdown(stream: &RssTcpStream) -> NativeAsyncPending<Result<(), TcpError>> {
     tcp_stream_shutdown_with_context(
         stream,
-        OperationContext::new(
+        OperationContext::with_services(
             deadline_after_ms(DEFAULT_TCP_OPERATION_TIMEOUT_MS),
             cancellation_never(),
             ResourceBudget::new(0),
+            Arc::clone(&stream.services),
         ),
     )
 }
@@ -301,7 +308,7 @@ fn tcp_stream_shutdown_inner(
     context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<(), TcpError>> {
     let writer = Arc::clone(&stream.writer);
-    spawn_tokio_native(async move {
+    spawn_tcp(context, |context| async move {
         tcp_with_controls(
             async {
                 let mut writer = writer.lock().await;
@@ -314,6 +321,27 @@ fn tcp_stream_shutdown_inner(
         .map_err(|error| TcpError::new(format!("TCP shutdown failed: {error}")))?;
         Ok(())
     })
+}
+
+fn spawn_tcp<T, F, Build>(
+    context: NetworkOperationContext,
+    build: Build,
+) -> NativeAsyncPending<Result<T, TcpError>>
+where
+    T: Send + 'static,
+    F: std::future::Future<Output = Result<T, TcpError>> + Send + 'static,
+    Build: FnOnce(NetworkOperationContext) -> F,
+{
+    let services = Arc::clone(context.services());
+    let cancellation = CancellationToken::new();
+    match spawn_tokio_native_with_services(&services, cancellation.clone(), build(context)) {
+        Ok(pending) => pending,
+        Err(error) => {
+            let (pending, completer) = native_async_pending(cancellation);
+            completer.complete(Err(TcpError::new(error)));
+            pending
+        }
+    }
 }
 
 async fn tcp_with_controls<T>(
@@ -403,6 +431,32 @@ mod tests {
         .expect_err("one denied answer must reject the target");
 
         assert_eq!(error, "network target resolves to a non-public address");
+    }
+
+    #[test]
+    fn explicit_shutdown_runtime_does_not_fall_back_to_compatibility_runtime() {
+        let services = Arc::new(crate::RuntimeServices::new().expect("runtime services"));
+        services.shutdown(Duration::from_secs(1));
+        let context = crate::OperationContext::with_services(
+            crate::deadline_after_ms(1_000),
+            crate::cancellation_never(),
+            crate::ResourceBudget::new(0),
+            services,
+        );
+
+        let error = match Executor::new().run_pending(super::tcp_connect_with_context(
+            "127.0.0.1",
+            9,
+            context,
+        )) {
+            Ok(_) => panic!("shutdown runtime must reject the operation"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            super::tcp_error_message(&error),
+            "runtime services are shut down"
+        );
     }
 
     #[test]

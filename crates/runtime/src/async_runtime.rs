@@ -551,6 +551,7 @@ pub struct NativeAsyncPending<T> {
     wake: Arc<Mutex<Option<WakeHandle>>>,
     abort_handle: Option<tokio::task::AbortHandle>,
     cancellation_registration: Arc<Mutex<Option<AbortRegistration>>>,
+    _runtime_owner: Option<Arc<RuntimeServices>>,
 }
 
 #[derive(Clone)]
@@ -572,6 +573,7 @@ pub fn native_async_pending<T>(
             wake: wake.clone(),
             abort_handle: None,
             cancellation_registration: cancellation_registration.clone(),
+            _runtime_owner: None,
         },
         NativeAsyncCompleter {
             result,
@@ -685,6 +687,7 @@ struct ProcessConcurrency {
 
 pub(crate) struct ProcessPermit {
     concurrency: Arc<ProcessConcurrency>,
+    _runtime_owner: Arc<RuntimeServices>,
 }
 
 impl Drop for ProcessPermit {
@@ -716,6 +719,7 @@ impl ProcessConcurrency {
 
     fn acquire(
         self: &Arc<Self>,
+        runtime_owner: Arc<RuntimeServices>,
         cancellation: Option<&RssCancellationToken>,
     ) -> Result<ProcessPermit, String> {
         let mut active = self
@@ -741,6 +745,7 @@ impl ProcessConcurrency {
         *active += 1;
         Ok(ProcessPermit {
             concurrency: Arc::clone(self),
+            _runtime_owner: runtime_owner,
         })
     }
 }
@@ -802,10 +807,11 @@ impl RuntimeServices {
     }
 
     pub(crate) fn acquire_process_permit(
-        &self,
+        self: &Arc<Self>,
         cancellation: Option<&RssCancellationToken>,
     ) -> Result<ProcessPermit, String> {
-        self.process_concurrency.acquire(cancellation)
+        self.process_concurrency
+            .acquire(Arc::clone(self), cancellation)
     }
 
     #[cfg(feature = "net")]
@@ -836,16 +842,13 @@ where
     T: Send + 'static,
     F: Future<Output = T> + Send + 'static,
 {
-    spawn_tokio_native_with_services(
-        crate::compatibility::runtime_services(),
-        cancellation,
-        future,
-    )
-    .expect("default runtime services should be running")
+    let services = crate::compatibility::runtime_services();
+    spawn_tokio_native_with_services(&services, cancellation, future)
+        .expect("default runtime services should be running")
 }
 
 pub fn spawn_tokio_native_with_services<T, F>(
-    services: &RuntimeServices,
+    services: &Arc<RuntimeServices>,
     cancellation: CancellationToken,
     future: F,
 ) -> Result<NativeAsyncPending<T>, String>
@@ -867,6 +870,7 @@ where
         .lock()
         .expect("cancellation registration lock poisoned") = registration;
     pending.abort_handle = Some(abort_handle);
+    pending._runtime_owner = Some(Arc::clone(services));
     let _ = start_sender.send(());
     Ok(pending)
 }
@@ -1796,5 +1800,22 @@ mod tests {
         assert_eq!(second.worker_threads(), 3);
         first.shutdown(Duration::from_secs(1));
         second.shutdown(Duration::from_secs(1));
+    }
+
+    #[test]
+    fn pending_owns_runtime_services_until_completion() {
+        let services = Arc::new(RuntimeServices::new().expect("runtime services"));
+        let weak = Arc::downgrade(&services);
+        let pending =
+            spawn_tokio_native_with_services(&services, CancellationToken::new(), async { 42 })
+                .expect("service spawn");
+
+        drop(services);
+        assert!(weak.upgrade().is_some(), "pending must retain its runtime");
+        assert_eq!(Executor::new().run_pending(pending), 42);
+        assert!(
+            weak.upgrade().is_none(),
+            "completed pending releases runtime"
+        );
     }
 }

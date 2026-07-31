@@ -1,8 +1,10 @@
 use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 
 use crate::{
-    OperationContext, ResourceBudget, cancellation_token_cancelled, deadline_remaining_duration,
+    OperationContext, ResourceBudget, RuntimeServices, cancellation_token_cancelled,
+    deadline_remaining_duration,
 };
 
 pub trait NetworkTargetPolicy: Send + Sync {
@@ -116,6 +118,10 @@ impl NetworkOperationContext {
 
     pub(crate) fn byte_budget(&self) -> &ResourceBudget {
         self.resources.byte_budget()
+    }
+
+    pub(crate) fn services(&self) -> &Arc<RuntimeServices> {
+        self.resources.services()
     }
 
     pub(crate) async fn run<T>(&self, future: impl Future<Output = T>) -> Result<T, ControlError> {

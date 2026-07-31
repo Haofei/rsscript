@@ -5,8 +5,8 @@ use crate::network::{
     authorize_resolved_target,
 };
 use crate::{
-    NativeAsyncPending, OperationContext, ResourceBudget, cancellation_never, deadline_after_ms,
-    spawn_tokio_native,
+    CancellationToken, NativeAsyncPending, OperationContext, ResourceBudget, cancellation_never,
+    deadline_after_ms, native_async_pending, spawn_tokio_native_with_services,
 };
 use futures_util::{SinkExt, StreamExt};
 use tokio_tungstenite::tungstenite::Message;
@@ -39,6 +39,7 @@ pub fn websocket_error_message(error: &WebSocketError) -> String {
 pub struct RssWebSocket {
     reader: Arc<tokio::sync::Mutex<WebSocketReader>>,
     writer: Arc<tokio::sync::Mutex<WebSocketWriter>>,
+    services: Arc<crate::RuntimeServices>,
 }
 
 pub fn websocket_connect(url: &str) -> NativeAsyncPending<Result<RssWebSocket, WebSocketError>> {
@@ -73,7 +74,8 @@ fn websocket_connect_inner(
     context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<RssWebSocket, WebSocketError>> {
     let url = url.to_string();
-    spawn_tokio_native(async move {
+    let socket_services = Arc::clone(context.services());
+    spawn_websocket(context, |context| async move {
         let request = url
             .as_str()
             .into_client_request()
@@ -135,6 +137,7 @@ fn websocket_connect_inner(
         Ok(RssWebSocket {
             reader: Arc::new(tokio::sync::Mutex::new(reader)),
             writer: Arc::new(tokio::sync::Mutex::new(writer)),
+            services: socket_services,
         })
     })
 }
@@ -146,10 +149,11 @@ pub fn websocket_send_text(
     websocket_send_text_with_context(
         socket,
         text,
-        OperationContext::new(
+        OperationContext::with_services(
             deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
             cancellation_never(),
             ResourceBudget::new(MAX_WEBSOCKET_MESSAGE_BYTES as u64),
+            Arc::clone(&socket.services),
         ),
     )
 }
@@ -169,7 +173,7 @@ fn websocket_send_text_inner(
 ) -> NativeAsyncPending<Result<(), WebSocketError>> {
     let writer = Arc::clone(&socket.writer);
     let text = text.to_string();
-    spawn_tokio_native(async move {
+    spawn_websocket(context, |context| async move {
         context
             .byte_budget()
             .try_consume(text.len())
@@ -202,10 +206,11 @@ pub fn websocket_send_bytes(
     websocket_send_bytes_with_context(
         socket,
         bytes,
-        OperationContext::new(
+        OperationContext::with_services(
             deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
             cancellation_never(),
             ResourceBudget::new(MAX_WEBSOCKET_MESSAGE_BYTES as u64),
+            Arc::clone(&socket.services),
         ),
     )
 }
@@ -225,7 +230,7 @@ fn websocket_send_bytes_inner(
 ) -> NativeAsyncPending<Result<(), WebSocketError>> {
     let writer = Arc::clone(&socket.writer);
     let bytes = bytes.to_vec();
-    spawn_tokio_native(async move {
+    spawn_websocket(context, |context| async move {
         context
             .byte_budget()
             .try_consume(bytes.len())
@@ -256,10 +261,11 @@ pub fn websocket_recv_text(
 ) -> NativeAsyncPending<Result<Option<String>, WebSocketError>> {
     websocket_recv_text_with_context(
         socket,
-        OperationContext::new(
+        OperationContext::with_services(
             deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
             cancellation_never(),
             ResourceBudget::new(MAX_WEBSOCKET_MESSAGE_BYTES as u64),
+            Arc::clone(&socket.services),
         ),
     )
 }
@@ -276,7 +282,7 @@ fn websocket_recv_text_inner_pending(
     context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<Option<String>, WebSocketError>> {
     let reader = Arc::clone(&socket.reader);
-    spawn_tokio_native(async move {
+    spawn_websocket(context, |context| async move {
         websocket_with_controls(
             websocket_recv_text_inner(reader, context.byte_budget()),
             &context,
@@ -326,10 +332,11 @@ pub fn websocket_recv_bytes(
 ) -> NativeAsyncPending<Result<Option<Vec<u8>>, WebSocketError>> {
     websocket_recv_bytes_with_context(
         socket,
-        OperationContext::new(
+        OperationContext::with_services(
             deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
             cancellation_never(),
             ResourceBudget::new(MAX_WEBSOCKET_MESSAGE_BYTES as u64),
+            Arc::clone(&socket.services),
         ),
     )
 }
@@ -346,7 +353,7 @@ fn websocket_recv_bytes_inner_pending(
     context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<Option<Vec<u8>>, WebSocketError>> {
     let reader = Arc::clone(&socket.reader);
-    spawn_tokio_native(async move {
+    spawn_websocket(context, |context| async move {
         websocket_with_controls(
             websocket_recv_bytes_inner(reader, context.byte_budget()),
             &context,
@@ -405,10 +412,11 @@ async fn websocket_with_controls<T>(
 pub fn websocket_close(socket: &RssWebSocket) -> NativeAsyncPending<Result<(), WebSocketError>> {
     websocket_close_with_context(
         socket,
-        OperationContext::new(
+        OperationContext::with_services(
             deadline_after_ms(DEFAULT_WEBSOCKET_OPERATION_TIMEOUT_MS),
             cancellation_never(),
             ResourceBudget::new(0),
+            Arc::clone(&socket.services),
         ),
     )
 }
@@ -425,7 +433,7 @@ fn websocket_close_inner(
     context: NetworkOperationContext,
 ) -> NativeAsyncPending<Result<(), WebSocketError>> {
     let writer = Arc::clone(&socket.writer);
-    spawn_tokio_native(async move {
+    spawn_websocket(context, |context| async move {
         websocket_with_controls(
             async {
                 let mut writer = writer.lock().await;
@@ -438,6 +446,27 @@ fn websocket_close_inner(
         )
         .await
     })
+}
+
+fn spawn_websocket<T, F, Build>(
+    context: NetworkOperationContext,
+    build: Build,
+) -> NativeAsyncPending<Result<T, WebSocketError>>
+where
+    T: Send + 'static,
+    F: std::future::Future<Output = Result<T, WebSocketError>> + Send + 'static,
+    Build: FnOnce(NetworkOperationContext) -> F,
+{
+    let services = Arc::clone(context.services());
+    let cancellation = CancellationToken::new();
+    match spawn_tokio_native_with_services(&services, cancellation.clone(), build(context)) {
+        Ok(pending) => pending,
+        Err(error) => {
+            let (pending, completer) = native_async_pending(cancellation);
+            completer.complete(Err(WebSocketError::new(error)));
+            pending
+        }
+    }
 }
 
 #[cfg(test)]
