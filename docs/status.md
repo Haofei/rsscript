@@ -92,6 +92,7 @@ This table records the current implementation batch for the refactoring work in
 | R27 | Converge documentation after product contraction | Complete | Current boundary documents distinguish executable host surfaces from abstract review evidence and no longer present removed database, GPU, worker, publish, or vendor infrastructure as active products |
 | R28 | Generate intrinsic registries from one structured catalog | Complete | Internal VM identities, public aliases, AOT runtime targets, and direct/special lowering classifications come from `crates/rsscript/intrinsics.toml`; build tooling no longer scrapes Rust implementation source |
 | R29 | Generate self-host known-type metadata | Complete | The self-host checker consumes core builtin names from the analyzer's canonical list and stdlib nominal types parsed from `.rssi`; handwritten RSS type allowlists are removed |
+| R30 | Replace HIR ad hoc type-string decomposition | Complete | HIR inference queries `ResolvedType` for function returns, container payloads, capability parameters, and match payloads; legacy rendered HIR fields remain an explicit compatibility boundary |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -305,6 +306,13 @@ facts. Core language builtins come from the analyzer's canonical constant and
 stdlib nominal types come directly from parsed `.rssi` declarations. The
 self-host checker no longer carries manually synchronized builtin or stdlib
 type allowlists.
+
+R30 removes the hand-written `Fn`, `Result`, `Option`, `List`, `Stream`, `Task`,
+and `Capability` string parsers from HIR inference. `ResolvedType` now exposes
+structural root, argument, function-return, and qualifier queries used by call,
+await/try/for, capability, and pattern inference. Existing rendered fields on
+`FunctionSig`, `ParamSig`, and `FieldInfo` remain compatibility projections and
+are not presented as a completed whole-HIR storage migration.
 
 ## Experimental Status
 

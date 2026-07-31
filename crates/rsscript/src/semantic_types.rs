@@ -72,6 +72,38 @@ pub struct ResolvedType {
 }
 
 impl ResolvedType {
+    pub fn root_name(&self) -> Option<&str> {
+        match &self.kind {
+            ResolvedTypeKind::Named { name, .. } => Some(name),
+            ResolvedTypeKind::Function { .. } => None,
+        }
+    }
+
+    pub fn arguments(&self) -> &[Self] {
+        match &self.kind {
+            ResolvedTypeKind::Named { arguments, .. } => arguments,
+            ResolvedTypeKind::Function { .. } => &[],
+        }
+    }
+
+    pub fn named_argument(&self, root: &str, index: usize) -> Option<&Self> {
+        (self.root_name() == Some(root))
+            .then(|| self.arguments().get(index))
+            .flatten()
+    }
+
+    pub fn function_return(&self) -> Option<&Self> {
+        match &self.kind {
+            ResolvedTypeKind::Function { return_type, .. } => return_type.as_deref(),
+            ResolvedTypeKind::Named { .. } => None,
+        }
+    }
+
+    pub fn without_fresh(mut self) -> Self {
+        self.qualifiers.fresh = false;
+        self
+    }
+
     pub fn from_type_ref(ty: &TypeRef) -> Self {
         let qualifiers = TypeQualifiers {
             fresh: ty.is_fresh,
@@ -599,6 +631,34 @@ mod tests {
         assert_eq!(
             ty.to_string(),
             "fresh noescape Fn(read List<U>, take W) -> Result<W, U>"
+        );
+    }
+
+    #[test]
+    fn structural_queries_replace_display_string_decomposition() {
+        let result = ResolvedType::from_display("fresh Result<List<Int>, String>");
+        assert_eq!(result.root_name(), Some("Result"));
+        assert_eq!(
+            result
+                .named_argument("Result", 0)
+                .and_then(|ok| ok.named_argument("List", 0))
+                .and_then(ResolvedType::root_name),
+            Some("Int")
+        );
+        assert_eq!(
+            result
+                .named_argument("Result", 1)
+                .and_then(ResolvedType::root_name),
+            Some("String")
+        );
+
+        let function = ResolvedType::from_display("noescape Fn(Int) -> Task<Bool>");
+        assert_eq!(
+            function
+                .function_return()
+                .and_then(|ty| ty.named_argument("Task", 0))
+                .and_then(ResolvedType::root_name),
+            Some("Bool")
         );
     }
 }

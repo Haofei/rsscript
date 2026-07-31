@@ -79,7 +79,7 @@ pub(crate) fn infer_hir_expr_type(
                     Callee::Name(name) => value_types
                         .get(name)
                         .and_then(|type_name| fn_return_type(type_name))
-                        .map(str::to_string),
+                        .map(|return_type| return_type.to_string()),
                     Callee::Qualified { .. } | Callee::ReceiverCall { .. } => None,
                 },
                 CallResolution::EnumVariant => {
@@ -438,76 +438,67 @@ fn signature_semantic_key(signature: &FunctionSig) -> String {
 
 use crate::text_util::builtin_generic_type_params;
 
-pub(super) fn capability_protocol(type_name: &str) -> Option<&str> {
-    let root = type_root_name(type_name);
-    if root != "Capability" {
-        return None;
-    }
-    type_arg_names(type_name).and_then(|args| args.first().copied())
+pub(super) fn capability_protocol(type_name: &str) -> Option<String> {
+    ResolvedType::from_display(type_name)
+        .named_argument("Capability", 0)
+        .map(ToString::to_string)
 }
 
-fn fn_return_type(type_name: &str) -> Option<&str> {
-    let type_name = type_name.trim();
-    type_name
-        .strip_prefix("noescape ")
-        .unwrap_or(type_name)
-        .strip_prefix("Fn(")
-        .and_then(|rest| rest.split_once(')'))
-        .and_then(|(_, rest)| rest.trim_start().strip_prefix("->"))
-        .map(str::trim)
+fn fn_return_type(type_name: &str) -> Option<ResolvedType> {
+    ResolvedType::from_display(type_name)
+        .function_return()
+        .cloned()
 }
 
-fn noescape_return_type(type_name: &str) -> Option<&str> {
-    type_name
-        .trim()
-        .strip_prefix("noescape ")
-        .and_then(fn_return_type)
+fn noescape_return_type(type_name: &str) -> Option<ResolvedType> {
+    let ty = ResolvedType::from_display(type_name);
+    ty.qualifiers
+        .noescape
+        .then(|| ty.function_return().cloned())
+        .flatten()
 }
 
 fn result_ok_type(type_name: &str) -> Option<String> {
-    let inner = type_name
-        .strip_prefix("Result<")
-        .and_then(|rest| rest.strip_suffix('>'))?;
-    split_top_level_type_args(inner)
-        .into_iter()
-        .next()
-        .map(strip_fresh_type)
-        .map(str::to_string)
+    ResolvedType::from_display(type_name)
+        .named_argument("Result", 0)
+        .cloned()
+        .map(ResolvedType::without_fresh)
+        .map(|ty| ty.to_string())
 }
 
 pub(super) fn list_element_type(type_name: &str) -> Option<String> {
-    let inner = strip_fresh_type(type_name)
-        .strip_prefix("List<")
-        .and_then(|rest| rest.strip_suffix('>'))?;
-    split_top_level_type_args(inner)
-        .into_iter()
-        .next()
-        .map(str::to_string)
+    ResolvedType::from_display(type_name)
+        .named_argument("List", 0)
+        .map(ToString::to_string)
 }
 
 pub(super) fn stream_item_type(type_name: &str) -> Option<String> {
-    let inner = strip_fresh_type(type_name)
-        .strip_prefix("Stream<")
-        .and_then(|rest| rest.strip_suffix('>'))?;
-    split_top_level_type_args(inner)
-        .into_iter()
-        .next()
-        .map(str::to_string)
+    ResolvedType::from_display(type_name)
+        .named_argument("Stream", 0)
+        .map(ToString::to_string)
 }
 
 fn task_inner_type(type_name: &str) -> Option<String> {
-    type_name
-        .strip_prefix("Task<")
-        .and_then(|rest| rest.strip_suffix('>'))
-        .map(str::to_string)
+    ResolvedType::from_display(type_name)
+        .named_argument("Task", 0)
+        .map(ToString::to_string)
 }
 
 pub(super) fn match_pattern_binding_type(
     pattern: &MatchPattern,
     value_type: Option<&str>,
 ) -> Option<(String, String)> {
+    let value_type = value_type.map(ResolvedType::from_display);
+    match_pattern_binding_resolved_type(pattern, value_type.as_ref())
+        .map(|(name, ty)| (name, ty.to_string()))
+}
+
+fn match_pattern_binding_resolved_type(
+    pattern: &MatchPattern,
+    value_type: Option<&ResolvedType>,
+) -> Option<(String, ResolvedType)> {
     if let MatchPattern::Binding { name, .. } = pattern {
-        return value_type.map(|ty| (name.clone(), ty.to_string()));
+        return value_type.map(|ty| (name.clone(), ty.clone()));
     }
     let MatchPattern::Variant { name, bindings, .. } = pattern else {
         return None;
@@ -517,23 +508,18 @@ pub(super) fn match_pattern_binding_type(
         return None;
     };
     let value_type = value_type?;
-    let inner = value_type
-        .strip_prefix("Option<")
-        .and_then(|rest| rest.strip_suffix('>'));
     if name == "Some" {
-        return inner.and_then(|ty| match_pattern_binding_type(binding, Some(ty.trim())));
+        return value_type
+            .named_argument("Option", 0)
+            .and_then(|ty| match_pattern_binding_resolved_type(binding, Some(ty)));
     }
-    let inner = value_type
-        .strip_prefix("Result<")
-        .and_then(|rest| rest.strip_suffix('>'));
-    let args = inner.map(split_top_level_type_args)?;
     match name.as_str() {
-        "Ok" => args
-            .first()
-            .and_then(|ty| match_pattern_binding_type(binding, Some(ty.trim()))),
-        "Err" => args
-            .get(1)
-            .and_then(|ty| match_pattern_binding_type(binding, Some(ty.trim()))),
+        "Ok" => value_type
+            .named_argument("Result", 0)
+            .and_then(|ty| match_pattern_binding_resolved_type(binding, Some(ty))),
+        "Err" => value_type
+            .named_argument("Result", 1)
+            .and_then(|ty| match_pattern_binding_resolved_type(binding, Some(ty))),
         _ => None,
     }
 }
@@ -596,13 +582,16 @@ pub(super) fn match_pattern_binding_types(
         };
         // Element patterns bind at the list's element type `T` (`List<T>`); a
         // bound rest segment is itself a `List<T>`.
-        let element_type = value_type
-            .strip_prefix("List<")
-            .and_then(|rest| rest.strip_suffix('>'))
-            .map(str::trim);
+        let element_type = ResolvedType::from_display(value_type)
+            .named_argument("List", 0)
+            .map(ToString::to_string);
         let mut bindings = Vec::new();
         for element in prefix.iter().chain(suffix) {
-            bindings.extend(match_pattern_binding_types(hir, element, element_type));
+            bindings.extend(match_pattern_binding_types(
+                hir,
+                element,
+                element_type.as_deref(),
+            ));
         }
         if let Some(Some(rest_name)) = rest {
             bindings.push((rest_name.clone(), value_type.to_string()));

@@ -83,6 +83,26 @@ fn selfhost_known_type_sets_are_generated() {
     assert!(metadata.contains("for name in &metadata.types"));
 }
 
+#[test]
+fn hir_inference_uses_structural_type_queries() {
+    let root = workspace_root();
+    let inference = read(&root.join("crates/rsscript/src/hir/infer.rs"));
+    for parser in [
+        "strip_prefix(\"Fn(\")",
+        "strip_prefix(\"Result<\")",
+        "strip_prefix(\"Option<\")",
+        "strip_prefix(\"List<\")",
+        "strip_prefix(\"Stream<\")",
+        "strip_prefix(\"Task<\")",
+        "strip_prefix(\"Capability<\")",
+    ] {
+        assert!(
+            !inference.contains(parser),
+            "HIR inference must query ResolvedType instead of parsing {parser}"
+        );
+    }
+}
+
 fn rust_files_below(root: &Path) -> Vec<PathBuf> {
     fn visit(directory: &Path, files: &mut Vec<PathBuf>) {
         let mut entries = fs::read_dir(directory)

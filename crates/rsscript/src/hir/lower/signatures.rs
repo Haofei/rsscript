@@ -576,7 +576,7 @@ impl Hir {
             }
         }
         if let Some(protocol) = capability_protocol(receiver_type)
-            && let Some(sig) = self.resolve_function(Some(protocol), method)
+            && let Some(sig) = self.resolve_function(Some(&protocol), method)
         {
             candidates.push((protocol.to_string(), sig.clone()));
         }
