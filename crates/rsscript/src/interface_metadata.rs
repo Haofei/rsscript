@@ -5,6 +5,7 @@ use crate::text_util::{type_arg_names, type_root_name};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InterfaceMetadata {
     pub(crate) functions: Vec<InterfaceFunctionMetadata>,
+    pub(crate) types: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,35 +25,66 @@ pub(crate) struct InterfaceParamMetadata {
 
 pub(crate) fn collect_interface_metadata(interfaces: &[(&str, &str)]) -> InterfaceMetadata {
     let mut functions = Vec::new();
+    let mut types = Vec::new();
     for (path, source) in interfaces {
         let program = parse_source(path, source);
         for item in program.items {
-            if let Item::Function(function) = item {
-                let (namespace, method) = split_function_name(&function.name);
-                functions.push(InterfaceFunctionMetadata {
-                    namespace,
-                    method,
-                    return_type: function.return_ty.as_ref().map(type_ref_name),
-                    params: function
-                        .params
-                        .iter()
-                        .map(|param| InterfaceParamMetadata {
-                            name: param.name.clone(),
-                            effect: param.effective_effect(),
-                            type_name: type_ref_name(&param.ty),
-                        })
-                        .collect(),
-                });
+            match item {
+                Item::Function(function) => {
+                    let (namespace, method) = split_function_name(&function.name);
+                    functions.push(InterfaceFunctionMetadata {
+                        namespace,
+                        method,
+                        return_type: function.return_ty.as_ref().map(type_ref_name),
+                        params: function
+                            .params
+                            .iter()
+                            .map(|param| InterfaceParamMetadata {
+                                name: param.name.clone(),
+                                effect: param.effective_effect(),
+                                type_name: type_ref_name(&param.ty),
+                            })
+                            .collect(),
+                    });
+                }
+                Item::Type(ty) => types.push(ty.name),
+                Item::Module(_)
+                | Item::Use(_)
+                | Item::SumType(_)
+                | Item::TypeAlias(_)
+                | Item::Const(_) => {}
             }
         }
     }
-    InterfaceMetadata { functions }
+    types.sort();
+    types.dedup();
+    InterfaceMetadata { functions, types }
 }
 
 pub(crate) fn format_selfhost_interface_metadata_rss(metadata: &InterfaceMetadata) -> String {
     let mut out = String::from(
         "module selfhost.interfaces\n\n\
-         fn generated_stdlib_return_type(ns: read String, method: read String) -> String {\n",
+         fn is_builtin_type(name: read String) -> Bool {\n",
+    );
+    for name in crate::analyzer::BUILTIN_TYPE_NAMES {
+        out.push_str(&format!(
+            "    if name == {} {{ return true }}\n",
+            rss_string(name)
+        ));
+    }
+    out.push_str("    return false\n}\n\n");
+
+    out.push_str("fn is_stdlib_type(name: read String) -> Bool {\n");
+    for name in &metadata.types {
+        out.push_str(&format!(
+            "    if name == {} {{ return true }}\n",
+            rss_string(name)
+        ));
+    }
+    out.push_str("    return false\n}\n\n");
+
+    out.push_str(
+        "fn generated_stdlib_return_type(ns: read String, method: read String) -> String {\n",
     );
     for function in metadata
         .functions
@@ -258,10 +290,21 @@ mod tests {
         let metadata = metadata();
         let rss = format_selfhost_interface_metadata_rss(&metadata);
         assert!(rss.contains("module selfhost.interfaces"));
+        assert!(rss.contains("if name == \"Int\" { return true }"));
+        assert!(rss.contains("if name == \"ProcessRequest\" { return true }"));
         assert!(rss.contains("ns == \"Json\" && method == \"parse\""));
         assert!(rss.contains("return \"Result<fresh JsonValue, JsonError>\""));
         assert!(rss.contains("ns == \"File\" && method == \"write\" && pname == \"file\""));
         assert!(rss.contains("return \"mut\""));
+    }
+
+    #[test]
+    fn selfhost_known_types_come_from_canonical_sources() {
+        let metadata = metadata();
+        assert!(metadata.types.iter().any(|name| name == "ProcessRequest"));
+        assert!(metadata.types.iter().any(|name| name == "JsonValue"));
+        assert!(crate::analyzer::BUILTIN_TYPE_NAMES.contains(&"Int"));
+        assert!(crate::analyzer::BUILTIN_TYPE_NAMES.contains(&"Result"));
     }
 
     #[test]

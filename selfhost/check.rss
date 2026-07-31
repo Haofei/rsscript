@@ -3918,18 +3918,6 @@ fn region_has_text(toks: List<Tok>, s: Int, e: Int, word: String) -> Bool {
 // RS0024 UNKNOWN_TYPE.
 // ---------------------------------------------------------------------------
 
-// The hardcoded builtin nominal type set (mirror check_unknown_types).
-fn is_builtin_type(name: String) -> Bool {
-    return name == "Unit" || name == "Bool" || name == "Byte" || name == "Char" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Float" || name == "Float32" || name == "Float64" || name == "String" || name == "StringView" || name == "Url" || name == "Fd" || name == "Bytes" || name == "BytesView" || name == "Buffer" || name == "BufferView" || name == "Path" || name == "Result" || name == "Option" || name == "List" || name == "Map" || name == "Set" || name == "Capability" || name == "Fn" || name == "Closure" || name == "FileError" || name == "IOError" || name == "HttpError" || name == "JsonError" || name == "CsvError" || name == "NetworkError"
-}
-
-// Nominal types the analyzer preloads from the stdlib/package `.rssi` interfaces
-// (every `struct`/`resource` Item::Type across CORE + STANDARD package interfaces).
-// These live in hir.type_info and so count as known types for RS0024.
-fn is_stdlib_type(name: String) -> Bool {
-    return name == "CancellationSource" || name == "CancellationToken" || name == "Channel" || name == "ChannelError" || name == "Deadline" || name == "DecodeError" || name == "Deque" || name == "Duration" || name == "FalliblePipeline" || name == "File" || name == "FileMetadata" || name == "HttpRequest" || name == "HttpResponse" || name == "Instant" || name == "JsonLiteral" || name == "JsonValue" || name == "PersistentMap" || name == "Pipeline" || name == "ProcessEnv" || name == "ProcessEvent" || name == "ProcessOutput" || name == "ProcessRequest" || name == "Receiver" || name == "Regex" || name == "RegexError" || name == "Row" || name == "RowBuffer" || name == "Sender" || name == "SortedMap" || name == "SortedSet" || name == "Stream" || name == "StringBuilder" || name == "TcpError" || name == "TcpStream" || name == "TempDir" || name == "TimerError" || name == "WebSocket" || name == "WebSocketError"
-}
-
 // Generic-param names in scope for an item whose `<...>` clause opens at nameEnd
 // (or an empty set if none). First ident of each top-level comma segment.
 fn collect_generics(toks: List<Tok>, nameEnd: Int) -> Set<String> {

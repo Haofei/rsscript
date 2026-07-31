@@ -70,6 +70,19 @@ fn intrinsic_catalog_is_the_only_generated_registry_source() {
     );
 }
 
+#[test]
+fn selfhost_known_type_sets_are_generated() {
+    let root = workspace_root();
+    let checker = read(&root.join("selfhost/check.rss"));
+    assert!(
+        !checker.contains("fn is_builtin_type(") && !checker.contains("fn is_stdlib_type("),
+        "self-host type knowledge must come from generated interface metadata"
+    );
+    let metadata = read(&root.join("crates/rsscript/src/interface_metadata.rs"));
+    assert!(metadata.contains("crate::analyzer::BUILTIN_TYPE_NAMES"));
+    assert!(metadata.contains("for name in &metadata.types"));
+}
+
 fn rust_files_below(root: &Path) -> Vec<PathBuf> {
     fn visit(directory: &Path, files: &mut Vec<PathBuf>) {
         let mut entries = fs::read_dir(directory)
