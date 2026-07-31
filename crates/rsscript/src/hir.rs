@@ -124,7 +124,7 @@ pub enum ResolvedCalleeKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CallResolution {
     Resolved {
-        signature: FunctionSig,
+        signature: Box<FunctionSig>,
         kind: ResolvedCalleeKind,
     },
     EnumVariant,

@@ -402,7 +402,7 @@ impl Hir {
         };
 
         CallResolution::Resolved {
-            signature: signature.clone(),
+            signature: Box::new(signature.clone()),
             kind,
         }
     }
@@ -433,7 +433,7 @@ impl Hir {
                 // into a collection); this exposes that as a callable for any `derives(Clone)` type.
                 return (
                     CallResolution::Resolved {
-                        signature: FunctionSig {
+                        signature: Box::new(FunctionSig {
                             namespace: Some(type_root_name(&receiver_type).to_string()),
                             name: "clone".to_string(),
                             is_public: true,
@@ -452,7 +452,7 @@ impl Hir {
                             effects: Vec::new(),
                             retained_params: HashSet::new(),
                             is_builtin: true,
-                        },
+                        }),
                         kind: ResolvedCalleeKind::BuiltinFunction,
                     },
                     Some(type_root_name(&receiver_type).to_string()),
@@ -474,7 +474,7 @@ impl Hir {
         let (namespace, sig) = &candidates[0];
         (
             CallResolution::Resolved {
-                signature: sig.clone(),
+                signature: Box::new(sig.clone()),
                 kind: function_kind(sig),
             },
             Some(namespace.clone()),
