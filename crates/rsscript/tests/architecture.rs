@@ -139,6 +139,23 @@ fn native_tier_state_machines_have_explicit_module_boundaries() {
     assert!(entry.contains("fn run_jit_self_recursive_int("));
 }
 
+#[test]
+fn register_vm_execution_policy_is_snapshotted_before_running() {
+    let root = workspace_root();
+    let vm = read(&root.join("crates/rsscript/src/reg_vm/mod.rs"));
+    assert!(vm.contains("mod execution_plan;"));
+    assert!(vm.contains("NativeExecutionPlan::from_environment("));
+    assert!(vm.contains("NativeState::new_with_plan(native)"));
+
+    let plan = read(&root.join("crates/rsscript/src/reg_vm/execution_plan.rs"));
+    assert!(plan.contains("struct ExecutionPlan"));
+    assert!(plan.contains("enum TierPlan"));
+    assert!(plan.contains("struct NativeAdmissionPolicy"));
+    assert!(plan.contains("max_code_bytes"));
+    assert!(plan.contains("max_compile_millis"));
+    assert!(plan.contains("optimize_work_threshold"));
+}
+
 fn rust_files_below(root: &Path) -> Vec<PathBuf> {
     fn visit(directory: &Path, files: &mut Vec<PathBuf>) {
         let mut entries = fs::read_dir(directory)

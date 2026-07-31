@@ -62,6 +62,7 @@ fn intern_struct_layout(name: &str, fields: &[(String, Reg)]) -> Rc<TypeLayout> 
 mod architecture;
 mod calls;
 mod exec;
+mod execution_plan;
 mod host_adapters;
 mod intrinsics;
 mod lower;
@@ -78,6 +79,7 @@ mod tier;
 mod value_access;
 mod value_convert;
 mod value_ops;
+use execution_plan::*;
 pub(crate) use lower::*;
 pub(crate) use model::*;
 #[cfg(feature = "native-jit")]
@@ -829,6 +831,31 @@ pub(crate) fn reg_vm_compile_sources(
 }
 
 impl RegVmExecutable {
+    fn prepare_vm(
+        &self,
+        args: Vec<String>,
+        native_bindings: HashMap<String, NativeInterpreterFn>,
+        plan: &ExecutionPlan,
+    ) -> Result<RegVm, EvalError> {
+        let mut vm = RegVm::new(Rc::clone(&self.unit), args, native_bindings);
+        vm.set_limits(plan.limits.clone());
+        vm.stream_stdout = plan.stdout == StdoutMode::Streaming;
+        match &plan.tier {
+            TierPlan::Interpreter => {}
+            TierPlan::Tier0 { force_all } => {
+                vm.jit_enabled = true;
+                vm.jit_force_all = *force_all;
+            }
+            #[cfg(feature = "native-jit")]
+            TierPlan::Native(native) => {
+                vm.native = Some(NativeState::new_with_plan(native)?);
+                vm.jit_enabled = true;
+                vm.jit_force_all = true;
+            }
+        }
+        Ok(vm)
+    }
+
     /// Per-function JIT eligibility analysis (the tier-0 "compile" step). A
     /// function is eligible when it is non-suspending and non-recursive — every
     /// instruction in the JIT-supported subset or a `CallKnown` to another
@@ -1214,64 +1241,22 @@ impl RegVmExecutable {
         force_all_safepoints_override: bool,
         limits: VmLimits,
     ) -> Result<(EvalOutput, NativeStats, Vec<String>), EvalError> {
-        let mut vm = RegVm::new(
-            Rc::clone(&self.unit),
-            args.into_iter().map(Into::into).collect(),
-            std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
-        );
-        // Limits gate native dispatch: when any preemption/accounting limit is armed,
-        // `native_limits_unarmed()` refuses native (incl. the recursive fast paths) so
-        // the interpreter/tier-0 path enforces it via `tick()`.
-        vm.set_limits(limits);
-        // Native first, then tier-0, then interpreter.
-        // `RSS_JIT_BASELINE=1` is an explicit baseline-only mode. Otherwise the
-        // bounded ladder starts at `opt_level=none` and promotes eligible regions
-        // into a separate `opt_level=speed` module.
-        let baseline = std::env::var_os("RSS_JIT_BASELINE").is_some();
-        // Precise resume (J0.1/J0.2): a native bail resumes the interpreter at the
-        // safepoint's `resume_ip` (reconstructing the live register window —
-        // heap-aware: scalar regs restored, heap/flat regs left to the frame)
-        // instead of re-running from the function top. This is now the production
-        // DEFAULT (`eval_main_with_args_native` passes `precise_deopt_override`);
-        // re-run-from-top remains the byte-identical fallback when a heap write
-        // disables precise resume (`can_precise_deopt_resume`) and is kept under
-        // differential coverage by the force-deopt backend. `RSS_JIT_PRECISE_DEOPT`
-        // still forces it on for entry points that default it off.
-        let precise_deopt =
-            precise_deopt_override || std::env::var_os("RSS_JIT_PRECISE_DEOPT").is_some();
-        // `RSS_JIT_OSR=1` (J5.2) selects the eager OSR path: a function with a
-        // qualifying native-subset hot loop attempts OSR on the first header hit.
-        // Without it, eligible loops still use the default hot-backedge
-        // auto-trigger. OSR-exit resumes via the precise-deopt path, so OSR
-        // implies precise. A caller may force the eager path deterministically via
-        // `osr_override` (test/bench entry).
-        let osr_enabled = osr_override || std::env::var_os("RSS_JIT_OSR").is_some();
-        let precise_deopt = precise_deopt || osr_enabled;
-        // `RSS_JIT_REPORT=1` (lever 2) arms the developer-facing missed-optimization
-        // report: a purely observational, read-only diagnostic printed to stderr
-        // after the run. It changes NO compile decision (the differential is byte-
-        // identical with it on or off); when unset the report machinery is inert.
-        let report = report_override || std::env::var_os("RSS_JIT_REPORT").is_some();
-        // `RSS_JIT_DEOPT_EVERY=1` is a developer/deopt-stress knob: every generated
-        // native safepoint bails unconditionally, exercising the real deopt capture
-        // and fallback/resume machinery from normal CLI/bench entry points. Test
-        // entry points that pass a concrete `forced_safepoint` keep their narrower
-        // single-site behavior.
-        let force_all_safepoints = forced_safepoint.is_none()
-            && (force_all_safepoints_override || jit_native_deopt_every_from_env());
-        vm.native = Some(NativeState::new_with_opt_and_forced_safepoint(
+        let native_plan = NativeExecutionPlan::from_environment(
             tier_up_threshold,
             force_bail,
             collect_stats,
-            baseline,
-            precise_deopt,
-            osr_enabled,
-            report,
+            precise_deopt_override,
+            osr_override,
+            report_override,
             forced_safepoint,
-            force_all_safepoints,
-        )?);
-        vm.jit_enabled = true;
-        vm.jit_force_all = true;
+            force_all_safepoints_override,
+        );
+        let plan = ExecutionPlan::native(limits, native_plan);
+        let mut vm = self.prepare_vm(
+            args.into_iter().map(Into::into).collect(),
+            HashMap::new(),
+            &plan,
+        )?;
         let value = vm.run_program("main")?;
         if let Some(native) = &mut vm.native
             && native.collect_stats
@@ -1340,16 +1325,15 @@ impl RegVmExecutable {
         native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
         force_all: bool,
     ) -> Result<EvalOutput, EvalError> {
-        let mut vm = RegVm::new(
-            Rc::clone(&self.unit),
+        let plan = ExecutionPlan::tier0(force_all);
+        let mut vm = self.prepare_vm(
             args.into_iter().map(Into::into).collect(),
             native_bindings
                 .into_iter()
                 .map(|(key, function)| (key.into(), function))
                 .collect(),
-        );
-        vm.jit_enabled = true;
-        vm.jit_force_all = force_all;
+            &plan,
+        )?;
         let value = vm.run_program("main")?;
         let display_value = value.display();
         let native_value = value.native_value();
@@ -1388,16 +1372,15 @@ impl RegVmExecutable {
         native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
         limits: VmLimits,
     ) -> Result<EvalOutput, EvalError> {
-        let mut vm = RegVm::new(
-            Rc::clone(&self.unit),
+        let plan = ExecutionPlan::streaming(limits);
+        let mut vm = self.prepare_vm(
             args.into_iter().map(Into::into).collect(),
             native_bindings
                 .into_iter()
                 .map(|(key, function)| (key.into(), function))
                 .collect(),
-        );
-        vm.set_limits(limits);
-        vm.stream_stdout = true;
+            &plan,
+        )?;
         let result = vm.run_program("main");
         // Flush any final line that lacks a trailing newline so no output is lost.
         let flush_result = if vm.stream_flushed < vm.stdout.len() {
@@ -1431,12 +1414,12 @@ impl RegVmExecutable {
         args: impl IntoIterator<Item = impl Into<String>>,
         limits: VmLimits,
     ) -> Result<EvalOutput, EvalError> {
-        let mut vm = RegVm::new(
-            Rc::clone(&self.unit),
+        let plan = ExecutionPlan::interpreter(limits);
+        let mut vm = self.prepare_vm(
             args.into_iter().map(Into::into).collect(),
-            std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
-        );
-        vm.set_limits(limits);
+            HashMap::new(),
+            &plan,
+        )?;
         let value = vm.run_program("main")?;
         let display_value = value.display();
         let native_value = value.native_value();
@@ -1496,15 +1479,15 @@ impl RegVmExecutable {
         native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
         limits: VmLimits,
     ) -> Result<EvalOutput, EvalError> {
-        let mut vm = RegVm::new(
-            Rc::clone(&self.unit),
+        let plan = ExecutionPlan::interpreter(limits);
+        let mut vm = self.prepare_vm(
             args.into_iter().map(Into::into).collect(),
             native_bindings
                 .into_iter()
                 .map(|(key, function)| (key.into(), function))
                 .collect(),
-        );
-        vm.set_limits(limits);
+            &plan,
+        )?;
         let value = vm.run_program("main")?;
         let display_value = value.display();
         let native_value = value.native_value();
@@ -2180,13 +2163,6 @@ struct NativeState {
     /// instead of permanently marking the loop `GaveUp`.
     osr_dynamic_bail: bool,
 }
-
-#[cfg(feature = "native-jit")]
-const DEFAULT_NATIVE_MAX_CODE_BYTES: u64 = 16 * 1024 * 1024;
-#[cfg(feature = "native-jit")]
-const DEFAULT_NATIVE_MAX_COMPILE_MILLIS: u64 = 2_000;
-#[cfg(feature = "native-jit")]
-const DEFAULT_NATIVE_OPTIMIZE_WORK_THRESHOLD: u64 = 50_000;
 
 #[cfg(feature = "native-jit")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -6563,11 +6539,19 @@ extern "C" fn rss_jit_list_get_handle(_ctx: vm_jit::HostCtx, handle: i64, index:
 
 #[cfg(feature = "native-jit")]
 impl NativeState {
-    fn admission_limit_from_env(name: &str, default: u64) -> u64 {
-        std::env::var(name)
-            .ok()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(default)
+    fn new_with_plan(plan: &NativeExecutionPlan) -> Result<Self, EvalError> {
+        Self::new_with_opt_and_forced_safepoint(
+            plan.tier_up_threshold,
+            plan.force_bail,
+            plan.collect_stats,
+            plan.baseline,
+            plan.precise_deopt,
+            plan.osr_enabled,
+            plan.report,
+            plan.forced_safepoint,
+            plan.force_all_safepoints,
+            plan.admission,
+        )
     }
 
     // Used by the in-crate `#[cfg(test)]` unit tests; the optimizing/baseline
@@ -6615,6 +6599,7 @@ impl NativeState {
             report,
             None,
             false,
+            NativeAdmissionPolicy::from_environment(tier_up_threshold),
         )
     }
 
@@ -6628,18 +6613,11 @@ impl NativeState {
         report: bool,
         forced_safepoint: Option<u32>,
         force_all_safepoints: bool,
+        admission_policy: NativeAdmissionPolicy,
     ) -> Result<Self, EvalError> {
-        let max_code_bytes =
-            Self::admission_limit_from_env("RSS_JIT_MAX_CODE_BYTES", DEFAULT_NATIVE_MAX_CODE_BYTES);
-        let max_compile_millis = Self::admission_limit_from_env(
-            "RSS_JIT_MAX_COMPILE_MS",
-            DEFAULT_NATIVE_MAX_COMPILE_MILLIS,
-        );
-        let optimize_work_threshold = Self::admission_limit_from_env(
-            "RSS_JIT_OPT_THRESHOLD",
-            DEFAULT_NATIVE_OPTIMIZE_WORK_THRESHOLD,
-        )
-        .max(u64::from(tier_up_threshold) + 1);
+        let max_code_bytes = admission_policy.max_code_bytes;
+        let max_compile_millis = admission_policy.max_compile_millis;
+        let optimize_work_threshold = admission_policy.optimize_work_threshold;
         // A zero threshold is the explicit eager/benchmark mode. Preserve the
         // pre-ladder contract by compiling its only tier at `speed`; compiling
         // baseline and optimized copies on every fresh evaluation doubles cold
