@@ -1518,9 +1518,9 @@ fn check_argument_escaping(
     for (arg, resolved) in args.iter().zip(resolved_names) {
         let expected_param =
             resolved.and_then(|name| signature.params.iter().find(|param| param.name == name));
-        if expected_param.is_some_and(|param| {
-            param.ty.qualifiers.noescape && param.ty.function_return().is_some()
-        }) {
+        if expected_param
+            .is_some_and(|param| param.ty.qualifiers.noescape && param.ty.is_function())
+        {
             continue;
         }
         check_noescape_escape(

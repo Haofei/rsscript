@@ -109,6 +109,10 @@ impl ResolvedType {
         }
     }
 
+    pub fn is_function(&self) -> bool {
+        matches!(self.kind, ResolvedTypeKind::Function { .. })
+    }
+
     pub fn without_fresh(mut self) -> Self {
         self.qualifiers.fresh = false;
         self
@@ -663,6 +667,7 @@ mod tests {
         );
 
         let function = ResolvedType::from_display("noescape Fn(Int) -> Task<Bool>");
+        assert!(function.is_function());
         assert_eq!(
             function
                 .function_return()
@@ -670,5 +675,9 @@ mod tests {
                 .and_then(ResolvedType::root_name),
             Some("Bool")
         );
+
+        let implicit_unit_function = ResolvedType::from_display("noescape Fn()");
+        assert!(implicit_unit_function.is_function());
+        assert!(implicit_unit_function.function_return().is_none());
     }
 }

@@ -1849,7 +1849,7 @@ pub(super) fn call_arg_targets_noescape_param(
     arg.name
         .as_ref()
         .and_then(|name| signature.params.iter().find(|param| param.name == *name))
-        .is_some_and(|param| param.ty.qualifiers.noescape && param.ty.function_return().is_some())
+        .is_some_and(|param| param.ty.qualifiers.noescape && param.ty.is_function())
 }
 
 pub(super) fn is_noescape_fn_type(type_name: &str) -> bool {

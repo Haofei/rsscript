@@ -238,7 +238,7 @@ pub(super) fn call_arg_is_noescape_param(
     else {
         return false;
     };
-    param.ty.qualifiers.noescape && param.ty.function_return().is_some()
+    param.ty.qualifiers.noescape && param.ty.is_function()
 }
 
 pub(super) fn hir_closure_body(expr: &HirExpr) -> Option<&HirBlock> {
