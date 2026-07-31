@@ -511,6 +511,11 @@ packages/test-runner/src/main.rss
 selfhost/astdump.rss
 selfhost/backend/c_emit.rss
 selfhost/check.rss
+selfhost/checker/diagnostics/effects_calls.rss
+selfhost/checker/diagnostics/syntax_declarations.rss
+selfhost/checker/output.rss
+selfhost/checker/support.rss
+selfhost/checker/type_model.rss
 selfhost/ir/canonical.rss
 selfhost/lexer.rss
 selfhost/package_contract.rss
