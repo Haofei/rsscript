@@ -35,14 +35,14 @@ struct Session {
     assert_eq!(hir.type_kind("Session"), Some(HirTypeKind::Struct));
 
     let user_field = hir.fields_named("user").next().expect("user field exists");
-    assert_eq!(user_field.type_name, "User");
+    assert_eq!(user_field.ty.to_string(), "User");
     assert!(user_field.is_handle);
     assert!(!user_field.is_weak);
     let parent_field = hir
         .fields_named("parent")
         .next()
         .expect("parent field exists");
-    assert_eq!(parent_field.type_name, "User");
+    assert_eq!(parent_field.ty.to_string(), "User");
     assert!(!parent_field.is_handle);
     assert!(parent_field.is_weak);
     let session = hir.type_info("Session").expect("session type exists");
@@ -86,7 +86,7 @@ fn normalizes_omitted_function_type_effects() {
         .resolve_function(None, "apply")
         .expect("apply signature");
 
-    assert_eq!(signature.params[0].type_name, "Fn(read Int) -> Int");
+    assert_eq!(signature.params[0].ty.to_string(), "Fn(read Int) -> Int");
 }
 
 #[test]
@@ -172,12 +172,26 @@ fn store_put(store: mut Store, value: read Asset) -> Unit
     assert!(signature.retained_params.contains("value"));
     assert_eq!(signature.params[0].effect, Some(ParamEffect::Mut));
     assert_eq!(signature.params[1].effect, Some(ParamEffect::Read));
-    assert_eq!(signature.return_type.as_deref(), Some("Unit"));
+    assert_eq!(
+        signature
+            .return_ty
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("Unit")
+    );
 
     let concat = hir
         .resolve_function(Some("String"), "concat")
         .expect("builtin signature exists");
-    assert_eq!(concat.return_type.as_deref(), Some("String"));
+    assert_eq!(
+        concat
+            .return_ty
+            .as_ref()
+            .map(ToString::to_string)
+            .as_deref(),
+        Some("String")
+    );
 }
 
 #[test]

@@ -94,6 +94,8 @@ This table records the current implementation batch for the refactoring work in
 | R29 | Generate self-host known-type metadata | Complete | The self-host checker consumes core builtin names from the analyzer's canonical list and stdlib nominal types parsed from `.rssi`; handwritten RSS type allowlists are removed |
 | R30 | Replace HIR ad hoc type-string decomposition | Complete | HIR inference queries `ResolvedType` for function returns, container payloads, capability parameters, and match payloads; legacy rendered HIR fields remain an explicit compatibility boundary |
 | R31 | Split native tier state machines | Complete | Precise deopt reconstruction and Tier-0/recursive JIT execution live in dedicated modules; `tier.rs` retains admission, promotion, and OSR orchestration |
+| R32 | Runtime operation-scoped ownership | Complete | Canonical runtime operations own explicit services; the compatibility owner is weak and cannot keep services alive process-wide |
+| R33 | Structural HIR signatures and fields | Complete | Function parameters, returns, and declared fields store `ResolvedType`; inference no longer reparses those facts from display strings |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -311,9 +313,8 @@ type allowlists.
 R30 removes the hand-written `Fn`, `Result`, `Option`, `List`, `Stream`, `Task`,
 and `Capability` string parsers from HIR inference. `ResolvedType` now exposes
 structural root, argument, function-return, and qualifier queries used by call,
-await/try/for, capability, and pattern inference. Existing rendered fields on
-`FunctionSig`, `ParamSig`, and `FieldInfo` remain compatibility projections and
-are not presented as a completed whole-HIR storage migration.
+await/try/for, capability, and pattern inference. R33 subsequently removes the
+rendered signature and field compatibility projections.
 
 R31 extracts native deoptimization reconstruction into
 `reg_vm/tier/deopt_resume.rs` and Tier-0 plus recursive JIT entry execution into
@@ -329,6 +330,13 @@ lifetimes explicitly. TCP and WebSocket context APIs dispatch through the
 injected services and return a shutdown error instead of falling back to a
 different runtime. Default ABI entrypoints remain a compatibility factory, not
 a separate execution authority.
+
+R33 stores parameter, return, and declared-field types directly as
+`ResolvedType`. Declarations and synthesized constructors build those values
+structurally, generic substitution consumes them without fallback parsing, and
+protocol `Self` comparison is structural. Diagnostics, review output, and VM
+metadata render a type only at their text or ABI boundary. Expression and local
+binding type projections remain a separate whole-HIR migration.
 
 ## Experimental Status
 

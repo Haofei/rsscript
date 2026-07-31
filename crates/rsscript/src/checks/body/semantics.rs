@@ -621,7 +621,7 @@ pub(super) fn check_match_pattern_matches_type(
                 return;
             }
             for (binding, field) in bindings.iter().zip(fields.iter()) {
-                check_match_pattern_matches_type(analyzer, binding, &field.type_name);
+                check_match_pattern_matches_type(analyzer, binding, &field.ty.to_string());
             }
         }
         MatchPattern::Struct {
@@ -657,7 +657,8 @@ pub(super) fn check_match_pattern_matches_type(
                         .iter()
                         .find(|candidate| candidate.name == field.name)
                 {
-                    let field_type = substitute_type_args(&field_info.type_name, &substitutions);
+                    let field_type =
+                        substitute_type_args(&field_info.ty.to_string(), &substitutions);
                     check_match_pattern_matches_type(analyzer, pattern, &field_type);
                 }
             }

@@ -1438,7 +1438,7 @@ fn check_argument_types(
         };
         let Ok(expected_type) = substitute_type_params(
             &analyzer.budget,
-            &expected_param.type_name,
+            &expected_param.ty.to_string(),
             type_param_substitutions,
         ) else {
             return;
@@ -1518,7 +1518,9 @@ fn check_argument_escaping(
     for (arg, resolved) in args.iter().zip(resolved_names) {
         let expected_param =
             resolved.and_then(|name| signature.params.iter().find(|param| param.name == name));
-        if expected_param.is_some_and(|param| is_noescape_fn_type(&param.type_name)) {
+        if expected_param.is_some_and(|param| {
+            param.ty.qualifiers.noescape && param.ty.function_return().is_some()
+        }) {
             continue;
         }
         check_noescape_escape(

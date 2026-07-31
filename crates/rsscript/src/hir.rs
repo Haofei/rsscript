@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use crate::diagnostic::Span;
 use crate::interfaces::{builtin_interfaces, standard_package_interfaces};
-use crate::semantic::SemanticTypeFacts;
+use crate::semantic::{ResolvedType, SemanticTypeFacts};
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl,
     GenericBound, Item, LetKind, MatchPattern, Param, Program as SyntaxProgram, ProtocolImpl, Stmt,
@@ -40,7 +40,7 @@ pub struct HirClosureCapture {
 pub struct ParamSig {
     pub name: String,
     pub effect: Option<ParamEffect>,
-    pub type_name: String,
+    pub ty: ResolvedType,
     /// The parameter's default value expression, if it has one (`name: T = expr`).
     pub default: Option<crate::syntax::ast::Expr>,
 }
@@ -55,7 +55,7 @@ pub struct FunctionSig {
     pub type_params: Box<[String]>,
     pub type_param_bounds: Vec<Option<GenericBound>>,
     pub params: Vec<ParamSig>,
-    pub return_type: Option<String>,
+    pub return_ty: Option<ResolvedType>,
     pub returns_fresh: bool,
     pub effects: Vec<String>,
     pub retained_params: HashSet<String>,
@@ -81,7 +81,7 @@ pub enum HirTypeKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FieldInfo {
     pub name: String,
-    pub type_name: String,
+    pub ty: ResolvedType,
     pub is_handle: bool,
     pub is_weak: bool,
     /// Default value for the field, if declared (`name: Type = <expr>`); lets a

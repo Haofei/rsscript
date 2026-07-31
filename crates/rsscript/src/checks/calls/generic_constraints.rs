@@ -323,7 +323,7 @@ pub(super) fn check_enum_variant_form(
     if let Some(fields) = analyzer.hir.sum_variant_fields(&variant).map(|fields| {
         fields
             .iter()
-            .map(|f| (f.name.clone(), f.type_name.clone()))
+            .map(|f| (f.name.clone(), f.ty.to_string()))
             .collect::<Vec<(String, String)>>()
     }) {
         // Variants use the same named-field construction form as structs (per the v0.7 spec);
@@ -652,7 +652,7 @@ pub(super) fn call_type_param_substitutions(
         && let Some(receiver_param) = signature.params.first()
         && let Some(actual_type) = infer_receiver_expr_type(analyzer, function, receiver)
     {
-        let pattern_type = analyzer.expand_type_alias(&receiver_param.type_name);
+        let pattern_type = analyzer.expand_type_alias(&receiver_param.ty.to_string());
         let actual_type = analyzer.expand_type_alias(&actual_type);
         if !collect_type_param_substitutions(
             &analyzer.budget,
@@ -706,7 +706,7 @@ pub(super) fn collect_call_arg_type_param_substitutions(
         let Some(actual_type) = hir_expr_type_name(&arg.value) else {
             continue;
         };
-        let pattern_type = analyzer.expand_type_alias(&param.type_name);
+        let pattern_type = analyzer.expand_type_alias(&param.ty.to_string());
         let actual_type = analyzer.expand_type_alias(actual_type);
         if !collect_type_param_substitutions(
             &analyzer.budget,

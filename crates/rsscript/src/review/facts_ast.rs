@@ -280,7 +280,7 @@ pub(super) fn review_map_expr_type_name(expr: &Expr, hir: &Hir) -> Option<String
                 {
                     return Some(namespace.clone());
                 }
-                signature.return_type.clone()
+                signature.return_ty.map(|ty| ty.to_string())
             }
             CallResolution::EnumVariant
             | CallResolution::Ambiguous { .. }

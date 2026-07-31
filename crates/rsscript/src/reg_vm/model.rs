@@ -978,12 +978,12 @@ impl RegUnit {
                     params: signature
                         .params
                         .iter()
-                        .map(|param| hir.canonical_type_name(&param.type_name))
+                        .map(|param| hir.canonical_type_name(&param.ty.to_string()))
                         .collect(),
                     return_type: signature
-                        .return_type
-                        .as_deref()
-                        .map(|ty| hir.canonical_type_name(ty)),
+                        .return_ty
+                        .as_ref()
+                        .map(|ty| hir.canonical_type_name(&ty.to_string())),
                 },
             );
             let mut lowerer = RegLowerer {
@@ -1017,7 +1017,7 @@ impl RegUnit {
                 // `&mut`), so mutations must propagate. Non-mut heap/value params
                 // keep copy isolation; primitive scalars are already independent.
                 if param.effect != Some(ParamEffect::Mut)
-                    && !scalar_param_type_needs_no_deep_copy(&param.type_name)
+                    && !scalar_param_type_needs_no_deep_copy(&param.ty.to_string())
                 {
                     lowerer.emit(RegInstr::DeepCopy { reg });
                 }

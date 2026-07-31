@@ -86,7 +86,7 @@ pub(super) fn function_sig_from_decl(function: &FunctionDecl, is_builtin: bool) 
             .map(|param| param.bound.clone())
             .collect(),
         params: function.params.iter().map(param_sig_from_decl).collect(),
-        return_type: function.return_ty.as_ref().map(type_ref_name),
+        return_ty: function.return_ty.as_ref().map(ResolvedType::from_type_ref),
         returns_fresh: function.returns_fresh,
         effects: function
             .effects
@@ -213,7 +213,7 @@ pub(super) fn param_sig_from_decl(param: &Param) -> ParamSig {
     ParamSig {
         name: param.name.clone(),
         effect: effective_param_effect(param),
-        type_name: type_ref_name(&param.ty),
+        ty: ResolvedType::from_type_ref(&param.ty),
         default: param.default.clone(),
     }
 }
@@ -278,7 +278,7 @@ pub(super) fn type_kind_from_decl(kind: TypeKind) -> HirTypeKind {
 pub(super) fn field_info_from_decl(field: &FieldDecl) -> FieldInfo {
     FieldInfo {
         name: field.name.clone(),
-        type_name: type_ref_name(&field.ty),
+        ty: ResolvedType::from_type_ref(&field.ty),
         is_handle: field.is_handle,
         is_weak: field.is_weak,
         default: field.default.clone(),
@@ -300,7 +300,7 @@ pub(super) fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) 
             .map(|field| ParamSig {
                 name: field.name.clone(),
                 effect: None,
-                type_name: field.type_name.clone(),
+                ty: field.ty.clone(),
                 default: field.default.clone(),
             })
             .collect(),
@@ -309,11 +309,13 @@ pub(super) fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) 
         // `infer_signature_return_type` substitute them from the arguments
         // (`Wrap(item: 7)` -> `Wrap<Int>`); a bare name leaves nothing to
         // substitute and spuriously rejects `let w: Wrap<Int> = Wrap(item: 7)`.
-        return_type: Some(if type_info.type_params.is_empty() {
-            type_info.name.clone()
-        } else {
-            format!("{}<{}>", type_info.name, type_info.type_params.join(", "))
-        }),
+        return_ty: Some(ResolvedType::named(
+            type_info.name.clone(),
+            type_info
+                .type_params
+                .iter()
+                .map(|parameter| ResolvedType::named(parameter.clone(), [])),
+        )),
         returns_fresh: type_info.kind == HirTypeKind::Struct,
         effects: Vec::new(),
         retained_params: HashSet::new(),

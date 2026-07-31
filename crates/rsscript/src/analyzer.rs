@@ -13,7 +13,9 @@ use crate::hir::{
 };
 use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex_with_budget};
-use crate::semantic::{AnalysisResult, SemanticDatabase, SourceSnapshot, ValidatedProgram};
+use crate::semantic::{
+    AnalysisResult, ResolvedType, SemanticDatabase, SourceSnapshot, ValidatedProgram,
+};
 use crate::syntax::ast::merge_programs;
 use crate::syntax::ast::{
     AssignStmt, Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, GenericBound,
@@ -1791,15 +1793,26 @@ pub(crate) fn protocol_signature_mismatch(
             return Some(reason);
         }
     }
+    let substitutions = BTreeMap::from([(
+        "Self".to_string(),
+        ResolvedType::from_display(concrete_type),
+    )]);
     let protocol_return = protocol
-        .return_type
-        .as_deref()
-        .map(|return_type| substitute_protocol_self(return_type, concrete_type));
-    if protocol_return.as_deref() != target.return_type.as_deref() {
+        .return_ty
+        .as_ref()
+        .map(|return_type| return_type.substitute(&substitutions));
+    if protocol_return != target.return_ty {
         return Some(format!(
             "return type mismatch: protocol expects `{}`, implementation returns `{}`.",
-            protocol_return.as_deref().unwrap_or("Unit"),
-            target.return_type.as_deref().unwrap_or("Unit")
+            protocol_return
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "Unit".to_string()),
+            target
+                .return_ty
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "Unit".to_string())
         ));
     }
     if protocol.returns_fresh != target.returns_fresh {
@@ -1843,42 +1856,17 @@ fn protocol_param_mismatch(
                 .unwrap_or("none")
         ));
     }
-    let expected_type = substitute_protocol_self(&protocol.type_name, concrete_type);
-    if expected_type != target.type_name {
+    let expected_type = protocol.ty.substitute(&BTreeMap::from([(
+        "Self".to_string(),
+        ResolvedType::from_display(concrete_type),
+    )]));
+    if expected_type != target.ty {
         return Some(format!(
             "parameter type mismatch for `{}`: protocol expects `{expected_type}`, implementation has `{}`.",
-            protocol.name, target.type_name
+            protocol.name, target.ty
         ));
     }
     None
-}
-
-fn substitute_protocol_self(type_name: &str, concrete_type: &str) -> String {
-    if type_name == "Self" {
-        return concrete_type.to_string();
-    }
-    // Use word-boundary-aware replacement to avoid substituting inside identifiers
-    // like "MySelfThing". In RSScript, Self appears only as a standalone type or
-    // inside generic brackets (e.g. "List<Self>", "Option<Self>").
-    let mut result = String::new();
-    let mut chars = type_name.char_indices().peekable();
-    while let Some((i, _)) = chars.peek().copied() {
-        if type_name[i..].starts_with("Self") {
-            let before_ok = i == 0 || !type_name.as_bytes()[i - 1].is_ascii_alphanumeric();
-            let after_pos = i + 4;
-            let after_ok = after_pos >= type_name.len()
-                || !type_name.as_bytes()[after_pos].is_ascii_alphanumeric();
-            if before_ok && after_ok {
-                result.push_str(concrete_type);
-                for _ in 0..4 {
-                    chars.next();
-                }
-                continue;
-            }
-        }
-        result.push(chars.next().unwrap().1);
-    }
-    result
 }
 
 pub(crate) fn split_qualified_name(name: &str) -> (Option<String>, &str) {

@@ -309,7 +309,7 @@ impl Analyzer<'_> {
         let mut rows: Vec<Vec<(String, PatternWitness)>> = vec![Vec::new()];
         for field in fields {
             let domain = self
-                .finite_type_witnesses(&field.type_name)
+                .finite_type_witnesses(&field.ty.to_string())
                 .unwrap_or_else(|| vec![PatternWitness::Any]);
             if rows.len().saturating_mul(domain.len()) > MAX_PATTERN_WITNESSES {
                 return None;

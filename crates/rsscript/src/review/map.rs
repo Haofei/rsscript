@@ -592,7 +592,9 @@ pub(super) fn review_map_expr_type_name_with_facts(
                 .resolve_receiver_call(&receiver_type, method, value_types)
                 .0
             {
-                CallResolution::Resolved { signature, .. } => signature.return_type,
+                CallResolution::Resolved { signature, .. } => {
+                    signature.return_ty.map(|ty| ty.to_string())
+                }
                 CallResolution::Ambiguous { .. }
                 | CallResolution::EnumVariant
                 | CallResolution::Unknown => None,
@@ -609,7 +611,7 @@ pub(super) fn review_map_expr_type_name_with_facts(
             let base_type = review_map_expr_type_name_with_facts(base, hir, value_types)?;
             hir.type_info(&base_type)
                 .and_then(|info| info.fields.get(name))
-                .map(|field| field.type_name.clone())
+                .map(|field| field.ty.to_string())
         }
         _ => review_map_expr_type_name(expr, hir),
     }

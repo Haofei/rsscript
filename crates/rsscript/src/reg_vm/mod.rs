@@ -1587,7 +1587,7 @@ fn type_name_may_contain_fn(type_name: &str, hir: &Hir) -> bool {
             let result = info
                 .fields_ordered
                 .iter()
-                .any(|field| go(&field.type_name, hir, visited));
+                .any(|field| go(&field.ty.to_string(), hir, visited));
             visited.pop();
             return result;
         }

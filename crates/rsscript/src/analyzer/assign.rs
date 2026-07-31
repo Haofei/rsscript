@@ -327,7 +327,7 @@ impl<'a> AssignChecker<'a> {
                     None => type_info.fields_ordered.get(index),
                 };
                 if let Some(field) = field {
-                    return Some(field.type_name.clone());
+                    return Some(field.ty.to_string());
                 }
             }
             if let Some(fields) = self.hir.sum_variant_fields(root) {
@@ -336,7 +336,7 @@ impl<'a> AssignChecker<'a> {
                     None => fields.get(index),
                 };
                 if let Some(field) = field {
-                    return Some(field.type_name.clone());
+                    return Some(field.ty.to_string());
                 }
             }
         }
@@ -347,7 +347,7 @@ impl<'a> AssignChecker<'a> {
                 None => signature.params.get(index),
             };
             if let Some(param) = param {
-                return Some(param.type_name.clone());
+                return Some(param.ty.to_string());
             }
         }
         None

@@ -104,6 +104,24 @@ fn hir_inference_uses_structural_type_queries() {
 }
 
 #[test]
+fn hir_signatures_store_structural_types() {
+    let root = workspace_root();
+    let hir = read(&root.join("crates/rsscript/src/hir.rs"));
+    assert!(hir.contains("pub ty: ResolvedType"));
+    assert!(hir.contains("pub return_ty: Option<ResolvedType>"));
+    assert!(!hir.contains("pub type_name: String"));
+    assert!(!hir.contains("pub return_type: Option<String>"));
+
+    let inference = read(&root.join("crates/rsscript/src/hir/infer.rs"));
+    assert!(
+        !inference.contains("field.type_name")
+            && !inference.contains("param.type_name")
+            && !inference.contains("signature.return_type"),
+        "HIR inference must not reconstruct signature or field types from rendered strings"
+    );
+}
+
+#[test]
 fn native_tier_state_machines_have_explicit_module_boundaries() {
     let root = workspace_root();
     let tier = read(&root.join("crates/rsscript/src/reg_vm/tier.rs"));

@@ -72,6 +72,16 @@ pub struct ResolvedType {
 }
 
 impl ResolvedType {
+    pub fn named(name: impl Into<String>, arguments: impl IntoIterator<Item = Self>) -> Self {
+        Self {
+            qualifiers: TypeQualifiers::default(),
+            kind: ResolvedTypeKind::Named {
+                name: name.into(),
+                arguments: arguments.into_iter().collect::<Vec<_>>().into_boxed_slice(),
+            },
+        }
+    }
+
     pub fn root_name(&self) -> Option<&str> {
         match &self.kind {
             ResolvedTypeKind::Named { name, .. } => Some(name),
@@ -119,9 +129,13 @@ impl ResolvedType {
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
                 parameter_effects: ty
-                    .fn_param_effects
+                    .fn_params
                     .iter()
-                    .map(|effect| effect.map(ResolvedParamEffect::from))
+                    .enumerate()
+                    .map(|(index, _)| {
+                        ty.effective_fn_param_effect(index)
+                            .map(ResolvedParamEffect::from)
+                    })
                     .collect(),
                 return_type: ty
                     .fn_return
@@ -564,10 +578,6 @@ impl SemanticTypeFacts {
         self.functions
             .iter()
             .map(|(name, facts)| (name.as_str(), facts))
-    }
-
-    pub(crate) fn function(&self, name: &str) -> Option<&FunctionTypeFacts> {
-        self.functions.get(name)
     }
 
     pub fn named_type(&self, name: &str) -> Option<&NamedTypeFacts> {

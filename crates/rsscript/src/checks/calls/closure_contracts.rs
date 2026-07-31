@@ -742,7 +742,7 @@ pub(super) fn check_callback_resolved_call_argument_types(
         };
         let Ok(expected_type) = substitute_type_params(
             &analyzer.budget,
-            &expected_param.type_name,
+            &expected_param.ty.to_string(),
             &type_param_substitutions,
         ) else {
             return;
@@ -1849,7 +1849,7 @@ pub(super) fn call_arg_targets_noescape_param(
     arg.name
         .as_ref()
         .and_then(|name| signature.params.iter().find(|param| param.name == *name))
-        .is_some_and(|param| is_noescape_fn_type(&param.type_name))
+        .is_some_and(|param| param.ty.qualifiers.noescape && param.ty.function_return().is_some())
 }
 
 pub(super) fn is_noescape_fn_type(type_name: &str) -> bool {

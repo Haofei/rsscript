@@ -966,7 +966,7 @@ pub(super) fn lower_hir_call_expr(
                     effect: ParamEffect::Read,
                     value: Box::new(value),
                     events: Vec::new(),
-                    type_name: actual_type.or_else(|| Some(param.type_name.clone())),
+                    type_name: actual_type.or_else(|| Some(param.ty.to_string())),
                     span: arg.span.clone(),
                 };
             }
@@ -1012,7 +1012,7 @@ pub(super) fn lower_hir_call_expr(
                         effect,
                         value: Box::new(value),
                         events: Vec::new(),
-                        type_name: Some(param.type_name.clone()),
+                        type_name: Some(param.ty.to_string()),
                         span: span.clone(),
                     };
                 }

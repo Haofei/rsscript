@@ -48,10 +48,6 @@ impl Hir {
         hir
     }
 
-    pub(crate) fn semantic_types(&self) -> &SemanticTypeFacts {
-        &self.semantic_types
-    }
-
     pub(crate) fn semantic_types_arc(&self) -> Arc<SemanticTypeFacts> {
         Arc::clone(&self.semantic_types)
     }
@@ -116,24 +112,20 @@ impl Hir {
             .values()
             .flat_map(|info| info.fields.values())
             .filter(|field| {
-                class_types.contains(type_root_name(&self.expand_type_alias(&field.type_name)))
+                class_types.contains(type_root_name(
+                    &self.expand_type_alias(&field.ty.to_string()),
+                ))
             })
-            .map(|field| field.type_name.clone())
+            .map(|field| field.ty.clone())
             .collect::<HashSet<_>>();
         for info in self.types.values_mut() {
             for field in info.fields.values_mut() {
-                if !field.is_handle
-                    && !field.is_weak
-                    && aliased_class_fields.contains(&field.type_name)
-                {
+                if !field.is_handle && !field.is_weak && aliased_class_fields.contains(&field.ty) {
                     field.is_handle = true;
                 }
             }
             for field in &mut info.fields_ordered {
-                if !field.is_handle
-                    && !field.is_weak
-                    && aliased_class_fields.contains(&field.type_name)
-                {
+                if !field.is_handle && !field.is_weak && aliased_class_fields.contains(&field.ty) {
                     field.is_handle = true;
                 }
             }
@@ -452,10 +444,10 @@ impl Hir {
                             params: vec![ParamSig {
                                 name: "self".to_string(),
                                 effect: Some(ParamEffect::Read),
-                                type_name: receiver_type.clone(),
+                                ty: ResolvedType::from_display(&receiver_type),
                                 default: None,
                             }],
-                            return_type: Some(receiver_type.clone()),
+                            return_ty: Some(ResolvedType::from_display(&receiver_type)),
                             returns_fresh: true,
                             effects: Vec::new(),
                             retained_params: HashSet::new(),

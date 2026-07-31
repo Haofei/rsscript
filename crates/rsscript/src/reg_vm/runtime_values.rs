@@ -246,8 +246,8 @@ pub(super) fn json_decode_struct_value(
     let mut fields: Vec<(String, VmValue)> = Vec::with_capacity(info.fields_ordered.len());
     for field in &info.fields_ordered {
         let decoded = match object.get(&field.name) {
-            Some(value) => json_decode_field_value(unit, &field.type_name, value)?,
-            None if type_root_name(&field.type_name) == "Option" => value_none(),
+            Some(value) => json_decode_field_value(unit, &field.ty.to_string(), value)?,
+            None if field.ty.root_name() == Some("Option") => value_none(),
             None => {
                 return Err(json_error_value(format!(
                     "missing JSON field `{}`",

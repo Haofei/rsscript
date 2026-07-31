@@ -2285,7 +2285,7 @@ impl RegLowerer<'_> {
             }
             let field_ty = owner
                 .and_then(|info| info.fields.get(&field.name))
-                .map(|info| info.type_name.as_str());
+                .map(|info| info.ty.to_string());
             let field_reg = self.temp();
             self.emit(RegInstr::GetField {
                 dst: field_reg,
@@ -2294,9 +2294,13 @@ impl RegLowerer<'_> {
             });
             // A scalar field is a bit-copy: marking `field_reg` stops the `GetField`
             // from tainting the scrutinee (the read param). Non-scalar ⇒ unmarked.
-            self.note_scalar(field_reg, field_ty);
+            self.note_scalar(field_reg, field_ty.as_deref());
             if let Some(pattern) = field.pattern.as_deref() {
-                failures.extend(self.lower_match_pattern(pattern, field_reg, field_ty)?);
+                failures.extend(self.lower_match_pattern(
+                    pattern,
+                    field_reg,
+                    field_ty.as_deref(),
+                )?);
             } else if let Some(binding) = field.binding.as_ref() {
                 let dst = self.local(binding);
                 self.emit(RegInstr::Move {
@@ -2603,7 +2607,7 @@ impl RegLowerer<'_> {
             // native scalar-replacement pass can still dissolve the variant.
             [binding] => {
                 // Single-field variant: the payload type is the sole field's type.
-                let payload_ty = field_infos.first().map(|field| field.type_name.as_str());
+                let payload_ty = field_infos.first().map(|field| field.ty.to_string());
                 match binding {
                     MatchPattern::Binding { name, .. } => {
                         let dst = self.local(name);
@@ -2612,7 +2616,7 @@ impl RegLowerer<'_> {
                             src,
                             expected: variant.to_string(),
                         });
-                        self.note_scalar(dst, payload_ty);
+                        self.note_scalar(dst, payload_ty.as_deref());
                     }
                     MatchPattern::Wildcard(_) => {}
                     _ => {
@@ -2622,8 +2626,12 @@ impl RegLowerer<'_> {
                             src,
                             expected: variant.to_string(),
                         });
-                        self.note_scalar(payload, payload_ty);
-                        failures.extend(self.lower_match_pattern(binding, payload, payload_ty)?);
+                        self.note_scalar(payload, payload_ty.as_deref());
+                        failures.extend(self.lower_match_pattern(
+                            binding,
+                            payload,
+                            payload_ty.as_deref(),
+                        )?);
                     }
                 }
             }
@@ -2637,14 +2645,14 @@ impl RegLowerer<'_> {
                     if matches!(binding, MatchPattern::Wildcard(_)) {
                         continue;
                     }
-                    let field_ty = field_infos.get(index).map(|field| field.type_name.as_str());
+                    let field_ty = field_infos.get(index).map(|field| field.ty.to_string());
                     let field_reg = self.temp();
                     self.emit(RegInstr::GetField {
                         dst: field_reg,
                         base: src,
                         name: field_name.clone(),
                     });
-                    self.note_scalar(field_reg, field_ty);
+                    self.note_scalar(field_reg, field_ty.as_deref());
                     match binding {
                         MatchPattern::Binding { name, .. } => {
                             let dst = self.local(name);
@@ -2654,8 +2662,11 @@ impl RegLowerer<'_> {
                             });
                         }
                         _ => {
-                            failures
-                                .extend(self.lower_match_pattern(binding, field_reg, field_ty)?);
+                            failures.extend(self.lower_match_pattern(
+                                binding,
+                                field_reg,
+                                field_ty.as_deref(),
+                            )?);
                         }
                     }
                 }
@@ -2689,16 +2700,20 @@ impl RegLowerer<'_> {
             let field_ty = field_infos
                 .iter()
                 .find(|info| info.name == field.name)
-                .map(|info| info.type_name.as_str());
+                .map(|info| info.ty.to_string());
             let field_reg = self.temp();
             self.emit(RegInstr::GetField {
                 dst: field_reg,
                 base: src,
                 name: field.name.clone(),
             });
-            self.note_scalar(field_reg, field_ty);
+            self.note_scalar(field_reg, field_ty.as_deref());
             if let Some(pattern) = field.pattern.as_deref() {
-                failures.extend(self.lower_match_pattern(pattern, field_reg, field_ty)?);
+                failures.extend(self.lower_match_pattern(
+                    pattern,
+                    field_reg,
+                    field_ty.as_deref(),
+                )?);
             } else if let Some(binding) = field.binding.as_ref() {
                 let dst = self.local(binding);
                 self.emit(RegInstr::Move {

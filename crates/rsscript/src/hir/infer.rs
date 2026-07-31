@@ -73,7 +73,7 @@ pub(crate) fn infer_hir_expr_type(
             match resolution {
                 CallResolution::Resolved { signature, .. } => {
                     infer_signature_return_type(hir, &signature, callee, args, value_types)
-                        .or(signature.return_type)
+                        .or_else(|| signature.return_ty.map(|ty| ty.to_string()))
                 }
                 CallResolution::Ambiguous { .. } | CallResolution::Unknown => match callee {
                     Callee::Name(name) => value_types
@@ -117,7 +117,7 @@ fn infer_signature_return_type(
     args: &[CallArg],
     value_types: &HashMap<String, String>,
 ) -> Option<String> {
-    let return_type = structural_signature_return_type(hir, signature)?;
+    let return_type = signature.return_ty.clone()?;
     if signature.type_params.is_empty() {
         return None;
     }
@@ -226,13 +226,11 @@ fn collect_receiver_type_substitutions(
     let Some(actual_type) = infer_hir_expr_type(hir, receiver, value_types) else {
         return;
     };
-    structural_signature_parameter_type(hir, signature, 0)
-        .unwrap_or_else(|| ResolvedType::from_display(&receiver_param.type_name))
-        .collect_substitutions(
-            &ResolvedType::from_display(&actual_type),
-            generic_params,
-            substitutions,
-        );
+    receiver_param.ty.clone().collect_substitutions(
+        &ResolvedType::from_display(&actual_type),
+        generic_params,
+        substitutions,
+    );
 }
 
 fn collect_arg_type_substitutions(
@@ -244,7 +242,7 @@ fn collect_arg_type_substitutions(
     substitutions: &mut BTreeMap<String, ResolvedType>,
 ) {
     for (index, arg) in args.iter().enumerate() {
-        let Some((parameter_index, param)) = arg
+        let Some((_parameter_index, param)) = arg
             .name
             .as_deref()
             .and_then(|name| {
@@ -258,42 +256,23 @@ fn collect_arg_type_substitutions(
         else {
             continue;
         };
-        let (pattern_type, actual_type, structural_pattern) = if let Some(expected_return_type) =
-            noescape_return_type(&param.type_name)
+        let (actual_type, structural_pattern) = if param.ty.qualifiers.noescape
+            && let Some(expected_return_type) = param.ty.function_return()
             && let Expr::Closure { body, .. } = &arg.value
             && let Some(actual_return_type) = infer_closure_return_type(hir, body, value_types)
         {
-            let structural_pattern =
-                structural_signature_parameter_type(hir, signature, parameter_index).and_then(
-                    |ty| match ty.kind {
-                        crate::semantic::ResolvedTypeKind::Function { return_type, .. } => {
-                            return_type.map(|return_type| *return_type)
-                        }
-                        crate::semantic::ResolvedTypeKind::Named { .. } => None,
-                    },
-                );
-            (
-                expected_return_type.to_string(),
-                actual_return_type,
-                structural_pattern,
-            )
+            (actual_return_type, expected_return_type.clone())
         } else {
             let Some(actual_type) = infer_arg_expr_type(hir, &arg.value, value_types) else {
                 continue;
             };
-            (
-                param.type_name.clone(),
-                actual_type,
-                structural_signature_parameter_type(hir, signature, parameter_index),
-            )
+            (actual_type, param.ty.clone())
         };
-        structural_pattern
-            .unwrap_or_else(|| ResolvedType::from_display(&pattern_type))
-            .collect_substitutions(
-                &ResolvedType::from_display(&actual_type),
-                generic_params,
-                substitutions,
-            );
+        structural_pattern.collect_substitutions(
+            &ResolvedType::from_display(&actual_type),
+            generic_params,
+            substitutions,
+        );
     }
 }
 
@@ -374,14 +353,14 @@ fn infer_arg_expr_type(
 /// generic parameters replaced by `base_type`'s concrete arguments — so `item0`
 /// on `__Tuple2<Int, String>` resolves to `Int`, not the declared parameter `A`.
 pub(super) fn substituted_field_type(
-    hir: &Hir,
+    _hir: &Hir,
     type_info: &TypeInfo,
     base_type: &str,
     field: &FieldInfo,
 ) -> String {
     let args = type_arg_names(base_type).unwrap_or_default();
     if args.is_empty() || type_info.type_params.is_empty() {
-        return field.type_name.clone();
+        return field.ty.to_string();
     }
     let substitutions: BTreeMap<String, ResolvedType> = type_info
         .type_params
@@ -389,51 +368,7 @@ pub(super) fn substituted_field_type(
         .cloned()
         .zip(args.into_iter().map(ResolvedType::from_display))
         .collect();
-    let field_type = hir
-        .semantic_types()
-        .named_type(&type_info.name)
-        .and_then(|facts| {
-            facts
-                .fields
-                .iter()
-                .find(|(name, _)| name == &field.name)
-                .map(|(_, ty)| hir.semantic_types().arena().get(*ty).clone())
-        })
-        .unwrap_or_else(|| ResolvedType::from_display(&field.type_name));
-    field_type.substitute(&substitutions).to_string()
-}
-
-fn structural_signature_return_type(hir: &Hir, signature: &FunctionSig) -> Option<ResolvedType> {
-    let key = signature_semantic_key(signature);
-    hir.semantic_types()
-        .function(&key)
-        .and_then(|facts| facts.return_type)
-        .map(|ty| hir.semantic_types().arena().get(ty).clone())
-        .or_else(|| {
-            signature
-                .return_type
-                .as_deref()
-                .map(ResolvedType::from_display)
-        })
-}
-
-fn structural_signature_parameter_type(
-    hir: &Hir,
-    signature: &FunctionSig,
-    index: usize,
-) -> Option<ResolvedType> {
-    let key = signature_semantic_key(signature);
-    hir.semantic_types()
-        .function(&key)
-        .and_then(|facts| facts.parameters.get(index))
-        .map(|(_, ty)| hir.semantic_types().arena().get(*ty).clone())
-}
-
-fn signature_semantic_key(signature: &FunctionSig) -> String {
-    signature.namespace.as_ref().map_or_else(
-        || signature.name.clone(),
-        |namespace| format!("{namespace}.{}", signature.name),
-    )
+    field.ty.substitute(&substitutions).to_string()
 }
 
 use crate::text_util::builtin_generic_type_params;
@@ -448,14 +383,6 @@ fn fn_return_type(type_name: &str) -> Option<ResolvedType> {
     ResolvedType::from_display(type_name)
         .function_return()
         .cloned()
-}
-
-fn noescape_return_type(type_name: &str) -> Option<ResolvedType> {
-    let ty = ResolvedType::from_display(type_name);
-    ty.qualifiers
-        .noescape
-        .then(|| ty.function_return().cloned())
-        .flatten()
 }
 
 fn result_ok_type(type_name: &str) -> Option<String> {
@@ -557,9 +484,7 @@ pub(super) fn match_pattern_binding_types(
             // by index.
             let mut result = Vec::new();
             for (binding, field_type) in bindings.iter().zip(field_types.iter()) {
-                let field_type_name = ResolvedType::from_display(&field_type.type_name)
-                    .substitute(&substitutions)
-                    .to_string();
+                let field_type_name = field_type.ty.substitute(&substitutions).to_string();
                 result.extend(match_pattern_binding_types(
                     hir,
                     binding,
@@ -668,9 +593,7 @@ fn collect_struct_pattern_binding_types(
         else {
             continue;
         };
-        let field_type_name = ResolvedType::from_display(&field_type.type_name)
-            .substitute(substitutions)
-            .to_string();
+        let field_type_name = field_type.ty.substitute(substitutions).to_string();
         if let Some(pattern) = &field.pattern {
             bindings.extend(match_pattern_binding_types(
                 hir,

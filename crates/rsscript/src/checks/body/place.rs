@@ -21,7 +21,7 @@ pub(super) fn check_call_place_conflicts(
         CallResolution::Resolved { signature, .. } => signature
             .params
             .iter()
-            .filter(|param| param.type_name.starts_with("noescape"))
+            .filter(|param| param.ty.qualifiers.noescape)
             .map(|param| param.name.as_str())
             .collect(),
         _ => Vec::new(),

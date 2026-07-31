@@ -325,8 +325,12 @@ pub(super) fn check_constructor_field_initializers(
                 "Inline fields take ownership of non-Copy local values stored inside the constructed struct.",
             );
         } else if !field.is_handle
-            && analyzer.hir.type_kind(&field.type_name).is_some()
-            && !is_copy_type_name(&field.type_name)
+            && field
+                .ty
+                .root_name()
+                .and_then(|name| analyzer.hir.type_kind(name))
+                .is_some()
+            && !is_copy_type_name(&field.ty.to_string())
             && constructor_arg_uses_managed_inline_value(analyzer, &arg.value, state)
         {
             managed_inline_constructor_field_diagnostic(
@@ -412,11 +416,8 @@ pub(super) fn constructor_arg_uses_managed_inline_value(
                     },
             } if signature.returns_fresh => true,
             CallResolution::Resolved { signature, .. } => {
-                signature.return_type.as_deref().is_some_and(|type_name| {
-                    let type_name = type_name
-                        .trim()
-                        .strip_prefix("fresh ")
-                        .unwrap_or(type_name.trim());
+                signature.return_ty.as_ref().is_some_and(|return_ty| {
+                    let type_name = return_ty.root_name().unwrap_or_default();
                     !signature.returns_fresh
                         && !is_copy_type_name(type_name)
                         && analyzer.hir.type_kind(type_name).is_some()
