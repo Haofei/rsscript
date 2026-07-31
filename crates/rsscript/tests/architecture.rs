@@ -40,6 +40,36 @@ fn read(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
 }
 
+#[test]
+fn intrinsic_catalog_is_the_only_generated_registry_source() {
+    let root = workspace_root();
+    let build = read(&root.join("crates/rsscript/build.rs"));
+    assert!(
+        build.contains("intrinsics.toml"),
+        "the intrinsic generator must consume the structured catalog"
+    );
+    assert!(
+        !build.contains("src/reg_vm/lower.rs") && !build.contains("src/runtime_abi.rs"),
+        "the intrinsic generator must not scrape Rust implementation source"
+    );
+
+    let catalog = read(&root.join("crates/rsscript/intrinsics.toml"));
+    let catalog: toml::Value = toml::from_str(&catalog).expect("intrinsic catalog should parse");
+    assert_eq!(catalog["schema"].as_integer(), Some(1));
+    assert!(
+        catalog["intrinsic"]
+            .as_array()
+            .is_some_and(|entries| entries.len() >= 500),
+        "the catalog must retain internal VM-only intrinsic identities"
+    );
+    assert!(
+        catalog["binding"]
+            .as_array()
+            .is_some_and(|entries| entries.len() >= 500),
+        "the catalog must retain the public runtime and VM surface"
+    );
+}
+
 fn rust_files_below(root: &Path) -> Vec<PathBuf> {
     fn visit(directory: &Path, files: &mut Vec<PathBuf>) {
         let mut entries = fs::read_dir(directory)

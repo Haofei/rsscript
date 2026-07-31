@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, HashSet};
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -98,6 +98,35 @@ struct ManifestNativeRust {
     path: Option<String>,
     #[serde(rename = "crate")]
     crate_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IntrinsicCatalog {
+    schema: u32,
+    intrinsic: Vec<IntrinsicId>,
+    binding: Vec<IntrinsicBinding>,
+}
+
+#[derive(Debug, Deserialize)]
+struct IntrinsicId {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct IntrinsicBinding {
+    namespace: String,
+    name: String,
+    vm_id: Option<String>,
+    runtime_target: Option<String>,
+    lowering: IntrinsicLowering,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum IntrinsicLowering {
+    Direct,
+    Special,
+    RuntimeOnly,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -279,46 +308,84 @@ fn write_core_package_index() -> Result<(), String> {
 }
 
 fn write_reg_vm_runtime_intrinsics() -> Result<(), String> {
-    println!("cargo:rerun-if-changed=src/reg_vm/lower.rs");
-    println!("cargo:rerun-if-changed=src/runtime_abi.rs");
-
+    println!("cargo:rerun-if-changed=intrinsics.toml");
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
-    // The name->intrinsic lowering table lives in the reg-VM lowerer (`qualified_intrinsic`
-    // and the `call` special-arm), which is in src/reg_vm/lower.rs.
-    let source_path = manifest_dir.join("src/reg_vm/lower.rs");
-    let source = fs::read_to_string(&source_path)
-        .map_err(|error| format!("failed to read {}: {error}", source_path.display()))?;
-    let resolver_signatures = collect_reg_vm_resolver_signatures(&source)?;
-    let runtime_abi_path = manifest_dir.join("src/runtime_abi.rs");
-    let runtime_abi_source = fs::read_to_string(&runtime_abi_path)
-        .map_err(|error| format!("failed to read {}: {error}", runtime_abi_path.display()))?;
-    let runtime_abi_signatures = collect_runtime_abi_signatures(&runtime_abi_source);
-    let signatures = resolver_signatures
+    let catalog_path = manifest_dir.join("intrinsics.toml");
+    let source = fs::read_to_string(&catalog_path)
+        .map_err(|error| format!("failed to read {}: {error}", catalog_path.display()))?;
+    let catalog: IntrinsicCatalog = toml::from_str(&source)
+        .map_err(|error| format!("failed to parse {}: {error}", catalog_path.display()))?;
+    validate_intrinsic_catalog(&catalog)?;
+
+    let enum_variants = catalog
+        .intrinsic
         .iter()
-        .filter(|signature| runtime_abi_signatures.contains(*signature))
-        .cloned()
-        .collect::<Vec<_>>();
-    let special_forms = resolver_signatures
-        .into_iter()
-        .filter(|signature| !runtime_abi_signatures.contains(signature))
-        .collect::<Vec<_>>();
-    let generated_runtime = format!(
-        "&[\n{}\n]\n",
-        signatures
-            .iter()
-            .map(|signature| format!("    {signature:?},"))
-            .collect::<Vec<_>>()
-            .join("\n")
+        .map(|intrinsic| format!("    {},", intrinsic.id))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let generated_enum = format!(
+        "#[allow(dead_code)]\n#[derive(Debug, Clone, Copy)]\npub(crate) enum RegIntrinsic {{\n{enum_variants}\n}}\n"
     );
-    let generated_special_forms = format!(
-        "&[\n{}\n]\n",
-        special_forms
-            .iter()
-            .map(|signature| format!("    {signature:?},"))
-            .collect::<Vec<_>>()
-            .join("\n")
+    let direct_arms = catalog
+        .binding
+        .iter()
+        .filter(|binding| binding.lowering == IntrinsicLowering::Direct)
+        .map(|binding| {
+            let vm_id = binding
+                .vm_id
+                .as_deref()
+                .expect("validated direct intrinsic must have a VM id");
+            format!(
+                "        ({:?}, {:?}) => Some(RegIntrinsic::{}),",
+                binding.namespace, binding.name, vm_id
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let generated_lookup = format!(
+        "fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {{\n    match (namespace, name) {{\n{direct_arms}\n        _ => None,\n    }}\n}}\n"
     );
+    let runtime_entries = catalog
+        .binding
+        .iter()
+        .filter_map(|binding| {
+            binding.runtime_target.as_ref().map(|target| {
+                format!(
+                    "    runtime_intrinsic({:?}, {:?}, {:?}),",
+                    binding.namespace, binding.name, target
+                )
+            })
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let generated_abi =
+        format!("const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[\n{runtime_entries}\n];\n");
+    let runtime_signatures = catalog.binding.iter().filter(|binding| {
+        binding.runtime_target.is_some()
+            && matches!(
+                binding.lowering,
+                IntrinsicLowering::Direct | IntrinsicLowering::Special
+            )
+    });
+    let special_signatures = catalog.binding.iter().filter(|binding| {
+        binding.runtime_target.is_none()
+            && matches!(
+                binding.lowering,
+                IntrinsicLowering::Direct | IntrinsicLowering::Special
+            )
+    });
+    let generated_runtime = signature_slice(runtime_signatures);
+    let generated_special_forms = signature_slice(special_signatures);
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("out dir"));
+    fs::write(out_dir.join("rss-reg-intrinsic-enum.rs"), generated_enum)
+        .map_err(|error| format!("reg VM intrinsic enum should be written: {error}"))?;
+    fs::write(
+        out_dir.join("rss-reg-intrinsic-lookup.rs"),
+        generated_lookup,
+    )
+    .map_err(|error| format!("reg VM intrinsic lookup should be written: {error}"))?;
+    fs::write(out_dir.join("rss-runtime-intrinsics.rs"), generated_abi)
+        .map_err(|error| format!("runtime intrinsic table should be written: {error}"))?;
     fs::write(
         out_dir.join("rss-reg-vm-runtime-intrinsics.rs"),
         generated_runtime,
@@ -332,6 +399,76 @@ fn write_reg_vm_runtime_intrinsics() -> Result<(), String> {
     Ok(())
 }
 
+fn validate_intrinsic_catalog(catalog: &IntrinsicCatalog) -> Result<(), String> {
+    if catalog.schema != 1 {
+        return Err(format!(
+            "unsupported intrinsic catalog schema {}; expected 1",
+            catalog.schema
+        ));
+    }
+    let ids = catalog
+        .intrinsic
+        .iter()
+        .map(|intrinsic| intrinsic.id.as_str())
+        .collect::<HashSet<_>>();
+    if ids.len() != catalog.intrinsic.len() {
+        return Err("intrinsic catalog contains duplicate internal ids".to_string());
+    }
+    let mut bindings = HashSet::new();
+    for binding in &catalog.binding {
+        if !bindings.insert((binding.namespace.as_str(), binding.name.as_str())) {
+            return Err(format!(
+                "intrinsic catalog contains duplicate binding {}.{}",
+                binding.namespace, binding.name
+            ));
+        }
+        match binding.lowering {
+            IntrinsicLowering::Direct => {
+                let Some(vm_id) = binding.vm_id.as_deref() else {
+                    return Err(format!(
+                        "direct intrinsic {}.{} has no VM id",
+                        binding.namespace, binding.name
+                    ));
+                };
+                if !ids.contains(vm_id) {
+                    return Err(format!(
+                        "intrinsic {}.{} refers to unknown VM id {vm_id}",
+                        binding.namespace, binding.name
+                    ));
+                }
+            }
+            IntrinsicLowering::Special | IntrinsicLowering::RuntimeOnly => {
+                if binding.vm_id.is_some() {
+                    return Err(format!(
+                        "non-direct intrinsic {}.{} must not declare a VM id",
+                        binding.namespace, binding.name
+                    ));
+                }
+            }
+        }
+        if binding.lowering == IntrinsicLowering::RuntimeOnly && binding.runtime_target.is_none() {
+            return Err(format!(
+                "runtime-only intrinsic {}.{} has no runtime target",
+                binding.namespace, binding.name
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn signature_slice<'a>(bindings: impl Iterator<Item = &'a IntrinsicBinding>) -> String {
+    let entries = bindings
+        .map(|binding| {
+            format!(
+                "    {:?},",
+                format!("{}.{}", binding.namespace, binding.name)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("&[\n{entries}\n]\n")
+}
+
 fn workspace_root(manifest_dir: &Path) -> Result<PathBuf, String> {
     manifest_dir
         .parent()
@@ -343,122 +480,6 @@ fn workspace_root(manifest_dir: &Path) -> Result<PathBuf, String> {
                 manifest_dir.display()
             )
         })
-}
-
-fn collect_reg_vm_resolver_signatures(source: &str) -> Result<Vec<String>, String> {
-    // The name->intrinsic lowering table lives in two regions of reg_vm/mod.rs:
-    //   1. `qualified_intrinsic(...)` — the pure `(ns, name) => RegIntrinsic`
-    //      mappings, extracted into a standalone helper.
-    //   2. the `else { match (namespace_root, name_root) { ... } }` in `call`
-    //      — the special arms with inline lowering logic.
-    // Both are scanned so the generated runtime/special-form indices stay
-    // complete regardless of which region a signature lives in.
-    let mut signatures = BTreeMap::<String, ()>::new();
-
-    let pure_marker =
-        "fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {";
-    let pure_start = source
-        .find(pure_marker)
-        .ok_or_else(|| "reg VM intrinsic resolver helper was not found".to_string())?;
-    let pure_region = &source[pure_start + pure_marker.len()..];
-    let pure_end = pure_region
-        .find("\n        _ => None,")
-        .ok_or_else(|| "reg VM intrinsic resolver helper fallback was not found".to_string())?;
-    collect_signature_pairs(&pure_region[..pure_end], &mut signatures);
-
-    let special_marker = "let intrinsic = if let Some(intrinsic) =";
-    let special_start = source
-        .find(special_marker)
-        .ok_or_else(|| "reg VM intrinsic resolver match was not found".to_string())?;
-    let special_region = &source[special_start + special_marker.len()..];
-    let special_end = special_region
-        .find("\n                    _ => {")
-        .ok_or_else(|| "reg VM intrinsic resolver fallback was not found".to_string())?;
-    collect_signature_pairs(&special_region[..special_end], &mut signatures);
-
-    Ok(signatures.into_keys().collect())
-}
-
-fn collect_signature_pairs(resolver: &str, signatures: &mut BTreeMap<String, ()>) {
-    let bytes = resolver.as_bytes();
-    let mut index = 0;
-    while index + 2 < bytes.len() {
-        if bytes[index] != b'(' || bytes[index + 1] != b'"' {
-            index += 1;
-            continue;
-        }
-        let Some((namespace, after_namespace)) = parse_quoted_ascii(resolver, index + 1) else {
-            index += 1;
-            continue;
-        };
-        let mut cursor = after_namespace;
-        cursor = skip_ascii_whitespace(bytes, cursor);
-        if bytes.get(cursor) != Some(&b',') {
-            index += 1;
-            continue;
-        }
-        cursor += 1;
-        cursor = skip_ascii_whitespace(bytes, cursor);
-        if bytes.get(cursor) != Some(&b'"') {
-            index += 1;
-            continue;
-        }
-        let Some((name, after_name)) = parse_quoted_ascii(resolver, cursor) else {
-            index += 1;
-            continue;
-        };
-        signatures.insert(format!("{namespace}.{name}"), ());
-        index = after_name;
-    }
-}
-
-fn collect_runtime_abi_signatures(source: &str) -> BTreeSet<String> {
-    let mut signatures = BTreeSet::new();
-    let mut index = 0;
-    while let Some(relative) = source[index..].find("runtime_intrinsic") {
-        index += relative + "runtime_intrinsic".len();
-        let bytes = source.as_bytes();
-        let mut cursor = index;
-        if source[cursor..].starts_with("_with_handles") {
-            cursor += "_with_handles".len();
-        }
-        cursor = skip_ascii_whitespace(bytes, cursor);
-        if bytes.get(cursor) != Some(&b'(') {
-            continue;
-        }
-        cursor += 1;
-        cursor = skip_ascii_whitespace(bytes, cursor);
-        let Some((namespace, after_namespace)) = parse_quoted_ascii(source, cursor) else {
-            continue;
-        };
-        cursor = skip_ascii_whitespace(bytes, after_namespace);
-        if bytes.get(cursor) != Some(&b',') {
-            continue;
-        }
-        cursor += 1;
-        cursor = skip_ascii_whitespace(bytes, cursor);
-        let Some((name, after_name)) = parse_quoted_ascii(source, cursor) else {
-            continue;
-        };
-        signatures.insert(format!("{namespace}.{name}"));
-        index = after_name;
-    }
-    signatures
-}
-
-fn parse_quoted_ascii(source: &str, quote_index: usize) -> Option<(String, usize)> {
-    let bytes = source.as_bytes();
-    if bytes.get(quote_index) != Some(&b'"') {
-        return None;
-    }
-    let mut end = quote_index + 1;
-    while end < bytes.len() && bytes[end] != b'"' {
-        if bytes[end] == b'\\' {
-            return None;
-        }
-        end += 1;
-    }
-    (end < bytes.len()).then(|| (source[quote_index + 1..end].to_string(), end + 1))
 }
 
 fn default_core_entries(root: &Path) -> Result<Vec<CoreInterfaceEntry>, String> {

@@ -90,6 +90,7 @@ This table records the current implementation batch for the refactoring work in
 | R25 | Remove simulated domain runtime facades | Complete | No bundled image, cache, config, counter, interpreter-object, or local HTTP handler facade remains; the real HTTP client, File/JSON/CSV, JIT, and self-host framework remain |
 | R26 | Remove dormant database execution authority | Complete | No database host authority, grant, scope handle, adapter, public API, or execution-policy test remains; database evidence taxonomy is unchanged |
 | R27 | Converge documentation after product contraction | Complete | Current boundary documents distinguish executable host surfaces from abstract review evidence and no longer present removed database, GPU, worker, publish, or vendor infrastructure as active products |
+| R28 | Generate intrinsic registries from one structured catalog | Complete | Internal VM identities, public aliases, AOT runtime targets, and direct/special lowering classifications come from `crates/rsscript/intrinsics.toml`; build tooling no longer scrapes Rust implementation source |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -291,6 +292,12 @@ R27 reconciles current documentation with the contracted implementation. It
 keeps abstract database and registry evidence where REIR still models them, but
 removes stale claims about executable database adapters, DSN authority, dynamic
 shaders, hardware integration runners, and package publication infrastructure.
+
+R28 replaces three manually synchronized intrinsic registries and source-text
+scanning in `build.rs` with a versioned catalog. The generated `RegIntrinsic`
+enum, direct surface lookup, Rust runtime ABI table, and VM coverage indices now
+share one declaration. Complex lowering and JIT eligibility remain explicit,
+hand-written, fail-closed implementation decisions keyed by the generated ID.
 
 ## Experimental Status
 
