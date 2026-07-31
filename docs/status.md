@@ -73,7 +73,7 @@ This table records the current implementation batch for the refactoring work in
 | R7 | Interned structural type semantics | Complete | Semantic signatures and fields use shared structural facts; generic substitution no longer depends on parameter-name heuristics |
 | R8 | VM/JIT invariant boundary decomposition | Complete | Validation, executable memory, ABI, optimization, and deoptimization boundaries are independently testable |
 | R9 | Explicit service ownership and session lifetimes | Complete | Stateful runtime and native services have explicit owners, instance isolation, and deterministic close/shutdown paths |
-| R10 | Opaque host capability handles | Complete | Concrete host authorization returns execution-scoped path, endpoint, executable, and database handles |
+| R10 | Opaque host capability handles | Complete | Concrete host authorization returns execution-scoped path, endpoint, and executable handles |
 | R11 | REIR adapter convergence | Complete | Adapters share bounded evidence construction, provenance, and explicit unknown coverage |
 | R12 | Test-domain organization | Complete | Register-VM, JIT acceptance, and self-host parity suites are composed from independently owned semantic domains |
 | R13 | Runtime compatibility owner isolation | Complete | Canonical async work uses explicit services and the generated ABI has exactly one isolated process-wide compatibility owner |
@@ -81,7 +81,7 @@ This table records the current implementation batch for the refactoring work in
 | R15 | REIR adapter pipeline decomposition | Complete | Input, traversal, normalization, coverage, and fact projection are separate from bounded evidence construction |
 | R16 | Semantic checker and lowering decomposition | Complete | Call, ownership, effect, closure, and emission responsibilities have stable module boundaries |
 | R17 | Large test-domain decomposition | Complete | Remaining register-window, JIT, and backend suites have independently owned semantic domains |
-| R18 | Host capability adapter enforcement | Complete | Canonical filesystem, network, process, and database adapters consume scoped authorized handles |
+| R18 | Host capability adapter enforcement | Complete | Canonical filesystem, network, and process adapters consume scoped authorized handles |
 | R19 | Revision-scoped LSP index cache | Complete | Semantic indexes are reused only for matching document and package generations |
 | R20 | Remove third-party safe-execution scope | Complete | No untrusted profile, worker protocol, worker binary, sandbox launcher, release artifact, or execution API remains |
 | R21 | Remove Metal/GPU and tensor execution surfaces | Complete | No Metal crate, tensor runtime, GPU ABI, language interface, VM lowering, test domain, or release job remains |
@@ -89,6 +89,7 @@ This table records the current implementation batch for the refactoring work in
 | R23 | Contract native package ecosystem demos | Complete | One dependency-free native ABI fixture covers mutable list write-back; SQLite, SQLx, Rayon, CLI, Crypto, and HTTP native package trees are removed |
 | R24 | Remove fake database runtime and generic pooling | Complete | No synthetic database connection/error runtime, generic pooling language feature, compiler/VM model, stdlib interface, fixture, or generated crate remains |
 | R25 | Remove simulated domain runtime facades | Complete | No bundled image, cache, config, counter, interpreter-object, or local HTTP handler facade remains; the real HTTP client, File/JSON/CSV, JIT, and self-host framework remain |
+| R26 | Remove dormant database execution authority | Complete | No database host authority, grant, scope handle, adapter, public API, or execution-policy test remains; database evidence taxonomy is unchanged |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -115,7 +116,7 @@ scope identity. Legacy embedding helpers construct a named trusted-local
 context; restricted callers use the context-aware entrypoint. Every
 host-touching intrinsic is classified and checked before dispatch. Trusted-CI
 VM execution defaults to no host grants, can run pure bounded code, and denies
-filesystem, environment, process, network, database, native, and JIT
+filesystem, environment, process, network, native, and JIT
 effects before side effects occur. Capability objects support exact grants, but
 the VM remains deliberately conservative: a restricted intrinsic stays denied
 until that intrinsic validates its concrete resource through the scoped API.
@@ -165,7 +166,7 @@ inlining. Raw IR cannot reach code generation without a mode-specific borrowed
 `ValidatedJitFunction`.
 
 R9 introduced explicit owners for native-library loading, process concurrency,
-HTTP, database access, and the Tokio-backed runtime services. Instance APIs own
+HTTP, and the Tokio-backed runtime services. Instance APIs own
 caches, limits, and shutdown; compatibility free functions delegate to a default
 instance but no longer contain the core state machine. `OperationContext` can
 carry an explicit `RuntimeServices` owner, so embedded executions and tests can
@@ -174,11 +175,11 @@ native database and HTTP package implementations without weakening those
 generic runtime ownership boundaries.
 
 R10 replaces successful concrete authorization results with opaque
-`AuthorizedPath`, `AuthorizedEndpoint`, `AuthorizedExecutable`, and
-`AuthorizedDatabase` values. Each handle carries the unforgeable
-`ExecutionScopeId` that issued it, and cross-scope reuse is rejected. Restricted
-VM host effects remain fail-closed until their adapter accepts the corresponding
-handle; trusted-local compatibility does not weaken restricted construction.
+`AuthorizedPath`, `AuthorizedEndpoint`, and `AuthorizedExecutable` values. Each
+handle carries the unforgeable `ExecutionScopeId` that issued it, and
+cross-scope reuse is rejected. Restricted VM host effects remain fail-closed
+until their adapter accepts the corresponding handle; trusted-local
+compatibility does not weaken restricted construction.
 
 R11 routes RSScript and Terraform evidence through one bounded builder with
 operation, fact, and string budgets. Producer provenance is validated at the
@@ -226,14 +227,13 @@ calls/ABI, deoptimization, validation, fuzzing, range proofs, and the sealed
 compile boundary. Architecture tests pin both domain sets.
 
 R18 introduces `ScopedHostAdapters` as the sole consumption boundary for
-`AuthorizedPath`, `AuthorizedEndpoint`, `AuthorizedExecutable`, and
-`AuthorizedDatabase`. Restricted Register-VM dispatch now derives the concrete
-path, URL endpoint, executable, database identity, process working directory,
-and process environment names before any host effect; it mints an exact
-scope-bound handle and passes that handle through the adapter. Cross-scope
-handles fail closed. Existing stream/file resources remain valid only inside
-their creating VM, while trusted-local raw entrypoints remain explicitly
-compatibility-only.
+`AuthorizedPath`, `AuthorizedEndpoint`, and `AuthorizedExecutable`. Restricted
+Register-VM dispatch now derives the concrete path, URL endpoint, executable,
+process working directory, and process environment names before any host effect;
+it mints an exact scope-bound handle and passes that handle through the adapter.
+Cross-scope handles fail closed. Existing stream/file resources remain valid
+only inside their creating VM, while trusted-local raw entrypoints remain
+explicitly compatibility-only.
 
 R19 adds an immutable source-index cache keyed by document revision and package
 semantic generation. Editing, desynchronizing, saving, or invalidating package
@@ -282,6 +282,10 @@ environment/function-object, and local HTTP handler runtime facades. The real
 HTTP client remains backed by `HttpRequest`, `HttpResponse`, and `HttpError`;
 File, JSON, CSV, JIT, and the self-host framework retain their supported
 coverage.
+
+R26 removes the database-specific execution authority left behind after R24.
+The compiler still models database capabilities as review evidence, but no
+runtime grant, scoped database handle, host adapter, or execution API exists.
 
 ## Experimental Status
 

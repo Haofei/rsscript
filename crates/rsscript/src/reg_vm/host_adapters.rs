@@ -27,8 +27,7 @@ impl RegVm {
             crate::HostAuthority::Environment => {
                 self.authorize_environment_intrinsic(intrinsic, args, base)
             }
-            crate::HostAuthority::Database
-            | crate::HostAuthority::TempDirectory
+            crate::HostAuthority::TempDirectory
             | crate::HostAuthority::Native
             | crate::HostAuthority::Jit => self.authorize_host_authority(authority),
         }

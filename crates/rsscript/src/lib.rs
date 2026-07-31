@@ -68,9 +68,9 @@ pub use diagnostic::{
 pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
 pub use eval_types::{CoverageBucket, EvalError, EvalOutput, NativeInterpreterFn, NativeValue};
 pub use execution_policy::{
-    AuthorityError, AuthorizedDatabase, AuthorizedEndpoint, AuthorizedExecutable, AuthorizedPath,
-    DeploymentProfile, ExecutionCapability, ExecutionContext, ExecutionContextError,
-    ExecutionPolicyError, ExecutionScopeId, HostAuthority, HostCapabilities, NetworkEndpointGrant,
+    AuthorityError, AuthorizedEndpoint, AuthorizedExecutable, AuthorizedPath, DeploymentProfile,
+    ExecutionCapability, ExecutionContext, ExecutionContextError, ExecutionPolicyError,
+    ExecutionScopeId, HostAuthority, HostCapabilities, NetworkEndpointGrant,
     ParseDeploymentProfileError, ScopedHostAdapters, SupportLevel,
 };
 pub use formatter::{format_program, format_source};
@@ -252,12 +252,12 @@ pub mod api {
         /// Register-VM compilation and execution.
         pub mod vm {
             pub use crate::{
-                AuthorityError, AuthorizedDatabase, AuthorizedEndpoint, AuthorizedExecutable,
-                AuthorizedPath, CoverageBucket, DeploymentProfile, EvalError, EvalOutput,
-                ExecutionCapability, ExecutionContext, ExecutionContextError, ExecutionPolicyError,
-                ExecutionScopeId, HostAuthority, HostCapabilities, JitPlan, NativeInterpreterFn,
-                NativeValue, NetworkEndpointGrant, ParseDeploymentProfileError, RegVmExecutable,
-                SupportLevel, VmCoverageReport, VmLimits, load_authorized_package_native_bindings,
+                AuthorityError, AuthorizedEndpoint, AuthorizedExecutable, AuthorizedPath,
+                CoverageBucket, DeploymentProfile, EvalError, EvalOutput, ExecutionCapability,
+                ExecutionContext, ExecutionContextError, ExecutionPolicyError, ExecutionScopeId,
+                HostAuthority, HostCapabilities, JitPlan, NativeInterpreterFn, NativeValue,
+                NetworkEndpointGrant, ParseDeploymentProfileError, RegVmExecutable, SupportLevel,
+                VmCoverageReport, VmLimits, load_authorized_package_native_bindings,
                 load_package_native_bindings, reg_vm_compile_package, reg_vm_compile_package_input,
                 reg_vm_compile_source, reg_vm_compile_validated,
                 reg_vm_eval_package_main_with_args,

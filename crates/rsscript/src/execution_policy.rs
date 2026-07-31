@@ -246,30 +246,13 @@ impl AuthorizedExecutable {
     }
 }
 
-/// An authorized logical database identity bound to one execution scope.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct AuthorizedDatabase {
-    scope: ExecutionScopeId,
-    logical_id: String,
-}
-
-impl AuthorizedDatabase {
-    pub const fn scope_id(&self) -> ExecutionScopeId {
-        self.scope
-    }
-
-    pub fn logical_id(&self) -> &str {
-        &self.logical_id
-    }
-}
-
 /// Canonical host-adapter boundary for one execution scope.
 ///
 /// Restricted callers first ask [`ExecutionContext`] to mint an exact
 /// capability and then pass that capability through this adapter before
 /// touching the host. Keeping scope validation here prevents individual
-/// filesystem, network, process, and database adapters from reimplementing
-/// capability checks or accepting a detached authorization boolean.
+/// filesystem, network, and process adapters from reimplementing capability
+/// checks or accepting a detached authorization boolean.
 #[derive(Clone, Copy, Debug)]
 pub struct ScopedHostAdapters<'a> {
     context: &'a ExecutionContext,
@@ -298,14 +281,6 @@ impl<'a> ScopedHostAdapters<'a> {
     ) -> Result<&'resource Path, AuthorityError> {
         self.context.authorize_scope(authorized.scope)?;
         Ok(&authorized.path)
-    }
-
-    pub fn database<'resource>(
-        &self,
-        authorized: &'resource AuthorizedDatabase,
-    ) -> Result<&'resource str, AuthorityError> {
-        self.context.authorize_scope(authorized.scope)?;
-        Ok(&authorized.logical_id)
     }
 }
 
@@ -346,7 +321,6 @@ pub struct HostCapabilities {
     filesystem_roots: Vec<PathBuf>,
     network_endpoints: BTreeSet<NetworkEndpointGrant>,
     process_executables: BTreeSet<PathBuf>,
-    database_ids: BTreeSet<String>,
     environment_variables: BTreeSet<String>,
     allow_temp_directory: bool,
 }
@@ -357,7 +331,6 @@ impl HostCapabilities {
             filesystem_roots: Vec::new(),
             network_endpoints: BTreeSet::new(),
             process_executables: BTreeSet::new(),
-            database_ids: BTreeSet::new(),
             environment_variables: BTreeSet::new(),
             allow_temp_directory: false,
         }
@@ -389,12 +362,6 @@ impl HostCapabilities {
         Ok(self)
     }
 
-    pub fn grant_database(mut self, logical_id: impl Into<String>) -> Result<Self, AuthorityError> {
-        self.database_ids
-            .insert(normalize_logical_name("database", logical_id.into())?);
-        Ok(self)
-    }
-
     pub fn grant_environment_variable(
         mut self,
         name: impl Into<String>,
@@ -421,10 +388,6 @@ impl HostCapabilities {
         self.process_executables.iter().map(PathBuf::as_path)
     }
 
-    pub fn database_ids(&self) -> impl Iterator<Item = &str> {
-        self.database_ids.iter().map(String::as_str)
-    }
-
     pub fn environment_variables(&self) -> impl Iterator<Item = &str> {
         self.environment_variables.iter().map(String::as_str)
     }
@@ -446,7 +409,6 @@ pub enum HostAuthority {
     Filesystem,
     Network,
     Process,
-    Database,
     Environment,
     TempDirectory,
     Native,
@@ -537,7 +499,7 @@ impl ExecutionContext {
     /// Performs the coarse authorization used before dispatching an intrinsic.
     ///
     /// Resource-specific entry points below must still validate the concrete
-    /// path, endpoint, executable, database, or variable.
+    /// path, endpoint, executable, or variable.
     pub fn authorize_host_authority(&self, authority: HostAuthority) -> Result<(), AuthorityError> {
         match (&self.host, authority) {
             (HostAccess::Ambient, _) => Ok(()),
@@ -553,11 +515,6 @@ impl ExecutionContext {
             }
             (HostAccess::Restricted(capabilities), HostAuthority::Process)
                 if !capabilities.process_executables.is_empty() =>
-            {
-                Ok(())
-            }
-            (HostAccess::Restricted(capabilities), HostAuthority::Database)
-                if !capabilities.database_ids.is_empty() =>
             {
                 Ok(())
             }
@@ -678,31 +635,6 @@ impl ExecutionContext {
         })
     }
 
-    pub fn authorize_database(
-        &self,
-        logical_id: &str,
-    ) -> Result<AuthorizedDatabase, AuthorityError> {
-        let logical_id = normalize_logical_name("database", logical_id.to_owned())?;
-        if matches!(self.host, HostAccess::Ambient) {
-            return Ok(AuthorizedDatabase {
-                scope: self.scope,
-                logical_id,
-            });
-        }
-        match &self.host {
-            HostAccess::Ambient => unreachable!(),
-            HostAccess::Restricted(capabilities)
-                if capabilities.database_ids.contains(&logical_id) =>
-            {
-                Ok(AuthorizedDatabase {
-                    scope: self.scope,
-                    logical_id,
-                })
-            }
-            HostAccess::Restricted(_) => Err(AuthorityError::DatabaseDenied(logical_id)),
-        }
-    }
-
     /// Rejects a capability object that belongs to another execution.
     pub fn authorize_scope(&self, scope: ExecutionScopeId) -> Result<(), AuthorityError> {
         if self.scope == scope {
@@ -766,7 +698,6 @@ pub enum AuthorityError {
     FilesystemRootDenied(usize),
     NetworkDenied(NetworkEndpointGrant),
     ProcessDenied(PathBuf),
-    DatabaseDenied(String),
     EnvironmentDenied(String),
     TempDirectoryDenied,
     ScopeMismatch {
@@ -808,9 +739,6 @@ impl fmt::Display for AuthorityError {
                     "process executable `{}` is not authorized",
                     path.display()
                 )
-            }
-            Self::DatabaseDenied(logical_id) => {
-                write!(formatter, "database `{logical_id}` is not authorized")
             }
             Self::EnvironmentDenied(name) => {
                 write!(formatter, "environment variable `{name}` is not authorized")
@@ -947,7 +875,6 @@ mod tests {
                 .is_ok()
         );
         assert!(context.authorize_process_executable("tool").is_ok());
-        assert!(context.authorize_database("raw-dsn").is_ok());
         assert!(context.authorize_environment_variable("SECRET").is_ok());
         assert!(context.authorize_temp_directory().is_ok());
     }
@@ -972,7 +899,6 @@ mod tests {
                 .authorize_process_executable(test_absolute_path("tool"))
                 .is_err()
         );
-        assert!(context.authorize_database("primary").is_err());
         assert!(context.authorize_environment_variable("TOKEN").is_err());
         assert!(context.authorize_temp_directory().is_err());
     }
@@ -989,8 +915,6 @@ mod tests {
             )
             .grant_process_executable(&executable)
             .expect("executable")
-            .grant_database("primary")
-            .expect("database")
             .grant_environment_variable("CI_TOKEN")
             .expect("environment")
             .grant_temp_directory();
@@ -1026,8 +950,6 @@ mod tests {
                 .authorize_process_executable(test_absolute_path("bin/other"))
                 .is_err()
         );
-        assert!(context.authorize_database("primary").is_ok());
-        assert!(context.authorize_database("secondary").is_err());
         assert!(context.authorize_environment_variable("CI_TOKEN").is_ok());
         assert!(context.authorize_environment_variable("HOME").is_err());
         assert!(context.authorize_temp_directory().is_ok());
@@ -1038,8 +960,8 @@ mod tests {
         let first_context = ExecutionContext::trusted_local();
         let second_context = ExecutionContext::trusted_ci(HostCapabilities::deny_all());
         let first = first_context
-            .authorize_database("primary")
-            .expect("ambient database handle");
+            .authorize_filesystem_path(test_absolute_path("scope"))
+            .expect("ambient path handle");
 
         assert_ne!(first_context.scope_id(), second_context.scope_id());
         assert!(first_context.authorize_scope(first.scope_id()).is_ok());
@@ -1063,7 +985,6 @@ mod tests {
         let authorized_executable = first
             .authorize_process_executable(&executable)
             .expect("executable");
-        let authorized_database = first.authorize_database("primary").expect("database");
 
         assert_eq!(
             first
@@ -1086,10 +1007,6 @@ mod tests {
             second
                 .host_adapters()
                 .process_executable(&authorized_executable),
-            Err(AuthorityError::ScopeMismatch { .. })
-        ));
-        assert!(matches!(
-            second.host_adapters().database(&authorized_database),
             Err(AuthorityError::ScopeMismatch { .. })
         ));
     }

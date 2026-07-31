@@ -496,7 +496,7 @@ rss test     [--all] [--json] [--filter <substring>]
 - `--deployment-profile` accepts `local-trusted` (the default) or `trusted-ci`.
   `trusted-ci` can execute bounded, pure register-VM code
   with a deny-all host capability context; filesystem, environment, process,
-  network, database, native, and JIT effects fail before dispatch.
+  network, native, and JIT effects fail before dispatch.
   Trusted-CI AOT remains denied. There is no third-party or untrusted execution
   profile.
 

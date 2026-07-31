@@ -59,7 +59,7 @@ The following are trusted-only:
 - generated Cargo builds, build scripts, and executable package dependencies;
 - in-process native plugins or native wrappers;
 - in-process tier-0/native JIT execution;
-- host filesystem, environment, network, process, database, or device access;
+- host filesystem, environment, network, process, or device access;
 - execution based only on RSScript capabilities, VM budgets, process limits, a
   container, or the review action.
 
@@ -79,7 +79,7 @@ The `rss run --deployment-profile` spellings are `local-trusted` and
 `trusted-ci`. `TrustedCI` may run bounded pure code in the reference VM. That
 path carries an explicit deny-all host context and rejects every host-touching
 intrinsic before dispatch. It does not permit AOT, native, JIT, process,
-network, database, environment, or filesystem effects. This is a controlled-CI
+network, environment, or filesystem effects. This is a controlled-CI
 convenience for repositories the operator already trusts, not an untrusted-code
 execution boundary.
 
@@ -92,7 +92,7 @@ provide and audit a separate system outside this repository.
 | Layer | Trigger | Blocking contract |
 | --- | --- | --- |
 | Core | Every pull request and push to `main` | Locked full manifest, supply-chain audit, Windows/macOS containment and native authorization, review-action smoke, and other always-on Core workflows |
-| Security-sensitive | Pull requests and pushes touching boundary paths; manual | Deployment-policy tests, unsafe-boundary Clippy, JIT differential safety, native ABI, process containment, runtime, REIR/LSP, and database boundary tests |
+| Security-sensitive | Pull requests and pushes touching boundary paths; manual | Deployment-policy tests, unsafe-boundary Clippy, JIT differential safety, native ABI, process containment, runtime, and REIR/LSP boundary tests |
 | Experimental | Matching JIT paths, nightly, manual | Full native-JIT suite on Linux |
 | JIT performance/hardening | Matching JIT performance paths or scheduled/manual hardening | Performance regression gate, sanitizer/Miri/fuzz sweeps according to the dedicated workflow |
 | Release | Version tag or manual release | Core validation plus native JIT, generated backend parity, and self-host corpus before artifact promotion |

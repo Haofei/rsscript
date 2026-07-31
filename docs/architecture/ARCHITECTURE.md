@@ -55,8 +55,8 @@ reviewed path is not an execution capability.
 ### Runtime And Adapters
 
 The `runtime` crate owns the host-facing runtime contract and resource
-accounting. Network, process, filesystem, database, native, and JIT
-facilities are adapters with explicit trust and resource policies.
+accounting. Network, process, filesystem, native, and JIT facilities are
+adapters with explicit trust and resource policies.
 
 The runtime is not a sandbox. Runtime execution is restricted to source and
 dependencies controlled by the operator. Third-party package support ends at
