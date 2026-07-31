@@ -885,7 +885,7 @@ pub native fn OS.close(fd: Fd) -> Unit
 }
 
 #[test]
-fn package_review_reir_maps_csv_and_config_facades_to_filesystem_read() {
+fn package_review_reir_maps_csv_facades_to_filesystem_read() {
     let temp_dir = common::unique_temp_dir("rsscript-package-review-data-file-facades-reir");
     common::write_named_package_fixture(
         &temp_dir,
@@ -898,10 +898,6 @@ pub fn Csv.read_into(
     file: mut File,
     buffer: mut RowBuffer,
 ) -> Result<Unit, CsvError>
-
-pub fn Config.load(path: read Path) -> Result<fresh ConfigValue, ConfigError>
-
-pub fn RuleLoader.load_rules(path: read Path) -> Result<fresh List<Rule>, ConfigError>
 "#,
     );
 
@@ -912,14 +908,7 @@ pub fn RuleLoader.load_rules(path: read Path) -> Result<fresh List<Rule>, Config
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(reir_json["facts"].as_array().is_some_and(|facts| {
-        [
-            "Csv.open_read",
-            "Csv.read_into",
-            "Config.load",
-            "RuleLoader.load_rules",
-        ]
-        .iter()
-        .all(|name| {
+        ["Csv.open_read", "Csv.read_into"].iter().all(|name| {
             facts.iter().any(|fact| {
                 fact["kind"] == "capability"
                     && fact["subject"]["id"].as_str().is_some_and(|id| {

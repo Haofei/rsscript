@@ -151,8 +151,10 @@ struct Session {
 #[test]
 fn keeps_builtin_and_user_function_signatures() {
     let source = r#"
+struct Store
+struct Asset
 
-fn cache_put(cache: mut Cache, value: read Image) -> Unit
+fn store_put(store: mut Store, value: read Asset) -> Unit
     effects(retains(value))
 {
 }
@@ -162,23 +164,20 @@ fn cache_put(cache: mut Cache, value: read Image) -> Unit
     let program = parse_source("test.rss", source);
     let hir = Hir::from_syntax(&program);
 
-    assert!(hir.resolve_function(Some("Image"), "resize").is_some());
+    assert!(hir.resolve_function(Some("String"), "concat").is_some());
 
     let signature = hir
-        .resolve_function(None, "cache_put")
+        .resolve_function(None, "store_put")
         .expect("user signature exists");
     assert!(signature.retained_params.contains("value"));
     assert_eq!(signature.params[0].effect, Some(ParamEffect::Mut));
     assert_eq!(signature.params[1].effect, Some(ParamEffect::Read));
     assert_eq!(signature.return_type.as_deref(), Some("Unit"));
 
-    let load = hir
-        .resolve_function(Some("Image"), "load")
+    let concat = hir
+        .resolve_function(Some("String"), "concat")
         .expect("builtin signature exists");
-    assert_eq!(
-        load.return_type.as_deref(),
-        Some("Result<fresh Image, ImageError>")
-    );
+    assert_eq!(concat.return_type.as_deref(), Some("String"));
 }
 
 #[test]
@@ -432,13 +431,13 @@ struct Response {
 fn resolves_body_call_sites() {
     let source = r#"
 
-struct Response {
+struct Rendered {
     status: Int
     body: String
 }
 
-fn render(body: read String) -> Result<fresh Response, HttpError> {
-    let response = Response(status: 200, body: read body)
+fn render(body: read String) -> Result<fresh Rendered, HttpError> {
+    let response = Rendered(status: 200, body: read body)
     Log.write(message: read body)
     Missing.call(value: read body)
     return response
@@ -478,7 +477,7 @@ fn render(body: read String) -> Result<fresh Response, HttpError> {
     assert_eq!(bindings[0].type_name.as_deref(), Some("String"));
     assert_eq!(bindings[1].kind, HirBindingKind::ManagedLet);
     assert_eq!(bindings[1].name, "response");
-    assert_eq!(bindings[1].type_name.as_deref(), Some("Response"));
+    assert_eq!(bindings[1].type_name.as_deref(), Some("Rendered"));
 
     let returns = &hir.returns;
     assert_eq!(returns.len(), 1);
@@ -504,7 +503,7 @@ fn render(body: read String) -> Result<fresh Response, HttpError> {
             kind: HirBindingKind::ManagedLet,
             type_name: Some(type_name),
             ..
-        }) if type_name == "Response"
+        }) if type_name == "Rendered"
     ));
 }
 
@@ -513,8 +512,13 @@ fn records_local_binding_facts() {
     let source = r#"
 features: local
 
+struct Asset
+struct AssetError
+
+fn Asset.load(path: read Path) -> Result<fresh Asset, AssetError>
+
 fn load(path: read Path) -> Unit {
-    local image = Image.load(path: read path)?
+    local asset = Asset.load(path: read path)?
 }
 "#;
 
@@ -527,8 +531,8 @@ fn load(path: read Path) -> Unit {
 
     assert_eq!(bindings.len(), 2);
     assert_eq!(bindings[1].kind, HirBindingKind::LocalLet);
-    assert_eq!(bindings[1].name, "image");
-    assert_eq!(bindings[1].type_name.as_deref(), Some("Image"));
+    assert_eq!(bindings[1].name, "asset");
+    assert_eq!(bindings[1].type_name.as_deref(), Some("Asset"));
     assert!(matches!(
         hir.function_body("load")
             .and_then(|body| body.block.as_ref())
@@ -537,7 +541,7 @@ fn load(path: read Path) -> Unit {
             kind: HirBindingKind::LocalLet,
             type_name: Some(type_name),
             ..
-        }) if type_name == "Image"
+        }) if type_name == "Asset"
     ));
 }
 
@@ -622,6 +626,10 @@ fn records_effect_events() {
     let source = r#"
 features: local
 
+struct Image
+
+fn Image.load(path: read Path) -> fresh Image
+
 class RetainedImageStore {
 }
 
@@ -679,12 +687,17 @@ struct Config {
 class RetainedImageStore {
 }
 
-fn RetainedImageStore.store(cache: mut RetainedImageStore, image: read Image) -> Unit
-    effects(retains(image))
+struct Asset
+struct AssetError
+
+fn Asset.load(path: read Path) -> Result<fresh Asset, AssetError>
+
+fn RetainedImageStore.store(cache: mut RetainedImageStore, asset: read Asset) -> Unit
+    effects(retains(asset))
 
 fn update(cache: mut RetainedImageStore, config: mut Config, path: read Path) -> Unit {
-    local image = Image.load(path: read path)?
-    RetainedImageStore.store(cache: mut cache, image: read image)
+    local asset = Asset.load(path: read path)?
+    RetainedImageStore.store(cache: mut cache, asset: read asset)
     List.consume(list: take config.rules)
 }
 "#;
@@ -705,9 +718,9 @@ fn update(cache: mut RetainedImageStore, config: mut Config, path: read Path) ->
     else {
         panic!("first statement should be a typed local call binding");
     };
-    assert_eq!(name, "image");
-    assert_eq!(type_name.as_deref(), Some("Image"));
-    assert_eq!(binding_type, "Image");
+    assert_eq!(name, "asset");
+    assert_eq!(type_name.as_deref(), Some("Asset"));
+    assert_eq!(binding_type, "Asset");
 
     let HirStmt::Expr(HirExpr::Call {
         resolution, events, ..
@@ -723,7 +736,7 @@ fn update(cache: mut RetainedImageStore, config: mut Config, path: read Path) ->
         }
     ));
     assert!(matches!(events[0].kind, HirEffectEventKind::Retain { .. }));
-    assert_eq!(events[0].binding_name, "image");
+    assert_eq!(events[0].binding_name, "asset");
 
     let HirStmt::Expr(HirExpr::Call { args, .. }) = &block.statements[2] else {
         panic!("third statement should be a call");

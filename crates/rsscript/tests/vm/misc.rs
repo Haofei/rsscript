@@ -224,131 +224,6 @@ fn main() -> Unit {
 }
 
 #[test]
-fn reg_vm_runs_counter_intrinsics_like_interpreter() {
-    let source = r#"
-features: local
-
-fn main() -> Unit {
-    local counter = Counter.new(value: 4)
-    Counter.add(counter: mut counter, amount: 6)
-    Log.write(message: read String.from_int(value: Counter.value(counter: read counter)))
-    Counter.add(counter: mut counter, amount: 0 - 3)
-    Log.write(message: read String.from_int(value: Counter.value(counter: read counter)))
-    return Unit
-}
-"#;
-
-    assert_reg_vm_matches_compiled_backend("reg-vm-counter-intrinsics.rss", source, []);
-}
-
-#[test]
-fn reg_vm_runs_config_intrinsics_like_interpreter() {
-    let source = r#"
-features: local
-
-fn main() -> Unit {
-    let empty_rules = List<Rule>.new()
-    let empty = Config.new(name: read "empty", rules: read empty_rules)
-    Log.write(message: read String.from_int(value: Config.rule_count(config: read empty)))
-
-    let rules = List<Rule>.new()
-    let config = Config.new(name: read "rules", rules: read rules)
-    Log.write(message: read String.from_int(value: Config.rule_count(config: read config)))
-
-    local global = GlobalConfig.new(value: read config)
-    Log.write(message: read String.from_int(value: GlobalConfig.rule_count(global: read global)))
-    GlobalConfig.replace(global: mut global, value: read empty)
-    Log.write(message: read String.from_int(value: GlobalConfig.rule_count(global: read global)))
-    return Unit
-}
-"#;
-
-    assert_reg_vm_matches_compiled_backend("reg-vm-config-intrinsics.rss", source, []);
-}
-
-#[test]
-fn reg_vm_runs_cache_intrinsics_like_interpreter() {
-    let source = r#"
-features: local
-
-fn main() -> Unit {
-    local cache = Cache.new()
-    Log.write(message: read Cache.lookup(cache: read cache, key: read "missing"))
-    Cache.insert(cache: mut cache, key: read "one", value: read "first")
-    Cache.insert(cache: mut cache, key: read "one", value: read "second")
-    Cache.insert(cache: mut cache, key: read "two", value: read "other")
-    Log.write(message: read Cache.lookup(cache: read cache, key: read "one"))
-    Log.write(message: read Cache.lookup(cache: read cache, key: read "two"))
-    return Unit
-}
-"#;
-
-    assert_reg_vm_matches_compiled_backend("reg-vm-cache-intrinsics.rss", source, []);
-}
-
-#[test]
-fn reg_vm_runs_cache_get_like_interpreter() {
-    let source = r#"
-features: local
-
-fn main() -> Image {
-    local cache = Cache.new()
-    Cache.insert(cache: mut cache, key: read "image", value: read "cached-image")
-    return Cache.get(cache: read cache)
-}
-"#;
-
-    assert_reg_vm_matches_compiled_backend_return(
-        "reg-vm-cache-get.rss",
-        source,
-        [],
-        CompiledReturnHarness::Image,
-    );
-}
-
-#[test]
-fn reg_vm_runs_image_intrinsics_like_interpreter() {
-    let root = std::env::current_dir()
-        .expect("cwd should be available")
-        .join("target")
-        .join(format!("rss-vm-image-{}-fixture", std::process::id()));
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).expect("image fixture dir should be created");
-    let input = root.join("input.img");
-    let output = root.join("output.img");
-    fs::write(&input, b"pixels").expect("image fixture should write");
-    let input_arg = input.display().to_string();
-    let output_arg = output.display().to_string();
-
-    let source = r#"
-features: native, local, async
-
-fn main() -> Result<Unit, ImageError> {
-    let input = Path.from_string(value: read Args.get_or_default(index: 0, default: read "input.img"))
-    let output = Path.from_string(value: read Args.get_or_default(index: 1, default: read "output.img"))
-    local image = Image.load(path: read input)?
-    Image.inspect(image: read image)
-    Image.resize(image: mut image, width: 10, height: 20)
-    Image.normalize(image: mut image)
-    Image.sharpen(image: mut image)
-    Image.inspect(image: read image)
-
-    Image.save(image: read image, path: read output)?
-    local saved = Image.load(path: read output)?
-    Image.inspect(image: read saved)
-    return Ok(Unit)
-}
-"#;
-
-    assert_reg_vm_matches_compiled_backend(
-        "reg-vm-image-intrinsics.rss",
-        source,
-        [input_arg.as_str(), output_arg.as_str()],
-    );
-    let _ = fs::remove_dir_all(&root);
-}
-
-#[test]
 fn reg_vm_runs_hash_intrinsics_like_interpreter() {
     let source = r#"
 features: local
@@ -779,53 +654,7 @@ fn main() -> Unit {
 }
 
 #[test]
-fn reg_vm_runs_environment_function_and_request_response_like_interpreter() {
-    let source = r#"
-features: local
-
-fn main() -> Result<Unit, HttpError> {
-    local root_value = Environment.root()
-    let root = manage root_value
-    if !Environment.has_parent(env: read root) {
-        Log.write(message: read "root-no-parent")
-    }
-    if !Environment.has_function(env: read root) {
-        Log.write(message: read "root-no-function")
-    }
-
-    local child_value = Environment.child(parent: read root)
-    let child = manage child_value
-    if Environment.has_parent(env: read child) {
-        Log.write(message: read "child-parent")
-    }
-    if !Environment.has_function(env: read child) {
-        Log.write(message: read "child-no-function")
-    }
-
-    local function_value = FunctionObject.new(closure: read child)
-    let function = manage function_value
-    if FunctionObject.has_closure(function: read function) {
-        Log.write(message: read "function-closure")
-    }
-    Environment.bind_function(env: mut child, function: read function)
-    if Environment.has_function(env: read child) {
-        Log.write(message: read "child-function")
-    }
-
-    let request = Request.new(path: read "/users/42")
-    Log.write(message: read Request.path(request: read request))
-    let response = Response.ok(body: read "handled")?
-    Log.write(message: read String.from_int(value: Response.status(response: read response)))
-    Log.write(message: read Response.body(response: read response))
-    return Ok(Unit)
-}
-"#;
-
-    assert_reg_vm_matches_compiled_backend("reg-vm-env-function-request-response.rss", source, []);
-}
-
-#[test]
-fn reg_vm_runs_file_parse_and_config_load_like_interpreter() {
+fn reg_vm_runs_file_parse_intrinsics_like_interpreter() {
     let root = std::env::current_dir()
         .expect("cwd should be available")
         .join("target")
@@ -840,20 +669,14 @@ fn reg_vm_runs_file_parse_and_config_load_like_interpreter() {
     let json_path = root.join("data.json");
     let toml_path = root.join("data.toml");
     let yaml_path = root.join("data.yaml");
-    let config_path = root.join("config.txt");
-    let rules_path = root.join("rules.txt");
     fs::write(&json_path, r#"{"name":"rss","count":3}"#).expect("json fixture should write");
     fs::write(&toml_path, "name = \"rss\"\ncount = 4\n").expect("toml fixture should write");
     fs::write(&yaml_path, "name: rss\ncount: 5\n").expect("yaml fixture should write");
-    fs::write(&config_path, "\nprimary\nignored\n").expect("config fixture should write");
-    fs::write(&rules_path, "one\ntwo\n\nthree\n").expect("rules fixture should write");
 
     let args = [
         json_path.display().to_string(),
         toml_path.display().to_string(),
         yaml_path.display().to_string(),
-        config_path.display().to_string(),
-        rules_path.display().to_string(),
     ];
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
 
@@ -862,8 +685,6 @@ fn main() -> Result<Unit, JsonError> {
     let json_path = Path.from_string(value: read Option.unwrap_or<String>(value: read Args.get(index: 0), default: read "missing-json"))
     let toml_path = Path.from_string(value: read Option.unwrap_or<String>(value: read Args.get(index: 1), default: read "missing-toml"))
     let yaml_path = Path.from_string(value: read Option.unwrap_or<String>(value: read Args.get(index: 2), default: read "missing-yaml"))
-    let config_path = Path.from_string(value: read Option.unwrap_or<String>(value: read Args.get(index: 3), default: read "missing-config"))
-    let rules_path = Path.from_string(value: read Option.unwrap_or<String>(value: read Args.get(index: 4), default: read "missing-rules"))
 
     let json = Json.parse_file(path: read json_path)?
     let json_name = Json.field(value: read json, name: read "name")?
@@ -888,25 +709,6 @@ fn main() -> Result<Unit, JsonError> {
     let yaml_count_int = Json.as_int(value: read yaml_count)?
     Log.write(message: read yaml_name_text)
     Log.write(message: read String.from_int(value: yaml_count_int))
-
-    match Config.load(path: read config_path) {
-        Ok(config) => {
-            Log.write(message: read Config.name(value: read config))
-        }
-        Err(error) => {
-            Log.write(message: read "config-error")
-        }
-    }
-
-    match RuleLoader.load_rules(path: read rules_path) {
-        Ok(rules) => {
-            let config = Config.new(name: read "rules", rules: read rules)
-            Log.write(message: read String.from_int(value: Config.rule_count(config: read config)))
-        }
-        Err(error) => {
-            Log.write(message: read "rules-error")
-        }
-    }
 
     match Json.parse_file(path: read Path.from_string(value: read "missing-json-file")) {
         Ok(value) => {

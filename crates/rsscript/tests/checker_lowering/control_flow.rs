@@ -614,9 +614,8 @@ fn helper(value: read Int) -> Int {
     return value
 }
 
-pub fn publish(path: read Path) -> Image {
-    local image = Image.load(path: read path)
-    return manage image
+pub fn publish(value: read Int) -> Int {
+    return value
 }
 
 fn delegated(value: read Int) -> Int {

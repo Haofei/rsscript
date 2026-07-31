@@ -1,6 +1,8 @@
 struct Image
 struct Callback
 
+fn Image.inspect(image: Image) -> Unit
+
 fn store(callback: Callback) -> Unit
     effects(retains(callback))
 

@@ -8,6 +8,14 @@ struct Image {
     pixels: Buffer
 }
 
+struct ImageError
+
+fn Image.load(path: Path) -> Result<fresh Image, ImageError>
+
+fn Image.resize(image: mut Image, width: Int, height: Int) -> Unit
+
+fn Image.save(image: Image, path: Path) -> Result<Unit, ImageError>
+
 fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Image) -> Unit
     effects(retains(image))
 

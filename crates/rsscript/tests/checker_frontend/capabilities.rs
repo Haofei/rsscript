@@ -17,11 +17,6 @@ fn bundled_core_interfaces_are_available_to_checker() {
     assert!(
         core_interfaces()
             .iter()
-            .any(|(path, _)| *path == "stdlib/cache/cache.rssi")
-    );
-    assert!(
-        core_interfaces()
-            .iter()
             .any(|(path, _)| *path == "stdlib/collections/buffer.rssi")
     );
     assert!(
@@ -38,21 +33,6 @@ fn bundled_core_interfaces_are_available_to_checker() {
         core_interfaces()
             .iter()
             .any(|(path, _)| *path == "stdlib/process/process.rssi")
-    );
-    assert!(
-        core_interfaces()
-            .iter()
-            .any(|(path, _)| *path == "stdlib/counter/counter.rssi")
-    );
-    assert!(
-        core_interfaces()
-            .iter()
-            .any(|(path, _)| *path == "stdlib/config/rules.rssi")
-    );
-    assert!(
-        core_interfaces()
-            .iter()
-            .any(|(path, _)| *path == "stdlib/interpreter/interpreter.rssi")
     );
     assert!(
         core_interfaces()
@@ -87,24 +67,6 @@ fn check_label(actual: read String, expected: read String) -> Unit {
 
     assert!(codes.contains(&"RS0203".to_string()));
     assert!(codes.contains(&"RS0204".to_string()));
-}
-
-#[test]
-fn bundled_interpreter_function_object_new_does_not_retain_closure() {
-    let source = r#"
-features: local
-
-fn build() -> Unit {
-    local env = Environment.root()
-    let function = FunctionObject.new(closure: read env)
-    return Unit
-}
-"#;
-
-    assert_eq!(
-        analyze_source_with_core("interpreter-weak.rss", source),
-        Vec::new()
-    );
 }
 
 #[test]

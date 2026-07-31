@@ -258,8 +258,8 @@ mod tests {
         let metadata = metadata();
         let rss = format_selfhost_interface_metadata_rss(&metadata);
         assert!(rss.contains("module selfhost.interfaces"));
-        assert!(rss.contains("ns == \"Image\" && method == \"load\""));
-        assert!(rss.contains("return \"Result<fresh Image, ImageError>\""));
+        assert!(rss.contains("ns == \"Json\" && method == \"parse\""));
+        assert!(rss.contains("return \"Result<fresh JsonValue, JsonError>\""));
         assert!(rss.contains("ns == \"File\" && method == \"write\" && pname == \"file\""));
         assert!(rss.contains("return \"mut\""));
     }
@@ -273,25 +273,24 @@ mod tests {
         assert_eq!(find_param(concat, "left").effect, Some(DataEffect::Read));
         assert_eq!(find_param(concat, "right").type_name, "String");
 
-        let resize = find_function(&metadata, "Image", "resize");
-        assert_eq!(find_param(resize, "image").type_name, "Image");
-        assert_eq!(find_param(resize, "image").effect, Some(DataEffect::Mut));
-        assert_eq!(find_param(resize, "width").type_name, "Int");
-        assert_eq!(find_param(resize, "height").type_name, "Int");
+        let write = find_function(&metadata, "File", "write");
+        assert_eq!(find_param(write, "file").type_name, "File");
+        assert_eq!(find_param(write, "file").effect, Some(DataEffect::Mut));
+        assert_eq!(find_param(write, "data").type_name, "Bytes");
     }
 
     #[test]
     fn selfhost_interface_metadata_keeps_return_and_error_types_from_rssi() {
         let metadata = metadata();
 
-        let load = find_function(&metadata, "Image", "load");
+        let parse = find_function(&metadata, "Json", "parse");
         assert_eq!(
-            load.return_type.as_deref(),
-            Some("Result<fresh Image, ImageError>")
+            parse.return_type.as_deref(),
+            Some("Result<fresh JsonValue, JsonError>")
         );
 
         let rss = format_selfhost_interface_metadata_rss(&metadata);
-        assert!(rss.contains("if ns == \"Image\" && method == \"load\" { return \"ImageError\" }"));
+        assert!(rss.contains("if ns == \"Json\" && method == \"parse\" { return \"JsonError\" }"));
         assert!(rss.contains(
             "if ns == \"String\" && method == \"concat\" && pname == \"left\" { return \"String\" }"
         ));
@@ -299,7 +298,7 @@ mod tests {
             "if ns == \"String\" && method == \"concat\" && index == 0 { return \"left\" }"
         ));
         assert!(rss.contains(
-            "if ns == \"Image\" && method == \"resize\" && pname == \"image\" { return \"mut\" }"
+            "if ns == \"File\" && method == \"write\" && pname == \"file\" { return \"mut\" }"
         ));
     }
 }

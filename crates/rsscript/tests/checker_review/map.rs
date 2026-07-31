@@ -167,12 +167,15 @@ fn helper(value: read Int) -> Int {
     return value
 }
 
+struct InboundMessage
+struct OutboundMessage
+
 fn main() -> Unit {
     helper(value: read 1)
 }
 
-fn handle_request(request: read Request) -> Response {
-    return Response.ok()
+fn handle_request(request: read InboundMessage) -> OutboundMessage {
+    return OutboundMessage()
 }
 "#;
     let map = review_map_sources(vec![("entry.rss", source)]);

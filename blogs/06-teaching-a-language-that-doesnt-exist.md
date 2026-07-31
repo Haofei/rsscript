@@ -21,7 +21,7 @@ The first artifact is a single document — I call it `AGENT.md` — that is the
 2. By-reference arguments carry a data-effect keyword: read / mut / take.
 3. No implicit conversion. let p: Path = "s" is rejected; you write
    Path.from_string(value: read "s").
-4. Methods are qualified by type: Image.resize(image: mut image, ...),
+4. Methods are qualified by type: Picture.resize(image: mut image, ...),
    not image.resize(...).
 ```
 

@@ -58,10 +58,6 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../../../stdlib/capability/capability.rssi"),
     ),
     (
-        "stdlib/cache/cache.rssi",
-        include_str!("../../../stdlib/cache/cache.rssi"),
-    ),
-    (
         "stdlib/clock/clock.rssi",
         include_str!("../../../stdlib/clock/clock.rssi"),
     ),
@@ -118,18 +114,6 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../../../stdlib/collections/sorted_set.rssi"),
     ),
     (
-        "stdlib/config/config.rssi",
-        include_str!("../../../stdlib/config/config.rssi"),
-    ),
-    (
-        "stdlib/config/rules.rssi",
-        include_str!("../../../stdlib/config/rules.rssi"),
-    ),
-    (
-        "stdlib/counter/counter.rssi",
-        include_str!("../../../stdlib/counter/counter.rssi"),
-    ),
-    (
         "stdlib/csv/csv.rssi",
         include_str!("../../../stdlib/csv/csv.rssi"),
     ),
@@ -168,18 +152,6 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     (
         "stdlib/http/client.rssi",
         include_str!("../../../stdlib/http/client.rssi"),
-    ),
-    (
-        "stdlib/http/http.rssi",
-        include_str!("../../../stdlib/http/http.rssi"),
-    ),
-    (
-        "stdlib/interpreter/interpreter.rssi",
-        include_str!("../../../stdlib/interpreter/interpreter.rssi"),
-    ),
-    (
-        "stdlib/image/image.rssi",
-        include_str!("../../../stdlib/image/image.rssi"),
     ),
     (
         "stdlib/json/json.rssi",

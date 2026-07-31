@@ -6933,22 +6933,6 @@ fn deadline_after_ms(ms: i64) -> i64 {
     clock_system_unix_ms().saturating_add(ms.max(0))
 }
 
-fn config_name_from_text(text: &str) -> String {
-    text.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("default")
-        .to_string()
-}
-
-fn rules_from_text(text: &str) -> Vec<VmValue> {
-    text.lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(rule_value)
-        .collect()
-}
-
 enum WebSocketExpectedFrame {
     Text,
     Binary,

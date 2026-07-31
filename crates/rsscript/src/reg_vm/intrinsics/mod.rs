@@ -148,31 +148,6 @@ impl RegVm {
                     size.max(0) as usize
                 ))))
             }
-            RegIntrinsic::CacheGet => {
-                let cache = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let bytes = cache
-                    .borrow()
-                    .values()
-                    .find_map(|value| expect_string_ref(value).ok().map(str::to_owned))
-                    .map(String::into_bytes)
-                    .unwrap_or_default();
-                Ok(image_value(
-                    bytes,
-                    None,
-                    None,
-                    vec!["cache-get".to_string()],
-                ))
-            }
-            RegIntrinsic::CacheLookup => {
-                let cache = expect_map_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let (key, work) = map_key_from_value(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                self.charge_work(work)?;
-                Ok(cache
-                    .borrow()
-                    .get(&key)
-                    .cloned()
-                    .unwrap_or_else(|| VmValue::string("")))
-            }
             RegIntrinsic::CapabilityFrom => Ok(intrinsic_arg(&self.stack, base, args, 0)?.clone()),
             RegIntrinsic::CancellationSourceCancel => {
                 // RSS-level *cooperative* cancellation: flips the program-visible
@@ -269,35 +244,6 @@ impl RegVm {
             }
             RegIntrinsic::ClockNow => Ok(instant_value(clock_system_unix_ms())),
             RegIntrinsic::ClockSystemUnixMs => Ok(VmValue::Int(clock_system_unix_ms())),
-            RegIntrinsic::ConfigLoad => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    rsscript_runtime::file_read_string(path)
-                        .map(|text| config_value(config_name_from_text(&text)))
-                        .map_err(|error| config_error_value(error.to_string())),
-                ))
-            }
-            RegIntrinsic::ConfigName => {
-                let value = intrinsic_arg(&self.stack, base, args, 0)?;
-                Ok(VmValue::string(expect_config_value_name(value)?))
-            }
-            RegIntrinsic::ConfigNew => {
-                let name = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let rules = expect_list_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(config_rules_value(name, rules.borrow().len() as i64))
-            }
-            RegIntrinsic::ConfigRuleCount => {
-                let config = intrinsic_arg(&self.stack, base, args, 0)?;
-                Ok(VmValue::Int(expect_config_rule_count(config)?))
-            }
-            RegIntrinsic::ConfigStoreName => {
-                let store = intrinsic_arg(&self.stack, base, args, 0)?;
-                Ok(VmValue::string(expect_config_store_name(store)?))
-            }
-            RegIntrinsic::ConfigStoreNew => {
-                let value = intrinsic_arg(&self.stack, base, args, 0)?;
-                Ok(config_store_value(expect_config_value_name(value)?))
-            }
             RegIntrinsic::DateAddDays
             | RegIntrinsic::DateAddMs
             | RegIntrinsic::DateDay
@@ -316,14 +262,6 @@ impl RegVm {
             | RegIntrinsic::DateWeekday
             | RegIntrinsic::DateYear => {
                 self.exec_date_intrinsics(unit, intrinsic, args, base, next_base)
-            }
-            RegIntrinsic::CounterNew => {
-                let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(counter_value(value))
-            }
-            RegIntrinsic::CounterValue => {
-                let counter = intrinsic_arg(&self.stack, base, args, 0)?;
-                Ok(VmValue::Int(expect_counter_value(counter)?))
             }
             RegIntrinsic::CsvOpenRead => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -492,33 +430,6 @@ impl RegVm {
                 let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Int(value * 1000))
             }
-            RegIntrinsic::EnvironmentBindFunction => {
-                let env_reg = args.first().ok_or_else(|| {
-                    EvalError::Runtime("reg VM Environment.bind_function missing env.".to_string())
-                })?;
-                let function = intrinsic_arg(&self.stack, base, args, 1)?;
-                let _ = expect_function_has_closure(function)?;
-                let env = intrinsic_arg(&self.stack, base, args, 0)?;
-                let (has_parent, _) = expect_environment_state(env)?;
-                self.set_reg(base + *env_reg, environment_value(has_parent, true));
-                Ok(VmValue::Unit)
-            }
-            RegIntrinsic::EnvironmentChild => {
-                let parent = intrinsic_arg(&self.stack, base, args, 0)?;
-                let _ = expect_environment_state(parent)?;
-                Ok(environment_value(true, false))
-            }
-            RegIntrinsic::EnvironmentHasFunction => {
-                let env = intrinsic_arg(&self.stack, base, args, 0)?;
-                let (_, has_function) = expect_environment_state(env)?;
-                Ok(VmValue::Bool(has_function))
-            }
-            RegIntrinsic::EnvironmentHasParent => {
-                let env = intrinsic_arg(&self.stack, base, args, 0)?;
-                let (has_parent, _) = expect_environment_state(env)?;
-                Ok(VmValue::Bool(has_parent))
-            }
-            RegIntrinsic::EnvironmentRoot => Ok(environment_value(false, false)),
             RegIntrinsic::EnvCurrentDir => Ok(json_result(
                 std::env::current_dir()
                     .map(|path| VmValue::string(path.to_string_lossy()))
@@ -830,15 +741,6 @@ impl RegVm {
                     Err(error) => value_err(error),
                 })
             }
-            RegIntrinsic::FunctionObjectHasClosure => {
-                let function = intrinsic_arg(&self.stack, base, args, 0)?;
-                Ok(VmValue::Bool(expect_function_has_closure(function)?))
-            }
-            RegIntrinsic::FunctionObjectNew => {
-                let closure = intrinsic_arg(&self.stack, base, args, 0)?;
-                let _ = expect_environment_state(closure)?;
-                Ok(function_object_value(true))
-            }
             RegIntrinsic::HashSha256Bytes => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::string(sha256_digest(value)))
@@ -900,14 +802,6 @@ impl RegVm {
                     key.as_bytes(),
                     value.as_bytes(),
                 )))
-            }
-            RegIntrinsic::GlobalConfigNew => {
-                let value = intrinsic_arg(&self.stack, base, args, 0)?;
-                Ok(global_config_value(expect_config_rule_count(value)?))
-            }
-            RegIntrinsic::GlobalConfigRuleCount => {
-                let global = intrinsic_arg(&self.stack, base, args, 0)?;
-                Ok(VmValue::Int(expect_global_config_rule_count(global)?))
             }
             RegIntrinsic::GzipDecompressBytes => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -1057,61 +951,6 @@ impl RegVm {
             }
             RegIntrinsic::HttpResponseText => {
                 read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "body")
-            }
-            RegIntrinsic::ImageInspect => {
-                let image = expect_image_state(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let line = image.inspect_line();
-                self.push_stdout(&line)?;
-                self.push_stdout("\n")?;
-                Ok(VmValue::Unit)
-            }
-            RegIntrinsic::ImageLoad => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    rsscript_runtime::file_read_bytes(path)
-                        .map(|bytes| image_value(bytes, None, None, vec!["load".to_string()]))
-                        .map_err(|error| image_error_value(error.to_string())),
-                ))
-            }
-            RegIntrinsic::ImageNormalize => {
-                let image_reg = *args.first().ok_or_else(|| {
-                    EvalError::Runtime("reg VM Image.normalize missing image.".to_string())
-                })?;
-                let mut image = expect_image_state(self.reg(base + image_reg))?;
-                image.operations.push("normalize".to_string());
-                self.set_reg(base + image_reg, image.to_value());
-                Ok(VmValue::Unit)
-            }
-            RegIntrinsic::ImageResize => {
-                let image_reg = *args.first().ok_or_else(|| {
-                    EvalError::Runtime("reg VM Image.resize missing image.".to_string())
-                })?;
-                let width = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let height = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                let mut image = expect_image_state(self.reg(base + image_reg))?;
-                image.width = Some(width);
-                image.height = Some(height);
-                image.operations.push("resize".to_string());
-                self.set_reg(base + image_reg, image.to_value());
-                Ok(VmValue::Unit)
-            }
-            RegIntrinsic::ImageSave => {
-                let image = expect_image_state(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(json_result(
-                    std::fs::write(path, image.saved_bytes())
-                        .map(|_| VmValue::Unit)
-                        .map_err(|error| image_error_value(error.to_string())),
-                ))
-            }
-            RegIntrinsic::ImageSharpen => {
-                let image_reg = *args.first().ok_or_else(|| {
-                    EvalError::Runtime("reg VM Image.sharpen missing image.".to_string())
-                })?;
-                let mut image = expect_image_state(self.reg(base + image_reg))?;
-                image.operations.push("sharpen".to_string());
-                self.set_reg(base + image_reg, image.to_value());
-                Ok(VmValue::Unit)
             }
             RegIntrinsic::InstantElapsed => {
                 let start = expect_instant_unix_ms(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -1603,13 +1442,6 @@ impl RegVm {
             | RegIntrinsic::RegexSplit => {
                 self.exec_regex_intrinsics(unit, intrinsic, args, base, next_base)
             }
-            RegIntrinsic::RequestNew => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(request_value(path))
-            }
-            RegIntrinsic::RequestPath => {
-                read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "path")
-            }
             RegIntrinsic::ReceiverClose => {
                 let receiver_reg = *args.first().ok_or_else(|| {
                     EvalError::Runtime("reg VM Receiver.close missing receiver.".to_string())
@@ -1669,16 +1501,6 @@ impl RegVm {
                 }
                 Ok(json_result(self.channel_recv(receiver.channel_id)))
             }
-            RegIntrinsic::ResponseBody => {
-                read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "body")
-            }
-            RegIntrinsic::ResponseOk => {
-                let body = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(value_ok(response_value(200, body)))
-            }
-            RegIntrinsic::ResponseStatus => {
-                read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "status")
-            }
             RegIntrinsic::RowBufferNew => {
                 let size = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(row_buffer_value(Vec::with_capacity(size.max(0) as usize)))
@@ -1702,18 +1524,6 @@ impl RegVm {
             | RegIntrinsic::ResultUnwrapOr
             | RegIntrinsic::ResultUnwrapOrElse => {
                 self.exec_result_intrinsics(unit, intrinsic, args, base, next_base)
-            }
-            RegIntrinsic::RuleLoaderLoadRules => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    rsscript_runtime::file_read_string(path)
-                        .map(|text| {
-                            VmValue::List(Rc::new(RefCell::new(TypedVec::from_values(
-                                rules_from_text(&text),
-                            ))))
-                        })
-                        .map_err(|error| config_error_value(error.to_string())),
-                ))
             }
             RegIntrinsic::StringAfter
             | RegIntrinsic::StringBefore

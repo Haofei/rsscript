@@ -1,5 +1,54 @@
 features: local, native
 
+struct Picture
+struct PictureError
+struct InboundMessage
+struct OutboundMessage
+struct SettingsValue
+struct SettingsStore
+struct SettingsError
+struct Settings
+struct Policy
+struct SharedSettings
+struct MemoStore
+struct Tally
+struct LexicalScope
+struct ClosureRecord
+
+fn Picture.load(path: Path) -> Result<fresh Picture, PictureError>
+fn Picture.resize(image: mut Picture, width: Int, height: Int) -> Unit
+fn Picture.normalize(image: mut Picture) -> Unit
+fn Picture.sharpen(image: mut Picture) -> Unit
+fn Picture.inspect(image: Picture) -> Unit
+fn Picture.save(image: Picture, path: Path) -> Result<Unit, PictureError>
+fn InboundMessage.path(request: InboundMessage) -> String
+fn OutboundMessage.ok(body: String) -> Result<fresh OutboundMessage, HttpError>
+fn Settings.load(path: Path) -> Result<fresh SettingsValue, SettingsError>
+fn Settings.new(name: String, rules: List<Policy>) -> fresh Settings
+fn SettingsStore.replace(store: mut SettingsStore, value: SettingsValue) -> Unit
+    effects(retains(value))
+fn SettingsStore.name(store: SettingsStore) -> String
+fn PolicyLoader.load_rules(path: Path) -> Result<fresh List<Policy>, SettingsError>
+fn SharedSettings.new(value: Settings) -> fresh SharedSettings
+    effects(retains(value))
+fn SharedSettings.replace(global: mut SharedSettings, value: Settings) -> Unit
+    effects(retains(value))
+fn MemoStore.insert(cache: mut MemoStore, key: String, value: String) -> Unit
+    effects(retains(key), retains(value))
+fn MemoStore.lookup(cache: MemoStore, key: String) -> String
+fn Tally.add(counter: mut Tally, amount: Int) -> Unit
+fn Tally.value(counter: Tally) -> Int
+fn LexicalScope.root() -> fresh LexicalScope
+fn LexicalScope.child(parent: LexicalScope) -> fresh LexicalScope
+    effects(retains(parent))
+fn LexicalScope.bind_function(env: mut LexicalScope, function: ClosureRecord) -> Unit
+    effects(retains(function))
+fn LexicalScope.has_parent(env: LexicalScope) -> Bool
+fn LexicalScope.has_function(env: LexicalScope) -> Bool
+fn ClosureRecord.new(closure: LexicalScope) -> fresh ClosureRecord
+fn ClosureRecord.has_closure(function: ClosureRecord) -> Bool
+
+
 class User {
     id: String
 }
@@ -23,7 +72,7 @@ struct WorkItem {
 class RetainedImageStore {
 }
 
-fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Image) -> Unit
+fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Picture) -> Unit
     effects(retains(image))
 
 fn User.lookup(id: String) -> User
@@ -34,12 +83,12 @@ fn audit_step(callback: noescape Fn()) -> Unit {
     return Unit
 }
 
-fn HttpError.from_config(error: ConfigError) -> HttpError
+fn HttpError.from_config(error: SettingsError) -> HttpError
 fn HttpError.from_json(error: JsonError) -> HttpError
-fn HttpError.from_image(error: ImageError) -> HttpError
+fn HttpError.from_image(error: PictureError) -> HttpError
 
-fn parse_plan(request: Request) -> Result<fresh UploadPlan, JsonError> {
-    let body = Request.path(request)
+fn parse_plan(request: InboundMessage) -> Result<fresh UploadPlan, JsonError> {
+    let body = InboundMessage.path(request)
     let json = Json.parse(text: body)?
     local input_text = Json.field_string(value: json, name: "input")?
     local output_text = Json.field_string(value: json, name: "output")?
@@ -70,7 +119,7 @@ fn inspect_session(session: Session) -> Unit {
     return Unit
 }
 
-fn build_work_item(request: Request, owner_id: String) -> Result<fresh WorkItem, JsonError> {
+fn build_work_item(request: InboundMessage, owner_id: String) -> Result<fresh WorkItem, JsonError> {
     local plan = parse_plan(request)?
     let owner = User.lookup(id: owner_id)
     local session = build_session(owner, trace_id: plan.trace_id)
@@ -88,32 +137,32 @@ fn load_first_row(path: Path) -> Result<fresh Row, CsvError> {
     return Csv.parse_row(buffer)
 }
 
-fn process_image(plan: UploadPlan, cache: mut RetainedImageStore) -> Result<Unit, ImageError> {
-    local image = Image.load(path: plan.input)?
+fn process_image(plan: UploadPlan, cache: mut RetainedImageStore) -> Result<Unit, PictureError> {
+    local image = Picture.load(path: plan.input)?
 
     audit_step(callback: || {
-        Image.inspect(image)
+        Picture.inspect(image)
     })
 
-    Image.resize(image: mut image, width: 1024, height: 768)
-    Image.normalize(image: mut image)
-    Image.sharpen(image: mut image)
+    Picture.resize(image: mut image, width: 1024, height: 768)
+    Picture.normalize(image: mut image)
+    Picture.sharpen(image: mut image)
 
     let shared = manage image
     RetainedImageStore.store(cache: mut cache, image: shared)
-    Image.save(image: shared, path: plan.output)?
+    Picture.save(image: shared, path: plan.output)?
 
     return Ok(Unit)
 }
 
-fn refresh_config(path: Path, store: mut ConfigStore) -> Result<Unit, ConfigError> {
-    let config = Config.load(path)?
-    ConfigStore.replace(store: mut store, value: config)
+fn refresh_config(path: Path, store: mut SettingsStore) -> Result<Unit, SettingsError> {
+    let config = Settings.load(path)?
+    SettingsStore.replace(store: mut store, value: config)
 
     return Ok(Unit)
 }
 
-fn refresh_config_http(path: Path, store: mut ConfigStore) -> Result<Unit, HttpError> {
+fn refresh_config_http(path: Path, store: mut SettingsStore) -> Result<Unit, HttpError> {
     match refresh_config(path, store: mut store) {
         Ok(unit) => {
             return Ok(Unit)
@@ -125,7 +174,7 @@ fn refresh_config_http(path: Path, store: mut ConfigStore) -> Result<Unit, HttpE
 }
 
 fn build_work_item_http(
-    request: Request,
+    request: InboundMessage,
     owner_id: String,
 ) -> Result<WorkItem, HttpError> {
     match build_work_item(request, owner_id) {
@@ -154,19 +203,19 @@ fn record_audit(trace_id: String) -> Result<Unit, HttpError> {
     return Ok(Unit)
 }
 
-fn persist_trace(cache: mut Cache, trace_id: String, status: String) -> Unit {
-    Cache.insert(cache: mut cache, key: trace_id, value: status)
+fn persist_trace(cache: mut MemoStore, trace_id: String, status: String) -> Unit {
+    MemoStore.insert(cache: mut cache, key: trace_id, value: status)
     return Unit
 }
 
 fn handle_request(
-    request: Request,
+    request: InboundMessage,
     owner_id: String,
     image_store: mut RetainedImageStore,
-    config_store: mut ConfigStore,
-    status_cache: mut Cache,
-    counter: mut Counter,
-) -> Result<fresh Response, HttpError> {
+    config_store: mut SettingsStore,
+    status_cache: mut MemoStore,
+    counter: mut Tally,
+) -> Result<fresh OutboundMessage, HttpError> {
     let config_path = Path.from_string(value: "config.json")
     refresh_config_http(path: config_path, store: mut config_store)?
 
@@ -175,10 +224,10 @@ fn handle_request(
     process_image_http(plan: item.plan, cache: mut image_store)?
     record_audit(trace_id: item.plan.trace_id)?
 
-    let status = ConfigStore.name(store: config_store)
+    let status = SettingsStore.name(store: config_store)
     persist_trace(cache: mut status_cache, trace_id: item.plan.trace_id, status)
-    Counter.add(counter: mut counter, amount: 1)
+    Tally.add(counter: mut counter, amount: 1)
     Log.write(message: item.plan.trace_id)
 
-    return Response.ok(body: status)?
+    return OutboundMessage.ok(body: status)?
 }

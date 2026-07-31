@@ -295,21 +295,6 @@ fn deepcopy_collect_regs(instr: &RegInstr, out: &mut Vec<Reg>) {
             map: base,
             key: extra,
         }
-        | RegInstr::CounterAdd {
-            dst,
-            counter: base,
-            amount: extra,
-        }
-        | RegInstr::ConfigStoreReplace {
-            dst,
-            store: base,
-            value: extra,
-        }
-        | RegInstr::GlobalConfigReplace {
-            dst,
-            global: base,
-            value: extra,
-        }
         | RegInstr::StringBuilderPush {
             dst,
             builder: base,

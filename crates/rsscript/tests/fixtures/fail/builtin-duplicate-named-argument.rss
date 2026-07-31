@@ -5,6 +5,9 @@ struct Image {
     pixels: Buffer
 }
 
+fn Image.load(path: Path) -> fresh Image
+fn Image.resize(image: mut Image, width: Int, height: Int) -> Unit
+
 fn bad_resize_duplicate_argument(path: Path) -> Unit {
     local image = Image.load(path)
     Image.resize(image: mut image, image: mut image, width: 800, height: 600)

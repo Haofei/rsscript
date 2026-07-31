@@ -1,7 +1,0 @@
-struct Counter
-
-pub fn Counter.new(value: Int) -> fresh Counter
-
-pub fn Counter.add(counter: mut Counter, amount: Int) -> Unit
-
-pub fn Counter.value(counter: Counter) -> Int

@@ -5,7 +5,7 @@ class Scheduler {
     callbacks: List<Callback>
 }
 
-struct Image {
+struct Picture {
     pixels: Buffer
 }
 
@@ -15,11 +15,11 @@ fn schedule(scheduler: mut Scheduler, callback: Callback) -> Unit
 }
 
 fn bad_schedule(scheduler: mut Scheduler, path: Path) -> Unit {
-    local image = Image.load(path)
+    local image = Picture.load(path)
     schedule(
         scheduler: mut scheduler,
         callback: || {
-            Image.inspect(image)
+            Picture.inspect(image)
         },
     )
 }

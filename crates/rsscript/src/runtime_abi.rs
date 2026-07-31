@@ -18,20 +18,6 @@ const fn runtime_intrinsic(
     }
 }
 
-const fn runtime_intrinsic_with_handles(
-    namespace: &'static str,
-    name: &'static str,
-    rust_target: &'static str,
-    managed_handle_args: &'static [&'static str],
-) -> RuntimeIntrinsic {
-    RuntimeIntrinsic {
-        namespace,
-        name,
-        rust_target,
-        managed_handle_args,
-    }
-}
-
 pub(crate) fn lookup_runtime_intrinsic(
     namespace: &str,
     name: &str,
@@ -187,28 +173,6 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "to_bytes",
         "rsscript_runtime::bytes_view_to_bytes",
     ),
-    runtime_intrinsic("Cache", "get", "rsscript_runtime::cache_get"),
-    runtime_intrinsic("Cache", "insert", "rsscript_runtime::cache_insert"),
-    runtime_intrinsic("Cache", "lookup", "rsscript_runtime::cache_lookup"),
-    runtime_intrinsic("Cache", "new", "rsscript_runtime::cache_new"),
-    runtime_intrinsic("Config", "load", "rsscript_runtime::config_load"),
-    runtime_intrinsic("Config", "name", "rsscript_runtime::config_name"),
-    runtime_intrinsic("Config", "new", "rsscript_runtime::config_new"),
-    runtime_intrinsic(
-        "Config",
-        "rule_count",
-        "rsscript_runtime::config_rule_count",
-    ),
-    runtime_intrinsic("ConfigStore", "name", "rsscript_runtime::config_store_name"),
-    runtime_intrinsic("ConfigStore", "new", "rsscript_runtime::config_store_new"),
-    runtime_intrinsic(
-        "ConfigStore",
-        "replace",
-        "rsscript_runtime::config_store_replace",
-    ),
-    runtime_intrinsic("Counter", "add", "rsscript_runtime::counter_add"),
-    runtime_intrinsic("Counter", "new", "rsscript_runtime::counter_new"),
-    runtime_intrinsic("Counter", "value", "rsscript_runtime::counter_value"),
     runtime_intrinsic("Clock", "now", "rsscript_runtime::clock_now"),
     runtime_intrinsic(
         "Clock",
@@ -444,31 +408,6 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     ),
     runtime_intrinsic("Date", "weekday", "rsscript_runtime::date_weekday"),
     runtime_intrinsic("Date", "year", "rsscript_runtime::date_year"),
-    runtime_intrinsic_with_handles(
-        "Environment",
-        "bind_function",
-        "rsscript_runtime::environment_bind_function",
-        &["env", "function"],
-    ),
-    runtime_intrinsic_with_handles(
-        "Environment",
-        "child",
-        "rsscript_runtime::environment_child",
-        &["parent"],
-    ),
-    runtime_intrinsic_with_handles(
-        "Environment",
-        "has_function",
-        "rsscript_runtime::environment_has_function",
-        &["env"],
-    ),
-    runtime_intrinsic_with_handles(
-        "Environment",
-        "has_parent",
-        "rsscript_runtime::environment_has_parent",
-        &["env"],
-    ),
-    runtime_intrinsic("Environment", "root", "rsscript_runtime::environment_root"),
     runtime_intrinsic("Env", "current_dir", "rsscript_runtime::env_current_dir"),
     runtime_intrinsic("Env", "get", "rsscript_runtime::env_get"),
     runtime_intrinsic(
@@ -562,29 +501,6 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "FileError",
         "message",
         "rsscript_runtime::file_error_message",
-    ),
-    runtime_intrinsic_with_handles(
-        "FunctionObject",
-        "has_closure",
-        "rsscript_runtime::function_object_has_closure",
-        &["function"],
-    ),
-    runtime_intrinsic_with_handles(
-        "FunctionObject",
-        "new",
-        "rsscript_runtime::function_object_new",
-        &["closure"],
-    ),
-    runtime_intrinsic("GlobalConfig", "new", "rsscript_runtime::global_config_new"),
-    runtime_intrinsic(
-        "GlobalConfig",
-        "replace",
-        "rsscript_runtime::global_config_replace",
-    ),
-    runtime_intrinsic(
-        "GlobalConfig",
-        "rule_count",
-        "rsscript_runtime::global_config_rule_count",
     ),
     runtime_intrinsic(
         "Hash",
@@ -720,17 +636,6 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "text",
         "rsscript_runtime::http_response_text",
     ),
-    runtime_intrinsic_with_handles(
-        "Image",
-        "inspect",
-        "rsscript_runtime::image_inspect",
-        &["image"],
-    ),
-    runtime_intrinsic("Image", "load", "rsscript_runtime::image_load"),
-    runtime_intrinsic("Image", "normalize", "rsscript_runtime::image_normalize"),
-    runtime_intrinsic("Image", "resize", "rsscript_runtime::image_resize"),
-    runtime_intrinsic_with_handles("Image", "save", "rsscript_runtime::image_save", &["image"]),
-    runtime_intrinsic("Image", "sharpen", "rsscript_runtime::image_sharpen"),
     runtime_intrinsic("Instant", "elapsed", "rsscript_runtime::instant_elapsed"),
     runtime_intrinsic(
         "Json",
@@ -1216,11 +1121,6 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
         "message",
         "rsscript_runtime::regex_error_message",
     ),
-    runtime_intrinsic("Request", "new", "rsscript_runtime::request_new"),
-    runtime_intrinsic("Request", "path", "rsscript_runtime::request_path"),
-    runtime_intrinsic("Response", "body", "rsscript_runtime::response_body"),
-    runtime_intrinsic("Response", "ok", "rsscript_runtime::response_ok"),
-    runtime_intrinsic("Response", "status", "rsscript_runtime::response_status"),
     runtime_intrinsic("Result", "and_then", "rsscript_runtime::result_and_then"),
     runtime_intrinsic("Result", "err", "rsscript_runtime::result_err"),
     runtime_intrinsic(
@@ -1241,11 +1141,6 @@ const RUNTIME_INTRINSICS: &[RuntimeIntrinsic] = &[
     ),
     runtime_intrinsic("Row", "field_string", "rsscript_runtime::row_field_string"),
     runtime_intrinsic("RowBuffer", "new", "rsscript_runtime::row_buffer_new"),
-    runtime_intrinsic(
-        "RuleLoader",
-        "load_rules",
-        "rsscript_runtime::rule_loader_load_rules",
-    ),
     runtime_intrinsic("Set", "clear", "rsscript_runtime::set_clear"),
     runtime_intrinsic("Set", "contains", "rsscript_runtime::set_contains"),
     runtime_intrinsic("Set", "for_each", "rsscript_runtime::set_for_each"),

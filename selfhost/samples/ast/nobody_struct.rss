@@ -1,9 +1,9 @@
 // expect: RS0004
-struct Image
-struct ImageError
+struct Picture
+struct PictureError
 
-fn load(path: Path) -> Result<Image, ImageError>
+fn load(path: Path) -> Result<Picture, PictureError>
     effects(fresh)
 {
-    return Image()
+    return Picture()
 }

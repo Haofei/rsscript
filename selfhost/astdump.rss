@@ -505,7 +505,7 @@ fn emit_expr(out: mut StringBuilder, toks: List<Tok>, start: Int, end: Int, d: I
     // General effect prefix: read/mut/take <value>, handled AFTER the binary split
     // (effect binds tighter than any operator). The receiver-call shorthand
     // `<effect> recv.method(args)` (lowercase receiver) parses as a ReceiverCall;
-    // an uppercase namespace (`read Cache.put()`) stays a qualified call under it.
+    // an uppercase namespace (`read Store.put()`) stays a qualified call under it.
     let effWord = effect_kw(toks, i: s)
     if String.len(value: effWord) > 0 {
         let recvStart = s + 1
@@ -3172,7 +3172,7 @@ fn emit_shared_type_decl(out: mut StringBuilder, program: Program, toks: List<To
     // After the name (and any generics/derives) the very next token is either the
     // body `{` or the start of the NEXT declaration — so a body exists iff that
     // token is `{`. (A raw find_block_open would borrow a LATER decl's brace for a
-    // body-less declaration like `struct Image`, swallowing everything up to it.)
+    // body-less declaration like `struct Picture`, swallowing everything up to it.)
     let mut openb = -1
     if at_symbol(toks: toks, i: j, code: SYM_LBRACE) { openb = j }
     if openb < 0 { return j }
@@ -3212,7 +3212,7 @@ fn emit_shared_sum(out: mut StringBuilder, program: Program, toks: List<Tok>, st
     // After the name (and any generics/derives) the very next token is either the
     // body `{` or the start of the NEXT declaration — so a body exists iff that
     // token is `{`. (A raw find_block_open would borrow a LATER decl's brace for a
-    // body-less declaration like `struct Image`, swallowing everything up to it.)
+    // body-less declaration like `struct Picture`, swallowing everything up to it.)
     let mut openb = -1
     if at_symbol(toks: toks, i: j, code: SYM_LBRACE) { openb = j }
     if openb < 0 { return j }

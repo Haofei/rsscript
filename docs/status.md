@@ -88,6 +88,7 @@ This table records the current implementation batch for the refactoring work in
 | R22 | Remove package publish, vendor, and hosted-registry preview surfaces | Complete | No publish/vendor CLI, RSScript API/model, REIR collector, preview badge, archive-manifest, fixture, or package-manager prototype surface remains |
 | R23 | Contract native package ecosystem demos | Complete | One dependency-free native ABI fixture covers mutable list write-back; SQLite, SQLx, Rayon, CLI, Crypto, and HTTP native package trees are removed |
 | R24 | Remove fake database runtime and generic pooling | Complete | No synthetic database connection/error runtime, generic pooling language feature, compiler/VM model, stdlib interface, fixture, or generated crate remains |
+| R25 | Remove simulated domain runtime facades | Complete | No bundled image, cache, config, counter, interpreter-object, or local HTTP handler facade remains; the real HTTP client, File/JSON/CSV, JIT, and self-host framework remain |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -275,6 +276,12 @@ R24 removes the synthetic executable database connection model and the generic
 pooling language/runtime feature. Core `resource` declarations and `with`
 ownership remain, as do the abstract `database.read`/`database.write`
 capability taxonomy and Terraform/PostgreSQL review evidence demos.
+
+R25 removes the simulated image, cache, config/rule, counter,
+environment/function-object, and local HTTP handler runtime facades. The real
+HTTP client remains backed by `HttpRequest`, `HttpResponse`, and `HttpError`;
+File, JSON, CSV, JIT, and the self-host framework retain their supported
+coverage.
 
 ## Experimental Status
 

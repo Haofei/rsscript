@@ -331,7 +331,6 @@ crates/rsscript/tests/fixtures/pass/canonical-local-thumbnail.rss
 crates/rsscript/tests/fixtures/pass/channel-pipeline.rss
 crates/rsscript/tests/fixtures/pass/char-literal.rss
 crates/rsscript/tests/fixtures/pass/complex-supported-review-map.rss
-crates/rsscript/tests/fixtures/pass/config-hot-reload.rss
 crates/rsscript/tests/fixtures/pass/const-declarations.rss
 crates/rsscript/tests/fixtures/pass/core-common-helpers.rss
 crates/rsscript/tests/fixtures/pass/core-receiver-call.rss
@@ -366,9 +365,7 @@ crates/rsscript/tests/fixtures/pass/hashable-enum-payload-key.rss
 crates/rsscript/tests/fixtures/pass/hashable-struct-map-key.rss
 crates/rsscript/tests/fixtures/pass/hashable-struct-set.rss
 crates/rsscript/tests/fixtures/pass/hashable-uop-map-and-set.rss
-crates/rsscript/tests/fixtures/pass/image-pipeline-manage-exit.rss
 crates/rsscript/tests/fixtures/pass/inline-managed-closure-retains-managed.rss
-crates/rsscript/tests/fixtures/pass/interpreter-class-cycles.rss
 crates/rsscript/tests/fixtures/pass/json-fresh-managed-field.rss
 crates/rsscript/tests/fixtures/pass/json-typed-decode.rss
 crates/rsscript/tests/fixtures/pass/let-else-basic.rss
@@ -383,7 +380,6 @@ crates/rsscript/tests/fixtures/pass/loop-return-manage-unreachable.rss
 crates/rsscript/tests/fixtures/pass/lower_name_attribute.rss
 crates/rsscript/tests/fixtures/pass/managed-closure-captures-handle-field.rss
 crates/rsscript/tests/fixtures/pass/managed-closure-retains-managed.rss
-crates/rsscript/tests/fixtures/pass/managed-http-handler.rss
 crates/rsscript/tests/fixtures/pass/map-iteration-keys-values.rss
 crates/rsscript/tests/fixtures/pass/match-expression.rss
 crates/rsscript/tests/fixtures/pass/match-literal-and-if-let.rss
@@ -433,7 +429,6 @@ crates/rsscript/tests/fixtures/pass/selfhost-review-classifier.rss
 crates/rsscript/tests/fixtures/pass/selfhost-rustc-remap.rss
 crates/rsscript/tests/fixtures/pass/set-to-list.rss
 crates/rsscript/tests/fixtures/pass/short-circuit-manage-after-use.rss
-crates/rsscript/tests/fixtures/pass/single-isolate-counter.rss
 crates/rsscript/tests/fixtures/pass/struct-field-defaults.rss
 crates/rsscript/tests/fixtures/pass/sum-type-basic.rss
 crates/rsscript/tests/fixtures/pass/take-inline-field-disjoint.rss
@@ -487,20 +482,12 @@ examples/scripts/basic/operators.rss
 examples/scripts/basic/option.rss
 examples/scripts/basic/string_concat.rss
 examples/scripts/core/buffer_consume.rss
-examples/scripts/core/cache_lookup.rss
-examples/scripts/core/cache_retention.rss
-examples/scripts/core/config_reload.rss
-examples/scripts/core/counter.rss
 examples/scripts/core/csv_read.rss
 examples/scripts/core/file_copy.rss
 examples/scripts/core/file_copy_buffer.rss
-examples/scripts/core/http_handler.rss
-examples/scripts/core/image_pipeline.rss
-examples/scripts/core/interpreter_cycle.rss
 examples/scripts/core/interpreter_host_boundary.rss
 examples/scripts/core/interpreter_pure_parity.rss
 examples/scripts/core/json_nested.rss
-examples/scripts/core/rules_config_reload.rss
 examples/scripts/core/uop_interning.rss
 examples/scripts/core/yaml_config.rss
 packages/agent-tools/src/lib.rss

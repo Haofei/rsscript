@@ -444,26 +444,22 @@ impl<'a> Generator<'a> {
             3 => self.gen_collection_stmt(scope),
             4 => self.gen_closure_stmt(scope),
             5 => self.gen_cancellation_stmt(),
-            _ => self.gen_counter_stmt(),
+            _ => self.gen_accumulator_stmt(),
         }
     }
 
-    /// A `Counter` resource: create, add a few times, observe the value. A
-    /// runtime-backed mutable resource whose final value is deterministic, so it
-    /// exercises resource construction / `mut` receiver calls across backends.
-    fn gen_counter_stmt(&mut self) -> String {
-        let counter = self.fresh_var();
+    /// A scalar accumulator whose final value is deterministic across backends.
+    fn gen_accumulator_stmt(&mut self) -> String {
+        let accumulator = self.fresh_var();
         let start = self.seed.range_i64(0, 1000);
-        let mut lines = vec![format!("let {counter} = Counter.new(value: {start})")];
+        let mut lines = vec![format!("let mut {accumulator} = {start}")];
         let adds = self.seed.choice(3); // 0..=2
         for _ in 0..adds {
             let amount = self.seed.range_i64(0, 1000);
-            lines.push(format!(
-                "Counter.add(counter: mut {counter}, amount: {amount})"
-            ));
+            lines.push(format!("{accumulator} = {accumulator} + {amount}"));
         }
         lines.push(format!(
-            "Log.write(message: read String.from_int(value: Counter.value(counter: read {counter})))"
+            "Log.write(message: read String.from_int(value: {accumulator}))"
         ));
         lines.join("\n    ")
     }

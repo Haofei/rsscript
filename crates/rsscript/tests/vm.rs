@@ -63,7 +63,6 @@ fn assert_reg_vm_output<'a>(
 #[derive(Clone, Copy)]
 enum CompiledReturnHarness {
     HttpRequest,
-    Image,
     JsonValue,
     ResultUnitString,
 }
@@ -72,7 +71,6 @@ impl CompiledReturnHarness {
     fn cache_tag(self) -> &'static str {
         match self {
             Self::HttpRequest => "return-http-request",
-            Self::Image => "return-image",
             Self::JsonValue => "return-json-value",
             Self::ResultUnitString => "return-result-unit-string",
         }
@@ -86,16 +84,6 @@ impl CompiledReturnHarness {
                     "    rsscript_runtime::install_runtime_diagnostic_panic_hook();\n",
                     "    let value = {crate_name}::main();\n",
                     "    println!(\"__RSSCRIPT_RETURN__{{}}\", rsscript_runtime::http_request_debug_summary(&value));\n",
-                    "}}\n"
-                ),
-                crate_name = crate_name
-            ),
-            Self::Image => format!(
-                concat!(
-                    "fn main() {{\n",
-                    "    rsscript_runtime::install_runtime_diagnostic_panic_hook();\n",
-                    "    let value = {crate_name}::main();\n",
-                    "    println!(\"__RSSCRIPT_RETURN__{{}}\", rsscript_runtime::image_debug_summary(&value));\n",
                     "}}\n"
                 ),
                 crate_name = crate_name

@@ -45,7 +45,6 @@ impl RegVm {
                 self.authorize_path_arg(args, base, 0)?;
                 self.authorize_path_arg(args, base, 1)
             }
-            RegIntrinsic::ImageSave => self.authorize_path_arg(args, base, 1),
             RegIntrinsic::CsvReadInto
             | RegIntrinsic::FileReadAll
             | RegIntrinsic::FileReadAllString
@@ -63,8 +62,7 @@ impl RegVm {
                     .authorize_temp_directory()
                     .map_err(host_authority_error)
             }
-            RegIntrinsic::ConfigLoad
-            | RegIntrinsic::CsvOpenRead
+            RegIntrinsic::CsvOpenRead
             | RegIntrinsic::CsvRows
             | RegIntrinsic::DirectoryCreate
             | RegIntrinsic::DirectoryCreateAll
@@ -97,7 +95,6 @@ impl RegVm {
             | RegIntrinsic::FileWriteStringAsync
             | RegIntrinsic::FileWriteStringToPath
             | RegIntrinsic::HashSha256File
-            | RegIntrinsic::ImageLoad
             | RegIntrinsic::JsonParseFile
             | RegIntrinsic::PathExists
             | RegIntrinsic::PathIsDir
@@ -106,7 +103,6 @@ impl RegVm {
             | RegIntrinsic::PathListPaths
             | RegIntrinsic::PathReadString
             | RegIntrinsic::PathWriteString
-            | RegIntrinsic::RuleLoaderLoadRules
             | RegIntrinsic::TempDirNewIn
             | RegIntrinsic::TomlParseFile
             | RegIntrinsic::YamlParseFile => self.authorize_path_arg(args, base, 0),

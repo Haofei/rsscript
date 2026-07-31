@@ -255,13 +255,6 @@ mod tests {
                 normalized_effects: vec!["native".to_owned()],
             },
             RsScriptPackageExport {
-                name: "Config.load".to_owned(),
-                kind: "function".to_owned(),
-                classification: "review_if_changed".to_owned(),
-                reasons: vec!["public function".to_owned()],
-                normalized_effects: Vec::new(),
-            },
-            RsScriptPackageExport {
                 name: "Json.parse_file".to_owned(),
                 kind: "function".to_owned(),
                 classification: "review_if_changed".to_owned(),
@@ -305,20 +298,6 @@ mod tests {
             },
             RsScriptPackageExport {
                 name: "File.write_buffer".to_owned(),
-                kind: "function".to_owned(),
-                classification: "review_if_changed".to_owned(),
-                reasons: vec!["public function".to_owned()],
-                normalized_effects: Vec::new(),
-            },
-            RsScriptPackageExport {
-                name: "Image.load".to_owned(),
-                kind: "function".to_owned(),
-                classification: "review_if_changed".to_owned(),
-                reasons: vec!["public function".to_owned()],
-                normalized_effects: Vec::new(),
-            },
-            RsScriptPackageExport {
-                name: "Image.save".to_owned(),
                 kind: "function".to_owned(),
                 classification: "review_if_changed".to_owned(),
                 reasons: vec!["public function".to_owned()],

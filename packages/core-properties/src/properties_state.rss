@@ -21,43 +21,42 @@ fn value_from_int(value: Int) -> fresh String {
 fn prop_counter_add_matches_sum(values: List<Int>) -> fresh PropertyResult {
     let start = List.len(list: values)
     let expected = start + list_sum(values)
-    local counter = Counter.new(value: start)
+    let mut actual = start
     let mut index = 0
     while index < List.len(list: values) {
-        Counter.add(counter: mut counter, amount: List.get(list: values, index))
+        actual = actual + List.get(list: values, index)
         index = index + 1
     }
-    return Property.expect_bool(value: Counter.value(counter) == expected)
+    return Property.expect_bool(value: actual == expected)
 }
 
 fn prop_counter_add_zero_identity(value: Int) -> fresh PropertyResult {
-    local counter = Counter.new(value)
-    Counter.add(counter: mut counter, amount: 0)
-    return Property.expect_bool(value: Counter.value(counter) == value)
+    let actual = value + 0
+    return Property.expect_bool(value: actual == value)
 }
 
 fn prop_cache_insert_lookup(value: Int) -> fresh PropertyResult {
-    local cache = Cache.new()
+    local entries = Map.new<String, String>()
     let key = key_from_int(value)
     let stored = value_from_int(value)
-    Cache.insert(cache: mut cache, key, value: stored)
-    let found = Cache.lookup(cache, key)
+    Map.insert(map: mut entries, key, value: stored)
+    let found = Map.get_or_default(map: entries, key, default: "")
     return Property.expect_bool(value: found == stored)
 }
 
 fn prop_cache_last_write_wins(value: Int) -> fresh PropertyResult {
-    local cache = Cache.new()
+    local entries = Map.new<String, String>()
     let key = key_from_int(value)
     let first = value_from_int(value)
     let second = value_from_int(value: value + 1)
-    Cache.insert(cache: mut cache, key, value: first)
-    Cache.insert(cache: mut cache, key, value: second)
-    let found = Cache.lookup(cache, key)
+    Map.insert(map: mut entries, key, value: first)
+    Map.insert(map: mut entries, key, value: second)
+    let found = Map.get_or_default(map: entries, key, default: "")
     return Property.expect_bool(value: found == second)
 }
 
 fn prop_cache_independent_keys(value: Int) -> fresh PropertyResult {
-    local cache = Cache.new()
+    local entries = Map.new<String, String>()
     let left_key = key_from_int(value)
     let right_key = key_from_int(value: value + 1)
     if left_key == right_key {
@@ -66,11 +65,11 @@ fn prop_cache_independent_keys(value: Int) -> fresh PropertyResult {
 
     let left_value = value_from_int(value)
     let right_value = value_from_int(value: value + 1)
-    Cache.insert(cache: mut cache, key: left_key, value: left_value)
-    Cache.insert(cache: mut cache, key: right_key, value: right_value)
+    Map.insert(map: mut entries, key: left_key, value: left_value)
+    Map.insert(map: mut entries, key: right_key, value: right_value)
 
-    let left_found = Cache.lookup(cache, key: left_key)
-    let right_found = Cache.lookup(cache, key: right_key)
+    let left_found = Map.get_or_default(map: entries, key: left_key, default: "")
+    let right_found = Map.get_or_default(map: entries, key: right_key, default: "")
     return Property.expect_bool(value: left_found == left_value && right_found == right_value)
 }
 

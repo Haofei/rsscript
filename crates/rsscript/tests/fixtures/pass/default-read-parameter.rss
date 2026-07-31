@@ -2,6 +2,8 @@ struct Image {
     pixels: Buffer
 }
 
+fn Image.inspect(image: Image) -> Unit
+
 fn inspect(image: Image) -> Unit {
     Image.inspect(image)
 }

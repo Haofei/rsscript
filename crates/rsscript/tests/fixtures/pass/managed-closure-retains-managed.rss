@@ -1,5 +1,7 @@
 struct Image
 
+fn Image.inspect(image: Image) -> Unit
+
 fn retain_callback(image: Image) -> Unit {
     let callback = || {
         Image.inspect(image)

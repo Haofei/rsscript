@@ -1,4 +1,4 @@
-fn run(cache: mut Cache, xs: mut List<Int>) -> Int {
+fn run(cache: mut Store, xs: mut List<Int>) -> Int {
     mut xs.push(value: 1)
     cache.get(key: 2)
     return 0

@@ -320,15 +320,15 @@ fn count_files_with_suffix(
     let directory = Path.join(base: root, child)
     require_directory(path: directory, label: child)?
     let files = list_files_result(path: directory)?
-    let counter = Counter.new(value: 0)
+    let mut count = 0
 
     for file in files {
         if String.ends_with(value: file, suffix) {
-            Counter.add(counter: mut counter, amount: 1)
+            count = count + 1
         }
     }
 
-    return Ok(Counter.value(counter))
+    return Ok(count)
 }
 
 fn count_root_files_with_suffix(
@@ -336,7 +336,7 @@ fn count_root_files_with_suffix(
     children: List<String>,
     suffix: String,
 ) -> Result<Int, String> {
-    let counter = Counter.new(value: 0)
+    let mut total = 0
 
     for child in children {
         let count = count_files_with_suffix(
@@ -344,10 +344,10 @@ fn count_root_files_with_suffix(
             child,
             suffix,
         )?
-        Counter.add(counter: mut counter, amount: count)
+        total = total + count
     }
 
-    return Ok(Counter.value(counter))
+    return Ok(total)
 }
 
 fn create_dir_result(path: Path) -> Result<Unit, String> {
@@ -974,15 +974,15 @@ fn count_existing_files_with_suffix(
     }
 
     let files = list_files_result(path: directory)?
-    let counter = Counter.new(value: 0)
+    let mut count = 0
 
     for file in files {
         if String.ends_with(value: file, suffix) {
-            Counter.add(counter: mut counter, amount: 1)
+            count = count + 1
         }
     }
 
-    return Counter.value(counter)
+    return count
 }
 
 fn count_existing_root_files_with_suffix(
@@ -990,7 +990,7 @@ fn count_existing_root_files_with_suffix(
     children: List<String>,
     suffix: String,
 ) -> Result<Int, String> {
-    let counter = Counter.new(value: 0)
+    let mut total = 0
 
     for child in children {
         let count = count_existing_files_with_suffix(
@@ -998,10 +998,10 @@ fn count_existing_root_files_with_suffix(
             child,
             suffix,
         )?
-        Counter.add(counter: mut counter, amount: count)
+        total = total + count
     }
 
-    return Counter.value(counter)
+    return total
 }
 
 fn collect_interface_snapshots_from_files(

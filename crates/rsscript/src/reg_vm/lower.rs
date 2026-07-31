@@ -1332,51 +1332,8 @@ impl RegLowerer<'_> {
                             });
                             return Ok(dst);
                         }
-                        ("Cache", "insert") => {
-                            if arg_regs.len() != 3 {
-                                return Err(EvalError::Runtime(format!(
-                                    "reg VM Cache.insert expected 3 args, got {}.",
-                                    arg_regs.len()
-                                )));
-                            }
-                            self.emit(RegInstr::MapInsert {
-                                dst,
-                                map: arg_regs[0],
-                                key: arg_regs[1],
-                                value: arg_regs[2],
-                            });
-                            return Ok(dst);
-                        }
                         ("CancellationToken", "is_cancelled") => {
                             RegIntrinsic::CancellationTokenIsCancelled
-                        }
-                        ("ConfigStore", "replace") => {
-                            if arg_regs.len() != 2 {
-                                return Err(EvalError::Runtime(format!(
-                                    "reg VM ConfigStore.replace expected 2 args, got {}.",
-                                    arg_regs.len()
-                                )));
-                            }
-                            self.emit(RegInstr::ConfigStoreReplace {
-                                dst,
-                                store: arg_regs[0],
-                                value: arg_regs[1],
-                            });
-                            return Ok(dst);
-                        }
-                        ("Counter", "add") => {
-                            if arg_regs.len() != 2 {
-                                return Err(EvalError::Runtime(format!(
-                                    "reg VM Counter.add expected 2 args, got {}.",
-                                    arg_regs.len()
-                                )));
-                            }
-                            self.emit(RegInstr::CounterAdd {
-                                dst,
-                                counter: arg_regs[0],
-                                amount: arg_regs[1],
-                            });
-                            return Ok(dst);
                         }
                         ("Deque", "clear") => {
                             if arg_regs.len() != 1 {
@@ -1451,20 +1408,6 @@ impl RegLowerer<'_> {
                             self.emit(RegInstr::DequePushFront {
                                 dst,
                                 deque: arg_regs[0],
-                                value: arg_regs[1],
-                            });
-                            return Ok(dst);
-                        }
-                        ("GlobalConfig", "replace") => {
-                            if arg_regs.len() != 2 {
-                                return Err(EvalError::Runtime(format!(
-                                    "reg VM GlobalConfig.replace expected 2 args, got {}.",
-                                    arg_regs.len()
-                                )));
-                            }
-                            self.emit(RegInstr::GlobalConfigReplace {
-                                dst,
-                                global: arg_regs[0],
                                 value: arg_regs[1],
                             });
                             return Ok(dst);
@@ -2978,9 +2921,6 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("BytesView", "slice") => Some(RegIntrinsic::BytesSlice),
         ("BytesView", "starts_with") => Some(RegIntrinsic::BytesViewStartsWith),
         ("BytesView", "to_bytes") => Some(RegIntrinsic::BytesViewToBytes),
-        ("Cache", "get") => Some(RegIntrinsic::CacheGet),
-        ("Cache", "lookup") => Some(RegIntrinsic::CacheLookup),
-        ("Cache", "new") => Some(RegIntrinsic::MapNew),
         ("CancellationSource", "cancel") => Some(RegIntrinsic::CancellationSourceCancel),
         ("CancellationSource", "new") => Some(RegIntrinsic::CancellationSourceNew),
         ("CancellationSource", "token") => Some(RegIntrinsic::CancellationSourceToken),
@@ -3005,15 +2945,7 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Char", "to_upper") => Some(RegIntrinsic::CharToUpper),
         ("Clock", "now") => Some(RegIntrinsic::ClockNow),
         ("Clock", "system_unix_ms") => Some(RegIntrinsic::ClockSystemUnixMs),
-        ("Config", "load") => Some(RegIntrinsic::ConfigLoad),
         ("Capability", "from") => Some(RegIntrinsic::CapabilityFrom),
-        ("Config", "name") => Some(RegIntrinsic::ConfigName),
-        ("Config", "new") => Some(RegIntrinsic::ConfigNew),
-        ("Config", "rule_count") => Some(RegIntrinsic::ConfigRuleCount),
-        ("ConfigStore", "name") => Some(RegIntrinsic::ConfigStoreName),
-        ("ConfigStore", "new") => Some(RegIntrinsic::ConfigStoreNew),
-        ("Counter", "new") => Some(RegIntrinsic::CounterNew),
-        ("Counter", "value") => Some(RegIntrinsic::CounterValue),
         ("Csv", "open_read") => Some(RegIntrinsic::CsvOpenRead),
         ("Csv", "parse_row") => Some(RegIntrinsic::CsvParseRow),
         ("Csv", "read_into") => Some(RegIntrinsic::CsvReadInto),
@@ -3065,11 +2997,6 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Duration", "as_seconds") => Some(RegIntrinsic::DurationAsSeconds),
         ("Duration", "ms") => Some(RegIntrinsic::DurationMs),
         ("Duration", "seconds") => Some(RegIntrinsic::DurationSeconds),
-        ("Environment", "bind_function") => Some(RegIntrinsic::EnvironmentBindFunction),
-        ("Environment", "child") => Some(RegIntrinsic::EnvironmentChild),
-        ("Environment", "has_function") => Some(RegIntrinsic::EnvironmentHasFunction),
-        ("Environment", "has_parent") => Some(RegIntrinsic::EnvironmentHasParent),
-        ("Environment", "root") => Some(RegIntrinsic::EnvironmentRoot),
         ("Env", "current_dir") => Some(RegIntrinsic::EnvCurrentDir),
         ("Env", "get") => Some(RegIntrinsic::EnvGet),
         ("Env", "get_or_default") => Some(RegIntrinsic::EnvGetOrDefault),
@@ -3109,8 +3036,6 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("FalliblePipeline", "map") => Some(RegIntrinsic::FalliblePipelineMap),
         ("FalliblePipeline", "try_map") => Some(RegIntrinsic::FalliblePipelineTryMap),
         ("FileError", "message") => Some(RegIntrinsic::FileErrorMessage),
-        ("FunctionObject", "has_closure") => Some(RegIntrinsic::FunctionObjectHasClosure),
-        ("FunctionObject", "new") => Some(RegIntrinsic::FunctionObjectNew),
         ("Hash", "sha256_bytes") => Some(RegIntrinsic::HashSha256Bytes),
         ("Hash", "sha256_file") => Some(RegIntrinsic::HashSha256File),
         ("Hash", "sha256_string") => Some(RegIntrinsic::HashSha256String),
@@ -3119,8 +3044,6 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Hash", "shake128_bytes") => Some(RegIntrinsic::HashShake128Bytes),
         ("Hmac", "sha256_bytes") => Some(RegIntrinsic::HmacSha256Bytes),
         ("Hmac", "sha256_string") => Some(RegIntrinsic::HmacSha256String),
-        ("GlobalConfig", "new") => Some(RegIntrinsic::GlobalConfigNew),
-        ("GlobalConfig", "rule_count") => Some(RegIntrinsic::GlobalConfigRuleCount),
         ("Gzip", "decompress_bytes") => Some(RegIntrinsic::GzipDecompressBytes),
         ("Hex", "decode") => Some(RegIntrinsic::HexDecode),
         ("Hex", "encode") => Some(RegIntrinsic::HexEncode),
@@ -3146,12 +3069,6 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("HttpResponse", "lines") => Some(RegIntrinsic::HttpResponseLines),
         ("HttpResponse", "status") => Some(RegIntrinsic::HttpResponseStatus),
         ("HttpResponse", "text") => Some(RegIntrinsic::HttpResponseText),
-        ("Image", "inspect") => Some(RegIntrinsic::ImageInspect),
-        ("Image", "load") => Some(RegIntrinsic::ImageLoad),
-        ("Image", "normalize") => Some(RegIntrinsic::ImageNormalize),
-        ("Image", "resize") => Some(RegIntrinsic::ImageResize),
-        ("Image", "save") => Some(RegIntrinsic::ImageSave),
-        ("Image", "sharpen") => Some(RegIntrinsic::ImageSharpen),
         ("Instant", "elapsed") => Some(RegIntrinsic::InstantElapsed),
         ("Float", "is_finite") => Some(RegIntrinsic::FloatIsFinite),
         ("Float", "is_infinite") => Some(RegIntrinsic::FloatIsInfinite),
@@ -3383,18 +3300,12 @@ fn qualified_intrinsic(namespace: &str, name: &str) -> Option<RegIntrinsic> {
         ("Result", "ok") => Some(RegIntrinsic::ResultOk),
         ("Result", "unwrap_or") => Some(RegIntrinsic::ResultUnwrapOr),
         ("Result", "unwrap_or_else") => Some(RegIntrinsic::ResultUnwrapOrElse),
-        ("Request", "new") => Some(RegIntrinsic::RequestNew),
-        ("Request", "path") => Some(RegIntrinsic::RequestPath),
         ("Receiver", "close") => Some(RegIntrinsic::ReceiverClose),
         ("Receiver", "into_stream") => Some(RegIntrinsic::ReceiverIntoStream),
         ("Receiver", "recv") => Some(RegIntrinsic::ReceiverRecv),
         ("Receiver", "recv_cancellable") => Some(RegIntrinsic::ReceiverRecvCancellable),
-        ("Response", "body") => Some(RegIntrinsic::ResponseBody),
-        ("Response", "ok") => Some(RegIntrinsic::ResponseOk),
-        ("Response", "status") => Some(RegIntrinsic::ResponseStatus),
         ("Row", "field_string") => Some(RegIntrinsic::RowFieldString),
         ("RowBuffer", "new") => Some(RegIntrinsic::RowBufferNew),
-        ("RuleLoader", "load_rules") => Some(RegIntrinsic::RuleLoaderLoadRules),
         ("Set", "contains") => Some(RegIntrinsic::SetContains),
         ("Set", "difference") => Some(RegIntrinsic::SetDifference),
         ("Set", "intersection") => Some(RegIntrinsic::SetIntersection),

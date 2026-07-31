@@ -39,6 +39,7 @@ struct Image {
 }
 
 struct Metadata
+struct ImageError
 
 struct DecodeResult {
     image: Image

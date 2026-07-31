@@ -514,93 +514,6 @@ fn main() -> Unit {
 }
 
 #[test]
-fn parity_config_intrinsics() {
-    let interpreter_root = common::unique_temp_dir("rsscript-parity-config-interpreter");
-    let backend_root = common::unique_temp_dir("rsscript-parity-config-backend");
-    fs::create_dir_all(&interpreter_root).expect("interpreter config dir should be created");
-    fs::create_dir_all(&backend_root).expect("backend config dir should be created");
-
-    for root in [&interpreter_root, &backend_root] {
-        fs::write(root.join("config.txt"), "\nprimary\nignored\n")
-            .expect("config fixture should write");
-        fs::write(root.join("rules.txt"), "one\ntwo\n\nthree\n")
-            .expect("rules fixture should write");
-    }
-
-    let interpreter_args = [
-        interpreter_root.join("config.txt").display().to_string(),
-        interpreter_root.join("rules.txt").display().to_string(),
-    ];
-    let backend_args = [
-        backend_root.join("config.txt").display().to_string(),
-        backend_root.join("rules.txt").display().to_string(),
-    ];
-    let interpreter_arg_refs = interpreter_args
-        .iter()
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    let backend_arg_refs = backend_args.iter().map(String::as_str).collect::<Vec<_>>();
-
-    let source = r#"
-fn main() -> Result<Unit, ConfigError> {
-    let config_path = Path.from_string(value: read Args.get_or_default(index: 0, default: read "config.txt"))
-    let rules_path = Path.from_string(value: read Args.get_or_default(index: 1, default: read "rules.txt"))
-
-    let value = Config.load(path: read config_path)?
-    Log.write(message: read Config.name(value: read value))
-    let mut store = ConfigStore.new(value: read value)
-    Log.write(message: read ConfigStore.name(store: read store))
-
-    let rules = RuleLoader.load_rules(path: read rules_path)?
-    let config = Config.new(name: read "rules", rules: read rules)
-    Log.write(message: read String.from_int(value: Config.rule_count(config: read config)))
-    let mut global = GlobalConfig.new(value: read config)
-    Log.write(message: read String.from_int(value: GlobalConfig.rule_count(global: read global)))
-
-    let next = Config.load(path: read config_path)?
-    ConfigStore.replace(store: mut store, value: read next)
-    Log.write(message: read ConfigStore.name(store: read store))
-
-    let empty_rules = List<Rule>.new()
-    let empty = Config.new(name: read "empty", rules: read empty_rules)
-    GlobalConfig.replace(global: mut global, value: read empty)
-    Log.write(message: read String.from_int(value: GlobalConfig.rule_count(global: read global)))
-    return Ok(Unit)
-}
-"#;
-
-    common::assert_vm_eval_matches_backend_with_distinct_args(
-        "parity-config.rss",
-        "rsscript_parity_config",
-        source,
-        &interpreter_arg_refs,
-        &backend_arg_refs,
-    );
-
-    let _ = fs::remove_dir_all(&interpreter_root);
-    let _ = fs::remove_dir_all(&backend_root);
-}
-
-#[test]
-fn parity_request_response_intrinsics() {
-    let source = r#"
-fn main() -> Result<Unit, HttpError> {
-    let request = Request.new(path: read "/users/42")
-    Log.write(message: read Request.path(request: read request))
-    let response = Response.ok(body: read "handled")?
-    Log.write(message: read String.from_int(value: Response.status(response: read response)))
-    Log.write(message: read Response.body(response: read response))
-    return Ok(Unit)
-}
-"#;
-    common::assert_vm_eval_matches_backend(
-        "parity-request-response.rss",
-        "rsscript_parity_request_response",
-        source,
-    );
-}
-
-#[test]
 fn parity_borrowed_match_payload_used_by_value() {
     // Regression: matching a borrowed `read Option<T>` / `Result<T, E>` and using
     // the payload by value used to lower to `&T` and fail rustc E0308. The lowerer
@@ -888,21 +801,6 @@ fn main() -> Unit {
         "rsscript_parity_duration",
         source,
     );
-}
-
-#[test]
-fn parity_counter_intrinsics() {
-    let source = r#"
-fn main() -> Unit {
-    let mut counter = Counter.new(value: 4)
-    Counter.add(counter: mut counter, amount: 6)
-    Log.write(message: read String.from_int(value: Counter.value(counter: read counter)))
-    Counter.add(counter: mut counter, amount: 0 - 3)
-    Log.write(message: read String.from_int(value: Counter.value(counter: read counter)))
-    return Unit
-}
-"#;
-    common::assert_vm_eval_matches_backend("parity-counter.rss", "rsscript_parity_counter", source);
 }
 
 #[test]

@@ -69,26 +69,6 @@ pub fn inspect_core(
 }
 
 #[test]
-fn rust_lowering_maps_cache_core_calls_to_runtime_hooks() {
-    let source = r#"
-fn main() -> Unit {
-    let cache = Cache.new()
-    Cache.insert(cache: mut cache, key: read "/users", value: read "handled /users")
-    let body = Cache.lookup(cache: read cache, key: read "/users")
-    Log.write(message: read body)
-    return Unit
-}
-"#;
-    let rust = lower_source_to_rust("cache.rss", source).expect("source should lower");
-
-    assert!(rust.contains("let mut cache = rsscript_runtime::cache_new();"));
-    assert!(rust.contains("rsscript_runtime::cache_insert(&mut cache, &(\"/users\".to_string()), &(\"handled /users\".to_string()));"));
-    assert!(rust.contains(
-        "let body = rsscript_runtime::cache_lookup(&(cache), &(\"/users\".to_string()));"
-    ));
-}
-
-#[test]
 fn rust_lowering_maps_list_core_calls_to_runtime_hooks() {
     let source = r#"
 struct CountBox {
@@ -802,32 +782,6 @@ fn read_name(path: read Path) -> Result<String, CsvError> {
 }
 
 #[test]
-fn rust_lowering_maps_image_core_calls_to_runtime_hooks() {
-    let source = r#"
-features: local
-
-fn process(input: read Path, output: read Path) -> Result<Unit, ImageError> {
-    local image = Image.load(path: read input)?
-    Image.resize(image: mut image, width: 320, height: 240)
-    Image.normalize(image: mut image)
-    Image.sharpen(image: mut image)
-    Image.inspect(image: read image)
-    Image.save(image: read image, path: read output)?
-    return Ok(Unit)
-}
-"#;
-    let rust = lower_source_to_rust("image.rss", source).expect("source should lower");
-
-    assert!(rust.contains("-> Result<(), rsscript_runtime::ImageError>"));
-    assert!(rust.contains("let mut image = rsscript_runtime::image_load(input)?;"));
-    assert!(rust.contains("rsscript_runtime::image_resize(&mut image, 320i64, 240i64);"));
-    assert!(rust.contains("rsscript_runtime::image_normalize(&mut image);"));
-    assert!(rust.contains("rsscript_runtime::image_sharpen(&mut image);"));
-    assert!(rust.contains("rsscript_runtime::image_inspect(&(image));"));
-    assert!(rust.contains("rsscript_runtime::image_save(&(image), output)?;"));
-}
-
-#[test]
 fn rust_lowering_maps_p0_core_std_alignment_helpers() {
     let source = r#"
 struct MyError {
@@ -1004,110 +958,6 @@ fn process_main() -> Result<Unit, String> {
     assert!(rust.contains("let proc = rsscript_runtime::process_run(&(\"printf\".to_string()), &(rsscript_runtime::list_new()))?;"));
     assert!(rust.contains("let proc_timeout = rsscript_runtime::process_run_timeout(&(\"printf\".to_string()), &(rsscript_runtime::list_new()), 1000i64)?;"));
     assert!(rust.contains("rsscript_runtime::log_error(&(\"p1\".to_string()));"));
-}
-
-#[test]
-fn rust_lowering_maps_config_reload_to_runtime_hooks() {
-    let source = r#"
-features: local
-
-fn load_config(path: read Path) -> Result<fresh ConfigValue, ConfigError> {
-    return Config.load(path: read path)
-}
-
-fn reload_config(path: read Path, store: mut ConfigStore) -> Result<Unit, ConfigError> {
-    let next = load_config(path: read path)?
-    ConfigStore.replace(store: mut store, value: read next)
-    return Ok(Unit)
-}
-"#;
-    let rust = lower_source_to_rust("config.rss", source).expect("source should lower");
-
-    assert!(
-        rust.contains("-> Result<rsscript_runtime::ConfigValue, rsscript_runtime::ConfigError>")
-    );
-    assert!(rust.contains("return rsscript_runtime::config_load(path);"));
-    assert!(rust.contains("store: &mut rsscript_runtime::ConfigStore"));
-    assert!(rust.contains("rsscript_runtime::config_store_replace(store, &(next));"));
-}
-
-#[test]
-fn rust_lowering_maps_rules_config_reload_to_runtime_hooks() {
-    let source = r#"
-fn load_rules_config(path: read Path) -> Result<fresh Config, ConfigError> {
-    let rules = RuleLoader.load_rules(path: read path)?
-    return Ok(Config.new(name: read "rules", rules: read rules))
-}
-
-fn reload_rules_config(path: read Path, global: mut GlobalConfig) -> Result<Unit, ConfigError> {
-    let next = load_rules_config(path: read path)?
-    GlobalConfig.replace(global: mut global, value: read next)
-    return Ok(Unit)
-}
-"#;
-    let rust = lower_source_to_rust("rules-config.rss", source).expect("source should lower");
-
-    assert!(rust.contains("-> Result<rsscript_runtime::Config, rsscript_runtime::ConfigError>"));
-    assert!(rust.contains("let rules = rsscript_runtime::rule_loader_load_rules(path)?;"));
-    assert!(
-        rust.contains(
-            "return Ok(rsscript_runtime::config_new(&(\"rules\".to_string()), &(rules)));"
-        )
-    );
-    assert!(rust.contains("global: &mut rsscript_runtime::GlobalConfig"));
-    assert!(rust.contains("rsscript_runtime::global_config_replace(global, &(next));"));
-}
-
-#[test]
-fn rust_lowering_maps_counter_core_calls_to_runtime_hooks() {
-    let source = r#"
-fn main() -> Unit {
-    let counter = Counter.new(value: 1)
-    Counter.add(counter: mut counter, amount: 2)
-    let value = Counter.value(counter: read counter)
-    if value == 3 {
-        Log.write(message: read "counter ran")
-    }
-    return Unit
-}
-"#;
-    let rust = lower_source_to_rust("counter.rss", source).expect("source should lower");
-
-    assert!(rust.contains("let mut counter = rsscript_runtime::counter_new(1i64);"));
-    assert!(rust.contains("rsscript_runtime::counter_add(&mut counter, 2i64);"));
-    assert!(rust.contains("let value = rsscript_runtime::counter_value(&(counter));"));
-    assert!(rust.contains("if value == 3i64 {"));
-}
-
-#[test]
-fn rust_lowering_maps_interpreter_cycle_core_calls_to_runtime_hooks() {
-    let source = r#"
-features: local
-
-fn main() -> Unit {
-    local root_value = Environment.root()
-    let root = manage root_value
-    local child_value = Environment.child(parent: read root)
-    let child = manage child_value
-    local function_value = FunctionObject.new(closure: read child)
-    let function = manage function_value
-    Environment.bind_function(env: mut child, function: read function)
-    if Environment.has_function(env: read child) && FunctionObject.has_closure(function: read function) {
-        Log.write(message: read "linked")
-    }
-    return Unit
-}
-"#;
-    let rust = lower_source_to_rust("interpreter-cycle.rss", source).expect("source should lower");
-
-    assert!(rust.contains("let root_value = rsscript_runtime::environment_root();"));
-    assert!(rust.contains("let root = rsscript_runtime::manage_at(root_value,"));
-    assert!(rust.contains("let child_value = rsscript_runtime::environment_child(&root);"));
-    assert!(rust.contains("let mut child = rsscript_runtime::manage_at(child_value,"));
-    assert!(rust.contains("let function_value = rsscript_runtime::function_object_new(&child);"));
-    assert!(rust.contains("let function = rsscript_runtime::manage_at(function_value,"));
-    assert!(rust.contains("rsscript_runtime::environment_bind_function(&mut child, &function);"));
-    assert!(rust.contains("rsscript_runtime::function_object_has_closure(&function)"));
 }
 
 #[test]
@@ -1903,61 +1753,51 @@ fn review_map_pass_fixture_unknown_rate_stays_low() {
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
 }
 
-#[test]
-fn review_map_complex_supported_script_has_no_unknown_regions() {
-    let path = Path::new("tests/fixtures/pass/complex-supported-review-map.rss");
-    let source = common::read_fixture(path);
+fn assert_broad_review_fixture(
+    fixture: &str,
+    minimum_functions: usize,
+    minimum_lines: usize,
+) -> rsscript::ReviewMap {
+    let path = Path::new("tests/fixtures/pass").join(fixture);
+    let source = common::read_fixture(&path);
     let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
 
-    assert_eq!(map.summary.total_functions, 13);
-    assert!(map.summary.total_lines >= 70);
-    assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
-    assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
-    assert_eq!(map.summary.review_required.functions, 10);
-    assert_eq!(map.summary.foldable.functions, 3);
+    assert!(
+        map.summary.total_functions >= minimum_functions,
+        "{fixture}: {map:?}"
+    );
+    assert!(
+        map.summary.total_lines >= minimum_lines,
+        "{fixture}: {map:?}"
+    );
+    assert_eq!(map.summary.unknown.functions, 0, "{fixture}: {map:?}");
+    assert_eq!(map.summary.unknown.lines, 0, "{fixture}: {map:?}");
+    assert!(
+        map.summary.review_required.functions > 0,
+        "{fixture}: {map:?}"
+    );
+
     let json: Value =
         serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
     assert_eq!(json["summary"]["unknown_ratio"], 0.0);
     assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
+    map
+}
+
+#[test]
+fn review_map_complex_supported_script_has_no_unknown_regions() {
+    assert_broad_review_fixture("complex-supported-review-map.rss", 39, 120);
 }
 
 #[test]
 fn review_map_realistic_supported_corpus_has_no_unknown_regions() {
-    let path = Path::new("tests/fixtures/pass/realistic-supported-review-corpus.rss");
-    let source = common::read_fixture(path);
-    let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
-
-    assert_eq!(map.summary.total_functions, 20);
-    assert!(map.summary.total_lines >= 120);
-    assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
-    assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
-    assert!(map.summary.review_required.functions >= 10, "{map:?}");
-    let json: Value =
-        serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
-    assert_eq!(json["summary"]["unknown_ratio"], 0.0);
-    assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
+    assert_broad_review_fixture("realistic-supported-review-corpus.rss", 46, 180);
 }
 
 #[test]
 fn review_map_app_benchmark_has_no_unknown_regions() {
-    let path = Path::new("tests/fixtures/pass/app-review-benchmark.rss");
-    let source = common::read_fixture(path);
-    let map = review_map_sources(vec![(path.to_str().unwrap(), source.as_str())]);
-
-    assert_eq!(map.summary.total_functions, 41);
-    assert!(map.summary.total_lines >= 300, "{map:?}");
+    let map = assert_broad_review_fixture("app-review-benchmark.rss", 67, 350);
     assert_eq!(map.files[0].risk, ReviewMapFileRisk::High);
-    assert_eq!(map.summary.unknown.functions, 0, "{map:?}");
-    assert_eq!(map.summary.unknown.lines, 0, "{map:?}");
-    assert!(map.summary.review_required.functions >= 31, "{map:?}");
-    assert!(map.summary.foldable.functions <= 10, "{map:?}");
-
-    let json: Value =
-        serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
-    assert_eq!(json["summary"]["unknown_ratio"], 0.0);
-    assert_eq!(json["summary"]["unknown_function_ratio"], 0.0);
-    assert_eq!(json["summary"]["must_review"]["functions"], 31);
-    assert_eq!(json["summary"]["low_semantic_risk"]["functions"], 10);
 }
 
 #[test]

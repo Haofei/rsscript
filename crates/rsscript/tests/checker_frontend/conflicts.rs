@@ -501,16 +501,30 @@ fn apply(callback: noescape Fn()) -> Unit {
     return Unit
 }
 
-fn use_local(path: read Path) -> Result<fresh Image, ImageError> {
-    local image = Image.load(path: read path)?
-    apply(callback: || {
-        Image.inspect(image: read image)
-    })
-    return Ok(image)
+struct Asset {
+    id: Int
 }
 
-fn main() -> Result<Unit, ImageError> {
-    let path = Path.from_string(value: read "rsscript-image-input.bin")
+struct AssetError
+
+fn load_asset(path: read Path) -> Result<fresh Asset, AssetError> {
+    return Ok(Asset(id: 1))
+}
+
+fn inspect_asset(asset: read Asset) -> Unit {
+    return Unit
+}
+
+fn use_local(path: read Path) -> Result<fresh Asset, AssetError> {
+    local asset = load_asset(path: read path)?
+    apply(callback: || {
+        inspect_asset(asset: read asset)
+    })
+    return Ok(asset)
+}
+
+fn main() -> Result<Unit, AssetError> {
+    let path = Path.from_string(value: read "asset-input.bin")
     use_local(path: read path)?
     return Ok(Unit)
 }

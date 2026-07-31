@@ -321,19 +321,6 @@ impl RustLowerer<'_> {
             "BytesView" | "BufferView" => "[u8]".to_string(),
             "Bytes" | "Buffer" => "Vec<u8>".to_string(),
             "Path" => "std::path::PathBuf".to_string(),
-            "Cache" if !self.type_kinds.contains_key("Cache") => {
-                "rsscript_runtime::Cache".to_string()
-            }
-            "Rule" if !self.type_kinds.contains_key("Rule") => "rsscript_runtime::Rule".to_string(),
-            "Config" if !self.type_kinds.contains_key("Config") => {
-                "rsscript_runtime::Config".to_string()
-            }
-            "GlobalConfig" if !self.type_kinds.contains_key("GlobalConfig") => {
-                "rsscript_runtime::GlobalConfig".to_string()
-            }
-            "Environment" => "rsscript_runtime::Environment".to_string(),
-            "FunctionObject" => "rsscript_runtime::FunctionObject".to_string(),
-            "Counter" => "rsscript_runtime::Counter".to_string(),
             "Instant" => "rsscript_runtime::RssInstant".to_string(),
             "Duration" => "rsscript_runtime::RssDuration".to_string(),
             "Deadline" => "rsscript_runtime::RssDeadline".to_string(),
@@ -380,17 +367,10 @@ impl RustLowerer<'_> {
             "ProcessEvent" => "rsscript_runtime::ProcessEvent".to_string(),
             "ProcessOutput" => "rsscript_runtime::ProcessOutput".to_string(),
             "ProcessRequest" => "rsscript_runtime::ProcessRequest".to_string(),
-            "Request" => "rsscript_runtime::Request".to_string(),
             "HttpRequest" => "rsscript_runtime::HttpRequest".to_string(),
-            "Response" => "rsscript_runtime::Response".to_string(),
-            "HttpResponse" => "rsscript_runtime::Response".to_string(),
+            "HttpResponse" => "rsscript_runtime::HttpResponse".to_string(),
             "HttpError" => "rsscript_runtime::HttpError".to_string(),
             "TimerError" => "rsscript_runtime::TimerError".to_string(),
-            "ConfigValue" => "rsscript_runtime::ConfigValue".to_string(),
-            "ConfigStore" => "rsscript_runtime::ConfigStore".to_string(),
-            "ConfigError" => "rsscript_runtime::ConfigError".to_string(),
-            "Image" => "rsscript_runtime::Image".to_string(),
-            "ImageError" => "rsscript_runtime::ImageError".to_string(),
             "JsonValue" => "rsscript_runtime::JsonValue".to_string(),
             "JsonError" => "rsscript_runtime::JsonError".to_string(),
             "RowBuffer" => "rsscript_runtime::RowBuffer".to_string(),

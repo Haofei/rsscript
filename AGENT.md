@@ -31,7 +31,7 @@ One canonical spelling per operation — no shorthand alternatives, no inference
 5. **Statements end at newline** (no semicolons). Blocks use `{ }`.
 6. **`return` is explicit.** `main` returns `Result<Unit, E>` and ends with
    `return Ok(Unit)`.
-7. Method calls are **qualified by type**: `Image.resize(image: mut image, ...)`,
+7. Method calls are **qualified by type**: `Picture.resize(image: mut image, ...)`,
    not `image.resize(...)` (except the receiver shorthand in §3.4).
 
 ### The explicitness budget (the meta-rule behind all of the above)
@@ -114,9 +114,9 @@ fn main() -> Result<Unit, FileError> {
 ### 3.1 Declaration
 
 ```rust
-fn handle(request: read Request) -> Result<fresh Response, HttpError> {
-    let body = Request.path(request: read request)
-    return Response.ok(body: read body)        // last value still needs `return`
+fn handle(request: read IncomingMessage) -> Result<fresh Reply, HttpError> {
+    let body = IncomingMessage.path(request: read request)
+    return Reply.ok(body: read body)        // last value still needs `return`
 }
 ```
 
@@ -133,7 +133,7 @@ Each param is `name: <effect> Type`. Return may be `fresh T` (newly created, see
 | `take`  | consumed (ownership moves in; caller can't use it after)|
 
 ```rust
-fn resize_all(image: mut Image, width: Int) -> Unit { ... }
+fn resize_all(image: mut Picture, width: Int) -> Unit { ... }
 ```
 
 Called as:
@@ -151,7 +151,7 @@ If a function keeps a parameter alive after it returns (stores it in a field, a
 collection, or a closure capture), it must declare it:
 
 ```rust
-fn cache_put(cache: mut RetainedImageStore, key: read String, value: read Image) -> Unit
+fn cache_put(cache: mut RetainedImageStore, key: read String, value: read Picture) -> Unit
     effects(retains(key), retains(value))
 {
     Map.insert(map: mut cache.entries, key: read key, value: read value)
@@ -165,7 +165,7 @@ Other effect/guarantee tokens that may appear in `effects(...)`: `native`,
 
 ```rust
 mut image.resize(width: 256, height: 256)   // shorthand
-Image.resize(self: mut image, width: 256, height: 256)   // canonical expansion
+Picture.resize(self: mut image, width: 256, height: 256)   // canonical expansion
 ```
 
 The leading effect keyword (`read`/`mut`/`take`) is **mandatory**; it must
@@ -176,7 +176,7 @@ resolve to exactly one method or it is rejected.
 `?` propagates the error arm of a `Result`/`Option`:
 
 ```rust
-let image = Image.load(path: read input)?      // returns early on Err
+let image = Picture.load(path: read input)?      // returns early on Err
 ```
 
 `Result<T, E>` constructors: `Ok(x)`, `Err(e)`. `Option<T>`: `Some(x)`, `None`.
@@ -235,8 +235,8 @@ total = total + 1          // assignment to a `mut` binding, no `let`
 ```rust
 features: local
 
-fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, ImageError> {
-    local image = Image.load(path: read input)?   // exclusive, fast
+fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, PictureError> {
+    local image = Picture.load(path: read input)?   // exclusive, fast
     mut image.resize(width: 256, height: 256)
     mut image.normalize()
 
@@ -247,7 +247,7 @@ fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, ImageErro
 ```
 
 - A `fresh T` return is a value created in the function and handed out clean:
-  `fn load() -> Result<fresh Config, E>`.
+  `fn load() -> Result<fresh Settings, E>`.
 - `take` a local into a fresh struct field to move it; `read` to copy/share.
 - After `manage x` or `take x`, the original `local` binding is dead.
 
@@ -259,10 +259,10 @@ fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, ImageErro
 
 ```rust
 class RetainedImageStore {            // managed reference type (default for app types)
-    entries: Map<String, Image>
+    entries: Map<String, Picture>
 }
 
-struct Config {              // value/struct type
+struct Settings {              // value/struct type
     name: String
     rules: handle List<Rule>     // `handle` field: a retained managed handle
     workspace: Buffer
@@ -312,7 +312,7 @@ trait resolution).
 ### 6.4 Constructors & aliases
 
 ```rust
-let cfg = Config(name: "default", rules: read rules, workspace: take workspace)
+let cfg = Settings(name: "default", rules: read rules, workspace: take workspace)
 ```
 
 Type aliases and constants are top-level declarations:
@@ -498,19 +498,19 @@ boundaries, or build-time execution changed* before you build or run.
 
 ```rust
 class RetainedImageStore {
-    entries: Map<String, Image>
+    entries: Map<String, Picture>
 }
 
-fn cache_put(cache: mut RetainedImageStore, key: read String, value: read Image) -> Unit
+fn cache_put(cache: mut RetainedImageStore, key: read String, value: read Picture) -> Unit
     effects(retains(key), retains(value))
 {
     Map.insert(map: mut cache.entries, key: read key, value: read value)
 }
 
-fn main() -> Result<Unit, ImageError> {
+fn main() -> Result<Unit, PictureError> {
     let cache = RetainedImageStore.new(capacity: 16)
     let path = Path.from_string(value: read "in.png")
-    let image = Image.load(path: read path)?
+    let image = Picture.load(path: read path)?
     cache_put(cache: mut cache, key: read "in", value: read image)
     return Ok(Unit)
 }

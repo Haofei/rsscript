@@ -5,12 +5,12 @@ struct Workspace {
     id: Int
 }
 
-struct Config {
+struct Settings {
     workspace: Workspace
 }
 
-fn use_config(config: Config, workspace: Workspace) -> Unit
-fn make_config() -> fresh Config
+fn use_config(config: Settings, workspace: Workspace) -> Unit
+fn make_config() -> fresh Settings
 
 fn run() -> Unit {
     local config = make_config()

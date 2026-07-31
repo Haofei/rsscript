@@ -759,21 +759,6 @@ pub(crate) enum RegInstr {
         dst: Reg,
         buffer: Reg,
     },
-    CounterAdd {
-        dst: Reg,
-        counter: Reg,
-        amount: Reg,
-    },
-    ConfigStoreReplace {
-        dst: Reg,
-        store: Reg,
-        value: Reg,
-    },
-    GlobalConfigReplace {
-        dst: Reg,
-        global: Reg,
-        value: Reg,
-    },
     MapInsert {
         dst: Reg,
         map: Reg,
@@ -840,8 +825,6 @@ pub(crate) enum RegIntrinsic {
     BytesViewStartsWith,
     BytesViewToBytes,
     BufferNew,
-    CacheGet,
-    CacheLookup,
     CancellationSourceCancel,
     CancellationSourceNew,
     CancellationSourceToken,
@@ -865,15 +848,7 @@ pub(crate) enum RegIntrinsic {
     CloneClone,
     ClockNow,
     ClockSystemUnixMs,
-    ConfigLoad,
     CapabilityFrom,
-    ConfigName,
-    ConfigNew,
-    ConfigRuleCount,
-    ConfigStoreName,
-    ConfigStoreNew,
-    CounterNew,
-    CounterValue,
     CsvOpenRead,
     CsvParseRow,
     CsvReadInto,
@@ -925,11 +900,6 @@ pub(crate) enum RegIntrinsic {
     DurationAsSeconds,
     DurationMs,
     DurationSeconds,
-    EnvironmentBindFunction,
-    EnvironmentChild,
-    EnvironmentHasFunction,
-    EnvironmentHasParent,
-    EnvironmentRoot,
     EnvCurrentDir,
     EnvGet,
     EnvGetOrDefault,
@@ -969,8 +939,6 @@ pub(crate) enum RegIntrinsic {
     FalliblePipelineFilter,
     FalliblePipelineMap,
     FalliblePipelineTryMap,
-    FunctionObjectHasClosure,
-    FunctionObjectNew,
     HashSha256Bytes,
     HashSha256File,
     HashSha256String,
@@ -979,8 +947,6 @@ pub(crate) enum RegIntrinsic {
     HashShake128Bytes,
     HmacSha256Bytes,
     HmacSha256String,
-    GlobalConfigNew,
-    GlobalConfigRuleCount,
     GzipDecompressBytes,
     HexDecode,
     HexEncode,
@@ -1007,12 +973,6 @@ pub(crate) enum RegIntrinsic {
     HttpResponseLines,
     HttpResponseStatus,
     HttpResponseText,
-    ImageInspect,
-    ImageLoad,
-    ImageNormalize,
-    ImageResize,
-    ImageSave,
-    ImageSharpen,
     InstantElapsed,
     FloatToString,
     FloatIsFinite,
@@ -1259,18 +1219,12 @@ pub(crate) enum RegIntrinsic {
     ResultOk,
     ResultUnwrapOr,
     ResultUnwrapOrElse,
-    RequestNew,
-    RequestPath,
     ReceiverClose,
     ReceiverIntoStream,
     ReceiverRecv,
     ReceiverRecvCancellable,
-    ResponseBody,
-    ResponseOk,
-    ResponseStatus,
     RowBufferNew,
     RowFieldString,
-    RuleLoaderLoadRules,
     SetContains,
     SetDifference,
     SetIntersection,
@@ -1370,8 +1324,7 @@ impl RegIntrinsic {
     pub(crate) const fn host_authority(self) -> Option<crate::HostAuthority> {
         use crate::HostAuthority;
         match self {
-            Self::ConfigLoad
-            | Self::CsvOpenRead
+            Self::CsvOpenRead
             | Self::CsvReadInto
             | Self::CsvRows
             | Self::DirectoryCopyFile
@@ -1415,8 +1368,6 @@ impl RegIntrinsic {
             | Self::FileWriteStringAsync
             | Self::FileWriteStringToPath
             | Self::HashSha256File
-            | Self::ImageLoad
-            | Self::ImageSave
             | Self::JsonParseFile
             | Self::PathExists
             | Self::PathIsDir
@@ -1425,7 +1376,6 @@ impl RegIntrinsic {
             | Self::PathListPaths
             | Self::PathReadString
             | Self::PathWriteString
-            | Self::RuleLoaderLoadRules
             | Self::TempDirKeep
             | Self::TempDirNew
             | Self::TempDirNewIn

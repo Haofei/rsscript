@@ -2,7 +2,7 @@
 features: local
 
 fn run() -> Unit {
-    let cache = Cache.new()
+    let cache = Map<String, String>.new()
     local key = String.concat(left: "/users", right: "")
-    Cache.insert(cache: mut cache, key, value: "handled /users")
+    Map.insert(map: mut cache, key, value: "handled /users")
 }

@@ -1779,10 +1779,6 @@ Example:
 "Random.bytes" = ["random.read"]
 "Uuid.new_v4" = ["random.read"]
 "Csv.open_read" = ["filesystem.read"]
-"Config.load" = ["filesystem.read"]
-"RuleLoader.load_rules" = ["filesystem.read"]
-"Image.load" = ["filesystem.read"]
-"Image.save" = ["filesystem.write"]
 "Hash.sha256_string" = ["compute.hash"]
 "Hash.sha256_bytes" = ["compute.hash"]
 "Hash.sha256_file" = ["compute.hash", "filesystem.read"]
@@ -1811,9 +1807,7 @@ REIR capability facts when they appear in package review metadata. Examples:
 `filesystem.write`, `Http.get`, `Http.post_json`, and `Http.post_form` require
 `network.client`, `Clock.now`, `Clock.system_unix_ms`, and `Instant.elapsed`
 require `time.read`, `Random.bytes` and `Uuid.new_v4` require `random.read`,
-`Csv.open_read`, `Config.load`, and `RuleLoader.load_rules` require
-`filesystem.read`, `Image.load` requires `filesystem.read`, and `Image.save`
-requires `filesystem.write`. Database evidence uses the generic
+and `Csv.open_read` requires `filesystem.read`. Database evidence uses the generic
 `database.read` and `database.write` categories emitted by database-aware
 adapters. `Hash.sha256_string` and `Hash.sha256_bytes` require `compute.hash`,
 `Hash.sha256_file` requires both `compute.hash` and `filesystem.read`,
@@ -1830,10 +1824,8 @@ Deterministic encoding helpers such as `Base64.encode`, `Hex.decode`, and
 `Url.encode_component` remain public/native contract evidence but do not emit a
 separate external capability fact unless a future profile introduces a
 compute-encoding capability category.
-Purely in-memory façade helpers such as `Cache.*`, `RetainedImageStore.*`,
-`Environment.*`, and `FunctionObject.*` similarly do not emit external
-capability facts beyond their public contract, retention, and native-boundary
-evidence.
+Purely in-memory user-domain helpers do not emit external capability facts
+beyond their public contract, retention, and native-boundary evidence.
 Descriptor-cleanup helpers such as `OS.close` are trusted native/resource
 internals over `Fd`; they may still appear as native/public contract evidence,
 but they do not imply `filesystem.read`, `filesystem.write`, or

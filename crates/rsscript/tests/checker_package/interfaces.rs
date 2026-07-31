@@ -474,16 +474,17 @@ fn package_review_includes_lint_warnings_for_public_contracts() {
         r#"features: native
 
 struct Error
+struct Picture
 
 pub fn Api.overloaded<A, B, C, D>(
-    first: read Result<Option<List<Map<String, Image>>>, Error>,
+    first: read Result<Option<List<Map<String, Picture>>>, Error>,
     second: read String,
     third: read String,
     fourth: read String,
     fifth: read String,
     sixth: read String,
     seventh: read String,
-) -> Result<Option<List<Map<String, Image>>>, Error>
+) -> Result<Option<List<Map<String, Picture>>>, Error>
     effects(no_panic, noalloc, no_block, pure, native)
 "#,
     );

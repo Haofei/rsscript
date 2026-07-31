@@ -3,17 +3,6 @@
   "generated_by": "build.rs",
   "default_core": [
     {
-      "path": "stdlib/cache/cache.rssi",
-      "module": "cache.cache",
-      "functions": [
-        "Cache.get",
-        "Cache.insert",
-        "Cache.lookup",
-        "Cache.new"
-      ],
-      "types": []
-    },
-    {
       "path": "stdlib/capability/capability.rssi",
       "module": "capability.capability",
       "functions": [
@@ -307,50 +296,6 @@
       ]
     },
     {
-      "path": "stdlib/config/config.rssi",
-      "module": "config.config",
-      "functions": [
-        "Config.load",
-        "Config.name",
-        "ConfigStore.name",
-        "ConfigStore.new",
-        "ConfigStore.replace"
-      ],
-      "types": [
-        "ConfigStore",
-        "ConfigValue"
-      ]
-    },
-    {
-      "path": "stdlib/config/rules.rssi",
-      "module": "config.rules",
-      "functions": [
-        "Config.new",
-        "Config.rule_count",
-        "GlobalConfig.new",
-        "GlobalConfig.replace",
-        "GlobalConfig.rule_count",
-        "RuleLoader.load_rules"
-      ],
-      "types": [
-        "Config",
-        "GlobalConfig",
-        "Rule"
-      ]
-    },
-    {
-      "path": "stdlib/counter/counter.rssi",
-      "module": "counter.counter",
-      "functions": [
-        "Counter.add",
-        "Counter.new",
-        "Counter.value"
-      ],
-      "types": [
-        "Counter"
-      ]
-    },
-    {
       "path": "stdlib/csv/csv.rssi",
       "module": "csv.csv",
       "functions": [
@@ -533,53 +478,6 @@
         "HttpError",
         "HttpRequest",
         "HttpResponse"
-      ]
-    },
-    {
-      "path": "stdlib/http/http.rssi",
-      "module": "http.http",
-      "functions": [
-        "Request.new",
-        "Request.path",
-        "Response.body",
-        "Response.ok",
-        "Response.status"
-      ],
-      "types": [
-        "Request",
-        "Response"
-      ]
-    },
-    {
-      "path": "stdlib/image/image.rssi",
-      "module": "image.image",
-      "functions": [
-        "Image.inspect",
-        "Image.load",
-        "Image.normalize",
-        "Image.resize",
-        "Image.save",
-        "Image.sharpen"
-      ],
-      "types": [
-        "Image"
-      ]
-    },
-    {
-      "path": "stdlib/interpreter/interpreter.rssi",
-      "module": "interpreter.interpreter",
-      "functions": [
-        "Environment.bind_function",
-        "Environment.child",
-        "Environment.has_function",
-        "Environment.has_parent",
-        "Environment.root",
-        "FunctionObject.has_closure",
-        "FunctionObject.new"
-      ],
-      "types": [
-        "Environment",
-        "FunctionObject"
       ]
     },
     {

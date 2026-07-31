@@ -1,16 +1,22 @@
 features: local
 
+struct Picture
+struct PictureError
+
+fn Picture.load(path: Path) -> Result<fresh Picture, PictureError>
+fn Picture.inspect(picture: Picture) -> Unit
+
 fn apply(callback: noescape Fn()) -> Unit {
     callback()
     return Unit
 }
 
-fn use_local(path: Path) -> Result<fresh Image, ImageError> {
-    local image = Image.load(path)?
+fn use_local(path: Path) -> Result<fresh Picture, PictureError> {
+    local picture = Picture.load(path)?
     apply(callback: || {
-        Image.inspect(image)
+        Picture.inspect(picture)
     })
-    return Ok(image)
+    return Ok(picture)
 }
 
 fn main() -> Result<Unit, FileError> {
@@ -22,7 +28,7 @@ fn main() -> Result<Unit, FileError> {
     }
 
     match use_local(path) {
-        Ok(image) => {
+        Ok(picture) => {
             return Ok(Unit)
         }
         Err(error) => {

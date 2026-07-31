@@ -1403,14 +1403,12 @@ fn nearest_binding_is_local(toks: List<Tok>, from: Int, bodyOpen: Int, name: Str
 }
 
 // A builtin collection `insert` retains its `key`/`value` (the collection outlives the call).
-// `Cache.insert(cache: mut cache, key: read localKey, …)` on a managed collection retains the
-// key. Matched by receiver type + method + label, since no in-file decl carries the effect.
 fn builtin_retains_label(toks: List<Tok>, callPos: Int, label: String) -> Bool {
     if tk_text(toks, i: (callPos - 1)) != "insert" { return false }
     if at_symbol(toks: toks, i: (callPos - 2), code: SYM_DOT) == false { return false }
     if is_ident_tok(toks: toks, i: (callPos - 3)) == false { return false }
     let recv = tk_text(toks, i: (callPos - 3))
-    let isColl = recv == "Cache" || recv == "Map" || recv == "Set" || recv == "Deque" || recv == "HashMap"
+    let isColl = recv == "Map" || recv == "Set" || recv == "Deque" || recv == "HashMap"
     if !isColl  { return false }
     return label == "key" || label == "value"
 }
@@ -3094,15 +3092,6 @@ fn collect_fallible_producers(toks: List<Tok>, resources: Set<String>) -> Set<St
     return out
 }
 
-// Builtin fallible resource producers whose signatures come from stdlib interfaces,
-// not the source file. Only add them when the file does not declare the same
-// dotted fn name; same-file declarations shadow the builtin signature.
-fn add_builtin_fallible_producers(out: mut Set<String>, allFns: Set<String>) -> Unit {
-    if Set.contains<String>(set: allFns, value: "Image.load") == false {
-        Set.insert<String>(set: mut out, value: "Image.load")
-    }
-}
-
 // RS0706: `with <fallible-producer call> as B` with no `?` before `as` (the Result is not unwrapped).
 fn collect_missing_try_producer_tokens(toks: List<Tok>, fallible: Set<String>, out: mut List<Int>) -> Bool {
     let n = List.len(list: toks)
@@ -3931,14 +3920,14 @@ fn region_has_text(toks: List<Tok>, s: Int, e: Int, word: String) -> Bool {
 
 // The hardcoded builtin nominal type set (mirror check_unknown_types).
 fn is_builtin_type(name: String) -> Bool {
-    return name == "Unit" || name == "Bool" || name == "Byte" || name == "Char" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Float" || name == "Float32" || name == "Float64" || name == "String" || name == "StringView" || name == "Url" || name == "Fd" || name == "Bytes" || name == "BytesView" || name == "Buffer" || name == "BufferView" || name == "Path" || name == "Result" || name == "Option" || name == "List" || name == "Map" || name == "Set" || name == "Capability" || name == "Fn" || name == "Closure" || name == "Cache" || name == "FileError" || name == "IOError" || name == "HttpError" || name == "ConfigError" || name == "ImageError" || name == "JsonError" || name == "CsvError" || name == "NetworkError"
+    return name == "Unit" || name == "Bool" || name == "Byte" || name == "Char" || name == "Int" || name == "Int8" || name == "Int16" || name == "Int32" || name == "Int64" || name == "UInt" || name == "UInt8" || name == "UInt16" || name == "UInt32" || name == "UInt64" || name == "Float" || name == "Float32" || name == "Float64" || name == "String" || name == "StringView" || name == "Url" || name == "Fd" || name == "Bytes" || name == "BytesView" || name == "Buffer" || name == "BufferView" || name == "Path" || name == "Result" || name == "Option" || name == "List" || name == "Map" || name == "Set" || name == "Capability" || name == "Fn" || name == "Closure" || name == "FileError" || name == "IOError" || name == "HttpError" || name == "JsonError" || name == "CsvError" || name == "NetworkError"
 }
 
 // Nominal types the analyzer preloads from the stdlib/package `.rssi` interfaces
 // (every `struct`/`resource` Item::Type across CORE + STANDARD package interfaces).
 // These live in hir.type_info and so count as known types for RS0024.
 fn is_stdlib_type(name: String) -> Bool {
-    return name == "CancellationSource" || name == "CancellationToken" || name == "Channel" || name == "ChannelError" || name == "Config" || name == "ConfigStore" || name == "ConfigValue" || name == "Counter" || name == "Deadline" || name == "DecodeError" || name == "Deque" || name == "Duration" || name == "Environment" || name == "FalliblePipeline" || name == "File" || name == "FileMetadata" || name == "FunctionObject" || name == "GlobalConfig" || name == "HttpRequest" || name == "HttpResponse" || name == "Image" || name == "Instant" || name == "JsonLiteral" || name == "JsonValue" || name == "PersistentMap" || name == "Pipeline" || name == "ProcessEnv" || name == "ProcessEvent" || name == "ProcessOutput" || name == "ProcessRequest" || name == "Receiver" || name == "Regex" || name == "RegexError" || name == "Request" || name == "Response" || name == "Row" || name == "RowBuffer" || name == "Rule" || name == "Sender" || name == "SortedMap" || name == "SortedSet" || name == "Stream" || name == "StringBuilder" || name == "TcpError" || name == "TcpStream" || name == "TempDir" || name == "TimerError" || name == "WebSocket" || name == "WebSocketError"
+    return name == "CancellationSource" || name == "CancellationToken" || name == "Channel" || name == "ChannelError" || name == "Deadline" || name == "DecodeError" || name == "Deque" || name == "Duration" || name == "FalliblePipeline" || name == "File" || name == "FileMetadata" || name == "HttpRequest" || name == "HttpResponse" || name == "Instant" || name == "JsonLiteral" || name == "JsonValue" || name == "PersistentMap" || name == "Pipeline" || name == "ProcessEnv" || name == "ProcessEvent" || name == "ProcessOutput" || name == "ProcessRequest" || name == "Receiver" || name == "Regex" || name == "RegexError" || name == "Row" || name == "RowBuffer" || name == "Sender" || name == "SortedMap" || name == "SortedSet" || name == "Stream" || name == "StringBuilder" || name == "TcpError" || name == "TcpStream" || name == "TempDir" || name == "TimerError" || name == "WebSocket" || name == "WebSocketError"
 }
 
 // Generic-param names in scope for an item whose `<...>` clause opens at nameEnd
@@ -8142,15 +8131,6 @@ fn stdlib_param_type_is_safe(ns: String, method: String, label: String) -> Bool 
     if ns == "String" && method == "concat" && label == "right" { return true }
     if ns == "String" && method == "len" && label == "value" { return true }
     if ns == "File" && method == "write" && label == "data" { return true }
-    if ns == "Image" && method == "inspect" && label == "image" { return true }
-    if ns == "Image" && method == "normalize" && label == "image" { return true }
-    if ns == "Image" && method == "resize" && label == "image" { return true }
-    if ns == "Image" && method == "resize" && label == "width" { return true }
-    if ns == "Image" && method == "resize" && label == "height" { return true }
-    if ns == "Image" && method == "save" && label == "image" { return true }
-    if ns == "Image" && method == "save" && label == "path" { return true }
-    if ns == "Image" && method == "load" && label == "path" { return true }
-    if ns == "Request" && method == "path" && label == "request" { return true }
     return false
 }
 
@@ -9710,7 +9690,7 @@ fn collect_call_fn_sigs(toks: List<Tok>, pubFns: mut Set<String>, dottedFns: mut
 // namespaces (`ChatMessage.system(...)`, which the oracle leaves as UNKNOWN_CALLEE
 // with no naming diagnostic). See checks/calls.rs check_argument_naming.
 fn is_core_named_namespace(head: String) -> Bool {
-    return head == "String" || head == "Image" || head == "Log"
+    return head == "String" || head == "Log"
 }
 
 // True iff the call whose arg-list `(` is at `op` requires named arguments: a
@@ -9902,7 +9882,7 @@ fn collect_fn_unnamed_arg_tokens(toks: List<Tok>, start: Int, pubFns: Set<String
 // qualified call to any other namespace (`List.get`, `Set.insert`, …) short-circuits
 // before the arg list is split — the hot path over a large file.
 fn is_effect_stdlib_ns(ns: String) -> Bool {
-    return ns == "Log" || ns == "File" || ns == "Image"
+    return ns == "Log" || ns == "File"
 }
 
 // The last-segment method names of same-file `fn <Type>.method(...)` decls. A cheap
@@ -10923,7 +10903,6 @@ fn main() -> Unit {
     let mut resourceEscapeTokens = List<Int>.new()
     let resourceEscape = collect_resource_escape_tokens(toks, resources, retains: retainsReg, out: mut resourceEscapeTokens)
     let fallibleProducers = collect_fallible_producers(toks, resources)
-    add_builtin_fallible_producers(out: mut fallibleProducers, allFns)
     let mut missingTryTokens = List<Int>.new()
     let missingTry = collect_missing_try_producer_tokens(toks, fallible: fallibleProducers, out: mut missingTryTokens)
     let mut nonTransferPayloadTokens = List<Int>.new()

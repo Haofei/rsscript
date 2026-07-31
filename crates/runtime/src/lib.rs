@@ -114,23 +114,12 @@ macro_rules! runtime_abi_exports {
             install_runtime_diagnostic_panic_hook,
         };
         pub use crate::domain::{
-            Cache, Config, ConfigError, ConfigStore, ConfigValue, Counter, CsvError, Environment,
-            FunctionObject, GlobalConfig, HttpError, HttpRequest, Image, ImageError, Request,
-            Response, Row, RowBuffer, Rule, RuntimeEnvironmentHandle, RuntimeEnvironmentMut,
-            RuntimeFunctionHandle, RuntimeImageRef, TimerError, cache_get, cache_insert,
-            cache_lookup, cache_new, config_load, config_name, config_new, config_rule_count,
-            config_store_name, config_store_new, config_store_replace, counter_add, counter_new,
-            counter_value, csv_open_read, csv_parse_row, csv_read_into, csv_read_into_with_budget,
-            csv_rows, environment_bind_function, environment_child, environment_has_function,
-            environment_has_parent, environment_root, function_object_has_closure,
-            function_object_new, global_config_new, global_config_replace,
-            global_config_rule_count, http_error_message, http_request_debug_summary,
-            http_request_json, http_request_with_header, http_request_with_retry,
-            http_request_with_timeout, http_response_bytes, http_response_is_success,
-            http_response_lines, http_response_status, http_response_text, image_debug_summary,
-            image_inspect, image_load, image_normalize, image_resize, image_save, image_sharpen,
-            request_new, request_path, response_body, response_ok, response_status, row_buffer_new,
-            row_field_string, rule_loader_load_rules,
+            CsvError, HttpError, HttpRequest, HttpResponse, Row, RowBuffer, TimerError,
+            csv_open_read, csv_parse_row, csv_read_into, csv_read_into_with_budget, csv_rows,
+            http_error_message, http_request_debug_summary, http_request_json,
+            http_request_with_header, http_request_with_retry, http_request_with_timeout,
+            http_response_bytes, http_response_is_success, http_response_lines,
+            http_response_status, http_response_text, row_buffer_new, row_field_string,
         };
         #[cfg(feature = "net")]
         pub use crate::domain::{
@@ -316,7 +305,7 @@ pub mod net {
 
     pub mod http {
         pub use crate::{
-            HttpError, HttpRequest, Response, http_error_message, http_get_async_with_context,
+            HttpError, HttpRequest, HttpResponse, http_error_message, http_get_async_with_context,
             http_request_json, http_request_with_header, http_request_with_retry,
             http_request_with_timeout, http_response_bytes, http_response_is_success,
             http_response_lines, http_response_status, http_response_text,

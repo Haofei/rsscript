@@ -244,14 +244,16 @@ Generated Rust is typed implementation IR, not the RSScript semantic model.
 ### 2.1 Managed by default
 
 Ordinary application code uses managed values and avoids ownership/lifetime reasoning.
+`Picture`, `PictureError`, `Store`, and `Settings` in the ownership examples are
+application-defined models, not bundled domain runtime types.
 
 ```rust
-fn main() -> Result<Unit, ImageError> {
+fn main() -> Result<Unit, PictureError> {
     let in_path = Path.from_string(value: read "in.png")
     let out_path = Path.from_string(value: read "out.png")
-    let image = Image.load(path: read in_path)?
-    Image.resize(image: mut image, width: 800, height: 600)
-    Image.save(image: read image, path: read out_path)?
+    let image = Picture.load(path: read in_path)?
+    Picture.resize(image: mut image, width: 800, height: 600)
+    Picture.save(image: read image, path: read out_path)?
     return Ok(Unit)
 }
 ```
@@ -282,10 +284,10 @@ Performance-sensitive code opts into local exclusive values with `features: loca
 ```rust
 features: local
 
-fn process(path: read Path) -> Result<fresh Image, ImageError> {
-    local image = Image.load(path: read path)?
-    Image.resize(image: mut image, width: 800, height: 600)
-    Image.normalize(image: mut image)
+fn process(path: read Path) -> Result<fresh Picture, PictureError> {
+    local image = Picture.load(path: read path)?
+    Picture.resize(image: mut image, width: 800, height: 600)
+    Picture.normalize(image: mut image)
     return Ok(image)
 }
 ```
@@ -299,7 +301,7 @@ There are no script/review/performance syntax profiles.
 Canonical:
 
 ```rust
-Image.save(image: read image, path: read output)
+Picture.save(image: read image, path: read output)
 ```
 
 Non-canonical:
@@ -935,7 +937,7 @@ These are fixed language contexts, not user-defined conversions.
 Canonical call-site syntax uses parentheses when a data-effect wrapper applies to a postfix expression:
 
 ```rust
-image: read (Image.load(path: read input)?)
+image: read (Picture.load(path: read input)?)
 ```
 
 This avoids ambiguity around `?`, field access, and indexing in review.
@@ -1059,9 +1061,9 @@ of that rule). Conversion must be written explicitly, for example with a
 statement-form `match` that maps the error before returning:
 
 ```rust
-match Config.parse(text: read text) {
+match Settings.parse(text: read text) {
     Ok(config) => {
-        Config.apply(config: read config)
+        Settings.apply(config: read config)
     }
     Err(e) => {
         return Err(AppError.from_config(error: read e))
@@ -1530,14 +1532,14 @@ cannot be resource
 "Always managed" describes the class value, not each field: a class is a managed
 identity object, and its fields follow §6.5 (handle if marked `handle`/`weak` or
 class-typed, otherwise inline within the managed class). A class may hold inline
-non-Copy fields such as `entries: Map<String, Image>`.
+non-Copy fields such as `entries: Map<String, Picture>`.
 
 ### 6.3 `struct`
 
 A `struct` is a value object.
 
 ```rust
-struct Image {
+struct Picture {
     pixels: Buffer
     metadata: handle Map<String, String>
 }
@@ -1633,7 +1635,7 @@ The class/struct distinction is not about field handle-ness; it is about the
 containing value. A `class` is itself a managed identity object (§6.2): the class
 value is a managed handle, and its inline fields live inside that managed object.
 A `struct` is a value object (§6.3). So a class may hold inline non-Copy fields
-(for example `entries: Map<String, Image>`); those fields are not separate
+(for example `entries: Map<String, Picture>`); those fields are not separate
 handles, they are stored within the managed class. A field whose type is a class
 is a separate handle in both kinds, because class values are always managed
 handles. This is enforced by the checker (class-typed fields are treated as
@@ -1642,7 +1644,7 @@ handles for conflict-root analysis) and matches the Rust lowering.
 A handle field stores a managed handle. Fields of `class` type are always handles. A struct field can explicitly request a handle:
 
 ```rust
-struct Config {
+struct Settings {
     name: String
     rules: handle List<Rule>
 }
@@ -1688,7 +1690,7 @@ A local struct can contain managed handles. Those handles remain runtime-managed
 ```rust
 features: local
 
-local cfg = Config.load(path: read path)?
+local cfg = Settings.load(path: read path)?
 ```
 
 If `cfg.rules` is a handle field, then `cfg.rules` is a managed handle even while `cfg` itself is local.
@@ -1894,7 +1896,7 @@ symbol inventory as a type-level symbol (it introduces no value binding).
 `let` creates a managed binding for non-Copy values.
 
 ```rust
-let image = Image.load(path: read path)?
+let image = Picture.load(path: read path)?
 ```
 
 For Copy values, the value is copied normally.
@@ -1928,7 +1930,7 @@ updates an existing `let mut` place in place.
 ```rust
 features: local
 
-local image = Image.load(path: read path)?
+local image = Picture.load(path: read path)?
 ```
 
 A local binding:
@@ -1962,7 +1964,7 @@ The resource is dropped when the block exits.
 Invalid:
 
 ```rust
-let image = Image.load(path: read path)?
+let image = Picture.load(path: read path)?
 local working = image
 ```
 
@@ -1976,7 +1978,7 @@ extracting an exclusive local value would be unsafe or require deep clone
 If a type supports deep cloning into local form, it must expose an explicit API with visible cost:
 
 ```rust
-local image = Image.deep_clone_to_local(image: read managed_image)
+local image = Picture.deep_clone_to_local(image: read managed_image)
 ```
 
 ### 7.5 `manage`
@@ -1986,7 +1988,7 @@ local image = Image.deep_clone_to_local(image: read managed_image)
 ```rust
 features: local
 
-local image = Image.load(path: read path)?
+local image = Picture.load(path: read path)?
 let shared = manage image
 ```
 
@@ -2005,7 +2007,7 @@ may allocate
 `manage` is evaluated before any outer data-effect wrapper:
 
 ```rust
-Cache.put(value: read (manage image))
+Store.put(value: read (manage image))
 ```
 
 is equivalent to creating an expression-scoped managed temporary and passing it as `read`.
@@ -2165,7 +2167,7 @@ the closure body (a synthetic `mut` on the captured place).
 ```rust
 apply(
     image: mut image,
-    callback: || Image.save(image: read image, path: read output),
+    callback: || Picture.save(image: read image, path: read output),
 )
 ```
 
@@ -2275,8 +2277,8 @@ before a helper can become public. This exception does not apply to constructors
 protocol-qualified calls, native boundaries, or unknown callees.
 
 ```rust
-Image.resize(image: mut image, width: 800, height: 600)
-Image.resize(image: mut image, width, height)
+Picture.resize(image: mut image, width: 800, height: 600)
+Picture.resize(image: mut image, width, height)
 let point = Point(x: 1.0, y: 2.0)
 let point = Point(x, y)
 ```
@@ -2284,7 +2286,7 @@ let point = Point(x, y)
 Invalid:
 
 ```rust
-Image.resize(mut image, 800, 600)
+Picture.resize(mut image, 800, 600)
 ```
 
 Standard single-payload variants keep their conventional form:
@@ -2341,7 +2343,7 @@ Example:
 ```rust
 features: local
 
-return Ok(Config(
+return Ok(Settings(
     name: "default",
     rules: read rules,
     workspace: take workspace,
@@ -2399,8 +2401,8 @@ A `read` parameter may not be retained unless `effects(retains(param))` is prese
 A `mut` parameter may be modified during the call.
 
 ```rust
-fn resize(image: mut Image, width: Int, height: Int) -> Unit
-Image.resize(image: mut image, width: 800, height: 600)
+fn resize(image: mut Picture, width: Int, height: Int) -> Unit
+Picture.resize(image: mut image, width: 800, height: 600)
 ```
 
 For managed arguments, mutation is dynamically shared and aliases observe the change. For local arguments, the checker enforces local exclusivity.
@@ -2428,7 +2430,7 @@ the effect records the call contract without introducing a borrow. `mut` and
 `take` remain explicit.
 
 ```rust
-fn resize(image: mut Image, width: Int, height: Int) -> Unit
+fn resize(image: mut Picture, width: Int, height: Int) -> Unit
 pub fn Int.to_string(value: Int) -> fresh String
 ```
 
@@ -2496,7 +2498,7 @@ policy explicitly trusts that boundary.
 `retains(x)` means the function may keep a managed value derived from parameter `x` after returning.
 
 ```rust
-fn cache_put(cache: mut Cache, key: read String, value: read Image) -> Unit
+fn cache_put(cache: mut Store, key: read String, value: read Picture) -> Unit
     effects(retains(key), retains(value))
 ```
 
@@ -2558,7 +2560,7 @@ A managed closure retaining a managed capture must be reported in review metadat
 The following forms are retention-equivalent and must not hide captures:
 
 ```rust
-let cb = || Image.save(image: read image, path: read output)
+let cb = || Picture.save(image: read image, path: read output)
 return Some(cb)
 return Ok(cb)
 Registry.register(callback: cb)
@@ -2689,7 +2691,7 @@ A closure bound with `local` is a local closure and may move-capture local value
 Legal:
 
 ```rust
-fn load(path: read Path) -> Result<fresh Image, ImageError>
+fn load(path: read Path) -> Result<fresh Picture, PictureError>
 ```
 
 Illegal if `User` is a class:
@@ -2846,10 +2848,10 @@ distinction is between binding and field, following the materialization rules
 
 ```text
 - an ordinary container BINDING created by `let` materializes as managed, like
-  any non-Copy struct: `let images = List<Image>.new()` is a managed binding.
+  any non-Copy struct: `let images = List<Picture>.new()` is a managed binding.
 - a container FIELD is inline by default (stored within its containing value),
   unless the field is marked `handle`. A class may therefore hold an inline
-  container field such as `entries: Map<String, Image>`; it is not a separate
+  container field such as `entries: Map<String, Picture>`; it is not a separate
   managed handle, it lives within the managed class object.
 ```
 
@@ -2857,7 +2859,7 @@ So "managed" describes the default materialization of a container *binding*, not
 an intrinsic class-like identity. A `let` container binding is managed:
 
 ```rust
-let images = List<Image>.new()
+let images = List<Picture>.new()
 ```
 
 Managed container bindings may store:
@@ -2913,7 +2915,7 @@ native/unsafe/retention effects if any
 Example:
 
 ```rust
-pub fn resize(image: mut Image, width: Int, height: Int) -> Unit
+pub fn resize(image: mut Picture, width: Int, height: Int) -> Unit
     effects(no_panic)
 ```
 
@@ -3027,7 +3029,7 @@ non-`Unit` function is a return type mismatch before Rust lowering.
 `may_fail` is not an effect. Failure is represented by return type.
 
 ```rust
-fn load(path: read Path) -> Result<fresh Image, ImageError>
+fn load(path: read Path) -> Result<fresh Picture, PictureError>
 ```
 
 `async` is a function kind, not an effect. `fresh` is a return contract, not an effect.
@@ -3035,7 +3037,7 @@ fn load(path: read Path) -> Result<fresh Image, ImageError>
 Invalid:
 
 ```rust
-fn load(path: read Path) -> Result<Image, ImageError>
+fn load(path: read Path) -> Result<Picture, PictureError>
     effects(fresh)
 ```
 
@@ -3526,7 +3528,7 @@ effect):
 
 ```rust
 User.name(user: user)
-Cache.put(cache: mut cache, key: read key, value: read value)
+Store.put(cache: mut cache, key: read key, value: read value)
 StringBuilder.finish(builder: take builder)
 Writer.write(self: mut writer, message: read msg)
 ```
@@ -3609,10 +3611,10 @@ for every receiver-call expression:
 ```json
 {
   "source_call": "mut cache.put(key: read key, value: read value)",
-  "canonical_call": "Cache.put(self: mut cache, key: read key, value: read value)",
+  "canonical_call": "Store.put(self: mut cache, key: read key, value: read value)",
   "receiver_effect": "mut",
   "resolved_protocol": null,
-  "resolved_function": "Cache.put",
+  "resolved_function": "Store.put",
   "effects": ["retains(key)", "retains(value)"]
 }
 ```
@@ -3991,7 +3993,7 @@ reflection
 The reserved markers may be parsed and reported as review risk, but they do not
 unlock syntax, lowering, runtime behavior, or package-manager semantics in v0.7.
 Feature names are semantic capability gates or reserved review markers, not
-library categories. `Json`, `HTTP`, `Image`, and `Regex` are not file features.
+library categories. `Json`, `HTTP`, `Picture`, and `Regex` are not file features.
 
 Each feature may appear at most once. Duplicate features are diagnostics.
 
@@ -4477,13 +4479,11 @@ Hash
 TempDir
 Env
 Url
-HTTP request/response and client facade
+HttpRequest / HttpResponse / HttpError and the HTTP client facade
 Process
 Random / Uuid
 Encoding: Base64 / Hex / URL component encoding
 Csv
-Config / RulesConfig
-Counter
 Weak
 Diagnostic
 Span
@@ -5111,11 +5111,10 @@ pub fn Csv.parse_row(buffer: read RowBuffer) -> Result<fresh Row, CsvError>
 pub fn Row.field_string(row: read Row, index: Int) -> Result<String, CsvError>
 ```
 
-Agent, model-client, and domain-specific network clients are use-case
-libraries, not language core. The bundled HTTP surface is intentionally only a
-small façade: `stdlib/http/http.rssi` covers handler request/response values, and
-`stdlib/http/client.rssi` exposes a native client boundary for simple package-tool
-and integration workflows.
+Agent, model-client, server-handler, and domain-specific network APIs are
+use-case libraries, not language core. The bundled HTTP surface is the native
+client boundary in `stdlib/http/client.rssi`, backed by `HttpRequest`,
+`HttpResponse`, and `HttpError`.
 
 ### 18.3 Package manager boundary
 
@@ -5166,32 +5165,32 @@ fn write_text(path: read Path, text: read String) -> Result<Unit, FileError> {
 }
 ```
 
-### 19.2 Image pipeline
+### 19.2 Picture pipeline
 
 ```rust
 features: local
 
-fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, ImageError> {
-    local image = Image.load(path: read input)?
+fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, PictureError> {
+    local image = Picture.load(path: read input)?
 
-    Image.resize(image: mut image, width: 256, height: 256)
-    Image.normalize(image: mut image)
+    Picture.resize(image: mut image, width: 256, height: 256)
+    Picture.normalize(image: mut image)
 
     let shared = manage image
-    Image.save(image: read shared, path: read output)?
+    Picture.save(image: read shared, path: read output)?
 
     return Ok(Unit)
 }
 ```
 
-### 19.3 Cache retention
+### 19.3 Store retention
 
 ```rust
 class RetainedImageStore {
-    entries: Map<String, Image>
+    entries: Map<String, Picture>
 }
 
-fn cache_put(cache: mut RetainedImageStore, key: read String, value: read Image) -> Unit
+fn cache_put(cache: mut RetainedImageStore, key: read String, value: read Picture) -> Unit
     effects(retains(key), retains(value))
 {
     Map.insert(map: mut cache.entries, key: read key, value: read value)
@@ -5204,25 +5203,22 @@ With local image:
 cache_put(cache: mut cache, key: read key, value: read (manage image))
 ```
 
-### 19.4 Config with handle fields
+### 19.4 JSON configuration
 
 ```rust
-features: local
-
-struct Config {
+struct AppSettings {
     name: String
-    rules: handle List<Rule>
-    workspace: Buffer
+    retries: Int
 }
 
-fn load_config(path: read Path) -> Result<fresh Config, ConfigError> {
-    local workspace = Buffer.new(size: 4096)
-    let rules = RuleLoader.load_rules(path: read path)?
+fn load_settings(path: read Path) -> Result<fresh AppSettings, JsonError> {
+    let value = Json.parse_file(path: read path)?
+    let name = Json.field_string(value: read value, name: read "name")?
+    let retries = Json.field_int(value: read value, name: read "retries")?
 
-    return Ok(Config(
-        name: "default",
-        rules: read rules,
-        workspace: take workspace,
+    return Ok(AppSettings(
+        name: read name,
+        retries: retries,
     ))
 }
 ```
@@ -5245,13 +5241,13 @@ fn write_text(path: read Path, text: read String) -> Result<Unit, FileError> {
 }
 ```
 
-Image pipeline:
+Picture pipeline:
 
 ```rust
 features: local
 
-fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, ImageError> {
-    local image = Image.load(path: read input)?
+fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, PictureError> {
+    local image = Picture.load(path: read input)?
 
     mut image.resize(width: 256, height: 256)
     mut image.normalize()
@@ -5390,7 +5386,7 @@ F. Capability objects (explicit dynamic dispatch)
    - RSScript does not adopt Rust-style `dyn Trait` with vtable coercion.
    - the explicit capability-bounded form is visible to review:
 
-       fn serve(store: read capability Store<Image>) -> Result<Unit, Error>
+       fn serve(store: read capability Store<Picture>) -> Result<Unit, Error>
 
    - the review map must flag capability boundaries: the concrete implementation
      is unknown or specified by package contract, not inferred at compile time.

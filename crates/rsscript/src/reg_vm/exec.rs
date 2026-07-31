@@ -2041,29 +2041,6 @@ impl RegVm {
                             self.set_reg(base + *buffer, VmValue::Bytes(Rc::new(Vec::new())));
                             self.set_reg(base + *dst, VmValue::Unit);
                         }
-                        RegInstr::CounterAdd {
-                            dst,
-                            counter,
-                            amount,
-                        } => {
-                            let counter_reg = base + *counter;
-                            let value = expect_counter_value(self.reg(counter_reg))?
-                                + expect_int_ref(self.reg(base + *amount))?;
-                            self.set_reg(counter_reg, counter_value(value));
-                            self.set_reg(base + *dst, VmValue::Unit);
-                        }
-                        RegInstr::ConfigStoreReplace { dst, store, value } => {
-                            let store_reg = base + *store;
-                            let name = expect_config_value_name(self.reg(base + *value))?;
-                            self.set_reg(store_reg, config_store_value(name));
-                            self.set_reg(base + *dst, VmValue::Unit);
-                        }
-                        RegInstr::GlobalConfigReplace { dst, global, value } => {
-                            let global_reg = base + *global;
-                            let rule_count = expect_config_rule_count(self.reg(base + *value))?;
-                            self.set_reg(global_reg, global_config_value(rule_count));
-                            self.set_reg(base + *dst, VmValue::Unit);
-                        }
                         RegInstr::StringBuilderPush {
                             dst,
                             builder,

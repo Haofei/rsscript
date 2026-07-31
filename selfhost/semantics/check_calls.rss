@@ -42,12 +42,6 @@ fn prepared_external_type_is_owned(expression: Expr, parameterName: String) -> B
     if expression.text == "String.len" && parameterName == "value" { return true }
     if expression.text == "List.push" && (parameterName == "list" || parameterName == "value") { return true }
     if expression.text == "File.write" && parameterName == "data" { return true }
-    if expression.text == "Image.inspect" && parameterName == "image" { return true }
-    if expression.text == "Image.normalize" && parameterName == "image" { return true }
-    if expression.text == "Image.resize" && (parameterName == "image" || parameterName == "width" || parameterName == "height") { return true }
-    if expression.text == "Image.save" && (parameterName == "image" || parameterName == "path") { return true }
-    if expression.text == "Image.load" && parameterName == "path" { return true }
-    if expression.text == "Request.path" && parameterName == "request" { return true }
     return false
 }
 

@@ -1,18 +1,25 @@
 features: local
 
-struct Image {
+struct Picture {
     pixels: Buffer
 }
 
-fn make_thumbnail(input: Path, output: Path) -> Result<Unit, ImageError> {
-    local image = Image.load(path: input)?
+struct PictureError
 
-    Image.resize(image: mut image, width: 256, height: 256)
-    Image.normalize(image: mut image)
+fn Picture.load(path: Path) -> Result<fresh Picture, PictureError>
+fn Picture.resize(image: mut Picture, width: Int, height: Int) -> Unit
+fn Picture.normalize(image: mut Picture) -> Unit
+fn Picture.save(image: Picture, path: Path) -> Result<Unit, PictureError>
+
+fn make_thumbnail(input: Path, output: Path) -> Result<Unit, PictureError> {
+    local image = Picture.load(path: input)?
+
+    Picture.resize(image: mut image, width: 256, height: 256)
+    Picture.normalize(image: mut image)
 
     let shared = manage image
 
-    Image.save(image: shared, path: output)?
+    Picture.save(image: shared, path: output)?
 
     return Ok(Unit)
 }

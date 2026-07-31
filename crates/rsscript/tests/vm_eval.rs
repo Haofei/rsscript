@@ -1199,8 +1199,6 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Directory.remove_dir_all runtime:Directory.read_string runtime:Directory.write_string
 // parity: runtime:Duration.add runtime:Duration.as_ms runtime:Duration.as_seconds
 // parity: runtime:Duration.ms runtime:Duration.seconds
-// parity: runtime:Environment.bind_function runtime:Environment.child
-// parity: runtime:Environment.has_function runtime:Environment.has_parent runtime:Environment.root
 // parity: runtime:Diff.unified runtime:Patch.apply_text
 // parity: runtime:Bytes.concat runtime:Bytes.consume runtime:Bytes.from_string runtime:Bytes.is_empty
 // parity: runtime:Bytes.from_buffer runtime:Bytes.len runtime:Bytes.slice runtime:Bytes.view
@@ -1213,16 +1211,12 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Buffer.clear runtime:Buffer.consume runtime:Buffer.is_empty runtime:Buffer.len
 // parity: runtime:Buffer.new runtime:Buffer.view runtime:BufferView.is_empty
 // parity: runtime:BufferView.len runtime:BufferView.slice runtime:BufferView.to_bytes
-// parity: runtime:Cache.get runtime:Cache.insert runtime:Cache.lookup runtime:Cache.new
 // parity: runtime:Channel.bounded runtime:Channel.message runtime:Channel.receiver runtime:Channel.sender
 // parity: runtime:ChannelError.message
 // parity: runtime:CancellationSource.cancel runtime:CancellationSource.new
 // parity: runtime:CancellationSource.token runtime:CancellationToken.is_cancelled
 // parity: runtime:Clone.clone
 // parity: runtime:Clock.now runtime:Clock.system_unix_ms
-// parity: runtime:Config.load runtime:Config.name runtime:Config.new runtime:Config.rule_count
-// parity: runtime:ConfigStore.name runtime:ConfigStore.new runtime:ConfigStore.replace
-// parity: runtime:Counter.add runtime:Counter.new runtime:Counter.value
 // parity: runtime:Csv.open_read runtime:Csv.parse_row runtime:Csv.read_into runtime:Csv.rows
 // parity: runtime:Date.add_days runtime:Date.add_ms runtime:Date.day runtime:Date.days_between
 // parity: runtime:Date.days_in_month runtime:Date.format_iso runtime:Date.format_ymd
@@ -1270,8 +1264,6 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:HttpRequest.with_retry runtime:HttpRequest.with_timeout
 // parity: runtime:HttpResponse.bytes runtime:HttpResponse.is_success runtime:HttpResponse.lines
 // parity: runtime:HttpResponse.status runtime:HttpResponse.text
-// parity: runtime:Image.inspect runtime:Image.load runtime:Image.normalize runtime:Image.resize
-// parity: runtime:Image.save runtime:Image.sharpen
 // parity: runtime:List.all runtime:List.any runtime:List.append runtime:List.clear
 // parity: runtime:List.contains runtime:List.contains_value runtime:List.count_where
 // parity: runtime:List.consume runtime:List.dedup runtime:List.enumerate runtime:List.filter runtime:List.find runtime:List.first
@@ -1300,7 +1292,6 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:FalliblePipeline.collect runtime:FalliblePipeline.each
 // parity: runtime:FalliblePipeline.filter runtime:FalliblePipeline.map
 // parity: runtime:FalliblePipeline.try_map
-// parity: runtime:FunctionObject.has_closure runtime:FunctionObject.new
 // parity: runtime:PersistentMap.clear runtime:PersistentMap.contains_key runtime:PersistentMap.get
 // parity: runtime:PersistentMap.insert runtime:PersistentMap.is_empty runtime:PersistentMap.len
 // parity: runtime:PersistentMap.new runtime:PersistentMap.remove
@@ -1345,12 +1336,9 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:Option.or runtime:Option.unwrap_or runtime:Option.unwrap_or_else
 // parity: runtime:Result.and_then runtime:Result.map runtime:Result.map_error
 // parity: runtime:Ord.compare runtime:OS.close
-// parity: runtime:Request.new runtime:Request.path
-// parity: runtime:Response.body runtime:Response.ok runtime:Response.status
 // parity: runtime:Result.err runtime:Result.err_message runtime:Result.is_err
 // parity: runtime:Result.is_ok runtime:Result.ok runtime:Result.unwrap_or runtime:Result.unwrap_or_else
 // parity: runtime:Row.field_string runtime:RowBuffer.new
-// parity: runtime:RuleLoader.load_rules
 // parity: runtime:Set.clear runtime:Set.contains runtime:Set.difference runtime:Set.for_each
 // parity: runtime:Set.insert runtime:Set.intersection runtime:Set.is_empty runtime:Set.is_subset
 // parity: runtime:Set.len runtime:Set.new runtime:Set.remove runtime:Set.to_list runtime:Set.union
@@ -1380,7 +1368,6 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:StringView.slice runtime:StringView.starts_with runtime:StringView.to_string
 // parity: runtime:StringBuilder.finish runtime:StringBuilder.new runtime:StringBuilder.push
 // parity: runtime:Stream.collect_list runtime:Stream.from_list runtime:Stream.next
-// parity: runtime:GlobalConfig.new runtime:GlobalConfig.replace runtime:GlobalConfig.rule_count
 // parity: runtime:TempDir.keep runtime:TempDir.new runtime:TempDir.new_in runtime:TempDir.path
 // parity: runtime:Timer.sleep runtime:Timer.sleep_cancellable runtime:Timer.sleep_until
 // parity: runtime:Tcp.connect runtime:TcpError.message

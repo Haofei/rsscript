@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::fmt;
 #[cfg(feature = "net")]
 use std::sync::Arc;
@@ -22,7 +21,6 @@ use std::str::Utf8Error;
 
 use crate::fs::{File, RuntimePath, file_open_read};
 use crate::json::JsonError;
-use crate::managed::{Managed, WeakManaged, manage, weak};
 
 const DEFAULT_HTTP_TIMEOUT_MS: i64 = 30_000;
 #[cfg(feature = "net")]
@@ -33,12 +31,7 @@ const MAX_HTTP_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_HTTP_ATTEMPTS: i64 = 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Request {
-    path: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Response {
+pub struct HttpResponse {
     status: i64,
     body: String,
     body_bytes: Vec<u8>,
@@ -99,99 +92,6 @@ fn redact_http_url(url: &str) -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfigValue {
-    name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfigStore {
-    current: ConfigValue,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Cache {
-    entries: HashMap<String, String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Rule {
-    name: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Config {
-    name: String,
-    rules: Vec<Rule>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GlobalConfig {
-    current: Config,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Counter {
-    value: i64,
-}
-
-#[derive(Clone)]
-pub struct Environment {
-    parent: Option<Managed<Environment>>,
-    function: Option<Managed<FunctionObject>>,
-}
-
-#[derive(Clone)]
-pub struct FunctionObject {
-    closure: WeakManaged<Environment>,
-}
-
-impl fmt::Debug for Environment {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("Environment")
-            .field("has_parent", &self.parent.is_some())
-            .field("has_function", &self.function.is_some())
-            .finish()
-    }
-}
-
-impl fmt::Debug for FunctionObject {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("FunctionObject")
-            .field("has_closure", &self.closure.upgrade().is_some())
-            .finish()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ConfigError {
-    message: String,
-}
-
-impl ConfigError {
-    fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for ConfigError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}", self.message)
-    }
-}
-
-impl std::error::Error for ConfigError {}
-
-impl From<std::io::Error> for ConfigError {
-    fn from(error: std::io::Error) -> Self {
-        Self::new(error.to_string())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HttpError {
     message: String,
 }
@@ -221,24 +121,8 @@ impl fmt::Display for TimerError {
 
 impl std::error::Error for TimerError {}
 
-impl From<ConfigError> for HttpError {
-    fn from(error: ConfigError) -> Self {
-        Self {
-            message: error.to_string(),
-        }
-    }
-}
-
 impl From<CsvError> for HttpError {
     fn from(error: CsvError) -> Self {
-        Self {
-            message: error.to_string(),
-        }
-    }
-}
-
-impl From<ImageError> for HttpError {
-    fn from(error: ImageError) -> Self {
         Self {
             message: error.to_string(),
         }
@@ -250,74 +134,6 @@ impl From<JsonError> for HttpError {
         Self {
             message: error.to_string(),
         }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Image {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) width: Option<i64>,
-    pub(crate) height: Option<i64>,
-    pub(crate) operations: Vec<&'static str>,
-}
-
-pub fn image_debug_summary(image: &Image) -> String {
-    format!(
-        "Image {{ bytes: {:?}, height: {}, operations: [{}], width: {} }}",
-        image.bytes,
-        option_i64_debug_summary(image.height),
-        image.operations.join(", "),
-        option_i64_debug_summary(image.width)
-    )
-}
-
-fn option_i64_debug_summary(value: Option<i64>) -> String {
-    value
-        .map(|value| format!("Some({value})"))
-        .unwrap_or_else(|| "None".to_string())
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImageError {
-    message: String,
-}
-
-impl ImageError {
-    fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-}
-
-impl fmt::Display for ImageError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}", self.message)
-    }
-}
-
-impl std::error::Error for ImageError {}
-
-impl From<std::io::Error> for ImageError {
-    fn from(error: std::io::Error) -> Self {
-        Self::new(error.to_string())
-    }
-}
-
-pub trait RuntimeImageRef {
-    fn with_image<R>(&self, f: impl FnOnce(&Image) -> R) -> R;
-}
-
-impl RuntimeImageRef for Image {
-    fn with_image<R>(&self, f: impl FnOnce(&Image) -> R) -> R {
-        f(self)
-    }
-}
-
-impl RuntimeImageRef for Managed<Image> {
-    fn with_image<R>(&self, f: impl FnOnce(&Image) -> R) -> R {
-        let image = self.read();
-        f(&image)
     }
 }
 
@@ -370,68 +186,13 @@ impl From<Utf8Error> for CsvError {
     }
 }
 
-pub fn cache_new() -> Cache {
-    Cache {
-        entries: HashMap::new(),
-    }
-}
-
-pub fn cache_insert(cache: &mut Cache, key: &str, value: &str) {
-    cache.entries.insert(key.to_string(), value.to_string());
-}
-
-pub fn cache_lookup(cache: &Cache, key: &str) -> String {
-    cache.entries.get(key).cloned().unwrap_or_default()
-}
-
-pub fn cache_get(cache: &Cache) -> Image {
-    let bytes = cache
-        .entries
-        .values()
-        .next()
-        .map(|value| value.as_bytes().to_vec())
-        .unwrap_or_default();
-    Image {
-        bytes,
-        width: None,
-        height: None,
-        operations: vec!["cache-get"],
-    }
-}
-
-pub fn request_new(path: &str) -> Request {
-    Request {
-        path: path.to_string(),
-    }
-}
-
-pub fn request_path(request: &Request) -> String {
-    request.path.clone()
-}
-
-pub fn response_ok(body: &str) -> Result<Response, HttpError> {
-    Ok(Response {
-        status: 200,
-        body: body.to_string(),
-        body_bytes: body.as_bytes().to_vec(),
-    })
-}
-
-pub fn response_status(response: &Response) -> i64 {
-    response.status
-}
-
-pub fn response_body(response: &Response) -> String {
-    response.body.clone()
-}
-
 #[cfg(feature = "net")]
-pub fn http_get(url: &str) -> Result<Response, HttpError> {
+pub fn http_get(url: &str) -> Result<HttpResponse, HttpError> {
     run_pending(http_get_async(url))
 }
 
 #[cfg(feature = "net")]
-pub fn http_get_async(url: &str) -> NativeAsyncPending<Result<Response, HttpError>> {
+pub fn http_get_async(url: &str) -> NativeAsyncPending<Result<HttpResponse, HttpError>> {
     let url = url.to_string();
     spawn_tokio_native(async move { http_request_async("GET", &url, Vec::new(), None, None).await })
 }
@@ -440,7 +201,7 @@ pub fn http_get_async(url: &str) -> NativeAsyncPending<Result<Response, HttpErro
 pub fn http_get_async_with_context(
     url: &str,
     context: OperationContext,
-) -> NativeAsyncPending<Result<Response, HttpError>> {
+) -> NativeAsyncPending<Result<HttpResponse, HttpError>> {
     let request = http_request_new("GET", url, None, None);
     http_send_async_with_context(request, context)
 }
@@ -493,7 +254,9 @@ pub fn http_request_with_header(mut request: HttpRequest, name: &str, value: &st
 }
 
 #[cfg(feature = "net")]
-pub fn http_send_async(request: HttpRequest) -> NativeAsyncPending<Result<Response, HttpError>> {
+pub fn http_send_async(
+    request: HttpRequest,
+) -> NativeAsyncPending<Result<HttpResponse, HttpError>> {
     let budget = default_http_budget(&request);
     let cancellation = cancellation_never();
     let deadline = deadline_after_ms(normalized_http_timeout_ms(request.timeout_ms));
@@ -507,7 +270,7 @@ pub fn http_send_async(request: HttpRequest) -> NativeAsyncPending<Result<Respon
 pub fn http_send_async_with_context(
     request: HttpRequest,
     context: OperationContext,
-) -> NativeAsyncPending<Result<Response, HttpError>> {
+) -> NativeAsyncPending<Result<HttpResponse, HttpError>> {
     let services = Arc::clone(context.services());
     match spawn_tokio_native_with_services(&services, CancellationToken::new(), async move {
         http_request_retry_with_context(request, context).await
@@ -525,7 +288,7 @@ pub fn http_send_async_with_context(
 pub fn http_get_timeout_async(
     url: &str,
     timeout_ms: i64,
-) -> NativeAsyncPending<Result<Response, HttpError>> {
+) -> NativeAsyncPending<Result<HttpResponse, HttpError>> {
     let url = url.to_string();
     spawn_tokio_native(async move {
         http_request_timeout_async("GET", &url, Vec::new(), None, None, timeout_ms).await
@@ -538,7 +301,7 @@ pub fn http_get_retry_async(
     timeout_ms: i64,
     attempts: i64,
     backoff_ms: i64,
-) -> NativeAsyncPending<Result<Response, HttpError>> {
+) -> NativeAsyncPending<Result<HttpResponse, HttpError>> {
     let mut request = http_request_new("GET", url, None, None);
     request.timeout_ms = timeout_ms;
     request.attempts = attempts;
@@ -547,7 +310,7 @@ pub fn http_get_retry_async(
 }
 
 #[cfg(feature = "net")]
-pub fn http_post_json(url: &str, _body: &str) -> Result<Response, HttpError> {
+pub fn http_post_json(url: &str, _body: &str) -> Result<HttpResponse, HttpError> {
     Err(HttpError {
         message: format!("HTTP client runtime is not configured for POST JSON {url}"),
     })
@@ -557,7 +320,7 @@ pub fn http_post_json(url: &str, _body: &str) -> Result<Response, HttpError> {
 pub fn http_post_json_async(
     url: &str,
     body: &str,
-) -> NativeAsyncPending<Result<Response, HttpError>> {
+) -> NativeAsyncPending<Result<HttpResponse, HttpError>> {
     let url = url.to_string();
     let body = body.to_string();
     spawn_tokio_native(async move {
@@ -577,7 +340,7 @@ pub fn http_post_json_timeout_async(
     url: &str,
     body: &str,
     timeout_ms: i64,
-) -> NativeAsyncPending<Result<Response, HttpError>> {
+) -> NativeAsyncPending<Result<HttpResponse, HttpError>> {
     let url = url.to_string();
     let body = body.to_string();
     spawn_tokio_native(async move {
@@ -600,7 +363,7 @@ pub fn http_post_json_retry_async(
     timeout_ms: i64,
     attempts: i64,
     backoff_ms: i64,
-) -> NativeAsyncPending<Result<Response, HttpError>> {
+) -> NativeAsyncPending<Result<HttpResponse, HttpError>> {
     let mut request = http_request_new(
         "POST",
         url,
@@ -621,7 +384,7 @@ pub fn http_post_json_bearer_retry_async(
     timeout_ms: i64,
     attempts: i64,
     backoff_ms: i64,
-) -> NativeAsyncPending<Result<Response, HttpError>> {
+) -> NativeAsyncPending<Result<HttpResponse, HttpError>> {
     let mut request = http_request_new(
         "POST",
         url,
@@ -638,7 +401,7 @@ pub fn http_post_json_bearer_retry_async(
 }
 
 #[cfg(feature = "net")]
-pub fn http_post_form(url: &str, _body: &str) -> Result<Response, HttpError> {
+pub fn http_post_form(url: &str, _body: &str) -> Result<HttpResponse, HttpError> {
     Err(HttpError {
         message: format!("HTTP client runtime is not configured for POST form {url}"),
     })
@@ -648,7 +411,7 @@ pub fn http_post_form(url: &str, _body: &str) -> Result<Response, HttpError> {
 pub fn http_post_form_async(
     url: &str,
     body: &str,
-) -> NativeAsyncPending<Result<Response, HttpError>> {
+) -> NativeAsyncPending<Result<HttpResponse, HttpError>> {
     let url = url.to_string();
     let body = body.to_string();
     spawn_tokio_native(async move {
@@ -670,7 +433,7 @@ async fn http_request_async(
     headers: Vec<(String, String)>,
     content_type: Option<&str>,
     body: Option<String>,
-) -> Result<Response, HttpError> {
+) -> Result<HttpResponse, HttpError> {
     http_request_timeout_async(
         method,
         url,
@@ -683,7 +446,6 @@ async fn http_request_async(
 }
 
 #[cfg(feature = "net")]
-#[cfg(feature = "net")]
 async fn http_request_once_async(
     client: &reqwest::Client,
     method: &str,
@@ -692,7 +454,7 @@ async fn http_request_once_async(
     content_type: Option<&str>,
     body: Option<String>,
     budget: &ResourceBudget,
-) -> Result<Response, HttpError> {
+) -> Result<HttpResponse, HttpError> {
     let display_url = redact_http_url(url);
     let body_len = body.as_ref().map_or(0, String::len);
     if body_len > MAX_HTTP_REQUEST_BYTES {
@@ -756,7 +518,7 @@ async fn http_request_once_async(
         })?;
         body_bytes.extend_from_slice(&chunk);
     }
-    Ok(Response {
+    Ok(HttpResponse {
         status,
         body: String::from_utf8_lossy(&body_bytes).to_string(),
         body_bytes,
@@ -771,7 +533,7 @@ async fn http_request_timeout_async(
     content_type: Option<&str>,
     body: Option<String>,
     timeout_ms: i64,
-) -> Result<Response, HttpError> {
+) -> Result<HttpResponse, HttpError> {
     let timeout_ms = normalized_http_timeout_ms(timeout_ms);
     let request_bytes = body.as_ref().map_or(0, String::len);
     let budget = ResourceBudget::new(
@@ -793,7 +555,7 @@ fn normalized_http_timeout_ms(timeout_ms: i64) -> i64 {
 }
 
 #[cfg(feature = "net")]
-async fn http_request_retry_async(request: HttpRequest) -> Result<Response, HttpError> {
+async fn http_request_retry_async(request: HttpRequest) -> Result<HttpResponse, HttpError> {
     let budget = default_http_budget(&request);
     let cancellation = cancellation_never();
     let deadline = deadline_after_ms(normalized_http_timeout_ms(request.timeout_ms));
@@ -823,7 +585,7 @@ async fn http_request_once_with_controls(
     content_type: Option<&str>,
     body: Option<String>,
     context: &OperationContext,
-) -> Result<Response, HttpError> {
+) -> Result<HttpResponse, HttpError> {
     let display_url = redact_http_url(url);
     let remaining = deadline_remaining_duration(context.deadline());
     if remaining.is_zero() {
@@ -857,7 +619,7 @@ async fn http_request_once_with_controls(
 async fn http_request_retry_with_context(
     request: HttpRequest,
     context: OperationContext,
-) -> Result<Response, HttpError> {
+) -> Result<HttpResponse, HttpError> {
     let attempts = request.attempts.clamp(1, MAX_HTTP_ATTEMPTS);
     let backoff_ms = request.backoff_ms.max(0) as u64;
     let total_timeout_ms = normalized_http_timeout_ms(request.timeout_ms);
@@ -917,302 +679,24 @@ async fn http_request_retry_with_context(
     }))
 }
 
-pub fn http_response_status(response: &Response) -> i64 {
+pub fn http_response_status(response: &HttpResponse) -> i64 {
     response.status
 }
 
-pub fn http_response_text(response: &Response) -> String {
+pub fn http_response_text(response: &HttpResponse) -> String {
     response.body.clone()
 }
 
-pub fn http_response_bytes(response: &Response) -> Vec<u8> {
+pub fn http_response_bytes(response: &HttpResponse) -> Vec<u8> {
     response.body_bytes.clone()
 }
 
-pub fn http_response_lines(response: &Response) -> Vec<String> {
+pub fn http_response_lines(response: &HttpResponse) -> Vec<String> {
     response.body.lines().map(str::to_string).collect()
 }
 
-pub fn http_response_is_success(response: &Response) -> bool {
+pub fn http_response_is_success(response: &HttpResponse) -> bool {
     (200..300).contains(&response.status)
-}
-
-pub fn config_load<P: RuntimePath + ?Sized>(path: &P) -> Result<ConfigValue, ConfigError> {
-    let text =
-        crate::fs::file_read_string(path).map_err(|error| ConfigError::new(error.to_string()))?;
-    let name = text
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or("default")
-        .to_string();
-    Ok(ConfigValue { name })
-}
-
-pub fn config_name(value: &ConfigValue) -> String {
-    value.name.clone()
-}
-
-pub fn config_store_new(value: &ConfigValue) -> ConfigStore {
-    ConfigStore {
-        current: value.clone(),
-    }
-}
-
-pub fn config_store_replace(store: &mut ConfigStore, value: &ConfigValue) {
-    store.current = value.clone();
-}
-
-pub fn config_store_name(store: &ConfigStore) -> String {
-    store.current.name.clone()
-}
-
-pub fn rule_loader_load_rules<P: RuntimePath + ?Sized>(path: &P) -> Result<Vec<Rule>, ConfigError> {
-    let text =
-        crate::fs::file_read_string(path).map_err(|error| ConfigError::new(error.to_string()))?;
-    let rules = text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|name| Rule {
-            name: name.to_string(),
-        })
-        .collect();
-    Ok(rules)
-}
-
-pub fn config_new(name: &str, rules: &[Rule]) -> Config {
-    Config {
-        name: name.to_string(),
-        rules: rules.to_owned(),
-    }
-}
-
-pub fn config_rule_count(config: &Config) -> i64 {
-    config.rules.len() as i64
-}
-
-pub fn global_config_new(value: &Config) -> GlobalConfig {
-    GlobalConfig {
-        current: value.clone(),
-    }
-}
-
-pub fn global_config_replace(global: &mut GlobalConfig, value: &Config) {
-    global.current = value.clone();
-}
-
-pub fn global_config_rule_count(global: &GlobalConfig) -> i64 {
-    global.current.rules.len() as i64
-}
-
-pub fn counter_new(value: i64) -> Counter {
-    Counter { value }
-}
-
-pub fn counter_add(counter: &mut Counter, amount: i64) {
-    counter.value += amount;
-}
-
-pub fn counter_value(counter: &Counter) -> i64 {
-    counter.value
-}
-
-pub fn environment_root() -> Environment {
-    Environment {
-        parent: None,
-        function: None,
-    }
-}
-
-pub trait RuntimeEnvironmentHandle {
-    fn managed_environment(&self) -> Managed<Environment>;
-    fn environment_has_parent(&self) -> bool;
-    fn environment_has_function(&self) -> bool;
-}
-
-impl RuntimeEnvironmentHandle for Environment {
-    fn managed_environment(&self) -> Managed<Environment> {
-        manage(self.clone())
-    }
-
-    fn environment_has_parent(&self) -> bool {
-        self.parent.is_some()
-    }
-
-    fn environment_has_function(&self) -> bool {
-        self.function.is_some()
-    }
-}
-
-impl RuntimeEnvironmentHandle for Managed<Environment> {
-    fn managed_environment(&self) -> Managed<Environment> {
-        self.clone()
-    }
-
-    fn environment_has_parent(&self) -> bool {
-        self.read().parent.is_some()
-    }
-
-    fn environment_has_function(&self) -> bool {
-        self.read().function.is_some()
-    }
-}
-
-impl<T: RuntimeEnvironmentHandle + ?Sized> RuntimeEnvironmentHandle for &T {
-    fn managed_environment(&self) -> Managed<Environment> {
-        (*self).managed_environment()
-    }
-
-    fn environment_has_parent(&self) -> bool {
-        (*self).environment_has_parent()
-    }
-
-    fn environment_has_function(&self) -> bool {
-        (*self).environment_has_function()
-    }
-}
-
-pub trait RuntimeEnvironmentMut {
-    fn bind_function_handle(&mut self, function: Managed<FunctionObject>);
-}
-
-impl RuntimeEnvironmentMut for Environment {
-    fn bind_function_handle(&mut self, function: Managed<FunctionObject>) {
-        self.function = Some(function);
-    }
-}
-
-impl RuntimeEnvironmentMut for Managed<Environment> {
-    fn bind_function_handle(&mut self, function: Managed<FunctionObject>) {
-        self.write().function = Some(function);
-    }
-}
-
-pub trait RuntimeFunctionHandle {
-    fn managed_function(&self) -> Managed<FunctionObject>;
-    fn function_has_closure(&self) -> bool;
-}
-
-impl RuntimeFunctionHandle for FunctionObject {
-    fn managed_function(&self) -> Managed<FunctionObject> {
-        manage(self.clone())
-    }
-
-    fn function_has_closure(&self) -> bool {
-        self.closure.upgrade().is_some()
-    }
-}
-
-impl RuntimeFunctionHandle for Managed<FunctionObject> {
-    fn managed_function(&self) -> Managed<FunctionObject> {
-        self.clone()
-    }
-
-    fn function_has_closure(&self) -> bool {
-        self.read().closure.upgrade().is_some()
-    }
-}
-
-impl<T: RuntimeFunctionHandle + ?Sized> RuntimeFunctionHandle for &T {
-    fn managed_function(&self) -> Managed<FunctionObject> {
-        (*self).managed_function()
-    }
-
-    fn function_has_closure(&self) -> bool {
-        (*self).function_has_closure()
-    }
-}
-
-pub fn environment_child(parent: &impl RuntimeEnvironmentHandle) -> Environment {
-    Environment {
-        parent: Some(parent.managed_environment()),
-        function: None,
-    }
-}
-
-pub fn environment_bind_function(
-    env: &mut impl RuntimeEnvironmentMut,
-    function: &impl RuntimeFunctionHandle,
-) {
-    env.bind_function_handle(function.managed_function());
-}
-
-pub fn environment_has_parent(env: &impl RuntimeEnvironmentHandle) -> bool {
-    env.environment_has_parent()
-}
-
-pub fn environment_has_function(env: &impl RuntimeEnvironmentHandle) -> bool {
-    env.environment_has_function()
-}
-
-pub fn function_object_new(closure: &impl RuntimeEnvironmentHandle) -> FunctionObject {
-    FunctionObject {
-        closure: weak(&closure.managed_environment()),
-    }
-}
-
-pub fn function_object_has_closure(function: &impl RuntimeFunctionHandle) -> bool {
-    function.function_has_closure()
-}
-
-pub fn image_load<P: RuntimePath + ?Sized>(path: &P) -> Result<Image, ImageError> {
-    let bytes =
-        crate::fs::file_read_bytes(path).map_err(|error| ImageError::new(error.to_string()))?;
-    Ok(Image {
-        bytes,
-        width: None,
-        height: None,
-        operations: vec!["load"],
-    })
-}
-
-pub fn image_resize(image: &mut Image, width: i64, height: i64) {
-    image.width = Some(width);
-    image.height = Some(height);
-    image.operations.push("resize");
-}
-
-pub fn image_normalize(image: &mut Image) {
-    image.operations.push("normalize");
-}
-
-pub fn image_sharpen(image: &mut Image) {
-    image.operations.push("sharpen");
-}
-
-pub fn image_save<I: RuntimeImageRef + ?Sized, P: RuntimePath + ?Sized>(
-    image: &I,
-    path: &P,
-) -> Result<(), ImageError> {
-    let bytes = image.with_image(|image| {
-        let mut bytes = image.bytes.clone();
-        bytes.extend_from_slice(b"\n# rsscript-image-ops:");
-        bytes.extend_from_slice(image.operations.join(",").as_bytes());
-        if let (Some(width), Some(height)) = (image.width, image.height) {
-            bytes.extend_from_slice(format!(";size={width}x{height}").as_bytes());
-        }
-        bytes
-    });
-    std::fs::write(path.as_path(), bytes)?;
-    Ok(())
-}
-
-pub fn image_inspect<I: RuntimeImageRef + ?Sized>(image: &I) {
-    let summary = image.with_image(|image| {
-        let size = image
-            .width
-            .zip(image.height)
-            .map(|(width, height)| format!("{width}x{height}"))
-            .unwrap_or_else(|| "unknown".to_string());
-        format!(
-            "image bytes={} size={} ops={}",
-            image.bytes.len(),
-            size,
-            image.operations.join(",")
-        )
-    });
-    println!("{summary}");
 }
 
 pub fn row_buffer_new(size: i64) -> RowBuffer {
@@ -1738,31 +1222,5 @@ mod tests {
             Err(error) => error,
         };
         assert!(crate::channel_error_message(&error).contains("runtime read ceiling"));
-    }
-
-    #[test]
-    fn domain_file_loaders_reject_oversized_inputs_before_reading() {
-        let path = std::env::temp_dir().join(format!(
-            "rsscript-domain-oversized-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
-        let file = std::fs::File::create(&path).expect("oversized fixture should be created");
-        file.set_len(crate::fs::RUNTIME_READ_CEILING_BYTES as u64 + 1)
-            .expect("sparse oversized fixture should be sized");
-
-        assert!(
-            config_load(&path)
-                .expect_err("config must be bounded")
-                .to_string()
-                .contains("exceeds")
-        );
-        assert!(
-            image_load(&path)
-                .expect_err("image must be bounded")
-                .to_string()
-                .contains("exceeds")
-        );
-        let _ = std::fs::remove_file(path);
     }
 }

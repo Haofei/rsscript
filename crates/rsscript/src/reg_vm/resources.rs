@@ -61,81 +61,6 @@ pub(super) fn deadline_value(unix_ms: i64) -> VmValue {
     VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Deadline"), fields)))
 }
 
-pub(super) fn counter_value(value: i64) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![("value".to_string(), VmValue::Int(value))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Counter"), fields)))
-}
-
-pub(super) fn config_value(name: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![("name".to_string(), VmValue::string(name.into()))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::from("ConfigValue"),
-        fields,
-    )))
-}
-
-pub(super) fn config_rules_value(name: impl Into<String>, rule_count: i64) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("name".to_string(), VmValue::string(name.into())),
-        ("rule_count".to_string(), VmValue::Int(rule_count)),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Config"), fields)))
-}
-
-pub(super) fn rule_value(name: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![("name".to_string(), VmValue::string(name.into()))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Rule"), fields)))
-}
-
-pub(super) fn environment_value(has_parent: bool, has_function: bool) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("has_parent".to_string(), VmValue::Bool(has_parent)),
-        ("has_function".to_string(), VmValue::Bool(has_function)),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::from("Environment"),
-        fields,
-    )))
-}
-
-pub(super) fn function_object_value(has_closure: bool) -> VmValue {
-    let fields: Vec<(String, VmValue)> =
-        vec![("has_closure".to_string(), VmValue::Bool(has_closure))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::from("FunctionObject"),
-        fields,
-    )))
-}
-
-pub(super) fn config_store_value(name: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![("name".to_string(), VmValue::string(name.into()))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::from("ConfigStore"),
-        fields,
-    )))
-}
-
-pub(super) fn global_config_value(rule_count: i64) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![("rule_count".to_string(), VmValue::Int(rule_count))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::from("GlobalConfig"),
-        fields,
-    )))
-}
-
-pub(super) fn request_value(path: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![("path".to_string(), VmValue::string(path.into()))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Request"), fields)))
-}
-
-pub(super) fn response_value(status: i64, body: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("status".to_string(), VmValue::Int(status)),
-        ("body".to_string(), VmValue::string(body.into())),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Response"), fields)))
-}
-
 pub(super) fn http_request_value(
     method: impl Into<String>,
     url: impl Into<String>,
@@ -265,44 +190,6 @@ pub(super) fn tempdir_new_value(parent: PathBuf) -> Result<VmValue, VmValue> {
     Err(file_error_value(
         "could not allocate unique TempDir path".to_string(),
     ))
-}
-
-pub(super) fn image_value(
-    bytes: Vec<u8>,
-    width: Option<i64>,
-    height: Option<i64>,
-    operations: Vec<String>,
-) -> VmValue {
-    let mut fields: Vec<(String, VmValue)> =
-        vec![("bytes".to_string(), VmValue::Bytes(Rc::new(bytes)))];
-    fields.push((
-        "width".to_string(),
-        width
-            .map(|value| value_some(VmValue::Int(value)))
-            .unwrap_or_else(value_none),
-    ));
-    fields.push((
-        "height".to_string(),
-        height
-            .map(|value| value_some(VmValue::Int(value)))
-            .unwrap_or_else(value_none),
-    ));
-    fields.push((
-        "operations".to_string(),
-        VmValue::List(Rc::new(RefCell::new(
-            operations.into_iter().map(VmValue::string).collect(),
-        ))),
-    ));
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Image"), fields)))
-}
-
-pub(super) fn image_error_value(message: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> =
-        vec![("message".to_string(), VmValue::string(message.into()))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::from("ImageError"),
-        fields,
-    )))
 }
 
 pub(super) fn cancellation_source_value(id: i64) -> VmValue {
