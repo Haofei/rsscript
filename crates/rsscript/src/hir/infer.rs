@@ -4,6 +4,82 @@ use crate::semantic::ResolvedType;
 
 use super::*;
 
+/// Converts type arguments carried by the syntax callee spelling into the
+/// structural representation used by HIR inference. Callee type arguments are
+/// the sole remaining textual input here; inferred local types never round-trip
+/// through a display string.
+pub(crate) fn resolved_type_from_source(source: &str) -> ResolvedType {
+    let mut rest = source.trim();
+    let mut qualifiers = crate::semantic::TypeQualifiers::default();
+    loop {
+        if let Some(value) = rest.strip_prefix("fresh ").map(str::trim) {
+            qualifiers.fresh = true;
+            rest = value;
+        } else if let Some(value) = rest.strip_prefix("noescape ").map(str::trim) {
+            qualifiers.noescape = true;
+            rest = value;
+        } else if let Some(value) = rest.strip_prefix("owned ").map(str::trim) {
+            qualifiers.owned = true;
+            rest = value;
+        } else {
+            break;
+        }
+    }
+    if let Some(parameters) = rest.strip_prefix("Fn(")
+        && let Some(close) = matching_function_close(parameters)
+    {
+        let parameter_text = &parameters[..close];
+        let parameters = crate::text_util::split_top_level_type_args(parameter_text);
+        let (parameters, effects): (Vec<_>, Vec<_>) = parameters
+            .into_iter()
+            .filter(|parameter| !parameter.is_empty())
+            .map(|parameter| {
+                let (effect, parameter) = if let Some(parameter) = parameter.strip_prefix("read ") {
+                    (Some(crate::semantic::ResolvedParamEffect::Read), parameter)
+                } else if let Some(parameter) = parameter.strip_prefix("mut ") {
+                    (Some(crate::semantic::ResolvedParamEffect::Mut), parameter)
+                } else if let Some(parameter) = parameter.strip_prefix("take ") {
+                    (Some(crate::semantic::ResolvedParamEffect::Take), parameter)
+                } else {
+                    (None, parameter)
+                };
+                (resolved_type_from_source(parameter), effect)
+            })
+            .unzip();
+        let return_type = rest
+            .get("Fn(".len() + close + 1..)
+            .map(str::trim)
+            .and_then(|suffix| suffix.strip_prefix("->"))
+            .map(str::trim)
+            .filter(|suffix| !suffix.is_empty())
+            .map(resolved_type_from_source);
+        return ResolvedType::function(parameters, effects, return_type, qualifiers);
+    }
+    let mut resolved = ResolvedType::named(
+        type_root_name(rest),
+        type_arg_names(rest)
+            .unwrap_or_default()
+            .into_iter()
+            .map(resolved_type_from_source),
+    );
+    resolved.qualifiers = qualifiers;
+    resolved
+}
+
+fn matching_function_close(parameters: &str) -> Option<usize> {
+    let mut nested = 0usize;
+    for (index, character) in parameters.char_indices() {
+        match character {
+            '<' | '(' => nested = nested.saturating_add(1),
+            '>' => nested = nested.saturating_sub(1),
+            ')' if nested == 0 => return Some(index),
+            ')' => nested = nested.saturating_sub(1),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// Infer the type of a built-in `Option`/`Result` variant constructor call so an
 /// untyped local (`let o = Some(5)`) carries a type and downstream argument checks
 /// are not silently skipped. The variant's known payload position is filled from the
@@ -14,38 +90,46 @@ fn infer_enum_variant_type(
     hir: &Hir,
     variant: &str,
     args: &[crate::syntax::ast::CallArg],
-    value_types: &HashMap<String, String>,
-) -> Option<String> {
+    value_types: &HirValueTypes,
+) -> Option<ResolvedType> {
     let payload_type = |args: &[crate::syntax::ast::CallArg]| {
         args.first()
             .and_then(|arg| infer_hir_expr_type(hir, &arg.value, value_types))
     };
     match variant {
-        "Some" => Some(format!("Option<{}>", payload_type(args)?)),
-        "Ok" => Some(format!("Result<{}, E>", payload_type(args)?)),
-        "Err" => Some(format!("Result<T, {}>", payload_type(args)?)),
+        "Some" => Some(ResolvedType::named("Option", [payload_type(args)?])),
+        "Ok" => Some(ResolvedType::named(
+            "Result",
+            [payload_type(args)?, ResolvedType::named("E", [])],
+        )),
+        "Err" => Some(ResolvedType::named(
+            "Result",
+            [ResolvedType::named("T", []), payload_type(args)?],
+        )),
         // A user-declared sum variant constructs a value of its sum type, so a `Number(value: 5)`
         // call has type `Token` — letting the normal arg/binding type checks catch misuse.
-        _ => hir.sum_type_for_variant(variant).map(str::to_string),
+        _ => hir
+            .sum_type_for_variant(variant)
+            .map(|name| ResolvedType::named(name, [])),
     }
 }
 
 pub(crate) fn infer_hir_expr_type(
     hir: &Hir,
     expr: &Expr,
-    value_types: &HashMap<String, String>,
-) -> Option<String> {
+    value_types: &HirValueTypes,
+) -> Option<ResolvedType> {
     match expr {
-        Expr::Ident(name, _) => value_types
-            .get(name)
-            .cloned()
-            .or_else(|| hir.sum_type_for_variant(name).map(str::to_string)),
+        Expr::Ident(name, _) => value_types.get(name).cloned().or_else(|| {
+            hir.sum_type_for_variant(name)
+                .map(|name| ResolvedType::named(name, []))
+        }),
         Expr::Binary { .. } => None,
         Expr::Effect { value, .. } | Expr::Manage { value, .. } => {
             infer_hir_expr_type(hir, value, value_types)
         }
         Expr::Spawn { value, .. } => {
-            infer_hir_expr_type(hir, value, value_types).map(|ty| format!("Task<{ty}>"))
+            infer_hir_expr_type(hir, value, value_types).map(|ty| ResolvedType::named("Task", [ty]))
         }
         Expr::Await { value, .. } => infer_hir_expr_type(hir, value, value_types)
             .and_then(|ty| task_inner_type(&ty))
@@ -62,7 +146,7 @@ pub(crate) fn infer_hir_expr_type(
                     receiver, method, ..
                 } => {
                     if let Some(receiver_type) = infer_hir_expr_type(hir, receiver, value_types) {
-                        hir.resolve_receiver_call(&receiver_type, method, value_types)
+                        hir.resolve_receiver_call_structured(&receiver_type, method, value_types)
                             .0
                     } else {
                         CallResolution::Unknown
@@ -73,13 +157,10 @@ pub(crate) fn infer_hir_expr_type(
             match resolution {
                 CallResolution::Resolved { signature, .. } => {
                     infer_signature_return_type(hir, &signature, callee, args, value_types)
-                        .or_else(|| signature.return_ty.map(|ty| ty.to_string()))
+                        .or_else(|| signature.return_ty.clone())
                 }
                 CallResolution::Ambiguous { .. } | CallResolution::Unknown => match callee {
-                    Callee::Name(name) => value_types
-                        .get(name)
-                        .and_then(|type_name| fn_return_type(type_name))
-                        .map(|return_type| return_type.to_string()),
+                    Callee::Name(name) => value_types.get(name).and_then(fn_return_type),
                     Callee::Qualified { .. } | Callee::ReceiverCall { .. } => None,
                 },
                 CallResolution::EnumVariant => {
@@ -88,23 +169,24 @@ pub(crate) fn infer_hir_expr_type(
             }
         }
         Expr::Field { base, name, .. } => {
-            let base_type = hir.canonical_type_name(&infer_hir_expr_type(hir, base, value_types)?);
-            let type_info = hir.type_info(&base_type)?;
+            let base_type = infer_hir_expr_type(hir, base, value_types)?;
+            let canonical_base_type = hir.canonical_type_name(&base_type.to_string());
+            let type_info = hir.type_info(&canonical_base_type)?;
             let field = type_info.fields.get(name)?;
             Some(substituted_field_type(hir, type_info, &base_type, field))
         }
         Expr::Index { .. } => None,
-        Expr::Number(value, _) => Some(number_literal_type_name(value).to_string()),
-        Expr::String(_, _) | Expr::MultilineString(_, _) => Some("String".to_string()),
-        Expr::CharLiteral(_, _) => Some("Char".to_string()),
-        Expr::ObjectLiteral { .. } => Some("JsonLiteral".to_string()),
-        Expr::MapLiteral { .. } => Some("MapLiteral".to_string()),
+        Expr::Number(value, _) => Some(ResolvedType::named(number_literal_type_name(value), [])),
+        Expr::String(_, _) | Expr::MultilineString(_, _) => Some(ResolvedType::named("String", [])),
+        Expr::CharLiteral(_, _) => Some(ResolvedType::named("Char", [])),
+        Expr::ObjectLiteral { .. } => Some(ResolvedType::named("JsonLiteral", [])),
+        Expr::MapLiteral { .. } => Some(ResolvedType::named("MapLiteral", [])),
         Expr::ArrayLiteral { items, .. } => {
             let item_type = items
                 .first()
                 .and_then(|item| infer_hir_expr_type(hir, item, value_types))
-                .unwrap_or_else(|| "?".to_string());
-            Some(format!("List<{item_type}>"))
+                .unwrap_or_else(|| ResolvedType::named("?", []));
+            Some(ResolvedType::named("List", [item_type]))
         }
         Expr::Closure { .. } | Expr::Unknown(_) => None,
     }
@@ -115,8 +197,8 @@ fn infer_signature_return_type(
     signature: &FunctionSig,
     callee: &Callee,
     args: &[CallArg],
-    value_types: &HashMap<String, String>,
-) -> Option<String> {
+    value_types: &HirValueTypes,
+) -> Option<ResolvedType> {
     let return_type = signature.return_ty.clone()?;
     if signature.type_params.is_empty() {
         return None;
@@ -150,7 +232,7 @@ fn infer_signature_return_type(
     if substitutions.is_empty() {
         None
     } else {
-        Some(return_type.substitute(&substitutions).to_string())
+        Some(return_type.substitute(&substitutions))
     }
 }
 
@@ -171,7 +253,7 @@ fn collect_callee_type_substitutions(
         if generic_params.contains(param.as_str()) {
             substitutions
                 .entry(param.to_string())
-                .or_insert_with(|| ResolvedType::from_display(actual));
+                .or_insert_with(|| resolved_type_from_source(actual));
         }
     }
 }
@@ -204,7 +286,7 @@ fn collect_namespace_type_substitutions(
         if generic_params.contains(param) {
             substitutions
                 .entry(param.to_string())
-                .or_insert_with(|| ResolvedType::from_display(actual));
+                .or_insert_with(|| resolved_type_from_source(actual));
         }
     }
 }
@@ -213,7 +295,7 @@ fn collect_receiver_type_substitutions(
     hir: &Hir,
     signature: &FunctionSig,
     callee: &Callee,
-    value_types: &HashMap<String, String>,
+    value_types: &HirValueTypes,
     generic_params: &HashSet<&str>,
     substitutions: &mut BTreeMap<String, ResolvedType>,
 ) {
@@ -226,18 +308,17 @@ fn collect_receiver_type_substitutions(
     let Some(actual_type) = infer_hir_expr_type(hir, receiver, value_types) else {
         return;
     };
-    receiver_param.ty.clone().collect_substitutions(
-        &ResolvedType::from_display(&actual_type),
-        generic_params,
-        substitutions,
-    );
+    receiver_param
+        .ty
+        .clone()
+        .collect_substitutions(&actual_type, generic_params, substitutions);
 }
 
 fn collect_arg_type_substitutions(
     hir: &Hir,
     signature: &FunctionSig,
     args: &[CallArg],
-    value_types: &HashMap<String, String>,
+    value_types: &HirValueTypes,
     generic_params: &HashSet<&str>,
     substitutions: &mut BTreeMap<String, ResolvedType>,
 ) {
@@ -268,19 +349,15 @@ fn collect_arg_type_substitutions(
             };
             (actual_type, param.ty.clone())
         };
-        structural_pattern.collect_substitutions(
-            &ResolvedType::from_display(&actual_type),
-            generic_params,
-            substitutions,
-        );
+        structural_pattern.collect_substitutions(&actual_type, generic_params, substitutions);
     }
 }
 
 pub(super) fn infer_closure_return_type(
     hir: &Hir,
     body: &Block,
-    value_types: &HashMap<String, String>,
-) -> Option<String> {
+    value_types: &HirValueTypes,
+) -> Option<ResolvedType> {
     if let Some(statement) = body.statements.iter().next_back() {
         match statement {
             Stmt::Return(stmt) => {
@@ -288,11 +365,11 @@ pub(super) fn infer_closure_return_type(
                     .value
                     .as_ref()
                     .and_then(|value| infer_hir_expr_type(hir, value, value_types))
-                    .or_else(|| Some("Unit".to_string()));
+                    .or_else(|| Some(ResolvedType::named("Unit", [])));
             }
             Stmt::Expr(value) => return infer_hir_expr_type(hir, value, value_types),
             Stmt::Let(_) | Stmt::LetElse(_) | Stmt::Assign(_) => {
-                return Some("Unit".to_string());
+                return Some(ResolvedType::named("Unit", []));
             }
             Stmt::With { .. }
             | Stmt::If { .. }
@@ -311,14 +388,14 @@ pub(super) fn infer_closure_return_type(
             | Stmt::Unknown(_) => return None,
         }
     }
-    Some("Unit".to_string())
+    Some(ResolvedType::named("Unit", []))
 }
 
 fn infer_arg_expr_type(
     hir: &Hir,
     expr: &Expr,
-    value_types: &HashMap<String, String>,
-) -> Option<String> {
+    value_types: &HirValueTypes,
+) -> Option<ResolvedType> {
     match expr {
         Expr::Effect { value, .. }
         | Expr::Manage { value, .. }
@@ -329,11 +406,15 @@ fn infer_arg_expr_type(
         Expr::Call { .. } => infer_hir_expr_type(hir, expr, value_types),
         Expr::Closure { params, body, .. } => infer_closure_return_type(hir, body, value_types)
             .map(|return_type| {
-                let params = (0..params.len())
-                    .map(|_| "?")
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("noescape Fn({params}) -> {return_type}")
+                ResolvedType::function(
+                    (0..params.len()).map(|_| ResolvedType::named("?", [])),
+                    (0..params.len()).map(|_| None),
+                    Some(return_type),
+                    crate::semantic::TypeQualifiers {
+                        noescape: true,
+                        ..crate::semantic::TypeQualifiers::default()
+                    },
+                )
             }),
         Expr::Match { .. } => infer_hir_expr_type(hir, expr, value_types),
         Expr::ObjectLiteral { .. } | Expr::MapLiteral { .. } | Expr::ArrayLiteral { .. } => {
@@ -342,9 +423,9 @@ fn infer_arg_expr_type(
         Expr::Field { .. } => infer_hir_expr_type(hir, expr, value_types),
         // Scalar literals carry a type so generic construction can unify it with a
         // type parameter (`Pair(item0: 1)` -> `A = Int`).
-        Expr::Number(value, _) => Some(number_literal_type_name(value).to_string()),
-        Expr::String(_, _) | Expr::MultilineString(_, _) => Some("String".to_string()),
-        Expr::CharLiteral(_, _) => Some("Char".to_string()),
+        Expr::Number(value, _) => Some(ResolvedType::named(number_literal_type_name(value), [])),
+        Expr::String(_, _) | Expr::MultilineString(_, _) => Some(ResolvedType::named("String", [])),
+        Expr::CharLiteral(_, _) => Some(ResolvedType::named("Char", [])),
         Expr::Index { .. } | Expr::Binary { .. } | Expr::Unknown(_) => None,
     }
 }
@@ -355,69 +436,58 @@ fn infer_arg_expr_type(
 pub(super) fn substituted_field_type(
     _hir: &Hir,
     type_info: &TypeInfo,
-    base_type: &str,
+    base_type: &ResolvedType,
     field: &FieldInfo,
-) -> String {
-    let args = type_arg_names(base_type).unwrap_or_default();
+) -> ResolvedType {
+    let args = base_type.arguments();
     if args.is_empty() || type_info.type_params.is_empty() {
-        return field.ty.to_string();
+        return field.ty.clone();
     }
     let substitutions: BTreeMap<String, ResolvedType> = type_info
         .type_params
         .iter()
         .cloned()
-        .zip(args.into_iter().map(ResolvedType::from_display))
+        .zip(args.iter().cloned())
         .collect();
-    field.ty.substitute(&substitutions).to_string()
+    field.ty.substitute(&substitutions)
 }
 
 use crate::text_util::builtin_generic_type_params;
 
-pub(super) fn capability_protocol(type_name: &str) -> Option<String> {
-    ResolvedType::from_display(type_name)
+pub(super) fn capability_protocol(type_name: &ResolvedType) -> Option<String> {
+    type_name
         .named_argument("Capability", 0)
         .map(ToString::to_string)
 }
 
-fn fn_return_type(type_name: &str) -> Option<ResolvedType> {
-    ResolvedType::from_display(type_name)
-        .function_return()
-        .cloned()
+fn fn_return_type(type_name: &ResolvedType) -> Option<ResolvedType> {
+    type_name.function_return().cloned()
 }
 
-fn result_ok_type(type_name: &str) -> Option<String> {
-    ResolvedType::from_display(type_name)
+fn result_ok_type(type_name: &ResolvedType) -> Option<ResolvedType> {
+    type_name
         .named_argument("Result", 0)
         .cloned()
         .map(ResolvedType::without_fresh)
-        .map(|ty| ty.to_string())
 }
 
-pub(super) fn list_element_type(type_name: &str) -> Option<String> {
-    ResolvedType::from_display(type_name)
-        .named_argument("List", 0)
-        .map(ToString::to_string)
+pub(super) fn list_element_type(type_name: &ResolvedType) -> Option<ResolvedType> {
+    type_name.named_argument("List", 0).cloned()
 }
 
-pub(super) fn stream_item_type(type_name: &str) -> Option<String> {
-    ResolvedType::from_display(type_name)
-        .named_argument("Stream", 0)
-        .map(ToString::to_string)
+pub(super) fn stream_item_type(type_name: &ResolvedType) -> Option<ResolvedType> {
+    type_name.named_argument("Stream", 0).cloned()
 }
 
-fn task_inner_type(type_name: &str) -> Option<String> {
-    ResolvedType::from_display(type_name)
-        .named_argument("Task", 0)
-        .map(ToString::to_string)
+fn task_inner_type(type_name: &ResolvedType) -> Option<ResolvedType> {
+    type_name.named_argument("Task", 0).cloned()
 }
 
 pub(super) fn match_pattern_binding_type(
     pattern: &MatchPattern,
-    value_type: Option<&str>,
-) -> Option<(String, String)> {
-    let value_type = value_type.map(ResolvedType::from_display);
-    match_pattern_binding_resolved_type(pattern, value_type.as_ref())
-        .map(|(name, ty)| (name, ty.to_string()))
+    value_type: Option<&ResolvedType>,
+) -> Option<(String, ResolvedType)> {
+    match_pattern_binding_resolved_type(pattern, value_type)
 }
 
 fn match_pattern_binding_resolved_type(
@@ -454,13 +524,16 @@ fn match_pattern_binding_resolved_type(
 pub(super) fn match_pattern_binding_types(
     hir: &Hir,
     pattern: &MatchPattern,
-    value_type: Option<&str>,
-) -> Vec<(String, String)> {
-    let canonical_value_type = value_type.map(|ty| hir.canonical_type_name(ty));
-    let value_type = canonical_value_type.as_deref();
+    value_type: Option<&ResolvedType>,
+) -> Vec<(String, ResolvedType)> {
+    let canonical_value_type = value_type.map(|ty| {
+        let canonical = hir.canonical_type_name(&ty.to_string());
+        resolved_type_from_source(&canonical)
+    });
+    let value_type = canonical_value_type.as_ref();
     if let MatchPattern::Binding { name, .. } = pattern {
         return value_type
-            .map(|ty| vec![(name.clone(), ty.to_string())])
+            .map(|ty| vec![(name.clone(), ty.clone())])
             .unwrap_or_default();
     }
     if let Some(binding) = match_pattern_binding_type(pattern, value_type) {
@@ -473,7 +546,7 @@ pub(super) fn match_pattern_binding_types(
         let Some(value_type) = value_type else {
             return Vec::new();
         };
-        let root = type_root_name(value_type);
+        let root = value_type.root_name().unwrap_or_default();
         if hir
             .sum_type_for_variant(name)
             .is_some_and(|sum| sum == root)
@@ -484,12 +557,8 @@ pub(super) fn match_pattern_binding_types(
             // by index.
             let mut result = Vec::new();
             for (binding, field_type) in bindings.iter().zip(field_types.iter()) {
-                let field_type_name = field_type.ty.substitute(&substitutions).to_string();
-                result.extend(match_pattern_binding_types(
-                    hir,
-                    binding,
-                    Some(&field_type_name),
-                ));
+                let field_type = field_type.ty.substitute(&substitutions);
+                result.extend(match_pattern_binding_types(hir, binding, Some(&field_type)));
             }
             return result;
         }
@@ -507,19 +576,17 @@ pub(super) fn match_pattern_binding_types(
         };
         // Element patterns bind at the list's element type `T` (`List<T>`); a
         // bound rest segment is itself a `List<T>`.
-        let element_type = ResolvedType::from_display(value_type)
-            .named_argument("List", 0)
-            .map(ToString::to_string);
+        let element_type = value_type.named_argument("List", 0).cloned();
         let mut bindings = Vec::new();
         for element in prefix.iter().chain(suffix) {
             bindings.extend(match_pattern_binding_types(
                 hir,
                 element,
-                element_type.as_deref(),
+                element_type.as_ref(),
             ));
         }
         if let Some(Some(rest_name)) = rest {
-            bindings.push((rest_name.clone(), value_type.to_string()));
+            bindings.push((rest_name.clone(), value_type.clone()));
         }
         return bindings;
     }
@@ -531,7 +598,7 @@ pub(super) fn match_pattern_binding_types(
         return Vec::new();
     };
 
-    let root = type_root_name(value_type);
+    let root = value_type.root_name().unwrap_or_default();
     let field_types = if hir
         .sum_type_for_variant(name)
         .is_some_and(|sum| sum == root)
@@ -559,12 +626,12 @@ pub(super) fn match_pattern_binding_types(
 /// Build a substitution from a generic type's declared parameters to the
 /// concrete arguments in `value_type` (`Pair<Int, Int>` -> `{A: Int, B: Int}`),
 /// so match-bound fields carry their resolved element types.
-fn binding_substitutions(hir: &Hir, value_type: &str) -> BTreeMap<String, ResolvedType> {
-    let args = type_arg_names(value_type).unwrap_or_default();
+fn binding_substitutions(hir: &Hir, value_type: &ResolvedType) -> BTreeMap<String, ResolvedType> {
+    let args = value_type.arguments();
     if args.is_empty() {
         return BTreeMap::new();
     }
-    let root = type_root_name(value_type);
+    let root = value_type.root_name().unwrap_or_default();
     let params = hir
         .type_info(root)
         .map(|type_info| type_info.type_params.to_vec())
@@ -573,10 +640,7 @@ fn binding_substitutions(hir: &Hir, value_type: &str) -> BTreeMap<String, Resolv
                 .map(|params| params.into_iter().map(String::from).collect())
         })
         .unwrap_or_default();
-    params
-        .into_iter()
-        .zip(args.into_iter().map(ResolvedType::from_display))
-        .collect()
+    params.into_iter().zip(args.iter().cloned()).collect()
 }
 
 fn collect_struct_pattern_binding_types(
@@ -584,7 +648,7 @@ fn collect_struct_pattern_binding_types(
     fields: &[crate::syntax::ast::MatchFieldPattern],
     field_types: &[FieldInfo],
     substitutions: &BTreeMap<String, ResolvedType>,
-) -> Vec<(String, String)> {
+) -> Vec<(String, ResolvedType)> {
     let mut bindings = Vec::new();
     for field in fields.iter().filter(|field| !field.ignored) {
         let Some(field_type) = field_types
@@ -593,15 +657,11 @@ fn collect_struct_pattern_binding_types(
         else {
             continue;
         };
-        let field_type_name = field_type.ty.substitute(substitutions).to_string();
+        let field_type = field_type.ty.substitute(substitutions);
         if let Some(pattern) = &field.pattern {
-            bindings.extend(match_pattern_binding_types(
-                hir,
-                pattern,
-                Some(&field_type_name),
-            ));
+            bindings.extend(match_pattern_binding_types(hir, pattern, Some(&field_type)));
         } else if let Some(binding) = &field.binding {
-            bindings.push((binding.clone(), field_type_name));
+            bindings.push((binding.clone(), field_type));
         }
     }
     bindings
@@ -610,7 +670,7 @@ fn collect_struct_pattern_binding_types(
 fn classify_block_return_expr(
     hir: &Hir,
     block: &Block,
-    value_types: &HashMap<String, String>,
+    value_types: &HirValueTypes,
 ) -> HirReturnProof {
     let Some(statement) = block.statements.iter().next_back() else {
         return HirReturnProof::NoValue;
@@ -645,7 +705,7 @@ fn classify_block_return_expr(
 pub(super) fn classify_return_expr(
     hir: &Hir,
     expr: &Expr,
-    value_types: &HashMap<String, String>,
+    value_types: &HirValueTypes,
 ) -> HirReturnProof {
     match expr {
         // `true` / `false` are boolean literals (lexed as identifiers).
@@ -669,7 +729,7 @@ pub(super) fn classify_return_expr(
                 } => infer_hir_expr_type(hir, receiver, value_types).map_or(
                     CallResolution::Unknown,
                     |receiver_type| {
-                        hir.resolve_receiver_call(&receiver_type, method, value_types)
+                        hir.resolve_receiver_call_structured(&receiver_type, method, value_types)
                             .0
                     },
                 ),

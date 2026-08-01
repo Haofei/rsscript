@@ -97,13 +97,16 @@ impl<'a> AssignChecker<'a> {
     /// A flattened view of every currently-visible binding's type, with inner
     /// scopes shadowing outer ones — including an untyped inner binding hiding
     /// an outer type — for inferring the type of a value expression.
-    fn current_value_types(&self) -> HashMap<String, String> {
+    fn current_value_types(&self) -> crate::hir::HirValueTypes {
         let mut value_types = HashMap::new();
         for scope in &self.scopes {
             for (name, entry) in scope {
                 match &entry.type_name {
                     Some(type_name) => {
-                        value_types.insert(name.clone(), type_name.clone());
+                        value_types.insert(
+                            name.clone(),
+                            crate::hir::resolved_type_from_source(type_name),
+                        );
                     }
                     None => {
                         value_types.remove(name);
@@ -369,6 +372,7 @@ impl<'a> AssignChecker<'a> {
 
     fn infer_type(&self, value: &Expr) -> Option<String> {
         crate::hir::infer_hir_expr_type(self.hir, value, &self.current_value_types())
+            .map(|ty| ty.to_string())
     }
 
     fn validate_assignment(&mut self, stmt: &AssignStmt) {

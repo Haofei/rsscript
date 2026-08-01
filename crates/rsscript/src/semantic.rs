@@ -6,7 +6,9 @@ use crate::syntax::ast::Program;
 
 #[path = "semantic_types.rs"]
 mod semantic_types;
-pub(crate) use semantic_types::{ResolvedType, SemanticTypeFacts};
+pub(crate) use semantic_types::{
+    ResolvedParamEffect, ResolvedType, SemanticTypeFacts, TypeQualifiers,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrontendStopReason {

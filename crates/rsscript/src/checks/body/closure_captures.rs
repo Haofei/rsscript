@@ -336,8 +336,8 @@ pub(super) fn check_local_class_bindings(
 ) {
     for binding in &body.bindings {
         if binding.kind == HirBindingKind::LocalLet
-            && binding.type_name.as_deref().is_some_and(|type_name| {
-                analyzer.hir.type_kind(type_name) == Some(HirTypeKind::Class)
+            && binding.ty.as_ref().is_some_and(|ty| {
+                analyzer.hir.type_kind(&ty.to_string()) == Some(HirTypeKind::Class)
             })
         {
             local_class_binding_diagnostic(analyzer, &binding.name, binding.span.clone());

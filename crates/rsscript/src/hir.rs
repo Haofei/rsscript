@@ -174,6 +174,8 @@ pub struct HirBinding {
     pub kind: HirBindingKind,
     pub effect: Option<ParamEffect>,
     pub span: Span,
+    pub ty: Option<ResolvedType>,
+    /// Rendered compatibility projection for consumers not yet structural.
     pub type_name: Option<String>,
 }
 
@@ -182,7 +184,13 @@ pub struct HirFieldAccess {
     pub function_name: String,
     pub name: String,
     pub span: Span,
+    pub base_ty: Option<ResolvedType>,
+    pub ty: Option<ResolvedType>,
+    /// Compatibility projection for executable backends that have not yet
+    /// migrated to structural HIR types. Semantic analysis must use `base_ty`.
     pub base_type: Option<String>,
+    /// Compatibility projection for executable backends that have not yet
+    /// migrated to structural HIR types. Semantic analysis must use `ty`.
     pub type_name: Option<String>,
     pub is_handle: bool,
     pub is_weak: bool,
@@ -241,7 +249,11 @@ pub enum HirStmt {
         kind: HirBindingKind,
         name: String,
         value: Option<HirExpr>,
+        ty: Option<ResolvedType>,
+        value_ty: Option<ResolvedType>,
+        /// Rendered compatibility projection for executable backends.
         type_name: Option<String>,
+        /// Rendered compatibility projection for executable backends.
         value_type_name: Option<String>,
         is_async: bool,
         span: Span,
@@ -302,6 +314,12 @@ pub enum HirStmt {
     Expr(HirExpr),
     Unknown(Span),
 }
+
+/// The structural local type environment carried while lowering one HIR body.
+///
+/// It deliberately contains no rendered types: source spelling belongs to the
+/// syntax tree and diagnostic rendering, not to semantic propagation.
+pub(crate) type HirValueTypes = HashMap<String, ResolvedType>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HirMatchArm {
@@ -507,7 +525,7 @@ pub struct Hir {
 mod infer;
 mod lower;
 
-pub(crate) use infer::infer_hir_expr_type;
+pub(crate) use infer::{infer_hir_expr_type, resolved_type_from_source};
 pub(crate) use lower::assign_target_reads;
 
 // Re-exported so each sibling submodule (which `use super::*`) can reach the

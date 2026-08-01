@@ -250,7 +250,7 @@ impl Hir {
             let mut value_types = type_decl
                 .fields
                 .iter()
-                .map(|field| (field.name.clone(), type_ref_name(&field.ty)))
+                .map(|field| (field.name.clone(), ResolvedType::from_type_ref(&field.ty)))
                 .collect::<HashMap<_, _>>();
             let body = lower_hir_block(
                 self,
@@ -567,7 +567,7 @@ impl Hir {
                 candidates.push((protocol.clone(), sig.clone()));
             }
         }
-        if let Some(protocol) = capability_protocol(receiver_type)
+        if let Some(protocol) = capability_protocol(&ResolvedType::from_display(receiver_type))
             && let Some(sig) = self.resolve_function(Some(&protocol), method)
         {
             candidates.push((protocol.to_string(), sig.clone()));
@@ -599,6 +599,21 @@ impl Hir {
         }
 
         candidates
+    }
+
+    /// Structural HIR path for receiver resolution. Display strings are only
+    /// projected at the legacy resolver boundary used by review/backends.
+    pub(crate) fn resolve_receiver_call_structured(
+        &self,
+        receiver_type: &ResolvedType,
+        method: &str,
+        value_types: &HirValueTypes,
+    ) -> (CallResolution, Option<String>) {
+        let display_types = value_types
+            .iter()
+            .map(|(name, ty)| (name.clone(), ty.to_string()))
+            .collect();
+        self.resolve_receiver_call(&receiver_type.to_string(), method, &display_types)
     }
 
     pub(in crate::hir) fn insert_function(&mut self, signature: FunctionSig) {

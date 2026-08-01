@@ -99,8 +99,9 @@ This table records the current implementation batch for the refactoring work in
 | R34 | Modular self-host checker | Complete | The checker entry owns orchestration only; support, output, type-model, and diagnostic-family modules load transitively once and preserve diagnostic order |
 | R35 | Native translation post-pass decomposition | Complete | Loop-region discovery and JIT post-passes have dedicated modules while translation order, OSR, deopt, and JIT entrypoints remain unchanged |
 | R36 | Immutable Register-VM execution plans | Complete | Evaluation snapshots limits, output mode, tier policy, native deopt/OSR controls, and compile admission before execution starts |
-| R39 | VM JIT module-boundary convergence | Complete | Deopt state and JIT test domains are real Rust modules with explicit visibility instead of textual `include!` composition |
+| R37 | Structural HIR local type flow | Complete | HIR lowering and local semantic flow carry `ResolvedType`; rendered type names are compatibility projections only |
 | R38 | Compatibility runtime ownership convergence | Complete | Only the generated-ABI compatibility module may obtain the weak process-wide runtime factory; canonical work stays explicitly service-owned |
+| R39 | VM JIT module-boundary convergence | Complete | Deopt state and JIT test domains are real Rust modules with explicit visibility instead of textual `include!` composition |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -364,18 +365,26 @@ and native compile-admission environment values are captured before a VM starts.
 Mutable work counters, caches, and cancellation state remain execution state;
 JIT and self-host behavior and fallback ordering are unchanged.
 
-R39 removes the remaining textual composition at the VM JIT's deopt and test
-boundaries. `deopt` now owns its private fallback helper and explicitly exports
-the public deoptimization model; each test domain is an ordinary child module
-with explicit access to the shared fixture surface. The validation/codegen
-boundary test asserts those module declarations so later changes cannot silently
-revert to file inclusion.
+R37 makes structural `ResolvedType` the canonical representation while HIR
+lowers parameters, locals, `let` statements, pattern bindings, loop items, and
+field accesses. Type inference, generic substitution, receiver resolution, and
+local-flow facts use the structural environment directly. The existing rendered
+type-name fields remain deliberately as one-way compatibility projections for
+diagnostics and executable backends that have not yet migrated; they are never
+parsed back into semantic type facts.
 
 R38 narrows the remaining process-wide runtime lookup to a private factory in
 the generated-ABI compatibility module. Compatibility contexts, process
 permits, and pending tasks use named bridge functions; canonical operations keep
 their explicit `RuntimeServices` owner. Runtime architecture tests prohibit the
 core operation modules from reaching into that registry directly.
+
+R39 removes the remaining textual composition at the VM JIT's deopt and test
+boundaries. `deopt` now owns its private fallback helper and explicitly exports
+the public deoptimization model; each test domain is an ordinary child module
+with explicit access to the shared fixture surface. The validation/codegen
+boundary test asserts those module declarations so later changes cannot silently
+revert to file inclusion.
 
 ## Experimental Status
 

@@ -51,11 +51,12 @@ pub(crate) fn check(analyzer: &mut Analyzer<'_>) {
                 .bindings
                 .iter()
                 .filter_map(|binding| {
-                    binding.type_name.as_deref().and_then(|type_name| {
-                        is_fn_type(type_name).then_some((
+                    binding.ty.as_ref().and_then(|ty| {
+                        let type_name = ty.to_string();
+                        is_fn_type(&type_name).then_some((
                             binding.name.clone(),
                             CallbackBinding {
-                                type_name: type_name.to_string(),
+                                type_name,
                                 span: binding.span.clone(),
                             },
                         ))
@@ -239,13 +240,19 @@ fn check_block(
         match statement {
             HirStmt::Let {
                 value: Some(value),
-                type_name,
-                value_type_name,
+                ty,
+                value_ty,
                 name,
                 span,
                 ..
             } => {
-                check_binding_type(analyzer, name, type_name, value_type_name, value);
+                check_binding_type(
+                    analyzer,
+                    name,
+                    &ty.as_ref().map(ToString::to_string),
+                    &value_ty.as_ref().map(ToString::to_string),
+                    value,
+                );
                 check_noescape_escape(
                     analyzer,
                     value,

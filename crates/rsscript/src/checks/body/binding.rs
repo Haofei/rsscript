@@ -227,20 +227,17 @@ pub(super) fn check_uninferable_bindings_in_stmt(
 ) {
     match statement {
         // A bare `Ok`/`Err`/`None` with no user annotation (the HIR sets
-        // `type_name == value_type_name` exactly when the user did not annotate —
-        // an annotation would override `type_name` with a placeholder-free type),
+        // `ty == value_ty` exactly when the user did not annotate — an annotation
+        // overrides the binding type with a placeholder-free structural type),
         // bound to a name that is never used, so nothing pins the open parameter.
         HirStmt::Let {
             name,
             value: Some(value),
-            type_name,
-            value_type_name,
+            ty,
+            value_ty,
             span,
             ..
-        } if type_name == value_type_name
-            && !uses.contains(name)
-            && open_variant_constructor(value) =>
-        {
+        } if ty == value_ty && !uses.contains(name) && open_variant_constructor(value) => {
             analyzer.diagnostics.push(
                 Diagnostic::error(
                     code::UNINFERABLE_BINDING_TYPE,

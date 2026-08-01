@@ -96,7 +96,7 @@ pub(super) fn collect_function_body_facts(
                 span: param.span.clone(),
             });
         }
-        let param_type = type_ref_name(&param.ty);
+        let param_type = ResolvedType::from_type_ref(&param.ty);
         value_types.insert(param.name.clone(), param_type.clone());
         facts.bindings.push(HirBinding {
             function_name: function.name.clone(),
@@ -104,7 +104,8 @@ pub(super) fn collect_function_body_facts(
             kind: HirBindingKind::Param,
             effect: effective_param_effect(param),
             span: param.span.clone(),
-            type_name: Some(param_type),
+            ty: Some(param_type.clone()),
+            type_name: Some(param_type.to_string()),
         });
     }
     // Store protocol bounds for receiver-call shorthand resolution.
@@ -113,7 +114,7 @@ pub(super) fn collect_function_body_facts(
         if let Some(GenericBound::Protocol(protocol)) = &type_param.bound {
             value_types.insert(
                 format!("__protocol_bound__{}", type_param.name),
-                protocol.clone(),
+                ResolvedType::named(protocol, []),
             );
         }
     }
@@ -134,7 +135,7 @@ pub(super) fn lower_hir_block(
     hir: &Hir,
     function_name: &str,
     block: &Block,
-    value_types: &mut HashMap<String, String>,
+    value_types: &mut HirValueTypes,
 ) -> HirBlock {
     let mut statements = Vec::new();
     for statement in &block.statements {
@@ -150,16 +151,17 @@ pub(super) fn lower_hir_stmts(
     hir: &Hir,
     function_name: &str,
     statement: &Stmt,
-    value_types: &mut HashMap<String, String>,
+    value_types: &mut HirValueTypes,
 ) -> Vec<HirStmt> {
     match statement {
         Stmt::LetElse(stmt) => {
             let value_type_name = infer_hir_expr_type(hir, &stmt.value, value_types);
-            let canonical_value_type = value_type_name
-                .as_deref()
-                .map(|ty| hir.canonical_type_name(ty));
+            let canonical_value_type = value_type_name.as_ref().map(|ty| {
+                let canonical = hir.canonical_type_name(&ty.to_string());
+                ResolvedType::named(&canonical, [])
+            });
             let binding_type_name =
-                match_pattern_binding_type(&stmt.pattern, canonical_value_type.as_deref())
+                match_pattern_binding_type(&stmt.pattern, canonical_value_type.as_ref())
                     .map(|(_, type_name)| type_name);
             let mut statements = vec![HirStmt::Match {
                 value: lower_hir_expr(hir, function_name, &stmt.value, value_types),
@@ -194,8 +196,10 @@ pub(super) fn lower_hir_stmts(
                     kind: HirBindingKind::ManagedLet,
                     name: stmt.binding_name.clone(),
                     value: None,
-                    type_name: binding_type_name,
-                    value_type_name,
+                    ty: binding_type_name.clone(),
+                    value_ty: value_type_name.clone(),
+                    type_name: binding_type_name.map(|ty| ty.to_string()),
+                    value_type_name: value_type_name.map(|ty| ty.to_string()),
                     is_async: false,
                     span: stmt.span.clone(),
                 });
@@ -416,7 +420,7 @@ pub(super) fn lower_hir_stmt(
     hir: &Hir,
     function_name: &str,
     statement: &Stmt,
-    value_types: &mut HashMap<String, String>,
+    value_types: &mut HirValueTypes,
 ) -> HirStmt {
     match statement {
         Stmt::Let(stmt) => {
@@ -424,23 +428,28 @@ pub(super) fn lower_hir_stmt(
                 .value
                 .as_ref()
                 .and_then(|value| infer_hir_expr_type(hir, value, value_types));
-            let declared_type_name = stmt.type_annotation.as_ref().map(type_ref_name);
-            let type_name = declared_type_name
+            let declared_type_name = stmt
+                .type_annotation
+                .as_ref()
+                .map(ResolvedType::from_type_ref);
+            let ty = declared_type_name
                 .clone()
                 .or_else(|| value_type_name.clone());
             let value = stmt
                 .value
                 .as_ref()
                 .map(|value| lower_hir_expr(hir, function_name, value, value_types));
-            if let Some(type_name) = &type_name {
-                value_types.insert(stmt.name.clone(), type_name.clone());
+            if let Some(ty) = &ty {
+                value_types.insert(stmt.name.clone(), ty.clone());
             }
             HirStmt::Let {
                 kind: hir_binding_kind(stmt.kind),
                 name: stmt.name.clone(),
                 value,
-                type_name,
-                value_type_name,
+                ty: ty.clone(),
+                value_ty: value_type_name.clone(),
+                type_name: ty.map(|ty| ty.to_string()),
+                value_type_name: value_type_name.map(|ty| ty.to_string()),
                 is_async: stmt.is_async,
                 span: stmt.span.clone(),
             }
@@ -500,9 +509,9 @@ pub(super) fn lower_hir_stmt(
         Stmt::For(stmt) => {
             let iterable_type = infer_hir_expr_type(hir, &stmt.iterable, value_types);
             let item_type = if stmt.is_async {
-                iterable_type.as_deref().and_then(stream_item_type)
+                iterable_type.as_ref().and_then(stream_item_type)
             } else {
-                iterable_type.as_deref().and_then(list_element_type)
+                iterable_type.as_ref().and_then(list_element_type)
             };
             let mut body_types = value_types.clone();
             if let Some(item_type) = &item_type {
@@ -511,8 +520,8 @@ pub(super) fn lower_hir_stmt(
             HirStmt::For {
                 binding: stmt.binding.clone(),
                 iterable: lower_hir_expr(hir, function_name, &stmt.iterable, value_types),
-                iterable_type_name: iterable_type,
-                item_type_name: item_type,
+                iterable_type_name: iterable_type.map(|ty| ty.to_string()),
+                item_type_name: item_type.map(|ty| ty.to_string()),
                 is_async: stmt.is_async,
                 body: lower_hir_block(hir, function_name, &stmt.body, &mut body_types),
                 span: stmt.span.clone(),
@@ -527,7 +536,7 @@ pub(super) fn lower_hir_stmt(
                 .map(|arm| {
                     let mut arm_types = value_types.clone();
                     for (binding, type_name) in
-                        match_pattern_binding_types(hir, &arm.pattern, value_type.as_deref())
+                        match_pattern_binding_types(hir, &arm.pattern, value_type.as_ref())
                     {
                         arm_types.insert(binding, type_name);
                     }
@@ -603,7 +612,7 @@ pub(super) fn lower_hir_expr(
     hir: &Hir,
     function_name: &str,
     expr: &Expr,
-    value_types: &HashMap<String, String>,
+    value_types: &HirValueTypes,
 ) -> HirExpr {
     match expr {
         // A reference to a top-level `const` is inlined to its literal value: the
@@ -617,7 +626,7 @@ pub(super) fn lower_hir_expr(
         }
         Expr::Ident(name, span) => HirExpr::Ident {
             name: name.clone(),
-            type_name: value_types.get(name).cloned(),
+            type_name: value_types.get(name).map(ToString::to_string),
             span: span.clone(),
         },
         Expr::Number(value, span) => HirExpr::Number {
@@ -645,7 +654,7 @@ pub(super) fn lower_hir_expr(
                     span: field.span.clone(),
                 })
                 .collect(),
-            type_name: infer_hir_expr_type(hir, expr, value_types),
+            type_name: infer_hir_expr_type(hir, expr, value_types).map(|ty| ty.to_string()),
             span: span.clone(),
         },
         Expr::MapLiteral { entries, span } => HirExpr::MapLiteral {
@@ -657,7 +666,7 @@ pub(super) fn lower_hir_expr(
                     span: entry.span.clone(),
                 })
                 .collect(),
-            type_name: infer_hir_expr_type(hir, expr, value_types),
+            type_name: infer_hir_expr_type(hir, expr, value_types).map(|ty| ty.to_string()),
             span: span.clone(),
         },
         Expr::ArrayLiteral { items, span } => HirExpr::ArrayLiteral {
@@ -665,7 +674,7 @@ pub(super) fn lower_hir_expr(
                 .iter()
                 .map(|item| lower_hir_expr(hir, function_name, item, value_types))
                 .collect(),
-            type_name: infer_hir_expr_type(hir, expr, value_types),
+            type_name: infer_hir_expr_type(hir, expr, value_types).map(|ty| ty.to_string()),
             span: span.clone(),
         },
         Expr::Binary {
@@ -681,10 +690,12 @@ pub(super) fn lower_hir_expr(
         },
         Expr::Field { base, name, span } => {
             let base_type = infer_hir_expr_type(hir, base, value_types);
-            let resolved = base_type.as_deref().and_then(|type_name| {
-                let type_info = hir.type_info(type_name)?;
+            let base_type_display = base_type.as_ref().map(ToString::to_string);
+            let resolved = base_type.as_ref().and_then(|ty| {
+                let canonical = hir.canonical_type_name(&ty.to_string());
+                let type_info = hir.type_info(&canonical)?;
                 let field = type_info.fields.get(name)?;
-                Some((type_info, type_name, field))
+                Some((type_info, ty, field))
             });
             HirExpr::Field {
                 base: Box::new(lower_hir_expr(hir, function_name, base, value_types)),
@@ -693,13 +704,17 @@ pub(super) fn lower_hir_expr(
                     function_name: function_name.to_string(),
                     name: name.clone(),
                     span: span.clone(),
-                    type_name: resolved.map(|(type_info, type_name, field)| {
-                        substituted_field_type(hir, type_info, type_name, field)
+                    ty: resolved.map(|(type_info, ty, field)| {
+                        substituted_field_type(hir, type_info, ty, field)
                     }),
                     is_handle: resolved
                         .is_some_and(|(_, _, field)| field.is_handle || field.is_weak),
                     is_weak: resolved.is_some_and(|(_, _, field)| field.is_weak),
-                    base_type,
+                    base_ty: base_type.clone(),
+                    base_type: base_type_display,
+                    type_name: resolved.map(|(type_info, ty, field)| {
+                        substituted_field_type(hir, type_info, ty, field).to_string()
+                    }),
                 },
                 span: span.clone(),
             }
@@ -720,28 +735,28 @@ pub(super) fn lower_hir_expr(
             effect: param_effect_from_data_effect(*effect),
             value: Box::new(lower_hir_expr(hir, function_name, value, value_types)),
             events: effect_events_for_expr(function_name, expr),
-            type_name: infer_hir_expr_type(hir, expr, value_types),
+            type_name: infer_hir_expr_type(hir, expr, value_types).map(|ty| ty.to_string()),
             span: span.clone(),
         },
         Expr::Manage { value, span } => HirExpr::Manage {
             value: Box::new(lower_hir_expr(hir, function_name, value, value_types)),
             events: effect_events_for_expr(function_name, expr),
-            type_name: infer_hir_expr_type(hir, expr, value_types),
+            type_name: infer_hir_expr_type(hir, expr, value_types).map(|ty| ty.to_string()),
             span: span.clone(),
         },
         Expr::Spawn { value, span } => HirExpr::Spawn {
             value: Box::new(lower_hir_expr(hir, function_name, value, value_types)),
-            type_name: infer_hir_expr_type(hir, expr, value_types),
+            type_name: infer_hir_expr_type(hir, expr, value_types).map(|ty| ty.to_string()),
             span: span.clone(),
         },
         Expr::Await { value, span } => HirExpr::Await {
             value: Box::new(lower_hir_expr(hir, function_name, value, value_types)),
-            type_name: infer_hir_expr_type(hir, expr, value_types),
+            type_name: infer_hir_expr_type(hir, expr, value_types).map(|ty| ty.to_string()),
             span: span.clone(),
         },
         Expr::Try { value, span } => HirExpr::Try {
             value: Box::new(lower_hir_expr(hir, function_name, value, value_types)),
-            type_name: infer_hir_expr_type(hir, expr, value_types),
+            type_name: infer_hir_expr_type(hir, expr, value_types).map(|ty| ty.to_string()),
             span: span.clone(),
         },
         Expr::Closure {
@@ -784,7 +799,7 @@ pub(super) fn lower_hir_expr(
                 .map(|arm| {
                     let mut arm_types = value_types.clone();
                     for (binding, type_name) in
-                        match_pattern_binding_types(hir, &arm.pattern, value_type.as_deref())
+                        match_pattern_binding_types(hir, &arm.pattern, value_type.as_ref())
                     {
                         arm_types.insert(binding, type_name);
                     }
@@ -806,7 +821,7 @@ pub(super) fn lower_hir_expr(
                 value: Box::new(lowered_value),
                 scrutinee_effect: *scrutinee_effect,
                 arms: lowered_arms,
-                type_name: match_type,
+                type_name: match_type.map(|ty| ty.to_string()),
                 span: span.clone(),
             }
         }
@@ -824,7 +839,7 @@ pub(super) fn lower_hir_call_expr(
     callee: &Callee,
     args: &[CallArg],
     span: &Span,
-    value_types: &HashMap<String, String>,
+    value_types: &HirValueTypes,
 ) -> HirExpr {
     let receiver_type = match callee {
         Callee::ReceiverCall { receiver, .. } => infer_hir_expr_type(hir, receiver, value_types),
@@ -832,8 +847,8 @@ pub(super) fn lower_hir_call_expr(
     };
     let (resolution, resolved_namespace) = match callee {
         Callee::ReceiverCall { method, .. } => {
-            if let Some(receiver_type) = receiver_type.as_deref() {
-                hir.resolve_receiver_call(receiver_type, method, value_types)
+            if let Some(receiver_type) = receiver_type.as_ref() {
+                hir.resolve_receiver_call_structured(receiver_type, method, value_types)
             } else {
                 (CallResolution::Unknown, None)
             }
@@ -849,7 +864,7 @@ pub(super) fn lower_hir_call_expr(
         hir,
         value_types,
     );
-    let type_name = infer_hir_expr_type(hir, expr, value_types);
+    let type_name = infer_hir_expr_type(hir, expr, value_types).map(|ty| ty.to_string());
     let mut hir_args: Vec<HirCallArg> = args
         .iter()
         .enumerate()
@@ -966,7 +981,9 @@ pub(super) fn lower_hir_call_expr(
                     effect: ParamEffect::Read,
                     value: Box::new(value),
                     events: Vec::new(),
-                    type_name: actual_type.or_else(|| Some(param.ty.to_string())),
+                    type_name: actual_type
+                        .map(|ty| ty.to_string())
+                        .or_else(|| Some(param.ty.to_string())),
                     span: arg.span.clone(),
                 };
             }
@@ -1000,7 +1017,7 @@ pub(super) fn lower_hir_call_expr(
                 // Defaults execute at the call site, but their names are bound in
                 // the declaration environment. Caller locals must not shadow a
                 // top-level constant referenced by a default.
-                let mut value = lower_hir_expr(hir, function_name, default, &HashMap::new());
+                let mut value = lower_hir_expr(hir, function_name, default, &HirValueTypes::new());
                 // A non-Copy default is materialized at the call site and
                 // bound under the parameter's declared effect. Carry that
                 // effect on the synthesized argument so the call-site
@@ -1034,7 +1051,7 @@ pub(super) fn lower_hir_call_expr(
             if let Some(default) = &field.default {
                 hir_args.push(HirCallArg {
                     name: Some(field.name.clone()),
-                    value: lower_hir_expr(hir, function_name, default, &HashMap::new()),
+                    value: lower_hir_expr(hir, function_name, default, &HirValueTypes::new()),
                     parameter_index: Some(bound.parameter_index),
                     evaluation_index: bound.evaluation_index,
                     span: span.clone(),
@@ -1050,7 +1067,7 @@ pub(super) fn lower_hir_call_expr(
             } => Some(HirCallReceiver {
                 value: Box::new(lower_hir_expr(hir, function_name, receiver, value_types)),
                 effect: param_effect_from_data_effect((*effect).unwrap_or(DataEffect::Read)),
-                type_name: receiver_type,
+                type_name: receiver_type.map(|ty| ty.to_string()),
                 resolved_namespace,
             }),
             _ => None,

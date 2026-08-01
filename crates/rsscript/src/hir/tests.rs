@@ -488,9 +488,17 @@ fn render(body: read String) -> Result<fresh Rendered, HttpError> {
     assert_eq!(bindings.len(), 2);
     assert_eq!(bindings[0].kind, HirBindingKind::Param);
     assert_eq!(bindings[0].name, "body");
+    assert_eq!(
+        bindings[0].ty.as_ref().map(ToString::to_string).as_deref(),
+        Some("String")
+    );
     assert_eq!(bindings[0].type_name.as_deref(), Some("String"));
     assert_eq!(bindings[1].kind, HirBindingKind::ManagedLet);
     assert_eq!(bindings[1].name, "response");
+    assert_eq!(
+        bindings[1].ty.as_ref().map(ToString::to_string).as_deref(),
+        Some("Rendered")
+    );
     assert_eq!(bindings[1].type_name.as_deref(), Some("Rendered"));
 
     let returns = &hir.returns;
@@ -623,6 +631,14 @@ fn take_rules(config: mut Config) -> Unit {
 
     assert_eq!(field.function_name, "take_rules");
     assert_eq!(field.name, "rules");
+    assert_eq!(
+        field.base_ty.as_ref().map(ToString::to_string).as_deref(),
+        Some("Config")
+    );
+    assert_eq!(
+        field.ty.as_ref().map(ToString::to_string).as_deref(),
+        Some("Rules")
+    );
     assert_eq!(field.base_type.as_deref(), Some("Config"));
     assert_eq!(field.type_name.as_deref(), Some("Rules"));
     assert!(field.is_handle);

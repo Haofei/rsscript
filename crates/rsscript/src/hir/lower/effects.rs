@@ -45,7 +45,7 @@ pub(super) fn retain_events_for_call(
     call_span: &Span,
     resolution: &CallResolution,
     hir: &Hir,
-    value_types: &HashMap<String, String>,
+    value_types: &HirValueTypes,
 ) -> Vec<HirEffectEvent> {
     let CallResolution::Resolved { signature, .. } = resolution else {
         return Vec::new();
@@ -92,7 +92,7 @@ pub(super) fn collect_body_facts_in_block(
     hir: &Hir,
     function_name: &str,
     block: &Block,
-    value_types: &mut HashMap<String, String>,
+    value_types: &mut HirValueTypes,
     facts: &mut BodyFacts,
 ) {
     for statement in &block.statements {
@@ -104,7 +104,7 @@ pub(super) fn collect_body_facts_in_stmt(
     hir: &Hir,
     function_name: &str,
     statement: &Stmt,
-    value_types: &mut HashMap<String, String>,
+    value_types: &mut HirValueTypes,
     facts: &mut BodyFacts,
 ) {
     match statement {
@@ -131,8 +131,11 @@ pub(super) fn collect_body_facts_in_stmt(
                 .value
                 .as_ref()
                 .and_then(|value| infer_hir_expr_type(hir, value, value_types));
-            let declared_type_name = stmt.type_annotation.as_ref().map(type_ref_name);
-            let type_name = declared_type_name
+            let declared_type_name = stmt
+                .type_annotation
+                .as_ref()
+                .map(ResolvedType::from_type_ref);
+            let ty = declared_type_name
                 .clone()
                 .or_else(|| value_type_name.clone());
             facts.bindings.push(HirBinding {
@@ -141,10 +144,11 @@ pub(super) fn collect_body_facts_in_stmt(
                 kind: hir_binding_kind(stmt.kind),
                 effect: None,
                 span: stmt.span.clone(),
-                type_name: type_name.clone(),
+                ty: ty.clone(),
+                type_name: ty.clone().map(|ty| ty.to_string()),
             });
-            if let Some(type_name) = type_name {
-                value_types.insert(stmt.name.clone(), type_name);
+            if let Some(ty) = ty {
+                value_types.insert(stmt.name.clone(), ty);
             }
             if let Some(value) = &stmt.value {
                 collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
@@ -199,9 +203,9 @@ pub(super) fn collect_body_facts_in_stmt(
             collect_body_facts_in_expr(hir, function_name, &stmt.iterable, value_types, facts);
             let iterable_type = infer_hir_expr_type(hir, &stmt.iterable, value_types);
             let item_type = if stmt.is_async {
-                iterable_type.as_deref().and_then(stream_item_type)
+                iterable_type.as_ref().and_then(stream_item_type)
             } else {
-                iterable_type.as_deref().and_then(list_element_type)
+                iterable_type.as_ref().and_then(list_element_type)
             };
             let mut body_types = value_types.clone();
             if let Some(item_type) = item_type {
@@ -211,7 +215,8 @@ pub(super) fn collect_body_facts_in_stmt(
                     kind: HirBindingKind::ManagedLet,
                     effect: None,
                     span: stmt.span.clone(),
-                    type_name: Some(item_type.clone()),
+                    ty: Some(item_type.clone()),
+                    type_name: Some(item_type.to_string()),
                 });
                 body_types.insert(stmt.binding.clone(), item_type);
             }
@@ -245,7 +250,8 @@ pub(super) fn collect_body_facts_in_stmt(
                         kind: HirBindingKind::ManagedLet,
                         effect: None,
                         span: arm.span.clone(),
-                        type_name: Some(type_name.clone()),
+                        ty: Some(type_name.clone()),
+                        type_name: Some(type_name.to_string()),
                     });
                     arm_types.insert(arm.binding.clone(), type_name);
                 }
@@ -258,7 +264,7 @@ pub(super) fn collect_body_facts_in_stmt(
             for arm in &stmt.arms {
                 let mut arm_types = value_types.clone();
                 for (binding, type_name) in
-                    match_pattern_binding_types(hir, &arm.pattern, value_type.as_deref())
+                    match_pattern_binding_types(hir, &arm.pattern, value_type.as_ref())
                 {
                     facts.bindings.push(HirBinding {
                         function_name: function_name.to_string(),
@@ -266,7 +272,8 @@ pub(super) fn collect_body_facts_in_stmt(
                         kind: HirBindingKind::ManagedLet,
                         effect: None,
                         span: arm.span.clone(),
-                        type_name: Some(type_name.clone()),
+                        ty: Some(type_name.clone()),
+                        type_name: Some(type_name.to_string()),
                     });
                     arm_types.insert(binding, type_name);
                 }
@@ -285,7 +292,7 @@ pub(super) fn collect_body_facts_in_stmt(
             );
             if let Some((binding, type_name)) = match_pattern_binding_type(
                 &stmt.pattern,
-                infer_hir_expr_type(hir, &stmt.value, value_types).as_deref(),
+                infer_hir_expr_type(hir, &stmt.value, value_types).as_ref(),
             ) {
                 facts.bindings.push(HirBinding {
                     function_name: function_name.to_string(),
@@ -293,7 +300,8 @@ pub(super) fn collect_body_facts_in_stmt(
                     kind: HirBindingKind::ManagedLet,
                     effect: None,
                     span: stmt.span.clone(),
-                    type_name: Some(type_name.clone()),
+                    ty: Some(type_name.clone()),
+                    type_name: Some(type_name.to_string()),
                 });
                 value_types.insert(binding, type_name);
             }
@@ -320,7 +328,7 @@ pub(super) fn collect_body_facts_in_expr(
     hir: &Hir,
     function_name: &str,
     expr: &Expr,
-    value_types: &mut HashMap<String, String>,
+    value_types: &mut HirValueTypes,
     facts: &mut BodyFacts,
 ) {
     match expr {
@@ -334,8 +342,11 @@ pub(super) fn collect_body_facts_in_expr(
                     receiver, method, ..
                 } => {
                     if let Some(receiver_type) = infer_hir_expr_type(hir, receiver, value_types) {
-                        let (res, _namespace) =
-                            hir.resolve_receiver_call(&receiver_type, method, value_types);
+                        let (res, _namespace) = hir.resolve_receiver_call_structured(
+                            &receiver_type,
+                            method,
+                            value_types,
+                        );
                         res
                     } else {
                         CallResolution::Unknown
@@ -445,21 +456,28 @@ pub(super) fn collect_body_facts_in_expr(
         }
         Expr::Field { base, name, span } => {
             let base_type = infer_hir_expr_type(hir, base, value_types);
-            let resolved = base_type.as_deref().and_then(|type_name| {
-                let type_info = hir.type_info(type_name)?;
+            let base_type_display = base_type.as_ref().map(ToString::to_string);
+            let resolved_base_type = base_type.clone();
+            let resolved = resolved_base_type.as_ref().and_then(|ty| {
+                let canonical = hir.canonical_type_name(&ty.to_string());
+                let type_info = hir.type_info(&canonical)?;
                 let field = type_info.fields.get(name)?;
-                Some((type_info, type_name, field))
+                Some((type_info, ty, field))
             });
             facts.field_accesses.push(HirFieldAccess {
                 function_name: function_name.to_string(),
                 name: name.clone(),
                 span: span.clone(),
-                type_name: resolved.map(|(type_info, type_name, field)| {
-                    substituted_field_type(hir, type_info, type_name, field)
+                ty: resolved.map(|(type_info, ty, field)| {
+                    substituted_field_type(hir, type_info, ty, field)
                 }),
                 is_handle: resolved.is_some_and(|(_, _, field)| field.is_handle || field.is_weak),
                 is_weak: resolved.is_some_and(|(_, _, field)| field.is_weak),
-                base_type,
+                base_ty: base_type.clone(),
+                base_type: base_type_display,
+                type_name: resolved.map(|(type_info, ty, field)| {
+                    substituted_field_type(hir, type_info, ty, field).to_string()
+                }),
             });
             collect_body_facts_in_expr(hir, function_name, base, value_types, facts);
         }
@@ -507,7 +525,7 @@ pub(super) fn collect_body_facts_in_expr(
 pub(super) fn direct_effect_retained_binding(
     expr: &Expr,
     hir: &Hir,
-    value_types: &HashMap<String, String>,
+    value_types: &HirValueTypes,
 ) -> Option<(String, Span)> {
     match expr {
         Expr::Effect { value, .. } => retained_inline_binding(value, hir, value_types),
@@ -518,7 +536,7 @@ pub(super) fn direct_effect_retained_binding(
 pub(super) fn retained_inline_binding(
     expr: &Expr,
     hir: &Hir,
-    value_types: &HashMap<String, String>,
+    value_types: &HirValueTypes,
 ) -> Option<(String, Span)> {
     match expr {
         Expr::Ident(name, span) => Some((name.clone(), span.clone())),
@@ -527,7 +545,7 @@ pub(super) fn retained_inline_binding(
         }
         Expr::Field { base, name, span } => {
             let base_type = infer_hir_expr_type(hir, base, value_types)?;
-            let field = hir.type_info(&base_type)?.fields.get(name)?;
+            let field = hir.type_info(&base_type.to_string())?.fields.get(name)?;
             if field.is_handle || field.is_weak {
                 return None;
             }

@@ -286,7 +286,7 @@ pub(super) fn apply_stmt_effects(statement: &HirStmt, state: &mut BodyState) {
             kind,
             name,
             value,
-            type_name,
+            ty,
             ..
         } => {
             match kind {
@@ -294,8 +294,8 @@ pub(super) fn apply_stmt_effects(statement: &HirStmt, state: &mut BodyState) {
                 HirBindingKind::LocalLet => state.bind_local(name.clone()),
                 HirBindingKind::Param => {}
             }
-            if let Some(type_name) = type_name {
-                state.record_type(name.clone(), type_name.clone());
+            if let Some(ty) = ty {
+                state.record_type(name.clone(), ty.to_string());
             }
             if let Some(value) = value {
                 apply_expr_effects(value, state);

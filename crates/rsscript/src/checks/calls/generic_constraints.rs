@@ -748,7 +748,7 @@ pub(super) fn infer_receiver_expr_type(
                 body.bindings
                     .iter()
                     .find(|binding| binding.name == *name)
-                    .and_then(|binding| binding.type_name.clone())
+                    .and_then(|binding| binding.ty.as_ref().map(ToString::to_string))
             })
             .or_else(|| builtin_value_type_name(name).map(str::to_string)),
         Expr::Call { .. } => None,

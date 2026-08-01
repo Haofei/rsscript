@@ -82,6 +82,28 @@ impl ResolvedType {
         }
     }
 
+    pub fn function(
+        parameters: impl IntoIterator<Item = Self>,
+        parameter_effects: impl IntoIterator<Item = Option<ResolvedParamEffect>>,
+        return_type: Option<Self>,
+        qualifiers: TypeQualifiers,
+    ) -> Self {
+        Self {
+            qualifiers,
+            kind: ResolvedTypeKind::Function {
+                parameters: parameters
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+                parameter_effects: parameter_effects
+                    .into_iter()
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+                return_type: return_type.map(Box::new),
+            },
+        }
+    }
+
     pub fn root_name(&self) -> Option<&str> {
         match &self.kind {
             ResolvedTypeKind::Named { name, .. } => Some(name),

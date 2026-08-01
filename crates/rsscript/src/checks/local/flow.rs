@@ -786,12 +786,12 @@ pub(super) fn local_flow_step_binding(statement: &HirStmt) -> Option<LocalFlowBi
             kind,
             name,
             value,
-            type_name,
+            ty,
             ..
         } => Some(LocalFlowBinding {
             name: name.clone(),
             kind: *kind,
-            type_name: type_name.clone(),
+            type_name: ty.as_ref().map(ToString::to_string),
             value_ident: value.as_ref().and_then(local_binding_source_ident),
             value_handle_field: value.as_ref().and_then(local_binding_handle_field_source),
             fresh_from_local_source: None,
@@ -994,14 +994,14 @@ impl BodyState {
             if binding.kind != HirBindingKind::Param {
                 continue;
             }
-            if let Some(type_name) = &binding.type_name {
-                self.record_type(binding.name.clone(), type_name.clone());
+            if let Some(ty) = &binding.ty {
+                self.record_type(binding.name.clone(), ty.to_string());
             }
             if matches!(binding.effect, Some(ParamEffect::Read))
                 && binding
-                    .type_name
-                    .as_deref()
-                    .is_none_or(|type_name| !is_copy_type_name(type_name))
+                    .ty
+                    .as_ref()
+                    .is_none_or(|ty| !is_copy_type_name(&ty.to_string()))
             {
                 self.bind_managed(binding.name.clone());
             }
