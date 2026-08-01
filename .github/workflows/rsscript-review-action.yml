@@ -49,7 +49,7 @@ jobs:
         continue-on-error: true
         uses: Haofei/rsscript/.github/actions/rsscript-review@036f576f389a8001916b851440dc2578f0c8cdd9
         with:
-          head: packages/test-runner
+          head: packages/native-abi-fixture
           grants: examples/demos/s3-iam-reir/expected/prod-grants.reir.json
           target: prod
           principal: prod/report-uploader

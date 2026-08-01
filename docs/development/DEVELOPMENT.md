@@ -131,18 +131,9 @@ add executable examples, checked-in self-hosted tool runs, ignored static tests,
 or any other e2e test back into the normal `cargo test -p rsscript` loop. Slow
 release-grade checks belong in the explicit soak commands above.
 
-For package-manager dogfood work, use the focused TDD gate first:
-
-```sh
-cargo run --quiet -p rsscript --bin rss -- run packages/test-runner -- packages/test-runner/manifests/package-manager-tdd.rsstest.toml
-```
-
-This runs package-manager-focused static tests, the core JSON/lowering hooks
-needed by the RSS implementation, and the checked-in native ABI fixture facts.
-It intentionally avoids executable self-hosted package-manager sweeps.
-It is the intended sub-10-second loop while iterating on
-`packages/package-manager/main.rss`; run the full gate only before committing or when
-touching shared lowering/runtime behavior.
+For package-review work, use focused Rust integration targets first, then run
+the full workspace gate before committing. RSScript no longer maintains a
+second package-manager or test-runner implementation in the language itself.
 
 Release/soak tests live in a separate opt-in manifest:
 
@@ -155,12 +146,11 @@ temporary Rust packages, or run timing-sensitive demo clients. They must be
 marked `#[ignore]` at the Cargo test level so `cargo test --workspace` and the
 default full manifest remain static-first.
 
-Core CI runs the RSScript test-runner full manifest on every pull request. It is
-intentionally static-first: it runs the unignored workspace test suite,
-generated-package compile checks, and RSScript lint checks without executing
-every example, release demo, or self-hosted tool as a behavior test. Supply-chain
-audit and Windows/macOS process-containment and native-authorization tests are
-also Core per-PR gates.
+Core CI runs the locked Rust workspace gate on every pull request. It is
+intentionally static-first: it runs formatting, linting, the workspace test
+suite, and generated-package compile checks without executing every example or
+self-hosted tool as a behavior test. Supply-chain audit and Windows/macOS
+process-containment and native-authorization tests are also Core per-PR gates.
 
 The off-by-default native JIT path is Experimental. Its full suite runs when
 matching paths change, nightly, manually, and during release validation.
@@ -203,10 +193,6 @@ Windows does not provide a built-in, non-admin API for creating a true RAM disk,
 so the repository only consumes a mounted RAM disk path instead of trying to
 create one.
 
-```sh
-cargo run --quiet -p rsscript --bin rss -- run packages/test-runner -- packages/test-runner/manifests/all.rsstest.toml
-```
-
 Do not point these paths back at the SSD for normal development; if a test has
 file conflicts, give it an isolated ramdisk subdirectory or copy the ramdisk
 seed target, then clean the copy after the test.
@@ -221,8 +207,8 @@ start servers, run generated packages, or depend on timing. When behavior needs
 coverage, test the parser, analyzer, lowering, package metadata, source-map,
 runtime helper, or review function directly. Any unignored test that exceeds 10
 seconds must be deleted, split, or rewritten as a smaller static/unit-level
-check. Release-grade demos may exist only as ignored tests wired through
-`soak.rsstest.toml`.
+check. Release-grade demos may exist only as ignored Cargo tests, run explicitly
+by their owning workflow or release command.
 
 Avoid running multiple workspace Cargo commands in parallel. Cargo's build lock
 makes that slower and noisier. Independent RSScript script checks may run in

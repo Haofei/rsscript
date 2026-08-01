@@ -38,13 +38,11 @@ jobs:
           toolchain: 1.96.1
           components: clippy, rustfmt
 
-      - name: Install nextest
-        uses: taiki-e/install-action@6d9ce389421e24f7b73aff5e841bbe5a6b4c974c # nextest
-        with:
-          tool: nextest@0.9.140
-
       - name: Check
-        run: cargo run --locked --quiet -p rsscript --bin rss -- test --all
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace --all-targets
 
   core-platform-security:
     name: Core platform security (${{ matrix.os }})

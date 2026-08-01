@@ -23,10 +23,10 @@ RUN apt-get update \
         ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Toolchain components used by the test/lint flow, and cargo-nextest (the test
-# runner the `rss test` command and CI use). Prefer the prebuilt nextest binary
-# per architecture (works on amd64 and Apple-Silicon/arm64); fall back to a
-# source build on other arches.
+# Toolchain components used by the test/lint flow, and cargo-nextest used by
+# selected CI validation. Prefer the prebuilt nextest binary per architecture
+# (works on amd64 and Apple-Silicon/arm64); fall back to a source build on
+# other arches.
 ARG CARGO_NEXTEST_VERSION=0.9.140
 ARG CARGO_NEXTEST_X86_64_SHA256=4ee9aaa0d0171a985a5d0eb735b87355894c1c455972e9674fb9fdbd1387c9a3
 ARG CARGO_NEXTEST_AARCH64_SHA256=8b3f4d4560b6b0f83774fecc6be07e47716dbad0eb0bb6c3890f478f4affe4b6

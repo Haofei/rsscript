@@ -1,6 +1,6 @@
 # The feature I didn't build
 
-[The last post](07-the-agent-that-writes-the-language.md) ended on the big milestones — benchmarks, constrained decoding, self-hosted validation — and a promise to write about each when there's a running thing to point at. This is a different kind of post. It's a design note from the workbench, written *between* the milestones, because some of the most revealing moments in building a language happen in decisions you make before there's anything to benchmark. And this one is about a decision to *not* build something.
+The language has accumulated enough mechanisms to make one constraint clear: a feature is only useful when its maintenance cost serves the product's central proof. This is a design note from the workbench about a decision to *not* build something.
 
 The series so far has been mostly about what RSScript is. This is about how a feature gets rejected, which tells you more about a language's character than another list of what it includes. [Post 5](05-explicit-is-a-budget.md) argued that ceremony you don't need is a cost, not a virtue. This is the same discipline pointed at my own roadmap: a feature I wanted, talked myself into, designed two mechanisms for, and then didn't build — and why not building it was the right call.
 

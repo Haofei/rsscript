@@ -57,12 +57,13 @@ jobs:
           done
 
       # This is the same static-first full gate used by local development and
-      # CI. Its checked-in manifest covers the workspace in split feature
-      # graphs: compiler/LSP/JIT/native ABI/adapters, full runtime defaults,
-      # generated Rust packages, and self-host parity.
+      # CI. Rust owns the test orchestration; the removed RSS test runner no
+      # longer supplies a second manifest language.
       - name: Validate locked workspace
         run: |
-          cargo run --locked --quiet -p rsscript --bin rss -- test --all
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo test --locked --workspace --all-targets
 
       # The centralized full gate uses default features. Exercise the
       # off-by-default Cranelift tier separately so vm-jit and native ABI call

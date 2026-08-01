@@ -871,24 +871,6 @@ fn selfhost_ast_type_rules_accept_deque_queue_kernel() {
 }
 
 #[test]
-fn selfhost_ast_type_rules_accept_code_agent_config() {
-    let source = include_str!("../../../../examples/packages/code-agent/src/config.rss");
-    let exe = compile_selfhost_tool(
-        "serialize/control_outline.rss",
-        "AST code-agent config type-rule probe",
-    )
-    .expect("AST code-agent config type-rule probe should compile");
-    let output = exe
-        .eval_main_with_args([source.to_string()])
-        .expect("AST code-agent config type-rule probe should run");
-    assert!(
-        output.stdout.trim().is_empty(),
-        "valid code-agent config must not produce AST type diagnostics: {:?}",
-        output.stdout
-    );
-}
-
-#[test]
 fn selfhost_checker_accepts_diagnostic_ast_module() {
     let source = include_str!("../../../../selfhost/semantics/diagnostics.rss");
     let actual = diagnostic_records_for_code(
@@ -1054,4 +1036,3 @@ fn parser_parity_corpus() {
         mismatches.len()
     );
 }
-

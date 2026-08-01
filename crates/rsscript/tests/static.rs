@@ -20,8 +20,6 @@ mod checker_review;
 mod cli_fix;
 #[path = "core_index.rs"]
 mod core_index;
-#[path = "execution_coverage.rs"]
-mod execution_coverage;
 #[path = "generate.rs"]
 mod generate;
 #[path = "vscode_grammar.rs"]

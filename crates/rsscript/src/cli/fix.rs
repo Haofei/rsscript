@@ -1,10 +1,7 @@
 use std::fs;
 use std::process::ExitCode;
 
-use rsscript::{
-    Diagnostic, FixEdit, analyze_source_with_interfaces, default_read_migration_edits,
-    standard_package_interfaces,
-};
+use rsscript::{Diagnostic, FixEdit, analyze_source_with_interfaces, standard_package_interfaces};
 use serde_json::json;
 
 use super::{print_usage, read_interface_sources, required_flag_value};
@@ -13,7 +10,6 @@ use super::{print_usage, read_interface_sources, required_flag_value};
 struct FixOptions<'a> {
     json: bool,
     write: bool,
-    default_read: bool,
     path: Option<&'a str>,
     interfaces: Vec<&'a str>,
 }
@@ -21,7 +17,6 @@ struct FixOptions<'a> {
 fn parse_fix_args(args: &[String]) -> Result<FixOptions<'_>, String> {
     let mut json = false;
     let mut write = false;
-    let mut default_read = false;
     let mut path = None;
     let mut interfaces = Vec::new();
     let mut index = 0;
@@ -29,7 +24,6 @@ fn parse_fix_args(args: &[String]) -> Result<FixOptions<'_>, String> {
         match arg.as_str() {
             "--json" => json = true,
             "--write" => write = true,
-            "--default-read" => default_read = true,
             "--interface" => {
                 index += 1;
                 interfaces.push(required_flag_value(args, index, "--interface")?);
@@ -45,7 +39,6 @@ fn parse_fix_args(args: &[String]) -> Result<FixOptions<'_>, String> {
     Ok(FixOptions {
         json,
         write,
-        default_read,
         path,
         interfaces,
     })
@@ -180,18 +173,7 @@ pub(crate) fn run_fix(args: &[String]) -> ExitCode {
         .collect();
 
     let diagnostics = analyze(path, &source, &interface_refs);
-    let mut planned = plan_edits(&diagnostics);
-    if options.default_read {
-        planned.extend(
-            default_read_migration_edits(path, &source, &interface_refs)
-                .into_iter()
-                .map(|edit| PlannedEdit {
-                    code: "default-read".to_string(),
-                    title: "apply default-read simplification".to_string(),
-                    edit,
-                }),
-        );
-    }
+    let planned = plan_edits(&diagnostics);
     let (rewritten, applied, skipped) = apply_edits(&source, &planned);
 
     if options.write
@@ -203,10 +185,7 @@ pub(crate) fn run_fix(args: &[String]) -> ExitCode {
     }
 
     if options.json {
-        let applied_diagnostic_fixes = applied
-            .iter()
-            .filter(|&&index| planned[index].code != "default-read")
-            .count();
+        let applied_diagnostic_fixes = applied.len();
         let fixes: Vec<_> = applied
             .iter()
             .map(|&i| {
@@ -260,23 +239,4 @@ pub(crate) fn run_fix(args: &[String]) -> ExitCode {
         );
     }
     ExitCode::SUCCESS
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_fix_args_accepts_default_read_migration() {
-        let args = vec![
-            "--default-read".to_string(),
-            "--write".to_string(),
-            "example.rss".to_string(),
-        ];
-        let options = parse_fix_args(&args).expect("default-read migration should parse");
-
-        assert!(options.default_read);
-        assert!(options.write);
-        assert_eq!(options.path, Some("example.rss"));
-    }
 }

@@ -85,4 +85,4 @@ A zero-data language isn't a handicap you spend the project working around. It's
 
 ---
 
-*Next: [The agent that writes the language](07-the-agent-that-writes-the-language.md) — the first real program in RSScript is, fittingly, an AI agent that writes RSScript, and the most important thing it produced wasn't the agent. It was a bug the compiler couldn't see and review could.*
+*Next: [The feature I didn't build](08-the-feature-i-didnt-build.md) — a design note on keeping the language surface smaller than the mechanisms it might someday support.*

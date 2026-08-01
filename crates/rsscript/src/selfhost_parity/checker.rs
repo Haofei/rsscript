@@ -3181,14 +3181,6 @@ fn checker_rs0015_edge_parity() {
                 .expect("async-let sample should be readable"),
             true,
         ),
-        (
-            "core-properties/properties_result_option.rss",
-            std::fs::read_to_string(
-                root.join("packages/core-properties/src/properties_result_option.rss"),
-            )
-            .expect("result/option properties should be readable"),
-            false,
-        ),
     ];
     let exe = compile_checker().expect("rss checker should compile");
     for (file, source, expects_rs0015) in cases {

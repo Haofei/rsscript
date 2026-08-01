@@ -582,13 +582,13 @@ mod tests {
 
     #[test]
     fn parse_package_args_accepts_path_as_check_target() {
-        let values = args(&["examples/packages/code-agent"]);
+        let values = args(&["examples/packages/basic"]);
         let command = super::parse_package_args(&values).expect("path check should parse");
 
         match command {
             super::PackageCommand::Check { json, path } => {
                 assert!(!json);
-                assert_eq!(path, "examples/packages/code-agent");
+                assert_eq!(path, "examples/packages/basic");
             }
             other => panic!("unexpected package command: {other:?}"),
         }

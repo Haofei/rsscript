@@ -102,6 +102,11 @@ This table records the current implementation batch for the refactoring work in
 | R37 | Structural HIR local type flow | Complete | HIR lowering and local semantic flow carry `ResolvedType`; rendered type names are compatibility projections only |
 | R38 | Compatibility runtime ownership convergence | Complete | Only the generated-ABI compatibility module may obtain the weak process-wide runtime factory; canonical work stays explicitly service-owned |
 | R39 | VM JIT module-boundary convergence | Complete | Deopt state and JIT test domains are real Rust modules with explicit visibility instead of textual `include!` composition |
+| R40 | Remove duplicate BBOM evidence model | Complete | REIR is the only supported evidence model; BBOM model, policy, and bridge APIs are absent |
+| R41 | Remove language-level package/test/property runners | Complete | Package-manager, test-runner, quickcheck, and core-properties package trees and `.rsstest` manifests are absent |
+| R42 | Remove agent and chat demonstration ecosystem | Complete | Agent, agent-tools, chat-completions, and agent example packages are absent |
+| R43 | Remove retired migration and VM-coverage interfaces | Complete | Default-read migration and VM coverage APIs/tests are absent; ordinary diagnostics and JIT coverage remain |
+| R44 | Converge test orchestration on Cargo | Complete | `rss test` is absent; CI, release validation, and developer docs use Cargo commands |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -385,6 +390,16 @@ the public deoptimization model; each test domain is an ordinary child module
 with explicit access to the shared fixture surface. The validation/codegen
 boundary test asserts those module declarations so later changes cannot silently
 revert to file inclusion.
+
+R40--R44 complete the product-contraction deletion pass. The redundant BBOM
+model and policy bridge are gone; REIR is the sole supported evidence model.
+The duplicate RSS package manager, property, quickcheck, and test-runner
+packages are gone, along with agent/chat demonstration packages and their
+examples. Historical default-read migration and VM-coverage APIs are removed.
+`rss test` and its `.rsstest` manifests are removed as well: Cargo tests are
+the only supported test execution path. The retained self-host corpus now
+contains only compiler-facing fixtures, and native JIT self-host validation
+remains mandatory experimental coverage.
 
 ## Experimental Status
 

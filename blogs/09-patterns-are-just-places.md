@@ -2,7 +2,7 @@
 
 Another design note from the workbench, in the same register as [the last one](08-the-feature-i-didnt-build.md). This one is about pattern matching, and it's a small story about expecting a hard problem and finding that the language had already solved it — which, when it happens, is the strongest signal you get that a design is coherent rather than just a pile of features that happen to compile together.
 
-It starts the way [post 8](07-the-agent-that-writes-the-language.md) said these things always start: with a real program asking for something the language didn't have.
+It starts the way these design notes always start: with a real program asking for something the language didn't have.
 
 ## The interpreter wanted more
 

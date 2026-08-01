@@ -22,7 +22,7 @@ const PAYLOAD_BYTES: usize = 256 * 1024;
 const SERVER_DELAY_MS: u64 = 200;
 
 #[test]
-#[ignore = "release/soak; run from packages/test-runner/manifests/soak.rsstest.toml"]
+#[ignore = "release/soak; run explicitly with cargo test --test soak -- --ignored"]
 fn s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain() {
     let repo = common::workspace_root();
     let demo_dir = repo.join("examples/demos/s3-iam-reir");

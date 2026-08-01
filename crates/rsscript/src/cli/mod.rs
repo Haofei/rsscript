@@ -17,7 +17,6 @@ mod fmt;
 mod package;
 mod process;
 mod run_cmd;
-mod test_cmd;
 
 pub fn run() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -33,7 +32,6 @@ pub fn run() -> ExitCode {
         "new" => package::run_new_package(&args[2..]),
         "pkg" => package::run_package(&args[2..]),
         "run" => run_cmd::run_generated_rust(&args[2..]),
-        "test" => test_cmd::run_test(&args[2..]),
         _ => {
             print_usage();
             ExitCode::from(2)
@@ -412,7 +410,7 @@ pub(crate) fn print_usage() {
     eprintln!("  rss check [--json] <package-directory>");
     eprintln!("  rss check --explain <code>");
     eprintln!(
-        "  rss fix [--default-read] [--write] [--json] [--interface <file.rssi> ...] <file.rss>  # apply machine-applicable fixes"
+        "  rss fix [--write] [--json] [--interface <file.rssi> ...] <file.rss>  # apply machine-applicable fixes"
     );
     eprintln!("  rss fmt <file.rss>  # writes formatted source to stdout");
     eprintln!("  rss new <package-name>");
@@ -422,7 +420,6 @@ pub(crate) fn print_usage() {
     eprintln!(
         "  rss run [--json] [--release] [--dry-run] [--deployment-profile <profile>] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]"
     );
-    eprintln!("  rss test [--all] [--json] [--filter <substring>]");
     eprintln!("  rss pkg [--json] [package-directory]");
     eprintln!("  rss pkg add <dependency|dependency@version|path-to-package>");
     eprintln!("  rss pkg review [--json] [package-directory]");

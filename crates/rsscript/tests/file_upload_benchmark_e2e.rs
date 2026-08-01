@@ -19,7 +19,7 @@ const DEFAULT_SERVER_DELAY_MS: u64 = 10;
 const DEFAULT_AWAITS_PER_UPLOAD: usize = 4;
 
 #[test]
-#[ignore = "release/soak; run from packages/test-runner/manifests/soak.rsstest.toml"]
+#[ignore = "release/soak; run explicitly with cargo test --test soak -- --ignored"]
 fn file_upload_benchmark_reports_async_and_sync_requests_per_second() {
     let repo = common::workspace_root();
     let benchmark_dir = repo.join("benchmarks/packages/file-upload");

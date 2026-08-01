@@ -8,14 +8,10 @@
 )]
 
 mod analyzer;
-pub mod bbom;
-pub mod bbom_policy;
-pub mod bbom_reir;
 mod call_binding;
 mod capability;
 mod checks;
 mod core_index;
-mod default_read_migration;
 mod diagnostic;
 mod editor_grammar;
 mod eval_types;
@@ -41,7 +37,6 @@ mod semantic;
 mod symbols;
 pub mod syntax;
 mod text_util;
-mod vm_coverage;
 mod vm_value;
 
 pub use analyzer::{
@@ -59,7 +54,6 @@ pub use capability::{
     capability_risk, is_known_capability_category,
 };
 pub use core_index::core_package_index_json;
-pub use default_read_migration::default_read_migration_edits;
 pub use diagnostic::{
     Diagnostic, DiagnosticExplanation, Fix, FixEdit, Severity, Span, explain_diagnostic_code,
     format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
@@ -151,7 +145,6 @@ pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolInventoryEntry,
     SymbolKind, SymbolLookup, document_symbols, symbol_index, symbol_inventory,
 };
-pub use vm_coverage::{VmCoverageReport, vm_coverage_report};
 
 /// Versioned, stable entrypoints for embedding RSScript.
 pub mod api {
@@ -180,12 +173,11 @@ pub mod api {
                 analyze_sources_with_interfaces_without_core,
                 analyze_sources_with_interfaces_without_core_result, analyze_syntax_source,
                 capability_category, capability_risk, check_generated_rust_package,
-                core_interfaces, core_package_index_json, default_read_migration_edits,
-                document_symbols, format_program, format_source, is_known_capability_category,
-                lint_source, lower_coverage_report, lower_program_to_rust,
-                lower_program_to_rust_with_map, lower_source_to_rust, lower_source_to_rust_package,
-                lower_source_to_rust_package_with_interfaces, lower_source_to_rust_with_map,
-                lower_sources_to_rust_package_with_interfaces,
+                core_interfaces, core_package_index_json, document_symbols, format_program,
+                format_source, is_known_capability_category, lint_source, lower_coverage_report,
+                lower_program_to_rust, lower_program_to_rust_with_map, lower_source_to_rust,
+                lower_source_to_rust_package, lower_source_to_rust_package_with_interfaces,
+                lower_source_to_rust_with_map, lower_sources_to_rust_package_with_interfaces,
                 lower_sources_to_rust_package_with_options, lowered_symbol_name,
                 parse_runtime_diagnostics, parse_source_map_json, prefix_status,
                 remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines,
@@ -257,10 +249,9 @@ pub mod api {
                 ExecutionContext, ExecutionContextError, ExecutionPolicyError, ExecutionScopeId,
                 HostAuthority, HostCapabilities, JitPlan, NativeInterpreterFn, NativeValue,
                 NetworkEndpointGrant, ParseDeploymentProfileError, RegVmExecutable, SupportLevel,
-                VmCoverageReport, VmLimits, load_authorized_package_native_bindings,
-                load_package_native_bindings, reg_vm_compile_package, reg_vm_compile_package_input,
-                reg_vm_compile_source, reg_vm_compile_validated,
-                reg_vm_eval_package_main_with_args,
+                VmLimits, load_authorized_package_native_bindings, load_package_native_bindings,
+                reg_vm_compile_package, reg_vm_compile_package_input, reg_vm_compile_source,
+                reg_vm_compile_validated, reg_vm_eval_package_main_with_args,
                 reg_vm_eval_package_main_with_args_and_native_bindings,
                 reg_vm_eval_package_main_with_args_and_native_bindings_and_limits,
                 reg_vm_eval_package_main_with_args_and_native_bindings_streaming_stdout,
@@ -270,7 +261,7 @@ pub mod api {
                 reg_vm_eval_source_main_with_args_and_native_bindings_and_limits,
                 reg_vm_eval_source_main_with_args_streaming_stdout,
                 reg_vm_eval_source_main_with_context_and_limits,
-                reg_vm_eval_source_main_with_limits, vm_coverage_report,
+                reg_vm_eval_source_main_with_limits,
             };
             #[cfg(feature = "native-jit")]
             pub use crate::{

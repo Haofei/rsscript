@@ -73,7 +73,6 @@ rss fix    [--write] <file.rss>           # apply machine-applicable fixes
 rss fmt    <file.rss>                     # canonical formatter
 rss run    --vm <file-or-package-dir> [-- <args>...]  # fast VM run
 rss run    <file-or-package-dir> [-- <args>...]       # lower to Rust + build + run
-rss test   [--all] [--filter <substr>]
 rss pkg    [--json] [dir]            # package health check
 rss pkg    add <dep|dep@version|path>
 rss pkg    review [--json] [dir]     # review surface

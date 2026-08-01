@@ -7,8 +7,8 @@
 //! shared backend abstraction ([`backends`]). The same generator and drivers back
 //! both the in-suite proptest tests and the libFuzzer targets in `fuzz/`.
 //!
-//! This tests the *toolchain*; it is distinct from the `rss-quickcheck` package,
-//! which is property testing of user programs written in RSScript.
+//! This tests the toolchain directly; RSScript does not ship a second
+//! language-level property-testing package.
 
 pub mod backends;
 pub mod generator;

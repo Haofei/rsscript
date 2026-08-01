@@ -1,1 +1,0 @@
-pub fn RssTest.run(manifest_path: Path, filter: String) -> Result<Unit, String>

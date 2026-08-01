@@ -10,6 +10,6 @@ paths = ["interface", "vendor/interface"]
 paths = ["src", "src/extra"]
 
 [dependencies]
-rss-agent = { path = "../agent" }
+rss-fixture-dependency = { path = "../fixture-dependency" }
 rss-json = { path = "../json" }
 rss-toml = { path = "../toml" }

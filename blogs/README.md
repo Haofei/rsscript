@@ -6,7 +6,7 @@ This series is an argument in three acts: why AI-generated systems code is hard 
 
 - New to the argument: start with [01 — I reviewed 100,000 lines of AI-generated Rust](01-100k-lines-of-ai-rust.md).
 - Interested in language design: start with [05 — Explicit is a budget, not a virtue](05-explicit-is-a-budget.md).
-- Interested in dogfooding and agents: start with [07 — The agent that writes the language](07-the-agent-that-writes-the-language.md).
+- Interested in language tradeoffs: start with [08 — The feature I didn't build](08-the-feature-i-didnt-build.md).
 
 ## Act I: The Problem
 
@@ -22,7 +22,6 @@ This series is an argument in three acts: why AI-generated systems code is hard 
 
 ## Act III: The Workbench
 
-7. [The agent that writes the language](07-the-agent-that-writes-the-language.md) — the first real program and what it exposed.
-8. [The feature I didn't build](08-the-feature-i-didnt-build.md) — why eager pipeline beat generator machinery.
-9. [Patterns are just places](09-patterns-are-just-places.md) — pattern matching as existing ownership rules applied to projections.
-10. [When you are the entire ecosystem](10-when-you-are-the-entire-ecosystem.md) — why self-checking docs, tests, and tools matter when nobody else is there yet.
+7. [The feature I didn't build](08-the-feature-i-didnt-build.md) — why eager pipeline beat generator machinery.
+8. [Patterns are just places](09-patterns-are-just-places.md) — pattern matching as existing ownership rules applied to projections.
+9. [When you are the entire ecosystem](10-when-you-are-the-entire-ecosystem.md) — why self-checking docs, tests, and tools matter when nobody else is there yet.

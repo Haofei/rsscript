@@ -473,7 +473,6 @@ rss pkg      tree     [--json|--reir] [package-directory]
 rss pkg      metadata [--verify|--dry-run] [--json|--reir] [package-directory]
 rss run      [--json] [--vm] [--deployment-profile <profile>] [--trusted-unlimited] [--trusted-native] <file-or-package-directory> [-- <args>...]
 rss run      [--json] [--release] [--dry-run] [--deployment-profile <profile>] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]
-rss test     [--all] [--json] [--filter <substring>]
 ```
 
 ### Command notes
@@ -481,7 +480,6 @@ rss test     [--all] [--json] [--filter <substring>]
 - `rss check` loads bundled core `.rssi` signatures by default for single files; pointed at a directory with `rsspkg.toml`, it runs package check.
 - `rss check --lint` reuses the frontend checks and emits warnings. The first lint is `RSL001` — public signatures over the review budget for parameter count, generics, effects, or nested-type depth.
 - `rss fix` applies machine-applicable fixes, writing to stdout by default and editing the file only with `--write`.
-- `rss test` runs the default test set; `--all` runs the full test set. `--filter` selects tests by name substring, and `--json` emits a machine-readable summary.
 - Human diagnostics render the offending source line in a rustc-style gutter with an aligned caret and inline label (falling back to a caret-only view when the source file is unavailable, e.g. synthetic spans). `--json` output is unchanged.
 - `rss pkg` validates the current package: dependency contracts, implementation/native bindings, package review, semantic lock freshness, and native wrapper metadata. It is the default package health check.
 - `rss pkg add` updates the package manifest with a dependency spec or local package path.
@@ -523,7 +521,7 @@ These are **not equivalent backends** — they cover different slices of the lan
 | Tier-0 JIT | Rust test/benchmark harnesses | the register VM's numeric / control core plus side-effect-free heap reads | per-function **fallback** to the interpreter (gap-free) |
 | Native JIT (Cranelift, Experimental) | Rust test/benchmark harnesses (feature `native-jit`) | unboxed `Int` / `Float` / `Bool` arithmetic + control flow + `Int` heap reads | **bails** to the interpreter (gap-free) |
 
-The supported/unsupported surface of the VM tiers is tracked mechanically: `vm_coverage_report()` enumerates every HIR statement/expression and runtime intrinsic versus the supported set, and `tests/execution_coverage.rs` fails if anything leaves the supported set without being on a documented, shrinking allowlist (desugared constructs and scheduler-run async). VM/JIT harnesses and `rss run` are distinct, checked claims — not assumed equivalences.
+VM/JIT harnesses and `rss run` are distinct, checked claims — not assumed equivalences. Native-tier acceptance, fallback, and differential suites define the supported subset directly.
 
 ### Hello world
 
