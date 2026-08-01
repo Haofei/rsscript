@@ -19,12 +19,7 @@ impl OperationContext {
         cancellation: RssCancellationToken,
         byte_budget: ResourceBudget,
     ) -> Self {
-        Self::with_services(
-            deadline,
-            cancellation,
-            byte_budget,
-            crate::compatibility::runtime_services(),
-        )
+        crate::compatibility::generated_abi_operation_context(deadline, cancellation, byte_budget)
     }
 
     pub fn with_services(

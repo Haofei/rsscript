@@ -100,6 +100,7 @@ This table records the current implementation batch for the refactoring work in
 | R35 | Native translation post-pass decomposition | Complete | Loop-region discovery and JIT post-passes have dedicated modules while translation order, OSR, deopt, and JIT entrypoints remain unchanged |
 | R36 | Immutable Register-VM execution plans | Complete | Evaluation snapshots limits, output mode, tier policy, native deopt/OSR controls, and compile admission before execution starts |
 | R39 | VM JIT module-boundary convergence | Complete | Deopt state and JIT test domains are real Rust modules with explicit visibility instead of textual `include!` composition |
+| R38 | Compatibility runtime ownership convergence | Complete | Only the generated-ABI compatibility module may obtain the weak process-wide runtime factory; canonical work stays explicitly service-owned |
 
 Update this table in the same commit that changes a batch state. Do not create a
 separate dated progress report.
@@ -369,6 +370,12 @@ the public deoptimization model; each test domain is an ordinary child module
 with explicit access to the shared fixture surface. The validation/codegen
 boundary test asserts those module declarations so later changes cannot silently
 revert to file inclusion.
+
+R38 narrows the remaining process-wide runtime lookup to a private factory in
+the generated-ABI compatibility module. Compatibility contexts, process
+permits, and pending tasks use named bridge functions; canonical operations keep
+their explicit `RuntimeServices` owner. Runtime architecture tests prohibit the
+core operation modules from reaching into that registry directly.
 
 ## Experimental Status
 

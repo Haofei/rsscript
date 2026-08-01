@@ -869,7 +869,7 @@ mod tests {
 
     #[test]
     fn http_client_is_reused() {
-        let services = crate::compatibility::runtime_services();
+        let services = crate::compatibility::generated_abi_services_for_pending();
         assert!(std::ptr::eq(services.http_client(), services.http_client()));
     }
 

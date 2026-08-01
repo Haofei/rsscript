@@ -31,7 +31,7 @@ pub(super) fn process_concurrency_limit() -> usize {
 pub(super) fn acquire_process_permit(
     cancellation: Option<&RssCancellationToken>,
 ) -> Result<crate::async_runtime::ProcessPermit, String> {
-    crate::compatibility::runtime_services().acquire_process_permit(cancellation)
+    crate::compatibility::generated_abi_process_permit(cancellation)
 }
 
 pub(super) fn process_worker_count(jobs: i64) -> usize {

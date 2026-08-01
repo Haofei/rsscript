@@ -842,7 +842,7 @@ where
     T: Send + 'static,
     F: Future<Output = T> + Send + 'static,
 {
-    let services = crate::compatibility::runtime_services();
+    let services = crate::compatibility::generated_abi_services_for_pending();
     spawn_tokio_native_with_services(&services, cancellation, future)
         .expect("default runtime services should be running")
 }
