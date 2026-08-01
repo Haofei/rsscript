@@ -1,3 +1,5 @@
+use super::*;
+
 /// Identity of a deopt (bail) point in a compiled function. Codegen assigns every
 /// distinct guard/bail site a unique id numbered from 1 (see `build_function`);
 /// the generated code stores it into the host's safepoint cell on the bail edge,
@@ -158,7 +160,7 @@ pub enum NativeOutcome {
     },
 }
 
-fn anonymous_deopt() -> NativeOutcome {
+pub(super) fn anonymous_deopt() -> NativeOutcome {
     NativeOutcome::Deopt {
         safepoint_id: SafepointId::ANONYMOUS,
         live: Vec::new(),

@@ -282,7 +282,12 @@ pub struct CompiledId {
     index: usize,
 }
 
-include!("deopt.rs");
+mod deopt;
+pub use deopt::{
+    DeoptChildSite, DeoptFrame, DeoptMap, DeoptReg, DeoptSite, DeoptValue, NativeOutcome,
+    SafepointId,
+};
+use deopt::anonymous_deopt;
 
 fn is_flat_type(ty: JitValueType) -> bool {
     matches!(

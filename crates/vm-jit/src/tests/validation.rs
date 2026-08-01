@@ -566,10 +566,10 @@
     #[test]
     fn enforces_normal_and_osr_terminators() {
         let normal = f(0, 0, vec![JitInstr::OsrExit]);
-        assert!(super::validate(&normal, false).is_err());
+        assert!(crate::validate(&normal, false).is_err());
 
         let osr = f(1, 1, vec![JitInstr::Return { src: 0 }]);
-        assert!(super::validate(&osr, true).is_err());
+        assert!(crate::validate(&osr, true).is_err());
     }
 
     #[test]
@@ -658,7 +658,7 @@
     }
 
     // fn(a, b) { return a + b } — a 2-param function for the call-guard tests.
-    fn two_param_add() -> JitFunction {
+    pub(super) fn two_param_add() -> JitFunction {
         f(
             2,
             3,
@@ -986,4 +986,4 @@
         assert_eq!(m1.callt(id1, &[2, 3]), Some(5));
         assert_eq!(m2.callt(id1, &[2, 3]), None); // foreign id → fallback, no panic
     }
-
+use super::*;

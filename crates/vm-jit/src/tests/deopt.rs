@@ -260,8 +260,8 @@
         // A foreign / out-of-range id yields no map, mirroring `call`'s validation.
         let mut m1 = module();
         let mut m2 = module();
-        let id1 = m1.compile(&two_param_add()).unwrap();
-        let _id2 = m2.compile(&two_param_add()).unwrap();
+        let id1 = m1.compile(&super::validation::two_param_add()).unwrap();
+        let _id2 = m2.compile(&super::validation::two_param_add()).unwrap();
         assert!(m1.deopt_map(id1).is_some());
         assert!(m2.deopt_map(id1).is_none());
     }
@@ -610,7 +610,7 @@
             ],
         );
         assert!(
-            super::validate(&prog, false).is_err(),
+            crate::validate(&prog, false).is_err(),
             "non-param flat base must be rejected by a normal compile"
         );
         // Under OSR the same dataflow shape validates once it uses the OSR exit
@@ -628,7 +628,7 @@
             ],
         );
         assert!(
-            super::validate(&osr_prog, true).is_ok(),
+            crate::validate(&osr_prog, true).is_ok(),
             "an OSR-window flat base (index >= n_params) must validate"
         );
     }
@@ -1107,4 +1107,4 @@
             other => panic!("expected forced all-sites deopt, got {other:?}"),
         }
     }
-
+use super::*;

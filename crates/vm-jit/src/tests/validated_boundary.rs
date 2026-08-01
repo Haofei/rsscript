@@ -43,7 +43,8 @@
 
         assert!(root.contains("include!(\"ir_validation.rs\")"));
         assert!(root.contains("include!(\"codegen.rs\")"));
-        assert!(module.contains("include!(\"deopt.rs\")"));
+        assert!(module.contains("mod deopt;"));
+        assert!(module.contains("pub use deopt::{"));
         assert!(module.contains("validated: &ValidatedJitFunction<'_>"));
         assert!(!module.contains("fn validate(program: &JitFunction"));
         assert!(validation.contains("fn validate(program: &JitFunction"));
@@ -59,8 +60,9 @@
             "validated_boundary",
         ] {
             assert!(
-                tests.contains(&format!("include!(\"tests/{domain}.rs\")")),
+                tests.contains(&format!("mod {domain};")),
                 "VM JIT tests should retain the `{domain}` domain"
             );
         }
     }
+use super::*;

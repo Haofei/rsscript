@@ -560,11 +560,11 @@ mod tests {
         }
     }
 
-    include!("tests/host_and_memo.rs");
-    include!("tests/calls_and_abi.rs");
-    include!("tests/deopt.rs");
-    include!("tests/validation.rs");
-    include!("tests/fuzz.rs");
-    include!("tests/ranges.rs");
-    include!("tests/validated_boundary.rs");
+    mod calls_and_abi;
+    mod deopt;
+    mod fuzz;
+    mod host_and_memo;
+    mod ranges;
+    mod validated_boundary;
+    mod validation;
 }

@@ -1067,3 +1067,4 @@
             outcome => panic!("expected checked wrong-base deopt, got {outcome:?}"),
         }
     }
+use super::*;
