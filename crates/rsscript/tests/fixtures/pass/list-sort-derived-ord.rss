@@ -1,4 +1,3 @@
-features: local
 
 struct User derives(Clone, Eq, Ord) {
     id: Int

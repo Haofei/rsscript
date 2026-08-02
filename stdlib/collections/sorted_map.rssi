@@ -21,7 +21,7 @@ pub fn SortedMap.insert<K: Ord, V>(
     key: K,
     value: V,
 ) -> Unit
-    effects(retains(key), retains(value))
+    retains(key) retains(value)
 
 pub fn SortedMap.remove<K: Ord, V>(
     map: mut SortedMap<K, V>,

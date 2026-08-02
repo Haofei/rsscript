@@ -112,8 +112,9 @@ fn main() -> Unit {
 #[test]
 fn checker_reports_call_argument_type_mismatch_before_backend_lowering() {
     let source = r#"
+fn sink(message: read String) -> Unit { return Unit }
 fn main() -> Result<Unit, JsonError> {
-    Log.write(message: read 42)
+    sink(message: read 42)
     return Ok(Unit)
 }
 "#;
@@ -123,7 +124,7 @@ fn main() -> Result<Unit, JsonError> {
         diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "RS0207"
                 && diagnostic.summary
-                    == "argument `message` for `Log.write` has type `Int`, expected `String`."
+                    == "argument `message` for `sink` has type `Int`, expected `String`."
         }),
         "{diagnostics:?}"
     );
@@ -155,8 +156,9 @@ fn build() -> User {
 #[test]
 fn rust_lowering_rejects_call_argument_type_mismatch_before_rustc() {
     let source = r#"
+fn sink(message: read String) -> Unit { return Unit }
 fn main() -> Result<Unit, JsonError> {
-    Log.write(message: read 42)
+    sink(message: read 42)
     return Ok(Unit)
 }
 "#;

@@ -7,7 +7,6 @@ fn reg_vm_runs_task_group_async_let_like_backend() {
     // `async let` spawns concurrent tasks; `await` joins them. The scheduler must
     // run the spawned tasks and hand their results back to the joining task.
     let source = r#"
-features: async
 
 async fn fetch_user() -> Result<String, String> {
     return Ok("user")
@@ -97,7 +96,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_common_math_string_char_and_list_helpers_like_backend() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     Log.write(message: read String.from_int(value: Math.pow(base: 3, exponent: 4)))
@@ -176,7 +174,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_persistent_map_intrinsics_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let empty = PersistentMap<String, Int>.new()
@@ -222,7 +219,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_deque_intrinsics_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     local deque = Deque<Int>.new()
@@ -284,7 +280,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_set_intrinsics_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     local set = Set<String>.new()
@@ -354,7 +349,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_sorted_set_intrinsics_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     local set = SortedSet<Int>.new()
@@ -403,7 +397,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_sorted_map_intrinsics_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     local map = SortedMap<Int, String>.new()
@@ -462,7 +455,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_sorted_map_order_and_fresh_lists_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     local strings = SortedMap<String, Int>.new()
@@ -496,7 +488,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_buffer_intrinsics_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     local buffer = Buffer.new(size: 16)
@@ -525,7 +516,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_map_read_intrinsics_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let empty: Map<String, Int> = Map.new<String, Int>()
@@ -594,7 +584,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_list_index_scan_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let mut index = 0
@@ -621,7 +610,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_map_literal_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let table: Map<String, Int> = {"one" => 1, "two" => 2, "three" => 3}
@@ -653,7 +641,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_list_closure_intrinsics_like_interpreter() {
     let source = r#"
-features: local
 
 fn is_even(value: Int) -> Bool {
     let half = value / 2
@@ -782,7 +769,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_list_closure_pipeline_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let mut index = 0
@@ -824,7 +810,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_map_insert_lookup_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let mut index = 0
@@ -859,7 +844,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_string_key_map_like_interpreter() {
     let source = r#"
-features: local
 
 fn key_for(value: Int) -> String {
     return String.concat(left: read "key-", right: read String.from_int(value: value))
@@ -899,7 +883,6 @@ fn main() -> Unit {
 #[test]
 fn vm_runs_list_index_scan_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let mut index = 0
@@ -926,7 +909,6 @@ fn main() -> Unit {
 #[test]
 fn vm_runs_map_insert_lookup_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let mut index = 0
@@ -961,7 +943,6 @@ fn main() -> Unit {
 #[test]
 fn vm_runs_string_key_map_like_interpreter() {
     let source = r#"
-features: local
 
 fn key_for(value: Int) -> String {
     return String.concat(left: read "key-", right: read String.from_int(value: value))
@@ -1001,7 +982,6 @@ fn main() -> Unit {
 #[test]
 fn vm_runs_list_closure_pipeline_like_interpreter() {
     let source = r#"
-features: local
 
 struct Acc {
     total: Int
@@ -1047,7 +1027,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_list_mutator_and_json_intrinsics_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let mut values = List<Int>.new()
@@ -1243,7 +1222,6 @@ fn reg_vm_task_group_drains_unawaited_async_let_like_backend() {
     // `async let _ = background()`). The backend drains at the scope boundary, so
     // "background completed" must print before "after group".
     let source = r#"
-features: async
 
 async fn background() -> Result<Unit, String> {
     Log.write(message: read "background completed")

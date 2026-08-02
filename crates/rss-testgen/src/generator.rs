@@ -103,9 +103,7 @@ impl<'a> Generator<'a> {
             return self.gen_async_program();
         }
 
-        // Always declare `features: local` so generated `local` bindings are
-        // allowed; the feature is harmless when unused.
-        let mut source = String::from("features: local\n\n");
+        let mut source = String::new();
 
         let struct_count = self.seed.choice(3); // 0..=2
         for index in 0..struct_count {
@@ -183,11 +181,11 @@ impl<'a> Generator<'a> {
              async let consumer = consume(receiver: read receiver)\n        \
              await producer?\n        \
              let count = await consumer?\n        \
-             Log.write(message: read String.from_int(value: count))\n    }\n    \
+             let _ = String.from_int(value: count)\n    }\n    \
              return Ok(Unit)\n}\n";
 
         GeneratedProgram {
-            source: format!("features: async, local\n\n{produce}{consume}{main}"),
+            source: format!("{produce}{consume}{main}"),
             is_async: true,
         }
     }
@@ -321,7 +319,7 @@ impl<'a> Generator<'a> {
         functions.iter().any(|f| matches!(f.ret, Ty::Result(_, _)))
     }
 
-    /// One or more `Log.write` lines observing a freshly generated value. Compound
+    /// One or more statements observing a freshly generated value. Compound
     /// values are destructured down to a printable scalar.
     fn gen_observation(&mut self, scope: &mut Scope) -> String {
         let ty = self.pick_type();
@@ -349,7 +347,7 @@ impl<'a> Generator<'a> {
                 format!(
                     "{pad}match {access} {{\n\
                      {pad}    Some(x) => {{\n{some}{inner_pad}}}\n\
-                     {pad}    None => {{ Log.write(message: read \"none\") }}\n\
+                     {pad}    None => {{ let _ = \"none\" }}\n\
                      {pad}}}\n"
                 )
             }
@@ -359,7 +357,7 @@ impl<'a> Generator<'a> {
                 format!(
                     "{pad}match {access} {{\n\
                      {pad}    Ok(x) => {{\n{ok_obs}{inner_pad}}}\n\
-                     {pad}    Err(e) => {{ Log.write(message: read e) }}\n\
+                     {pad}    Err(e) => {{ let _ = e }}\n\
                      {pad}}}\n"
                 )
             }
@@ -373,7 +371,7 @@ impl<'a> Generator<'a> {
                 let arms = def
                     .variants
                     .iter()
-                    .map(|v| format!("{pad}    {v} => {{ Log.write(message: read \"{v}\") }}"))
+                    .map(|v| format!("{pad}    {v} => {{ let _ = \"{v}\" }}"))
                     .collect::<Vec<_>>()
                     .join("\n");
                 format!("{pad}match {access} {{\n{arms}\n{pad}}}\n")
@@ -399,7 +397,7 @@ impl<'a> Generator<'a> {
         }
     }
 
-    /// A `Log.write(...)` line printing a *scalar* access expression.
+    /// A statement observing a *scalar* access expression.
     fn log_scalar(&self, access: &str, ty: &Ty) -> String {
         let message = match ty {
             Ty::Int => format!("String.from_int(value: {access})"),
@@ -408,7 +406,7 @@ impl<'a> Generator<'a> {
             Ty::Float => format!("String.from_bool(value: ({access} > 0.0))"),
             _ => unreachable!("log_scalar called on non-scalar"),
         };
-        format!("Log.write(message: read {message})")
+        format!("let _ = {message}")
     }
 
     fn struct_def(&self, name: &str) -> StructDef {
@@ -458,9 +456,7 @@ impl<'a> Generator<'a> {
             let amount = self.seed.range_i64(0, 1000);
             lines.push(format!("{accumulator} = {accumulator} + {amount}"));
         }
-        lines.push(format!(
-            "Log.write(message: read String.from_int(value: {accumulator}))"
-        ));
+        lines.push(format!("let _ = String.from_int(value: {accumulator})"));
         lines.join("\n    ")
     }
 
@@ -473,8 +469,8 @@ impl<'a> Generator<'a> {
         let token = self.fresh_var();
         let observe = |token: &str| {
             format!(
-                "Log.write(message: read String.from_bool(value: \
-                 CancellationToken.is_cancelled(token: read {token})))"
+                "let _ = String.from_bool(value: \
+                 CancellationToken.is_cancelled(token: read {token}))"
             )
         };
         [
@@ -517,7 +513,7 @@ impl<'a> Generator<'a> {
             e = elem.render()
         ));
         lines.push(format!(
-            "Log.write(message: read String.from_int(value: List.len(list: read {result})))"
+            "let _ = String.from_int(value: List.len(list: read {result}))"
         ));
         let list_ty = Ty::List(Box::new(elem));
         scope.bindings.push(Binding {
@@ -621,9 +617,7 @@ impl<'a> Generator<'a> {
         lines.append(&mut inserts);
         // Observe the length so the collection contributes to stdout (deterministic
         // across backends, unlike element iteration order).
-        lines.push(format!(
-            "Log.write(message: read String.from_int(value: {len_expr}))"
-        ));
+        lines.push(format!("let _ = String.from_int(value: {len_expr})"));
         // Caller prefixes the first line with one indent; pre-indent the rest.
         lines.join("\n    ")
     }

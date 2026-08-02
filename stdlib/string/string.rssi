@@ -1,312 +1,311 @@
-features: local, native
 
 struct StringBuilder
 
 struct StringView
 
 pub fn Char.is_digit(value: Char) -> Bool
-    effects(pure)
+
 
 pub fn Char.is_alpha(value: Char) -> Bool
-    effects(pure)
+
 
 pub fn Char.is_whitespace(value: Char) -> Bool
-    effects(pure)
+
 
 pub fn Char.is_alphanumeric(value: Char) -> Bool
-    effects(pure)
+
 
 pub fn Char.is_lower(value: Char) -> Bool
-    effects(pure)
+
 
 pub fn Char.is_upper(value: Char) -> Bool
-    effects(pure)
+
 
 pub fn Char.to_lower(value: Char) -> Char
-    effects(pure)
+
 
 pub fn Char.to_upper(value: Char) -> Char
-    effects(pure)
+
 
 pub fn Char.to_code(value: Char) -> Int
-    effects(pure)
+
 
 pub fn Char.from_code(value: Int) -> Option<Char>
-    effects(pure)
+
 
 pub fn Char.compare(left: Char, right: Char) -> Int
-    effects(pure)
+
 
 pub fn Char.to_string(value: Char) -> fresh String
-    effects(pure)
+
 
 pub fn String.concat(left: String, right: String) -> fresh String
-    effects(pure)
+
 
 pub fn String.copy(value: String) -> fresh String
-    effects(pure)
+
 
 pub fn String.clone(value: String) -> fresh String
-    effects(pure)
+
 
 pub fn String.from_int(value: Int) -> fresh String
-    effects(pure)
+
 
 pub fn String.from_float(value: Float) -> fresh String
-    effects(pure)
+
 
 pub fn String.from_bool(value: Bool) -> fresh String
-    effects(pure)
+
 
 pub fn Int.to_string(value: Int) -> fresh String
-    effects(pure)
+
 
 pub fn Int.to_float(value: Int) -> Float
-    effects(pure)
+
 
 pub fn Float.to_string(value: Float) -> fresh String
-    effects(pure)
+
 
 pub fn Float.is_nan(value: Float) -> Bool
-    effects(pure)
+
 
 pub fn Float.is_finite(value: Float) -> Bool
-    effects(pure)
+
 
 pub fn Float.is_infinite(value: Float) -> Bool
-    effects(pure)
+
 
 pub fn Int.bit_and(left: Int, right: Int) -> Int
-    effects(pure)
+
 
 pub fn Int.bit_or(left: Int, right: Int) -> Int
-    effects(pure)
+
 
 pub fn Int.bit_xor(left: Int, right: Int) -> Int
-    effects(pure)
+
 
 pub fn Int.bit_not(value: Int) -> Int
-    effects(pure)
+
 
 pub fn Int.shift_left(value: Int, bits: Int) -> Int
-    effects(pure)
+
 
 pub fn Int.shift_right(value: Int, bits: Int) -> Int
-    effects(pure)
+
 
 pub fn String.to_path(value: String) -> fresh Path
-    effects(pure)
+
 
 pub fn String.safe_relative(value: String) -> Result<fresh Path, String>
-    effects(pure)
+
 
 pub fn String.to_url(value: String) -> fresh Url
-    effects(pure)
+
 
 pub fn String.to_bytes(value: String) -> fresh Bytes
-    effects(pure)
+
 
 pub fn String.env(value: String) -> Option<fresh String>
-    effects(native)
+
 
 pub fn String.env_or(value: String, default: String) -> fresh String
-    effects(native)
+
 
 pub fn String.len(value: String) -> Int
-    effects(pure)
+
 
 pub fn String.is_empty(value: String) -> Bool
-    effects(pure)
+
 
 pub fn String.trim(value: String) -> fresh String
-    effects(pure)
+
 
 pub fn String.trim_start(value: String) -> fresh String
-    effects(pure)
+
 
 pub fn String.trim_end(value: String) -> fresh String
-    effects(pure)
+
 
 pub fn String.to_lowercase(value: String) -> fresh String
-    effects(pure)
+
 
 pub fn String.to_uppercase(value: String) -> fresh String
-    effects(pure)
+
 
 pub fn String.replace(
     value: String,
     from: String,
     to: String,
 ) -> fresh String
-    effects(pure)
+
 
 pub fn String.replace_first(
     value: String,
     from: String,
     to: String,
 ) -> fresh String
-    effects(pure)
+
 
 pub fn String.count(
     value: String,
     needle: String,
 ) -> Int
-    effects(pure)
+
 
 pub fn String.pad_left(
     value: String,
     width: Int,
     fill: String,
 ) -> fresh String
-    effects(pure)
+
 
 pub fn String.pad_right(
     value: String,
     width: Int,
     fill: String,
 ) -> fresh String
-    effects(pure)
+
 
 pub fn String.reverse(value: String) -> fresh String
-    effects(pure)
+
 
 pub fn String.char_at(
     value: String,
     index: Int,
 ) -> Option<Char>
-    effects(pure)
+
 
 pub fn String.starts_with(
     value: String,
     prefix: String,
 ) -> Bool
-    effects(pure)
+
 
 pub fn String.ends_with(
     value: String,
     suffix: String,
 ) -> Bool
-    effects(pure)
+
 
 pub fn String.contains(
     value: String,
     needle: String,
 ) -> Bool
-    effects(pure)
+
 
 pub fn String.lines(value: String) -> fresh List<String>
-    effects(pure)
+
 
 pub fn String.chars(value: String) -> fresh List<Char>
-    effects(pure)
+
 
 pub fn String.join(
     parts: List<String>,
     separator: String,
 ) -> fresh String
-    effects(pure)
+
 
 pub fn String.format(
     template: String,
     args: List<String>,
 ) -> fresh String
-    effects(pure)
+
 
 pub fn String.strip_prefix(
     value: String,
     prefix: String,
 ) -> Option<String>
-    effects(pure)
+
 
 pub fn String.before(
     value: String,
     delimiter: String,
 ) -> Option<String>
-    effects(pure)
+
 
 pub fn String.after(
     value: String,
     delimiter: String,
 ) -> Option<String>
-    effects(pure)
+
 
 pub fn String.split(
     value: String,
     delimiter: String,
 ) -> fresh List<String>
-    effects(pure)
+
 
 pub fn String.slice(
     value: String,
     start: Int,
     len: Int,
 ) -> fresh String
-    effects(pure)
+
 
 pub fn String.index_of(
     value: String,
     needle: String,
 ) -> Option<Int>
-    effects(pure)
+
 
 pub fn String.repeat(
     value: String,
     count: Int,
 ) -> fresh String
-    effects(pure)
+
 
 pub fn String.parse_int(value: String) -> Option<Int>
-    effects(pure)
+
 
 pub fn String.parse_float(value: String) -> Option<Float>
-    effects(pure)
+
 
 pub fn String.view(
     value: String,
     start: Int,
     len: Int,
 ) -> StringView
-    effects(pure)
+
 
 pub fn StringView.slice(
     value: StringView,
     start: Int,
     len: Int,
 ) -> StringView
-    effects(pure)
+
 
 pub fn StringView.len(value: StringView) -> Int
-    effects(pure)
+
 
 pub fn StringView.is_empty(value: StringView) -> Bool
-    effects(pure)
+
 
 pub fn StringView.to_string(value: StringView) -> fresh String
-    effects(pure)
+
 
 pub fn StringView.starts_with(
     value: StringView,
     prefix: String,
 ) -> Bool
-    effects(pure)
+
 
 pub fn StringView.contains(
     value: StringView,
     needle: String,
 ) -> Bool
-    effects(pure)
+
 
 pub fn StringView.before(
     value: StringView,
     delimiter: String,
 ) -> Option<StringView>
-    effects(pure)
+
 
 pub fn StringView.after(
     value: StringView,
     delimiter: String,
 ) -> Option<StringView>
-    effects(pure)
+
 
 pub fn StringBuilder.new() -> fresh StringBuilder
 

@@ -1,6 +1,5 @@
 // expect: RS0032
 
-features: local
 
 struct User {
     id: Int

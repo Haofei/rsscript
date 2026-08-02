@@ -107,7 +107,6 @@ fn main() -> Unit {
 #[test]
 fn lint_warns_on_public_signature_complexity() {
     let source = r#"
-features: native
 
 pub fn overloaded<A, B, C, D>(
     first: read Result<Option<List<Map<String, Image>>>, Error>,
@@ -118,7 +117,6 @@ pub fn overloaded<A, B, C, D>(
     sixth: read String,
     seventh: read String,
 ) -> Result<Option<List<Map<String, Image>>>, Error>
-    effects(no_panic, noalloc, no_block, pure, native)
 {
     return Ok(None)
 }
@@ -145,11 +143,6 @@ pub fn overloaded<A, B, C, D>(
             .iter()
             .any(|diagnostic| diagnostic.summary.contains("4 generic parameters"))
     );
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.summary.contains("5 effects"))
-    );
 }
 
 #[test]
@@ -167,37 +160,18 @@ pub fn Html.escape(text: read String) -> fresh HtmlEscaped
 }
 
 #[test]
-fn parser_accepts_native_function_declaration() {
-    let source = r#"
-features: native
-
-native fn Host.emit(message: read String) -> Unit
-    effects(native)
-"#;
-    let program = parse_source("host.rssi", source);
-
-    let Item::Function(function) = &program.items[0] else {
-        panic!("expected native function declaration");
-    };
-    assert_eq!(function.name, "Host.emit");
-    assert!(function.is_native);
-    assert!(
-        function
-            .effects
-            .iter()
-            .any(|effect| matches!(effect, EffectDecl::Name(name) if name == "native"))
-    );
-    assert!(analyze_source("host.rssi", source).is_empty());
+fn parser_rejects_removed_native_and_effect_syntax() {
+    let source = "native fn Host.emit(message: read String) -> Unit effects(pure)\n";
+    assert!(!analyze_source("host.rssi", source).is_empty());
 }
 
 #[test]
 fn parser_preserves_explicit_fn_capture_contract() {
     let source = r#"
-features: local
 
 fn run() -> Int {
     let offset = 2
-    local add = fn(value) captures(read offset) effects(pure) {
+    local add = fn(value) captures(read offset) {
         return value + offset
     }
     return add(40)
@@ -226,20 +200,16 @@ fn run() -> Int {
         })
         .and_then(|expr| match expr {
             Expr::Closure {
-                captures,
-                declared_effects,
-                explicit,
-                ..
-            } => Some((captures, declared_effects, explicit)),
+                captures, explicit, ..
+            } => Some((captures, explicit)),
             _ => None,
         })
         .expect("explicit fn expression should parse as closure");
 
-    assert!(*closure.2);
+    assert!(*closure.1);
     assert_eq!(closure.0.len(), 1);
     assert_eq!(closure.0[0].name, "offset");
     assert_eq!(closure.0[0].effect, DataEffect::Read);
-    assert_eq!(closure.1, &vec!["pure".to_string()]);
 }
 
 #[test]

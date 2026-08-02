@@ -1,7 +1,5 @@
-features: native
 
-native fn Db.query(sql: String) -> String
-    effects(native)
+fn Db.query(sql: String) -> String
 
-native fn Net.fetch(url: String) -> String
-    effects(native)
+
+fn Net.fetch(url: String) -> String

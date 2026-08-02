@@ -1,6 +1,6 @@
 
 fn zero() -> Int
-    effects(noalloc, no_panic, pure)
+    effect_list(noalloc, no_panic, pure)
 {
     return 0
 }

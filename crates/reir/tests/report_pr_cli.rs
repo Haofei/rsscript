@@ -59,7 +59,7 @@ fn report_pr_cli_matches_s3_demo_golden_comment() {
                 "normalized_effects": ["native", "suspends"]
             }
         ],
-        "capabilities": [
+        "external_bindings": [
             {
                 "function": "Reports.cleanup_old_reports",
                 "binding_symbol": "S3.delete_object",
@@ -71,7 +71,7 @@ fn report_pr_cli_matches_s3_demo_golden_comment() {
                 "call_chain": ["Reports.cleanup_old_reports", "S3.delete_object"],
                 "span": {
                     "file": "src/upload.rss",
-                    "line": 28,
+                    "line": 27,
                     "column": 11,
                     "length": 2
                 }
@@ -87,7 +87,7 @@ fn report_pr_cli_matches_s3_demo_golden_comment() {
                 "call_chain": ["S3.delete_object"],
                 "span": {
                     "file": "interface/s3.rssi",
-                    "line": 10,
+                    "line": 9,
                     "column": 1,
                     "length": 3
                 }
@@ -103,7 +103,7 @@ fn report_pr_cli_matches_s3_demo_golden_comment() {
                 "call_chain": ["Reports.upload_batch", "upload_report", "S3.put_object"],
                 "span": {
                     "file": "src/upload.rss",
-                    "line": 16,
+                    "line": 15,
                     "column": 11,
                     "length": 13
                 }
@@ -119,7 +119,7 @@ fn report_pr_cli_matches_s3_demo_golden_comment() {
                 "call_chain": ["S3.put_object"],
                 "span": {
                     "file": "interface/s3.rssi",
-                    "line": 3,
+                    "line": 2,
                     "column": 1,
                     "length": 3
                 }

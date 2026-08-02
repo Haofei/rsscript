@@ -151,7 +151,6 @@ fn main() -> Unit {
 "#;
     let new_source = r#"
 fn work(x: read Int) -> Int
-    effects(parallel)
 {
     return x
 }

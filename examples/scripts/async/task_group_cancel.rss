@@ -1,4 +1,3 @@
-features: async
 
 fn run_workers() -> Result<Unit, TimerError> {
     task_group {

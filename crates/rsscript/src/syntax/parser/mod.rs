@@ -1,19 +1,16 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::checks::budget::{FrontendBudget, FrontendBudgetLimits, ParseRecursionGuard};
 use crate::diagnostic::Span;
 use crate::lexer::{Token, TokenKind, lex_with_budget};
 use crate::syntax::ast::{
-    AssignStmt, BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, DuplicateFileFeature,
-    EffectDecl, Expr, FieldDecl, FileFeature, FileFeatureScope, ForStmt, FunctionDecl,
-    GenericBound, GenericParam, IfStmt, Item, LetElseStmt, LetKind, LetStmt, LoopStmt,
-    MapLiteralEntry, MatchArm, MatchFieldPattern, MatchLiteral, MatchPattern, MatchStmt,
+    AssignStmt, BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, Expr, FieldDecl, ForStmt,
+    FunctionDecl, GenericBound, GenericParam, IfStmt, Item, LetElseStmt, LetKind, LetStmt,
+    LoopStmt, MapLiteralEntry, MatchArm, MatchFieldPattern, MatchLiteral, MatchPattern, MatchStmt,
     ModuleDecl, ObjectLiteralField, Param, Program, ProtocolDecl, ProtocolImpl,
     ProtocolImplMapping, ReturnStmt, SelectArm, SelectStmt, Stmt, SumTypeDecl, SumVariant,
-    TaskGroupStmt, TypeAliasDecl, TypeDecl, TypeKind, TypeRef, UnknownFileFeature, UseDecl,
-    WithStmt,
+    TaskGroupStmt, TypeAliasDecl, TypeDecl, TypeKind, TypeRef, UseDecl, WithStmt,
 };
 
 mod expr;
@@ -72,14 +69,9 @@ pub fn parse_source_raw(file: &str, source: &str) -> Program {
     parse_source_tokens_raw(file, &tokens, budget)
 }
 
-fn parse_source_tokens_raw(file: &str, tokens: &[Token], budget: Rc<FrontendBudget>) -> Program {
+fn parse_source_tokens_raw(_file: &str, tokens: &[Token], budget: Rc<FrontendBudget>) -> Program {
     let _active_budget = ActiveParseBudget::set(budget);
-    Parser {
-        tokens,
-        index: 0,
-        file,
-    }
-    .parse_program()
+    Parser { tokens, index: 0 }.parse_program()
 }
 
 fn source_start_span(file: &str, length: usize) -> Span {
@@ -135,23 +127,11 @@ pub(super) fn parse_is_active() -> bool {
 struct Parser<'a> {
     tokens: &'a [Token],
     index: usize,
-    file: &'a str,
-}
-
-struct ParsedFeatures {
-    features: Vec<FileFeature>,
-    unknown_features: Vec<UnknownFileFeature>,
-    duplicate_features: Vec<DuplicateFileFeature>,
 }
 
 impl Parser<'_> {
     fn parse_program(&mut self) -> Program {
         let _parse = enter_parse();
-        let mut features = Vec::new();
-        let mut unknown_features = Vec::new();
-        let mut duplicate_features = Vec::new();
-        let mut feature_spans = Vec::new();
-        let mut profile_spans = Vec::new();
         let mut unknown_top_level_spans = Vec::new();
         let mut malformed_declaration_spans = Vec::new();
         let mut protocols = Vec::new();
@@ -159,16 +139,7 @@ impl Parser<'_> {
         let mut items = Vec::new();
 
         while parse_is_active() && !self.is_eof() {
-            if self.at_ident("features") && self.peek_symbol(1, ":") {
-                feature_spans.push(self.tokens[self.index].span.clone());
-                let parsed = self.parse_features();
-                features.extend(parsed.features);
-                unknown_features.extend(parsed.unknown_features);
-                duplicate_features.extend(parsed.duplicate_features);
-            } else if self.at_ident("profile") && self.peek_symbol(1, ":") {
-                profile_spans.push(self.tokens[self.index].span.clone());
-                self.index += 1;
-            } else if self.at_ident("class")
+            if self.at_ident("class")
                 || self.at_ident("struct")
                 || self.at_ident("resource")
                 || self.at_ident("opaque")
@@ -213,14 +184,6 @@ impl Parser<'_> {
                     }
                 } else if let Some(protocol_impl) = self.parse_protocol_impl_decl() {
                     protocol_impls.push(protocol_impl);
-                } else {
-                    malformed_declaration_spans.push(self.tokens[start].span.clone());
-                    self.index = skip_unknown_top_level(self.tokens, start);
-                }
-            } else if self.at_ident("native") && self.peek_ident(1, "module") {
-                let start = self.index;
-                if let Some(functions) = self.parse_native_module_decl() {
-                    items.extend(functions.into_iter().map(Item::Function));
                 } else {
                     malformed_declaration_spans.push(self.tokens[start].span.clone());
                     self.index = skip_unknown_top_level(self.tokens, start);
@@ -276,61 +239,11 @@ impl Parser<'_> {
         }
 
         Program {
-            feature_scopes: vec![FileFeatureScope {
-                file: self.file.to_string(),
-                features: features.clone(),
-            }],
-            features,
-            unknown_features,
-            duplicate_features,
-            feature_spans,
-            profile_spans,
             unknown_top_level_spans,
             malformed_declaration_spans,
             protocols,
             protocol_impls,
             items,
-        }
-    }
-
-    fn parse_features(&mut self) -> ParsedFeatures {
-        self.index += 2;
-        let end = declaration_line_end(self.tokens, self.index);
-        let mut features = Vec::new();
-        let mut unknown_features = Vec::new();
-        let mut duplicate_features = Vec::new();
-        let mut seen_features = HashSet::new();
-        while self.index < end {
-            if self.at_symbol(",") {
-                self.index += 1;
-                continue;
-            }
-            let token = self.tokens.get(self.index);
-            if let Some(feature) = parse_file_feature(token) {
-                let name = file_feature_name(feature).to_string();
-                if !seen_features.insert(feature)
-                    && let Some(token) = token
-                {
-                    duplicate_features.push(DuplicateFileFeature {
-                        name,
-                        span: token.span.clone(),
-                    });
-                }
-                features.push(feature);
-            } else if let Some(token) = token
-                && !matches!(token.kind, TokenKind::Eof)
-            {
-                unknown_features.push(UnknownFileFeature {
-                    name: token.text(),
-                    span: token.span.clone(),
-                });
-            }
-            self.index += 1;
-        }
-        ParsedFeatures {
-            features,
-            unknown_features,
-            duplicate_features,
         }
     }
 
@@ -601,16 +514,12 @@ impl Parser<'_> {
         }
         let mut is_public = false;
         let mut is_async = false;
-        let mut is_native = false;
-        while self.at_ident("pub") || self.at_ident("async") || self.at_ident("native") {
+        while self.at_ident("pub") || self.at_ident("async") {
             if self.at_ident("pub") {
                 is_public = true;
             }
             if self.at_ident("async") {
                 is_async = true;
-            }
-            if self.at_ident("native") {
-                is_native = true;
             }
             self.index += 1;
         }
@@ -645,7 +554,7 @@ impl Parser<'_> {
             }
             let return_start = self.index;
             while self.index < signature_end
-                && !self.at_ident("effects")
+                && !self.at_ident("retains")
                 && !self.at_symbol("{")
                 && !self.at_symbol("=")
             {
@@ -657,14 +566,14 @@ impl Parser<'_> {
             return_ty = parse_type_ref(self.tokens, return_start, self.index);
         }
 
-        let mut effects = Vec::new();
-        let mut malformed_effect_spans = Vec::new();
-        if self.index < signature_end && self.at_ident("effects") && self.peek_symbol(1, "(") {
+        let mut retained_params = Vec::new();
+        while self.index < signature_end && self.at_ident("retains") && self.peek_symbol(1, "(") {
             let open = self.index + 1;
             let close = find_matching(self.tokens, open, "(", ")")?;
-            let parsed_effects = parse_effects(self.tokens, open + 1, close);
-            effects = parsed_effects.effects;
-            malformed_effect_spans = parsed_effects.malformed_spans;
+            if close != open + 2 {
+                return None;
+            }
+            retained_params.push(self.tokens.get(open + 1)?.text());
             self.index = close + 1;
         }
         let default_impl_marker =
@@ -695,7 +604,6 @@ impl Parser<'_> {
             name,
             is_public,
             is_async,
-            is_native,
             has_body,
             default_impl_marker,
             deprecated_reason,
@@ -706,8 +614,7 @@ impl Parser<'_> {
             malformed_param_spans,
             return_ty,
             returns_fresh,
-            effects,
-            malformed_effect_spans,
+            retained_params,
             body,
             span,
         })
@@ -836,7 +743,7 @@ impl Parser<'_> {
     // qualified functions `fn Type.method(self: <effect> Type, ...)`. The block
     // only supplies the `Type.` qualifier and the `self` receiver type, so every
     // downstream stage (checker, HIR, receiver-call resolution, lowering) sees
-    // exactly what the flat spelling produces — no new capability, grouping only.
+    // exactly what the flat spelling produces — no new external_binding, grouping only.
     fn parse_inherent_impl_decl(&mut self) -> Option<Vec<FunctionDecl>> {
         self.index += 1;
         let type_name = self.take_ident_name()?;
@@ -864,48 +771,6 @@ impl Parser<'_> {
                 if param.name == "self" && param.ty.name.is_empty() {
                     param.ty.name = type_name.clone();
                 }
-            }
-            functions.push(function);
-        }
-        self.index = close + 1;
-        Some(functions)
-    }
-
-    fn parse_native_module_decl(&mut self) -> Option<Vec<FunctionDecl>> {
-        self.index += 2;
-        let module = self.take_ident_name()?;
-        if !self.at_symbol("{") {
-            return None;
-        }
-        let open = self.index;
-        let close = find_matching(self.tokens, open, "{", "}")?;
-        self.index = open + 1;
-        let mut functions = Vec::new();
-        while self.index < close {
-            if is_trivia_boundary(self.current()?) {
-                self.index += 1;
-                continue;
-            }
-            let start = self.index;
-            let Some(mut function) = self.parse_function_decl() else {
-                self.index = skip_unknown_top_level(self.tokens, start).min(close);
-                continue;
-            };
-            function.name = if function.name.contains('.') {
-                function.name
-            } else {
-                format!("{module}.{}", function.name)
-            };
-            function.is_public = true;
-            function.is_native = true;
-            if !function
-                .effects
-                .iter()
-                .any(|effect| matches!(effect, EffectDecl::Name(name) if name == "native"))
-            {
-                function
-                    .effects
-                    .push(EffectDecl::Name("native".to_string()));
             }
             functions.push(function);
         }

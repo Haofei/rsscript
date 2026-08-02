@@ -1,4 +1,3 @@
-features: local, native
 
 struct Picture
 struct PictureError
@@ -26,23 +25,23 @@ fn OutboundMessage.ok(body: String) -> Result<fresh OutboundMessage, HttpError>
 fn Settings.load(path: Path) -> Result<fresh SettingsValue, SettingsError>
 fn Settings.new(name: String, rules: List<Policy>) -> fresh Settings
 fn SettingsStore.replace(store: mut SettingsStore, value: SettingsValue) -> Unit
-    effects(retains(value))
+    retains(value)
 fn SettingsStore.name(store: SettingsStore) -> String
 fn PolicyLoader.load_rules(path: Path) -> Result<fresh List<Policy>, SettingsError>
 fn SharedSettings.new(value: Settings) -> fresh SharedSettings
-    effects(retains(value))
+    retains(value)
 fn SharedSettings.replace(global: mut SharedSettings, value: Settings) -> Unit
-    effects(retains(value))
+    retains(value)
 fn MemoStore.insert(cache: mut MemoStore, key: String, value: String) -> Unit
-    effects(retains(key), retains(value))
+    retains(key) retains(value)
 fn MemoStore.lookup(cache: MemoStore, key: String) -> String
 fn Tally.add(counter: mut Tally, amount: Int) -> Unit
 fn Tally.value(counter: Tally) -> Int
 fn LexicalScope.root() -> fresh LexicalScope
 fn LexicalScope.child(parent: LexicalScope) -> fresh LexicalScope
-    effects(retains(parent))
+    retains(parent)
 fn LexicalScope.bind_function(env: mut LexicalScope, function: ClosureRecord) -> Unit
-    effects(retains(function))
+    retains(function)
 fn LexicalScope.has_parent(env: LexicalScope) -> Bool
 fn LexicalScope.has_function(env: LexicalScope) -> Bool
 fn ClosureRecord.new(closure: LexicalScope) -> fresh ClosureRecord
@@ -73,7 +72,7 @@ class RetainedImageStore {
 }
 
 fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Picture) -> Unit
-    effects(retains(image))
+    retains(image)
 
 fn User.lookup(id: String) -> User
 fn User.touch(user: User) -> Unit

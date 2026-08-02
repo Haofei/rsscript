@@ -37,10 +37,10 @@ impl Hir {
         let mut callable_symbols: HashMap<String, (DuplicateSymbolKind, Span)> = HashMap::new();
         for interface in interfaces {
             hir.extend_protocol_impls(&interface.protocol_impls, false);
-            hir.collect_item_signatures(interface, &mut type_symbols, &mut callable_symbols);
+            hir.collect_item_signatures(interface, &mut type_symbols, &mut callable_symbols, true);
         }
         hir.extend_protocol_impls(&program.protocol_impls, true);
-        hir.collect_item_signatures(program, &mut type_symbols, &mut callable_symbols);
+        hir.collect_item_signatures(program, &mut type_symbols, &mut callable_symbols, false);
         hir.normalize_class_typed_handle_fields();
         hir.collect_const_values(program);
         hir.collect_resource_drop_bodies(program);
@@ -146,6 +146,7 @@ impl Hir {
         program: &SyntaxProgram,
         type_symbols: &mut HashMap<String, (DuplicateSymbolKind, Span)>,
         callable_symbols: &mut HashMap<String, (DuplicateSymbolKind, Span)>,
+        is_external: bool,
     ) {
         for item in &program.items {
             match item {
@@ -157,7 +158,7 @@ impl Hir {
                         &function.name,
                         &function.span,
                     );
-                    self.insert_function(function_sig_from_decl(function, false));
+                    self.insert_function(function_sig_from_decl(function, false, is_external));
                 }
                 Item::Type(type_decl) => {
                     record_duplicate_fields(&mut self.duplicate_symbols, type_decl);
@@ -266,7 +267,7 @@ impl Hir {
     /// Concrete impl targets for a protocol method: `(implementing type name,
     /// target function name)` for every `impl Protocol for Type` that maps
     /// `method`. Used by the reg-VM to dynamically dispatch a `Protocol.method`
-    /// call by the receiver's runtime type (capability objects + generic bounds),
+    /// call by the receiver's runtime type (dynamic protocol values + generic bounds),
     /// mirroring the compiled backend's closed-world enum dispatch.
     pub(crate) fn protocol_method_targets(
         &self,
@@ -362,10 +363,6 @@ impl Hir {
             .map(|(type_name, body)| (type_name.as_str(), body))
     }
 
-    pub fn feature_uses(&self) -> &[HirFeatureUse] {
-        &self.feature_uses
-    }
-
     pub fn call_sites(&self) -> &[HirCallSite] {
         &self.call_sites
     }
@@ -438,7 +435,6 @@ impl Hir {
                             name: "clone".to_string(),
                             is_public: true,
                             is_async: false,
-                            is_native: false,
                             type_params: Box::from([]),
                             type_param_bounds: Vec::new(),
                             params: vec![ParamSig {
@@ -449,9 +445,9 @@ impl Hir {
                             }],
                             return_ty: Some(ResolvedType::from_display(&receiver_type)),
                             returns_fresh: true,
-                            effects: Vec::new(),
                             retained_params: HashSet::new(),
                             is_builtin: true,
+                            is_external: false,
                         }),
                         kind: ResolvedCalleeKind::BuiltinFunction,
                     },
@@ -567,7 +563,7 @@ impl Hir {
                 candidates.push((protocol.clone(), sig.clone()));
             }
         }
-        if let Some(protocol) = capability_protocol(&ResolvedType::from_display(receiver_type))
+        if let Some(protocol) = dyn_protocol(&ResolvedType::from_display(receiver_type))
             && let Some(sig) = self.resolve_function(Some(&protocol), method)
         {
             candidates.push((protocol.to_string(), sig.clone()));
@@ -640,7 +636,7 @@ impl Hir {
         for item in &program.items {
             match item {
                 Item::Function(function) => {
-                    self.insert_function(function_sig_from_decl(function, true));
+                    self.insert_function(function_sig_from_decl(function, true, false));
                 }
                 Item::Type(type_decl) => {
                     self.insert_builtin_type(type_info_from_decl(type_decl));
@@ -686,6 +682,5 @@ impl Hir {
         self.field_accesses = facts.field_accesses;
         self.effect_events = facts.effect_events;
         self.returns = facts.returns;
-        self.feature_uses = facts.feature_uses;
     }
 }

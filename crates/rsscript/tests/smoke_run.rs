@@ -21,7 +21,7 @@ mod common;
 use std::fs;
 use std::process::Command;
 
-use rsscript::reg_vm_eval_source_main;
+use common::reg_vm_eval_source_main;
 
 /// A representative program: arithmetic, a user function call, a `match` over the
 /// result, and `Log.write` for stdout. Exercises the value path AND the I/O path.
@@ -80,9 +80,8 @@ fn run_vm_cli_executes_through_register_vm() {
     fs::write(
         &file,
         concat!(
-            "fn main() -> Unit {\n",
-            "    Log.write(message: read \"hello VM\")\n",
-            "    return Unit\n",
+            "fn main() -> String {\n",
+            "    return \"hello VM\"\n",
             "}\n",
         ),
     )
@@ -99,7 +98,7 @@ fn run_vm_cli_executes_through_register_vm() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "hello VM\nUnit\n");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "hello VM\n");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 
     let _ = fs::remove_dir_all(&dir);

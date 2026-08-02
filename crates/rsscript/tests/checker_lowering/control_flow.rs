@@ -241,7 +241,6 @@ fn inspect() -> Int {
 #[test]
 fn rust_lowering_uses_trait_qualified_ufcs_for_receiver_protocol_calls() {
     let source = r#"
-features: local
 
 protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
@@ -273,7 +272,6 @@ fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit {
 #[test]
 fn rust_lowering_uses_trait_qualified_ufcs_for_concrete_receiver_protocol_impl_calls() {
     let source = r#"
-features: local
 
 protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
@@ -303,9 +301,8 @@ fn write_line(writer: mut BufferWriter, message: read String) -> Unit {
 }
 
 #[test]
-fn rust_lowering_generates_sealed_capability_object_for_protocol_impls() {
+fn rust_lowering_generates_sealed_external_binding_object_for_protocol_impls() {
     let source = r#"
-features: local
 
 protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
@@ -324,17 +321,17 @@ impl Writer for BufferWriter {
 }
 
 fn write_dynamic(writer: take BufferWriter, message: read String) -> Unit {
-    local cap: Capability<Writer> = Capability<Writer>.from(value: take writer)
+    local cap: Dyn<Writer> = Dyn<Writer>.from(value: take writer)
     Writer.write(self: mut cap, message: read message)
 }
 "#;
-    let rust =
-        lower_source_to_rust("capability-object-lower.rss", source).expect("source should lower");
+    let rust = lower_source_to_rust("external_binding-object-lower.rss", source)
+        .expect("source should lower");
 
-    assert!(rust.contains("pub enum CapabilityWriter"));
+    assert!(rust.contains("pub enum ExternalBindingWriter"));
     assert!(rust.contains("BufferWriter(BufferWriter)"));
-    assert!(rust.contains("impl Writer for CapabilityWriter"));
-    assert!(rust.contains("CapabilityWriter::BufferWriter(writer)"));
+    assert!(rust.contains("impl Writer for ExternalBindingWriter"));
+    assert!(rust.contains("ExternalBindingWriter::BufferWriter(writer)"));
     assert!(rust.contains("Writer::write(&mut cap, message);"));
     assert!(!rust.contains("dyn Writer"));
 }
@@ -342,7 +339,6 @@ fn write_dynamic(writer: take BufferWriter, message: read String) -> Unit {
 #[test]
 fn rust_lowering_allows_receiver_calls_for_core_namespace_functions() {
     let source = r#"
-features: local
 
 fn main() -> Int {
     let mut items = List<Int>.new()
@@ -454,7 +450,6 @@ fn name_of(user: read User) -> String {
 #[test]
 fn rust_lowering_supports_local_take_match_patterns() {
     let source = r#"
-features: local
 
 struct User {
     name: String
@@ -558,7 +553,6 @@ fn bad(value: read Option<Int>) -> Int {
 #[test]
 fn checker_tracks_use_after_take_for_local_inline_field() {
     let bad = r#"
-features: local
 
 struct Image
 struct Holder {
@@ -583,7 +577,6 @@ fn bad_take_field(path: read Path) -> Unit {
     );
 
     let ok = r#"
-features: local
 
 struct Image
 struct Pair {
@@ -717,7 +710,6 @@ protocol Writer {
         self: mut Self,
         message: read String,
     ) -> Unit
-        effects(retains(message))
 }
 
 struct BufferWriter
@@ -726,7 +718,6 @@ fn BufferWriter.write(
     self: read BufferWriter,
     message: read String,
 ) -> Unit
-    effects(retains(message))
 {
     Log.write(message: read message)
 }

@@ -1,6 +1,5 @@
 // expect: RS0412
 
-features: async
 
 // `Task.cancellation_token()` here cannot see the `task_group` that drives this
 // task — an async fn is lowered at its definition site — so it would silently

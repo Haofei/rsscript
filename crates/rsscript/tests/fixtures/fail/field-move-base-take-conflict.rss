@@ -1,5 +1,4 @@
 // expect: RS0305
-features: local
 
 struct Workspace {
     id: Int

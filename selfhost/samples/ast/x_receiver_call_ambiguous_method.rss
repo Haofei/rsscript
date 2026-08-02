@@ -1,5 +1,4 @@
 // expect: RS0206
-features: local
 
 protocol Formatter {
     fn format(self: Self) -> fresh String

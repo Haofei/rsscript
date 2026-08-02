@@ -407,21 +407,20 @@ fn function_detail(function: &FunctionDecl) -> String {
         .map(type_ref_display)
         .unwrap_or_else(|| "Unit".to_string());
     let async_prefix = if function.is_async { "async " } else { "" };
-    let native_prefix = if function.is_native { "native " } else { "" };
-    let effects = if function.effects.is_empty() {
+    let retains = if function.retained_params.is_empty() {
         String::new()
     } else {
         format!(
-            " effects({})",
+            " retains({})",
             function
-                .effects
+                .retained_params
                 .iter()
-                .map(effect_display)
+                .map(String::as_str)
                 .collect::<Vec<_>>()
                 .join(", ")
         )
     };
-    format!("{async_prefix}{native_prefix}fn({params}) -> {return_ty}{effects}")
+    format!("{async_prefix}fn({params}) -> {return_ty}{retains}")
 }
 
 fn param_detail(param: &Param) -> String {
@@ -441,13 +440,6 @@ fn type_kind_detail(kind: TypeKind) -> &'static str {
         TypeKind::Class => "class",
         TypeKind::Struct => "struct",
         TypeKind::Resource => "resource",
-    }
-}
-
-fn effect_display(effect: &crate::syntax::ast::EffectDecl) -> String {
-    match effect {
-        crate::syntax::ast::EffectDecl::Name(name) => name.clone(),
-        crate::syntax::ast::EffectDecl::Retains(param) => format!("retains({param})"),
     }
 }
 

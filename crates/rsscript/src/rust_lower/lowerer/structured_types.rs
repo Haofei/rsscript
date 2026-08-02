@@ -4,7 +4,7 @@ use super::*;
 use crate::text_util::builtin_generic_type_params;
 
 impl<'a> RustLowerer<'a> {
-    pub(in crate::rust_lower) fn lower_capability_from_call(
+    pub(in crate::rust_lower) fn lower_dyn_from_call(
         &mut self,
         protocol: &str,
         args: &[CallArg],
@@ -14,7 +14,10 @@ impl<'a> RustLowerer<'a> {
             .find(|arg| arg.name.as_deref() == Some("value"))
             .or_else(|| args.first())
         else {
-            return format!("{}::/* missing value */", capability_enum_name(protocol));
+            return format!(
+                "{}::/* missing value */",
+                external_binding_enum_name(protocol)
+            );
         };
         let value_type = self.infer_expr_type(&value_arg.value);
         let value_type = value_type.map(|ty| self.canonical_type_ref(&ty));
@@ -25,7 +28,7 @@ impl<'a> RustLowerer<'a> {
         let value_type_root = type_root_name(&value_type_name);
         format!(
             "{}::{}({})",
-            capability_enum_name(protocol),
+            external_binding_enum_name(protocol),
             rust_ident(value_type_root),
             self.lower_expr(&value_arg.value)
         )
@@ -37,7 +40,7 @@ impl<'a> RustLowerer<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Option<TypeRef> {
-        let key = native_boundary_callee_key(callee);
+        let key = external_boundary_callee_key(callee);
         let return_ty = self.function_return_types.get(&key)?.clone();
         let Some(type_params) = self.function_type_params.get(&key) else {
             return Some(return_ty);
@@ -105,7 +108,7 @@ impl<'a> RustLowerer<'a> {
         args: &[CallArg],
         substitutions: &mut BTreeMap<String, TypeRef>,
     ) {
-        let key = native_boundary_callee_key(callee);
+        let key = external_boundary_callee_key(callee);
         let Some(params) = self.function_param_types.get(&key) else {
             return;
         };
@@ -138,7 +141,7 @@ impl<'a> RustLowerer<'a> {
             return false;
         };
         self.retained_params_by_callee
-            .get(&native_boundary_callee_key(callee))
+            .get(&external_boundary_callee_key(callee))
             .is_some_and(|retained| retained.contains(name))
     }
 
@@ -181,13 +184,13 @@ impl<'a> RustLowerer<'a> {
                                 name: method.clone(),
                             };
                             self.function_return_types
-                                .get(&native_boundary_callee_key(&qualified))
+                                .get(&external_boundary_callee_key(&qualified))
                                 .is_some_and(is_result_type)
                         })
                         .unwrap_or(false);
                 }
                 self.function_return_types
-                    .get(&native_boundary_callee_key(callee))
+                    .get(&external_boundary_callee_key(callee))
                     .is_some_and(is_result_type)
                     || matches!(
                         callee,
@@ -233,7 +236,7 @@ impl<'a> RustLowerer<'a> {
                 namespace: namespace.to_string(),
                 name: method.to_string(),
             };
-            let key = native_boundary_callee_key(&qualified);
+            let key = external_boundary_callee_key(&qualified);
             self.function_param_types
                 .get(&key)?
                 .get(arg_index + 1)
@@ -350,7 +353,7 @@ impl<'a> RustLowerer<'a> {
             namespace: namespace.to_string(),
             name: method.to_string(),
         };
-        let key = native_boundary_callee_key(&qualified);
+        let key = external_boundary_callee_key(&qualified);
         if let Some(params) = self.function_param_types.get(&key) {
             if let Some(arg_name) = arg_name
                 && let Some((_, ty)) = params.iter().find(|(param_name, _)| param_name == arg_name)
@@ -394,7 +397,7 @@ impl<'a> RustLowerer<'a> {
         self.generic_protocol_bounds
             .get(&receiver_type_name)
             .cloned()
-            .or_else(|| capability_protocol_name(&receiver_type_name).map(str::to_string))
+            .or_else(|| dyn_protocol_name(&receiver_type_name).map(str::to_string))
             .or_else(|| self.protocol_impl_namespace(&receiver_type_root, method))
             .or_else(|| receiver_facade_namespace(&receiver_type_root, method).map(str::to_string))
             .unwrap_or(receiver_type_root)
@@ -410,7 +413,7 @@ impl<'a> RustLowerer<'a> {
             namespace: namespace.to_string(),
             name: method.to_string(),
         };
-        let key = native_boundary_callee_key(&qualified);
+        let key = external_boundary_callee_key(&qualified);
         self.function_param_effects.get(&key)?.get(arg_index + 1)?.1
     }
 
@@ -427,7 +430,7 @@ impl<'a> RustLowerer<'a> {
         };
         let params = self
             .function_param_types
-            .get(&native_boundary_callee_key(&qualified))?;
+            .get(&external_boundary_callee_key(&qualified))?;
         if let Some(arg_name) = arg_name {
             params
                 .iter()

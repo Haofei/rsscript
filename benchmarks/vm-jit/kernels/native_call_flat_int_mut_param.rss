@@ -1,4 +1,3 @@
-features: local
 
 // JIT hot path: a native parent repeatedly calls a native child that mutates a
 // flat `List<Int>` parameter. This exercises the native-to-native ABI for

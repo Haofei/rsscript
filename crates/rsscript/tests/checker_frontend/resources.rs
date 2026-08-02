@@ -5,7 +5,6 @@ use super::*;
 #[test]
 fn tempdir_keep_may_consume_with_resource() {
     let source = r#"
-features: local
 
 fn keep_tempdir() -> Result<Unit, FileError> {
     with TempDir.new()? as dir {

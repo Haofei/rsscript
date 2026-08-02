@@ -28,9 +28,9 @@ pub(super) struct RustLowerer<'a> {
     pub(super) type_params: BTreeMap<String, Vec<String>>,
     pub(super) type_aliases: BTreeMap<String, (Vec<String>, TypeRef)>,
     pub(super) protocol_names: BTreeSet<String>,
-    pub(super) native_boundary_callees: BTreeSet<String>,
-    pub(super) async_native_boundary_callees: BTreeSet<String>,
-    pub(super) native_bindings: BTreeMap<String, String>,
+    pub(super) external_boundary_callees: BTreeSet<String>,
+    pub(super) async_external_boundary_callees: BTreeSet<String>,
+    pub(super) external_bindings: BTreeMap<String, String>,
     pub(super) function_return_types: BTreeMap<String, TypeRef>,
     pub(super) function_type_params: BTreeMap<String, Vec<String>>,
     pub(super) function_param_types: BTreeMap<String, Vec<(String, TypeRef)>>,
@@ -66,7 +66,7 @@ pub(super) struct AsyncTaskGroupBoundary {
 impl<'a> RustLowerer<'a> {
     pub(super) fn new(
         program: &'a Program,
-        native_bindings: BTreeMap<String, String>,
+        external_bindings: BTreeMap<String, String>,
         interface_programs: &[Program],
     ) -> Self {
         // Type kinds (struct/class/resource) for `is_class_type`/`is_resource_type`,
@@ -139,9 +139,10 @@ impl<'a> RustLowerer<'a> {
                 _ => None,
             })
             .collect();
-        let native_boundary_callees = collect_native_boundary_callees(program, interface_programs);
-        let async_native_boundary_callees =
-            collect_async_native_boundary_callees(program, interface_programs);
+        let external_boundary_callees =
+            collect_external_boundary_callees(program, interface_programs);
+        let async_external_boundary_callees =
+            collect_async_external_boundary_callees(program, interface_programs);
         let protocol_names = program
             .protocols
             .iter()
@@ -189,9 +190,9 @@ impl<'a> RustLowerer<'a> {
             type_params,
             type_aliases,
             protocol_names,
-            native_boundary_callees,
-            async_native_boundary_callees,
-            native_bindings,
+            external_boundary_callees,
+            async_external_boundary_callees,
+            external_bindings,
             function_return_types,
             function_type_params,
             function_param_types,
@@ -220,10 +221,10 @@ impl<'a> RustLowerer<'a> {
     pub(super) fn new_validated(
         program: &'a Program,
         semantic_types: &'a SemanticTypeFacts,
-        native_bindings: BTreeMap<String, String>,
+        external_bindings: BTreeMap<String, String>,
         interface_programs: &[Program],
     ) -> Self {
-        let mut lowerer = Self::new(program, native_bindings, interface_programs);
+        let mut lowerer = Self::new(program, external_bindings, interface_programs);
         let span = Span {
             file: "<semantic-type>".to_string(),
             line: 1,

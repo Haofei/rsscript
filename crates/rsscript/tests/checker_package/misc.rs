@@ -57,10 +57,10 @@ fn package_reference_uses_current_http_and_env_facade_shapes() {
         );
     }
     for current in [
-        "pub native fn Http.get(\n    url: read Url,\n) -> Result<fresh HttpResponse, HttpError>",
-        "pub native fn HttpResponse.text(\n    response: read HttpResponse,\n) -> fresh String",
-        "pub native fn Env.get(name: read String) -> Option<fresh String>",
-        "pub native fn Env.get_or_default(",
+        "pub fn Http.get(\n    url: read Url,\n) -> Result<fresh HttpResponse, HttpError>",
+        "pub fn HttpResponse.text(\n    response: read HttpResponse,\n) -> fresh String",
+        "pub fn Env.get(name: read String) -> Option<fresh String>",
+        "pub fn Env.get_or_default(",
     ] {
         assert!(
             spec.contains(current),
@@ -70,8 +70,8 @@ fn package_reference_uses_current_http_and_env_facade_shapes() {
 }
 
 #[test]
-fn rss_spec_documents_capability_dispatch_and_rejects_implicit_dyn() {
-    // Dynamic dispatch is implemented ONLY as the explicit `Capability<Protocol>`
+fn rss_spec_documents_external_binding_dispatch_and_rejects_implicit_dyn() {
+    // Dynamic dispatch is implemented ONLY as the explicit `Dyn<Protocol>`
     // form (§20.2-2). The spec must document that, and must still reject implicit
     // protocol-typed values / Rust-style `dyn` coercion as non-goals.
     let spec = fs::read_to_string(common::language_spec_path())
@@ -88,9 +88,9 @@ fn rss_spec_documents_capability_dispatch_and_rejects_implicit_dyn() {
             "implicit dynamic dispatch must stay a non-goal, found `{forbidden}`"
         );
     }
-    assert!(spec.contains("Dynamic dispatch (explicit capability form implemented §20.2-2)"));
+    assert!(spec.contains("Dynamic dispatch (explicit external_binding form implemented §20.2-2)"));
     assert!(
-        spec.contains("`Capability<Protocol>` form (with the `capability Protocol` keyword sugar)")
+        spec.contains("`Dyn<Protocol>` form (with the `external_binding Protocol` keyword sugar)")
     );
     assert!(spec.contains("Rust-style `dyn Trait` vtable coercion"));
     assert!(spec.contains("`Protocol.method(...)` dispatch backed by an explicit generic bound"));

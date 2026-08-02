@@ -11,22 +11,6 @@ pub(crate) const STANDARD_PACKAGE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../../../packages/async/interface/channel.rssi"),
     ),
     (
-        "packages/async/interface/deadline.rssi",
-        include_str!("../../../packages/async/interface/deadline.rssi"),
-    ),
-    (
-        "packages/async/interface/file.rssi",
-        include_str!("../../../packages/async/interface/file.rssi"),
-    ),
-    (
-        "packages/async/interface/http.rssi",
-        include_str!("../../../packages/async/interface/http.rssi"),
-    ),
-    (
-        "packages/async/interface/process.rssi",
-        include_str!("../../../packages/async/interface/process.rssi"),
-    ),
-    (
         "packages/async/interface/csv.rssi",
         include_str!("../../../packages/async/interface/csv.rssi"),
     ),
@@ -38,28 +22,12 @@ pub(crate) const STANDARD_PACKAGE_INTERFACES: &[(&str, &str)] = &[
         "packages/async/interface/task.rssi",
         include_str!("../../../packages/async/interface/task.rssi"),
     ),
-    (
-        "packages/async/interface/tcp.rssi",
-        include_str!("../../../packages/async/interface/tcp.rssi"),
-    ),
-    (
-        "packages/async/interface/timer.rssi",
-        include_str!("../../../packages/async/interface/timer.rssi"),
-    ),
-    (
-        "packages/async/interface/websocket.rssi",
-        include_str!("../../../packages/async/interface/websocket.rssi"),
-    ),
 ];
 
 pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     (
-        "stdlib/capability/capability.rssi",
-        include_str!("../../../stdlib/capability/capability.rssi"),
-    ),
-    (
-        "stdlib/clock/clock.rssi",
-        include_str!("../../../stdlib/clock/clock.rssi"),
+        "stdlib/dyn/dyn.rssi",
+        include_str!("../../../stdlib/dyn/dyn.rssi"),
     ),
     (
         "stdlib/clone/clone.rssi",
@@ -130,18 +98,6 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../../../stdlib/encoding/encoding.rssi"),
     ),
     (
-        "stdlib/env/env.rssi",
-        include_str!("../../../stdlib/env/env.rssi"),
-    ),
-    (
-        "stdlib/fs/directory.rssi",
-        include_str!("../../../stdlib/fs/directory.rssi"),
-    ),
-    (
-        "stdlib/fs/file.rssi",
-        include_str!("../../../stdlib/fs/file.rssi"),
-    ),
-    (
         "stdlib/hash/hash.rssi",
         include_str!("../../../stdlib/hash/hash.rssi"),
     ),
@@ -150,16 +106,8 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../../../stdlib/hash/hashable.rssi"),
     ),
     (
-        "stdlib/http/client.rssi",
-        include_str!("../../../stdlib/http/client.rssi"),
-    ),
-    (
         "stdlib/json/json.rssi",
         include_str!("../../../stdlib/json/json.rssi"),
-    ),
-    (
-        "stdlib/log/log.rssi",
-        include_str!("../../../stdlib/log/log.rssi"),
     ),
     (
         "stdlib/math/math.rssi",
@@ -170,24 +118,8 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../../../stdlib/option/option.rssi"),
     ),
     (
-        "stdlib/os/os.rssi",
-        include_str!("../../../stdlib/os/os.rssi"),
-    ),
-    (
-        "stdlib/path/path.rssi",
-        include_str!("../../../stdlib/path/path.rssi"),
-    ),
-    (
         "stdlib/patch/patch.rssi",
         include_str!("../../../stdlib/patch/patch.rssi"),
-    ),
-    (
-        "stdlib/process/process.rssi",
-        include_str!("../../../stdlib/process/process.rssi"),
-    ),
-    (
-        "stdlib/random/random.rssi",
-        include_str!("../../../stdlib/random/random.rssi"),
     ),
     (
         "stdlib/regex/regex.rssi",
@@ -200,10 +132,6 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
     (
         "stdlib/string/string.rssi",
         include_str!("../../../stdlib/string/string.rssi"),
-    ),
-    (
-        "stdlib/tempdir/tempdir.rssi",
-        include_str!("../../../stdlib/tempdir/tempdir.rssi"),
     ),
     (
         "stdlib/test/assert.rssi",
@@ -222,10 +150,6 @@ pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../../../stdlib/weak/weak.rssi"),
     ),
     (
-        "stdlib/workspace/workspace.rssi",
-        include_str!("../../../stdlib/workspace/workspace.rssi"),
-    ),
-    (
         "stdlib/yaml/yaml.rssi",
         include_str!("../../../stdlib/yaml/yaml.rssi"),
     ),
@@ -235,6 +159,7 @@ pub(crate) fn builtin_interfaces() -> impl Iterator<Item = (&'static str, &'stat
     CORE_INTERFACES.iter().copied()
 }
 
+#[cfg(not(test))]
 pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
     CORE_INTERFACES
         .iter()
@@ -242,6 +167,24 @@ pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'stat
         .copied()
 }
 
+#[cfg(test)]
+pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
+    CORE_INTERFACES
+        .iter()
+        .chain(STANDARD_PACKAGE_INTERFACES.iter())
+        .chain(crate::test_interfaces::TEST_INTERFACES.iter())
+        .copied()
+}
+
+#[cfg(not(test))]
 pub(crate) fn standard_package_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
     STANDARD_PACKAGE_INTERFACES.iter().copied()
+}
+
+#[cfg(test)]
+pub(crate) fn standard_package_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
+    STANDARD_PACKAGE_INTERFACES
+        .iter()
+        .chain(crate::test_interfaces::TEST_INTERFACES.iter())
+        .copied()
 }

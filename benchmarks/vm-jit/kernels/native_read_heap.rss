@@ -1,4 +1,3 @@
-features: local
 
 // JIT hot path: read-only heap access (List.len / List.get) inside a pure scalar
 // loop in its own function — exercises the native tier's host-helper read ABI

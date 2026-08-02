@@ -1,3 +1,11 @@
-[bindings]
-"Db.query" = "demo_native::query"
-"Net.fetch" = "demo_native::fetch"
+schema = "rsscript.bindings.v1"
+
+[[function]]
+symbol = "Db.query"
+provider = "demo_native"
+entry = "query"
+
+[[function]]
+symbol = "Net.fetch"
+provider = "demo_native"
+entry = "fetch"

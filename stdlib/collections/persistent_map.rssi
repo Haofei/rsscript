@@ -21,7 +21,7 @@ pub fn PersistentMap.insert<K, V>(
     key: K,
     value: V,
 ) -> fresh PersistentMap<K, V>
-    effects(retains(key), retains(value))
+    retains(key) retains(value)
 
 pub fn PersistentMap.remove<K, V>(
     map: PersistentMap<K, V>,

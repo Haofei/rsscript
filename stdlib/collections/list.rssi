@@ -1,4 +1,3 @@
-features: local
 
 pub fn List.new<T>() -> fresh List<T>
 
@@ -6,14 +5,14 @@ pub fn List.push<T>(
     list: mut List<T>,
     value: T,
 ) -> Unit
-    effects(retains(value))
+    retains(value)
 
 pub fn List.set<T>(
     list: mut List<T>,
     index: Int,
     value: T,
 ) -> Unit
-    effects(retains(value))
+    retains(value)
 
 pub fn List.pop<T>(list: mut List<T>) -> Option<T>
 
@@ -23,7 +22,7 @@ pub fn List.append<T>(
     list: mut List<T>,
     values: List<T>,
 ) -> Unit
-    effects(retains(values))
+    retains(values)
 
 pub fn List.len<T>(list: List<T>) -> Int
 
@@ -165,7 +164,6 @@ pub fn List.remove_at<T>(
 pub fn List.join(list: List<String>, separator: String) -> fresh String
 
 pub fn List.to_json_strings(list: List<String>) -> fresh JsonValue
-    effects(pure)
+
 
 pub fn List.to_json_values(list: List<JsonValue>) -> fresh JsonValue
-    effects(pure)

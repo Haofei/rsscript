@@ -1,4 +1,3 @@
-features: native
 
 struct ProcessOutput {
     status: Int
@@ -30,50 +29,49 @@ struct ProcessRequest {
     output_cap_bytes: Int
 }
 
-pub native fn Process.run_stdout(
+pub fn Process.run_stdout(
     command: String,
     args: List<String>,
 ) -> Result<String, String>
-    effects(native)
 
-pub native fn Process.run_stdout_timeout(
+
+pub fn Process.run_stdout_timeout(
     command: String,
     args: List<String>,
     timeout_ms: Int,
 ) -> Result<String, String>
-    effects(native)
 
-pub native fn Process.run(
+
+pub fn Process.run(
     command: String,
     args: List<String>,
 ) -> Result<fresh ProcessOutput, String>
-    effects(native)
 
-pub native fn Process.run_timeout(
+
+pub fn Process.run_timeout(
     command: String,
     args: List<String>,
     timeout_ms: Int,
 ) -> Result<fresh ProcessOutput, String>
-    effects(native)
 
-pub native fn Process.run_request(
+
+pub fn Process.run_request(
     request: ProcessRequest,
 ) -> Result<fresh ProcessOutput, String>
-    effects(native)
 
-pub native fn Process.run_many_stdout(
+
+pub fn Process.run_many_stdout(
     command: String,
     args: List<String>,
     appended_args: List<String>,
     jobs: Int,
 ) -> Result<List<String>, String>
-    effects(native)
 
-pub native fn Process.run_many_stdout_timeout(
+
+pub fn Process.run_many_stdout_timeout(
     command: String,
     args: List<String>,
     appended_args: List<String>,
     jobs: Int,
     timeout_ms: Int,
 ) -> Result<List<String>, String>
-    effects(native)

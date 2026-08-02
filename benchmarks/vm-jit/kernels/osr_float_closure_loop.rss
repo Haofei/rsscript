@@ -44,11 +44,10 @@ fn apply_loop(g: Fn(Float) -> Float, limit: Int, seed: Float) -> Float {
 fn main() -> Unit {
     let limit = bench_size(default: 2000000)
     let scale = 1.5
-    let g = fn(value) captures(read scale) effects(pure) {
+    let g = fn(value) captures(read scale) {
         return value * scale + scale
     }
     let result = apply_loop(g, limit, seed: 0.0)
     Log.write(message: String.from_float(value: result))
     return Unit
 }
-features: local

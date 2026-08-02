@@ -1,6 +1,6 @@
 #deprecated("use bar instead")
 #lower_name("rss_foo")
-fn foo() -> Int effects(io, retains(self)) {
+fn foo() -> Int {
     return 1
 }
 

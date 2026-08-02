@@ -1,4 +1,3 @@
-features: local
 
 struct Deque<T>
 
@@ -8,13 +7,13 @@ pub fn Deque.push_back<T>(
     deque: mut Deque<T>,
     value: T,
 ) -> Unit
-    effects(retains(value))
+    retains(value)
 
 pub fn Deque.push_front<T>(
     deque: mut Deque<T>,
     value: T,
 ) -> Unit
-    effects(retains(value))
+    retains(value)
 
 pub fn Deque.pop_back<T>(deque: mut Deque<T>) -> Option<T>
 

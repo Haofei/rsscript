@@ -1,4 +1,3 @@
-features: local
 
 struct PackageRootManifestFacts {
     package_name: String

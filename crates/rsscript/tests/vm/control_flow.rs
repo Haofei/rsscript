@@ -7,7 +7,6 @@ fn reg_vm_runs_select_first_ready_like_backend() {
     // `select` runs both arms concurrently; the shorter sleep (1ms) wins over the
     // longer (50ms), so the scheduler's clock — not arm order — must decide.
     let source = r#"
-features: async, native
 
 async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
     await Timer.sleep(ms: ms)?
@@ -290,7 +289,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_async_for_like_interpreter() {
     let source = r#"
-features: async, local
 
 async fn main() -> Result<Unit, ChannelError> {
     local values = [1, 2, 3]
@@ -472,7 +470,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_immediate_multi_arm_select_like_compiled_backend() {
     let source = r#"
-features: async
 
 async fn ready(value: Int) -> Result<Int, String> {
     return Ok(value)
@@ -500,7 +497,6 @@ fn reg_vm_runs_select_winner_by_timing_not_arm_order_like_backend() {
     // pick it (value 9) — proving the winner is decided by the scheduler clock,
     // not by arm declaration order.
     let source = r#"
-features: async, native
 
 async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
     await Timer.sleep(ms: ms)?
@@ -532,7 +528,6 @@ fn reg_vm_select_does_not_run_loser_side_effects_like_backend() {
     // un-cancelled loser would still get scheduled. Expected output: "winner",
     // then "done" — never "loser ran".
     let source = r#"
-features: async, native
 
 async fn winner() -> Result<Int, TimerError> {
     await Timer.sleep(ms: 1)?

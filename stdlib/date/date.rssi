@@ -1,52 +1,50 @@
-features: native
 
-pub native fn Date.year(unix_ms: Int) -> Int
-    effects(native)
+pub fn Date.year(unix_ms: Int) -> Int
 
-pub native fn Date.month(unix_ms: Int) -> Int
-    effects(native)
 
-pub native fn Date.day(unix_ms: Int) -> Int
-    effects(native)
+pub fn Date.month(unix_ms: Int) -> Int
 
-pub native fn Date.hour(unix_ms: Int) -> Int
-    effects(native)
 
-pub native fn Date.minute(unix_ms: Int) -> Int
-    effects(native)
+pub fn Date.day(unix_ms: Int) -> Int
 
-pub native fn Date.second(unix_ms: Int) -> Int
-    effects(native)
 
-pub native fn Date.add_ms(unix_ms: Int, ms: Int) -> Int
-    effects(native)
+pub fn Date.hour(unix_ms: Int) -> Int
 
-pub native fn Date.add_days(unix_ms: Int, days: Int) -> Int
-    effects(native)
 
-pub native fn Date.days_between(start_unix_ms: Int, end_unix_ms: Int) -> Int
-    effects(native)
+pub fn Date.minute(unix_ms: Int) -> Int
 
-pub native fn Date.start_of_day(unix_ms: Int) -> Int
-    effects(native)
 
-pub native fn Date.weekday(unix_ms: Int) -> Int
-    effects(native)
+pub fn Date.second(unix_ms: Int) -> Int
 
-pub native fn Date.is_leap_year(year: Int) -> Bool
-    effects(native)
 
-pub native fn Date.days_in_month(year: Int, month: Int) -> Int
-    effects(native)
+pub fn Date.add_ms(unix_ms: Int, ms: Int) -> Int
 
-pub native fn Date.format_ymd(unix_ms: Int) -> fresh String
-    effects(native)
 
-pub native fn Date.parse_ymd(value: String) -> Option<Int>
-    effects(native)
+pub fn Date.add_days(unix_ms: Int, days: Int) -> Int
 
-pub native fn Date.format_iso(unix_ms: Int) -> fresh String
-    effects(native)
 
-pub native fn Date.parse_iso(value: String) -> Option<Int>
-    effects(native)
+pub fn Date.days_between(start_unix_ms: Int, end_unix_ms: Int) -> Int
+
+
+pub fn Date.start_of_day(unix_ms: Int) -> Int
+
+
+pub fn Date.weekday(unix_ms: Int) -> Int
+
+
+pub fn Date.is_leap_year(year: Int) -> Bool
+
+
+pub fn Date.days_in_month(year: Int, month: Int) -> Int
+
+
+pub fn Date.format_ymd(unix_ms: Int) -> fresh String
+
+
+pub fn Date.parse_ymd(value: String) -> Option<Int>
+
+
+pub fn Date.format_iso(unix_ms: Int) -> fresh String
+
+
+pub fn Date.parse_iso(value: String) -> Option<Int>

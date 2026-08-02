@@ -19,15 +19,6 @@ impl<'a> RustLowerer<'a> {
         out.push_str(
             "#![allow(dead_code, non_snake_case, non_camel_case_types, non_upper_case_globals, unused_parens)]\n",
         );
-        let feature_names = lowered_feature_names(&self.program.features);
-        if feature_names.is_empty() {
-            out.push_str("// RSScript features: <none>\n");
-        } else {
-            out.push_str(&format!(
-                "// RSScript features: {}\n",
-                feature_names.join(", ")
-            ));
-        }
         out.push('\n');
 
         for item in &self.program.items {
@@ -58,7 +49,7 @@ impl<'a> RustLowerer<'a> {
         }
         self.lower_default_parameter_helpers(&mut out);
         self.lower_protocol_traits(&mut out);
-        self.lower_capability_enums(&mut out);
+        self.lower_external_binding_enums(&mut out);
         for item in &self.program.items {
             match item {
                 Item::Type(_)
@@ -75,7 +66,7 @@ impl<'a> RustLowerer<'a> {
             }
         }
         self.lower_protocol_impls(&mut out);
-        self.lower_capability_impls(&mut out);
+        self.lower_external_binding_impls(&mut out);
         while out.ends_with("\n\n") {
             out.pop();
         }
@@ -489,17 +480,17 @@ impl<'a> RustLowerer<'a> {
         out.push_str(&format!("{pad}}}\n"));
     }
 
-    pub(in crate::rust_lower) fn is_native_boundary_call(&self, callee: &Callee) -> bool {
-        let key = native_boundary_callee_key(callee);
-        self.native_boundary_callees.contains(&key) || self.native_bindings.contains_key(&key)
+    pub(in crate::rust_lower) fn is_external_boundary_call(&self, callee: &Callee) -> bool {
+        let key = external_boundary_callee_key(callee);
+        self.external_boundary_callees.contains(&key) || self.external_bindings.contains_key(&key)
     }
 
     pub(in crate::rust_lower) fn await_call_lowers_to_pending(&self, callee: &Callee) -> bool {
-        let key = native_boundary_callee_key(callee);
+        let key = external_boundary_callee_key(callee);
         is_async_runtime_intrinsic_callee(callee)
-            || (self.async_native_boundary_callees.contains(&key)
-                && self.native_bindings.contains_key(&key))
-            || self.native_bindings.contains_key(&key)
+            || (self.async_external_boundary_callees.contains(&key)
+                && self.external_bindings.contains_key(&key))
+            || self.external_bindings.contains_key(&key)
     }
 
     /// Whether `name` is a `mut` parameter of a Copy scalar type (Int/Bool/Float/…).

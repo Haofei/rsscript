@@ -150,7 +150,7 @@ fn hir_inference_uses_structural_type_queries() {
         "strip_prefix(\"List<\")",
         "strip_prefix(\"Stream<\")",
         "strip_prefix(\"Task<\")",
-        "strip_prefix(\"Capability<\")",
+        "strip_prefix(\"Dyn<\")",
     ] {
         assert!(
             !inference.contains(parser),
@@ -573,35 +573,28 @@ fn executable_backends_consume_validated_frontend_results() {
 }
 
 #[test]
-fn restricted_vm_authority_is_mandatory_and_precedes_intrinsic_dispatch() {
+fn compiler_and_vm_do_not_embed_execution_authority() {
     let root = workspace_root();
     let vm_model = read(&root.join("crates/rsscript/src/reg_vm/model.rs"));
     assert!(
-        vm_model.contains("fn host_authority")
-            && vm_model.contains("HostAuthority::Filesystem")
-            && vm_model.contains("HostAuthority::Network")
-            && vm_model.contains("HostAuthority::Process"),
-        "host-touching intrinsics must carry an explicit authority classification"
+        !vm_model.contains("host_authority"),
+        "VM instructions must not carry runner authority policy"
     );
 
     let vm = read(&root.join("crates/rsscript/src/reg_vm/mod.rs"));
     assert!(
-        vm.contains("execution_context: crate::ExecutionContext"),
-        "every RegVm instance must own an execution context"
+        !vm.contains("execution_context"),
+        "VM core must not own an execution policy context"
     );
     let intrinsics = read(&root.join("crates/rsscript/src/reg_vm/intrinsics/mod.rs"));
-    let dispatch = function_source(&intrinsics, "pub(super) fn call_intrinsic");
     assert!(
-        dispatch.contains("self.authorize_intrinsic_host_access(intrinsic, args, base)?"),
-        "authority must be checked before intrinsic dispatch"
+        !intrinsics.contains("authorize_intrinsic_host_access"),
+        "intrinsic dispatch must be independent of runner policy"
     );
-    let adapters = read(&root.join("crates/rsscript/src/reg_vm/host_adapters.rs"));
     assert!(
-        adapters.contains("intrinsic.host_authority()")
-            && adapters.contains(".filesystem_path(&authorized)")
-            && adapters.contains(".network_endpoint(&authorized)")
-            && adapters.contains(".process_executable(&authorized)"),
-        "restricted dispatch must consume exact scope-bound host capabilities"
+        !root
+            .join("crates/rsscript/src/reg_vm/host_adapters.rs")
+            .exists()
     );
 }
 

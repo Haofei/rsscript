@@ -1,4 +1,3 @@
-features: local
 
 sum Shape {
     Circle(radius: Int)

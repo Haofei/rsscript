@@ -17,23 +17,9 @@ pub(crate) use std::fs;
 pub(crate) use std::path::Path;
 pub(crate) use std::process::Command;
 
-#[path = "checker_lowering/async_concurrency.rs"]
-mod async_concurrency;
-#[path = "checker_lowering/control_flow.rs"]
-mod control_flow;
-#[path = "checker_lowering/effects.rs"]
-mod effects;
-#[path = "checker_lowering/managed.rs"]
-mod managed;
-#[path = "checker_lowering/misc.rs"]
-mod misc;
-#[path = "checker_lowering/native.rs"]
-mod native;
 #[path = "checker_lowering/resources.rs"]
 mod resources;
 #[path = "checker_lowering/source_map.rs"]
 mod source_map;
-#[path = "checker_lowering/stdlib.rs"]
-mod stdlib;
 #[path = "checker_lowering/types.rs"]
 mod types;

@@ -1,4 +1,3 @@
-features: local
 
 // Slow path: Bytes value family (construct + slice + length) in a hot loop.
 // Exercises the Bytes intrinsic group, distinct from String. Not reachable by

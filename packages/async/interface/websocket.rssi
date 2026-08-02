@@ -1,4 +1,3 @@
-features: async, native, local
 
 // WebSocket client IO is provider-backed. Text and bytes are explicit separate
 // operations so review can see which frame type a call expects.
@@ -6,29 +5,28 @@ features: async, native, local
 struct WebSocket
 struct WebSocketError
 
-pub async native fn WebSocket.connect(url: Url) -> Result<fresh WebSocket, WebSocketError>
-    effects(native)
+pub async fn WebSocket.connect(url: Url) -> Result<fresh WebSocket, WebSocketError>
 
-pub async native fn WebSocket.send_text(
+
+pub async fn WebSocket.send_text(
     socket: WebSocket,
     text: String,
 ) -> Result<Unit, WebSocketError>
-    effects(native)
 
-pub async native fn WebSocket.send_bytes(
+
+pub async fn WebSocket.send_bytes(
     socket: WebSocket,
     bytes: Bytes,
 ) -> Result<Unit, WebSocketError>
-    effects(native)
 
-pub async native fn WebSocket.recv_text(socket: WebSocket) -> Result<Option<String>, WebSocketError>
-    effects(native)
 
-pub async native fn WebSocket.recv_bytes(socket: WebSocket) -> Result<Option<Bytes>, WebSocketError>
-    effects(native)
+pub async fn WebSocket.recv_text(socket: WebSocket) -> Result<Option<String>, WebSocketError>
 
-pub async native fn WebSocket.close(socket: WebSocket) -> Result<Unit, WebSocketError>
-    effects(native)
+
+pub async fn WebSocket.recv_bytes(socket: WebSocket) -> Result<Option<Bytes>, WebSocketError>
+
+
+pub async fn WebSocket.close(socket: WebSocket) -> Result<Unit, WebSocketError>
+
 
 pub fn WebSocketError.message(error: WebSocketError) -> fresh String
-    effects(pure)

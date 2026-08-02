@@ -1,4 +1,3 @@
-features: local
 // Minimal shared semantic context for the first body-AST consumers. It owns
 // bindings and function return lookup; richer nominal/generic/effect models
 // will extend this module instead of rebuilding checker-local token maps.

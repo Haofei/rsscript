@@ -62,12 +62,10 @@ fn package_review_marks_async_native_await_boundary() {
         &temp_dir,
         "0.1.0",
         "",
-        r#"features: async, native
-
+        r#"
 struct HostError
 
-pub async native fn Host.wait(ms: Int) -> Result<Unit, HostError>
-    effects(native)
+pub async fn Host.wait(ms: Int) -> Result<Unit, HostError>
 
 pub async fn Api.run() -> Result<Unit, HostError>
 "#,
@@ -75,8 +73,7 @@ pub async fn Api.run() -> Result<Unit, HostError>
     fs::create_dir_all(temp_dir.join("src")).expect("src dir should be created");
     fs::write(
         temp_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 pub async fn Api.run() -> Result<Unit, HostError> {
     await Host.wait(ms: 1)?
     return Ok(Unit)
@@ -113,12 +110,9 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native, unsafe
-
-native fn Native.echo(message: read String) -> String
-    effects(native)
+        r#"
+fn Native.echo(message: read String) -> String
 fn Native.danger(message: read String) -> String
-    effects(unsafe)
 "#,
     );
 
@@ -145,10 +139,8 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.noop() -> Unit
-    effects(native)
+        r#"
+fn Native.noop() -> Unit
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -175,8 +167,9 @@ native fn Native.noop() -> Unit
 }
 
 #[test]
-fn package_review_reir_marks_unbound_native_facade_capability_unknown() {
-    let temp_dir = common::unique_temp_dir("rsscript-package-review-unbound-native-capability");
+fn package_review_reir_marks_unbound_native_facade_external_binding_unknown() {
+    let temp_dir =
+        common::unique_temp_dir("rsscript-package-review-unbound-native-external_binding");
     fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
     fs::write(
@@ -196,10 +189,8 @@ paths = ["src"]
     .expect("manifest should be written");
     fs::write(
         temp_dir.join("interface/s3.rssi"),
-        r#"features: native
-
-native fn S3.put_object(body: read String) -> Result<Unit, String>
-    effects(native)
+        r#"
+fn S3.put_object(body: read String) -> Result<Unit, String>
 "#,
     )
     .expect("interface should be written");
@@ -225,19 +216,19 @@ native fn S3.put_object(body: read String) -> Result<Unit, String>
     assert!(review_json["reasons"].as_array().is_some_and(|reasons| {
         reasons
             .iter()
-            .any(|reason| reason == "native/external capability binding unknown")
+            .any(|reason| reason == "native/external external_binding binding unknown")
     }));
     assert!(
-        review_json["capabilities"]
+        review_json["external_bindings"]
             .as_array()
-            .is_some_and(|capabilities| {
-                capabilities.iter().any(|capability| {
-                    capability["function"] == "upload_report"
-                        && capability["binding_symbol"] == "S3.put_object"
-                        && capability["category"] == "unknown"
-                        && capability["unknown_reason"]
-                            == "native/external facade has no review.capability_bindings entry"
-                        && capability["call_chain"].as_array().is_some_and(|chain| {
+            .is_some_and(|external_bindings| {
+                external_bindings.iter().any(|external_binding| {
+                    external_binding["function"] == "upload_report"
+                        && external_binding["binding_symbol"] == "S3.put_object"
+                        && external_binding["category"] == "unknown"
+                        && external_binding["unknown_reason"]
+                            == "native/external facade has no review.external_binding_bindings entry"
+                        && external_binding["call_chain"].as_array().is_some_and(|chain| {
                             chain
                                 == &vec![Value::from("upload_report"), Value::from("S3.put_object")]
                         })
@@ -251,10 +242,10 @@ native fn S3.put_object(body: read String) -> Result<Unit, String>
             && fact.value == reir::FactValue::Unknown
             && fact.subject.id == "rss-report-upload::function::upload_report"
             && fact.unknown_reason.as_deref()
-                == Some("native/external facade has no review.capability_bindings entry")
-            && fact.capability.as_ref().is_some_and(|capability| {
-                capability.category == reir::CapabilityCategory::Unknown
-                    && capability.action.as_deref() == Some("S3.put_object")
+                == Some("native/external facade has no review.external_binding_bindings entry")
+            && fact.capability.as_ref().is_some_and(|external_binding| {
+                external_binding.category == reir::CapabilityCategory::Unknown
+                    && external_binding.action.as_deref() == Some("S3.put_object")
             })
     }));
 }
@@ -274,10 +265,9 @@ fn s3_iam_reir_demo_preserves_call_site_for_missing_permission() {
             fact.kind == reir::FactKind::Capability
                 && fact.role == Some(reir::FactRole::Required)
                 && fact.subject.id == "rss-s3-uploader::function::upload_report"
-                && fact
-                    .capability
-                    .as_ref()
-                    .is_some_and(|capability| capability.action.as_deref() == Some("s3:PutObject"))
+                && fact.capability.as_ref().is_some_and(|external_binding| {
+                    external_binding.action.as_deref() == Some("s3:PutObject")
+                })
         })
         .expect("demo upload_report should require s3:PutObject");
 
@@ -363,10 +353,8 @@ build_scripts = "review"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Build.run() -> Unit
-    effects(native)
+        r#"
+fn Build.run() -> Unit
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -397,9 +385,9 @@ native fn Build.run() -> Unit
                 && fact["confidence"]["level"] == "scanned"
                 && fact["acquisition_mode"] == "source_scan"
         }) && facts.iter().any(|fact| {
-            fact["kind"] == "capability"
-                && fact["capability"]["category"] == "build.execute"
-                && fact["capability"]["service"] == "native_rust_source_scan"
+            fact["kind"] == "external_binding"
+                && fact["external_binding"]["category"] == "build.execute"
+                && fact["external_binding"]["service"] == "native_rust_source_scan"
         })
     }));
     assert!(reir_json["slices"].as_array().is_some_and(|slices| {
@@ -431,10 +419,8 @@ unsafe = "forbid"
 [native.rust.feature_map]
 wasm-browser = { cargo_features = ["worker-pool/web-spin-lock"] }
 "#,
-        r#"features: native
-
-native fn Feature.value() -> Int
-    effects(native)
+        r#"
+fn Feature.value() -> Int
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -498,10 +484,8 @@ fn package_check_fails_when_policy_denies_native_api() {
         r#"[review.policy]
 deny_native = true
 "#,
-        r#"features: native
-
-native fn Native.echo(message: read String) -> String
-    effects(native)
+        r#"
+fn Native.echo(message: read String) -> String
 "#,
     );
     fs::write(
@@ -548,10 +532,8 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.echo(message: read String) -> String
-    effects(native)
+        r#"
+fn Native.echo(message: read String) -> String
 "#,
     );
 
@@ -629,10 +611,8 @@ path = "native/rust"
 crate = "rss_json_native"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.parse(text: read String) -> String
-    effects(native)
+        r#"
+fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -693,10 +673,8 @@ path = "native/rust"
 crate = "rss_json_native"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.parse(text: read String) -> String
-    effects(native)
+        r#"
+fn Native.parse(text: read String) -> String
 "#,
     );
 
@@ -733,10 +711,8 @@ build_scripts = "review"
 proc_macros = "forbid"
 wrapper_unsafe_blocks = "review"
 "#,
-        r#"features: native
-
-native fn Native.parse(text: read String) -> String
-    effects(native)
+        r#"
+fn Native.parse(text: read String) -> String
 "#,
     );
 
@@ -780,10 +756,8 @@ rss_unsafe_apis = "allow"
 wrapper_unsafe_blocks = "forbid"
 transitive_unsafe_blocks = "review"
 "#,
-        r#"features: native
-
-native fn Native.parse(text: read String) -> String
-    effects(native)
+        r#"
+fn Native.parse(text: read String) -> String
 "#,
     );
 
@@ -818,10 +792,8 @@ path = "native/rust"
 crate = "rss_json_native"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.parse(text: read String) -> String
-    effects(native)
+        r#"
+fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native source directory");
@@ -866,10 +838,8 @@ links = ["z"]
 native_links = "allow"
 ffi = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.value() -> Int
-    effects(native)
+        r#"
+fn Native.value() -> Int
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -919,10 +889,8 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.parse(text: read String) -> String
-    effects(native)
+        r#"
+fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -971,18 +939,15 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.echo(message: read String) -> String
-    effects(native)
+        r#"
+fn Native.echo(message: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
     fs::write(
         temp_dir.join("src/main.rss"),
-        r#"features: native
-
+        r#"
 fn main() -> Unit {
     let message = Native.echo(message: read "hello native")
     Log.write(message: read message)
@@ -993,8 +958,12 @@ fn main() -> Unit {
     .expect("source should be written");
     fs::write(
         temp_dir.join("native/bindings.rssbind.toml"),
-        r#"[bindings]
-"Native.echo" = "rss_json_native::echo"
+        r#"schema = "rsscript.bindings.v1"
+
+[[function]]
+symbol = "Native.echo"
+provider = "rss_json_native"
+entry = "echo"
 "#,
     )
     .expect("native binding manifest should be written");
@@ -1042,10 +1011,8 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.echo(message: read String) -> String
-    effects(native)
+        r#"
+fn Native.echo(message: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
@@ -1057,8 +1024,12 @@ native fn Native.echo(message: read String) -> String
     .expect("source should be written");
     fs::write(
         temp_dir.join("native/bindings.rssbind.toml"),
-        r#"[bindings]
-"Native.ehco" = "rss_json_native::echo"
+        r#"schema = "rsscript.bindings.v1"
+
+[[function]]
+symbol = "Native.ehco"
+provider = "rss_json_native"
+entry = "echo"
 "#,
     )
     .expect("native binding manifest should be written");
@@ -1103,19 +1074,21 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
+        r#"
 struct Config
 
-native fn Native.load(config: read Config) -> Result<Int, Config>
-    effects(native)
+fn Native.load(config: read Config) -> Result<Int, Config>
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
     fs::write(
         temp_dir.join("native/bindings.rssbind.toml"),
-        r#"[bindings]
-"Native.load" = "rss_config_native::load"
+        r#"schema = "rsscript.bindings.v1"
+
+[[function]]
+symbol = "Native.load"
+provider = "rss_config_native"
+entry = "load"
 "#,
     )
     .expect("native binding manifest should be written");
@@ -1155,18 +1128,15 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.echo(message: read String) -> String
-    effects(native)
+        r#"
+fn Native.echo(message: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
     fs::write(
         temp_dir.join("src/main.rss"),
-        r#"features: native
-
+        r#"
 fn main() -> Unit {
     let message = Native.echo(message: read "hello native")
     Log.write(message: read message)
@@ -1177,8 +1147,12 @@ fn main() -> Unit {
     .expect("source should be written");
     fs::write(
         temp_dir.join("native/bindings.rssbind.toml"),
-        r#"[bindings]
-"Native.echo" = "other_native::echo"
+        r#"schema = "rsscript.bindings.v1"
+
+[[function]]
+symbol = "Native.echo"
+provider = "other_native"
+entry = "echo"
 "#,
     )
     .expect("native binding manifest should be written");
@@ -1216,10 +1190,8 @@ fn package_check_reports_native_binding_without_native_rust() {
         &temp_dir,
         "0.1.0",
         "",
-        r#"features: native
-
-native fn Native.echo(message: read String) -> String
-    effects(native)
+        r#"
+fn Native.echo(message: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
@@ -1231,8 +1203,12 @@ native fn Native.echo(message: read String) -> String
     .expect("source should be written");
     fs::write(
         temp_dir.join("native/bindings.rssbind.toml"),
-        r#"[bindings]
-"Native.echo" = "rss_json_native::echo"
+        r#"schema = "rsscript.bindings.v1"
+
+[[function]]
+symbol = "Native.echo"
+provider = "rss_json_native"
+entry = "echo"
 "#,
     )
     .expect("native binding manifest should be written");
@@ -1267,10 +1243,8 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.echo(message: read String) -> String
-    effects(native)
+        r#"
+fn Native.echo(message: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
@@ -1282,8 +1256,12 @@ native fn Native.echo(message: read String) -> String
     .expect("source should be written");
     fs::write(
         temp_dir.join("native/bindings.rssbind.toml"),
-        r#"[bindings]
-"Native.echo" = "rss_json_native::echo"
+        r#"schema = "rsscript.bindings.v1"
+
+[[function]]
+symbol = "Native.echo"
+provider = "rss_json_native"
+entry = "echo"
 "#,
     )
     .expect("native binding manifest should be written");
@@ -1332,10 +1310,8 @@ rss_unsafe_apis = "allow"
 wrapper_unsafe_blocks = "forbid"
 transitive_unsafe_blocks = "review"
 "#,
-        r#"features: native
-
-native fn Native.parse(text: read String) -> String
-    effects(native)
+        r#"
+fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -1410,10 +1386,8 @@ proc_macros = "forbid"
 unsafe = "forbid"
 links = ["ssl"]
 "#,
-        r#"features: native
-
-native fn Native.parse(text: read String) -> String
-    effects(native)
+        r#"
+fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -1467,10 +1441,8 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.parse(text: read String) -> String
-    effects(native)
+        r#"
+fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -1530,10 +1502,8 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.parse(text: read String) -> String
-    effects(native)
+        r#"
+fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -1717,18 +1687,20 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.echo(message: read String) -> String
-    effects(native)
+        r#"
+fn Native.echo(message: read String) -> String
 "#,
     );
     fs::create_dir_all(dep_dir.join("native/rust/src")).expect("native src dir should be created");
     fs::create_dir_all(dep_dir.join("native")).expect("native dir should be created");
     fs::write(
         dep_dir.join("native/bindings.rssbind.toml"),
-        r#"[bindings]
-"Native.echo" = "rss_dep_native::echo"
+        r#"schema = "rsscript.bindings.v1"
+
+[[function]]
+symbol = "Native.echo"
+provider = "rss_dep_native"
+entry = "echo"
 "#,
     )
     .expect("native bindings should be written");
@@ -1758,8 +1730,7 @@ rss-native-dep = {{ path = "{}" }}
     fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
     fs::write(
         root_dir.join("src/main.rss"),
-        r#"features: native
-
+        r#"
 fn main() -> Unit {
     let message = Native.echo(message: read "hello dep native")
     Log.write(message: read message)

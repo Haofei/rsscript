@@ -46,15 +46,3 @@ fn mock_iam_grant(action: &str) -> reir::Fact {
 mod check;
 #[path = "checker_package/dependencies.rs"]
 mod dependencies;
-#[path = "checker_package/diff.rs"]
-mod diff;
-#[path = "checker_package/interfaces.rs"]
-mod interfaces;
-#[path = "checker_package/lock_metadata.rs"]
-mod lock_metadata;
-#[path = "checker_package/misc.rs"]
-mod misc;
-#[path = "checker_package/native_bindings.rs"]
-mod native_bindings;
-#[path = "checker_package/review.rs"]
-mod review;

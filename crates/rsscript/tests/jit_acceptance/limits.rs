@@ -40,7 +40,7 @@ fn main() -> Unit {
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_self_recursion_refused_when_step_budget_armed() {
-    let exe = rsscript::reg_vm_compile_source("limit-self.rss", FIB_SELF_SRC).expect("compile");
+    let exe = common::compile_vm_source("limit-self.rss", FIB_SELF_SRC).expect("compile");
     let limits = rsscript::VmLimits {
         step_budget: Some(50_000_000),
         ..rsscript::VmLimits::default()
@@ -59,7 +59,7 @@ fn native_self_recursion_refused_when_step_budget_armed() {
 #[test]
 fn native_recursion_obeys_custom_max_depth_via_interpreter() {
     let exe =
-        rsscript::reg_vm_compile_source("limit-custom-depth.rss", FIB_SELF_SRC).expect("compile");
+        common::compile_vm_source("limit-custom-depth.rss", FIB_SELF_SRC).expect("compile");
     let (out, stats) = exe
         .eval_main_with_args_native_with_limits(
             std::iter::empty::<String>(),
@@ -96,7 +96,7 @@ fn native_recursion_obeys_custom_max_depth_via_interpreter() {
 #[test]
 fn native_mutual_recursion_refused_when_step_budget_armed() {
     let exe =
-        rsscript::reg_vm_compile_source("limit-mutual.rss", IS_EVEN_MUTUAL_SRC).expect("compile");
+        common::compile_vm_source("limit-mutual.rss", IS_EVEN_MUTUAL_SRC).expect("compile");
     let limits = rsscript::VmLimits {
         step_budget: Some(50_000_000),
         ..rsscript::VmLimits::default()
@@ -117,7 +117,7 @@ fn native_mutual_recursion_refused_when_step_budget_armed() {
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_recursion_refused_when_cancel_armed() {
-    let exe = rsscript::reg_vm_compile_source("limit-cancel.rss", FIB_SELF_SRC).expect("compile");
+    let exe = common::compile_vm_source("limit-cancel.rss", FIB_SELF_SRC).expect("compile");
     let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let limits = rsscript::VmLimits {
         cancel: Some(cancel),
@@ -139,7 +139,7 @@ fn native_recursion_refused_when_cancel_armed() {
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_self_recursion_step_budget_preempts() {
-    let exe = rsscript::reg_vm_compile_source("limit-preempt.rss", FIB_SELF_SRC).expect("compile");
+    let exe = common::compile_vm_source("limit-preempt.rss", FIB_SELF_SRC).expect("compile");
     let limits = rsscript::VmLimits {
         step_budget: Some(1_000),
         ..rsscript::VmLimits::default()
@@ -184,7 +184,7 @@ fn main() -> Unit {
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_completes_under_generous_step_budget() {
-    let exe = rsscript::reg_vm_compile_source("j05-step-ok.rss", J05_OSR_KERNEL).expect("compile");
+    let exe = common::compile_vm_source("j05-step-ok.rss", J05_OSR_KERNEL).expect("compile");
     let limits = rsscript::VmLimits {
         step_budget: Some(10_000_000),
         ..rsscript::VmLimits::default()
@@ -206,7 +206,7 @@ fn native_osr_completes_under_generous_step_budget() {
 #[test]
 fn native_osr_trips_tight_step_budget() {
     let exe =
-        rsscript::reg_vm_compile_source("j05-step-trip.rss", J05_OSR_KERNEL).expect("compile");
+        common::compile_vm_source("j05-step-trip.rss", J05_OSR_KERNEL).expect("compile");
     let limits = rsscript::VmLimits {
         step_budget: Some(5_000),
         ..rsscript::VmLimits::default()
@@ -243,7 +243,7 @@ fn main() -> Unit {
     return Unit
 }
 ";
-    let exe = rsscript::reg_vm_compile_source("osr-host-budget.rss", source).expect("compile");
+    let exe = common::compile_vm_source("osr-host-budget.rss", source).expect("compile");
     let (out, stats) = exe
         .eval_main_with_args_native_osr_with_limits(
             std::iter::empty::<String>(),
@@ -296,7 +296,7 @@ fn main() -> Unit {
 ";
     let file = "osr-handle-liveout.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interpreter");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (native, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("native OSR");
@@ -334,7 +334,7 @@ fn main() -> Unit {
 ";
     let file = "osr-bool-liveout.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interpreter");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (native, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("native OSR");
@@ -350,8 +350,6 @@ fn main() -> Unit {
 #[test]
 fn native_osr_flat_and_nested_handle_alias_falls_back() {
     let source = "\
-features: local
-
 struct Holder {
     items: handle List<Int>
 }
@@ -378,7 +376,7 @@ fn main() -> Unit {
 ";
     let file = "osr-flat-nested-alias.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interpreter");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (native, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("native fallback");
@@ -416,7 +414,7 @@ fn main() -> Unit {
     return Unit
 }
 ";
-    let exe = rsscript::reg_vm_compile_source("j05-cancel.rss", source).expect("compile");
+    let exe = common::compile_vm_source("j05-cancel.rss", source).expect("compile");
     let flag = Arc::new(AtomicBool::new(true));
     let limits = rsscript::VmLimits {
         cancel: Some(Arc::clone(&flag)),
@@ -464,7 +462,7 @@ fn main() -> Unit {
     let file = "j1-map-strkey.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
     let osr =
-        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        common::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
             .expect("osr native run");
     assert_eq!(
         interp.stdout, osr.stdout,
@@ -472,7 +470,7 @@ fn main() -> Unit {
     );
     assert_eq!(osr.stdout.trim_end(), "begin\n1");
 
-    let executable = rsscript::reg_vm_compile_source(file, source).expect("compiles");
+    let executable = common::compile_vm_source(file, source).expect("compiles");
     let (_osr2, stats) = executable
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr native run (stats)");
@@ -487,7 +485,7 @@ fn main() -> Unit {
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_nonallocating_loop_runs_under_mem_budget() {
-    let exe = rsscript::reg_vm_compile_source("j05-mem-ok.rss", J05_OSR_KERNEL).expect("compile");
+    let exe = common::compile_vm_source("j05-mem-ok.rss", J05_OSR_KERNEL).expect("compile");
     let limits = rsscript::VmLimits {
         mem_budget: Some(1 << 20),
         ..rsscript::VmLimits::default()
@@ -528,7 +526,7 @@ fn main() -> Unit {
 ";
     let file = "j05-mem-mapinsert.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let limits = rsscript::VmLimits {
         mem_budget: Some(1 << 20),
         ..rsscript::VmLimits::default()
@@ -581,7 +579,7 @@ fn main() -> Unit {
     let file = "j1-list-push-handle.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
     let osr =
-        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        common::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
             .expect("osr native run");
     assert_eq!(
         interp.stdout, osr.stdout,
@@ -629,7 +627,7 @@ fn main() -> Unit {
 ";
     let file = "jit-osr-j3-two-armed-result.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let executable = common::compile_vm_source(file, source).expect("source compiles");
     let (osr, stats) = executable
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr native run");
@@ -684,7 +682,7 @@ fn main() -> Unit {
 ";
     let file = "jit-osr-j3-two-armed-result-live-after.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
-    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let executable = common::compile_vm_source(file, source).expect("source compiles");
     let (osr, stats) = executable
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr native run");
@@ -728,7 +726,7 @@ fn main() -> Unit {
     let file = "j1-set-insert-string.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
     let osr =
-        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        common::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
             .expect("osr native run");
     assert_eq!(
         interp.stdout, osr.stdout,
@@ -736,7 +734,7 @@ fn main() -> Unit {
     );
     assert_eq!(osr.stdout.trim_end(), "begin\n1");
 
-    let executable = rsscript::reg_vm_compile_source(file, source).expect("compiles");
+    let executable = common::compile_vm_source(file, source).expect("compiles");
     let (_osr2, stats) = executable
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr native run (stats)");
@@ -769,7 +767,7 @@ fn main() -> Unit {
 }
 ";
     let interp = common::run_vm_source("j1-sortedset.rss", set_src, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source("j1-sortedset.rss", set_src).expect("compile");
+    let exe = common::compile_vm_source("j1-sortedset.rss", set_src).expect("compile");
     let (osr, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
@@ -800,7 +798,7 @@ fn main() -> Unit {
 }
 ";
     let interp2 = common::run_vm_source("j1-sortedmap.rss", map_src, &[]).expect("interp");
-    let exe2 = rsscript::reg_vm_compile_source("j1-sortedmap.rss", map_src).expect("compile");
+    let exe2 = common::compile_vm_source("j1-sortedmap.rss", map_src).expect("compile");
     let (osr2, stats2) = exe2
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
@@ -845,7 +843,7 @@ fn main() -> Unit {
     let file = "j1-field-set-handle.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
     let osr =
-        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        common::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
             .expect("osr native run");
     assert_eq!(
         interp.stdout, osr.stdout,
@@ -854,7 +852,7 @@ fn main() -> Unit {
     // After the loop h.name = "hello" (len 5).
     assert_eq!(osr.stdout.trim_end(), "begin\n5");
 
-    let executable = rsscript::reg_vm_compile_source(file, source).expect("compiles");
+    let executable = common::compile_vm_source(file, source).expect("compiles");
     let (_osr2, stats) = executable
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr native run (stats)");
@@ -891,7 +889,7 @@ fn main() -> Unit {
     let file = "j1-deque-push-handle.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
     let osr =
-        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        common::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
             .expect("osr native run");
     assert_eq!(
         interp.stdout, osr.stdout,
@@ -900,7 +898,7 @@ fn main() -> Unit {
     // 100 iters * 2 pushes = 200.
     assert_eq!(osr.stdout.trim_end(), "begin\n200");
 
-    let executable = rsscript::reg_vm_compile_source(file, source).expect("compiles");
+    let executable = common::compile_vm_source(file, source).expect("compiles");
     let (_osr2, stats) = executable
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr native run (stats)");
@@ -947,7 +945,7 @@ fn main() -> Unit {
     let file = "j7-two-armed-heap-string.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
     let osr =
-        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        common::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
             .expect("osr native run");
     assert_eq!(
         interp.stdout, osr.stdout,
@@ -956,7 +954,7 @@ fn main() -> Unit {
     // 100 iters * 5 ("hello") = 500.
     assert_eq!(osr.stdout.trim_end(), "begin\n500\n500");
 
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (_osr2, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr native run (stats)");
@@ -1000,7 +998,7 @@ fn main() -> Unit {
     let file = "j7-two-armed-mixed.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
     let osr =
-        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        common::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
             .expect("osr native run");
     // Sum of 0..50 (1225) + 50*5 (250) = 1475.
     assert_eq!(
@@ -1009,7 +1007,7 @@ fn main() -> Unit {
     );
     assert_eq!(osr.stdout.trim_end(), "begin\n1475\n1475");
 
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (_osr2, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr native run (stats)");
@@ -1051,7 +1049,7 @@ fn main() -> Unit {
     let file = "j7-two-armed-heap-live-after.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
     let osr =
-        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        common::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
             .expect("osr native run");
     // Last iter (i=99) takes Err ⇒ String.len("hello") + 1000 = 1005.
     assert_eq!(
@@ -1097,7 +1095,7 @@ fn main() -> Unit {
     let file = "j7-two-armed-heap-live-after.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
     let osr =
-        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        common::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
             .expect("osr native run");
     // Loop: total += 1 each of 100 iters ⇒ 100. last = (i=99 ⇒ Err("hello")). Post-loop
     // Err arm ⇒ +5+1000 = 1005. total = 100 + 1005 = 1105.
@@ -1107,7 +1105,7 @@ fn main() -> Unit {
     );
     assert_eq!(osr.stdout.trim_end(), "begin\n1105\n1105");
 
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (_osr2, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr native run (stats)");
@@ -1147,7 +1145,7 @@ fn main() -> Unit {
     let file = "j1-map-strkey-lookup.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
     let osr =
-        rsscript::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
+        common::reg_vm_eval_source_main_native_osr(file, source, std::iter::empty::<String>())
             .expect("osr native run");
     // Last inserted value for "key" is 199.
     assert_eq!(
@@ -1156,7 +1154,7 @@ fn main() -> Unit {
     );
     assert_eq!(osr.stdout.trim_end(), "begin\n199");
 
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compiles");
+    let exe = common::compile_vm_source(file, source).expect("compiles");
     let (_o, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
@@ -1193,7 +1191,7 @@ fn main() -> Unit {
 ";
     let file = "wf.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let nat = rsscript::reg_vm_eval_source_main_native(file, source, std::iter::empty::<String>())
+    let nat = common::reg_vm_eval_source_main_native(file, source, std::iter::empty::<String>())
         .expect("native");
     eprintln!(
         "WF interp={:?} native={:?}",
@@ -1232,7 +1230,7 @@ fn main() -> Unit {
 ";
     let file = "wf2.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_with_stats(std::iter::empty::<String>())
         .expect("native");
@@ -1279,7 +1277,7 @@ fn main() -> Unit {
 }
 ";
     let interp = common::run_vm_source("j1-set-disc.rss", set_src, &[]).expect("interp");
-    let osr = rsscript::reg_vm_eval_source_main_native_osr(
+    let osr = common::reg_vm_eval_source_main_native_osr(
         "j1-set-disc.rss",
         set_src,
         std::iter::empty::<String>(),
@@ -1312,7 +1310,7 @@ fn main() -> Unit {
 }
 ";
     let interp2 = common::run_vm_source("j1-sortedmap-disc.rss", sm_src, &[]).expect("interp");
-    let osr2 = rsscript::reg_vm_eval_source_main_native_osr(
+    let osr2 = common::reg_vm_eval_source_main_native_osr(
         "j1-sortedmap-disc.rss",
         sm_src,
         std::iter::empty::<String>(),
@@ -1352,7 +1350,7 @@ fn main() -> Unit {
 ";
     let file = "j05-list-push-mem.rss";
     // (A) Generous budget: the loop OSRs, charges per push, stays within budget, completes.
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let ok = rsscript::VmLimits {
         mem_budget: Some(1 << 24),
         ..rsscript::VmLimits::default()
@@ -1367,7 +1365,7 @@ fn main() -> Unit {
     );
 
     // (B) Tight budget the build exceeds: native must ERROR identically to the interpreter.
-    let interp_err = rsscript::reg_vm_eval_source_main_with_limits(
+    let interp_err = common::reg_vm_eval_source_main_with_limits(
         file,
         source,
         std::iter::empty::<String>(),
@@ -1377,7 +1375,7 @@ fn main() -> Unit {
         },
     )
     .expect_err("interpreter must exceed the tight mem_budget");
-    let exe2 = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe2 = common::compile_vm_source(file, source).expect("compile");
     let nat_err = exe2
         .eval_main_with_args_native_osr_with_limits(
             std::iter::empty::<String>(),
@@ -1427,7 +1425,7 @@ fn main() -> Unit {
 ";
     let file = "s4.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
@@ -1472,7 +1470,7 @@ fn main() -> Unit {
 ";
     let file = "s4_map.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
@@ -1513,7 +1511,7 @@ fn main() -> Unit {
 ";
     let file = "s4_deque.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
@@ -1562,7 +1560,7 @@ fn main() -> Unit {
 ";
     let file = "p7.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
@@ -1607,7 +1605,7 @@ fn main() -> Unit {
 ";
     let file = "p7b.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
@@ -1652,7 +1650,7 @@ fn main() -> Unit {
 ";
     let file = "p7c.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
@@ -1712,7 +1710,7 @@ fn main() -> Unit {
 ";
     let file = "p7d.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
@@ -1765,7 +1763,7 @@ fn main() -> Unit {
 ";
     let file = "p7e.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
@@ -1822,7 +1820,7 @@ fn main() -> Unit {
 ";
     let file = "p7f.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr");
@@ -1881,7 +1879,7 @@ fn main() -> Unit {
 ";
     let file = "p7g.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
@@ -1930,7 +1928,7 @@ fn main() -> Unit {
 ";
     let file = "p7h.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
@@ -1976,7 +1974,7 @@ fn main() -> Unit {
 ";
     let file = "p7i.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
@@ -2022,7 +2020,7 @@ fn main() -> Unit {
 ";
     let file = "p7j.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
@@ -2074,7 +2072,7 @@ fn main() -> Unit {
 ";
     let file = "p7k.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
@@ -2127,7 +2125,7 @@ fn main() -> Unit {
 ";
     let file = "p7l.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
@@ -2182,7 +2180,7 @@ fn main() -> Unit {
 ";
     let file = "p7m.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
@@ -2212,8 +2210,6 @@ fn main() -> Unit {
 #[test]
 fn native_non_mut_heap_param_mutation_does_not_leak_to_caller() {
     let source = "\
-features: local
-
 fn mutate(xs: read List<Int>, limit: Int) -> Int {
     let mut ys = xs
     let mut i = 0
@@ -2234,7 +2230,7 @@ fn main() -> Unit {
 ";
     let file = "deepcopy_leak.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, _stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
@@ -2256,8 +2252,6 @@ fn main() -> Unit {
 #[test]
 fn elision_reused_loop_var_scalar_then_heap_does_not_leak() {
     let source = "\
-features: local
-
 fn pick(nums: read List<Int>, grid: read List<List<Int>>) -> List<Int> {
     for item in nums {
         let bump = item + 1
@@ -2290,8 +2284,6 @@ fn main() -> Unit {
 #[test]
 fn mut_scalar_param_returned_does_not_crash() {
     let source = "\
-features: local
-
 fn ident(i: mut Int) -> Int {
     return i
 }
@@ -2341,8 +2333,6 @@ fn main() -> Unit {
 #[test]
 fn native_store_reload_mutate_non_mut_heap_param_does_not_leak() {
     let source = "\
-features: local
-
 struct Box {
     items: List<Int>
 }
@@ -2367,7 +2357,7 @@ fn main() -> Unit {
 ";
     let file = "store_reload_leak.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, _stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
@@ -2392,8 +2382,6 @@ fn main() -> Unit {
 #[test]
 fn native_inlined_leaf_store_of_non_mut_heap_param_does_not_leak() {
     let source = "\
-features: local
-
 struct Holder {
     items: List<Int>
 }
@@ -2423,7 +2411,7 @@ fn main() -> Unit {
 ";
     let file = "inlined_store_leak.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, _stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
@@ -2465,7 +2453,7 @@ fn main() -> Unit {
 ";
     let file = "p7n.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
@@ -2514,7 +2502,7 @@ fn main() -> Unit {
 ";
     let file = "p7p.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
@@ -2567,7 +2555,7 @@ fn main() -> Unit {
 ";
     let file = "p7probe.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
@@ -2629,7 +2617,7 @@ fn main() -> Unit {
 ";
     let file = "p7o.rss";
     let interp = common::run_vm_source(file, source, &[]).expect("interp");
-    let exe = rsscript::reg_vm_compile_source(file, source).expect("compile");
+    let exe = common::compile_vm_source(file, source).expect("compile");
     let (nat, _stats) = exe
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("run");
@@ -2704,7 +2692,7 @@ fn main() -> Unit {
     // Deopt-every parity across the whole composed transform pipeline.
     assert_fast_jit_backends_agree(file, source);
     // Confirm it actually exercises the OSR pipeline (not trivially declined).
-    let executable = rsscript::reg_vm_compile_source(file, source).expect("source compiles");
+    let executable = common::compile_vm_source(file, source).expect("source compiles");
     let (_out, stats) = executable
         .eval_main_with_args_native_osr_with_stats(std::iter::empty::<String>())
         .expect("osr native run");

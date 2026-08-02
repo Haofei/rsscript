@@ -5,7 +5,6 @@ use super::*;
 #[test]
 fn parity_cancellation_intrinsics() {
     let source = r#"
-features: native, local
 
 fn main() -> Unit {
     local source = CancellationSource.new()
@@ -36,7 +35,6 @@ fn main() -> Unit {
 #[test]
 fn parity_deadline_intrinsics() {
     let source = r#"
-features: native
 
 fn main() -> Unit {
     let immediate = Deadline.after_ms(ms: 0)
@@ -63,7 +61,6 @@ fn main() -> Unit {
 #[test]
 fn parity_channel_sync_intrinsics() {
     let source = r#"
-features: async, native, local
 
 async fn main() -> Result<Unit, ChannelError> {
     match Channel.bounded<Int>(capacity: 0) {
@@ -208,7 +205,6 @@ fn parity_await_in_expression() {
     // is hoisted to preceding `let` bindings. Evaluation order (left-to-right)
     // and the doubly-nested `await g(await f())` form must match across backends.
     let source = r#"
-features: async, local
 
 async fn step(n: Int) -> Result<Int, String> {
     Log.write(message: read String.from_int(value: n))
@@ -239,7 +235,6 @@ fn parity_message_channel_roundtrip() {
     // cross-isolate-transferable payload and reuses the bounded-channel runtime, so
     // send/recv must behave identically across backends.
     let source = r#"
-features: async, native, local
 
 async fn main() -> Result<Unit, ChannelError> {
     let mut channel: Channel<Int> = Channel.message<Int>(capacity: 1)?

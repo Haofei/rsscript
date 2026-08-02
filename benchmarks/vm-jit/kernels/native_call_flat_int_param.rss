@@ -1,4 +1,3 @@
-features: local
 
 // JIT hot path: a native parent passes a read-only flat `List<Int>` parameter
 // to a compiled native child. This exercises the native-to-native flat param ABI:

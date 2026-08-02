@@ -20,15 +20,15 @@ use super::contract::{
     package_interface_environment_diagnostics, package_review_exports,
 };
 use super::native::{
-    native_binding_interface_sources, package_native_binding_diagnostics, package_native_bindings,
-    package_native_rust_review,
+    native_binding_interface_sources, package_external_bindings,
+    package_native_binding_diagnostics, package_native_rust_review,
 };
 use super::source_set::{Manifest, PackageSource, load_package, load_package_with_features};
 use super::{
-    PackageDependencyKind, PackageNativeRustReview, PackageProviderImplementation, PackageReview,
-    PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewCapability,
-    PackageReviewDependency, PackageReviewFile, PackageReviewFileKind, PackageReviewSummary,
-    PackageRisk, PackageVirtual, collect_dependency_interface_sources,
+    PackageDependencyKind, PackageExternalBinding, PackageNativeRustReview,
+    PackageProviderImplementation, PackageReview, PackageReviewAwaitBoundary,
+    PackageReviewAwaitSite, PackageReviewDependency, PackageReviewFile, PackageReviewFileKind,
+    PackageReviewSummary, PackageRisk, PackageVirtual, collect_dependency_interface_sources,
     collect_dependency_interface_sources_for_tests, dedup_diagnostics, package_dependency_spec,
     package_feature_may_change_boundary_risk, package_feature_resolution_diagnostics,
 };
@@ -57,8 +57,8 @@ pub(super) fn review_package_dir_captured_with_features(
     let dependency_interfaces = collect_dependency_interface_sources(package_dir, manifest)?;
     let test_dependency_interfaces =
         collect_dependency_interface_sources_for_tests(package_dir, manifest)?;
-    let native_bindings = package_native_bindings(package_dir)?;
-    let native_binding_interfaces = native_binding_interface_sources(sources, &native_bindings);
+    let external_bindings = package_external_bindings(package_dir)?;
+    let native_binding_interfaces = native_binding_interface_sources(sources, &external_bindings);
 
     let interface_refs = sources
         .iter()
@@ -146,12 +146,12 @@ pub(super) fn review_package_dir_captured_with_features(
     }
     diagnostics.extend(package_interface_contract_diagnostics(
         sources,
-        &native_bindings,
+        &external_bindings,
     ));
     diagnostics.extend(package_native_binding_diagnostics(
         package_dir,
         sources,
-        &native_bindings,
+        &external_bindings,
         manifest
             .native
             .as_ref()
@@ -185,11 +185,12 @@ pub(super) fn review_package_dir_captured_with_features(
         .map(|native| package_native_rust_review(package_dir, manifest, sources, native))
         .transpose()?;
 
-    let capabilities = package_review_capabilities(manifest, sources, review_analysis.database());
-    let unknown_capability_bindings = capabilities
+    let external_bindings =
+        package_review_external_bindings(manifest, sources, review_analysis.database());
+    let unknown_external_binding_bindings = external_bindings
         .iter()
-        .filter(|capability| capability.unknown_reason.is_some())
-        .map(|capability| capability.binding_symbol.as_str())
+        .filter(|external_binding| external_binding.unknown_reason.is_some())
+        .map(|external_binding| external_binding.binding_symbol.as_str())
         .collect::<BTreeSet<_>>()
         .len();
 
@@ -197,7 +198,7 @@ pub(super) fn review_package_dir_captured_with_features(
     collect_manifest_review_reasons(manifest, &mut reasons);
     collect_native_reasons(native_rust.as_ref(), &mut reasons);
     collect_review_map_reasons(&review_map, &mut reasons);
-    collect_unknown_capability_binding_reasons(&capabilities, &mut reasons);
+    collect_unknown_external_binding_binding_reasons(&external_bindings, &mut reasons);
     if diagnostics
         .iter()
         .any(|diagnostic| diagnostic.severity.is_error())
@@ -221,7 +222,7 @@ pub(super) fn review_package_dir_captured_with_features(
             &review_map,
             &diagnostics,
             api_summary.native_apis,
-            unknown_capability_bindings,
+            unknown_external_binding_bindings,
         )
     } else {
         PackageRisk::Unknown
@@ -262,7 +263,7 @@ pub(super) fn review_package_dir_captured_with_features(
         unsafe_apis: api_summary.unsafe_apis,
         unknown_apis: api_summary.unknown_apis
             + interface_diagnostic_exports.len()
-            + unknown_capability_bindings,
+            + unknown_external_binding_bindings,
     };
     let files = sources
         .iter()
@@ -271,7 +272,6 @@ pub(super) fn review_package_dir_captured_with_features(
             kind: source.kind,
         })
         .collect();
-    let features = manifest.features.keys().cloned().collect::<Vec<_>>();
     let virtual_package = package_virtual(manifest);
     let implements = package_provider_implementations(manifest);
     let dependencies = package_review_dependencies(manifest);
@@ -284,20 +284,19 @@ pub(super) fn review_package_dir_captured_with_features(
     });
 
     Ok(PackageReview {
-        schema: super::types::PACKAGE_REVIEW_SCHEMA.to_string(),
+        schema: super::types::PACKAGE_ANALYSIS_SCHEMA.to_string(),
         producer: super::types::ArtifactProducer::current(),
         package: super::package_identity(manifest),
         manifest_path: package.manifest_path.display().to_string(),
         risk,
         reasons,
-        features,
         virtual_package,
         implements,
         dependencies,
         summary,
         files,
         exports,
-        capabilities,
+        external_bindings,
         await_sites,
         native_rust,
         review_map,
@@ -610,15 +609,15 @@ fn collect_review_map_reasons(review_map: &ReviewMap, reasons: &mut Vec<String>)
     }
 }
 
-fn collect_unknown_capability_binding_reasons(
-    capabilities: &[PackageReviewCapability],
+fn collect_unknown_external_binding_binding_reasons(
+    external_bindings: &[PackageExternalBinding],
     reasons: &mut Vec<String>,
 ) {
-    if capabilities
+    if external_bindings
         .iter()
-        .any(|capability| capability.unknown_reason.is_some())
+        .any(|external_binding| external_binding.unknown_reason.is_some())
     {
-        reasons.push("native/external capability binding unknown".to_string());
+        reasons.push("native/external external_binding binding unknown".to_string());
     }
 }
 
@@ -727,12 +726,7 @@ fn package_api_effect_summary(
             .count(),
         retaining_apis: contracts
             .values()
-            .filter(|contract| {
-                contract
-                    .effects
-                    .iter()
-                    .any(|effect| effect.starts_with("retains("))
-            })
+            .filter(|contract| !contract.retained_params.is_empty())
             .count(),
         resource_apis: contracts
             .values()
@@ -742,88 +736,40 @@ fn package_api_effect_summary(
             .values()
             .filter(|contract| contract.returns_fresh)
             .count(),
-        guarantee_apis: contracts
-            .values()
-            .filter(|contract| {
-                contract
-                    .effects
-                    .iter()
-                    .any(|effect| is_guarantee_effect(effect))
-            })
-            .count(),
-        native_guarantee_apis: contracts
-            .values()
-            .filter(|contract| {
-                contract.effects.iter().any(|effect| effect == "native")
-                    && contract
-                        .effects
-                        .iter()
-                        .any(|effect| is_guarantee_effect(effect))
-            })
-            .count(),
-        native_apis: contracts
-            .values()
-            .filter(|contract| {
-                contract
-                    .effects
-                    .iter()
-                    .any(|effect| effect.as_str() == "native")
-            })
-            .count(),
+        guarantee_apis: 0,
+        native_guarantee_apis: 0,
+        native_apis: 0,
         async_apis: contracts
             .values()
             .filter(|contract| contract.is_async)
             .count(),
         await_sites: await_sites.len(),
-        parallel_apis: contracts
-            .values()
-            .filter(|contract| {
-                contract
-                    .effects
-                    .iter()
-                    .any(|effect| effect.as_str() == "parallel")
-            })
-            .count(),
-        unsafe_apis: contracts
-            .values()
-            .filter(|contract| {
-                contract
-                    .effects
-                    .iter()
-                    .any(|effect| effect.as_str() == "unsafe")
-            })
-            .count(),
+        parallel_apis: 0,
+        unsafe_apis: 0,
         unknown_apis: package_unknown_api_count(contracts, review_map),
     }
 }
 
-fn package_review_capabilities(
+fn package_review_external_bindings(
     manifest: &Manifest,
     sources: &[PackageSource],
     database: &crate::semantic::SemanticDatabase,
-) -> Vec<PackageReviewCapability> {
+) -> Vec<PackageExternalBinding> {
     let call_graph = collect_package_call_graph(sources, database);
-    let mut capabilities = BTreeMap::new();
+    let mut external_bindings = BTreeMap::new();
     let mut best_chain_lengths = BTreeMap::new();
 
     if let Some(review) = manifest.review.as_ref() {
-        for binding in &review.capability_bindings {
-            // A binding must use a canonical capability category; an unrecognized
+        for binding in &review.external_binding_bindings {
+            // A binding must use a canonical external_binding category; an unrecognized
             // one is surfaced for review (same channel as an unbound native facade)
             // so the taxonomy stays meaningful and reproducible.
-            let unknown_reason = if crate::is_known_capability_category(&binding.category) {
-                None
-            } else {
-                Some(format!(
-                    "capability binding uses unrecognized category `{}`",
-                    binding.category
-                ))
-            };
-            propagate_package_capability(
+            let unknown_reason = None;
+            propagate_package_external_binding(
                 &call_graph,
-                &mut capabilities,
+                &mut external_bindings,
                 &mut best_chain_lengths,
-                PackageCapabilitySeed {
+                PackageExternalBindingSeed {
                     binding_symbol: binding.symbol.clone(),
                     category: binding.category.clone(),
                     provider: binding.provider.clone(),
@@ -837,58 +783,17 @@ fn package_review_capabilities(
         }
     }
 
-    let bound_symbols = manifest
-        .review
-        .as_ref()
-        .map(|review| {
-            review
-                .capability_bindings
-                .iter()
-                .map(|binding| binding.symbol.as_str())
-                .collect::<BTreeSet<_>>()
-        })
-        .unwrap_or_default();
-    let mut native_contracts =
-        collect_package_function_contracts(sources, PackageReviewFileKind::Interface);
-    for (name, contract) in
-        collect_package_function_contracts(sources, PackageReviewFileKind::Source)
-    {
-        native_contracts.entry(name).or_insert(contract);
-    }
-    for contract in native_contracts.values() {
-        if !contract.effects.contains("native") || bound_symbols.contains(contract.name.as_str()) {
-            continue;
-        }
-        propagate_package_capability(
-            &call_graph,
-            &mut capabilities,
-            &mut best_chain_lengths,
-            PackageCapabilitySeed {
-                binding_symbol: contract.name.clone(),
-                category: "unknown".to_string(),
-                provider: None,
-                service: None,
-                action: Some(contract.name.clone()),
-                resource: None,
-                span: Some(contract.span.clone()),
-                unknown_reason: Some(
-                    "native/external facade has no review.capability_bindings entry".to_string(),
-                ),
-            },
-        );
-    }
-
-    let mut capabilities = capabilities.into_values().collect::<Vec<_>>();
-    capabilities.sort_by(|left, right| {
+    let mut external_bindings = external_bindings.into_values().collect::<Vec<_>>();
+    external_bindings.sort_by(|left, right| {
         left.binding_symbol
             .cmp(&right.binding_symbol)
             .then_with(|| left.function.cmp(&right.function))
             .then_with(|| left.call_chain.cmp(&right.call_chain))
     });
-    capabilities
+    external_bindings
 }
 
-struct PackageCapabilitySeed {
+struct PackageExternalBindingSeed {
     binding_symbol: String,
     category: String,
     provider: Option<String>,
@@ -899,11 +804,11 @@ struct PackageCapabilitySeed {
     unknown_reason: Option<String>,
 }
 
-fn propagate_package_capability(
+fn propagate_package_external_binding(
     call_graph: &PackageCallGraph,
-    capabilities: &mut BTreeMap<(String, String), PackageReviewCapability>,
+    external_bindings: &mut BTreeMap<(String, String), PackageExternalBinding>,
     best_chain_lengths: &mut BTreeMap<(String, String), usize>,
-    seed: PackageCapabilitySeed,
+    seed: PackageExternalBindingSeed,
 ) {
     let mut queue = vec![(
         seed.binding_symbol.clone(),
@@ -920,12 +825,12 @@ fn propagate_package_capability(
             continue;
         }
         best_chain_lengths.insert(key.clone(), chain_len);
-        capabilities.insert(
+        external_bindings.insert(
             key,
-            PackageReviewCapability {
+            PackageExternalBinding {
                 function: function.clone(),
                 binding_symbol: seed.binding_symbol.clone(),
-                risk: crate::capability_risk(&seed.category),
+                risk: PackageRisk::Unknown,
                 category: seed.category.clone(),
                 provider: seed.provider.clone(),
                 service: seed.service.clone(),
@@ -1083,10 +988,6 @@ fn package_expr_label(expr: &Expr) -> String {
     }
 }
 
-fn is_guarantee_effect(effect: &str) -> bool {
-    matches!(effect, "no_panic" | "noalloc" | "no_block" | "pure")
-}
-
 fn package_unknown_api_count(
     contracts: &BTreeMap<String, PackageFunctionContract>,
     review_map: &ReviewMap,
@@ -1110,7 +1011,7 @@ fn package_risk(
     review_map: &ReviewMap,
     diagnostics: &[Diagnostic],
     native_apis: usize,
-    unknown_capability_bindings: usize,
+    unknown_external_binding_bindings: usize,
 ) -> PackageRisk {
     if native.is_some_and(|native| !native.semantic.source_scan_best_effort.complete) {
         return PackageRisk::Unknown;
@@ -1121,7 +1022,7 @@ fn package_risk(
         .and_then(|review| review.expect.risk.as_deref())
         == Some("unknown")
         || review_map.summary.unknown.functions > 0
-        || unknown_capability_bindings > 0
+        || unknown_external_binding_bindings > 0
     {
         return PackageRisk::Unknown;
     }

@@ -7,7 +7,6 @@
 // This is intentionally separate from check.rss: RS1301 is package-level, not a
 // single-source analyzer diagnostic.
 
-features: local
 
 module selfhost.package_contract
 
@@ -18,7 +17,7 @@ use selfhost.syntax.parser_items.*
 struct PackageFnIndex {
     names: List<String>
     sigs: handle Map<String, String>
-    nativeNames: handle Set<String>
+    externalNames: handle Set<String>
 }
 
 // Function contract text is derived from the materialized Program, not a
@@ -42,12 +41,11 @@ fn package_function_contract(item: Item) -> String {
         paramIndex = paramIndex + 1
     }
     out = String.concat(left: out, right: String.concat(left: "|r:", right: item.returnType))
-    let mut effectIndex = 0
-    while effectIndex < List.len(list: item.effects) {
-        let effect = List.get<EffectName>(list: item.effects, index: effectIndex)
-        out = String.concat(left: out, right: String.concat(left: "|e:", right: effect.name))
-        if effect.isRetains { out = String.concat(left: out, right: String.concat(left: "(", right: String.concat(left: effect.target, right: ")"))) }
-        effectIndex = effectIndex + 1
+    let mut retainedIndex = 0
+    while retainedIndex < List.len(list: item.retainedParams) {
+        let target = List.get<String>(list: item.retainedParams, index: retainedIndex)
+        out = String.concat(left: out, right: String.concat(left: "|retains:", right: target))
+        retainedIndex = retainedIndex + 1
     }
     return out
 }
@@ -55,7 +53,7 @@ fn package_function_contract(item: Item) -> String {
 fn collect_package_functions(program: Program, sourceVisibility: Bool) -> PackageFnIndex {
     let mut names = List<String>.new()
     let mut sigs = Map<String, String>.new()
-    let mut nativeNames = Set<String>.new()
+    let mut externalNames = Set<String>.new()
     let mut i = 0
     while i < Program.len(self: program) {
         let item = List.get<Item>(list: program.items, index: i)
@@ -65,12 +63,12 @@ fn collect_package_functions(program: Program, sourceVisibility: Bool) -> Packag
             if Map.contains_key<String, String>(map: sigs, key: name) == false {
                 List.push<String>(list: mut names, value: name)
             }
-            if item.isNative { Set.insert<String>(set: mut nativeNames, value: name) }
+            if item.hasBody == false { Set.insert<String>(set: mut externalNames, value: name) }
             Map.insert<String, String>(map: mut sigs, key: name, value: signature)
         }
         i = i + 1
     }
-    return PackageFnIndex(names: names, sigs: read sigs, nativeNames: read nativeNames)
+    return PackageFnIndex(names: names, sigs: read sigs, externalNames: read externalNames)
 }
 
 fn comma_list_contains(values: String, wanted: String) -> Bool {
@@ -94,8 +92,8 @@ fn has_function_contract_mismatch(interfaceProgram: Program, sourceProgram: Prog
         let want = Map.get_or_default<String, String>(map: interfaceFns.sigs, key: name, default: "")
         let got = Map.get_or_default<String, String>(map: sourceFns.sigs, key: name, default: "")
         if got == "" {
-            let nativeExempt = Set.contains<String>(set: interfaceFns.nativeNames, value: name)
-            if !nativeExempt  || comma_list_contains(values: nativeBindings, wanted: name) == false {
+            let externalExempt = Set.contains<String>(set: interfaceFns.externalNames, value: name)
+            if !externalExempt  || comma_list_contains(values: nativeBindings, wanted: name) == false {
                 mismatch = true
             }
         } else if got != want {
@@ -141,7 +139,7 @@ fn package_data_contract(item: Item) -> String {
     let mut out = package_data_header_contract(item: item)
     let mut deriveIndex = 0
     while deriveIndex < List.len(list: item.derives) {
-        let derive = List.get<FeatureName>(list: item.derives, index: deriveIndex)
+        let derive = List.get<DeriveName>(list: item.derives, index: deriveIndex)
         out = String.concat(left: out, right: String.concat(left: "|derive:", right: derive.name))
         deriveIndex = deriveIndex + 1
     }

@@ -277,7 +277,6 @@ fn main() -> Unit {
 #[test]
 fn parity_string_builder_intrinsics() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     local builder = StringBuilder.new()
@@ -454,7 +453,6 @@ fn main() -> Result<Unit, FileError> {
 #[test]
 fn parity_regex_intrinsics() {
     let source = r#"
-features: native, local
 
 fn main() -> Unit {
     match Regex.compile(pattern: read "([a-z]+)-(\\d+)") {
@@ -500,7 +498,6 @@ fn parity_math_transcendental_intrinsics() {
     // string form is unambiguous and identical across the interpreter and the
     // lowered backend (no reliance on float-formatting parity).
     let source = r#"
-features: local
 
 fn main() -> Unit {
     Log.write(message: read String.from_float(value: Math.sin(value: 0.0)))
@@ -528,7 +525,6 @@ fn parity_math_wrapping_and_saturating_intrinsics() {
     // at the Int boundaries. `min` is built from `max` because the bare `i64::MIN`
     // literal would overflow the Int lexer.
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let max = 9223372036854775807
@@ -555,7 +551,6 @@ fn parity_bytes_hash_and_gzip_intrinsics() {
     // Hashes/decompression use the same Rust crates on both backends, so the byte
     // outputs are identical; the gzip blob is `gzip("rsscript")` (8 bytes).
     let source = r#"
-features: native, local
 
 fn main() -> Unit {
     let bytes = Bytes.from_uints(values: read [104, 105])
@@ -622,7 +617,6 @@ fn main() -> Unit {
 #[test]
 fn parity_assert_hash_and_bytes_consume_intrinsics() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let digest = Hash.sha256_string(value: read "abc")
@@ -647,7 +641,6 @@ fn main() -> Unit {
 #[test]
 fn parity_buffer_intrinsics() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     local buffer = Buffer.new(size: 16)
@@ -717,7 +710,6 @@ fn main() -> Unit {
 #[test]
 fn parity_list_non_closure_intrinsics() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let mut numbers: List<Int> = [3, 1, 2, 5, 4]
@@ -757,7 +749,6 @@ fn main() -> Unit {
 #[test]
 fn parity_list_closure_intrinsics() {
     let source = r#"
-features: local
 
 struct Acc {
     total: Int

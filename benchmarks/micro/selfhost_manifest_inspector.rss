@@ -1,4 +1,3 @@
-features: native, local
 
 // Self-hosted RSS tool: inspect an `rsspkg.toml` package manifest and emit a JSON
 // report. Used both as a real tool and as a cross-backend (VM/JIT/AOT) benchmark

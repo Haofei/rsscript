@@ -38,11 +38,10 @@ fn apply_loop(g: Fn(Int) -> Int, limit: Int, seed: Int) -> Int {
 fn main() -> Unit {
     let limit = bench_size(default: 2000000)
     let base = 7
-    let g = fn(value) captures(read base) effects(pure) {
+    let g = fn(value) captures(read base) {
         return value * 2 + base
     }
     let result = apply_loop(g, limit, seed: 0)
     Log.write(message: String.from_int(value: result))
     return Unit
 }
-features: local

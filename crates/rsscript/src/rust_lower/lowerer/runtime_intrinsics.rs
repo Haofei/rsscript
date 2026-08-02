@@ -292,7 +292,7 @@ impl<'a> RustLowerer<'a> {
             } => {
                 let receiver_type = self.infer_expr_type(receiver)?;
                 let namespace = self.receiver_call_namespace(&receiver_type, method);
-                let key = native_boundary_function_key(&format!("{namespace}.{method}"));
+                let key = external_boundary_function_key(&format!("{namespace}.{method}"));
                 (
                     key,
                     1,
@@ -302,7 +302,7 @@ impl<'a> RustLowerer<'a> {
                     },
                 )
             }
-            _ => (native_boundary_callee_key(callee), 0, callee.clone()),
+            _ => (external_boundary_callee_key(callee), 0, callee.clone()),
         };
         let params = self.function_param_types.get(&key)?.clone();
         let effects = self
@@ -581,7 +581,7 @@ impl<'a> RustLowerer<'a> {
                 .generic_protocol_bounds
                 .get(&receiver_type_name)
                 .cloned()
-                .or_else(|| capability_protocol_name(&receiver_type_name).map(str::to_string))
+                .or_else(|| dyn_protocol_name(&receiver_type_name).map(str::to_string))
                 .or_else(|| self.protocol_impl_namespace(&receiver_type_root, method))
                 .or_else(|| {
                     receiver_facade_namespace(&receiver_type_root, method).map(str::to_string)
@@ -727,8 +727,8 @@ impl<'a> RustLowerer<'a> {
             } else {
                 format!("{lowered_receiver}, {lowered_args}")
             };
-            let qualified_key = native_boundary_function_key(&format!("{namespace}.{method}"));
-            if let Some(native_target) = self.native_bindings.get(&qualified_key).cloned() {
+            let qualified_key = external_boundary_function_key(&format!("{namespace}.{method}"));
+            if let Some(native_target) = self.external_bindings.get(&qualified_key).cloned() {
                 return Some(format!("{native_target}({all_args})"));
             }
             let callee_str = if is_protocol {
@@ -751,7 +751,7 @@ impl<'a> RustLowerer<'a> {
     }
 
     /// Generic / fallthrough call dispatch: string-concat and weak intrinsics,
-    /// native-bound free functions, capability-from-protocol, protocol callees, and the default
+    /// native-bound free functions, external_binding-from-protocol, protocol callees, and the default
     /// `callee(args...)` form (including trailing defaulted-parameter fill-in).
     pub(in crate::rust_lower) fn lower_call_dispatch(
         &mut self,
@@ -769,8 +769,8 @@ impl<'a> RustLowerer<'a> {
             return lower_weak_upgrade_call(self, args);
         }
         if let Some(native_target) = self
-            .native_bindings
-            .get(&native_boundary_callee_key(callee))
+            .external_bindings
+            .get(&external_boundary_callee_key(callee))
             .cloned()
         {
             let args = args
@@ -780,8 +780,8 @@ impl<'a> RustLowerer<'a> {
                 .join(", ");
             return format!("{native_target}({args})");
         }
-        if let Some(protocol) = capability_from_protocol(callee) {
-            return self.lower_capability_from_call(protocol, args);
+        if let Some(protocol) = dyn_from_protocol(callee) {
+            return self.lower_dyn_from_call(protocol, args);
         }
         if self.is_protocol_callee(callee) {
             let lowered_callee = lower_protocol_callee(callee);

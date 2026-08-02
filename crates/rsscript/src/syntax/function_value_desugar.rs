@@ -294,7 +294,6 @@ fn forwarding_closure_for_arg(
     Some(Expr::Closure {
         params: params.iter().map(|(name, _)| name.clone()).collect(),
         captures: Vec::new(),
-        declared_effects: Vec::new(),
         explicit: false,
         body,
         span: span.clone(),

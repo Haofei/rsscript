@@ -84,7 +84,6 @@ fn package_review_reports_interface_implementation_signature_mismatch() {
         "0.1.0",
         "",
         r#"pub fn render(body: read String) -> fresh String
-    effects(no_panic)
 "#,
     );
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
@@ -471,8 +470,7 @@ fn package_review_includes_lint_warnings_for_public_contracts() {
         &temp_dir,
         "0.1.0",
         "",
-        r#"features: native
-
+        r#"
 struct Error
 struct Picture
 
@@ -485,7 +483,6 @@ pub fn Api.overloaded<A, B, C, D>(
     sixth: read String,
     seventh: read String,
 ) -> Result<Option<List<Map<String, Picture>>>, Error>
-    effects(no_panic, noalloc, no_block, pure, native)
 "#,
     );
 
@@ -532,7 +529,6 @@ fn package_review_exports_protocol_impl_contracts() {
         "",
         r#"protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
-        effects(retains(message))
 
     fn flush(self: mut Self) -> Unit = _
 }
@@ -540,7 +536,6 @@ fn package_review_exports_protocol_impl_contracts() {
 struct BufferWriter
 
 pub fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
-    effects(retains(message))
 
 pub fn BufferWriter.flush(self: mut BufferWriter) -> Unit
 
@@ -585,7 +580,7 @@ impl Writer for BufferWriter {
                         })
                         && reasons.iter().any(|reason| {
                             reason
-                                == "method contract `fn Writer.write(self: mut Self, message: read String) -> Unit effects(retains(message))`"
+                                == "method contract `fn Writer.write(self: mut Self, message: read String) -> Unit retains(message)`"
                         })
                 })
         })
@@ -632,15 +627,12 @@ fn package_review_reports_protocol_impl_contract_mismatch() {
         "",
         r#"protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
-        effects(retains(message))
 }
 
 struct BufferWriter
 
 pub fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
-    effects(retains(message))
 pub fn BufferWriter.audit_write(self: mut BufferWriter, message: read String) -> Unit
-    effects(retains(message))
 
 impl Writer for BufferWriter {
     write = BufferWriter.write
@@ -652,19 +644,16 @@ impl Writer for BufferWriter {
         temp_dir.join("src/lib.rss"),
         r#"protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
-        effects(retains(message))
 }
 
 struct BufferWriter
 
 pub fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
-    effects(retains(message))
 {
     Log.write(message: read message)
 }
 
 pub fn BufferWriter.audit_write(self: mut BufferWriter, message: read String) -> Unit
-    effects(retains(message))
 {
     Log.write(message: read message)
 }
@@ -699,7 +688,6 @@ fn package_review_reports_interface_protocol_contract_mismatch() {
         "",
         r#"protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
-        effects(retains(message))
 }
 "#,
     );
@@ -722,7 +710,7 @@ fn package_review_reports_interface_protocol_contract_mismatch() {
             && diagnostic
                 .causes
                 .iter()
-                .any(|cause| cause.contains("effects(retains(message))"))
+                .any(|cause| cause.contains("retains(message)"))
     }));
 }
 
@@ -736,7 +724,6 @@ fn package_review_accepts_matching_interface_protocol_contract() {
         "",
         r#"protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
-        effects(retains(message))
 }
 "#,
     );
@@ -745,7 +732,6 @@ fn package_review_accepts_matching_interface_protocol_contract() {
         temp_dir.join("src/lib.rss"),
         r#"protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
-        effects(retains(message))
 }
 "#,
     )

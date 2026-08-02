@@ -1,5 +1,4 @@
 // expect: RS0022
-features: async
 
 async fn fetch(url: Url) -> Result<fresh Bytes, NetworkError>
 

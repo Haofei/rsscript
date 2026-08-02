@@ -8,7 +8,6 @@ fn reg_vm_runs_spawned_producer_consumer_channel_like_backend() {
     // exercises both recv-on-empty and send-on-full parking plus cross-task wakeups
     // (the producer's second send blocks until the consumer's first recv frees a slot).
     let source = r#"
-features: native, local, async
 
 async fn produce(sender: read Sender<Int>) -> Result<Unit, ChannelError> {
     local a = 10
@@ -66,7 +65,6 @@ async fn main() -> Result<Unit, ChannelError> {
 #[test]
 fn compiled_backend_accepts_inline_read_copy_expression_args() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     local xs = List.new<Int>()
@@ -96,7 +94,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_managed_struct_value_like_interpreter() {
     let source = r#"
-features: local
 
 struct Box {
     value: Int
@@ -114,9 +111,8 @@ fn main() -> Unit {
 }
 
 #[test]
-fn reg_vm_runs_capability_from_construction_like_compiled_backend() {
+fn reg_vm_runs_dyn_from_construction_like_compiled_backend() {
     let source = r#"
-features: local
 
 protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
@@ -136,16 +132,16 @@ impl Writer for BufferWriter {
 
 fn main() -> Unit {
     local writer = BufferWriter(count: 1)
-    local cap: Capability<Writer> = Capability<Writer>.from(value: take writer)
+    local cap: Dyn<Writer> = Dyn<Writer>.from(value: take writer)
     return Unit
 }
 "#;
 
-    assert_reg_vm_matches_compiled_backend("reg-vm-capability-from.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-external_binding-from.rss", source, []);
 }
 
 #[test]
-fn reg_vm_runs_class_alias_capability_like_compiled_backend() {
+fn reg_vm_runs_class_alias_external_binding_like_compiled_backend() {
     let source = r#"
 protocol Readable {
     fn get(self: read Self) -> Int
@@ -178,7 +174,7 @@ fn main() -> Unit {
 }
 "#;
 
-    assert_reg_vm_matches_compiled_backend("reg-vm-class-capability.rss", source, []);
+    assert_reg_vm_matches_compiled_backend("reg-vm-class-external_binding.rss", source, []);
 }
 
 #[test]

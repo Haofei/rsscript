@@ -66,14 +66,17 @@ pub(super) fn receiver_facade_namespace(receiver_root: &str, method: &str) -> Op
     }
 }
 
-pub(super) fn function_sig_from_decl(function: &FunctionDecl, is_builtin: bool) -> FunctionSig {
+pub(super) fn function_sig_from_decl(
+    function: &FunctionDecl,
+    is_builtin: bool,
+    is_external: bool,
+) -> FunctionSig {
     let (namespace, name) = split_function_name(&function.name);
     FunctionSig {
         namespace,
         name,
         is_public: function.is_public,
         is_async: function.is_async,
-        is_native: function.is_native,
         type_params: function
             .type_params
             .iter()
@@ -88,23 +91,9 @@ pub(super) fn function_sig_from_decl(function: &FunctionDecl, is_builtin: bool) 
         params: function.params.iter().map(param_sig_from_decl).collect(),
         return_ty: function.return_ty.as_ref().map(ResolvedType::from_type_ref),
         returns_fresh: function.returns_fresh,
-        effects: function
-            .effects
-            .iter()
-            .filter_map(|effect| match effect {
-                EffectDecl::Name(name) => Some(name.clone()),
-                EffectDecl::Retains(_) => None,
-            })
-            .collect(),
-        retained_params: function
-            .effects
-            .iter()
-            .filter_map(|effect| match effect {
-                EffectDecl::Retains(param) => Some(param.clone()),
-                EffectDecl::Name(_) => None,
-            })
-            .collect(),
+        retained_params: function.retained_params.iter().cloned().collect(),
         is_builtin,
+        is_external,
     }
 }
 
@@ -220,7 +209,7 @@ pub(super) fn param_sig_from_decl(param: &Param) -> ParamSig {
 
 /// Syntax records whether the author wrote an effect. Semantics add the silent
 /// `read` default for ordinary data values; the established closure/Fd
-/// exceptions continue to pass without a data-effect capability.
+/// exceptions continue to pass without a data-effect external_binding.
 pub(super) fn effective_param_effect(param: &Param) -> Option<ParamEffect> {
     param.effective_effect().map(param_effect_from_data_effect)
 }
@@ -291,7 +280,6 @@ pub(super) fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) 
         name: type_info.name.clone(),
         is_public: is_builtin,
         is_async: false,
-        is_native: false,
         type_params: type_info.type_params.clone(),
         type_param_bounds: vec![None; type_info.type_params.len()],
         params: type_info
@@ -317,9 +305,9 @@ pub(super) fn constructor_sig_from_type(type_info: &TypeInfo, is_builtin: bool) 
                 .map(|parameter| ResolvedType::named(parameter.clone(), [])),
         )),
         returns_fresh: type_info.kind == HirTypeKind::Struct,
-        effects: Vec::new(),
         retained_params: HashSet::new(),
         is_builtin,
+        is_external: false,
     }
 }
 

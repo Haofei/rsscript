@@ -6,8 +6,8 @@ use crate::diagnostic::{Diagnostic, Span};
 use crate::review::{ReviewFinding, ReviewMap};
 use crate::rust_lower::NativeRustDependency;
 
-/// Schema id for the package-review JSON artifact. Bump on breaking changes.
-pub const PACKAGE_REVIEW_SCHEMA: &str = "rsscript.package_review.v0.1";
+/// Schema id for the platform-neutral package analysis artifact.
+pub const PACKAGE_ANALYSIS_SCHEMA: &str = "rsscript.package_analysis.v1";
 
 /// The tool + version that produced an artifact, so consumers can reason about
 /// schema compatibility instead of guessing.
@@ -51,7 +51,6 @@ pub struct PackageReview {
     pub manifest_path: String,
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
-    pub features: Vec<String>,
     pub virtual_package: Option<PackageVirtual>,
     pub implements: Vec<PackageProviderImplementation>,
     pub dependencies: Vec<PackageReviewDependency>,
@@ -59,7 +58,7 @@ pub struct PackageReview {
     pub files: Vec<PackageReviewFile>,
     pub exports: Vec<PackageReviewExport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub capabilities: Vec<PackageReviewCapability>,
+    pub external_bindings: Vec<PackageExternalBinding>,
     pub await_sites: Vec<PackageReviewAwaitSite>,
     pub native_rust: Option<PackageNativeRustReview>,
     pub review_map: ReviewMap,
@@ -120,7 +119,6 @@ pub struct PackageReviewMetadata {
     pub package: PackageIdentity,
     pub risk: PackageRisk,
     pub reasons: Vec<String>,
-    pub features: Vec<String>,
     pub virtual_package: Option<PackageVirtual>,
     pub implements: Vec<PackageProviderImplementation>,
     pub dependencies: Vec<PackageReviewDependency>,
@@ -128,7 +126,7 @@ pub struct PackageReviewMetadata {
     pub files: Vec<PackageReviewFile>,
     pub exports: Vec<PackageReviewExport>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub capabilities: Vec<PackageReviewCapability>,
+    pub external_bindings: Vec<PackageExternalBinding>,
     pub await_sites: Vec<PackageReviewAwaitSite>,
     pub native_rust: Option<PackageNativeRustReview>,
     pub review_map: ReviewMap,
@@ -143,26 +141,26 @@ pub struct PackageDiff {
     pub reasons: Vec<String>,
     pub manifest_changes: Vec<PackageManifestChange>,
     pub interface_changes: Vec<PackageInterfaceChange>,
-    /// Distinct capabilities added/removed between the two versions — the
+    /// Distinct external_bindings added/removed between the two versions — the
     /// "what powers did this change introduce" view.
-    pub capability_changes: Vec<PackageCapabilityChange>,
+    pub external_binding_changes: Vec<PackageExternalBindingChange>,
     pub old_review: PackageReviewSummary,
     pub new_review: PackageReviewSummary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]
-pub enum PackageCapabilityChangeKind {
+pub enum PackageExternalBindingChangeKind {
     Added,
     Removed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageCapabilityChange {
-    pub change: PackageCapabilityChangeKind,
+pub struct PackageExternalBindingChange {
+    pub change: PackageExternalBindingChangeKind,
     pub category: String,
     pub binding_symbol: String,
-    pub risk: crate::CapabilityRisk,
+    pub risk: crate::package::types::PackageRisk,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -429,16 +427,16 @@ pub struct PackageReviewExport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub function_kind: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub normalized_effects: Vec<String>,
+    pub retained_params: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PackageReviewCapability {
+pub struct PackageExternalBinding {
     pub function: String,
     pub binding_symbol: String,
     pub category: String,
     /// Default risk of `category` from the canonical taxonomy (unknown -> high).
-    pub risk: crate::CapabilityRisk,
+    pub risk: crate::package::types::PackageRisk,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -3,7 +3,6 @@
 // self-contained value with no managed handle (spec §20.2-3). A `List<Int>` is a
 // managed container, so it cannot be a message; this must be rejected at check
 // time. (Use `Channel.bounded` for an in-isolate channel.)
-features: async, native, local
 
 async fn main() -> Result<Unit, ChannelError> {
     let channel = Channel.message<List<Int>>(capacity: 4)?

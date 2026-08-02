@@ -1,4 +1,3 @@
-features: async
 
 async fn worker() -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?

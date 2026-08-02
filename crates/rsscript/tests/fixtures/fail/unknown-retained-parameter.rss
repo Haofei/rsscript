@@ -5,7 +5,7 @@ struct Image {
 }
 
 fn cache_put(image: Image) -> Unit
-    effects(retains(value))
+    retains(value)
 {
     return Unit
 }

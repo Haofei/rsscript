@@ -1,4 +1,3 @@
-features: local
 // AST-backed type rules for the materialized body subset. Each rule is
 // deliberately conservative: a missing type is unknown, never an error.
 

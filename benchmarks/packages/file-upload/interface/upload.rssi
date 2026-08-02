@@ -1,7 +1,5 @@
-features: async, native
 
-pub async native fn Upload.put(
+pub async fn Upload.put(
     path: String,
     body: String,
 ) -> Result<Unit, String>
-    effects(native)

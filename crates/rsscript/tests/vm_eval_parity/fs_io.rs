@@ -93,7 +93,6 @@ fn parity_path_file_directory_intrinsics() {
         let interpreter_root_arg = interpreter_root.display().to_string();
         let backend_root_arg = backend_root.display().to_string();
         let source = r#"
-features: native, local
 
 fn main() -> Result<Unit, FileError> {
     let root = Args.get_or_default(index: 0, default: read "target/rsscript-parity-fs")
@@ -288,7 +287,6 @@ fn parity_csv_intrinsics() {
     let interpreter_path = interpreter_root.join("data.csv").display().to_string();
     let backend_path = backend_root.join("data.csv").display().to_string();
     let source = r#"
-features: local
 
 fn main() -> Result<Unit, CsvError> {
     let path = Path.from_string(value: read Args.get_or_default(index: 0, default: read "data.csv"))
@@ -347,7 +345,6 @@ fn parity_tempdir_intrinsics() {
     let backend_root_arg = backend_root.display().to_string();
 
     let source = r#"
-features: native, local
 
 fn main() -> Result<Unit, FileError> {
     let root = Path.from_string(value: read Args.get_or_default(index: 0, default: read "target/rsscript-parity-tempdir"))
@@ -391,7 +388,6 @@ fn main() -> Result<Unit, FileError> {
 #[test]
 fn parity_process_run_intrinsics() {
     let source = r#"
-features: native
 
 fn main() -> Result<Unit, String> {
     let mut args = List<String>.new()
@@ -630,7 +626,6 @@ fn parity_json_toml_yaml_parse_file_intrinsics() {
     let backend_arg_refs = backend_args.iter().map(String::as_str).collect::<Vec<_>>();
 
     let source = r#"
-features: native
 
 fn main() -> Result<Unit, JsonError> {
     let json_path = Path.from_string(value: read Args.get_or_default(index: 0, default: read "data.json"))

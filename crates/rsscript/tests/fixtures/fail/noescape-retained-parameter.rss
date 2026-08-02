@@ -1,6 +1,6 @@
 // expect: RS0802
 fn retain(callback: noescape Fn()) -> Unit
-    effects(retains(callback))
+    retains(callback)
 {
     callback()
     return Unit

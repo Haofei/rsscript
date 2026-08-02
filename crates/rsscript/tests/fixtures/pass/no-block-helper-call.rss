@@ -1,11 +1,11 @@
 fn add_one(value: Int) -> Int
-    effects(no_block)
+
 {
     return value + 1
 }
 
 fn add_two(value: Int) -> Int
-    effects(no_block)
+
 {
     return add_one(value) + 1
 }

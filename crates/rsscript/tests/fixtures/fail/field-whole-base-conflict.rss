@@ -1,5 +1,4 @@
 // expect: RS0302
-features: local
 
 struct Cache {
     value: Int

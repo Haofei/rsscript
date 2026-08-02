@@ -1,4 +1,3 @@
-features: native, local
 
 struct MailboxInt {
     capacity: Int

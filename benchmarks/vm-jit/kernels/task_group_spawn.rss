@@ -1,4 +1,3 @@
-features: async
 
 // Slow path: structured concurrency — each round spawns 3 concurrent tasks in a
 // `task_group` and joins them (the SpawnTask / async-let / await-join machinery),

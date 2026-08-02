@@ -352,7 +352,7 @@
         let mut vm = RegVm::new(
             Rc::clone(&executable.unit),
             Vec::<String>::new(),
-            std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
+            std::iter::empty::<(String, ExternalFunction)>().collect(),
         );
         assert_eq!(
             vm.resolve_osr_candidate(main_func),

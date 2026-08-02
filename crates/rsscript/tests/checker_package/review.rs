@@ -41,13 +41,11 @@ unsafe = "forbid"
     .expect("manifest should be written");
     fs::write(
         temp_dir.join("interface/json.rssi"),
-        r#"features: native
-
+        r#"
 struct JsonValue
 struct JsonError
 
-native fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
-    effects(native)
+fn Json.parse(text: read String) -> Result<fresh JsonValue, JsonError>
 "#,
     )
     .expect("interface should be written");
@@ -109,15 +107,13 @@ fn package_review_can_emit_reir_bundle_json() {
         r#"[dependencies]
 rss-core = "0.5"
 "#,
-        r#"features: native
-
+        r#"
 module rss.package.review
 
 use rss.package.contract.PackageContract
 use rss.review.ReviewMap
 
 pub fn NativeBridge.run(value: read Int) -> Int
-    effects(native)
 "#,
     );
 
@@ -127,7 +123,7 @@ pub fn NativeBridge.run(value: read Int) -> Int
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert_eq!(bundle["schema"], "reir.bundle.v0.2");
-    assert_eq!(bundle["ontology"], "reir.capability_ontology.v0.2");
+    assert_eq!(bundle["ontology"], "reir.external_binding_ontology.v0.2");
     assert!(bundle["facts"].as_array().is_some_and(|facts| {
         facts
             .iter()
@@ -270,13 +266,11 @@ fn package_review_summarizes_async_apis_and_await_sites() {
         &temp_dir,
         "0.1.0",
         "",
-        r#"features: async, native
-
+        r#"
 struct TimerError
 struct Client
 
-pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
-    effects(native)
+pub async fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
 
 pub fn Log.done(client: read Client) -> Unit
 
@@ -286,8 +280,7 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError>
     fs::create_dir_all(temp_dir.join("src")).expect("src dir should be created");
     fs::write(
         temp_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
     Log.done(client: read client)
@@ -325,7 +318,7 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
         exports.iter().any(|export| {
             export["name"] == "Api.run"
                 && export["function_kind"] == "async"
-                && export["normalized_effects"]
+                && export["retained_params"]
                     .as_array()
                     .is_some_and(|effects| effects.iter().any(|effect| effect == "suspends"))
                 && export["reasons"]
@@ -366,13 +359,11 @@ fn package_review_resolves_task_group_async_let_await_callees() {
         &temp_dir,
         "0.1.0",
         "",
-        r#"features: async, native
-
+        r#"
 struct TimerError
 struct Client
 
-pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
-    effects(native)
+pub async fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
 
 pub fn Log.done(client: read Client) -> Unit
 
@@ -382,8 +373,7 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError>
     fs::create_dir_all(temp_dir.join("src")).expect("src dir should be created");
     fs::write(
         temp_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
     task_group {
         async let pause = Timer.sleep(ms: 1)
@@ -442,8 +432,7 @@ fn package_review_marks_rss_async_await_boundary() {
         &temp_dir,
         "0.1.0",
         "",
-        r#"features: async
-
+        r#"
 struct AppError
 
 pub async fn Work.step() -> Result<Unit, AppError>
@@ -454,8 +443,7 @@ pub async fn Api.run() -> Result<Unit, AppError>
     fs::create_dir_all(temp_dir.join("src")).expect("src dir should be created");
     fs::write(
         temp_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 pub async fn Work.step() -> Result<Unit, AppError> {
     return Ok(Unit)
 }
@@ -509,20 +497,18 @@ risk = "unknown"
 }
 
 #[test]
-fn package_review_reir_maps_process_facade_to_process_capability() {
+fn package_review_reir_maps_process_facade_to_process_external_binding() {
     let temp_dir = common::unique_temp_dir("rsscript-package-review-process-facade-reir");
     common::write_named_package_fixture(
         &temp_dir,
         "rss-process-facade",
         "0.1.0",
         "",
-        r#"features: native
-
-pub native fn Process.run_stdout(
+        r#"
+pub fn Process.run_stdout(
     command: read String,
     args: read List<String>,
 ) -> Result<String, String>
-    effects(native)
 "#,
     );
 
@@ -534,11 +520,11 @@ pub native fn Process.run_stdout(
 
     assert!(reir_json["facts"].as_array().is_some_and(|facts| {
         facts.iter().any(|fact| {
-            fact["kind"] == "capability"
+            fact["kind"] == "external_binding"
                 && fact["subject"]["id"]
                     == "rss-process-facade::public::function::Process.run_stdout"
-                && fact["capability"]["category"] == "process.spawn"
-                && fact["capability"]["service"] == "stdlib"
+                && fact["external_binding"]["category"] == "process.spawn"
+                && fact["external_binding"]["service"] == "stdlib"
                 && fact["evidence"][0]["kind"] == "package_metadata"
         })
     }));
@@ -550,8 +536,8 @@ pub native fn Process.run_stdout(
 }
 
 #[test]
-fn package_review_reir_finds_missing_mock_iam_permission_for_bound_capability() {
-    let temp_dir = common::unique_temp_dir("rsscript-package-review-s3-capability-reir");
+fn package_review_reir_finds_missing_mock_iam_permission_for_bound_external_binding() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-s3-external_binding-reir");
     fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
     fs::write(
@@ -567,7 +553,7 @@ paths = ["interface"]
 [sources]
 paths = ["src"]
 
-[[review.capability_bindings]]
+[[review.external_binding_bindings]]
 symbol = "S3.put_object"
 category = "object_storage.write"
 provider = "aws"
@@ -579,10 +565,8 @@ resource = "arn:aws:s3:::reports-prod/*"
     .expect("manifest should be written");
     fs::write(
         temp_dir.join("interface/s3.rssi"),
-        r#"features: native
-
-native fn S3.put_object(body: read String) -> Result<Unit, String>
-    effects(native)
+        r#"
+fn S3.put_object(body: read String) -> Result<Unit, String>
 "#,
     )
     .expect("interface should be written");
@@ -608,10 +592,9 @@ native fn S3.put_object(body: read String) -> Result<Unit, String>
             fact.kind == reir::FactKind::Capability
                 && fact.role == Some(reir::FactRole::Required)
                 && fact.subject.id == "rss-report-upload::function::upload_report"
-                && fact
-                    .capability
-                    .as_ref()
-                    .is_some_and(|capability| capability.action.as_deref() == Some("s3:PutObject"))
+                && fact.capability.as_ref().is_some_and(|external_binding| {
+                    external_binding.action.as_deref() == Some("s3:PutObject")
+                })
         })
         .expect("upload_report should require s3:PutObject through the S3 binding");
     assert!(required.evidence.iter().any(|evidence| {
@@ -640,20 +623,22 @@ native fn S3.put_object(body: read String) -> Result<Unit, String>
             && reconciliation
                 .capability
                 .as_ref()
-                .is_some_and(|capability| capability.action.as_deref() == Some("s3:PutObject"))
+                .is_some_and(|external_binding| {
+                    external_binding.action.as_deref() == Some("s3:PutObject")
+                })
             && reconciliation.required_fact.as_ref() == Some(&required.id)
     }));
 }
 
 #[test]
-fn package_review_capability_propagates_through_hir_resolved_receiver_call() {
-    let temp_dir = common::unique_temp_dir("rsscript-package-review-receiver-capability");
+fn package_review_external_binding_propagates_through_hir_resolved_receiver_call() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-review-receiver-external_binding");
     fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");
     fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
     fs::write(
         temp_dir.join("rsspkg.toml"),
         r#"[package]
-name = "rss-receiver-capability"
+name = "rss-receiver-external_binding"
 version = "0.1.0"
 edition = "2026"
 
@@ -663,7 +648,7 @@ paths = ["interface"]
 [sources]
 paths = ["src"]
 
-[[review.capability_bindings]]
+[[review.external_binding_bindings]]
 symbol = "S3Client.put_object"
 category = "object_storage.write"
 provider = "aws"
@@ -675,15 +660,13 @@ resource = "arn:aws:s3:::reports-prod/*"
     .expect("manifest should be written");
     fs::write(
         temp_dir.join("interface/s3.rssi"),
-        r#"features: native
-
+        r#"
 opaque class S3Client
 
-native fn S3Client.put_object(
+fn S3Client.put_object(
     self: read S3Client,
     body: read String,
 ) -> Result<Unit, String>
-    effects(native)
 "#,
     )
     .expect("interface should be written");
@@ -702,20 +685,22 @@ native fn S3Client.put_object(
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(
-        review_json["capabilities"]
+        review_json["external_bindings"]
             .as_array()
-            .is_some_and(|capabilities| {
-                capabilities.iter().any(|capability| {
-                    capability["function"] == "upload_report"
-                        && capability["binding_symbol"] == "S3Client.put_object"
-                        && capability["action"] == "s3:PutObject"
-                        && capability["call_chain"].as_array().is_some_and(|chain| {
-                            chain
-                                == &vec![
-                                    Value::from("upload_report"),
-                                    Value::from("S3Client.put_object"),
-                                ]
-                        })
+            .is_some_and(|external_bindings| {
+                external_bindings.iter().any(|external_binding| {
+                    external_binding["function"] == "upload_report"
+                        && external_binding["binding_symbol"] == "S3Client.put_object"
+                        && external_binding["action"] == "s3:PutObject"
+                        && external_binding["call_chain"]
+                            .as_array()
+                            .is_some_and(|chain| {
+                                chain
+                                    == &vec![
+                                        Value::from("upload_report"),
+                                        Value::from("S3Client.put_object"),
+                                    ]
+                            })
                 })
             }),
         "{review_json:#}"
@@ -723,23 +708,20 @@ native fn S3Client.put_object(
 }
 
 #[test]
-fn package_review_reir_maps_args_facade_to_process_args_capability() {
+fn package_review_reir_maps_args_facade_to_process_args_external_binding() {
     let temp_dir = common::unique_temp_dir("rsscript-package-review-args-facade-reir");
     common::write_named_package_fixture(
         &temp_dir,
         "rss-args-facade",
         "0.1.0",
         "",
-        r#"features: native
+        r#"
+pub fn Args.count() -> Int
 
-pub native fn Args.count() -> Int
-    effects(native)
-
-pub native fn Args.get_or_default(
+pub fn Args.get_or_default(
     index: Int,
     default: read String,
 ) -> String
-    effects(native)
 "#,
     );
 
@@ -752,12 +734,12 @@ pub native fn Args.get_or_default(
     assert!(reir_json["facts"].as_array().is_some_and(|facts| {
         ["Args.count", "Args.get_or_default"].iter().all(|name| {
             facts.iter().any(|fact| {
-                fact["kind"] == "capability"
+                fact["kind"] == "external_binding"
                     && fact["subject"]["id"].as_str().is_some_and(|id| {
                         id == format!("rss-args-facade::public::function::{name}")
                     })
-                    && fact["capability"]["category"] == "process.args"
-                    && fact["capability"]["service"] == "stdlib"
+                    && fact["external_binding"]["category"] == "process.args"
+                    && fact["external_binding"]["service"] == "stdlib"
                     && fact["evidence"][0]["kind"] == "package_metadata"
             })
         })
@@ -770,20 +752,17 @@ pub native fn Args.get_or_default(
 }
 
 #[test]
-fn package_review_reir_maps_random_facade_to_random_capability() {
+fn package_review_reir_maps_random_facade_to_random_external_binding() {
     let temp_dir = common::unique_temp_dir("rsscript-package-review-random-facade-reir");
     common::write_named_package_fixture(
         &temp_dir,
         "rss-random-facade",
         "0.1.0",
         "",
-        r#"features: native
+        r#"
+pub fn Uuid.new_v4() -> fresh String
 
-pub native fn Uuid.new_v4() -> fresh String
-    effects(native)
-
-pub native fn Random.bytes(len: Int) -> fresh Bytes
-    effects(native)
+pub fn Random.bytes(len: Int) -> fresh Bytes
 "#,
     );
 
@@ -795,16 +774,16 @@ pub native fn Random.bytes(len: Int) -> fresh Bytes
 
     assert!(reir_json["facts"].as_array().is_some_and(|facts| {
         facts.iter().any(|fact| {
-            fact["kind"] == "capability"
+            fact["kind"] == "external_binding"
                 && fact["subject"]["id"] == "rss-random-facade::public::function::Random.bytes"
-                && fact["capability"]["category"] == "random.read"
-                && fact["capability"]["service"] == "stdlib"
+                && fact["external_binding"]["category"] == "random.read"
+                && fact["external_binding"]["service"] == "stdlib"
                 && fact["evidence"][0]["kind"] == "package_metadata"
         }) && facts.iter().any(|fact| {
-            fact["kind"] == "capability"
+            fact["kind"] == "external_binding"
                 && fact["subject"]["id"] == "rss-random-facade::public::function::Uuid.new_v4"
-                && fact["capability"]["category"] == "random.read"
-                && fact["capability"]["service"] == "stdlib"
+                && fact["external_binding"]["category"] == "random.read"
+                && fact["external_binding"]["service"] == "stdlib"
         })
     }));
     assert!(reir_json["slices"].as_array().is_some_and(|slices| {
@@ -815,17 +794,15 @@ pub native fn Random.bytes(len: Int) -> fresh Bytes
 }
 
 #[test]
-fn package_review_reir_maps_log_facade_to_telemetry_capability() {
+fn package_review_reir_maps_log_facade_to_telemetry_external_binding() {
     let temp_dir = common::unique_temp_dir("rsscript-package-review-log-facade-reir");
     common::write_named_package_fixture(
         &temp_dir,
         "rss-log-facade",
         "0.1.0",
         "",
-        r#"features: native
-
+        r#"
 pub fn Log.write(message: read String) -> Unit
-    effects(native)
 "#,
     );
 
@@ -837,10 +814,10 @@ pub fn Log.write(message: read String) -> Unit
 
     assert!(reir_json["facts"].as_array().is_some_and(|facts| {
         facts.iter().any(|fact| {
-            fact["kind"] == "capability"
+            fact["kind"] == "external_binding"
                 && fact["subject"]["id"] == "rss-log-facade::public::function::Log.write"
-                && fact["capability"]["category"] == "telemetry.emit"
-                && fact["capability"]["service"] == "stdlib"
+                && fact["external_binding"]["category"] == "telemetry.emit"
+                && fact["external_binding"]["service"] == "stdlib"
                 && fact["evidence"][0]["kind"] == "package_metadata"
         })
     }));
@@ -852,17 +829,15 @@ pub fn Log.write(message: read String) -> Unit
 }
 
 #[test]
-fn package_review_reir_does_not_map_os_close_to_external_capability() {
+fn package_review_reir_does_not_map_os_close_to_external_external_binding() {
     let temp_dir = common::unique_temp_dir("rsscript-package-review-os-close-reir");
     common::write_named_package_fixture(
         &temp_dir,
         "rss-os-close",
         "0.1.0",
         "",
-        r#"features: native
-
-pub native fn OS.close(fd: Fd) -> Unit
-    effects(native)
+        r#"
+pub fn OS.close(fd: Fd) -> Unit
 "#,
     );
 
@@ -877,10 +852,10 @@ pub native fn OS.close(fd: Fd) -> Unit
         .expect("REIR facts should be an array");
     assert!(
         !facts.iter().any(|fact| {
-            fact["kind"] == "capability"
+            fact["kind"] == "external_binding"
                 && fact["subject"]["id"] == "rss-os-close::public::function::OS.close"
         }),
-        "OS.close should remain native/resource cleanup evidence, not an external capability fact: {facts:?}"
+        "OS.close should remain native/resource cleanup evidence, not an external external_binding fact: {facts:?}"
     );
 }
 
@@ -910,12 +885,12 @@ pub fn Csv.read_into(
     assert!(reir_json["facts"].as_array().is_some_and(|facts| {
         ["Csv.open_read", "Csv.read_into"].iter().all(|name| {
             facts.iter().any(|fact| {
-                fact["kind"] == "capability"
+                fact["kind"] == "external_binding"
                     && fact["subject"]["id"].as_str().is_some_and(|id| {
                         id == format!("rss-data-file-facades::public::function::{name}")
                     })
-                    && fact["capability"]["category"] == "filesystem.read"
-                    && fact["capability"]["service"] == "stdlib"
+                    && fact["external_binding"]["category"] == "filesystem.read"
+                    && fact["external_binding"]["service"] == "stdlib"
                     && fact["evidence"][0]["kind"] == "package_metadata"
             })
         })
@@ -936,8 +911,7 @@ fn package_review_reir_maps_file_json_toml_and_yaml_facades_to_filesystem_capabi
         "rss-file-json-toml-facades",
         "0.1.0",
         "",
-        r#"features: native
-
+        r#"
 resource File
 
 pub fn File.open(path: read Path) -> Result<File, FileError>
@@ -948,8 +922,7 @@ pub fn File.write_buffer(file: mut File, buffer: read Buffer) -> Result<Unit, Fi
 
 pub fn Json.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
 
-pub native fn Toml.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
-    effects(native)
+pub fn Toml.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
 
 pub fn Yaml.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
 "#,
@@ -972,21 +945,21 @@ pub fn Yaml.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
         .iter()
         .all(|name| {
             facts.iter().any(|fact| {
-                fact["kind"] == "capability"
+                fact["kind"] == "external_binding"
                     && fact["subject"]["id"].as_str().is_some_and(|id| {
                         id == format!("rss-file-json-toml-facades::public::function::{name}")
                     })
-                    && fact["capability"]["category"] == "filesystem.read"
-                    && fact["capability"]["service"] == "stdlib"
+                    && fact["external_binding"]["category"] == "filesystem.read"
+                    && fact["external_binding"]["service"] == "stdlib"
             })
         }) && ["File.open", "File.write_buffer"].iter().all(|name| {
             facts.iter().any(|fact| {
-                fact["kind"] == "capability"
+                fact["kind"] == "external_binding"
                     && fact["subject"]["id"].as_str().is_some_and(|id| {
                         id == format!("rss-file-json-toml-facades::public::function::{name}")
                     })
-                    && fact["capability"]["category"] == "filesystem.write"
-                    && fact["capability"]["service"] == "stdlib"
+                    && fact["external_binding"]["category"] == "filesystem.write"
+                    && fact["external_binding"]["service"] == "stdlib"
             })
         })
     }));
@@ -1205,10 +1178,8 @@ fn package_check_fails_when_policy_denies_unsafe_api() {
         r#"[review.policy]
 deny_unsafe_apis = true
 "#,
-        r#"features: unsafe
-
+        r#"
 fn Native.danger(message: read String) -> String
-    effects(unsafe)
 "#,
     );
     fs::write(
@@ -1318,7 +1289,7 @@ build_execution_default = "sometimes"
 }
 
 #[test]
-fn reir_spec_keeps_os_close_as_descriptor_cleanup_not_external_capability() {
+fn reir_spec_keeps_os_close_as_descriptor_cleanup_not_external_external_binding() {
     let root = common::workspace_root();
     let spec = fs::read_to_string(root.join("docs/spec/Review_Evidence_IR_Spec_v0.2.md"))
         .expect("REIR spec should be readable");
@@ -1330,16 +1301,20 @@ fn reir_spec_keeps_os_close_as_descriptor_cleanup_not_external_capability() {
 
 #[test]
 fn package_review_markdown_lists_capabilities_by_risk() {
-    let review =
-        review_package_dir(&common::workspace_root().join("examples/capability-review-demo/after"))
-            .expect("demo review should succeed");
+    let review = review_package_dir(
+        &common::workspace_root().join("examples/external_binding-review-demo/after"),
+    )
+    .expect("demo review should succeed");
     let markdown = rsscript::format_package_review_markdown(&review);
     assert!(markdown.contains("## RSScript review:"));
     assert!(markdown.contains("### Capabilities (by risk)"));
     assert!(markdown.contains("network.client"));
     assert!(markdown.contains("database.read"));
-    // high-risk capability is listed before medium.
+    // high-risk external_binding is listed before medium.
     let high = markdown.find("network.client").unwrap();
     let medium = markdown.find("database.read").unwrap();
-    assert!(high < medium, "high-risk capability should sort first");
+    assert!(
+        high < medium,
+        "high-risk external_binding should sort first"
+    );
 }

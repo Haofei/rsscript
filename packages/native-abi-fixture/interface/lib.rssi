@@ -1,4 +1,2 @@
-features: native
 
-native fn NativeAbiFixture.sort_int(values: mut List<Int>) -> Unit
-    effects(native)
+fn NativeAbiFixture.sort_int(values: mut List<Int>) -> Unit

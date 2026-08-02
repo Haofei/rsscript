@@ -21,7 +21,6 @@ use selfhost.semantics.check_bindings.*
 use selfhost.semantics.check_calls.*
 use selfhost.semantics.declarations.*
 use selfhost.semantics.diagnostics.*
-use selfhost.semantics.features.*
 use selfhost.semantics.semantic_index.*
 use selfhost.syntax.ast.*
 use selfhost.syntax.parser_items.*
@@ -96,7 +95,7 @@ fn main() -> Unit {
     // RS0015: unsupported/malformed syntax covered by the self-hosted frontend
     // parity corpus.
     let unsupportedSyntax = has_unsupported_syntax_rs0015(source, toks, program)
-    // RS0023: `Fd` in a non-native fn signature or a non-resource type field.
+    // RS0023: `Fd` in a non-fn signature or a non-resource type field.
     let mut fdSurface = false
     let mut fdSurfaceTokens = List<Int>.new()
     // RS0021: any non-exhaustive match statement or expression in the file.
@@ -131,7 +130,7 @@ fn main() -> Unit {
     let mut asyncFns = Set<String>.new()
     let mut unsafeFns = Set<String>.new()
     collect_rs0009(toks, resources: mut resources, sumVariants: mut sumVariants, pureFns: mut pureFns, allFns: mut allFns, noBlockFns: mut noBlockFns, noPanicFns: mut noPanicFns, asyncFns: mut asyncFns, unsafeFns: mut unsafeFns)
-    // RS0020: names of `effects(noalloc)` fns (allowed callees inside noalloc fns).
+    // RS0020: names of `` fns (allowed callees inside noalloc fns).
     let noallocFns = collect_noalloc_fns(toks)
     // RS0022: an unconsumed call to a same-file async fn.
     let mut asyncNotConsumedTokens = List<Int>.new()
@@ -217,23 +216,6 @@ fn main() -> Unit {
     // RS0903: reading a weak field without Weak.upgrade.
     let mut weakReadTokens = List<Int>.new()
     let weakRead = collect_weak_field_read_tokens(toks, out: mut weakReadTokens)
-    // RS0101: feature-gating. Declared features (pre-pass, order-independent) and
-    // whole-file construct probes for local/async/unsafe; native is tracked in the
-    // fn walk below (the missing-effect source fires even when native is declared).
-    let declaredFeatures = collect_declared_features(toks)
-    let localViol = file_local_use(toks) && Set.contains<String>(set: declaredFeatures, value: "local") == false
-    let asyncViol = file_async_use(toks) && Set.contains<String>(set: declaredFeatures, value: "async") == false
-    let unsafeViol = file_unsafe_use(toks) && Set.contains<String>(set: declaredFeatures, value: "unsafe") == false
-    let mut featureViolationTokens = List<Int>.new()
-    let featureBodyViol = collect_feature_use_tokens(
-        toks,
-        declared: declaredFeatures,
-        asyncFns,
-        unsafeFns,
-        out: mut featureViolationTokens
-    )
-    let mut nativeEffect = false
-    let mut nativeMissing = false
     // RS0202: a missing/mismatched call-site data effect (any of four sub-cases).
     // Precompute the same-file method-name set (receiver-call resolution gate).
     let mut missingDataEffect = false
@@ -443,25 +425,6 @@ fn main() -> Unit {
                     if collect_fn_noalloc_alloc_sites(source, toks, start: i, declared, out: mut noallocAllocSites) { noallocAlloc = true }
                     if collect_fn_guarantee_call_bad_sites(source, toks, start: i, effName: "no_block", allFns, guaranteeFns: noBlockFns, out: mut noBlockCallSites) { noBlockCall = true }
                     if collect_fn_guarantee_call_bad_sites(source, toks, start: i, effName: "no_panic", allFns, guaranteeFns: noPanicFns, out: mut noPanicCallSites) { noPanicCall = true }
-                    // RS0101: a fn with `effects(native)` (gated by the `native`
-                    // feature), and a `native fn` missing that effect (ungated).
-                    let hasNativeEff = effects_name_probe(toks, start: i, mode: 2)
-                    if hasNativeEff {
-                        nativeEffect = true
-                        if Set.contains<String>(set: declaredFeatures, value: "native") == false {
-                            List.push<Int>(list: mut featureViolationTokens, value: i)
-                        }
-                    }
-                    if fn_has_named_effect(toks, start: i, effName: "unsafe") && Set.contains<String>(set: declaredFeatures, value: "unsafe") == false {
-                        List.push<Int>(list: mut featureViolationTokens, value: i)
-                    }
-                    if fn_is_async(toks, start: i) && Set.contains<String>(set: declaredFeatures, value: "async") == false {
-                        List.push<Int>(list: mut featureViolationTokens, value: i)
-                    }
-                    if fn_is_native(toks, start: i) && !hasNativeEff  {
-                        nativeMissing = true
-                        List.push<Int>(list: mut featureViolationTokens, value: i)
-                    }
                     i = r
                 }
             } else {
@@ -477,8 +440,6 @@ fn main() -> Unit {
     lowerConflict = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0035")
     collect_program_variant_arity_diagnostics(program, diagnostics: mut signatureDiagnostics)
     collect_program_call_diagnostics(program, semantics: semanticIndex, diagnostics: mut signatureDiagnostics)
-    collect_program_removed_profile_diagnostics(program, diagnostics: mut signatureDiagnostics)
-    collect_program_feature_diagnostics(program, diagnostics: mut signatureDiagnostics)
     missingDataEffectSites = filter_owned_diagnostic_sites(
         sites: missingDataEffectSites,
         ownedSites: callEffectOwnedSites
@@ -547,7 +508,6 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: "RS0036", toks, tokenIndices: nonTransferPayloadTokens)
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0037")
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0035")
-        emitted = emitted + emit_diagnostic_records(code: "RS0101", toks, tokenIndices: featureViolationTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS0024", toks, tokenIndices: unknownTypeTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS0009", toks, tokenIndices: pureBadTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS0013", toks, tokenIndices: invalidTryTokens)
@@ -848,14 +808,7 @@ fn main() -> Unit {
     if weakRead {
         Log.write(message: "RS0903")
     }
-    // RS0101: any unfeatured feature-requiring construct. Native fires if a fn has
-    // `effects(native)` without the feature, OR a `native fn` omits that effect.
-    let nativeViol = nativeMissing || (nativeEffect && Set.contains<String>(set: declaredFeatures, value: "native") == false)
-    let featureViol = featureBodyViol || localViol || asyncViol || unsafeViol || nativeViol
-    if featureViol && !structured  {
-        Log.write(message: "RS0101")
-    }
-    let anyDiag = duplicateFound || hasUnknownFeat || hasDupFeat || headerCount > 0 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || pureBad || nonExhaustive || badAwait || invalidTry || unsupportedSyntax || fdSurface || lowerConflict || unknownProtocol || protocolImplBad || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || featureViol || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || implicitConv || operatorOverload || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourceGenericBad || resourceEscape || noescapeEscape || localClosureEscape || missingTry || nonTransferPayload || takeHandle || weakInit || weakRead
+    let anyDiag = duplicateFound || hasUnknownFeat || hasDupFeat || headerCount > 0 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || pureBad || nonExhaustive || badAwait || invalidTry || unsupportedSyntax || fdSurface || lowerConflict || unknownProtocol || protocolImplBad || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || implicitConv || operatorOverload || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourceGenericBad || resourceEscape || noescapeEscape || localClosureEscape || missingTry || nonTransferPayload || takeHandle || weakInit || weakRead
     if !anyDiag  {
         Log.write(message: "CLEAN")
     }

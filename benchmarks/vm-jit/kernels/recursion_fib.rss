@@ -1,4 +1,3 @@
-features: local
 
 // Slow path: deep direct recursion (frame allocation / call-and-return churn).
 // fib(n) makes ~fib(n) calls; this stresses the frame/register-window setup and

@@ -9,7 +9,7 @@ resource File {
 }
 
 fn make_file() -> File
-    effects(pure)
+
 {
     return File(fd: 1)
 }

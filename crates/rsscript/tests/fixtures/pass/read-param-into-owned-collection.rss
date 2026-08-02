@@ -1,6 +1,5 @@
 // Regression: a `read`-PARAM managed value pushed into an owned collection (or passed on as
 // a `read` arg) must not be double-borrowed. Before the fix this emitted `&&T` -> E0308.
-features: local
 
 struct Node derives(Clone, Eq, Hash) {
     tag: Int

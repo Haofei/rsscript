@@ -1,6 +1,5 @@
 // expect: RS0702
 
-features: local
 
 resource LogFile {
     fd: Int

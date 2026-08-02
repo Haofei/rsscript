@@ -61,12 +61,10 @@ fn review_map_from_parsed_sources(
                 .filter(|draft| draft.file == source.file)
                 .map(|draft| draft.region.clone())
                 .collect();
-            let features = feature_names(&source.program.features);
             ReviewMapFile {
                 file: source.file.clone(),
-                features,
-                risk: review_map_file_risk(&source.program.features),
-                reasons: review_map_file_reasons(&source.program.features),
+                risk: ReviewMapFileRisk::Low,
+                reasons: Vec::new(),
                 regions,
             }
         })
@@ -102,13 +100,7 @@ pub fn format_review_map_human(map: &ReviewMap) -> String {
     ));
     for file in &map.files {
         output.push_str(&format!("{}:", file.file));
-        if !file.features.is_empty() {
-            output.push_str(&format!(
-                " features {}; risk {}",
-                file.features.join(", "),
-                review_map_file_risk_label(file.risk)
-            ));
-        }
+        output.push_str(&format!(" risk {}", review_map_file_risk_label(file.risk)));
         if !file.reasons.is_empty() {
             output.push_str(&format!("; {}", file.reasons.join("; ")));
         }
@@ -305,17 +297,8 @@ pub(super) fn review_map_region_draft(
     if function.is_async {
         reasons.push("async function boundary".to_string());
     }
-    for effect in &function.effects {
-        match effect {
-            EffectDecl::Retains(param) => reasons.push(format!("retains `{param}`")),
-            EffectDecl::Name(name) if matches!(name.as_str(), "native" | "unsafe" | "parallel") => {
-                reasons.push(format!("{name} boundary"))
-            }
-            EffectDecl::Name(name) if is_runtime_guarantee_boundary(name) => {
-                reasons.push(format!("guarantee `{name}`"))
-            }
-            _ => {}
-        }
+    for param in &function.retained_params {
+        reasons.push(format!("retains `{param}`"));
     }
     for call in &facts.native_calls {
         reasons.push(format!("native call `{call}`"));
@@ -374,8 +357,8 @@ pub(super) fn review_map_region_draft(
     if facts.has_error_boundary {
         reasons.push("error handling boundary".to_string());
     }
-    if facts.has_capability_object {
-        reasons.push("capability object construction".to_string());
+    if facts.has_external_binding_object {
+        reasons.push("dynamic protocol object construction".to_string());
     }
     if facts.has_dynamic_protocol_dispatch {
         reasons.push("dynamic protocol dispatch".to_string());
@@ -438,7 +421,7 @@ pub(super) struct ReviewMapFacts {
     pub(super) has_handle_field_write: bool,
     pub(super) has_managed_state_write: bool,
     pub(super) has_error_boundary: bool,
-    pub(super) has_capability_object: bool,
+    pub(super) has_external_binding_object: bool,
     pub(super) has_dynamic_protocol_dispatch: bool,
     pub(super) user_calls: BTreeSet<String>,
     pub(super) unresolved_calls: BTreeSet<String>,
@@ -633,15 +616,15 @@ pub(super) fn review_expr_label(expr: &Expr) -> String {
     }
 }
 
-pub(super) fn is_capability_from_callee(callee: &Callee) -> bool {
+pub(super) fn is_dyn_from_callee(callee: &Callee) -> bool {
     matches!(
         callee,
         Callee::Qualified { namespace, name }
-            if type_root_name(namespace) == "Capability" && type_root_name(name) == "from"
+            if type_root_name(namespace) == "Dyn" && type_root_name(name) == "from"
     )
 }
 
-pub(super) fn is_capability_protocol_call(
+pub(super) fn is_dyn_protocol_call(
     callee: &Callee,
     args: &[CallArg],
     value_types: &HashMap<String, String>,
@@ -658,7 +641,7 @@ pub(super) fn is_capability_protocol_call(
     };
     expr_ident_name(&self_arg.value)
         .and_then(|name| value_types.get(name))
-        .and_then(|type_name| capability_protocol_name(type_name))
+        .and_then(|type_name| dyn_protocol_name(type_name))
         .is_some_and(|protocol| protocol == namespace)
 }
 
@@ -722,8 +705,8 @@ pub(super) fn result_ok_type_name(type_name: &str) -> Option<String> {
     type_arg_names(type_name).and_then(|args| args.first().map(|ty| (*ty).to_string()))
 }
 
-pub(super) fn capability_protocol_name(type_name: &str) -> Option<&str> {
-    if type_root_name(type_name) != "Capability" {
+pub(super) fn dyn_protocol_name(type_name: &str) -> Option<&str> {
+    if type_root_name(type_name) != "Dyn" {
         return None;
     }
     type_arg_names(type_name).and_then(|args| args.first().copied())
@@ -766,79 +749,4 @@ pub(super) fn is_entry_function(name: &str) -> bool {
         || name.starts_with("run_")
         || name.starts_with("handle_")
         || name.ends_with("_handler")
-}
-
-pub(super) fn is_runtime_guarantee_boundary(effect: &str) -> bool {
-    matches!(effect, "no_panic" | "noalloc" | "no_block" | "pure")
-}
-
-pub(super) fn feature_label(features: &[FileFeature]) -> String {
-    let labels = feature_names(features);
-    if labels.is_empty() {
-        return "<none>".to_string();
-    }
-    labels.join(",")
-}
-
-pub(super) fn feature_names(features: &[FileFeature]) -> Vec<String> {
-    let mut labels = features
-        .iter()
-        .map(feature_name)
-        .map(str::to_string)
-        .collect::<Vec<_>>();
-    labels.sort_unstable();
-    labels.dedup();
-    labels
-}
-
-pub(super) fn feature_name(feature: &FileFeature) -> &'static str {
-    match feature {
-        FileFeature::Local => "local",
-        FileFeature::Native => "native",
-        FileFeature::Unsafe => "unsafe",
-        FileFeature::Async => "async",
-        FileFeature::Device => "device",
-        FileFeature::Ffi => "ffi",
-        FileFeature::Reflection => "reflection",
-    }
-}
-
-pub(super) fn review_map_file_risk(features: &[FileFeature]) -> ReviewMapFileRisk {
-    if features.iter().any(|feature| {
-        matches!(
-            feature,
-            FileFeature::Native | FileFeature::Unsafe | FileFeature::Device | FileFeature::Ffi
-        )
-    }) {
-        ReviewMapFileRisk::High
-    } else if features.iter().any(|feature| {
-        matches!(
-            feature,
-            FileFeature::Local | FileFeature::Async | FileFeature::Reflection
-        )
-    }) {
-        ReviewMapFileRisk::Elevated
-    } else {
-        ReviewMapFileRisk::Low
-    }
-}
-
-pub(super) fn review_map_file_reasons(features: &[FileFeature]) -> Vec<String> {
-    feature_names(features)
-        .into_iter()
-        .filter_map(|feature| review_map_feature_reason(&feature).map(str::to_string))
-        .collect()
-}
-
-pub(super) fn review_map_feature_reason(feature: &str) -> Option<&'static str> {
-    match feature {
-        "local" => Some("local capability enabled"),
-        "native" => Some("native boundary capability enabled"),
-        "unsafe" => Some("unsafe capability enabled"),
-        "async" => Some("async control-flow capability enabled"),
-        "device" => Some("reserved device review marker enabled"),
-        "ffi" => Some("reserved ffi review marker enabled"),
-        "reflection" => Some("reserved reflection review marker enabled"),
-        _ => None,
-    }
 }

@@ -5,7 +5,6 @@ use super::*;
 #[test]
 fn parity_sync_http_error_intrinsics() {
     let source = r#"
-features: native
 
 fn main() -> Unit {
     let url = Url.from_string(value: read "https://example.test/api")
@@ -55,7 +54,6 @@ fn main() -> Unit {
 #[test]
 fn parity_async_http_error_intrinsics() {
     let source = r#"
-features: async, native, local
 
 fn log_http_error(error: read HttpError, label: read String) -> Unit {
     let message = HttpError.message(error: read error)
@@ -139,7 +137,6 @@ fn parity_http_response_intrinsics() {
         let interpreter_url = format!("http://127.0.0.1:{interpreter_port}/health");
         let backend_url = format!("http://127.0.0.1:{backend_port}/health");
         let source = r#"
-features: async, native, local
 
 fn url_arg() -> Url {
     return Url.from_string(value: read Args.get_or_default(index: 0, default: read "http://127.0.0.1:1/health"))
@@ -182,7 +179,6 @@ fn parity_websocket_intrinsics() {
         let interpreter_url = format!("ws://127.0.0.1:{interpreter_port}/socket");
         let backend_url = format!("ws://127.0.0.1:{backend_port}/socket");
         let source = r#"
-features: async, native, local
 
 fn url_arg() -> Url {
     return Url.from_string(value: read Args.get_or_default(index: 0, default: read "ws://127.0.0.1:1/socket"))
@@ -221,7 +217,6 @@ async fn main() -> Result<Unit, WebSocketError> {
 #[test]
 fn parity_async_socket_error_intrinsics() {
     let source = r#"
-features: async, native, local
 
 async fn main() -> Unit {
     match await Tcp.connect(host: read "127.0.0.1", port: 9) {
@@ -258,7 +253,6 @@ fn parity_tcp_stream_intrinsics() {
     let (interpreter_port, interpreter_server) = common::spawn_tcp_echo_server();
     let (backend_port, backend_server) = common::spawn_tcp_echo_server();
     let source = r#"
-features: async, native, local
 
 fn port_arg() -> Int {
     match String.parse_int(value: read Args.get_or_default(index: 0, default: read "0")) {
@@ -301,7 +295,6 @@ async fn main() -> Result<Unit, TcpError> {
 #[test]
 fn parity_http_request_builder_intrinsics() {
     let source = r#"
-features: native, local
 
 fn main() -> Unit {
     let url = Url.from_string(value: read "https://example.test/api")

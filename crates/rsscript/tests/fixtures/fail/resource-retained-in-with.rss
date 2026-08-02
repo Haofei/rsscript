@@ -1,5 +1,4 @@
 // expect: RS0702
-features: local
 
 resource File {
     fd: Int
@@ -14,7 +13,7 @@ class Registry {
 }
 
 fn register(registry: mut Registry, file: File) -> Unit
-    effects(retains(file))
+    retains(file)
 {
 }
 

@@ -6,9 +6,9 @@ use crate::diagnostic::Span;
 use crate::interfaces::{builtin_interfaces, standard_package_interfaces};
 use crate::semantic::{ResolvedType, SemanticTypeFacts};
 use crate::syntax::ast::{
-    BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl,
-    GenericBound, Item, LetKind, MatchPattern, Param, Program as SyntaxProgram, ProtocolImpl, Stmt,
-    TypeDecl, TypeKind, TypeRef,
+    BinaryOp, Block, CallArg, Callee, DataEffect, Expr, FieldDecl, FunctionDecl, GenericBound,
+    Item, LetKind, MatchPattern, Param, Program as SyntaxProgram, ProtocolImpl, Stmt, TypeDecl,
+    TypeKind, TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -51,15 +51,14 @@ pub struct FunctionSig {
     pub name: String,
     pub is_public: bool,
     pub is_async: bool,
-    pub is_native: bool,
     pub type_params: Box<[String]>,
     pub type_param_bounds: Vec<Option<GenericBound>>,
     pub params: Vec<ParamSig>,
     pub return_ty: Option<ResolvedType>,
     pub returns_fresh: bool,
-    pub effects: Vec<String>,
     pub retained_params: HashSet<String>,
     pub is_builtin: bool,
+    pub is_external: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -140,24 +139,6 @@ pub struct HirCallSite {
     pub callee: Callee,
     pub span: Span,
     pub resolution: CallResolution,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum HirFeatureUseKind {
-    LocalLet,
-    LocalClosure,
-    Manage,
-    Take,
-    Native,
-    Unsafe,
-    Async,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HirFeatureUse {
-    pub function_name: Option<String>,
-    pub kind: HirFeatureUseKind,
-    pub span: Span,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -438,7 +419,6 @@ pub enum HirExpr {
     Closure {
         params: Vec<String>,
         captures: Vec<HirClosureCapture>,
-        declared_effects: Vec<String>,
         explicit: bool,
         body: HirBlock,
         span: Span,
@@ -512,7 +492,6 @@ pub struct Hir {
     field_accesses: Vec<HirFieldAccess>,
     effect_events: Vec<HirEffectEvent>,
     returns: Vec<HirReturn>,
-    feature_uses: Vec<HirFeatureUse>,
     function_bodies: HashMap<String, HirFunctionBody>,
     resource_drop_bodies: HashMap<String, HirBlock>,
     protocol_impls: Vec<HirProtocolImpl>,
@@ -533,7 +512,7 @@ pub(crate) use lower::assign_target_reads;
 // the hir.rs split and keep their original module-private reach via `pub(super)`
 // plus this re-export.
 use infer::{
-    capability_protocol, classify_return_expr, infer_closure_return_type, list_element_type,
+    classify_return_expr, dyn_protocol, infer_closure_return_type, list_element_type,
     match_pattern_binding_type, match_pattern_binding_types, stream_item_type,
     substituted_field_type,
 };

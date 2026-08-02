@@ -6,7 +6,6 @@ use crate::syntax::parse_source;
 #[test]
 fn collects_type_kinds_and_handle_fields() {
     let source = r#"
-features: local
 
 class User {
     name: String
@@ -155,7 +154,7 @@ struct Store
 struct Asset
 
 fn store_put(store: mut Store, value: read Asset) -> Unit
-    effects(retains(value))
+    retains(value)
 {
 }
 
@@ -237,7 +236,6 @@ fn caller(value: String, count: Int) -> Unit {
 #[test]
 fn omitted_read_is_accepted_but_never_upgrades_to_mut_or_take() {
     let source = r#"
-features: local
 
 fn inspect(value: String) -> Unit {
 }
@@ -472,13 +470,7 @@ fn render(body: read String) -> Result<fresh Rendered, HttpError> {
             ..
         }
     ));
-    assert!(matches!(
-        sites[1].resolution,
-        CallResolution::Resolved {
-            kind: ResolvedCalleeKind::BuiltinFunction,
-            ..
-        }
-    ));
+    assert!(matches!(sites[1].resolution, CallResolution::Unknown));
     assert!(matches!(sites[2].resolution, CallResolution::Unknown));
 
     let bindings = &hir
@@ -532,7 +524,6 @@ fn render(body: read String) -> Result<fresh Rendered, HttpError> {
 #[test]
 fn records_local_binding_facts() {
     let source = r#"
-features: local
 
 struct Asset
 struct AssetError
@@ -608,7 +599,6 @@ fn run(holder: read Holder<Config>) -> Unit {
 #[test]
 fn records_field_access_facts() {
     let source = r#"
-features: local
 
 class Rules {
 }
@@ -654,7 +644,6 @@ fn take_rules(config: mut Config) -> Unit {
 #[test]
 fn records_effect_events() {
     let source = r#"
-features: local
 
 struct Image
 
@@ -664,7 +653,7 @@ class RetainedImageStore {
 }
 
 fn RetainedImageStore.store(cache: mut RetainedImageStore, image: read Image) -> Unit
-    effects(retains(image))
+    retains(image)
 
 fn publish(cache: mut RetainedImageStore, path: read Path) -> Unit {
     local image = Image.load(path: read path)
@@ -705,7 +694,6 @@ fn publish(cache: mut RetainedImageStore, path: read Path) -> Unit {
 #[test]
 fn lowers_resolved_statement_expression_tree_for_function_body() {
     let source = r#"
-features: local
 
 class Rules {
 }
@@ -723,7 +711,7 @@ struct AssetError
 fn Asset.load(path: read Path) -> Result<fresh Asset, AssetError>
 
 fn RetainedImageStore.store(cache: mut RetainedImageStore, asset: read Asset) -> Unit
-    effects(retains(asset))
+    retains(asset)
 
 fn update(cache: mut RetainedImageStore, config: mut Config, path: read Path) -> Unit {
     local asset = Asset.load(path: read path)?

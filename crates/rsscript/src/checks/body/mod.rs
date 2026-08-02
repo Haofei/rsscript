@@ -11,8 +11,8 @@ use crate::hir::{
     HirTypeKind, ParamEffect, ResolvedCalleeKind,
 };
 use crate::syntax::ast::{
-    Block as SyntaxBlock, Callee, DataEffect, Expr, FileFeature, FunctionDecl, Item,
-    MatchFieldPattern, MatchLiteral, MatchPattern, Stmt as SyntaxStmt, TypeRef,
+    Block as SyntaxBlock, Callee, DataEffect, Expr, FunctionDecl, Item, MatchFieldPattern,
+    MatchLiteral, MatchPattern, Stmt as SyntaxStmt, TypeRef,
 };
 
 use super::local::{

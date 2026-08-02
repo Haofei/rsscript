@@ -32,14 +32,14 @@ pub fn Map.insert<K: Hashable, V>(
     key: K,
     value: V,
 ) -> Unit
-    effects(retains(key), retains(value))
+    retains(key) retains(value)
 
 pub fn Map.insert_old<K: Hashable, V>(
     map: mut Map<K, V>,
     key: K,
     value: V,
 ) -> Option<V>
-    effects(retains(key), retains(value))
+    retains(key) retains(value)
 
 pub fn Map.remove<K: Hashable, V>(
     map: mut Map<K, V>,

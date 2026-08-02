@@ -34,13 +34,11 @@ path = "native/rust"
 crate = "rss_json_native"
 build_scripts = "review"
 "#,
-        r#"features: native
-
+        r#"
 struct JsonValue
 struct JsonError
 
 pub fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
-    effects(native)
 "#,
     );
 
@@ -84,10 +82,8 @@ fn package_diff_can_emit_reir_diff_json() {
         &new_dir,
         "0.1.0",
         "",
-        r#"features: native
-
+        r#"
 pub fn NativeBridge.run(value: read Int) -> Int
-    effects(native)
 "#,
     );
 
@@ -139,7 +135,6 @@ pub fn Cache.get(cache: read Cache) -> Bytes
     fs::write(
         new_dir.join("interface/retention.rssi"),
         r#"pub fn Cache.put(cache: mut Cache, value: read Bytes) -> Unit
-    effects(retains(value))
 "#,
     )
     .expect("added boundary interface should be written");
@@ -174,8 +169,7 @@ fn package_diff_marks_added_boundary_contracts_in_modified_interface_high_risk()
         "rss-modified-interface",
         "0.1.0",
         "",
-        r#"features: native
-
+        r#"
 struct Bytes
 
 pub fn Bytes.len(value: read Bytes) -> Int
@@ -186,14 +180,12 @@ pub fn Bytes.len(value: read Bytes) -> Int
         "rss-modified-interface",
         "0.1.0",
         "",
-        r#"features: native
-
+        r#"
 struct Bytes
 
 pub fn Bytes.len(value: read Bytes) -> Int
 
-native fn Bytes.decode(value: read Bytes) -> String
-    effects(native)
+fn Bytes.decode(value: read Bytes) -> String
 "#,
     );
 
@@ -301,15 +293,12 @@ fn package_diff_marks_protocol_impl_mapping_changes_high_risk() {
     let new_dir = common::unique_temp_dir("rsscript-package-protocol-impl-new");
     let old_interface = r#"protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
-        effects(retains(message))
 }
 
 struct BufferWriter
 
 pub fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
-    effects(retains(message))
 pub fn BufferWriter.audit_write(self: mut BufferWriter, message: read String) -> Unit
-    effects(retains(message))
 
 impl Writer for BufferWriter {
     write = BufferWriter.write
@@ -317,15 +306,12 @@ impl Writer for BufferWriter {
 "#;
     let new_interface = r#"protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
-        effects(retains(message))
 }
 
 struct BufferWriter
 
 pub fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
-    effects(retains(message))
 pub fn BufferWriter.audit_write(self: mut BufferWriter, message: read String) -> Unit
-    effects(retains(message))
 
 impl Writer for BufferWriter {
     write = BufferWriter.audit_write
@@ -416,8 +402,7 @@ pub fn Api.run() -> Result<Unit, TimerError>
         "rss-async-interface",
         "0.1.0",
         "",
-        r#"features: async
-
+        r#"
 struct TimerError
 
 pub async fn Api.run() -> Result<Unit, TimerError>
@@ -484,12 +469,10 @@ native-tls = ["native"]
 fn package_diff_reports_await_site_metadata_changes() {
     let old_dir = common::unique_temp_dir("rsscript-package-diff-await-old");
     let new_dir = common::unique_temp_dir("rsscript-package-diff-await-new");
-    let interface = r#"features: async, native
-
+    let interface = r#"
 struct TimerError
 
-pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
-    effects(native)
+pub async fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
 
 pub async fn Api.run() -> Result<Unit, TimerError>
 "#;
@@ -498,8 +481,7 @@ pub async fn Api.run() -> Result<Unit, TimerError>
     fs::create_dir_all(old_dir.join("src")).expect("old src dir should be created");
     fs::write(
         old_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 pub async fn Api.run() -> Result<Unit, TimerError> {
     return Ok(Unit)
 }
@@ -509,8 +491,7 @@ pub async fn Api.run() -> Result<Unit, TimerError> {
     fs::create_dir_all(new_dir.join("src")).expect("new src dir should be created");
     fs::write(
         new_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 pub async fn Api.run() -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
     return Ok(Unit)
@@ -542,17 +523,14 @@ pub async fn Api.run() -> Result<Unit, TimerError> {
 fn package_diff_ignores_unchanged_await_site_directory_paths() {
     let old_dir = common::unique_temp_dir("rsscript-package-diff-await-same-old");
     let new_dir = common::unique_temp_dir("rsscript-package-diff-await-same-new");
-    let interface = r#"features: async, native
-
+    let interface = r#"
 struct TimerError
 
-pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
-    effects(native)
+pub async fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
 
 pub async fn Api.run() -> Result<Unit, TimerError>
 "#;
-    let source = r#"features: async
-
+    let source = r#"
 pub async fn Api.run() -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
     return Ok(Unit)
@@ -585,12 +563,10 @@ pub async fn Api.run() -> Result<Unit, TimerError> {
 fn package_diff_preserves_duplicate_await_site_counts() {
     let old_dir = common::unique_temp_dir("rsscript-package-diff-await-count-old");
     let new_dir = common::unique_temp_dir("rsscript-package-diff-await-count-new");
-    let interface = r#"features: async, native
-
+    let interface = r#"
 struct TimerError
 
-pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
-    effects(native)
+pub async fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
 
 pub async fn Api.run() -> Result<Unit, TimerError>
 "#;
@@ -599,8 +575,7 @@ pub async fn Api.run() -> Result<Unit, TimerError>
     fs::create_dir_all(old_dir.join("src")).expect("old src dir should be created");
     fs::write(
         old_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 pub async fn Api.run() -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
     return Ok(Unit)
@@ -611,8 +586,7 @@ pub async fn Api.run() -> Result<Unit, TimerError> {
     fs::create_dir_all(new_dir.join("src")).expect("new src dir should be created");
     fs::write(
         new_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 pub async fn Api.run() -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
     await Timer.sleep(ms: 1)?

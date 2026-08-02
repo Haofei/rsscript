@@ -2,7 +2,6 @@
 // `spawn` is a firm non-goal (spec §21, §20.2): unstructured task creation breaks
 // the single-isolate structured-concurrency model, so it is rejected before
 // lowering (the lowerer's Spawn arm is `unreachable_lowering`). Use `task_group`.
-features: async, local
 
 async fn work() -> Int {
     return 1

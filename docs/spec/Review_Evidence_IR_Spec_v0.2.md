@@ -921,7 +921,7 @@ those facts are less comparable until mapped.
 
 ### 6.4 Required, granted, and observed capability facts
 
-The same capability object can appear in different fact roles:
+The same dynamic protocol object can appear in different fact roles:
 
 ```text
 required  code/package/build needs it

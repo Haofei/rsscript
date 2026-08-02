@@ -1,5 +1,4 @@
 // expect: RS0304
-features: local
 
 struct Buffer {
     value: Int

@@ -1,19 +1,17 @@
-features: native
 
-pub native fn Args.all() -> fresh List<String>
-    effects(native)
+pub fn Args.all() -> fresh List<String>
 
-pub native fn Args.count() -> Int
-    effects(native)
 
-pub native fn Args.get(index: Int) -> Option<String>
-    effects(native)
+pub fn Args.count() -> Int
 
-pub native fn Args.get_or_default(
+
+pub fn Args.get(index: Int) -> Option<String>
+
+
+pub fn Args.get_or_default(
     index: Int,
     default: String,
 ) -> String
-    effects(native)
 
-pub native fn OS.close(fd: Fd) -> Unit
-    effects(native)
+
+pub fn OS.close(fd: Fd) -> Unit

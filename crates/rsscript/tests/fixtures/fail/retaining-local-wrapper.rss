@@ -1,5 +1,4 @@
 // expect: RS0501
-features: local
 
 struct Image
 struct Holder {
@@ -8,10 +7,10 @@ struct Holder {
 struct Cache
 
 fn Cache.store_option(cache: mut Cache, value: Option<Image>) -> Unit
-    effects(retains(value))
+    retains(value)
 
 fn Cache.store_result(cache: mut Cache, value: Result<Image, StoreError>) -> Unit
-    effects(retains(value))
+    retains(value)
 
 fn make_holder() -> fresh Holder
 

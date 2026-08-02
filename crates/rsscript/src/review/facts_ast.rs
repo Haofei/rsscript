@@ -322,8 +322,8 @@ pub(super) fn collect_review_map_facts_expr(
     // effects, which the walker now drives.
     match expr {
         Expr::Call { callee, args, span } => {
-            if is_capability_from_callee(callee) {
-                facts.has_capability_object = true;
+            if is_dyn_from_callee(callee) {
+                facts.has_external_binding_object = true;
             }
             if let Some(callback) = review_map_callback_call(callee, callback_params) {
                 facts.callback_calls.insert(callback.to_string());
@@ -343,7 +343,7 @@ pub(super) fn collect_review_map_facts_expr(
                                 method,
                                 &facts.value_types,
                             );
-                            if capability_protocol_name(&receiver_type)
+                            if dyn_protocol_name(&receiver_type)
                                 .is_some_and(|protocol| namespace.as_deref() == Some(protocol))
                             {
                                 facts.has_dynamic_protocol_dispatch = true;
@@ -388,7 +388,7 @@ pub(super) fn collect_review_map_facts_expr(
                 match resolution {
                     CallResolution::Resolved { signature, kind } => {
                         collect_call_boundary_facts(&signature, facts);
-                        if is_capability_protocol_call(callee, args, &facts.value_types) {
+                        if is_dyn_protocol_call(callee, args, &facts.value_types) {
                             facts.has_dynamic_protocol_dispatch = true;
                         }
                         if kind == ResolvedCalleeKind::UserFunction {
@@ -415,10 +415,7 @@ pub(super) fn collect_review_map_facts_expr(
         Expr::Await { .. } => facts.has_await = true,
         Expr::Try { .. } => facts.has_error_boundary = true,
         Expr::Closure {
-            captures,
-            declared_effects,
-            explicit,
-            ..
+            captures, explicit, ..
         } => {
             if *explicit {
                 for capture in captures {
@@ -427,11 +424,6 @@ pub(super) fn collect_review_map_facts_expr(
                         effect_label(capture.effect),
                         capture.name
                     ));
-                }
-                if !declared_effects.is_empty() {
-                    facts
-                        .explicit_closure_contracts
-                        .insert(format!("effects({})", declared_effects.join(", ")));
                 }
             }
         }
@@ -469,13 +461,7 @@ pub(super) fn collect_review_map_facts_expr(
 }
 
 pub(super) fn collect_call_boundary_facts(signature: &HirFunctionSig, facts: &mut ReviewMapFacts) {
-    let callee = function_sig_key(signature);
-    if signature.effects.iter().any(|effect| effect == "native") {
-        facts.native_calls.insert(callee.clone());
-    }
-    if signature.effects.iter().any(|effect| effect == "unsafe") {
-        facts.unsafe_calls.insert(callee);
-    }
+    let _ = (signature, facts);
 }
 
 pub(super) fn review_map_callback_call<'a>(

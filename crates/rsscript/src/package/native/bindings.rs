@@ -5,9 +5,7 @@ use serde::Deserialize;
 
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::formatter::format_program;
-use crate::syntax::ast::{
-    EffectDecl, FileFeature, FileFeatureScope, FunctionDecl, Item, Program, TypeRef,
-};
+use crate::syntax::ast::{FunctionDecl, Item, Program, TypeRef};
 use crate::syntax::parse_source;
 
 use super::super::contract::collect_package_function_contracts;
@@ -16,37 +14,25 @@ use super::super::{
 };
 use super::NATIVE_MANIFEST_MAX_BYTES;
 
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NativeBindingsManifest {
+    schema: String,
     #[serde(default)]
-    bindings: BTreeMap<String, String>,
-    /// Compact whole-boundary binding: one `[adapter.<Namespace>]` section binds
-    /// many `Namespace.method` native functions to `<crate>::<method>` without a
-    /// per-function line. Expands into `bindings` at load time, so every
-    /// downstream consumer (lowering, VM shim, conformance checks) sees the same
-    /// flat map - there is no separate adapter code path.
-    #[serde(default)]
-    adapter: BTreeMap<String, AdapterBinding>,
+    function: Vec<FunctionBinding>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AdapterBinding {
-    /// The Rust wrapper crate that owns every method in this boundary.
-    #[serde(rename = "crate")]
-    crate_name: String,
-    /// Method names declared under the namespace (the part after the dot). Each
-    /// `m` binds `Namespace.m` to `<crate>::m`.
+struct FunctionBinding {
+    symbol: String,
+    provider: String,
+    entry: String,
     #[serde(default)]
-    functions: Vec<String>,
-    /// Optional per-method Rust name overrides for `m` whose Rust function name
-    /// differs from the RSScript method name (`Namespace.m -> <crate>::<rename[m]>`).
-    #[serde(default)]
-    rename: BTreeMap<String, String>,
+    review_effects: Vec<String>,
 }
 
-pub(in crate::package) fn package_native_bindings(
+pub(in crate::package) fn package_external_bindings(
     package_dir: &Path,
 ) -> Result<BTreeMap<String, String>, String> {
     let path = package_dir.join("native/bindings.rssbind.toml");
@@ -58,52 +44,45 @@ pub(in crate::package) fn package_native_bindings(
         NATIVE_MANIFEST_MAX_BYTES,
         "native binding manifest read",
     )?;
-    parse_native_bindings(&path, &source)
+    parse_external_bindings(&path, &source)
 }
 
-fn parse_native_bindings(path: &Path, source: &str) -> Result<BTreeMap<String, String>, String> {
+fn parse_external_bindings(path: &Path, source: &str) -> Result<BTreeMap<String, String>, String> {
     let manifest: NativeBindingsManifest = toml::from_str(source)
         .map_err(|error| format!("failed to parse {}: {error}", path.display()))?;
-    flatten_native_bindings(manifest).map_err(|error| format!("{}: {error}", path.display()))
+    flatten_external_bindings(manifest).map_err(|error| format!("{}: {error}", path.display()))
 }
 
-/// Flatten a binding manifest into the canonical `symbol -> rust target` map,
-/// expanding any compact `[adapter.*]` sections. Errors on malformed adapters and
-/// on a symbol produced by more than one source (explicit binding or adapter), so
-/// the binding surface stays unambiguous for review.
-fn flatten_native_bindings(
+/// Validate the v1 binding descriptor and flatten it to `symbol -> provider::entry`.
+fn flatten_external_bindings(
     manifest: NativeBindingsManifest,
 ) -> Result<BTreeMap<String, String>, String> {
-    let mut flat = manifest.bindings;
-    for (namespace, adapter) in manifest.adapter {
-        let crate_name = adapter.crate_name.trim();
-        if crate_name.is_empty() {
-            return Err(format!(
-                "adapter `{namespace}` must set a non-empty `crate`."
-            ));
+    if manifest.schema != "rsscript.bindings.v1" {
+        return Err(format!(
+            "unsupported binding schema `{}`; expected `rsscript.bindings.v1`",
+            manifest.schema
+        ));
+    }
+    let mut flat = BTreeMap::new();
+    for binding in manifest.function {
+        let symbol = binding.symbol.trim();
+        let provider = binding.provider.trim();
+        let entry = binding.entry.trim();
+        if symbol.is_empty() || provider.is_empty() || entry.is_empty() {
+            return Err("binding symbol, provider, and entry must be non-empty".to_string());
         }
-        if adapter.functions.is_empty() {
-            return Err(format!(
-                "adapter `{namespace}` lists no `functions`; add the method names it binds or remove the section."
-            ));
+        if binding
+            .review_effects
+            .iter()
+            .any(|effect| effect.trim().is_empty())
+        {
+            return Err(format!("binding `{symbol}` has an empty review effect"));
         }
-        for method in &adapter.functions {
-            let method = method.trim();
-            if method.is_empty() {
-                return Err(format!("adapter `{namespace}` has an empty function name."));
-            }
-            let symbol = format!("{namespace}.{method}");
-            let rust_method = adapter
-                .rename
-                .get(method)
-                .map(String::as_str)
-                .unwrap_or(method);
-            let target = format!("{crate_name}::{rust_method}");
-            if flat.insert(symbol.clone(), target).is_some() {
-                return Err(format!(
-                    "native binding `{symbol}` is defined twice (by `[adapter.{namespace}]` and an explicit `[bindings]` entry, or duplicated)."
-                ));
-            }
+        if flat
+            .insert(symbol.to_string(), format!("{provider}::{entry}"))
+            .is_some()
+        {
+            return Err(format!("external binding `{symbol}` is defined twice"));
         }
     }
     Ok(flat)
@@ -111,9 +90,9 @@ fn flatten_native_bindings(
 
 pub(in crate::package) fn native_binding_interface_sources(
     sources: &[PackageSource],
-    native_bindings: &BTreeMap<String, String>,
+    external_bindings: &BTreeMap<String, String>,
 ) -> Vec<PackageSource> {
-    if native_bindings.is_empty() {
+    if external_bindings.is_empty() {
         return Vec::new();
     }
     let source_type_names = sources
@@ -141,12 +120,7 @@ pub(in crate::package) fn native_binding_interface_sources(
                     Item::Type(type_decl) if !source_type_names.contains(&type_decl.name) => {
                         selected_items.push(Item::Type(type_decl));
                     }
-                    Item::Function(function)
-                        if function
-                            .effects
-                            .contains(&EffectDecl::Name("native".to_string()))
-                            && native_bindings.contains_key(&function.name) =>
-                    {
+                    Item::Function(function) if external_bindings.contains_key(&function.name) => {
                         selected_items.push(Item::Function(function));
                     }
                     _ => {}
@@ -159,15 +133,6 @@ pub(in crate::package) fn native_binding_interface_sources(
                 return None;
             }
             let program = Program {
-                features: vec![FileFeature::Native],
-                feature_scopes: vec![FileFeatureScope {
-                    file: source.path.clone(),
-                    features: vec![FileFeature::Native],
-                }],
-                unknown_features: Vec::new(),
-                duplicate_features: Vec::new(),
-                feature_spans: Vec::new(),
-                profile_spans: Vec::new(),
                 unknown_top_level_spans: Vec::new(),
                 malformed_declaration_spans: Vec::new(),
                 protocols: Vec::new(),
@@ -187,10 +152,10 @@ pub(in crate::package) fn native_binding_interface_sources(
 pub(in crate::package) fn package_native_binding_diagnostics(
     package_dir: &Path,
     sources: &[PackageSource],
-    native_bindings: &BTreeMap<String, String>,
+    external_bindings: &BTreeMap<String, String>,
     native: Option<&ManifestNativeRust>,
 ) -> Vec<Diagnostic> {
-    if native_bindings.is_empty() {
+    if external_bindings.is_empty() {
         return Vec::new();
     }
     let interface_function_contracts =
@@ -243,7 +208,7 @@ pub(in crate::package) fn package_native_binding_diagnostics(
         );
     }
 
-    for (symbol, target) in native_bindings {
+    for (symbol, target) in external_bindings {
         let span = native_binding_span(package_dir, symbol);
         if symbol.trim().is_empty() || target.trim().is_empty() {
             diagnostics.push(
@@ -263,40 +228,23 @@ pub(in crate::package) fn package_native_binding_diagnostics(
             continue;
         }
 
-        let Some(contract) = interface_function_contracts.get(symbol) else {
+        let Some(_contract) = interface_function_contracts.get(symbol) else {
             diagnostics.push(
                 Diagnostic::error(
                     code::PACKAGE_NATIVE_BINDING,
-                    format!("native binding `{symbol}` does not match any package interface function."),
+                    format!("external binding `{symbol}` does not match any package interface function."),
                     span,
-                    "unknown native binding symbol",
+                    "unknown external binding symbol",
                 )
-                .with_cause("Native bindings are reviewable only when their RSScript side is declared in a package `.rssi` contract.")
+                .with_cause("Bindings must resolve to a bodyless function declared in a package `.rssi` contract.")
                 .with_fix(
-                    "declare_native_interface",
-                    format!("Declare `native fn {symbol}(...)` in the package interface, or remove this binding."),
+                    "declare_external_interface",
+                    format!("Declare `fn {symbol}(...)` in the package interface, or remove this binding."),
                     "manual",
                 ),
             );
             continue;
         };
-
-        if !contract.effects.contains("native") {
-            diagnostics.push(
-                Diagnostic::error(
-                    code::PACKAGE_NATIVE_BINDING,
-                    format!("native binding `{symbol}` points to a non-native interface function."),
-                    span.clone(),
-                    "non-native binding symbol",
-                )
-                .with_cause("Only interface functions declared with the native boundary can be implemented by native wrapper bindings.")
-                .with_fix(
-                    "mark_native_interface",
-                    format!("Declare `{symbol}` as `native fn` or add `effects(native)`, or remove this binding."),
-                    "manual",
-                ),
-            );
-        }
 
         if let Some(function) = interface_functions.get(symbol)
             && let Some(reason) = unsupported_native_binding_signature(function)
@@ -420,15 +368,15 @@ mod tests {
 
     fn flatten(toml_src: &str) -> Result<BTreeMap<String, String>, String> {
         let manifest: NativeBindingsManifest = toml::from_str(toml_src).expect("manifest parses");
-        flatten_native_bindings(manifest)
+        flatten_external_bindings(manifest)
     }
 
     #[test]
-    fn adapter_section_expands_to_per_method_bindings() {
+    fn v1_function_bindings_flatten_to_provider_entries() {
         let flat = flatten(
-            "[adapter.NativeOps]\ncrate = \"rss_native_ops\"\nfunctions = [\"sum_int\", \"sort_int\"]\n",
+            "schema = \"rsscript.bindings.v1\"\n\n[[function]]\nsymbol = \"NativeOps.sum_int\"\nprovider = \"rss_native_ops\"\nentry = \"sum_int\"\n\n[[function]]\nsymbol = \"NativeOps.sort_int\"\nprovider = \"rss_native_ops\"\nentry = \"sort_int\"\n",
         )
-        .expect("adapter expands");
+        .expect("v1 descriptor flattens");
         assert_eq!(
             flat.get("NativeOps.sum_int").map(String::as_str),
             Some("rss_native_ops::sum_int")
@@ -441,59 +389,23 @@ mod tests {
     }
 
     #[test]
-    fn adapter_form_matches_the_explicit_form() {
-        let compact = flatten(
-            "[adapter.NativeOps]\ncrate = \"rss_native_ops\"\nfunctions = [\"sum_int\", \"sort_int\"]\n",
-        )
-        .unwrap();
-        let explicit = flatten(
-            "[bindings]\n\"NativeOps.sum_int\" = \"rss_native_ops::sum_int\"\n\"NativeOps.sort_int\" = \"rss_native_ops::sort_int\"\n",
-        )
-        .unwrap();
-        assert_eq!(compact, explicit);
-    }
-
-    #[test]
-    fn rename_overrides_the_rust_method_name() {
-        let flat = flatten(
-            "[adapter.File]\ncrate = \"file_native\"\nfunctions = [\"open\"]\n\n[adapter.File.rename]\nopen = \"open_file\"\n",
-        )
-        .unwrap();
-        assert_eq!(
-            flat.get("File.open").map(String::as_str),
-            Some("file_native::open_file")
-        );
-    }
-
-    #[test]
-    fn explicit_bindings_and_adapters_compose() {
-        let flat = flatten(
-            "[bindings]\n\"Extra.ping\" = \"extra::ping\"\n\n[adapter.File]\ncrate = \"file_native\"\nfunctions = [\"open\"]\n",
-        )
-        .unwrap();
-        assert_eq!(flat.len(), 2);
-        assert!(flat.contains_key("Extra.ping"));
-        assert!(flat.contains_key("File.open"));
-    }
-
-    #[test]
-    fn duplicate_symbol_across_adapter_and_bindings_errors() {
+    fn duplicate_symbol_errors() {
         let error = flatten(
-            "[bindings]\n\"File.open\" = \"file_native::open\"\n\n[adapter.File]\ncrate = \"file_native\"\nfunctions = [\"open\"]\n",
+            "schema = \"rsscript.bindings.v1\"\n\n[[function]]\nsymbol = \"File.open\"\nprovider = \"file_native\"\nentry = \"open\"\n\n[[function]]\nsymbol = \"File.open\"\nprovider = \"file_native\"\nentry = \"open_again\"\n",
         )
         .expect_err("duplicate symbol should error");
         assert!(error.contains("File.open"), "error: {error}");
     }
 
     #[test]
-    fn empty_crate_and_empty_functions_error() {
+    fn old_schema_and_empty_fields_error() {
         assert!(
-            flatten("[adapter.File]\ncrate = \"\"\nfunctions = [\"open\"]\n").is_err(),
-            "empty crate must error"
+            flatten("schema = \"rsscript.bindings.v0\"\n").is_err(),
+            "old schema must error"
         );
         assert!(
-            flatten("[adapter.File]\ncrate = \"file_native\"\nfunctions = []\n").is_err(),
-            "empty functions must error"
+            flatten("schema = \"rsscript.bindings.v1\"\n\n[[function]]\nsymbol = \"File.open\"\nprovider = \"\"\nentry = \"open\"\n").is_err(),
+            "empty provider must error"
         );
     }
 }

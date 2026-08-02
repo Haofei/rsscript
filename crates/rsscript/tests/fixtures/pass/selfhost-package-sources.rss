@@ -1,4 +1,3 @@
-features: local
 
 struct PackageSourceSetFacts {
     total_files: Int

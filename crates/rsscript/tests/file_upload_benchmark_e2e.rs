@@ -306,7 +306,7 @@ unsafe = "forbid"
 native_links = "forbid"
 ffi = "forbid"
 
-[[review.capability_bindings]]
+[[review.external_binding_bindings]]
 symbol = "Upload.put"
 category = "network.client"
 provider = "local"
@@ -323,7 +323,7 @@ resource = "http://127.0.0.1/upload/*"
 }
 
 fn rss_benchmark_source(config: &BenchmarkConfig) -> String {
-    let mut source = String::from("features: async\n\n");
+    let mut source = String::new();
     source.push_str(
         "async fn upload_stage_0(path: read String, body: read String) -> Result<Unit, String> {\n",
     );

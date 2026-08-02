@@ -36,7 +36,6 @@ impl RegVm {
         next_base: usize,
     ) -> Result<VmValue, EvalError> {
         self.charge_host_call()?;
-        self.authorize_intrinsic_host_access(intrinsic, args, base)?;
         match intrinsic {
             RegIntrinsic::ArgsAll => Ok(VmValue::List(Rc::new(RefCell::new(
                 self.args.iter().cloned().map(VmValue::string).collect(),
@@ -148,7 +147,7 @@ impl RegVm {
                     size.max(0) as usize
                 ))))
             }
-            RegIntrinsic::CapabilityFrom => Ok(intrinsic_arg(&self.stack, base, args, 0)?.clone()),
+            RegIntrinsic::DynFrom => Ok(intrinsic_arg(&self.stack, base, args, 0)?.clone()),
             RegIntrinsic::CancellationSourceCancel => {
                 // RSS-level *cooperative* cancellation: flips the program-visible
                 // flag a task must poll (e.g. `token.is_cancelled()`); it preempts

@@ -8,52 +8,52 @@ pub fn Json.json_parse(text: String) -> Result<fresh JsonValue, JsonError>
 pub fn Json.parse_file(path: Path) -> Result<fresh JsonValue, JsonError>
 
 pub fn Json.value(value: JsonLiteral) -> fresh JsonValue
-    effects(pure)
+
 
 pub fn Json.clone(value: JsonValue) -> fresh JsonValue
-    effects(pure)
+
 
 pub fn Json.decode<T: Struct>(value: JsonValue) -> Result<fresh T, JsonError>
-    effects(pure)
+
 
 pub fn Json.decode_text<T: Struct>(text: String) -> Result<fresh T, JsonError>
-    effects(pure)
+
 
 pub fn Json.encode(value: JsonLiteral) -> fresh String
-    effects(pure)
+
 
 pub fn Json.quote_string(value: String) -> fresh String
-    effects(pure)
+
 
 pub fn Json.to_string(value: JsonValue) -> fresh String
-    effects(pure)
+
 
 pub fn Json.string_field(name: String, value: String) -> fresh String
-    effects(pure)
+
 
 pub fn Json.int_field(name: String, value: Int) -> fresh String
-    effects(pure)
+
 
 pub fn Json.bool_field(name: String, value: Bool) -> fresh String
-    effects(pure)
+
 
 pub fn Json.raw_field(name: String, value: String) -> fresh String
-    effects(pure)
+
 
 pub fn Json.object(fields: List<String>) -> fresh String
-    effects(pure)
+
 
 pub fn Json.array(items: List<String>) -> fresh String
-    effects(pure)
+
 
 pub fn Json.string_array(items: List<String>) -> fresh String
-    effects(pure)
+
 
 pub fn Json.strings(items: List<String>) -> fresh JsonValue
-    effects(pure)
+
 
 pub fn Json.values(items: List<JsonValue>) -> fresh JsonValue
-    effects(pure)
+
 
 pub fn Json.field(
     value: JsonValue,
@@ -110,7 +110,7 @@ pub fn Json.at_or(
     path: String,
     fallback: JsonValue,
 ) -> fresh JsonValue
-    effects(pure)
+
 
 pub fn Json.at_string(
     value: JsonValue,
@@ -152,21 +152,21 @@ pub fn Json.at_string_or(
     path: String,
     fallback: String,
 ) -> String
-    effects(pure)
+
 
 pub fn Json.at_int_or(
     value: JsonValue,
     path: String,
     fallback: Int,
 ) -> Int
-    effects(pure)
+
 
 pub fn Json.at_bool_or(
     value: JsonValue,
     path: String,
     fallback: Bool,
 ) -> Bool
-    effects(pure)
+
 
 pub fn Json.at_to_string(
     value: JsonValue,
@@ -178,7 +178,7 @@ pub fn Json.at_to_string_or(
     path: String,
     fallback: String,
 ) -> String
-    effects(pure)
+
 
 pub fn Json.string_at(
     text: String,
@@ -205,49 +205,49 @@ pub fn Json.string_at_or(
     path: String,
     fallback: String,
 ) -> String
-    effects(pure)
+
 
 pub fn Json.json_string_at_or(
     text: String,
     path: String,
     fallback: String,
 ) -> String
-    effects(pure)
+
 
 pub fn Json.int_at_or(
     text: String,
     path: String,
     fallback: Int,
 ) -> Int
-    effects(pure)
+
 
 pub fn Json.json_int_at_or(
     text: String,
     path: String,
     fallback: Int,
 ) -> Int
-    effects(pure)
+
 
 pub fn Json.bool_at_or(
     text: String,
     path: String,
     fallback: Bool,
 ) -> Bool
-    effects(pure)
+
 
 pub fn Json.json_bool_at_or(
     text: String,
     path: String,
     fallback: Bool,
 ) -> Bool
-    effects(pure)
+
 
 pub fn Json.to_string_at_or(
     text: String,
     path: String,
     fallback: String,
 ) -> String
-    effects(pure)
+
 
 pub fn Json.as_string(value: JsonValue) -> Result<String, JsonError>
 
@@ -256,16 +256,16 @@ pub fn Json.as_int(value: JsonValue) -> Result<Int, JsonError>
 pub fn Json.as_bool(value: JsonValue) -> Result<Bool, JsonError>
 
 pub fn Json.is_null(value: JsonValue) -> Bool
-    effects(pure)
+
 
 pub fn Json.is_array(value: JsonValue) -> Bool
-    effects(pure)
+
 
 pub fn Json.is_object(value: JsonValue) -> Bool
-    effects(pure)
+
 
 pub fn Json.kind(value: JsonValue) -> String
-    effects(pure)
+
 
 pub fn Json.object_len(value: JsonValue) -> Result<Int, JsonError>
 
@@ -311,4 +311,3 @@ pub fn Json.array_fold<T: Struct>(
 ) -> Result<fresh T, JsonError>
 
 pub fn JsonError.message(error: JsonError) -> String
-    effects(pure)

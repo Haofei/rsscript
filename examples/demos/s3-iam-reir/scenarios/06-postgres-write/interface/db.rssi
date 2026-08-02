@@ -1,7 +1,5 @@
-features: async, native
 
-pub async native fn DB.insert_event(
+pub async fn DB.insert_event(
     table: String,
     payload: String,
 ) -> Result<Unit, String>
-    effects(native)

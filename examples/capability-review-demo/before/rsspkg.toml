@@ -16,7 +16,7 @@ unsafe = "forbid"
 
 # Each native boundary declares the capability it grants, from the canonical
 # taxonomy (src/capability.rs). Today this package only reads a database.
-[[review.capability_bindings]]
+[[review.external_binding_bindings]]
 symbol = "Db.query"
 category = "database.read"
 provider = "sqlite"

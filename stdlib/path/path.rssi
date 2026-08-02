@@ -1,59 +1,57 @@
-features: native
 
 pub fn Path.from_string(value: String) -> fresh Path
 
 pub fn Path.join(base: Path, child: String) -> fresh Path
 
 pub fn Path.safe_relative(value: String) -> Result<fresh Path, String>
-    effects(pure)
+
 
 pub fn Path.resolve_relative(
     root: Path,
     relative: String,
 ) -> Result<fresh Path, String>
-    effects(pure)
+
 
 pub fn Path.normalize(path: Path) -> fresh Path
-    effects(pure)
+
 
 pub fn Path.to_string(path: Path) -> fresh String
-    effects(pure)
+
 
 pub fn Path.file_name(path: Path) -> Option<String>
-    effects(pure)
+
 
 pub fn Path.extension(path: Path) -> Option<String>
-    effects(pure)
+
 
 pub fn Path.parent(path: Path) -> Option<Path>
-    effects(pure)
+
 
 pub fn Path.is_absolute(path: Path) -> Bool
-    effects(pure)
+
 
 pub fn Path.with_extension(path: Path, extension: String) -> fresh Path
-    effects(pure)
+
 
 pub fn Path.starts_with(path: Path, base: Path) -> Bool
-    effects(pure)
+
 
 pub fn Path.exists(path: Path) -> Bool
-    effects(native)
+
 
 pub fn Path.is_file(path: Path) -> Bool
-    effects(native)
+
 
 pub fn Path.is_dir(path: Path) -> Bool
-    effects(native)
+
 
 pub fn Path.list_files(path: Path) -> Result<fresh List<String>, FileError>
-    effects(native)
+
 
 pub fn Path.list_paths(path: Path) -> Result<fresh List<Path>, FileError>
-    effects(native)
+
 
 pub fn Path.read_string(path: Path) -> Result<String, FileError>
-    effects(native)
+
 
 pub fn Path.write_string(path: Path, text: String) -> Result<Unit, FileError>
-    effects(native)

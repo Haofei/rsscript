@@ -10,7 +10,6 @@ use serde::Deserialize;
 
 use crate::rust_lower::NativeRustDependency;
 
-use super::contract::collect_package_function_contracts;
 use super::dependency::package_dependency_spec;
 use super::source_set::{
     load_package, load_package_manifest, load_package_with_features, resolve_package_features,
@@ -20,14 +19,14 @@ use super::{
     CARGO_METADATA_TIMEOUT, CARGO_OUTPUT_MAX_BYTES, Manifest, ManifestNativeRust,
     PackageNativeRustAuthorDeclaration, PackageNativeRustCheck, PackageNativeRustReview,
     PackageNativeRustSemanticReview, PackageNativeRustSourceScan, PackageNativeRustUnsafePolicies,
-    PackageReviewFileKind, PackageRisk, PackageSource, canonical_path_label,
-    configure_reduced_build_environment, read_utf8_file_bounded, run_bounded_command,
+    PackageRisk, PackageSource, canonical_path_label, configure_reduced_build_environment,
+    read_utf8_file_bounded, run_bounded_command,
 };
 
 mod bindings;
 
 pub(super) use bindings::{
-    native_binding_interface_sources, package_native_binding_diagnostics, package_native_bindings,
+    native_binding_interface_sources, package_external_bindings, package_native_binding_diagnostics,
 };
 
 const NATIVE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
@@ -119,7 +118,7 @@ fn collect_package_native_plugin_build_dependencies(
                 selected_features,
             ),
             default_features: native.default_features,
-            bindings: package_native_bindings(package_dir)?,
+            bindings: package_external_bindings(package_dir)?,
         });
     }
     for (name, value) in &manifest.dependencies {
@@ -247,7 +246,7 @@ fn package_own_native_rust_dependencies(
         })?;
     let native_path = native.path.as_deref().unwrap_or("native/rust");
     let native_root = confined_native_rust_path(package_dir, native_path)?;
-    let bindings = package_native_bindings(package_dir)?;
+    let bindings = package_external_bindings(package_dir)?;
     let cargo_features =
         selected_native_cargo_features_for_package_features(native, selected_features);
     Ok(vec![NativeRustDependency {
@@ -508,13 +507,8 @@ pub(super) fn confined_native_rust_path(
     Ok(canonical_existing.join(absent_suffix))
 }
 
-fn package_declares_parallel_native_api(sources: &[PackageSource]) -> bool {
-    collect_package_function_contracts(sources, PackageReviewFileKind::Interface)
-        .values()
-        .any(|contract| {
-            contract.effects.iter().any(|effect| effect == "native")
-                && contract.effects.iter().any(|effect| effect == "parallel")
-        })
+fn package_declares_parallel_native_api(_sources: &[PackageSource]) -> bool {
+    false
 }
 
 fn selected_native_cargo_features(manifest: &Manifest, native: &ManifestNativeRust) -> Vec<String> {
@@ -1196,8 +1190,8 @@ cargo_features = ["simd"]
         )
         .expect("oversized binding manifest");
 
-        let error =
-            package_native_bindings(&package_dir).expect_err("oversized manifest must be rejected");
+        let error = package_external_bindings(&package_dir)
+            .expect_err("oversized manifest must be rejected");
         let _ = fs::remove_dir_all(&package_dir);
         assert!(
             error.contains("native binding manifest read exceeded byte limit"),

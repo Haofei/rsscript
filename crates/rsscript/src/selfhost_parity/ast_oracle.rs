@@ -46,18 +46,6 @@ fn push_node(out: &mut String, depth: usize, content: &str, span: &crate::diagno
     push_line(out, depth, &c);
 }
 
-fn feature_name(f: ast::FileFeature) -> &'static str {
-    match f {
-        ast::FileFeature::Local => "local",
-        ast::FileFeature::Native => "native",
-        ast::FileFeature::Unsafe => "unsafe",
-        ast::FileFeature::Async => "async",
-        ast::FileFeature::Device => "device",
-        ast::FileFeature::Ffi => "ffi",
-        ast::FileFeature::Reflection => "reflection",
-    }
-}
-
 fn type_kind_str(k: ast::TypeKind) -> &'static str {
     match k {
         ast::TypeKind::Class => "class",
@@ -101,9 +89,6 @@ fn ast_oracle_dump(file: &str, source: &str) -> String {
     let program = crate::syntax::parse_source_raw(file, source);
     let mut out = String::new();
     push_line(&mut out, 0, "program");
-    for f in &program.features {
-        push_line(&mut out, 1, &format!("feature {}", feature_name(*f)));
-    }
     for item in &program.items {
         dump_item(&mut out, 1, item);
     }
@@ -126,16 +111,6 @@ fn ast_oracle_dump(file: &str, source: &str) -> String {
                 &format!("mapping method={} target={}", m.method, m.target),
             );
         }
-    }
-    for f in &program.unknown_features {
-        push_line(&mut out, 1, &format!("unknown-feature {}", escape(&f.name)));
-    }
-    for f in &program.duplicate_features {
-        push_line(
-            &mut out,
-            1,
-            &format!("duplicate-feature {}", escape(&f.name)),
-        );
     }
     for _ in &program.unknown_top_level_spans {
         push_line(&mut out, 1, "unknown-top-level");
@@ -247,8 +222,8 @@ fn dump_item(out: &mut String, depth: usize, item: &ast::Item) {
 
 fn dump_function(out: &mut String, depth: usize, f: &ast::FunctionDecl) {
     let mut line = format!(
-        "fn name={} public={} async={} native={} has-body={}",
-        f.name, f.is_public, f.is_async, f.is_native, f.has_body
+        "fn name={} public={} async={} has-body={}",
+        f.name, f.is_public, f.is_async, f.has_body
     );
     if f.default_impl_marker {
         line.push_str(" default-impl=true");
@@ -272,22 +247,14 @@ fn dump_function(out: &mut String, depth: usize, f: &ast::FunctionDecl) {
     if let Some(r) = &f.return_ty {
         dump_type_ref(out, depth + 1, r, "return-type", None);
     }
-    for e in &f.effects {
-        match e {
-            ast::EffectDecl::Name(n) => push_line(out, depth + 1, &format!("effect-name {n}")),
-            ast::EffectDecl::Retains(n) => {
-                push_line(out, depth + 1, &format!("effect-retains {n}"))
-            }
-        }
+    for param in &f.retained_params {
+        push_line(out, depth + 1, &format!("retains {param}"));
     }
     for _ in &f.malformed_generic_param_spans {
         push_line(out, depth + 1, "malformed-generic");
     }
     for _ in &f.malformed_param_spans {
         push_line(out, depth + 1, "malformed-param");
-    }
-    for _ in &f.malformed_effect_spans {
-        push_line(out, depth + 1, "malformed-effect");
     }
     push_line(out, depth + 1, "body");
     dump_block(out, depth + 2, &f.body);
@@ -719,7 +686,6 @@ fn dump_expr(out: &mut String, depth: usize, e: &ast::Expr) {
         ast::Expr::Closure {
             params,
             captures,
-            declared_effects,
             explicit,
             body,
             ..
@@ -734,9 +700,6 @@ fn dump_expr(out: &mut String, depth: usize, e: &ast::Expr) {
                     depth + 1,
                     &format!("capture effect={} name={}", c.effect.as_str(), c.name),
                 );
-            }
-            for d in declared_effects {
-                push_line(out, depth + 1, &format!("declared-effect {d}"));
             }
             push_line(out, depth + 1, "body");
             dump_block(out, depth + 2, body);
@@ -793,7 +756,7 @@ fn ast_oracle_dump_tiny_sample_golden() {
     let dump = ast_oracle_dump("samples/tiny.rss", &source);
     let expected = "\
 program
-  fn name=add public=false async=false native=false has-body=true
+  fn name=add public=false async=false has-body=true
     param name=x
       type name=Int fresh=false noescape=false owned=false
     return-type name=Int fresh=false noescape=false owned=false
@@ -865,29 +828,7 @@ fn astdump_shared_body_receiver_call_parity() {
 /// Keep the shared renderer's non-control expression and mutation slice exact.
 /// These nodes are already materialized by `Program`; this gate prevents them
 /// from silently returning to the legacy token renderer.
-#[test]
-fn astdump_shared_body_places_effects_and_expression_statements_parity() {
-    let source = r#"features: local, async
-struct Box {
-    value: Int
-}
 
-async fn update(values: mut List<Int>, box: mut Box, pending: Task<Int>) -> Int {
-    let mut scratch = [1, 2]
-    scratch[0] = await pending?
-    box.value = manage take scratch[0]
-    Log.write(message: read box.value)
-    return !false
-}
-"#;
-    let oracle = ast_oracle_dump("shared-body-places-effects.rss", source);
-    let exe = compile_astdump().expect("rss astdump should compile");
-    let actual = run_astdump(&exe, source).expect("rss astdump should run");
-    assert_eq!(actual, oracle);
-}
-
-/// Control-flow blocks are now rendered from the shared statement arena. Keep
-/// their nesting, empty-free blocks, and representative spans byte-exact.
 #[test]
 fn astdump_shared_body_control_flow_parity() {
     let source = r#"fn choose(flag: Bool, values: List<Int>) -> Int {

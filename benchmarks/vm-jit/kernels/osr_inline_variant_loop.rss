@@ -1,4 +1,3 @@
-features: local
 
 // OSR × inline-leaf-calls (Pending #1) cross-function kernel.
 //

@@ -19,7 +19,7 @@ These items block stronger deployment claims:
    exposed.
 
 The bounded reference VM carries a mandatory context and supports pure
-`trusted-ci` execution with no ambient host authority. AOT and host effects
+runner-specific execution with no ambient host authority. AOT and host effects
 remain fail-closed for that profile. Third-party packages are inspected
 statically and are never built or executed by the supported product.
 

@@ -1,4 +1,3 @@
-features: async
 
 async fn persist_event(
     table: String,

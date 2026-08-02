@@ -1,11 +1,11 @@
 pub fn Option.is_some<T>(value: Option<T>) -> Bool
-    effects(pure)
+
 
 pub fn Option.is_none<T>(value: Option<T>) -> Bool
-    effects(pure)
+
 
 pub fn Option.unwrap_or<T>(value: Option<T>, default: T) -> T
-    effects(pure)
+
 
 pub fn Option.map<T, U>(
     value: Option<T>,

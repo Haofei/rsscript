@@ -79,11 +79,7 @@ pub(super) fn collect_await_site_context(
             if !function.is_async {
                 continue;
             }
-            if function.is_native {
-                context.async_native_callees.insert(function.name.clone());
-            } else {
-                context.async_rss_callees.insert(function.name.clone());
-            }
+            context.async_rss_callees.insert(function.name.clone());
         }
     }
     context

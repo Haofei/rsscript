@@ -1,4 +1,3 @@
-features: async
 
 async fn main() -> Result<Unit, TimerError> {
     let budget = Duration.ms(value: 10)

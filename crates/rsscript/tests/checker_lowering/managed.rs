@@ -89,7 +89,7 @@ fn read_token(token: read Alias) -> Int {
 }
 
 #[test]
-fn rust_lowering_uses_managed_class_for_protocol_and_capability() {
+fn rust_lowering_uses_managed_class_for_protocol_and_external_binding() {
     let source = r#"
 protocol Readable {
     fn get(self: read Self) -> Int
@@ -275,7 +275,6 @@ fn read_owner(session: read Session) -> Unit {
 #[test]
 fn rust_lowering_uses_shared_handles_for_managed_class_mut_parameters() {
     let source = r#"
-features: local
 
 class User {
     id: Int
@@ -307,7 +306,6 @@ fn promote(id: Int) -> Unit {
 #[test]
 fn checker_rejects_effect_wrapped_managed_to_local() {
     let source = r#"
-features: local
 
 struct Widget
 
@@ -334,7 +332,6 @@ fn bad() -> Unit {
 #[test]
 fn checker_rejects_wrapped_managed_bound_as_local() {
     let source = r#"
-features: local
 
 struct Widget
 
@@ -361,7 +358,6 @@ fn bad() -> Unit {
 #[test]
 fn checker_rejects_handle_field_bound_as_local() {
     let source = r#"
-features: local
 
 struct Rules
 struct Holder {
@@ -391,7 +387,6 @@ fn bad() -> Unit {
 #[test]
 fn checker_rejects_wrapped_handle_field_bound_as_local() {
     let source = r#"
-features: local
 
 struct Rules
 struct Holder {
@@ -421,7 +416,6 @@ fn bad() -> Unit {
 #[test]
 fn checker_rejects_retaining_local_inline_field() {
     let source = r#"
-features: local
 
 struct Image
 struct Holder {
@@ -430,7 +424,6 @@ struct Holder {
 struct Cache
 
 fn Cache.store(cache: mut Cache, value: read Image) -> Unit
-    effects(retains(value))
 
 fn make_holder(path: read Path) -> fresh Holder
 
@@ -449,7 +442,6 @@ fn bad_store(cache: mut Cache, path: read Path) -> Unit {
 #[test]
 fn checker_rejects_retaining_local_through_enum_wrapper() {
     let source = r#"
-features: local
 
 struct Image
 struct Holder {
@@ -458,10 +450,8 @@ struct Holder {
 struct Cache
 
 fn Cache.store_option(cache: mut Cache, value: read Option<Image>) -> Unit
-    effects(retains(value))
 
 fn Cache.store_result(cache: mut Cache, value: read Result<Image, StoreError>) -> Unit
-    effects(retains(value))
 
 fn make_holder() -> fresh Holder
 
@@ -486,7 +476,6 @@ fn bad_store(cache: mut Cache) -> Unit {
 #[test]
 fn checker_accepts_managed_closure_capturing_handle_field() {
     let source = r#"
-features: local
 
 class Image
 
@@ -538,7 +527,6 @@ fn bad() -> Unit {
 #[test]
 fn checker_rejects_same_call_manage_conflict_independent_of_argument_order() {
     let source = r#"
-features: local
 
 struct Image {
     width: Int
@@ -569,7 +557,6 @@ fn bad_manage_then_read() -> Unit {
 #[test]
 fn review_reports_local_manage_boundary_changes() {
     let old_source = r#"
-features: local
 
 struct Image {
     pixels: Buffer
@@ -580,7 +567,6 @@ fn publish(path: read Path) -> Unit {
 }
 "#;
     let new_source = r#"
-features: local
 
 struct Image {
     pixels: Buffer
@@ -657,7 +643,6 @@ struct Image
 struct Callback
 
 fn store(callback: read Callback) -> Unit
-    effects(retains(callback))
 
 fn apply(callback: noescape Fn()) -> Unit {
     callback()

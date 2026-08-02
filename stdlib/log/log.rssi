@@ -1,16 +1,14 @@
-features: native
 
 pub fn Log.write(message: String) -> Unit
-    effects(native)
+
 
 pub fn Log.write_json(value: JsonValue) -> Unit
-    effects(native)
+
 
 pub fn Log.error(message: String) -> Unit
-    effects(native)
+
 
 pub fn Log.error_json(value: JsonValue) -> Unit
-    effects(native)
+
 
 pub fn Log.trace(event: String, message: String) -> Unit
-    effects(native)

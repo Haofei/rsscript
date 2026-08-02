@@ -238,7 +238,6 @@ fn main() -> Unit {
 #[test]
 fn rust_lowering_maps_pipeline_core_calls_to_runtime_hooks() {
     let source = r#"
-features: local
 
 struct CountBox {
     value: Int
@@ -292,7 +291,6 @@ fn main() -> Result<Unit, String> {
 #[test]
 fn rust_lowered_pipeline_package_compiles() {
     let source = r#"
-features: local
 
 fn parse_positive(value: Int) -> Result<fresh Int, String> {
     if value < 0 {
@@ -760,7 +758,6 @@ fn read_name(text: read String) -> Result<String, JsonError> {
 #[test]
 fn rust_lowering_maps_csv_core_calls_to_runtime_hooks() {
     let source = r#"
-features: local
 
 fn read_name(path: read Path) -> Result<String, CsvError> {
     local buffer = RowBuffer.new(size: 4096)
@@ -1018,7 +1015,6 @@ fn main() -> Unit {
 #[test]
 fn rust_lowering_maps_string_concat_to_rust_std_expression() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let message = String.concat(left: read "hello ", right: read "world")
@@ -1239,7 +1235,6 @@ fn main() -> Result<Unit, String> {
 #[test]
 fn rust_lowering_maps_stdlib_facade_calls_to_runtime_hooks() {
     let source = r#"
-features: native, local
 
 fn inspect_file(path: read Path, bytes: read Bytes) -> Result<String, FileError> {
     let exists = Directory.exists(path: read path)
@@ -1369,7 +1364,6 @@ fn main() -> Unit {
 #[test]
 fn rustc_diagnostics_map_back_to_rsscript_source_spans() {
     let source = r#"
-features: local
 
 struct Session {
     id: Int
@@ -1497,14 +1491,12 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"#;
 #[test]
 fn rust_lowering_maps_protocol_static_dispatch_to_rust_traits() {
     let source = r#"
-features: local
 
 protocol Writer {
     fn write(
         self: mut Self,
         message: read String,
     ) -> Unit
-        effects(retains(message))
 }
 
 struct BufferWriter {
@@ -1515,7 +1507,6 @@ fn BufferWriter.write(
     self: mut BufferWriter,
     message: read String,
 ) -> Unit
-    effects(retains(message))
 {
     Log.write(message: read message)
 }
@@ -1546,16 +1537,13 @@ fn review_json_uses_protocol_shape() {
     let old_source = r#"
 
 fn render(path: read Path) -> Image
-    effects(no_panic)
 {
     Image.load(path: read path)
 }
 "#;
     let new_source = r#"
-features: local
 
 fn render(path: take Path) -> fresh Image
-    effects(retains(path))
 {
     Image.load(path: read path)
 }
@@ -1609,16 +1597,13 @@ fn review_reports_protocol_impl_mapping_changes() {
     let old_source = r#"
 protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
-        effects(retains(message))
 }
 
 struct BufferWriter
 
 fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
-    effects(retains(message))
 
 fn BufferWriter.audit_write(self: mut BufferWriter, message: read String) -> Unit
-    effects(retains(message))
 
 impl Writer for BufferWriter {
     write = BufferWriter.write
@@ -1627,16 +1612,13 @@ impl Writer for BufferWriter {
     let new_source = r#"
 protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
-        effects(retains(message))
 }
 
 struct BufferWriter
 
 fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
-    effects(retains(message))
 
 fn BufferWriter.audit_write(self: mut BufferWriter, message: read String) -> Unit
-    effects(retains(message))
 
 impl Writer for BufferWriter {
     write = BufferWriter.audit_write
@@ -1664,7 +1646,6 @@ impl Writer for BufferWriter {
 #[test]
 fn review_map_marks_noescape_callback_calls_review_required_not_unknown() {
     let source = r#"
-features: local
 
 fn apply(callback: noescape Fn()) -> Unit {
     callback()
@@ -1695,7 +1676,6 @@ fn apply(callback: noescape Fn()) -> Unit {
 #[test]
 fn review_map_marks_local_closure_direct_calls_review_required_not_unknown() {
     let source = r#"
-features: local
 
 fn run() -> Unit {
     local callback = || {
@@ -1808,7 +1788,6 @@ protocol Writer {
         self: mut Self,
         message: read String,
     ) -> Unit
-        effects(retains(message))
 }
 
 struct BufferWriter
@@ -1817,7 +1796,6 @@ fn BufferWriter.write(
     self: mut BufferWriter,
     message: read String,
 ) -> Unit
-    effects(retains(message))
 {
     Log.write(message: read message)
 }
@@ -1837,7 +1815,6 @@ fn rust_lowering_builtin_value_clone_uses_rust_clone() {
     // lower to a dangling `List_clone`-style call (rustc E0425). It must lower to
     // Rust's `.clone()`, which these types support.
     let source = r#"
-features: local
 
 fn dup_list(xs: read List<Int>) -> fresh List<Int> {
     return xs.clone()

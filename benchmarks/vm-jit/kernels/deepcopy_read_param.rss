@@ -1,4 +1,3 @@
-features: local
 
 // Phase 2 measurement kernel: a non-mut nested-struct param passed to a READ-ONLY
 // helper in a hot loop. Under the eager scheme `sum_reads` deep-copies all three

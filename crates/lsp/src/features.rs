@@ -77,10 +77,7 @@ pub(crate) const TOKEN_LOCAL: u32 = 4;
 pub(crate) const TOKEN_FIELD: u32 = 5;
 pub(crate) const TOKEN_VARIANT: u32 = 6;
 pub(crate) const TOKEN_RESOURCE: u32 = 7;
-pub(crate) const TOKEN_EFFECT: u32 = 8;
-pub(crate) const TOKEN_CAPABILITY: u32 = 9;
-pub(crate) const TOKEN_NATIVE: u32 = 10;
-pub(crate) const TOKEN_KEYWORD: u32 = 11;
+pub(crate) const TOKEN_KEYWORD: u32 = 8;
 
 pub(crate) const MOD_DEFINITION: u32 = 1;
 pub(crate) const MOD_READONLY: u32 = 1 << 1;
@@ -106,9 +103,6 @@ pub(crate) fn semantic_tokens_legend() -> SemanticTokensLegend {
             SemanticTokenType::PROPERTY,
             SemanticTokenType::ENUM_MEMBER,
             SemanticTokenType::new("resource"),
-            SemanticTokenType::new("effect"),
-            SemanticTokenType::new("capability"),
-            SemanticTokenType::new("native"),
             SemanticTokenType::KEYWORD,
         ],
         token_modifiers: vec![
@@ -270,11 +264,9 @@ pub(crate) fn push_keyword_tokens(source: &str, raw: &mut Vec<RawSemanticToken>)
 pub(crate) fn semantic_keyword_token(word: &str) -> Option<(u32, u32)> {
     match word {
         "resource" => Some((TOKEN_RESOURCE, 0)),
-        "effects" | "effect" => Some((TOKEN_EFFECT, 0)),
         "read" | "mut" | "take" | "fresh" | "owned" | "noescape" | "with" => {
-            Some((TOKEN_CAPABILITY, 0))
+            Some((TOKEN_KEYWORD, 0))
         }
-        "native" | "unsafe" => Some((TOKEN_NATIVE, 0)),
         "async" => Some((TOKEN_KEYWORD, MOD_ASYNC)),
         "fn" | "struct" | "sum" | "protocol" | "const" | "let" | "return" | "if" | "else"
         | "match" | "while" | "for" | "in" | "as" | "await" | "task_group" | "impl" => {

@@ -1,4 +1,3 @@
 pub fn Url.from_string(value: String) -> fresh Url
 
 pub fn Url.to_string(url: Url) -> fresh String
-    effects(pure)

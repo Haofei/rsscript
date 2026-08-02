@@ -1,6 +1,5 @@
 // expect: RS0601
 
-features: local
 
 struct Boxed {
     value: Int

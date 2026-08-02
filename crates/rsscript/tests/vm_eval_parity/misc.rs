@@ -43,7 +43,6 @@ fn parity_named_function_value_as_callback() {
     // A named function passed where a `Fn` is expected desugars to a forwarding
     // closure, so the VM and compiled backend filter identically.
     let source = r#"
-features: local
 
 fn is_even(x: read Int) -> Bool {
     return x % 2 == 0
@@ -98,7 +97,6 @@ fn parity_inline_manage_of_fresh_rvalue() {
     // binding). The VM and compiled backend must agree on the managed value's
     // observable field.
     let source = r#"
-features: local
 
 struct Tally {
     value: Int
@@ -438,7 +436,6 @@ fn main() -> Unit {
 #[test]
 fn parity_encoding_intrinsics() {
     let source = r#"
-features: native
 
 fn main() -> Unit {
     let encoded = Base64.encode(value: read "rsscript")
@@ -520,7 +517,6 @@ fn parity_borrowed_match_payload_used_by_value() {
     // now rebinds the payload to an owned value (`*x` for Copy, `x.clone()`
     // otherwise), so the AOT backend compiles and matches the interpreter.
     let source = r#"
-features: local
 
 fn int_or(o: read Option<Int>, fallback: Int) -> Int {
     match o {
@@ -619,7 +615,6 @@ fn main() -> Unit {
 fn parity_pipeline_intrinsics() {
     common::run_with_large_stack(|| {
         let source = r#"
-features: local
 
 fn main() -> Unit {
     let numbers: List<Int> = [1, 2, 3, 4]
@@ -726,7 +721,6 @@ fn main() -> Unit {
 #[test]
 fn parity_deque_intrinsics() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     local deque = Deque<Int>.new()
@@ -1182,9 +1176,7 @@ fn parity_list_match_patterns() {
     // List slice patterns lower to a length test plus `ListGet`/`List.slice` in
     // the VM and to native Rust slice patterns (with owned rebindings) in the
     // compiled backend; both must dispatch and bind identically.
-    let source = r#"features: local
-
-fn head_tail(xs: read List<Int>) -> fresh String {
+    let source = r#"fn head_tail(xs: read List<Int>) -> fresh String {
     match read xs {
         [] => { return "empty" }
         [only] => { return String.concat(left: read "one:", right: read String.from_int(value: only)) }
@@ -1225,14 +1217,13 @@ fn main() -> Unit {
 }
 
 #[test]
-fn parity_capability_dynamic_dispatch() {
-    // Capability objects (spec §20.2-2): `Capability<Protocol>` and the
-    // `capability Protocol` keyword form dispatch a protocol method by the
-    // value's runtime type. The reg-VM must select the same concrete impl as the
+fn parity_external_binding_dynamic_dispatch() {
+    // Dyn values (spec §20.2-2): `Dyn<Protocol>` and the
+    // `Dyn<Protocol>` form dispatches a protocol method by the value's runtime
+    // type. The reg-VM must select the same concrete impl as the
     // compiled backend's closed-world enum dispatch (regression for the VM
     // CallDynamic path; previously the VM returned Unit).
     let source = r#"
-features: local
 
 protocol Greeter {
     fn greet(self: read Self) -> fresh String
@@ -1253,23 +1244,23 @@ fn French.greet(self: read French) -> fresh String {
 impl Greeter for English { greet = English.greet }
 impl Greeter for French { greet = French.greet }
 
-fn say(who: read capability Greeter) -> fresh String {
+fn say(who: read Dyn<Greeter>) -> fresh String {
     return Greeter.greet(self: read who)
 }
 
 fn main() -> Unit {
     local e = English(x: 1)
     local f = French(x: 2)
-    local a: Capability<Greeter> = Capability<Greeter>.from(value: take e)
-    local b: Capability<Greeter> = Capability<Greeter>.from(value: take f)
+    local a: Dyn<Greeter> = Dyn<Greeter>.from(value: take e)
+    local b: Dyn<Greeter> = Dyn<Greeter>.from(value: take f)
     Log.write(message: read say(who: read a))
     Log.write(message: read say(who: read b))
     return Unit
 }
 "#;
     common::assert_vm_eval_matches_backend(
-        "parity-capability-dispatch.rss",
-        "rsscript_parity_capability_dispatch",
+        "parity-external_binding-dispatch.rss",
+        "rsscript_parity_external_binding_dispatch",
         source,
     );
 }

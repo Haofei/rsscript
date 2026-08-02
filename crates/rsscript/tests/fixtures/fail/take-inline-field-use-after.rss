@@ -1,5 +1,4 @@
 // expect: RS0401
-features: local
 
 struct Image
 

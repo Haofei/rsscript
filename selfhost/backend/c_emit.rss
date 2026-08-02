@@ -1,4 +1,3 @@
-features: local
 // Stage 4 bootstrap C emitter, scalar ABI slice.
 //
 // Input is canonical rss-ir-v1 text, never source RSS. This first executable

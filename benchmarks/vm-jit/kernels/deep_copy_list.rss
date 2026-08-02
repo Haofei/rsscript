@@ -1,4 +1,3 @@
-features: local
 
 // Slow path: deep value copy (Rc/clone traffic). Each iteration makes an
 // independent copy of a 256-element list via List.slice(full range), exercising

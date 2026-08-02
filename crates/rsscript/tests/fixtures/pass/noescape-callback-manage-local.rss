@@ -1,4 +1,3 @@
-features: local
 
 struct ImageData {
     size: Int
@@ -9,7 +8,7 @@ struct Cache {
 }
 
 fn Cache.store(cache: mut Cache, image: ImageData) -> Unit
-    effects(retains(image)) {
+    retains(image) {
     return Unit
 }
 

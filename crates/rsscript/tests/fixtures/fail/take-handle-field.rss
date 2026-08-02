@@ -1,5 +1,4 @@
 // expect: RS0901
-features: local
 
 struct Rule {
     name: String

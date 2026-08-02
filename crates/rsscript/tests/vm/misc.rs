@@ -5,7 +5,6 @@ use super::*;
 #[test]
 fn reg_vm_runs_math_random_uuid_and_modulo_like_interpreter() {
     let source = r#"
-features: native
 
 fn float_mix(value: Float, salt: Float) -> Float {
     return value * 2.0 + salt
@@ -85,7 +84,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_format_date_and_int_bit_helpers_like_backend() {
     let source = r#"
-features: native
 
 fn main() -> Unit {
     Log.write(message: read String.format(template: read "hello {}, {{}} {}", args: read ["rss", "vm"]))
@@ -157,7 +155,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_basic_args_assert_and_int_intrinsics_like_interpreter() {
     let source = r#"
-features: native
 
 fn main() -> Unit {
     let args = Args.all()
@@ -203,7 +200,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_duration_and_url_intrinsics_like_interpreter() {
     let source = r#"
-features: native
 
 fn main() -> Unit {
     let short = Duration.ms(value: 750)
@@ -226,7 +222,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_hash_intrinsics_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let digest = Hash.sha256_string(value: read "abc")
@@ -278,7 +273,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_encoding_intrinsics_like_interpreter() {
     let source = r#"
-features: native
 
 fn main() -> Unit {
     let encoded = Base64.encode(value: read "rsscript")
@@ -353,7 +347,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_pure_path_intrinsics_like_interpreter() {
     let source = r#"
-features: native
 
 fn main() -> Unit {
     let root = Path.from_string(value: read "fixtures")
@@ -459,7 +452,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_log_and_workspace_intrinsics_like_interpreter() {
     let source = r#"
-features: native, local
 
 fn main() -> Unit {
     Log.write(message: read "stdout line")
@@ -523,7 +515,6 @@ fn main() -> Result<Unit, String> {
 #[test]
 fn reg_vm_runs_pipeline_chain_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let mut index = 0
@@ -565,7 +556,6 @@ fn main() -> Unit {
 #[test]
 fn vm_runs_pipeline_chain_like_interpreter() {
     let source = r#"
-features: local
 
 struct Acc {
     total: Int
@@ -729,7 +719,6 @@ fn main() -> Result<Unit, JsonError> {
 #[test]
 fn reg_vm_runs_cancellation_and_stream_intrinsics_like_interpreter() {
     let source = r#"
-features: native, local, async
 
 async fn main() -> Result<Unit, ChannelError> {
     local source = CancellationSource.new()
@@ -790,7 +779,6 @@ async fn main() -> Result<Unit, ChannelError> {
 #[test]
 fn reg_vm_runs_http_request_builder_intrinsics_like_interpreter() {
     let source = r#"
-features: native, local
 
 fn main() -> HttpRequest {
     let url = Url.from_string(value: read "https://example.test/api")
@@ -814,7 +802,6 @@ fn main() -> HttpRequest {
 #[test]
 fn reg_vm_runs_runtime_facade_batch_like_interpreter() {
     let source = r#"
-features: native, local, async
 
 async fn main() -> Result<Unit, String> {
     match Channel.bounded<Int>(capacity: 1) {
@@ -895,7 +882,6 @@ fn reg_vm_runs_tempdir_and_path_fs_intrinsics_like_interpreter() {
     let file_arg = file_path.display().to_string();
 
     let source = r#"
-features: local
 
 fn main() -> Result<Unit, FileError> {
     let root = Path.from_string(value: read Args.get_or_default(index: 0, default: read "target/rss-vm-tempdir"))
@@ -958,7 +944,6 @@ fn reg_vm_runs_file_core_intrinsics_like_interpreter() {
     let root_arg = root.display().to_string();
 
     let source = r#"
-features: local
 
 fn main() -> Result<Unit, FileError> {
     let root = Path.from_string(value: read Args.get_or_default(index: 0, default: read "target/rss-vm-file-core"))
@@ -1023,7 +1008,6 @@ fn reg_vm_runs_directory_and_file_stream_intrinsics_like_interpreter() {
     let root_arg = root.display().to_string();
 
     let source = r#"
-features: local
 
 fn main() -> Result<Unit, FileError> {
     let root = Path.from_string(value: read Args.get_or_default(index: 0, default: read "target/rss-vm-directory"))
@@ -1135,7 +1119,6 @@ fn reg_vm_runs_env_path_and_file_extra_intrinsics_like_interpreter() {
     let root_arg = root.display().to_string();
 
     let source = r#"
-features: async, native, local
 
 async fn main() -> Result<Unit, FileError> {
     let current = Env.current_dir()?
@@ -1215,7 +1198,6 @@ async fn main() -> Result<Unit, FileError> {
 #[test]
 fn reg_vm_runs_time_and_fallible_pipeline_intrinsics_like_interpreter() {
     let source = r#"
-features: native
 
 fn main() -> Result<Unit, String> {
     let start = Clock.now()

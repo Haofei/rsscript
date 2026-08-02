@@ -1,4 +1,3 @@
-features: local
 // Declaration-level diagnostics over the shared Program. These rules do not
 // inspect token ranges or function bodies, so keeping them here prevents the
 // checker driver from becoming a second declaration parser.
@@ -17,9 +16,7 @@ fn collect_program_declaration_diagnostics(program: Program, diagnostics: mut Di
     collect_program_protocol_contract_diagnostics(program, diagnostics: mut diagnostics)
     collect_program_fresh_return_diagnostics(program, diagnostics: mut diagnostics)
     collect_program_resource_generic_diagnostics(program, diagnostics: mut diagnostics)
-    collect_program_effect_diagnostics(program, diagnostics: mut diagnostics)
     collect_program_retains_diagnostics(program, diagnostics: mut diagnostics)
-    collect_program_removed_effect_diagnostics(program, diagnostics: mut diagnostics)
     collect_program_removed_share_diagnostics(program, diagnostics: mut diagnostics)
     collect_program_lower_name_diagnostics(program, diagnostics: mut diagnostics)
     collect_program_duplicate_declaration_diagnostics(program, diagnostics: mut diagnostics)
@@ -376,75 +373,31 @@ fn collect_program_signature_diagnostics(program: Program, diagnostics: mut Diag
     return Unit
 }
 
-// RS0004: the parser materializes only valid bare effect names here. `retains`
-// is represented separately and checked by the declaration contract below.
-fn collect_program_effect_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
-    let mut itemIndex = 0
-    while itemIndex < Program.len(self: program) {
-        let item = List.get<Item>(list: program.items, index: itemIndex)
-        if item.kind == ITEM_FUNCTION {
-            let mut effectIndex = 0
-            while effectIndex < List.len(list: item.effects) {
-                let effect = List.get<EffectName>(list: item.effects, index: effectIndex)
-                let invalid = effect.isRetains == false && (effect.name == "fresh" || (is_removed_declaration_effect(name: effect.name) == false && is_valid_declaration_effect(name: effect.name) == false))
-                if invalid {
-                    DiagnosticBag.add(self: mut diagnostics, code: "RS0004", line: item.line, column: item.column, length: item.length)
-                }
-                effectIndex = effectIndex + 1
-            }
-        }
-        itemIndex = itemIndex + 1
-    }
-    return Unit
-}
-
 // RS0007: `retains(p)` must name a declared, non-Copy parameter.
 fn collect_program_retains_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
     let mut itemIndex = 0
     while itemIndex < Program.len(self: program) {
         let item = List.get<Item>(list: program.items, index: itemIndex)
         if item.kind == ITEM_FUNCTION {
-            let mut effectIndex = 0
-            while effectIndex < List.len(list: item.effects) {
-                let effect = List.get<EffectName>(list: item.effects, index: effectIndex)
-                if effect.isRetains {
-                    let mut paramIndex = 0
-                    let mut matched = false
-                    while paramIndex < List.len(list: item.params) && !matched {
-                        let param = List.get<Param>(list: item.params, index: paramIndex)
-                        if param.name == effect.target {
-                            matched = true
-                            if param.isCopy {
-                                DiagnosticBag.add(self: mut diagnostics, code: "RS0007", line: param.line, column: param.column, length: param.length)
-                            }
+            let mut retainedIndex = 0
+            while retainedIndex < List.len(list: item.retainedParams) {
+                let target = List.get<String>(list: item.retainedParams, index: retainedIndex)
+                let mut paramIndex = 0
+                let mut matched = false
+                while paramIndex < List.len(list: item.params) && !matched {
+                    let param = List.get<Param>(list: item.params, index: paramIndex)
+                    if param.name == target {
+                        matched = true
+                        if param.isCopy {
+                            DiagnosticBag.add(self: mut diagnostics, code: "RS0007", line: param.line, column: param.column, length: param.length)
                         }
-                        paramIndex = paramIndex + 1
                     }
-                    if !matched {
-                        DiagnosticBag.add(self: mut diagnostics, code: "RS0007", line: item.line, column: item.column, length: item.length)
-                    }
+                    paramIndex = paramIndex + 1
                 }
-                effectIndex = effectIndex + 1
-            }
-        }
-        itemIndex = itemIndex + 1
-    }
-    return Unit
-}
-
-// RS0012: removed runtime effects are declaration contracts, not body checks.
-fn collect_program_removed_effect_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
-    let mut itemIndex = 0
-    while itemIndex < Program.len(self: program) {
-        let item = List.get<Item>(list: program.items, index: itemIndex)
-        if item.kind == ITEM_FUNCTION {
-            let mut effectIndex = 0
-            while effectIndex < List.len(list: item.effects) {
-                let effect = List.get<EffectName>(list: item.effects, index: effectIndex)
-                if effect.isRetains == false && is_removed_declaration_effect(name: effect.name) {
-                    DiagnosticBag.add(self: mut diagnostics, code: "RS0012", line: item.line, column: item.column, length: item.length)
+                if !matched {
+                    DiagnosticBag.add(self: mut diagnostics, code: "RS0007", line: item.line, column: item.column, length: item.length)
                 }
-                effectIndex = effectIndex + 1
+                retainedIndex = retainedIndex + 1
             }
         }
         itemIndex = itemIndex + 1

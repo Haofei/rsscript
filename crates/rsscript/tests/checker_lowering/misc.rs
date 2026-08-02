@@ -399,7 +399,7 @@ fn main() -> Int {
 }
 
 #[test]
-fn checker_rejects_capability_object_without_visible_protocol_impl() {
+fn checker_rejects_external_binding_object_without_visible_protocol_impl() {
     let source = r#"
 protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
@@ -410,16 +410,16 @@ struct NotWriter {
 }
 
 fn write_dynamic(writer: take NotWriter) -> Unit {
-    local cap: Capability<Writer> = Capability<Writer>.from(value: take writer)
+    local cap: Dyn<Writer> = Dyn<Writer>.from(value: take writer)
 }
 "#;
-    let diagnostics = analyze_source_with_core("capability-reject.rss", source);
+    let diagnostics = analyze_source_with_core("external_binding-reject.rss", source);
 
     assert!(
         diagnostics
             .iter()
             .any(|diagnostic| diagnostic.code == "RS0032"
-                && diagnostic.summary.contains("Capability<Writer>")),
+                && diagnostic.summary.contains("Dyn<Writer>")),
         "{diagnostics:?}"
     );
 }
@@ -505,7 +505,6 @@ fn bad(path: read Path) -> Unit {
 #[test]
 fn rust_lowering_rejects_unimplemented_declaration_calls_before_generation() {
     let source = r#"
-features: local
 
 struct Meter {
     value: Int
@@ -766,16 +765,13 @@ fn review_reports_api_contract_changes() {
     let old_source = r#"
 
 fn render(path: read Path) -> Image
-    effects(no_panic)
 {
     Image.load(path: read path)
 }
 "#;
     let new_source = r#"
-features: local
 
 fn render(path: take Path, width: Int) -> fresh Image
-    effects(retains(path))
 {
     Image.load(path: read path)
 }
@@ -844,7 +840,6 @@ fn review_reports_removed_guarantees() {
     let old_source = r#"
 
 fn checksum(data: read Bytes) -> UInt64
-    effects(noalloc, no_panic, pure)
 {
     Bytes.checksum(data: read data)
 }
@@ -852,7 +847,6 @@ fn checksum(data: read Bytes) -> UInt64
     let new_source = r#"
 
 fn checksum(data: read Bytes) -> UInt64
-    effects(no_panic)
 {
     Bytes.checksum(data: read data)
 }
@@ -948,7 +942,6 @@ pub fn field_string(
 "#;
     let program = parse_source("json.rssi", source);
 
-    assert!(program.features.is_empty());
     assert_eq!(program.items.len(), 4);
     assert!(matches!(&program.items[0], Item::Type(type_decl) if type_decl.name == "JsonValue"));
     assert!(
@@ -971,7 +964,6 @@ protocol Writer {
         self: mut Self,
         message: read String,
     ) -> Unit
-        effects(retains(message))
 }
 
 struct BufferWriter
@@ -1065,14 +1057,12 @@ fn write_line<W: MissingWriter>(
 #[test]
 fn parser_rejects_namespace_interface_shorthand() {
     let source = r#"
-features: native
 namespace Json
 
 opaque struct JsonValue
 opaque struct JsonError
 
-native fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
-    effects(native)
+fn parse(text: read String) -> Result<fresh JsonValue, JsonError>
 "#;
     let program = parse_source("json.rssi", source);
 

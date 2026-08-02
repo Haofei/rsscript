@@ -1,5 +1,4 @@
 // expect: RS0202
-features: local
 
 struct Cache {
     data: Map<String, String>

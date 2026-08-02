@@ -5,7 +5,6 @@ use super::*;
 #[test]
 fn rust_lowering_maps_take_consume_core_calls_to_runtime_hooks() {
     let source = r#"
-features: local
 
 fn consume_list(list: take List<Int>) -> Unit {
     List.consume(list: take list)
@@ -26,7 +25,6 @@ fn consume_buffer(buffer: take Buffer) -> Unit {
 #[test]
 fn rust_lowering_maps_file_read_into_and_buffer_reuse_to_runtime_hooks() {
     let source = r#"
-features: local
 
 fn copy_file(input: read Path, output: read Path) -> Result<Unit, FileError> {
     local buffer = Buffer.new(size: 8192)
@@ -93,7 +91,6 @@ fn wrap(value: read String) -> fresh Names {
 #[test]
 fn rust_lowering_maps_string_and_bytes_views_to_borrowed_slices() {
     let source = r#"
-features: local
 
 fn parse_header(line: read String, bytes: read Bytes, buffer: read Buffer) -> Result<String, Unit> {
     let head = String.view(value: read line, start: 0, len: 12)
@@ -153,7 +150,6 @@ fn is_unknown(value: read String) -> Bool {
 #[test]
 fn rust_lowering_emits_machine_readable_source_map() {
     let source = r#"
-features: local
 
 struct Session {
     id: Int
@@ -194,9 +190,8 @@ pub fn make_session(id: Int) -> Unit {
 }
 
 #[test]
-fn rust_lowering_resolves_receiver_calls_through_capability_object_protocol() {
+fn rust_lowering_resolves_receiver_calls_through_external_binding_object_protocol() {
     let source = r#"
-features: local
 
 protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
@@ -215,14 +210,14 @@ impl Writer for BufferWriter {
 }
 
 fn write_dynamic(writer: take BufferWriter, message: read String) -> Unit {
-    local cap: Capability<Writer> = Capability<Writer>.from(value: take writer)
+    local cap: Dyn<Writer> = Dyn<Writer>.from(value: take writer)
     mut cap.write(message: read message)
 }
 "#;
-    let rust =
-        lower_source_to_rust("capability-receiver-lower.rss", source).expect("source should lower");
+    let rust = lower_source_to_rust("external_binding-receiver-lower.rss", source)
+        .expect("source should lower");
 
-    assert!(rust.contains("<CapabilityWriter as Writer>::write(&mut cap, message);"));
+    assert!(rust.contains("<ExternalBindingWriter as Writer>::write(&mut cap, message);"));
 }
 
 #[test]
@@ -289,7 +284,6 @@ fn main() -> String {
 #[test]
 fn rust_lowering_materializes_constructor_read_fields_as_owned_values() {
     let source = r#"
-features: local
 
 struct Inner {
     name: String
@@ -318,7 +312,6 @@ fn make_outer(name: read String, label: read String) -> fresh Outer {
 #[test]
 fn rust_lowering_maps_read_and_mut_effects_to_rust_borrows() {
     let source = r#"
-features: local
 
 struct Meter {
     value: Int
@@ -350,19 +343,16 @@ pub fn run() -> Int {
 fn checker_reports_malformed_effect_declarations_as_unsupported() {
     let source = r#"
 fn empty_effect_slot(value: read String) -> Unit
-    effects(no_panic,, native)
 {
     return Unit
 }
 
 fn empty_retains(value: read String) -> Unit
-    effects(retains())
 {
     return Unit
 }
 
 fn unknown_effect_call(value: read String) -> Unit
-    effects(custom(value))
 {
     return Unit
 }
@@ -382,7 +372,6 @@ fn unknown_effect_call(value: read String) -> Unit
 fn checker_rejects_unknown_effect_names() {
     let source = r#"
 fn typo(value: read String) -> Unit
-    effects(retian)
 {
     return Unit
 }
@@ -400,7 +389,6 @@ fn typo(value: read String) -> Unit
 fn checker_rejects_user_authored_suspends_effect() {
     let source = r#"
 fn wait() -> Unit
-    effects(suspends)
 {
     return Unit
 }
@@ -447,7 +435,6 @@ protocol Writer {
         self: mut Self,
         message: read String,
     ) -> Unit
-        effects(retains(message))
 }
 
 struct BufferWriter

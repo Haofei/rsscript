@@ -5,7 +5,6 @@ use super::*;
 #[test]
 fn fresh_return_allows_inline_field_of_clean_local() {
     let source = r#"
-features: local
 
 struct Image {
     pixels: Buffer
@@ -18,9 +17,11 @@ struct DecodeResult {
     metadata: Metadata
 }
 
-fn decode(path: read Path) -> fresh DecodeResult
+fn decode(path: read String) -> fresh DecodeResult {
+    return DecodeResult(image: Image(pixels: Buffer.new(size: 0)), metadata: Metadata())
+}
 
-fn load_image(path: read Path) -> fresh Image {
+fn load_image(path: read String) -> fresh Image {
     local decoded = decode(path: read path)
     return decoded.image
 }
@@ -32,7 +33,6 @@ fn load_image(path: read Path) -> fresh Image {
 #[test]
 fn fresh_return_allows_wrapped_inline_field_of_clean_local() {
     let source = r#"
-features: local
 
 struct Image {
     pixels: Buffer
@@ -46,9 +46,11 @@ struct DecodeResult {
     metadata: Metadata
 }
 
-fn decode(path: read Path) -> fresh DecodeResult
+fn decode(path: read String) -> fresh DecodeResult {
+    return DecodeResult(image: Image(pixels: Buffer.new(size: 0)), metadata: Metadata())
+}
 
-fn load_image(path: read Path) -> Result<fresh Image, ImageError> {
+fn load_image(path: read String) -> Result<fresh Image, ImageError> {
     local decoded = decode(path: read path)
     return Ok(read decoded.image)
 }
@@ -63,7 +65,6 @@ fn load_image(path: read Path) -> Result<fresh Image, ImageError> {
 #[test]
 fn fresh_return_rejects_handle_field_of_clean_local() {
     let source = r#"
-features: local
 
 struct Image {
     pixels: Buffer

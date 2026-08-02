@@ -38,4 +38,3 @@ fn main() -> Unit {
     Log.write(message: String.from_int(value: total))
     return Unit
 }
-

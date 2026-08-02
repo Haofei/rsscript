@@ -1,11 +1,11 @@
 fn cheap_id(value: Int) -> Int
-    effects(noalloc)
+
 {
     return value
 }
 
 fn cheap_wrapper(value: Int) -> Int
-    effects(noalloc)
+
 {
     return cheap_id(value)
 }

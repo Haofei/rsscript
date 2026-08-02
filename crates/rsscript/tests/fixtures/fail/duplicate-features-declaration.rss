@@ -1,6 +1,4 @@
 // expect: RS0006
-features: local
-features: native
 
 fn duplicate_features() -> Unit {
     return Unit

@@ -214,7 +214,7 @@ impl RustLowerer<'_> {
                     generated: generated.clone(),
                     ..Default::default()
                 });
-                if self.is_native_boundary_call(callee) {
+                if self.is_external_boundary_call(callee) {
                     self.source_map.push(RustSourceMapEntry {
                         kind: "native_call".to_string(),
                         source: span.clone(),

@@ -1,4 +1,3 @@
-features: async, local
 
 async fn produce(sender: Sender<Int>) -> Result<Unit, ChannelError> {
     local first = 1

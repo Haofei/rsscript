@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
+    "crates/rsscript-semantics",
+    "crates/rsscript-lowering",
     "crates/rsscript",
     "crates/lsp",
     "crates/runtime",

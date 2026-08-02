@@ -11,27 +11,12 @@ impl RegVm {
     pub(super) fn new(
         unit: Rc<RegUnit>,
         args: Vec<String>,
-        native_bindings: HashMap<String, NativeInterpreterFn>,
-    ) -> Self {
-        Self::new_with_context(
-            unit,
-            args,
-            native_bindings,
-            crate::ExecutionContext::trusted_local(),
-        )
-    }
-
-    pub(super) fn new_with_context(
-        unit: Rc<RegUnit>,
-        args: Vec<String>,
-        native_bindings: HashMap<String, NativeInterpreterFn>,
-        execution_context: crate::ExecutionContext,
+        external_bindings: HashMap<String, ExternalFunction>,
     ) -> Self {
         Self {
             unit,
             args,
-            native_bindings,
-            execution_context,
+            external_bindings,
             stdout: String::new(),
             stream_stdout: false,
             stream_flushed: 0,
@@ -91,24 +76,6 @@ impl RegVm {
     /// unaffected and only agent-facing entry points need call this).
     pub(super) fn set_limits(&mut self, limits: VmLimits) {
         self.limits = limits;
-    }
-
-    pub(super) fn authorize_host_authority(
-        &self,
-        authority: crate::HostAuthority,
-    ) -> Result<(), EvalError> {
-        // Restricted VM execution is deny-by-default until each intrinsic
-        // validates its concrete path, endpoint, executable, or database id.
-        // A coarse category grant alone must never authorize arbitrary values.
-        if !self.execution_context.is_ambient() {
-            return Err(EvalError::Runtime(format!(
-                "execution scope {} denied {authority:?} host authority: scoped intrinsic authorization is required",
-                self.execution_context.scope_id().get()
-            )));
-        }
-        self.execution_context
-            .authorize_host_authority(authority)
-            .map_err(|error| EvalError::Runtime(error.to_string()))
     }
 
     /// Push a call frame, enforcing the recursion-depth cap first. `frames.len()`
@@ -1736,13 +1703,13 @@ impl RegVm {
                                 }
                             }
                         }
-                        RegInstr::CallNative {
+                        RegInstr::CallExternal {
                             dst,
                             key,
                             args,
                             mut_args,
                         } => {
-                            let result = self.call_native_key(key, args, mut_args, base)?;
+                            let result = self.call_external_symbol(key, args, mut_args, base)?;
                             self.set_reg(base + *dst, result);
                         }
                         RegInstr::CallClosure {

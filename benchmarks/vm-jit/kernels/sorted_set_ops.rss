@@ -1,4 +1,3 @@
-features: local
 
 // Slow path: SortedSet membership (ordered insert + contains) — the one
 // collection structure the suite was missing (have Map/SortedMap/Set/Deque).

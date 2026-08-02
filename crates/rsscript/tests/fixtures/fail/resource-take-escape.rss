@@ -1,5 +1,4 @@
 // expect: RS0702
-features: local
 
 resource File {
     fd: Int

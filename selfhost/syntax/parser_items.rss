@@ -1,4 +1,3 @@
-features: local
 // Stage 2 top-level parser slice. It owns Program construction and delegates
 // declaration boundary recognition to the established shared scanner helpers.
 
@@ -71,23 +70,6 @@ fn push_use_item(program: mut Program, toks: List<Tok>, start: Int, end: Int) ->
     Program.push(self: mut program, item: item)
 }
 
-fn push_feature_item(program: mut Program, toks: List<Tok>, start: Int, end: Int) -> Unit {
-    let tok = List.get(list: toks, index: start)
-    local name = "features"
-    let mut item = Item.plain(ITEM_FEATURES, take name, tok.line, tok.col, tok.len)
-    let mut i = start + 2
-    while i < end {
-        if is_ident_tok(toks: toks, i: i) {
-            let featureTok = List.get<Tok>(list: toks, index: i)
-            local featureName = String.copy(value: featureTok.text)
-            let feature = FeatureName.from(name: take featureName, line: featureTok.line, column: featureTok.col, length: featureTok.len)
-            List.push<FeatureName>(list: mut item.features, value: feature)
-        }
-        i = i + 1
-    }
-    Program.push(self: mut program, item: item)
-}
-
 // Data declarations use the same Item record as functions. These helpers own
 // syntax shape and preserve field-default expression roots; name/type binding
 // remains in the semantic layer.
@@ -96,7 +78,7 @@ fn data_decl_name_end(toks: List<Tok>, start: Int) -> Int {
     return take_function_name(toks: toks, i: nameStart)
 }
 
-fn collect_data_derives(toks: List<Tok>, start: Int, end: Int, derives: mut List<FeatureName>) -> Int {
+fn collect_data_derives(toks: List<Tok>, start: Int, end: Int, derives: mut List<DeriveName>) -> Int {
     let mut i = start
     if at_symbol(toks: toks, i: i, code: SYM_LANGLE) {
         let genericClose = find_matching(toks: toks, open: i, openSym: SYM_LANGLE, closeSym: SYM_RANGLE)
@@ -112,8 +94,8 @@ fn collect_data_derives(toks: List<Tok>, start: Int, end: Int, derives: mut List
         if is_ident_tok(toks: toks, i: member) {
             let tok = List.get<Tok>(list: toks, index: member)
             local name = String.copy(value: tok.text)
-            let derive = FeatureName.from(name: take name, line: tok.line, column: tok.col, length: tok.len)
-            List.push<FeatureName>(list: mut derives, value: derive)
+            let derive = DeriveName.from(name: take name, line: tok.line, column: tok.col, length: tok.len)
+            List.push<DeriveName>(list: mut derives, value: derive)
         }
         member = member + 1
     }
@@ -123,7 +105,7 @@ fn collect_data_derives(toks: List<Tok>, start: Int, end: Int, derives: mut List
 fn data_body_open(toks: List<Tok>, start: Int, end: Int) -> Int {
     let nameEnd = data_decl_name_end(toks, start)
     if nameEnd < 0 { return -1 }
-    local ignored = List<FeatureName>.new()
+    local ignored = List<DeriveName>.new()
     let afterDerives = collect_data_derives(toks, start: nameEnd, end, derives: mut ignored)
     if at_symbol(toks: toks, i: afterDerives, code: SYM_LBRACE) { return afterDerives }
     return -1
@@ -493,7 +475,7 @@ fn return_type(toks: List<Tok>, start: Int, end: Int) -> String {
     let mut typeEnd = end
     i = arrow + 1
     while i < end {
-        if at_ident(toks: toks, i: i, wid: WORD_EFFECTS) || at_symbol(toks: toks, i: i, code: SYM_EQ) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) {
+        if token_text_is(toks: toks, i: i, value: "retains") || at_symbol(toks: toks, i: i, code: SYM_EQ) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) {
             typeEnd = i
             i = end
         } else {
@@ -503,62 +485,16 @@ fn return_type(toks: List<Tok>, start: Int, end: Int) -> String {
     return canonical_type_text(toks: toks, start: (arrow + 1), end: typeEnd)
 }
 
-fn retains_target_text(toks: List<Tok>, start: Int, isRetains: Bool) -> String {
-    if isRetains && is_ident_tok(toks: toks, i: (start + 2)) {
-        let target = List.get<Tok>(list: toks, index: (start + 2))
-        return String.copy(value: target.text)
-    }
-    return ""
-}
-
-fn effect_segment_is_well_formed(toks: List<Tok>, start: Int, end: Int) -> Bool {
-    if start >= end || is_ident_tok(toks: toks, i: start) == false { return false }
-    let head = List.get<Tok>(list: toks, index: start)
-    if head.text == "retains" {
-        return (start + 4) == end && at_symbol(toks: toks, i: (start + 1), code: SYM_LPAREN) && is_ident_tok(toks: toks, i: (start + 2)) && at_symbol(toks: toks, i: (start + 3), code: SYM_RPAREN)
-    }
-    return (start + 1) == end
-}
-
-fn effects_clause_is_well_formed(toks: List<Tok>, open: Int, close: Int) -> Bool {
-    if open + 1 >= close { return false }
-    let mut segmentStart = open + 1
-    let mut valid = true
-    while segmentStart < close && valid {
-        let comma = split_top_level_comma(toks: toks, start: segmentStart, end: close)
-        let mut segmentEnd = close
-        if comma >= 0 { segmentEnd = comma }
-        if effect_segment_is_well_formed(toks, start: segmentStart, end: segmentEnd) == false { valid = false }
-        if comma < 0 { segmentStart = close } else { segmentStart = comma + 1 }
-    }
-    return valid
-}
-
-fn collect_effects(toks: List<Tok>, start: Int, end: Int, effects: mut List<EffectName>) -> Unit {
+fn collect_retained_params(toks: List<Tok>, start: Int, end: Int, retainedParams: mut List<String>) -> Unit {
     let mut i = start
-    let mut open = -1
-    while i < end && open < 0 {
-        if at_ident(toks: toks, i: i, wid: WORD_EFFECTS) && at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) {
-            open = i + 1
+    while i + 3 < end {
+        if token_text_is(toks: toks, i: i, value: "retains") && at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) && is_ident_tok(toks: toks, i: (i + 2)) && at_symbol(toks: toks, i: (i + 3), code: SYM_RPAREN) {
+            let target = List.get<Tok>(list: toks, index: (i + 2))
+            List.push<String>(list: mut retainedParams, value: String.copy(value: target.text))
+            i = i + 4
+        } else {
+            i = i + 1
         }
-        i = i + 1
-    }
-    if open < 0 { return Unit }
-    let close = find_matching(toks: toks, open: open, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-    if close < 0 || close > end { return Unit }
-    if effects_clause_is_well_formed(toks, open, close) == false { return Unit }
-    let mut segmentStart = open + 1
-    while segmentStart < close {
-        let comma = split_top_level_comma(toks: toks, start: segmentStart, end: close)
-        if is_ident_tok(toks: toks, i: segmentStart) {
-            let tok = List.get(list: toks, index: segmentStart)
-            local name = String.copy(value: tok.text)
-            let isRetains = tok.text == "retains" && at_symbol(toks: toks, i: (segmentStart + 1), code: SYM_LPAREN)
-            local target = retains_target_text(toks, start: segmentStart, isRetains)
-            let effect = EffectName.from(name: take name, target: take target, isRetains: isRetains, line: tok.line, column: tok.col, length: tok.len)
-            List.push<EffectName>(list: mut effects, value: effect)
-        }
-        if comma < 0 { segmentStart = close } else { segmentStart = comma + 1 }
     }
     return Unit
 }
@@ -596,8 +532,8 @@ fn push_function_item(program: mut Program, toks: List<Tok>, start: Int, end: In
         let paramClose = find_matching(toks: toks, open: paramOpen, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
         if paramClose >= 0 { parse_params(program: mut program, toks, open: paramOpen, close: paramClose, params: mut params) }
     }
-    local effects = List<EffectName>.new()
-    collect_effects(toks, start: nameEnd, end: sigEnd, effects: mut effects)
+    local retainedParams = List<String>.new()
+    collect_retained_params(toks, start: nameEnd, end: sigEnd, retainedParams: mut retainedParams)
     local name = dotted_name(toks, start: nameStart, end: nameEnd)
     let hasLowerName = function_has_lower_name(toks, start: start)
     local lowerName = function_lower_name(toks, start: start)
@@ -610,7 +546,7 @@ fn push_function_item(program: mut Program, toks: List<Tok>, start: Int, end: In
         if bodyClose >= 0 { parse_body_statements(program: mut program, toks: toks, open: bodyOpen, close: bodyClose, statements: mut statements) }
     }
     let tok = List.get(list: toks, index: start)
-    let mut item = Item.function(name: take name, line: tok.line, column: tok.col, length: tok.len, isPublic: modifier_present(toks, start, word: WORD_PUB), isAsync: modifier_present(toks, start, word: WORD_ASYNC), isNative: modifier_present(toks, start, word: WORD_NATIVE), hasBody: hasBody, hasLowerName: hasLowerName, lowerName: take lowerName, generics: take generics, params: take params, effects: take effects, statements: take statements, returnType: take ret)
+    let mut item = Item.function(name: take name, line: tok.line, column: tok.col, length: tok.len, isPublic: modifier_present(toks, start, word: WORD_PUB), isAsync: modifier_present(toks, start, word: WORD_ASYNC), hasBody: hasBody, hasLowerName: hasLowerName, lowerName: take lowerName, generics: take generics, params: take params, retainedParams: take retainedParams, statements: take statements, returnType: take ret)
     if String.len(value: protocolName) > 0 {
         item.isPublic = true
         item.protocol = String.copy(value: protocolName)
@@ -805,14 +741,7 @@ fn parse_program_mode(toks: List<Tok>, includeBodies: Bool) -> Program {
         } else {
             let cls = classify_top(toks: toks, i: i)
             let isPub = cls.isPub
-            if cls.isFeatures {
-                let end = declaration_line_end(toks: toks, start: i)
-                push_feature_item(program: mut program, toks, start: i, end)
-                i = end
-            } else if cls.isProfile {
-                push_item(program: mut program, toks, i, kind: ITEM_PROFILE, name: "profile")
-                i = declaration_line_end(toks: toks, start: i)
-            } else if starts_type_decl(toks: toks, i: i, isPub: isPub) {
+            if starts_type_decl(toks: toks, i: i, isPub: isPub) {
                 let r = parse_type_decl(toks: toks, i: i)
                 if r < 0 { push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "") ; i = i + 1 }
                 else { push_data_item(program: mut program, toks, start: i, end: r, kind: ITEM_TYPE) ; i = r }
@@ -828,10 +757,6 @@ fn parse_program_mode(toks: List<Tok>, includeBodies: Bool) -> Program {
                 let r = parse_impl_decl(toks: toks, i: i)
                 if r < 0 { push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "") ; i = i + 1 }
                 else { push_impl_item(program: mut program, toks: toks, start: i, end: r) ; i = r }
-            } else if cls.isNativeMod {
-                let r = parse_native_module_decl(toks: toks, i: i)
-                if r < 0 { push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "") ; i = i + 1 }
-                else { push_item(program: mut program, toks, i, kind: ITEM_NATIVE_MODULE, name: item_name(toks, i)) ; i = r }
             } else if cls.isTypeAlias {
                 let r = parse_type_alias_decl(toks: toks, i: i)
                 if r < 0 { push_item(program: mut program, toks, i, kind: ITEM_UNKNOWN, name: "") ; i = i + 1 }

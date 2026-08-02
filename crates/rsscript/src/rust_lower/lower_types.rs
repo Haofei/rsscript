@@ -25,7 +25,7 @@ impl RustLowerer<'_> {
                 | "Option"
                 | "Result"
         ) || self.type_kinds.contains_key(&ty.name)
-            || capability_protocol_name(&ty.name).is_some();
+            || dyn_protocol_name(&ty.name).is_some();
         root_is_concrete
             && ty
                 .args
@@ -128,11 +128,11 @@ impl RustLowerer<'_> {
             } if type_root_name(name) == "new" && type_arg_names(namespace).is_some() => {
                 Some(type_ref_from_display(namespace, span))
             }
-            Expr::Call { callee, span, .. } if capability_from_protocol(callee).is_some() => {
-                let protocol = capability_from_protocol(callee)?;
+            Expr::Call { callee, span, .. } if dyn_from_protocol(callee).is_some() => {
+                let protocol = dyn_from_protocol(callee)?;
                 Some(TypeRef {
                     args: vec![simple_type_ref(protocol, span)],
-                    ..simple_type_ref("Capability", span)
+                    ..simple_type_ref("Dyn", span)
                 })
             }
             Expr::Call {
@@ -218,7 +218,7 @@ impl RustLowerer<'_> {
             "SortedSet",
             "Option",
             "Result",
-            "Capability",
+            "Dyn",
         ];
         let canonical = self.canonical_type_ref(ty);
         if canonical.args.is_empty() || !GENERIC_CONTAINERS.contains(&canonical.name.as_str()) {
@@ -424,7 +424,7 @@ impl RustLowerer<'_> {
                     self.lower_type_ref(&ty.args[0], ManagedPosition::Nested)
                 )
             }
-            "Capability" if ty.args.len() == 1 => capability_enum_name(&ty.args[0].name),
+            "Dyn" if ty.args.len() == 1 => external_binding_enum_name(&ty.args[0].name),
             _ => {
                 let name = rust_ident(&ty.name);
                 if ty.args.is_empty() {

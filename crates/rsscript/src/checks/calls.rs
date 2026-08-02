@@ -1080,7 +1080,7 @@ fn check_call_args(
         check_enum_variant_form(analyzer, callee, args, call_span);
         return;
     }
-    check_capability_from_call(analyzer, function, callee, args, call_span);
+    check_dyn_from_call(analyzer, function, callee, args, call_span);
 
     let is_receiver_call = matches!(callee, Callee::ReceiverCall { .. });
     let signature = match resolution {

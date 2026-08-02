@@ -1214,7 +1214,7 @@ impl RegLowerer<'_> {
                 } else if self.is_native_function(None, name) {
                     let mut_args = self.native_mut_arg_positions(None, name);
                     let restore = mut_place_restore_plan(args, &mut_args, &arg_regs);
-                    self.emit(RegInstr::CallNative {
+                    self.emit(RegInstr::CallExternal {
                         dst,
                         key: type_root_name(name).to_string(),
                         args: arg_regs,
@@ -1933,7 +1933,7 @@ impl RegLowerer<'_> {
                                 let mut_args =
                                     self.native_mut_arg_positions(Some(namespace_root), name_root);
                                 let restore = mut_place_restore_plan(args, &mut_args, &arg_regs);
-                                self.emit(RegInstr::CallNative {
+                                self.emit(RegInstr::CallExternal {
                                     dst,
                                     key: qualified_key,
                                     args: arg_regs,
@@ -1945,7 +1945,7 @@ impl RegLowerer<'_> {
                             // Dynamic protocol dispatch: `Protocol.method(self: x, ...)`
                             // where `Protocol` is a protocol with impls. The concrete
                             // function is selected at runtime by `args[0]`'s struct type
-                            // (capability objects + generic bounds) — the VM equivalent
+                            // (dynamic protocol values + generic bounds) — the VM equivalent
                             // of the compiled backend's closed-world enum dispatch.
                             // Checked before the `function_ids` lookup because a protocol
                             // method also appears there as a bodyless stub (which would
@@ -2057,7 +2057,7 @@ impl RegLowerer<'_> {
     fn is_native_function(&self, namespace: Option<&str>, name: &str) -> bool {
         self.hir
             .resolve_function(namespace, type_root_name(name))
-            .is_some_and(|signature| signature.is_native && !signature.is_builtin)
+            .is_some_and(|signature| signature.is_external)
     }
 
     /// Parameter positions of a native function that are `mut`. These map to

@@ -91,8 +91,8 @@ impl PackageGraphSnapshot {
         for file in &mut review.files {
             file.path = self.remap_path_label(&file.path);
         }
-        for capability in &mut review.capabilities {
-            if let Some(span) = &mut capability.span {
+        for external_binding in &mut review.external_bindings {
+            if let Some(span) = &mut external_binding.span {
                 self.remap_span(span);
             }
         }
@@ -166,10 +166,10 @@ impl PrivateContentSnapshot {
 /// succeeded.
 ///
 /// Values can only be created by authorizing a [`PreparedPackage`] or through
-/// [`prepare_authorized_package`]. Native build and load code consumes this type
+/// [`prepare_executable_package`]. Native build and load code consumes this type
 /// instead of accepting an unchecked path.
 #[derive(Debug)]
-pub struct AuthorizedPackage {
+pub struct ExecutablePackageSnapshot {
     package_dir: PathBuf,
     lowering_input: PackageLoweringInput,
     native_build_dependencies: Vec<NativePluginBuildDependency>,
@@ -180,7 +180,7 @@ pub struct AuthorizedPackage {
 /// An immutable package dependency graph prepared for lowering or review.
 ///
 /// Pure packages can be consumed directly. Packages with native dependencies
-/// must be converted into an [`AuthorizedPackage`] before lowering or loading.
+/// must be converted into an [`ExecutablePackageSnapshot`] before lowering or loading.
 #[derive(Debug)]
 pub struct PreparedPackage {
     package_dir: PathBuf,
@@ -189,33 +189,33 @@ pub struct PreparedPackage {
 }
 
 impl PreparedPackage {
-    /// Return whether this graph must pass native authorization before use.
-    pub fn requires_native_authorization(&self) -> bool {
+    /// Return whether this graph must pass external provider verification before use.
+    pub fn requires_external_provider(&self) -> bool {
         !self.lowering_input.native_dependencies.is_empty()
     }
 
     /// Consume a pure package graph and return its captured lowering input.
     pub fn into_lowering_input(self) -> Result<PackageLoweringInput, String> {
-        if self.requires_native_authorization() {
+        if self.requires_external_provider() {
             return Err(
-                "native package execution requires an AuthorizedPackage; explicitly authorize the prepared snapshot before lowering".to_string(),
+                "native package execution requires an ExecutablePackageSnapshot; explicitly authorize the prepared snapshot before lowering".to_string(),
             );
         }
         Ok(self.lowering_input)
     }
 
     /// Review and authorize the captured graph for native build and loading.
-    pub fn authorize(self) -> Result<AuthorizedPackage, String> {
-        authorize_prepared_package(self)
+    pub fn verify(self) -> Result<ExecutablePackageSnapshot, String> {
+        verify_prepared_package(self)
     }
 }
 
-impl AuthorizedPackage {
+impl ExecutablePackageSnapshot {
     pub fn package_dir(&self) -> &Path {
         &self.package_dir
     }
 
-    /// Return the checked lowering snapshot captured during authorization.
+    /// Return the checked lowering snapshot captured during snapshot verification.
     ///
     /// AOT callers must use this snapshot rather than re-reading the package
     /// path after authorization.
@@ -245,15 +245,15 @@ impl AuthorizedPackage {
 /// The returned value also captures the lowering and native dependency inputs
 /// used by the loader, so the loader cannot independently rediscover an
 /// unchecked package graph.
-pub fn prepare_authorized_package(package_dir: &Path) -> Result<AuthorizedPackage, String> {
-    prepare_package_for_execution(package_dir)?.authorize()
+pub fn prepare_executable_package(package_dir: &Path) -> Result<ExecutablePackageSnapshot, String> {
+    prepare_package_for_execution(package_dir)?.verify()
 }
 
 /// Capture a complete package dependency graph before lowering or review.
 pub fn prepare_package_for_execution(package_dir: &Path) -> Result<PreparedPackage, String> {
     let package_dir = package_dir.canonicalize().map_err(|error| {
         format!(
-            "failed to canonicalize package before authorization snapshot {}: {error}",
+            "failed to canonicalize package before content snapshot {}: {error}",
             package_dir.display()
         )
     })?;
@@ -266,7 +266,7 @@ pub fn prepare_package_for_execution(package_dir: &Path) -> Result<PreparedPacka
     })
 }
 
-fn authorize_prepared_package(prepared: PreparedPackage) -> Result<AuthorizedPackage, String> {
+fn verify_prepared_package(prepared: PreparedPackage) -> Result<ExecutablePackageSnapshot, String> {
     let PreparedPackage {
         package_dir,
         mut lowering_input,
@@ -302,7 +302,7 @@ fn authorize_prepared_package(prepared: PreparedPackage) -> Result<AuthorizedPac
         dependency.path = snapshotted.path.clone();
     }
 
-    Ok(AuthorizedPackage {
+    Ok(ExecutablePackageSnapshot {
         package_dir,
         lowering_input,
         native_build_dependencies,
@@ -315,9 +315,9 @@ fn authorize_prepared_package(prepared: PreparedPackage) -> Result<AuthorizedPac
 fn authorize_package_snapshot(
     package_dir: PathBuf,
     package_snapshot: PackageGraphSnapshot,
-) -> Result<AuthorizedPackage, String> {
+) -> Result<ExecutablePackageSnapshot, String> {
     let lowering_input = package_lowering_input(package_snapshot.root())?;
-    authorize_prepared_package(PreparedPackage {
+    verify_prepared_package(PreparedPackage {
         package_dir,
         lowering_input,
         package_snapshot,
@@ -425,7 +425,7 @@ fn validate_captured_manifest(
         .map_err(|error| format!("failed to read {}: {error}", manifest_path.display()))?;
     if captured_source != node.manifest_source {
         return Err(format!(
-            "package manifest changed while the authorization snapshot was captured: {}",
+            "package manifest changed while the content snapshot was captured: {}",
             node.package_dir.display()
         ));
     }
@@ -803,7 +803,7 @@ fn snapshot_file_bounded(
         .map_err(|error| format!("failed to inspect opened {}: {error}", source.display()))?;
     if !opened.is_file() || opened.len() != expected_bytes {
         return Err(format!(
-            "native input changed while authorization snapshot was captured: {}",
+            "native input changed while content snapshot was captured: {}",
             source.display()
         ));
     }
@@ -816,7 +816,7 @@ fn snapshot_file_bounded(
     .map_err(|error| format!("failed to snapshot {}: {error}", source.display()))?;
     if copied != expected_bytes {
         return Err(format!(
-            "native input changed while authorization snapshot was captured: {}",
+            "native input changed while content snapshot was captured: {}",
             source.display()
         ));
     }
@@ -848,7 +848,7 @@ fn set_package_snapshot_permissions(_path: &Path) -> Result<(), String> {
 #[cfg(not(unix))]
 fn set_private_directory_permissions(path: &Path) -> Result<(), String> {
     Err(format!(
-        "native authorization snapshots require verifiable private directory ownership and ACLs; this platform backend is unavailable for {}",
+        "external provider verification snapshots require verifiable private directory ownership and ACLs; this platform backend is unavailable for {}",
         path.display()
     ))
 }
@@ -903,7 +903,7 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::native_plugin::load_authorized_package_native_bindings;
+    use crate::native_plugin::load_package_bindings_from_snapshot;
     use crate::package::{
         check_package_dir, format_package_lock_toml, lock_package_dir, package_tree,
         review_package_dir,
@@ -957,7 +957,7 @@ mod tests {
         fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
             .expect("fixture lockfile");
 
-        let package = prepare_authorized_package(&root).expect("checked fixture should authorize");
+        let package = prepare_executable_package(&root).expect("checked fixture should authorize");
         assert_eq!(
             package.package_dir(),
             root.canonicalize().expect("canonical fixture")
@@ -965,7 +965,7 @@ mod tests {
         assert_eq!(package.lowering_input().package.name, "authorized-test");
         assert!(package.native_build_dependencies().is_empty());
         assert!(
-            load_authorized_package_native_bindings(&package)
+            load_package_bindings_from_snapshot(&package)
                 .expect("pure authorized package should load without native work")
                 .is_empty()
         );
@@ -978,7 +978,7 @@ mod tests {
         let root = pure_package_fixture();
 
         let error =
-            prepare_authorized_package(&root).expect_err("missing lock must prevent authorization");
+            prepare_executable_package(&root).expect_err("missing lock must prevent authorization");
         assert!(error.contains("native build/load denied"), "{error}");
         assert!(error.contains("rsspkg.lock missing"), "{error}");
 
@@ -1248,7 +1248,7 @@ mod tests {
             .expect("fixture lockfile");
 
         let package =
-            prepare_authorized_package(&root).expect("checked native fixture should authorize");
+            prepare_executable_package(&root).expect("checked native fixture should authorize");
         assert_eq!(package.lowering_input().native_dependencies.len(), 1);
         assert_eq!(package.native_build_dependencies().len(), 1);
         assert_eq!(
@@ -1273,7 +1273,7 @@ mod tests {
             .expect("fixture lockfile");
 
         let package =
-            prepare_authorized_package(&root).expect("checked native fixture should authorize");
+            prepare_executable_package(&root).expect("checked native fixture should authorize");
         fs::write(
             root.join("native/rust/src/lib.rs"),
             "compile_error!(\"mutated after authorization\");\n",
@@ -1300,7 +1300,7 @@ mod tests {
             .expect("fixture lockfile");
 
         let package =
-            prepare_authorized_package(&root).expect("checked native fixture should authorize");
+            prepare_executable_package(&root).expect("checked native fixture should authorize");
         let aot_input = package.lowering_input().clone();
         let loader_path = package.native_build_dependencies()[0].path.clone();
         assert_eq!(aot_input.native_dependencies[0].path, loader_path);
@@ -1329,8 +1329,8 @@ mod tests {
         fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
             .expect("fixture lockfile");
 
-        let first = prepare_authorized_package(&root).expect("first authorization");
-        let second = prepare_authorized_package(&root).expect("second authorization");
+        let first = prepare_executable_package(&root).expect("first authorization");
+        let second = prepare_executable_package(&root).expect("second authorization");
         assert_eq!(
             first.native_build_dependencies()[0].path,
             second.native_build_dependencies()[0].path
@@ -1352,8 +1352,8 @@ mod tests {
         fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
             .expect("fixture lockfile");
 
-        let error = prepare_authorized_package(&root)
-            .expect_err("native authorization must require private cache enforcement");
+        let error = prepare_executable_package(&root)
+            .expect_err("external provider verification must require private cache enforcement");
         assert!(
             error.contains("private owner and ACL enforcement")
                 || error.contains("platform backend is unavailable"),
@@ -1377,7 +1377,7 @@ mod tests {
         fs::write(root.join("rsspkg.lock"), format_package_lock_toml(&lock))
             .expect("fixture lockfile");
 
-        let error = prepare_authorized_package(&root)
+        let error = prepare_executable_package(&root)
             .expect_err("native package without Cargo.lock must fail closed");
         assert!(
             error.contains("cargo metadata failed") || error.contains("Cargo.lock"),

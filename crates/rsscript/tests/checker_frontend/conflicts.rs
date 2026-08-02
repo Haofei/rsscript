@@ -33,7 +33,6 @@ module rss.package.other
 #[test]
 fn managed_closure_capture_makes_fresh_local_unclean() {
     let source = r#"
-features: local
 
 struct Image {
     pixels: Buffer
@@ -61,7 +60,6 @@ fn bad_fresh(path: read Path) -> fresh Image {
 #[test]
 fn checker_rejects_resource_capture_in_wrapped_managed_closure() {
     let source = r#"
-features: local
 
 resource File {
     fd: Int
@@ -494,7 +492,6 @@ fn main() -> Unit {
 #[test]
 fn checker_accepts_noescape_callback_that_temporarily_uses_local() {
     let source = r#"
-features: local
 
 fn apply(callback: noescape Fn()) -> Unit {
     callback()
@@ -507,7 +504,7 @@ struct Asset {
 
 struct AssetError
 
-fn load_asset(path: read Path) -> Result<fresh Asset, AssetError> {
+fn load_asset(path: read String) -> Result<fresh Asset, AssetError> {
     return Ok(Asset(id: 1))
 }
 
@@ -515,7 +512,7 @@ fn inspect_asset(asset: read Asset) -> Unit {
     return Unit
 }
 
-fn use_local(path: read Path) -> Result<fresh Asset, AssetError> {
+fn use_local(path: read String) -> Result<fresh Asset, AssetError> {
     local asset = load_asset(path: read path)?
     apply(callback: || {
         inspect_asset(asset: read asset)
@@ -524,7 +521,7 @@ fn use_local(path: read Path) -> Result<fresh Asset, AssetError> {
 }
 
 fn main() -> Result<Unit, AssetError> {
-    let path = Path.from_string(value: read "asset-input.bin")
+    let path = "asset-input.bin"
     use_local(path: read path)?
     return Ok(Unit)
 }
@@ -554,7 +551,6 @@ fn main() -> Result<Unit, AssetError> {
 #[test]
 fn rust_lowering_noescape_callbacks_are_non_consuming_fnmut() {
     let source = r#"
-features: local
 
 fn apply_twice(callback: noescape Fn()) -> Unit {
     callback()
@@ -582,11 +578,10 @@ fn use_local_buffer() -> Unit {
 #[test]
 fn rust_lowering_accepts_explicit_fn_capture_contract() {
     let source = r#"
-features: local
 
 fn run() -> Int {
     let offset = 2
-    local add = fn(value) captures(read offset) effects(pure) {
+    local add = fn(value) captures(read offset) {
         return value + offset
     }
     return add(40)
@@ -612,7 +607,7 @@ fn apply(callback: owned Fn(Int) -> Int, value: Int) -> Int {
 fn run() -> Int {
     let offset = 2
     return apply(
-        callback: fn(value) captures(read offset) effects(pure) {
+        callback: fn(value) captures(read offset) {
             return value + offset
         },
         value: 40,
@@ -634,7 +629,7 @@ fn apply(callback: owned Fn(Int) -> Int, value: Int) -> Int {
 fn run() -> Int {
     let offset = 2
     return apply(
-        callback: fn(value) captures(read offset) effects(pure) {
+        callback: fn(value) captures(read offset) {
             return value + offset
         },
         value: 40,
@@ -797,7 +792,6 @@ fn checker_accepts_owned_fn_as_first_class_storable_value() {
     // `owned Fn` is storable: a generic argument, a struct field, a binding, and
     // a function return; a closure literal fills it and is called as a value.
     let source = r#"
-features: local
 
 struct Adder derives(Clone) {
     fxn: owned Fn(Int) -> Int
@@ -806,7 +800,7 @@ struct Adder derives(Clone) {
 fn make() -> fresh List<owned Fn(Int) -> Int> {
     local fns = List.new<owned Fn(Int) -> Int>()
     let k = 10
-    let g = fn(x) captures(read k) effects(pure) { return x + k }
+    let g = fn(x) captures(read k) { return x + k }
     List.push(list: mut fns, value: read g)
     return take fns
 }
@@ -814,7 +808,7 @@ fn make() -> fresh List<owned Fn(Int) -> Int> {
 fn run() -> Int {
     local adders = List.new<Adder>()
     let base = 5
-    let a = Adder(fxn: fn(x) captures(read base) effects(pure) { return x * base })
+    let a = Adder(fxn: fn(x) captures(read base) { return x * base })
     List.push(list: mut adders, value: read a)
     let r = List.get(list: read adders, index: 0)
     let f = r.fxn
@@ -831,7 +825,6 @@ fn checker_rejects_noescape_fn_in_storable_position() {
     // field (or any non-parameter position) must still be rejected — a noescape
     // callback may borrow-capture, so storing it would let a borrow escape.
     let source = r#"
-features: local
 
 struct Holder {
     fxn: noescape Fn(Int) -> Int
@@ -853,7 +846,6 @@ fn run() -> Unit {
 #[test]
 fn checker_rejects_noescape_fn_hidden_behind_alias() {
     let source = r#"
-features: local
 
 type HiddenCallback = noescape Fn(Int) -> Int
 
@@ -873,7 +865,6 @@ struct Holder {
 #[test]
 fn checker_rejects_unsized_take_callbacks_after_alias_expansion() {
     let source = r#"
-features: local
 
 type Handler = Fn(Int) -> Int
 type OwnedHandler = owned Fn(Int) -> Int
@@ -920,7 +911,6 @@ fn checker_rejects_owned_closure_capturing_non_copy_value_by_read() {
     // non-`Copy` `String` captured with `read` while the body needs ownership
     // (consumes/returns it) fails the capture contract.
     let source = r#"
-features: local
 
 struct Holder derives(Clone) {
     fxn: owned Fn() -> fresh String
@@ -928,7 +918,7 @@ struct Holder derives(Clone) {
 
 fn run() -> fresh String {
     let s = "captured"
-    let h = Holder(fxn: fn() captures(read s) effects(pure) { return take s })
+    let h = Holder(fxn: fn() captures(read s) { return take s })
     let f = h.fxn
     return f()
 }

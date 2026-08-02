@@ -9,7 +9,7 @@ use crate::rust_lower::intrinsics::runtime_intrinsic_target;
 
 pub(in crate::rust_lower) fn validate_executable_declarations(
     program: &Program,
-    native_bindings: &BTreeMap<String, String>,
+    external_bindings: &BTreeMap<String, String>,
 ) -> Vec<Diagnostic> {
     let mut implemented = BTreeSet::new();
     let mut bodyless = BTreeMap::new();
@@ -24,7 +24,7 @@ pub(in crate::rust_lower) fn validate_executable_declarations(
             continue;
         }
         if function.body.statements.is_empty() {
-            if function.is_native {
+            if external_bindings.contains_key(&key) {
                 native_bodyless.insert(key, function.name.clone());
             } else {
                 bodyless.insert(key, function.name.clone());
@@ -45,7 +45,7 @@ pub(in crate::rust_lower) fn validate_executable_declarations(
     let context = ExecutableDeclarationValidation {
         bodyless: &bodyless,
         native_bodyless: &native_bodyless,
-        native_bindings,
+        external_bindings,
     };
     for item in &program.items {
         let Item::Function(function) = item else {
@@ -62,7 +62,7 @@ pub(in crate::rust_lower) fn validate_executable_declarations(
 struct ExecutableDeclarationValidation<'a> {
     bodyless: &'a BTreeMap<String, String>,
     native_bodyless: &'a BTreeMap<String, String>,
-    native_bindings: &'a BTreeMap<String, String>,
+    external_bindings: &'a BTreeMap<String, String>,
 }
 
 fn validate_executable_declarations_in_block(
@@ -171,7 +171,7 @@ fn validate_executable_declarations_in_expr(
                 );
             }
             if runtime_intrinsic_target(callee).is_none()
-                && !context.native_bindings.contains_key(&key)
+                && !context.external_bindings.contains_key(&key)
                 && let Some(function_name) = context.native_bodyless.get(&key)
             {
                 diagnostics.push(

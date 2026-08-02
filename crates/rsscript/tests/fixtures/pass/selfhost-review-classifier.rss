@@ -1,4 +1,3 @@
-features: local
 
 struct ReviewFacts {
     function_name: String

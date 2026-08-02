@@ -1,5 +1,4 @@
 // expect: RS0401
-features: local
 
 class LruCache {
     entries: Map<String, Image>
@@ -10,7 +9,7 @@ struct Image {
 }
 
 fn lru_put(cache: mut LruCache, key: String, value: Image) -> Unit
-    effects(retains(value))
+    retains(value)
 {
     Map.insert(map: mut cache.entries, key, value)
 }

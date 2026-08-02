@@ -1951,7 +1951,7 @@ pub(super) fn noescape_escape_diagnostic(
     let (summary, cause) = match context {
         NoescapeEscapeContext::Store => (
             format!("noescape callback `{name}` cannot be stored."),
-            "`noescape Fn()` parameters are temporary callback capabilities and cannot be bound into stored values.".to_string(),
+            "`noescape Fn()` parameters are temporary callback external_bindings and cannot be bound into stored values.".to_string(),
         ),
         NoescapeEscapeContext::Return => (
             format!("noescape callback `{name}` cannot be returned."),
@@ -1993,7 +1993,7 @@ pub(super) fn local_closure_escape_diagnostic(
     let (summary, cause) = match context {
         LocalClosureEscapeContext::Store => (
             format!("local closure `{name}` cannot be stored in a managed binding."),
-            "A closure bound with `local` is an exclusive local capability and cannot become managed data.".to_string(),
+            "A closure bound with `local` is an exclusive local external_binding and cannot become managed data.".to_string(),
         ),
         LocalClosureEscapeContext::Return => (
             format!("local closure `{name}` cannot be returned."),

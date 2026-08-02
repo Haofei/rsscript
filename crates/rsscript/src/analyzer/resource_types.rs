@@ -38,9 +38,6 @@ impl Analyzer<'_> {
         for item in &items {
             match item {
                 Item::Function(function) => {
-                    if function.is_native {
-                        continue;
-                    }
                     for param in &function.params {
                         if type_ref_contains_name(&param.ty, "Fd") {
                             self.fd_surface_diagnostic(

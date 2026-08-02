@@ -5,7 +5,6 @@ use super::*;
 #[test]
 fn reg_vm_runs_interpolated_strings_like_backend() {
     let source = r#"
-features: native
 
 fn greeting(name: read String) -> fresh String {
     return $"hello {name}"
@@ -25,7 +24,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_env_string_intrinsics_like_interpreter() {
     let source = r#"
-features: native
 
 fn main() -> Unit {
     match Env.get(name: read "RSSCRIPT_VM_PARITY_ENV_SHOULD_NOT_EXIST") {
@@ -120,7 +118,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_bytes_intrinsics_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let data = Bytes.from_string(value: read "abcdef")
@@ -165,7 +162,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_regex_intrinsics_like_interpreter() {
     let source = r#"
-features: native, local
 
 fn main() -> Unit {
     match Regex.compile(pattern: read "([a-z]+)-(\\d+)") {
@@ -209,7 +205,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_regex_capture_edges_like_interpreter() {
     let source = r#"
-features: native, local
 
 fn main() -> Unit {
     match Regex.compile(pattern: read "(a)?b") {
@@ -239,7 +234,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_yaml_parse_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     match Yaml.parse(text: read "name: rss\ncount: 10\nitems:\n  - one\n  - two\n") {
@@ -298,7 +292,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_string_view_builder_intrinsics_like_interpreter() {
     let source = r#"
-features: local
 
 fn main() -> Unit {
     let text = "aébc=tail"
@@ -359,7 +352,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_read_only_collection_and_string_intrinsics_like_interpreter() {
     let source = r#"
-features: native
 
 fn main() -> Unit {
     let words: List<String> = ["red", "green", "blue"]
@@ -1198,7 +1190,6 @@ fn reg_vm_runs_csv_row_intrinsics_like_interpreter() {
     let csv_arg = csv_path.display().to_string();
 
     let source = r#"
-features: local
 
 fn main() -> Result<Unit, CsvError> {
     let path = Path.from_string(value: read Option.unwrap_or<String>(value: read Args.get(index: 0), default: read "missing.csv"))

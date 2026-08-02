@@ -456,8 +456,6 @@ fn main() -> Unit {
     #[test]
     fn native_direct_dispatch_passes_flat_int_arg_to_compiled_call() {
         let source = "\
-features: local
-
 fn read_at(values: read List<Int>, index: Int) -> Int {
     return List.get<Int>(list: read values, index: index) + List.len<Int>(list: read values)
 }
@@ -528,8 +526,6 @@ fn main() -> Unit {
     #[test]
     fn native_direct_dispatch_passes_flat_float_arg_to_compiled_call() {
         let source = "\
-features: local
-
 fn read_at(values: read List<Float>, index: Int) -> Float {
     return List.get<Float>(list: read values, index: index) + Int.to_float(value: read List.len<Float>(list: read values))
 }
@@ -601,8 +597,6 @@ fn main() -> Unit {
     #[test]
     fn native_direct_dispatch_passes_flat_int_mut_arg_to_compiled_call() {
         let source = "\
-features: local
-
 fn write_at(values: mut List<Int>, index: Int, value: Int) -> Int {
     List.set<Int>(list: mut values, index: index, value: read value)
     return List.get<Int>(list: read values, index: index)
@@ -960,9 +954,7 @@ fn main() -> Result<Unit, JsonError> {
     #[cfg(feature = "native-jit")]
     #[test]
     fn native_osr_preserves_heap_live_through_scalar_loop() {
-        let source = r#"features: local
-
-fn main() -> Unit {
+        let source = r#"fn main() -> Unit {
     let mut q: Deque<Int> = Deque.new<Int>()
     Log.write(message: read String.from_int(value: Deque.len(deque: read q)))
     let mut xs: List<Int> = List.new<Int>()
@@ -1105,4 +1097,3 @@ fn main() -> Unit {
             jit.code,
         );
     }
-

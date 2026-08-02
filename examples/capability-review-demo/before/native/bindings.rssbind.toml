@@ -1,2 +1,6 @@
-[bindings]
-"Db.query" = "demo_native::query"
+schema = "rsscript.bindings.v1"
+
+[[function]]
+symbol = "Db.query"
+provider = "demo_native"
+entry = "query"

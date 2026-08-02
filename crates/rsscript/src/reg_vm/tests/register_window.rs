@@ -368,7 +368,7 @@ mod register_window_tests {
             native_signatures: HashMap::new(),
             closure_identity_observable: true,
         });
-        let binding = NativeInterpreterFn::new(|_| Ok(NativeValue::String("x".repeat(1024))));
+        let binding = ExternalFunction::new(|_| Ok(NativeValue::String("x".repeat(1024))));
         let mut vm = RegVm::new(
             unit,
             Vec::new(),
@@ -379,7 +379,7 @@ mod register_window_tests {
             ..VmLimits::default()
         });
         let error = vm
-            .call_native_key("test.big", &[], &[], 0)
+            .call_external_symbol("test.big", &[], &[], 0)
             .expect_err("large native result must be rejected before materialization");
         assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
     }
@@ -394,12 +394,12 @@ mod register_window_tests {
             native_signatures: HashMap::new(),
             closure_identity_observable: true,
         });
-        let string_binding = NativeInterpreterFn::new(|_| {
+        let string_binding = ExternalFunction::new(|_| {
             let mut value = String::with_capacity(1 << 20);
             value.push('x');
             Ok(NativeValue::String(value))
         });
-        let json_binding = NativeInterpreterFn::new(|_| {
+        let json_binding = ExternalFunction::new(|_| {
             let values = Vec::with_capacity(1 << 16);
             Ok(NativeValue::Json(serde_json::Value::Array(values)))
         });
@@ -419,7 +419,7 @@ mod register_window_tests {
         });
         for key in ["test.string-capacity", "test.json-capacity"] {
             let error = vm
-                .call_native_key(key, &[], &[], 0)
+                .call_external_symbol(key, &[], &[], 0)
                 .expect_err("spare native capacity must be charged before publication");
             assert!(
                 matches!(&error, EvalError::Runtime(message) if message.contains("memory limit")),
@@ -438,7 +438,7 @@ mod register_window_tests {
             native_signatures: HashMap::new(),
             closure_identity_observable: true,
         });
-        let binding = NativeInterpreterFn::new(|_| {
+        let binding = ExternalFunction::new(|_| {
             Ok(NativeValue::List(vec![
                 NativeValue::Unit,
                 NativeValue::String("x".repeat(1024)),
@@ -456,7 +456,7 @@ mod register_window_tests {
         vm.prepare_frame(0, 1).expect("register window");
         vm.set_reg(0, VmValue::Int(7));
         let error = vm
-            .call_native_key("test.mutate", &[0], &[0], 0)
+            .call_external_symbol("test.mutate", &[0], &[0], 0)
             .expect_err("mutation envelope must be rejected atomically");
         assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
         assert_eq!(vm.reg(0), &VmValue::Int(7));

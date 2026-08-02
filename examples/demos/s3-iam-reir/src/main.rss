@@ -1,4 +1,3 @@
-features: async
 
 fn main() -> Result<Unit, String> {
     Reports.upload_batch(

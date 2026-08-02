@@ -10,8 +10,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostic::Span;
 use crate::syntax::ast::{
-    Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FileFeature, FunctionDecl, GenericBound,
-    GenericParam, Item, MatchLiteral, MatchPattern, Param, Program, Stmt, TypeRef,
+    Block, CallArg, Callee, DataEffect, Expr, FunctionDecl, GenericBound, GenericParam, Item,
+    MatchLiteral, MatchPattern, Param, Program, Stmt, TypeRef,
 };
 
 use super::intrinsics::*;
@@ -174,15 +174,12 @@ pub(super) fn collect_program_function_retained_params(
             continue;
         };
         let retained = function
-            .effects
+            .retained_params
             .iter()
-            .filter_map(|effect| match effect {
-                EffectDecl::Retains(param) => Some(param.clone()),
-                EffectDecl::Name(_) => None,
-            })
+            .cloned()
             .collect::<BTreeSet<_>>();
         if !retained.is_empty() {
-            retained_params.insert(native_boundary_function_key(&function.name), retained);
+            retained_params.insert(external_boundary_function_key(&function.name), retained);
         }
     }
 }
@@ -200,31 +197,31 @@ pub(super) fn collect_program_function_return_types(
     }
 }
 
-pub(super) fn collect_native_boundary_callees(
+pub(super) fn collect_external_boundary_callees(
     program: &Program,
     interface_programs: &[Program],
 ) -> BTreeSet<String> {
     let mut callees = BTreeSet::new();
     for interface in interface_programs {
-        collect_native_boundary_callees_from_program(interface, &mut callees);
+        collect_external_boundary_callees_from_program(interface, &mut callees);
     }
-    collect_native_boundary_callees_from_program(program, &mut callees);
+    collect_external_boundary_callees_from_program(program, &mut callees);
     callees
 }
 
-pub(super) fn collect_async_native_boundary_callees(
+pub(super) fn collect_async_external_boundary_callees(
     program: &Program,
     interface_programs: &[Program],
 ) -> BTreeSet<String> {
     let mut callees = BTreeSet::new();
     for interface in interface_programs {
-        collect_async_native_boundary_callees_from_program(interface, &mut callees);
+        collect_async_external_boundary_callees_from_program(interface, &mut callees);
     }
-    collect_async_native_boundary_callees_from_program(program, &mut callees);
+    collect_async_external_boundary_callees_from_program(program, &mut callees);
     callees
 }
 
-pub(super) fn collect_native_boundary_callees_from_program(
+pub(super) fn collect_external_boundary_callees_from_program(
     program: &Program,
     callees: &mut BTreeSet<String>,
 ) {
@@ -232,13 +229,13 @@ pub(super) fn collect_native_boundary_callees_from_program(
         let Item::Function(function) = item else {
             continue;
         };
-        if function.effects.iter().any(is_native_boundary) {
-            callees.insert(native_boundary_function_key(&function.name));
+        if !function.has_body {
+            callees.insert(function.name.clone());
         }
     }
 }
 
-pub(super) fn collect_async_native_boundary_callees_from_program(
+pub(super) fn collect_async_external_boundary_callees_from_program(
     program: &Program,
     callees: &mut BTreeSet<String>,
 ) {
@@ -246,13 +243,13 @@ pub(super) fn collect_async_native_boundary_callees_from_program(
         let Item::Function(function) = item else {
             continue;
         };
-        if function.is_async && function.effects.iter().any(is_native_boundary) {
-            callees.insert(native_boundary_function_key(&function.name));
+        if !function.has_body && function.is_async {
+            callees.insert(function.name.clone());
         }
     }
 }
 
-pub(super) fn native_boundary_function_key(name: &str) -> String {
+pub(super) fn external_boundary_function_key(name: &str) -> String {
     if let Some((namespace, name)) = name.rsplit_once('.') {
         format!("{}.{}", type_root_name(namespace), name)
     } else {
@@ -260,7 +257,7 @@ pub(super) fn native_boundary_function_key(name: &str) -> String {
     }
 }
 
-pub(super) fn native_boundary_callee_key(callee: &Callee) -> String {
+pub(super) fn external_boundary_callee_key(callee: &Callee) -> String {
     match callee {
         Callee::Name(name) => type_root_name(name).to_string(),
         Callee::Qualified { namespace, name } => {
@@ -868,10 +865,6 @@ pub(super) fn lower_generic_args(params: &[GenericParam]) -> String {
     format!("<{args}>")
 }
 
-pub(super) fn is_native_boundary(effect: &EffectDecl) -> bool {
-    matches!(effect, EffectDecl::Name(name) if matches!(name.as_str(), "native" | "unsafe"))
-}
-
 pub(super) fn lower_callee(callee: &Callee) -> String {
     if let Some(target) = runtime_intrinsic_target(callee) {
         return target.to_string();
@@ -1192,24 +1185,6 @@ pub(super) fn rust_package_main(program: &Program, package_name: &str) -> Option
         ),
         main.name, call
     ))
-}
-
-pub(super) fn lowered_feature_names(features: &[FileFeature]) -> Vec<&'static str> {
-    let mut names = features
-        .iter()
-        .map(|feature| match feature {
-            FileFeature::Local => "local",
-            FileFeature::Native => "native",
-            FileFeature::Unsafe => "unsafe",
-            FileFeature::Async => "async",
-            FileFeature::Device => "device",
-            FileFeature::Ffi => "ffi",
-            FileFeature::Reflection => "reflection",
-        })
-        .collect::<Vec<_>>();
-    names.sort_unstable();
-    names.dedup();
-    names
 }
 
 pub(super) fn is_runnable_main(function: &FunctionDecl) -> bool {

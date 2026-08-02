@@ -20,12 +20,6 @@ fn parse_oracle_error(file: &str, source: &str) -> Option<(usize, usize)> {
     for s in &program.malformed_declaration_spans {
         spans.push((s.line, s.column));
     }
-    for f in &program.unknown_features {
-        spans.push((f.span.line, f.span.column));
-    }
-    for f in &program.duplicate_features {
-        spans.push((f.span.line, f.span.column));
-    }
     spans.sort_unstable();
     spans.into_iter().next()
 }
@@ -128,23 +122,6 @@ fn parser_parity_tiny_sample() {
     compare_parse(oracle, actual, parse_position_tier()).unwrap_or_else(|msg| panic!("{msg}"));
 }
 
-#[test]
-fn selfhost_feature_header_ast_outline_is_deterministic() {
-    let source = "features: local, async\n";
-    let exe = compile_selfhost_tool("serialize/outline.rss", "feature header AST outline")
-        .expect("feature header AST outline should compile");
-    let output = exe
-        .eval_main_with_args([source.to_string()])
-        .expect("feature header AST outline should run");
-    assert_eq!(
-        output.stdout,
-        concat!(
-            "features\tfeatures\t1:1:8\n",
-            "  feature\tlocal\t1:11:5\n",
-            "  feature\tasync\t1:18:5\n",
-        )
-    );
-}
 
 #[test]
 fn selfhost_data_declaration_ast_outline_is_deterministic() {
@@ -214,23 +191,23 @@ impl Writer for Buffer {
         concat!(
             "protocol\tWriter\t1:1:8\n",
             "function\tWriter.write\t2:5:2\n",
-            "  header\tpublic=true\tasync=false\tnative=false\tbody=false\treturn=Unit\tprotocol=Writer\n",
+            "  header\tpublic=true\tasync=false\tbody=false\treturn=Unit\tprotocol=Writer\n",
             "  generic\tSelf\tManaged\n",
             "  param\tself\tmut\tSelf\n",
             "  param\tmessage\tread\tString\n",
             "function\tWriter.default_write\t3:5:2\n",
-            "  header\tpublic=true\tasync=false\tnative=false\tbody=false\treturn=Unit\tprotocol=Writer\tdefault-impl=true\n",
+            "  header\tpublic=true\tasync=false\tbody=false\treturn=Unit\tprotocol=Writer\tdefault-impl=true\n",
             "  generic\tSelf\tManaged\n",
             "  param\tself\tread\tSelf\n",
             "type\tBuffer\t5:1:6\n",
             "  data-kind\tstruct\tpublic=false\topaque=false\n",
             "function\tBuffer.write\t6:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  param\tself\tmut\tBuffer\n",
             "  param\tmessage\tread\tString\n",
             "  stmt\treturn\t\t\tliteral\tUnit\n",
             "function\tBuffer.default_write\t9:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  param\tself\tread\tBuffer\n",
             "  stmt\treturn\t\t\tliteral\tUnit\n",
             "impl\tWriter\t12:1:4\n",
@@ -243,8 +220,7 @@ impl Writer for Buffer {
 
 #[test]
 fn selfhost_top_level_ast_outline_is_deterministic() {
-    let source = r#"features: local
-module demo.core
+    let source = r#"module demo.core
 use demo.util.*
 struct Boxed {
     value: Int
@@ -263,10 +239,10 @@ pub struct PublicBox {
 async fn async_run() -> Unit {
     return Unit
 }
-fn effectful() -> Unit effects(noalloc, pure) {
+fn ordinary() -> Unit {
     return Unit
 }
-pub native fn external<T: Display, U>(value: take List<String>, count: mut Int = 1) -> fresh Result<Int, String>
+pub fn external<T: Display, U>(value: take List<String>, count: mut Int = 1) -> fresh Result<Int, String>
 #lower_name("lowered_named")
 pub fn pinned_name() -> Unit {
     return Unit
@@ -280,44 +256,40 @@ pub fn pinned_name() -> Unit {
     assert_eq!(
         output.stdout,
         concat!(
-            "features\tfeatures\t1:1:8\n",
-            "  feature\tlocal\t1:11:5\n",
-            "module\tdemo.core\t2:1:6\n",
-            "use\tdemo.util\t3:1:3\n",
-            "type\tBoxed\t4:1:6\n",
+            "module\tdemo.core\t1:1:6\n",
+            "use\tdemo.util\t2:1:3\n",
+            "type\tBoxed\t3:1:6\n",
             "  data-kind\tstruct\tpublic=false\topaque=false\n",
             "  field\tvalue\tInt\thandle=false\tweak=false\n",
-            "sum\tResultish\t7:1:3\n",
+            "sum\tResultish\t6:1:3\n",
             "  data-kind\tsum\tpublic=false\topaque=false\n",
             "  variant\tGood\n",
-            "type-alias\tName\t10:1:4\n",
+            "type-alias\tName\t9:1:4\n",
             "  target\tString\n",
-            "const\tLIMIT\t11:1:5\n",
+            "const\tLIMIT\t10:1:5\n",
             "  type\tInt\n",
             "  value\t3\n",
-            "function\trun\t12:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "function\trun\t11:1:2\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  stmt\treturn\t\t\tliteral\tUnit\n",
-            "type\tPublicBox\t15:1:3\n",
+            "type\tPublicBox\t14:1:3\n",
             "  data-kind\tstruct\tpublic=true\topaque=false\n",
             "  field\tvalue\tInt\thandle=false\tweak=false\n",
-            "function\tasync_run\t18:1:5\n",
-            "  header\tpublic=false\tasync=true\tnative=false\tbody=true\treturn=Unit\n",
+            "function\tasync_run\t17:1:5\n",
+            "  header\tpublic=false\tasync=true\tbody=true\treturn=Unit\n",
             "  stmt\treturn\t\t\tliteral\tUnit\n",
-            "function\teffectful\t21:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
-            "  effect\tnoalloc\t21:32:7\n",
-            "  effect\tpure\t21:41:4\n",
+            "function\tordinary\t20:1:2\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  stmt\treturn\t\t\tliteral\tUnit\n",
-            "function\texternal\t24:1:3\n",
-            "  header\tpublic=true\tasync=false\tnative=true\tbody=false\treturn=fresh Result<Int, String>\n",
+            "function\texternal\t23:1:3\n",
+            "  header\tpublic=true\tasync=false\tbody=false\treturn=fresh Result<Int, String>\n",
             "  generic\tT\tDisplay\n",
             "  generic\tU\t\n",
             "  param\tvalue\ttake\tList<String>\n",
             "  param\tcount\tmut\tInt\n",
-            "  default\t24:82:1\n",
-            "function\tpinned_name\t25:1:1\n",
-            "  header\tpublic=true\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  default\t23:75:1\n",
+            "function\tpinned_name\t24:1:1\n",
+            "  header\tpublic=true\tasync=false\tbody=true\treturn=Unit\n",
             "  stmt\treturn\t\t\tliteral\tUnit\n",
         )
     );
@@ -351,11 +323,11 @@ fn work() -> Unit {
         output.stdout,
         concat!(
             "function\tconsume\t1:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  param\tvalue\tread\tInt\n",
             "  stmt\treturn\t\t\tliteral\tUnit\n",
             "function\twork\t5:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  stmt\tlet\titem\tInt\tliteral\t1\n",
             "  stmt\texpr\t\t\tcall\tconsume\targs=1\tlabels=value\n",
             "  stmt\tif\t\t\tbinary\t==\tthen=1\telse=1\n",
@@ -380,7 +352,7 @@ fn selfhost_pipe_closure_ast_outline_is_deterministic() {
         output.stdout,
         concat!(
             "function\tincrementer\t1:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  stmt\tlet\tincrement\t\tclosure\tclosure\n",
             "  stmt\treturn\t\t\tliteral\tUnit\n",
         )
@@ -406,7 +378,7 @@ fn selfhost_braced_pipe_closure_body_is_materialized() {
         output.stdout,
         concat!(
             "function\tincrementer\t1:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  stmt\tlet\tincrement\t\tclosure\tclosure\tclosure-body=2\n",
             "  stmt\treturn\t\t\tliteral\tUnit\n",
         )
@@ -430,7 +402,7 @@ fn selfhost_ast_outline_names_shared_expression_kinds() {
         output.stdout,
         concat!(
             "function\tvalues\t1:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=List<Int>\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=List<Int>\n",
             "  param\timage\tImage\n",
             "  stmt\tlet\tshared\t\tmanage\tmanage\n",
             "  stmt\tlet\titems\t\tarray\tarray\n",
@@ -458,7 +430,7 @@ fn selfhost_match_ast_outline_is_deterministic() {
         output.stdout,
         concat!(
             "function\tchoose\t1:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  param\tvalue\tread\tOption<Int>\n",
             "  stmt\tmatch\t\t\tname\tvalue\tarms=2\n",
             "    arm\treturn\tUnit\tbody=1\tpattern=variant\n",
@@ -489,7 +461,7 @@ fn selfhost_match_arm_block_ast_outline_is_deterministic() {
         output.stdout,
         concat!(
             "function\tchoose\t1:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  param\tvalue\tread\tOption<Int>\n",
             "  stmt\tmatch\t\t\tname\tvalue\tarms=2\n",
             "    arm\tlet\titem\tbody=2\tpattern=variant\n",
@@ -517,7 +489,7 @@ fn selfhost_match_expression_ast_outline_is_deterministic() {
         output.stdout,
         concat!(
             "function\tchoose\t1:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  param\tvalue\tread\tOption<Int>\n",
             "  stmt\tlet\tanswer\tInt\tmatch\tmatch\tarms=2\tguards=0\n",
             "  stmt\treturn\t\t\tliteral\tUnit\n",
@@ -597,7 +569,7 @@ fn selfhost_match_guard_ast_outline_is_deterministic() {
         output.stdout,
         concat!(
             "function\tchoose\t1:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Int\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Int\n",
             "  param\tvalue\tread\tOption<Int>\n",
             "  stmt\treturn\t\t\tmatch\tmatch\tarms=2\tguards=1\n",
         )
@@ -622,7 +594,7 @@ fn selfhost_destructuring_pattern_ast_outline_is_deterministic() {
         output.stdout,
         concat!(
             "function\tchoose\t1:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  param\tvalue\tread\tInt\n",
             "  stmt\tmatch\t\t\tname\tvalue\tarms=2\n",
             "    arm\treturn\tUnit\tbody=1\tpattern=tuple\tpattern-parts=2\n",
@@ -648,7 +620,7 @@ fn selfhost_with_statement_ast_outline_is_deterministic() {
         output.stdout,
         concat!(
             "function\trun\t1:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  param\tpool\tread\tPool\n",
             "  stmt\twith\tresource\t\tcall\tacquire\targs=0\tlabels=\tbody=1\n",
         )
@@ -673,7 +645,7 @@ fn selfhost_select_statement_ast_outline_is_deterministic() {
         output.stdout,
         concat!(
             "function\tpick\t1:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  param\tfirst\tread\tChan\n",
             "  param\tsecond\tread\tChan\n",
             "  stmt\tselect\t\t\tnone\t\tarms=2\n",
@@ -699,7 +671,7 @@ fn selfhost_let_destructure_ast_outline_is_deterministic() {
         output.stdout,
         concat!(
             "function\tsplit\t1:1:2\n",
-            "  header\tpublic=false\tasync=false\tnative=false\tbody=true\treturn=Unit\n",
+            "  header\tpublic=false\tasync=false\tbody=true\treturn=Unit\n",
             "  param\tpair\tread\tPair\n",
             "  stmt\tlet\t\t\tname\tpair\tdestructure=left,right\n",
             "  stmt\treturn\t\t\tliteral\tUnit\n",

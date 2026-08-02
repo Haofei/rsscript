@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::syntax::ast::{DataEffect, Item, Program, TypeRef};
 
-use super::native_boundary_function_key;
+use super::external_boundary_function_key;
 
 pub(in crate::rust_lower) fn collect_function_type_params(
     program: &Program,
@@ -116,7 +116,7 @@ fn collect_program_function_type_params(
     for item in &program.items {
         if let Item::Function(function) = item {
             type_params.insert(
-                native_boundary_function_key(&function.name),
+                external_boundary_function_key(&function.name),
                 function
                     .type_params
                     .iter()

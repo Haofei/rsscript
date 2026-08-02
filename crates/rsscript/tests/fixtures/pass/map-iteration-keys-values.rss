@@ -1,4 +1,3 @@
-features: local
 
 fn count_keys(table: Map<String, Int>) -> Int {
     let keys = Map.keys<String, Int>(map: table)

@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 
 use super::format::format_package_review_reir_json;
 use super::native::{
-    native_binding_interface_sources, package_native_bindings, package_native_rust_dependencies,
+    native_binding_interface_sources, package_external_bindings, package_native_rust_dependencies,
 };
 use super::source_set::load_package;
 use super::{
@@ -163,9 +163,9 @@ pub fn package_lowering_input(package_dir: &Path) -> Result<PackageLoweringInput
         collect_dependency_interface_sources(package_dir, &package.manifest)?;
     let dependency_sources = collect_dependency_lowering_sources(package_dir, &package.manifest)?;
     let native_dependencies = package_native_rust_dependencies(package_dir, &package.manifest)?;
-    let native_bindings = package_native_bindings(package_dir)?;
+    let external_bindings = package_external_bindings(package_dir)?;
     let native_binding_interfaces =
-        native_binding_interface_sources(&package.sources, &native_bindings);
+        native_binding_interface_sources(&package.sources, &external_bindings);
     let source_dependency_roots = dependency_sources
         .iter()
         .filter_map(package_source_root)
@@ -254,14 +254,13 @@ fn package_review_metadata_from_review(review: &PackageReview) -> PackageReviewM
         package: review.package.clone(),
         risk: review.risk,
         reasons: review.reasons.clone(),
-        features: review.features.clone(),
         virtual_package: review.virtual_package.clone(),
         implements: review.implements.clone(),
         dependencies: review.dependencies.clone(),
         summary: review.summary.clone(),
         files: review.files.clone(),
         exports: review.exports.clone(),
-        capabilities: review.capabilities.clone(),
+        external_bindings: review.external_bindings.clone(),
         await_sites: review.await_sites.clone(),
         native_rust: review.native_rust.clone(),
         review_map: review.review_map.clone(),

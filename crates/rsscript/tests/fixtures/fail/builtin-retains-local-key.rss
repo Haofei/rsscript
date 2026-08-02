@@ -1,5 +1,4 @@
 // expect: RS0501
-features: local
 
 fn run() -> Unit {
     let cache = Map<String, String>.new()

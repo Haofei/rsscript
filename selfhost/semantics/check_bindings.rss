@@ -1,4 +1,3 @@
-features: local
 // AST-backed binding rules. These rules inspect one materialized function body
 // instead of reopening its token range, so later name-resolution work has one
 // place to extend rather than another checker-specific token probe.

@@ -1,5 +1,3 @@
 fn helper(x: Int) -> Int {
     return x
 }
-
-features: local

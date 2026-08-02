@@ -1,15 +1,13 @@
-features: async, native
 
 struct TimerError
 
-pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
-    effects(native)
+pub async fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
 
-pub async native fn Timer.sleep_until(deadline: Deadline) -> Result<Unit, TimerError>
-    effects(native)
 
-pub async native fn Timer.sleep_cancellable(
+pub async fn Timer.sleep_until(deadline: Deadline) -> Result<Unit, TimerError>
+
+
+pub async fn Timer.sleep_cancellable(
     ms: Int,
     token: CancellationToken,
 ) -> Result<Unit, TimerError>
-    effects(native)

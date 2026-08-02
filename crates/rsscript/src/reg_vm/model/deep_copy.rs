@@ -178,7 +178,7 @@ fn deepcopy_collect_regs(instr: &RegInstr, out: &mut Vec<Reg>) {
         RegInstr::CallKnown { dst, args, .. }
         | RegInstr::CallDynamic { dst, args, .. }
         | RegInstr::SpawnTask { dst, args, .. }
-        | RegInstr::CallNative { dst, args, .. }
+        | RegInstr::CallExternal { dst, args, .. }
         | RegInstr::CallIntrinsic { dst, args, .. }
         | RegInstr::CallTypedIntrinsic { dst, args, .. } => {
             out.push(*dst);
@@ -665,7 +665,7 @@ fn deepcopy_instr_forces_keep(instr: &RegInstr, tainted: &[bool], n_regs: usize)
         // the `closure` receiver is only invoked, not mutated.
         RegInstr::CallKnown { args, mut_args, .. }
         | RegInstr::CallDynamic { args, mut_args, .. }
-        | RegInstr::CallNative { args, mut_args, .. }
+        | RegInstr::CallExternal { args, mut_args, .. }
         | RegInstr::CallClosure { args, mut_args, .. } => mut_args
             .iter()
             .any(|&p| args.get(p).is_some_and(|r| is_t(*r))),

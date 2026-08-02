@@ -482,10 +482,6 @@ fn package_review_hash(review: &PackageReview) -> String {
         input.push_str(reason);
         input.push('\n');
     }
-    for feature in &review.features {
-        input.push_str(feature);
-        input.push('\n');
-    }
     for implementation in &review.implements {
         input.push_str(&implementation.interface_package);
         input.push('\n');
@@ -537,7 +533,7 @@ fn package_review_hash(review: &PackageReview) -> String {
         input.push('\n');
         input.push_str(export.function_kind.as_deref().unwrap_or(""));
         input.push('\n');
-        for effect in &export.normalized_effects {
+        for effect in &export.retained_params {
             input.push_str(effect);
             input.push('\n');
         }
@@ -591,18 +587,18 @@ fn package_review_hash(review: &PackageReview) -> String {
     // Capabilities (incl. provider/service/action/resource) are part of the
     // review identity: a provider swap or re-classification that keeps the same
     // summary counts must still change the review hash, so the lock catches it.
-    for capability in &review.capabilities {
-        input.push_str(&capability.binding_symbol);
+    for external_binding in &review.external_bindings {
+        input.push_str(&external_binding.binding_symbol);
         input.push('\n');
-        input.push_str(&capability.category);
+        input.push_str(&external_binding.category);
         input.push('\n');
-        input.push_str(capability.provider.as_deref().unwrap_or(""));
+        input.push_str(external_binding.provider.as_deref().unwrap_or(""));
         input.push('\n');
-        input.push_str(capability.service.as_deref().unwrap_or(""));
+        input.push_str(external_binding.service.as_deref().unwrap_or(""));
         input.push('\n');
-        input.push_str(capability.action.as_deref().unwrap_or(""));
+        input.push_str(external_binding.action.as_deref().unwrap_or(""));
         input.push('\n');
-        input.push_str(capability.resource.as_deref().unwrap_or(""));
+        input.push_str(external_binding.resource.as_deref().unwrap_or(""));
         input.push('\n');
     }
     sha256_label(input.as_bytes())

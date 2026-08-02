@@ -1,42 +1,7 @@
 use crate::diagnostic::Span;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum FileFeature {
-    Local,
-    Native,
-    Unsafe,
-    Async,
-    Device,
-    Ffi,
-    Reflection,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnknownFileFeature {
-    pub name: String,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DuplicateFileFeature {
-    pub name: String,
-    pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileFeatureScope {
-    pub file: String,
-    pub features: Vec<FileFeature>,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
-    pub features: Vec<FileFeature>,
-    pub feature_scopes: Vec<FileFeatureScope>,
-    pub unknown_features: Vec<UnknownFileFeature>,
-    pub duplicate_features: Vec<DuplicateFileFeature>,
-    pub feature_spans: Vec<Span>,
-    pub profile_spans: Vec<Span>,
     pub unknown_top_level_spans: Vec<Span>,
     pub malformed_declaration_spans: Vec<Span>,
     pub protocols: Vec<ProtocolDecl>,
@@ -44,29 +9,7 @@ pub struct Program {
     pub items: Vec<Item>,
 }
 
-impl Program {
-    pub fn has_feature(&self, feature: FileFeature) -> bool {
-        self.features.contains(&feature)
-    }
-
-    pub fn file_has_feature(&self, file: &str, feature: FileFeature) -> bool {
-        self.feature_scopes
-            .iter()
-            .any(|scope| scope.file == file && scope.features.contains(&feature))
-    }
-
-    pub fn local_capability_enabled(&self) -> bool {
-        self.has_feature(FileFeature::Local)
-    }
-}
-
 pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
-    let mut features = Vec::new();
-    let mut feature_scopes: Vec<FileFeatureScope> = Vec::new();
-    let mut unknown_features = Vec::new();
-    let mut duplicate_features = Vec::new();
-    let mut feature_spans = Vec::new();
-    let mut profile_spans = Vec::new();
     let mut unknown_top_level_spans = Vec::new();
     let mut malformed_declaration_spans = Vec::new();
     let mut protocols = Vec::new();
@@ -74,45 +17,14 @@ pub fn merge_programs(programs: impl IntoIterator<Item = Program>) -> Program {
     let mut items = Vec::new();
 
     for program in programs {
-        for feature in program.features {
-            if !features.contains(&feature) {
-                features.push(feature);
-            }
-        }
-        for scope in program.feature_scopes {
-            if let Some(existing) = feature_scopes
-                .iter_mut()
-                .find(|existing| existing.file == scope.file)
-            {
-                for feature in scope.features {
-                    if !existing.features.contains(&feature) {
-                        existing.features.push(feature);
-                    }
-                }
-            } else {
-                feature_scopes.push(scope);
-            }
-        }
-        unknown_features.extend(program.unknown_features);
-        duplicate_features.extend(program.duplicate_features);
         unknown_top_level_spans.extend(program.unknown_top_level_spans);
         malformed_declaration_spans.extend(program.malformed_declaration_spans);
-        if program.feature_spans.len() > 1 {
-            feature_spans.extend(program.feature_spans);
-        }
-        profile_spans.extend(program.profile_spans);
         protocols.extend(program.protocols);
         protocol_impls.extend(program.protocol_impls);
         items.extend(program.items);
     }
 
     Program {
-        features,
-        feature_scopes,
-        unknown_features,
-        duplicate_features,
-        feature_spans,
-        profile_spans,
         unknown_top_level_spans,
         malformed_declaration_spans,
         protocols,
@@ -300,7 +212,6 @@ pub struct FunctionDecl {
     pub name: String,
     pub is_public: bool,
     pub is_async: bool,
-    pub is_native: bool,
     pub has_body: bool,
     pub default_impl_marker: bool,
     pub deprecated_reason: Option<String>,
@@ -315,8 +226,7 @@ pub struct FunctionDecl {
     pub malformed_param_spans: Vec<Span>,
     pub return_ty: Option<TypeRef>,
     pub returns_fresh: bool,
-    pub effects: Vec<EffectDecl>,
-    pub malformed_effect_spans: Vec<Span>,
+    pub retained_params: Vec<String>,
     pub body: Block,
     pub span: Span,
 }
@@ -363,7 +273,7 @@ impl Param {
 impl TypeRef {
     /// The semantic default for an omitted data effect on this type. Syntax
     /// deliberately keeps omission distinct from an explicit `read`; consumers
-    /// that need an ABI or a capability use this method instead.
+    /// that need an ABI or a external_binding use this method instead.
     pub fn default_data_effect(&self) -> Option<DataEffect> {
         (!self.is_noescape
             && !self.is_owned
@@ -393,12 +303,6 @@ pub struct ClosureCapture {
     pub effect: DataEffect,
     pub name: String,
     pub span: Span,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EffectDecl {
-    Name(String),
-    Retains(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -726,7 +630,6 @@ pub enum Expr {
     Closure {
         params: Vec<String>,
         captures: Vec<ClosureCapture>,
-        declared_effects: Vec<String>,
         explicit: bool,
         body: Block,
         span: Span,

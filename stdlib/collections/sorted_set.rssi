@@ -15,7 +15,7 @@ pub fn SortedSet.insert<T: Ord>(
     set: mut SortedSet<T>,
     value: T,
 ) -> Bool
-    effects(retains(value))
+    retains(value)
 
 pub fn SortedSet.remove<T: Ord>(
     set: mut SortedSet<T>,

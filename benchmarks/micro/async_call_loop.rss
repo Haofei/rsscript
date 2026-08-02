@@ -1,4 +1,3 @@
-features: async
 
 fn bench_size(default: Int) -> Int {
     let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))

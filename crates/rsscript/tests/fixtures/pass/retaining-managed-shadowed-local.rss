@@ -1,4 +1,3 @@
-features: local
 
 class Cache {
     entries: Map<String, Image>
@@ -12,7 +11,7 @@ fn Image.load(path: Path) -> fresh Image
 fn Image.inspect(image: Image) -> Unit
 
 fn cache_put(cache: mut Cache, value: Image) -> Unit
-    effects(retains(value))
+    retains(value)
 {
 }
 

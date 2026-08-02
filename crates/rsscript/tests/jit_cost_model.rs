@@ -33,7 +33,7 @@ fn main() -> Unit {
         }
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    let _ = String.from_int(value: total)
     return Unit
 }
 ";
@@ -48,7 +48,7 @@ fn main() -> Unit {
         total = total + i * 2 - 1
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    let _ = String.from_int(value: total)
     return Unit
 }
 ";

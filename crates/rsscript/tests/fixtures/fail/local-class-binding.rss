@@ -1,5 +1,4 @@
 // expect: RS0306
-features: local
 
 class User {
     id: Int

@@ -23,7 +23,6 @@
 // keep `chars: read List<Char>` DIRECT so the DeepCopy-elision holds (extracted
 // Chars flow only into `Char.*` intrinsics / compares / `List.get`).
 
-features: local
 
 module selfhost.scan
 
@@ -1321,10 +1320,10 @@ struct TopClass {
 
 fn classify_top(toks: List<Tok>, i: Int) -> TopClass {
     let isPub = at_ident(toks, i, wid: WORD_PUB)
-    let isFeatures = at_ident(toks, i, wid: WORD_FEATURES) && at_symbol(toks, i: (i + 1), code: SYM_COLON)
-    let isProfile = at_ident(toks, i, wid: WORD_PROFILE) && at_symbol(toks, i: (i + 1), code: SYM_COLON)
+    let isFeatures = false
+    let isProfile = false
     let isSum = at_ident(toks, i, wid: WORD_SUM) || (isPub && at_ident(toks, i: (i + 1), wid: WORD_SUM))
-    let isNativeMod = at_ident(toks, i, wid: WORD_NATIVE) && at_ident(toks, i: (i + 1), wid: WORD_MODULE)
+    let isNativeMod = false
     let isTypeAlias = at_ident(toks, i, wid: WORD_TYPE) || (isPub && at_ident(toks, i: (i + 1), wid: WORD_TYPE))
     let isConst = at_ident(toks, i, wid: WORD_CONST) || (isPub && at_ident(toks, i: (i + 1), wid: WORD_CONST))
     return TopClass(isPub: isPub, isFeatures: isFeatures, isProfile: isProfile, isSum: isSum, isNativeMod: isNativeMod, isTypeAlias: isTypeAlias, isConst: isConst)

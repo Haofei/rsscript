@@ -410,7 +410,6 @@ fn local_analysis_indexes_resource_escape_facts_by_with_span() {
                             value: Some(HirExpr::Closure {
                                 params: Vec::new(),
                                 captures: Vec::new(),
-                                declared_effects: Vec::new(),
                                 explicit: false,
                                 body: HirBlock {
                                     statements: vec![HirStmt::Expr(HirExpr::Ident {
@@ -610,7 +609,6 @@ fn local_analysis_indexes_managed_closure_uses_by_statement_span() {
                     value: Some(HirExpr::Closure {
                         params: Vec::new(),
                         captures: Vec::new(),
-                        declared_effects: Vec::new(),
                         explicit: false,
                         body: HirBlock {
                             statements: vec![HirStmt::Expr(HirExpr::Ident {

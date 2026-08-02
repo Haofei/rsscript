@@ -84,10 +84,8 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Parallel.sort(values: mut List<Int>) -> Unit
-    effects(native, parallel)
+        r#"
+fn Parallel.sort(values: mut List<Int>) -> Unit
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -131,9 +129,9 @@ native fn Parallel.sort(values: mut List<Int>) -> Unit
     );
     assert!(reir_json["facts"].as_array().is_some_and(|facts| {
         facts.iter().any(|fact| {
-            fact["kind"] == "capability"
-                && fact["capability"]["category"] == "process.spawn"
-                && fact["capability"]["service"] == "native_rust_author_declaration"
+            fact["kind"] == "external_binding"
+                && fact["external_binding"]["category"] == "process.spawn"
+                && fact["external_binding"]["service"] == "native_rust_author_declaration"
                 && fact["confidence"]["level"] == "declared"
                 && fact["acquisition_mode"] == "manual_declaration"
         })
@@ -153,39 +151,29 @@ fn package_review_reir_maps_env_http_time_hash_regex_and_tempdir_facades() {
         "rss-stdlib-facades",
         "0.1.0",
         "",
-        r#"features: native, local
-
+        r#"
 resource TempDir
 struct Instant
 struct Regex
 struct RegexError
 
-pub native fn Env.get(name: read String) -> Option<fresh String>
-    effects(native)
+pub fn Env.get(name: read String) -> Option<fresh String>
 
-pub native fn Env.set(name: read String, value: read String) -> Unit
-    effects(native)
+pub fn Env.set(name: read String, value: read String) -> Unit
 
-pub native fn Http.post_json(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
-    effects(native)
+pub fn Http.post_json(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
 
-pub native fn Clock.now() -> fresh Instant
-    effects(native)
+pub fn Clock.now() -> fresh Instant
 
-pub native fn Hash.sha256_string(value: read String) -> fresh String
-    effects(native)
+pub fn Hash.sha256_string(value: read String) -> fresh String
 
-pub native fn Hash.sha256_file(path: read Path) -> Result<fresh String, FileError>
-    effects(native)
+pub fn Hash.sha256_file(path: read Path) -> Result<fresh String, FileError>
 
-pub native fn Regex.compile(pattern: read String) -> Result<fresh Regex, RegexError>
-    effects(native)
+pub fn Regex.compile(pattern: read String) -> Result<fresh Regex, RegexError>
 
-pub native fn TempDir.new() -> Result<TempDir, FileError>
-    effects(native)
+pub fn TempDir.new() -> Result<TempDir, FileError>
 
-pub native fn TempDir.path(dir: read TempDir) -> fresh Path
-    effects(native)
+pub fn TempDir.path(dir: read TempDir) -> fresh Path
 "#,
     );
 
@@ -212,15 +200,15 @@ pub native fn TempDir.path(dir: read TempDir) -> fresh Path
     ] {
         assert!(
             facts.iter().any(|fact| {
-                fact["kind"] == "capability"
+                fact["kind"] == "external_binding"
                     && fact["subject"]["id"].as_str().is_some_and(|id| {
                         id == format!("rss-stdlib-facades::public::function::{name}")
                     })
-                    && fact["capability"]["category"] == category
-                    && fact["capability"]["service"] == "stdlib"
+                    && fact["external_binding"]["category"] == category
+                    && fact["external_binding"]["service"] == "stdlib"
                     && fact["evidence"][0]["kind"] == "package_metadata"
             }),
-            "missing stdlib capability fact for {name} -> {category}: {facts:?}"
+            "missing stdlib external_binding fact for {name} -> {category}: {facts:?}"
         );
     }
 
@@ -283,7 +271,7 @@ fast = []
             .as_str()
             .is_some_and(|path| path.ends_with("review/reir/rsscript.json"))
     );
-    assert_eq!(json["metadata"]["schema"], "rss.review.package.v1");
+    assert_eq!(json["metadata"]["schema"], "rsscript.package_analysis.v1");
     assert_eq!(json["metadata"]["package"]["name"], "rss-metadata");
     assert_eq!(json["metadata"]["features"], serde_json::json!(["fast"]));
 }
@@ -296,10 +284,8 @@ fn package_metadata_writes_reir_review_artifact() {
         "rss-metadata-reir",
         "0.1.0",
         "",
-        r#"features: native
-
+        r#"
 pub fn NativeBridge.run(value: read Int) -> Int
-    effects(native)
 "#,
     );
 
@@ -365,7 +351,7 @@ fn package_metadata_verify_reports_missing_or_stale_artifacts() {
     package_metadata(&temp_dir, false).expect("metadata write should succeed");
     fs::write(
         temp_dir.join("review").join("package-review.json"),
-        "{\"schema\":\"rss.review.package.v1\",\"stale\":true}",
+        "{\"schema\":\"rsscript.package_analysis.v1\",\"stale\":true}",
     )
     .expect("package review artifact should be made stale");
     fs::remove_file(temp_dir.join("review").join("reir").join("rsscript.json"))
@@ -599,38 +585,45 @@ unsafe = "forbid"
         &old_dir,
         "0.1.0",
         native_manifest,
-        r#"features: native
-
-native fn Native.one(message: read String) -> String
-    effects(native)
+        r#"
+fn Native.one(message: read String) -> String
 "#,
     );
     common::write_package_fixture(
         &new_dir,
         "0.1.0",
         native_manifest,
-        r#"features: native
-
-native fn Native.one(message: read String) -> String
-    effects(native)
-native fn Native.two(message: read String) -> String
-    effects(native)
+        r#"
+fn Native.one(message: read String) -> String
+fn Native.two(message: read String) -> String
 "#,
     );
     fs::create_dir_all(old_dir.join("native")).expect("old native dir should be created");
     fs::write(
         old_dir.join("native/bindings.rssbind.toml"),
-        r#"[bindings]
-"Native.one" = "rss_native::one"
+        r#"schema = "rsscript.bindings.v1"
+
+[[function]]
+symbol = "Native.one"
+provider = "rss_native"
+entry = "one"
+
+[[function]]
+symbol = "Native.two"
+provider = "rss_native"
+entry = "two"
 "#,
     )
     .expect("old native bindings should be written");
     fs::create_dir_all(new_dir.join("native")).expect("new native dir should be created");
     fs::write(
         new_dir.join("native/bindings.rssbind.toml"),
-        r#"[bindings]
-"Native.one" = "rss_native::one"
-"Native.two" = "rss_native::two"
+        r#"schema = "rsscript.bindings.v1"
+
+[[function]]
+symbol = "Native.one"
+provider = "rss_native"
+entry = "one"
 "#,
     )
     .expect("new native bindings should be written");
@@ -651,8 +644,8 @@ native fn Native.two(message: read String) -> String
 }
 
 #[test]
-fn package_lock_review_hash_tracks_capability_provider_swap() {
-    // Same code, same capability category — only the provider changes. The lock
+fn package_lock_review_hash_tracks_external_binding_provider_swap() {
+    // Same code, same external_binding category — only the provider changes. The lock
     // must still notice (provider pinning), otherwise a supply-chain provider
     // swap would be invisible to review.
     let old_dir = common::unique_temp_dir("rsscript-package-lock-provider-old");
@@ -667,20 +660,22 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 
-[[review.capability_bindings]]
+[[review.external_binding_bindings]]
 symbol = "Native.write"
 category = "database.write"
 provider = "{provider}"
 "#
         )
     };
-    let source = r#"features: native
-
-native fn Native.write(message: read String) -> String
-    effects(native)
+    let source = r#"
+fn Native.write(message: read String) -> String
 "#;
-    let bindings = r#"[bindings]
-"Native.write" = "rss_native::write"
+    let bindings = r#"schema = "rsscript.bindings.v1"
+
+[[function]]
+symbol = "Native.write"
+provider = "rss_native"
+entry = "write"
 "#;
     common::write_package_fixture(&old_dir, "0.1.0", &manifest("trusted-db"), source);
     common::write_package_fixture(&new_dir, "0.1.0", &manifest("rogue-db"), source);
@@ -697,7 +692,7 @@ native fn Native.write(message: read String) -> String
 
     assert_ne!(
         old_lock.packages[0].review_hash, new_lock.packages[0].review_hash,
-        "a capability provider swap must change the review hash"
+        "a external_binding provider swap must change the review hash"
     );
 }
 
@@ -705,13 +700,11 @@ native fn Native.write(message: read String) -> String
 fn package_lock_review_hash_tracks_await_live_across_changes() {
     let old_dir = common::unique_temp_dir("rsscript-package-lock-await-live-old");
     let new_dir = common::unique_temp_dir("rsscript-package-lock-await-live-new");
-    let interface = r#"features: async, native
-
+    let interface = r#"
 struct TimerError
 struct Client
 
-pub async native fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
-    effects(native)
+pub async fn Timer.sleep(ms: Int) -> Result<Unit, TimerError>
 
 pub fn Log.done(client: read Client) -> Unit
 
@@ -722,8 +715,7 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError>
     fs::create_dir_all(old_dir.join("src")).expect("old src dir should be created");
     fs::write(
         old_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
     return Ok(Unit)
@@ -734,8 +726,7 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
     fs::create_dir_all(new_dir.join("src")).expect("new src dir should be created");
     fs::write(
         new_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
     Log.done(client: read client)
@@ -1175,10 +1166,8 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.parse(text: read String) -> String
-    effects(native)
+        r#"
+fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -1237,10 +1226,8 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 "#,
-        r#"features: native
-
-native fn Native.parse(text: read String) -> String
-    effects(native)
+        r#"
+fn Native.parse(text: read String) -> String
 "#,
     );
     fs::create_dir_all(temp_dir.join("native/rust/src")).expect("native src dir should be created");
@@ -1305,8 +1292,7 @@ rss-async = {{ path = "{}" }}
     fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
     fs::write(
         root_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 async fn main() -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
     return Ok(Unit)
@@ -1394,8 +1380,7 @@ async = "rss-async-runtime"
     fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
     fs::write(
         root_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 async fn main() -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
     return Ok(Unit)
@@ -2125,7 +2110,7 @@ fn package_metadata_fails_closed_on_error_diagnostics() {
     // Malformed declaration -> error diagnostic.
     fs::write(
         dir.join("interface/lib.rssi"),
-        "native fn Broken.x(sql: read String -> String\n",
+        "fn Broken.x(sql: read String -> String\n",
     )
     .expect("interface");
 

@@ -9,7 +9,6 @@ use selfhost.interfaces.*
 use selfhost.scan.*
 use selfhost.semantics.declarations.*
 use selfhost.semantics.diagnostics.*
-use selfhost.semantics.features.*
 use selfhost.syntax.ast.*
 use selfhost.syntax.parser_items.*
 use selfhost.syntax.token_ranges.*
@@ -39,7 +38,7 @@ fn find_param_open(toks: List<Tok>, from: Int, end: Int) -> Int {
     return r
 }
 
-// Valid v0.6 effect names for an `effects(...)` clause (check_function_effects).
+// Valid v0.6 effect names for an `effect_list(...)` clause (check_function_effects).
 fn is_valid_effect_name(name: String) -> Bool {
     return name == "no_panic" || name == "noalloc" || name == "no_block" || name == "pure" || name == "unsafe" || name == "native" || name == "parallel"
 }
@@ -49,7 +48,7 @@ fn is_removed_runtime_effect(name: String) -> Bool {
     return name == "io" || name == "allocates" || name == "may_panic" || name == "may_fail" || name == "async" || name == "suspends"
 }
 
-// Index of the `(` of a top-level `effects(...)` clause in a function signature,
+// Index of the `(` of a top-level `effect_list(...)` clause in a function signature,
 // or -1. The clause sits after the param list, before the body.
 fn find_effects_open(toks: List<Tok>, start: Int) -> Int {
     let ns = fn_name_start(toks, i: start)
@@ -98,7 +97,7 @@ fn effect_item_kind(toks: List<Tok>, segStart: Int, segEnd: Int) -> Int {
     return 0
 }
 
-// Walk a function's `effects(...)` items (only the VALID ones — malformed items
+// Walk a function's `effect_list(...)` items (only the VALID ones — malformed items
 // recover to RS0015 and are skipped). `mode`: 0 = RS0004 (unknown effect: `fresh`
 // or an unrecognized name), 1 = RS0012 (removed runtime effect).
 fn effects_name_probe(toks: List<Tok>, start: Int, mode: Int) -> Bool {
@@ -142,8 +141,8 @@ fn effect_name_hits(toks: List<Tok>, segStart: Int, segEnd: Int, mode: Int) -> B
     if effect_item_kind(toks, segStart, segEnd) != 1 { return false }
     let name = tk_text(toks, i: segStart)
     if mode == 1 { return is_removed_runtime_effect(name) }
-    // mode 2: RS0101 — the `native` effect (a `native fn` boundary, or any fn with
-    // `effects(native)`). Used to gate the `native` file feature.
+    // mode 2: RS0101 — the `native` effect (a `fn` boundary, or any fn with
+    // ``). Used to gate the `native` file feature.
     if mode == 2 { return name == "native" }
     if name == "fresh" { return true }
     if is_removed_runtime_effect(name) { return false }
@@ -1009,7 +1008,7 @@ fn collect_fn_use_after_manage_tokens(toks: List<Tok>, start: Int, out: mut List
 }
 
 // RS0501 LOCAL_VALUE_RETAINED: passing a `local` value as an argument to a parameter the callee
-// declares `effects(retains(P))`. A local's lifetime is the caller's frame, so it can't be
+// declares `retains(P)`. A local's lifetime is the caller's frame, so it can't be
 // retained beyond the call. (A `let`/managed value passed there is a different error — the take
 // itself is RS0308; a managed value can legitimately be retained.)
 
@@ -3199,7 +3198,7 @@ fn retains_item_bad(toks: List<Tok>, segStart: Int, segEnd: Int, popen: Int, pcl
     return status == 0 || status == 2
 }
 
-// RS0007: an `effects(retains(p))` item whose p is not a param, or is a Copy param.
+// RS0007: an `retains(p)` item whose p is not a param, or is a Copy param.
 fn collect_bad_retains_tokens(toks: List<Tok>, start: Int, out: mut List<Int>) -> Bool {
     let effOpen = find_effects_open(toks, start)
     if effOpen < 0 { return false }
@@ -3266,7 +3265,7 @@ fn item_is_pure(toks: List<Tok>, segStart: Int, segEnd: Int) -> Bool {
     return tk_text(toks, i: segStart) == "pure"
 }
 
-// True if the fn declares `effects(pure)` (a bare `pure` item).
+// True if the fn declares `` (a bare `pure` item).
 fn fn_is_pure(toks: List<Tok>, start: Int) -> Bool {
     let effOpen = find_effects_open(toks, start)
     if effOpen < 0 { return false }
@@ -3681,7 +3680,7 @@ fn collect_type_ref_unknown_tokens(toks: List<Tok>, s: Int, e: Int, generics: Se
     let after = dotted_end(toks, i: p)
     let mut unknown = false
     // Capability is treated as always-known and its protocol arg is not recursed.
-    if base == "Capability" {
+    if base == "Dyn" {
         return false
     }
     let known = Set.contains<String>(set: generics, value: base) || is_builtin_type(name: base) || is_stdlib_type(name: base) || Set.contains<String>(set: declared, value: base)
@@ -4554,7 +4553,7 @@ fn collect_fn_bad_await_tokens(
 // ---------------------------------------------------------------------------
 // RS0023 FD_OUTSIDE_INTERNAL_BOUNDARY.
 //
-// `Fd` used in a param/return type of a non-native fn, or in a field type of a
+// `Fd` used in a param/return type of a non-fn, or in a field type of a
 // non-resource type decl (check_fd_surface, type_ref_contains_name(ty, "Fd")).
 // Native fns and resource types are the trusted internal boundary and skipped.
 // ---------------------------------------------------------------------------
@@ -4571,7 +4570,7 @@ fn fn_is_native(toks: List<Tok>, start: Int) -> Bool {
     return hit
 }
 
-// RS0023 over a non-native fn: any param type or the return type names `Fd`.
+// RS0023 over a non-fn: any param type or the return type names `Fd`.
 fn collect_text_tokens(toks: List<Tok>, s: Int, e: Int, word: String, out: mut List<Int>) -> Bool {
     let mut k = s
     let mut hit = false
@@ -4793,7 +4792,7 @@ fn fn_lower_name_pin(toks: List<Tok>, start: Int) -> String {
 // bound (`Managed`/`Struct`/`Resource`) nor visible. Visible protocols are the
 // stdlib-interface protocols plus the file's own `protocol` decls. Mirrors
 // check_protocol_bound over the exact 3-token `Ident : Ident` param form the
-// parser accepts. (The Capability<P> and `impl P for T` paths have no fixtures.)
+// parser accepts. (The Dyn<P> and `impl P for T` paths have no fixtures.)
 // ---------------------------------------------------------------------------
 
 // Stdlib-interface protocols visible to every file (the `protocol` decls in the
@@ -4801,10 +4800,10 @@ fn fn_lower_name_pin(toks: List<Tok>, start: Int) -> String {
 // ---------------------------------------------------------------------------
 // RS0014 / RS0018 / RS0019 runtime-guarantee bodies.
 //
-// A fn declaring effects(no_block)/effects(no_panic) may only call constructors,
+// A fn declaring/ may only call constructors,
 // enum variants, or functions carrying the same guarantee — an unqualified call
 // to a user function lacking it is RS0018 / RS0019. A fn declaring
-// effects(noalloc) must not construct a value or `manage` — RS0014. Mirrors
+// must not construct a value or `manage` — RS0014. Mirrors
 // check_runtime_guarantee_* (the qualified-stdlib-call cases have no fixtures).
 // ---------------------------------------------------------------------------
 
@@ -4814,7 +4813,7 @@ fn effect_seg_named(toks: List<Tok>, segStart: Int, segEnd: Int, effName: String
     return tk_text(toks, i: segStart) == effName
 }
 
-// True if the fn's effects(...) clause lists the bare effect `effName`.
+// True if the fn's effect_list(...) clause lists the bare effect `effName`.
 fn fn_has_named_effect(toks: List<Tok>, start: Int, effName: String) -> Bool {
     let effOpen = find_effects_open(toks, start)
     if effOpen < 0 { return false }
@@ -4869,7 +4868,7 @@ fn collect_fn_guarantee_call_bad_sites(source: String, toks: List<Tok>, start: I
     return hit
 }
 
-// RS0014: a fn declaring effects(noalloc) whose body constructs a value (an
+// RS0014: a fn declaring whose body constructs a value (an
 // unqualified call to a declared type) or uses `manage`.
 fn collect_fn_noalloc_alloc_sites(source: String, toks: List<Tok>, start: Int, declared: Set<String>, out: mut List<DiagnosticSite>) -> Bool {
     if fn_has_named_effect(toks, start, effName: "noalloc") == false { return false }
@@ -4906,7 +4905,7 @@ fn collect_fn_noalloc_alloc_sites(source: String, toks: List<Tok>, start: Int, d
 // `noalloc` fns (oracle analyzer/diagnostics.rs). Unqualified constructor calls
 // (a declared type) allocate and are RS0014, not RS0020, so they are excluded here.
 
-// Simple + dotted names of every `effects(noalloc)` fn (one top-level pre-pass).
+// Simple + dotted names of every `` fn (one top-level pre-pass).
 fn collect_noalloc_fns(toks: List<Tok>) -> Set<String> {
     let ntok = List.len(list: toks)
     let mut out = Set<String>.new()
@@ -5763,12 +5762,12 @@ fn collect_weak_field_bad_init_tokens(toks: List<Tok>, out: mut List<Int>) -> Bo
 // oracle sources are reproduced:
 //   * checks/features.rs feature_uses — construct -> required feature:
 //       local  : `local` let/closure, `manage` expr, `take` data-effect
-//       native : a fn with `effects(native)`
-//       unsafe : a fn with `effects(unsafe)`
+//       native : a fn with ``
+//       unsafe : a fn with ``
 //       async  : `async fn`/`async let`/`async for`, `spawn`, `await`,
 //                `task_group`, `select`
-//   * analyzer/signatures.rs check_native_effect — a `native fn` that does NOT
-//     surface `effects(native)` is RS0101 REGARDLESS of the declared features.
+//   * analyzer/signatures.rs check_native_effect — a `fn` that does NOT
+//     surface `` is RS0101 REGARDLESS of the declared features.
 //   * checks/body/semantics.rs check_match_pattern_effects — `match take`
 //     without `features: local` (subsumed by the `take` keyword probe).
 //
@@ -5778,33 +5777,6 @@ fn collect_weak_field_bad_init_tokens(toks: List<Tok>, out: mut List<Int>) -> Bo
 // exception (the missing-effect source fires even when declared), so it is
 // tracked separately in the fn walk.
 // ---------------------------------------------------------------------------
-
-// The `local`/`native`/`unsafe`/`async` features this file declares, collected
-// from every top-level `features:` header (order-independent pre-pass).
-fn collect_declared_features(toks: List<Tok>) -> Set<String> {
-    let mut declared = Set<String>.new()
-    let n = List.len(list: toks)
-    let mut i = 0
-    while i < n {
-        if at_ident(toks: toks, i: i, wid: WORD_FEATURES) && at_symbol(toks: toks, i: (i + 1), code: SYM_COLON) {
-            let lineEnd = declaration_line_end(toks: toks, start: i)
-            let mut j = i + 2
-            while j < lineEnd {
-                if is_ident_tok(toks: toks, i: j) {
-                    let fname = tk_text(toks, i: j)
-                    if is_known_feature(name: fname) {
-                        Set.insert<String>(set: mut declared, value: fname)
-                    }
-                }
-                j = j + 1
-            }
-            i = lineEnd
-        } else {
-            i = i + 1
-        }
-    }
-    return declared
-}
 
 // True if the ident/keyword token at i is `word` and is not a method name (not
 // preceded by `.`).
@@ -5905,7 +5877,7 @@ fn file_async_use(toks: List<Tok>) -> Bool {
     let mut hit = false
     while i < n {
         // The `async` MODIFIER (`async fn`/`async let`/`async for`) is a feature
-        // use; the `async` EFFECT NAME in `effects(..., async, ...)` is a removed
+        // use; the `async` EFFECT NAME in `effect_list(..., async, ...)` is a removed
         // runtime effect (RS0012), NOT an async construct, so gate on the next kw.
         if at_ident(toks: toks, i: i, wid: WORD_ASYNC) && (at_ident(toks: toks, i: (i + 1), wid: WORD_FN) || at_ident(toks: toks, i: (i + 1), wid: WORD_FOR) || is_kw_text(toks, i: (i + 1), word: "let")) {
             hit = true
@@ -5923,7 +5895,7 @@ fn file_async_use(toks: List<Tok>) -> Bool {
     return hit
 }
 
-// An `unsafe`-feature construct anywhere: an `effects(unsafe)` clause. `unsafe`
+// An `unsafe`-feature construct anywhere: an `` clause. `unsafe`
 // is only ever an effect name or a `features: unsafe` header token (the latter
 // implies the feature is declared, so it self-gates), so a bare WORD_UNSAFE
 // token is a faithful proxy.
@@ -6440,7 +6412,6 @@ fn rs0015_has_native_body(program: Program) -> Bool {
     let mut i = 0
     while i < Program.len(self: program) {
         let item = List.get<Item>(list: program.items, index: i)
-        if item.kind == ITEM_FUNCTION && item.isNative && item.hasBody { return true }
         i = i + 1
     }
     return false

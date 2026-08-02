@@ -18,7 +18,7 @@
 //!   stdout   = "..."                # expected stdout (optional)
 //!   value    = "..."                # expected `main` return display (optional)
 //!   codes    = ["RS0206"]           # diagnostics: expected error codes
-//!   tags     = ["arithmetic"]       # capability tags (feed the coverage gate)
+//!   tags     = ["arithmetic"]       # external_binding tags (feed the coverage gate)
 #![allow(clippy::duplicate_mod)]
 
 mod common;
@@ -53,9 +53,9 @@ struct FixtureSpec {
     tags: Vec<String>,
 }
 
-/// Capability tags the corpus must always cover, so "test all aspects" is an
+/// ExternalBinding tags the corpus must always cover, so "test all aspects" is an
 /// enforced invariant rather than an aspiration. Adding a feature should add a
-/// fixture (and, when it's a new capability, a tag here).
+/// fixture (and, when it's a new external_binding, a tag here).
 const REQUIRED_TAGS: &[&str] = &[
     "arithmetic",
     "string",
@@ -82,7 +82,7 @@ fn collect_fixture_paths() -> Vec<PathBuf> {
     paths
 }
 
-/// Fail if any required capability tag has no fixture covering it.
+/// Fail if any required external_binding tag has no fixture covering it.
 fn coverage_gate(paths: &[PathBuf]) -> Result<(), String> {
     let mut covered = std::collections::BTreeSet::new();
     for path in paths {
@@ -97,7 +97,7 @@ fn coverage_gate(paths: &[PathBuf]) -> Result<(), String> {
         .collect();
     if !missing.is_empty() {
         return Err(format!(
-            "corpus is missing fixtures for capabilities: {missing:?}"
+            "corpus is missing fixtures for external_bindings: {missing:?}"
         ));
     }
     Ok(())

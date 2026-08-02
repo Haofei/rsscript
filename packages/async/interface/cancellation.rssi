@@ -1,4 +1,3 @@
-features: native, local
 
 // Structured cancellation split into a cancel capability and a read-only
 // observation token. The language/runtime owns propagation through task_group;
@@ -7,14 +6,13 @@ features: native, local
 struct CancellationSource
 struct CancellationToken
 
-pub native fn CancellationSource.new() -> fresh CancellationSource
-    effects(native)
+pub fn CancellationSource.new() -> fresh CancellationSource
 
-pub native fn CancellationSource.token(source: CancellationSource) -> fresh CancellationToken
-    effects(native)
 
-pub native fn CancellationSource.cancel(source: mut CancellationSource) -> Unit
-    effects(native)
+pub fn CancellationSource.token(source: CancellationSource) -> fresh CancellationToken
 
-pub native fn CancellationToken.is_cancelled(token: CancellationToken) -> Bool
-    effects(native)
+
+pub fn CancellationSource.cancel(source: mut CancellationSource) -> Unit
+
+
+pub fn CancellationToken.is_cancelled(token: CancellationToken) -> Bool

@@ -1,4 +1,3 @@
-features: async
 
 async fn produce(id: Int) -> Result<Int, TimerError> {
     await Timer.sleep(ms: 1)?

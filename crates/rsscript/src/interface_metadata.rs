@@ -291,17 +291,16 @@ mod tests {
         let rss = format_selfhost_interface_metadata_rss(&metadata);
         assert!(rss.contains("module selfhost.interfaces"));
         assert!(rss.contains("if name == \"Int\" { return true }"));
-        assert!(rss.contains("if name == \"ProcessRequest\" { return true }"));
+        assert!(!rss.contains("if name == \"ProcessRequest\" { return true }"));
         assert!(rss.contains("ns == \"Json\" && method == \"parse\""));
         assert!(rss.contains("return \"Result<fresh JsonValue, JsonError>\""));
-        assert!(rss.contains("ns == \"File\" && method == \"write\" && pname == \"file\""));
-        assert!(rss.contains("return \"mut\""));
+        assert!(!rss.contains("ns == \"File\" && method == \"write\""));
     }
 
     #[test]
     fn selfhost_known_types_come_from_canonical_sources() {
         let metadata = metadata();
-        assert!(metadata.types.iter().any(|name| name == "ProcessRequest"));
+        assert!(!metadata.types.iter().any(|name| name == "ProcessRequest"));
         assert!(metadata.types.iter().any(|name| name == "JsonValue"));
         assert!(crate::analyzer::BUILTIN_TYPE_NAMES.contains(&"Int"));
         assert!(crate::analyzer::BUILTIN_TYPE_NAMES.contains(&"Result"));
@@ -315,11 +314,6 @@ mod tests {
         assert_eq!(find_param(concat, "left").type_name, "String");
         assert_eq!(find_param(concat, "left").effect, Some(DataEffect::Read));
         assert_eq!(find_param(concat, "right").type_name, "String");
-
-        let write = find_function(&metadata, "File", "write");
-        assert_eq!(find_param(write, "file").type_name, "File");
-        assert_eq!(find_param(write, "file").effect, Some(DataEffect::Mut));
-        assert_eq!(find_param(write, "data").type_name, "Bytes");
     }
 
     #[test]
@@ -340,8 +334,6 @@ mod tests {
         assert!(rss.contains(
             "if ns == \"String\" && method == \"concat\" && index == 0 { return \"left\" }"
         ));
-        assert!(rss.contains(
-            "if ns == \"File\" && method == \"write\" && pname == \"file\" { return \"mut\" }"
-        ));
+        assert!(!rss.contains("if ns == \"File\" && method == \"write\""));
     }
 }

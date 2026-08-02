@@ -5,7 +5,7 @@ struct Image {
 }
 
 fn memoize(image: Image) -> Image
-    effects(pure, retains(image))
+    retains(image)
 {
     return image
 }

@@ -1,12 +1,12 @@
 use crate::diagnostic::{Diagnostic, Span, code};
 use std::collections::HashSet;
 
-use crate::syntax::ast::{EffectDecl, Item, TypeRef};
+use crate::syntax::ast::{Item, TypeRef};
 use crate::syntax::parse_source;
 
 const MAX_PUBLIC_PARAMS: usize = 6;
 const MAX_PUBLIC_GENERICS: usize = 3;
-const MAX_PUBLIC_EFFECTS: usize = 4;
+const MAX_PUBLIC_RETAINS: usize = 4;
 const MAX_TYPE_DEPTH: usize = 4;
 
 pub fn lint_source(file: &str, source: &str) -> Vec<Diagnostic> {
@@ -17,10 +17,10 @@ pub fn lint_source(file: &str, source: &str) -> Vec<Diagnostic> {
         let Item::Function(function) = item else {
             continue;
         };
-        lint_duplicate_effects(
+        lint_duplicate_retains(
             &mut diagnostics,
             &function.name,
-            &function.effects,
+            &function.retained_params,
             function.span.clone(),
         );
         if !function.is_public {
@@ -57,16 +57,16 @@ pub fn lint_source(file: &str, source: &str) -> Vec<Diagnostic> {
             );
         }
 
-        if function.effects.len() > MAX_PUBLIC_EFFECTS {
+        if function.retained_params.len() > MAX_PUBLIC_RETAINS {
             signature_complexity_warning(
                 &mut diagnostics,
                 function.span.clone(),
                 format!(
-                    "Public function `{}` declares {} effects.",
+                    "Public function `{}` retains {} parameters.",
                     function.name,
-                    function.effects.len()
+                    function.retained_params.len()
                 ),
-                format!("Keep public effect clauses at or below {MAX_PUBLIC_EFFECTS} entries."),
+                format!("Keep public retention clauses at or below {MAX_PUBLIC_RETAINS} entries."),
             );
         }
 
@@ -106,39 +106,31 @@ pub fn lint_source(file: &str, source: &str) -> Vec<Diagnostic> {
     diagnostics
 }
 
-fn lint_duplicate_effects(
+fn lint_duplicate_retains(
     diagnostics: &mut Vec<Diagnostic>,
     function_name: &str,
-    effects: &[EffectDecl],
+    retained_params: &[String],
     span: Span,
 ) {
     let mut seen = HashSet::new();
-    for effect in effects {
-        let label = effect_label(effect);
+    for label in retained_params {
         if seen.insert(label.clone()) {
             continue;
         }
         diagnostics.push(
             Diagnostic::warning(
                 code::LINT_DUPLICATE_EFFECT,
-                format!("Function `{function_name}` repeats effect `{label}`."),
+                format!("Function `{function_name}` repeats retained parameter `{label}`."),
                 span.clone(),
                 "duplicate effect",
             )
-            .with_cause("Repeating an effect does not change the function contract.")
+            .with_cause("Repeating a retention declaration does not change the function contract.")
             .with_fix(
                 "remove_duplicate_effect",
-                format!("Remove the repeated `{label}` effect."),
+                format!("Remove the repeated `retains({label})` declaration."),
                 "machine-applicable",
             ),
         );
-    }
-}
-
-fn effect_label(effect: &EffectDecl) -> String {
-    match effect {
-        EffectDecl::Name(name) => name.clone(),
-        EffectDecl::Retains(param) => format!("retains({param})"),
     }
 }
 

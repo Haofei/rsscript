@@ -5,7 +5,6 @@ use super::*;
 #[test]
 fn rust_lowering_is_gated_by_diagnostics() {
     let source = r#"
-features: local
 
 struct Image {
     pixels: Buffer

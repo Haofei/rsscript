@@ -1,14 +1,15 @@
 #![allow(unused_imports, dead_code)]
-pub(crate) use rsscript::{
-    NativeInterpreterFn, NativeValue, lower_source_to_rust_package, reg_vm_compile_source,
-    reg_vm_eval_source_main_with_args, reg_vm_eval_source_main_with_args_and_native_bindings,
-    write_generated_rust_package,
-};
+pub(crate) use rsscript::{ExternalFunction, NativeValue, write_generated_rust_package};
 pub(crate) use sha1::{Digest, Sha1};
 pub(crate) use std::fs;
 pub(crate) use std::path::Path;
 pub(crate) use std::process::Command;
 mod common;
+pub(crate) use common::{
+    compile_vm_source as reg_vm_compile_source,
+    lower_test_source_to_rust_package as lower_source_to_rust_package,
+    reg_vm_eval_source_main_with_args, reg_vm_eval_source_main_with_args_and_external_bindings,
+};
 
 fn assert_reg_vm_matches_compiled_backend<'a>(
     file: &str,
@@ -325,18 +326,16 @@ fn hash_path_if_exists(hasher: &mut Sha1, path: &Path) {
 fn assert_reg_vm_with_native_output<'a, const N: usize>(
     file: &str,
     source: &str,
+    interfaces: &[(&str, &str)],
     args: impl IntoIterator<Item = &'a str>,
-    native_bindings: [(&'static str, NativeInterpreterFn); N],
+    external_bindings: [(&'static str, ExternalFunction); N],
     expected_stdout: &str,
 ) {
     let args = args.into_iter().collect::<Vec<_>>();
-    let reg = reg_vm_eval_source_main_with_args_and_native_bindings(
-        file,
-        source,
-        args.iter().copied(),
-        native_bindings,
-    )
-    .expect("reg vm should run");
+    let reg = common::compile_vm_source_with_interfaces(file, source, interfaces)
+        .expect("reg vm should compile")
+        .eval_main_with_args_and_external_bindings(args.iter().copied(), external_bindings)
+        .expect("reg vm should run");
 
     assert_eq!(reg.value, "Unit");
     assert_eq!(reg.display_value, "Unit");

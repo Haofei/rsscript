@@ -1,4 +1,3 @@
-features: local
 
 // Self-hosted RSS tool: a stdlib conformance reporter. Runs a battery of
 // pure stdlib checks (List/Map/String/Option/Result) and emits a JSON summary.

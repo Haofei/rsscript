@@ -1556,6 +1556,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-lowering"
+version = "0.1.0"
+dependencies = [
+ "rsscript-semantics",
+]
+
+[[package]]
 name = "rsscript-runtime"
 version = "0.1.0"
 dependencies = [
@@ -1583,6 +1590,10 @@ dependencies = [
  "tracing",
  "uuid",
 ]
+
+[[package]]
+name = "rsscript-semantics"
+version = "0.1.0"
 
 [[package]]
 name = "rustc-hash"

@@ -5,12 +5,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rsscript::{
-    DeploymentProfile, EvalError, EvalOutput, ExecutionCapability, ExecutionContext,
-    HostCapabilities, NativeValue, VmLimits, check_generated_rust_package,
+    EvalError, EvalOutput, NativeValue, VmLimits, check_generated_rust_package,
     configure_reduced_build_environment, format_diagnostics_human, format_diagnostics_json,
-    load_authorized_package_native_bindings, parse_runtime_diagnostics,
-    prepare_package_for_execution, reg_vm_compile_package_input, reg_vm_eval_source_main_with_args,
-    write_generated_rust_package,
+    load_package_bindings_from_snapshot, parse_runtime_diagnostics, prepare_package_for_execution,
+    reg_vm_compile_package_input, write_generated_rust_package,
 };
 
 use super::{
@@ -31,9 +29,6 @@ struct RunOptions<'a> {
     vm: bool,
     release: bool,
     dry_run: bool,
-    trusted_unlimited: bool,
-    trusted_native: bool,
-    deployment_profile: DeploymentProfile,
     path: Option<&'a str>,
     out_dir: Option<&'a str>,
     program_args: Vec<&'a str>,
@@ -44,9 +39,6 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
     let mut vm = false;
     let mut release = false;
     let mut dry_run = false;
-    let mut trusted_unlimited = false;
-    let mut trusted_native = false;
-    let mut deployment_profile = DeploymentProfile::default();
     let mut path = None;
     let mut out_dir = None;
     let mut program_args = Vec::new();
@@ -64,15 +56,6 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
             release = true;
         } else if arg == "--dry-run" {
             dry_run = true;
-        } else if arg == "--trusted-unlimited" {
-            trusted_unlimited = true;
-        } else if arg == "--trusted-native" {
-            trusted_native = true;
-        } else if arg == "--deployment-profile" {
-            index += 1;
-            deployment_profile = required_flag_value(args, index, "--deployment-profile")?
-                .parse()
-                .map_err(|error: rsscript::ParseDeploymentProfileError| error.to_string())?;
         } else if arg == "--out-dir" {
             index += 1;
             out_dir = Some(required_flag_value(args, index, "--out-dir")?);
@@ -91,9 +74,6 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
         vm,
         release,
         dry_run,
-        trusted_unlimited,
-        trusted_native,
-        deployment_profile,
         path,
         out_dir,
         program_args,
@@ -112,32 +92,6 @@ fn validate_run_options(options: &RunOptions<'_>) -> Result<(), String> {
     if options.vm && options.out_dir.is_some() {
         return Err("`rss run --vm` cannot be combined with `--out-dir`.".to_string());
     }
-    if options.trusted_unlimited && !options.vm {
-        return Err("`--trusted-unlimited` is only valid with `rss run --vm`.".to_string());
-    }
-    if options.trusted_unlimited {
-        options
-            .deployment_profile
-            .authorize(ExecutionCapability::UnlimitedVm)
-            .map_err(|error| error.to_string())?;
-    }
-    if options.trusted_native {
-        options
-            .deployment_profile
-            .authorize(ExecutionCapability::InProcessNative)
-            .map_err(|error| error.to_string())?;
-    }
-    let backend = if options.dry_run {
-        ExecutionCapability::StaticLowering
-    } else if options.vm {
-        ExecutionCapability::BoundedReferenceVm
-    } else {
-        ExecutionCapability::BoundedRustAot
-    };
-    options
-        .deployment_profile
-        .authorize(backend)
-        .map_err(|error| error.to_string())?;
     Ok(())
 }
 pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
@@ -153,14 +107,7 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     if options.vm {
-        return run_via_vm(
-            path,
-            &options.program_args,
-            options.json,
-            options.trusted_unlimited,
-            options.trusted_native,
-            options.deployment_profile,
-        );
+        return run_via_vm(path, &options.program_args, options.json);
     }
     let runtime_path = match default_runtime_path() {
         Ok(path) => path,
@@ -183,8 +130,7 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
         let cached_package_present =
             cache_dir.join("Cargo.toml").is_file() && cache_dir.join("src/main.rs").is_file();
         if cached_package_present
-            && let Some(fingerprint) =
-                run_input_fingerprint(path, &runtime_path, options.release, options.trusted_native)
+            && let Some(fingerprint) = run_input_fingerprint(path, &runtime_path, options.release)
             && read_cached_fingerprint(&cache_dir).as_deref() == Some(fingerprint.as_str())
         {
             return run_cached_package(
@@ -196,12 +142,7 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
         }
     }
 
-    let package = match lower_cli_input_to_rust_package(
-        path,
-        &runtime_path,
-        options.json,
-        options.trusted_native,
-    ) {
+    let package = match lower_cli_input_to_rust_package(path, &runtime_path, options.json) {
         Ok(package) => package,
         Err(exit_code) => return exit_code,
     };
@@ -249,8 +190,7 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
     // is left untouched. Written after the package files so a partial write never
     // leaves a fingerprint claiming a stale package is current.
     if is_default_cache
-        && let Some(fingerprint) =
-            run_input_fingerprint(path, &runtime_path, options.release, options.trusted_native)
+        && let Some(fingerprint) = run_input_fingerprint(path, &runtime_path, options.release)
     {
         write_cached_fingerprint(&package_dir, &fingerprint);
     }
@@ -265,27 +205,10 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
 /// Execute through the register VM instead of the Rust-lowering AOT backend.
 /// This is the fast edit-run path folded into `rss run` so VM execution remains
 /// available without growing the top-level command set.
-fn run_via_vm(
-    path: &str,
-    program_args: &[&str],
-    json: bool,
-    trusted_unlimited: bool,
-    trusted_native: bool,
-    deployment_profile: DeploymentProfile,
-) -> ExitCode {
-    let limits = if trusted_unlimited {
-        VmLimits::default()
-    } else {
-        cli_vm_limits()
-    };
+fn run_via_vm(path: &str, program_args: &[&str], json: bool) -> ExitCode {
+    let limits = cli_vm_limits();
     let result = if is_package_directory(path) {
-        run_package_via_vm(
-            path,
-            program_args,
-            limits,
-            trusted_native,
-            deployment_profile,
-        )
+        run_package_via_vm(path, program_args, limits)
     } else {
         let source = match read_cli_source(Path::new(path)) {
             Ok(source) => source,
@@ -294,7 +217,7 @@ fn run_via_vm(
                 return ExitCode::from(2);
             }
         };
-        run_source_via_vm(path, &source, program_args, limits, deployment_profile)
+        run_source_via_vm(path, &source, program_args, limits)
     };
     finish_vm_run(result, json)
 }
@@ -317,74 +240,34 @@ fn run_source_via_vm(
     source: &str,
     program_args: &[&str],
     limits: VmLimits,
-    deployment_profile: DeploymentProfile,
 ) -> Result<EvalOutput, EvalError> {
-    if deployment_profile == DeploymentProfile::LocalTrusted && limits.step_budget.is_none() {
-        reg_vm_eval_source_main_with_args(path, source, program_args.iter().copied())
-    } else {
-        let context = execution_context(deployment_profile)?;
-        rsscript::reg_vm_eval_source_main_with_context_and_limits(
-            path,
-            source,
-            program_args.iter().copied(),
-            context,
-            limits,
-        )
-    }
+    rsscript::reg_vm_compile_source(path, source)?
+        .eval_main_with_limits(program_args.iter().copied(), limits)
 }
 
 fn run_package_via_vm(
     path: &str,
     program_args: &[&str],
     limits: VmLimits,
-    trusted_native: bool,
-    deployment_profile: DeploymentProfile,
 ) -> Result<EvalOutput, EvalError> {
     let package_dir = Path::new(path);
     let prepared = prepare_package_for_execution(package_dir).map_err(EvalError::Runtime)?;
-    let (executable, bindings) = if !prepared.requires_native_authorization() {
+    let (executable, bindings) = if !prepared.requires_external_provider() {
         let input = prepared.into_lowering_input().map_err(EvalError::Runtime)?;
         (reg_vm_compile_package_input(&input)?, Vec::new())
-    } else if trusted_native {
-        let package = prepared.authorize().map_err(EvalError::Runtime)?;
-        let bindings =
-            load_authorized_package_native_bindings(&package).map_err(EvalError::Runtime)?;
+    } else {
+        let package = prepared.verify().map_err(EvalError::Runtime)?;
+        let bindings = load_package_bindings_from_snapshot(&package).map_err(EvalError::Runtime)?;
         (
             reg_vm_compile_package_input(package.lowering_input())?,
             bindings,
         )
-    } else {
-        return Err(EvalError::Runtime(
-            "native package execution is disabled by default; pass `--trusted-native` only for code you trust with full host-process authority".to_string(),
-        ));
     };
-    if trusted_native {
-        debug_assert_eq!(deployment_profile, DeploymentProfile::LocalTrusted);
-    }
-    if deployment_profile == DeploymentProfile::LocalTrusted && limits.step_budget.is_none() {
-        executable.eval_main_with_args_and_native_bindings(program_args.iter().copied(), bindings)
-    } else if bindings.is_empty() {
-        executable.eval_main_with_context_and_limits(
-            program_args.iter().copied(),
-            execution_context(deployment_profile)?,
-            limits,
-        )
-    } else {
-        executable.eval_main_with_args_and_native_bindings_and_limits(
-            program_args.iter().copied(),
-            bindings,
-            limits,
-        )
-    }
-}
-
-fn execution_context(profile: DeploymentProfile) -> Result<ExecutionContext, EvalError> {
-    match profile {
-        DeploymentProfile::LocalTrusted => Ok(ExecutionContext::trusted_local()),
-        DeploymentProfile::TrustedCi => {
-            Ok(ExecutionContext::trusted_ci(HostCapabilities::deny_all()))
-        }
-    }
+    executable.eval_main_with_args_and_external_bindings_and_limits(
+        program_args.iter().copied(),
+        bindings,
+        limits,
+    )
 }
 
 fn finish_vm_run(result: Result<EvalOutput, EvalError>, json: bool) -> ExitCode {
@@ -629,8 +512,6 @@ fn print_run_dry_run(
 
 #[cfg(test)]
 mod tests {
-    use rsscript::DeploymentProfile;
-
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
     }
@@ -672,23 +553,8 @@ mod tests {
         assert!(options.vm);
         assert!(!options.release);
         assert!(!options.dry_run);
-        assert!(!options.trusted_unlimited);
-        assert!(!options.trusted_native);
-        assert_eq!(options.deployment_profile, DeploymentProfile::LocalTrusted);
         assert_eq!(options.path, Some("demo.rss"));
         assert_eq!(options.program_args, vec!["input"]);
-    }
-
-    #[test]
-    fn removed_untrusted_profile_is_rejected() {
-        let error = super::parse_run_args(&args(&[
-            "--vm",
-            "--deployment-profile",
-            "untrusted-isolated",
-            "main.rss",
-        ]))
-        .expect_err("third-party safe execution is not a supported profile");
-        assert!(error.contains("expected local-trusted or trusted-ci"));
     }
 
     #[test]
@@ -783,72 +649,5 @@ mod tests {
         let error = super::parse_run_args(&values).expect_err("vm out-dir combo should fail");
 
         assert_eq!(error, "`rss run --vm` cannot be combined with `--out-dir`.");
-    }
-
-    #[test]
-    fn parse_run_args_accepts_explicit_trusted_unlimited_vm_mode() {
-        let values = args(&["--vm", "--trusted-unlimited", "demo.rss"]);
-        let options = super::parse_run_args(&values).expect("trusted mode should parse");
-        assert!(options.vm);
-        assert!(options.trusted_unlimited);
-    }
-
-    #[test]
-    fn parse_run_args_accepts_explicit_trusted_native_mode() {
-        let values = args(&["--vm", "--trusted-native", "trusted-package"]);
-        let options = super::parse_run_args(&values).expect("trusted native mode should parse");
-        assert!(options.vm);
-        assert!(options.trusted_native);
-    }
-
-    #[test]
-    fn trusted_ci_profile_allows_only_bounded_reference_vm_execution() {
-        let bounded = args(&["--vm", "--deployment-profile", "trusted-ci", "demo.rss"]);
-        let options =
-            super::parse_run_args(&bounded).expect("bounded CI reference VM should be allowed");
-        assert!(options.vm);
-        assert_eq!(options.deployment_profile, DeploymentProfile::TrustedCi);
-
-        let native = args(&[
-            "--vm",
-            "--trusted-native",
-            "--deployment-profile",
-            "trusted-ci",
-            "trusted-package",
-        ]);
-        let error = super::parse_run_args(&native).expect_err("native CI run must fail");
-        assert!(
-            error.contains("denies in-process native plugins"),
-            "{error}"
-        );
-
-        let unlimited = args(&[
-            "--vm",
-            "--trusted-unlimited",
-            "--deployment-profile",
-            "trusted-ci",
-            "demo.rss",
-        ]);
-        let error = super::parse_run_args(&unlimited).expect_err("unlimited CI run must fail");
-        assert!(error.contains("denies unlimited VM execution"), "{error}");
-
-        let dry_run = args(&[
-            "--dry-run",
-            "--deployment-profile",
-            "trusted-ci",
-            "demo.rss",
-        ]);
-        let options = super::parse_run_args(&dry_run).expect("CI static lowering should parse");
-        assert_eq!(options.deployment_profile, DeploymentProfile::TrustedCi);
-    }
-
-    #[test]
-    fn parse_run_args_rejects_trusted_unlimited_aot_mode() {
-        let values = args(&["--trusted-unlimited", "demo.rss"]);
-        let error = super::parse_run_args(&values).expect_err("AOT mode stays bounded");
-        assert_eq!(
-            error,
-            "`--trusted-unlimited` is only valid with `rss run --vm`."
-        );
     }
 }

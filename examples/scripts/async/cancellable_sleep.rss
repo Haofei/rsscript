@@ -1,4 +1,3 @@
-features: async
 
 async fn main() -> Result<Unit, TimerError> {
     let mut source = CancellationSource.new()

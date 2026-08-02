@@ -291,16 +291,16 @@ pub fn lower_sources_to_rust_package_with_options(
     let validated = validate_sources_with_interfaces_without_core(&source_refs, &interface_refs)?;
     let database = validated.database();
     let program = database.program();
-    let native_bindings = native_dependencies
+    let external_bindings = native_dependencies
         .iter()
         .flat_map(|dependency| dependency.bindings.iter())
         .map(|(symbol, target)| (symbol.clone(), target.clone()))
         .collect::<BTreeMap<_, _>>();
-    let lowering_diagnostics = validate_executable_declarations(&program, &native_bindings);
+    let lowering_diagnostics = validate_executable_declarations(&program, &external_bindings);
     if !lowering_diagnostics.is_empty() {
         return Err(lowering_diagnostics);
     }
-    let lowered = lower_validated_program_to_rust_with_map(database, native_bindings);
+    let lowered = lower_validated_program_to_rust_with_map(database, external_bindings);
     let package_name = cargo_package_name(package_name);
     let native_dependency_toml = native_dependencies
         .iter()
@@ -418,33 +418,33 @@ pub fn lower_program_to_rust_with_map(program: &Program) -> LoweredRust {
     let interface_programs = default_interfaces()
         .map(|(file, source)| parse_source(file, source))
         .collect::<Vec<_>>();
-    lower_program_to_rust_with_map_with_native_bindings(
+    lower_program_to_rust_with_map_with_external_bindings(
         program,
         BTreeMap::new(),
         &interface_programs,
     )
 }
 
-fn lower_program_to_rust_with_map_with_native_bindings(
+fn lower_program_to_rust_with_map_with_external_bindings(
     program: &Program,
-    native_bindings: BTreeMap<String, String>,
+    external_bindings: BTreeMap<String, String>,
     interface_programs: &[Program],
 ) -> LoweredRust {
     // Apply module namespace isolation so the emitted Rust symbols match the
     // names the checker validated (single application per lowering run).
     let mut program = program.clone();
     crate::syntax::isolate_module_namespaces(&mut program);
-    RustLowerer::new(&program, native_bindings, interface_programs).lower()
+    RustLowerer::new(&program, external_bindings, interface_programs).lower()
 }
 
 fn lower_validated_program_to_rust_with_map(
     database: &crate::semantic::SemanticDatabase,
-    native_bindings: BTreeMap<String, String>,
+    external_bindings: BTreeMap<String, String>,
 ) -> LoweredRust {
     RustLowerer::new_validated(
         database.program(),
         database.types(),
-        native_bindings,
+        external_bindings,
         database.interface_programs(),
     )
     .lower()
@@ -460,7 +460,6 @@ mod tests {
     #[test]
     fn validated_lowering_uses_structural_generic_signature_facts() {
         let source = r#"
-features: local
 
 fn choose<U, W>(left: read U, right: take W) -> W {
     return right

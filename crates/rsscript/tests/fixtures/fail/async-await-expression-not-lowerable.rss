@@ -3,7 +3,6 @@
 // a preceding `let` binding. The exception is the right-hand operand of a
 // short-circuit `&&`/`||`: it is only conditionally evaluated, so hoisting it
 // would change semantics. Those stay rejected as non-linear awaits.
-features: async
 
 async fn ready() -> Result<Bool, TimerError> {
     return Ok(true)

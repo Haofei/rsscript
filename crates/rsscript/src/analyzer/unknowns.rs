@@ -38,8 +38,8 @@ impl Analyzer<'_> {
     }
 
     pub(super) fn check_unknown_type_ref(&mut self, ty: &TypeRef, generic_params: &HashSet<&str>) {
-        if ty.name == "Capability" {
-            self.check_capability_type_ref(ty, generic_params);
+        if ty.name == "Dyn" {
+            self.check_external_binding_type_ref(ty, generic_params);
             for param in &ty.fn_params {
                 self.check_unknown_type_ref(param, generic_params);
             }
@@ -65,7 +65,7 @@ impl Analyzer<'_> {
         }
     }
 
-    pub(super) fn check_capability_type_ref(
+    pub(super) fn check_external_binding_type_ref(
         &mut self,
         ty: &TypeRef,
         generic_params: &HashSet<&str>,

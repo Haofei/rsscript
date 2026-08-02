@@ -1,0 +1,5 @@
+// Explicit dynamic protocol object. `Dyn` is a language-level dispatch
+// boundary and carries no host authority.
+struct Dyn<P>
+
+pub fn Dyn.from<P, T>(value: take T) -> fresh Dyn<P>

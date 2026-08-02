@@ -1,7 +1,7 @@
 // expect: RS0007
 
 fn bad(width: Int) -> Unit
-    effects(retains(width))
+    retains(width)
 {
     return Unit
 }

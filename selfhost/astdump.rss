@@ -1,6 +1,5 @@
 // Self-hosted rss AST-dump producer — step 2 of frontend object parity.
 //
-features: local
 //
 // Emits the canonical AST dump defined in docs/self-hosting.md, matching the
 // Rust oracle (crate::syntax::parse_source_raw serialized by crate::selfhost_parity)
@@ -413,7 +412,7 @@ fn emit_expr(out: mut StringBuilder, toks: List<Tok>, start: Int, end: Int, d: I
         emit_closure(out: mut out, toks, start: s, end: e, d)
         return Unit
     }
-    // Explicit closure: `fn(params) captures(...) [effects(...)] { body }`.
+    // Explicit closure: `fn(params) captures(...) [effect_list(...)] { body }`.
     if is_kw_text(toks, i: s, word: "fn") && at_symbol(toks: toks, i: (s + 1), code: SYM_LPAREN) {
         emit_explicit_fn(out: mut out, toks, start: s, end: e, d)
         return Unit
@@ -551,8 +550,8 @@ fn emit_expr(out: mut StringBuilder, toks: List<Tok>, start: Int, end: Int, d: I
 }
 
 // Closure `|params| body`. `body` is a `{ }` block or a single expression (which
-// becomes a block with one expr-stmt). Captures/declared-effects are the explicit
-// `fn(...)` form only (a documented gap); the `|...|` form has neither.
+// becomes a block with one expr-stmt). Captures belong to the explicit `fn(...)`
+// form only; the `|...|` form has none.
 fn emit_closure(out: mut StringBuilder, toks: List<Tok>, start: Int, end: Int, d: Int) -> Unit {
     // Second `|` closes the parameter list.
     let mut closePipe = -1
@@ -590,8 +589,7 @@ fn emit_closure(out: mut StringBuilder, toks: List<Tok>, start: Int, end: Int, d
     return Unit
 }
 
-// Explicit closure `fn(params) captures(<eff name>, ...) [effects(a, ...)] { body }`.
-// Mirrors parse_explicit_fn_expr: explicit=true, capture/declared-effect children.
+// Explicit closure `fn(params) captures(<data-effect name>, ...) { body }`.
 fn emit_explicit_fn(out: mut StringBuilder, toks: List<Tok>, start: Int, end: Int, d: Int) -> Unit {
     let pOpen = start + 1
     let pClose = find_matching(toks: toks, open: pOpen, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
@@ -623,20 +621,6 @@ fn emit_explicit_fn(out: mut StringBuilder, toks: List<Tok>, start: Int, end: In
             if comma < 0 { j = cClose } else { j = comma + 1 }
         }
         cur = cClose + 1
-    }
-    // optional effects(a, b) — each entry a single ident → `declared-effect <n>`.
-    if is_kw_text(toks, i: cur, word: "effects") && at_symbol(toks: toks, i: (cur + 1), code: SYM_LPAREN) {
-        let eOpen = cur + 1
-        let eClose = find_matching(toks: toks, open: eOpen, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-        let mut m = eOpen + 1
-        while m < eClose {
-            let comma = split_comma(toks, start: m, end: eClose)
-            if is_ident_tok(toks: toks, i: m) {
-                emit(out: mut out, depth: (d + 1), s: String.concat(left: "declared-effect ", right: tk_text(toks, i: m)))
-            }
-            if comma < 0 { m = eClose } else { m = comma + 1 }
-        }
-        cur = eClose + 1
     }
     emit(out: mut out, depth: (d + 1), s: "body")
     if at_symbol(toks: toks, i: cur, code: SYM_LBRACE) {
@@ -2502,10 +2486,8 @@ fn emit_function(out: mut StringBuilder, program: Program, toks: List<Tok>, star
     }
     let mut isPub = false
     let mut isAsync = false
-    let mut isNative = false
     if is_kw_text(toks, i: j, word: "pub") { isPub = true; j = j + 1 }
     if is_kw_text(toks, i: j, word: "async") { isAsync = true; j = j + 1 }
-    if is_kw_text(toks, i: j, word: "native") { isNative = true; j = j + 1 }
     // `fn`
     j = j + 1
     let nameEnd = take_function_name(toks: toks, i: j)
@@ -2536,7 +2518,7 @@ fn emit_function(out: mut StringBuilder, program: Program, toks: List<Tok>, star
             retStart = j + 2
         }
     }
-    // Signature region [pclose+1, sigEnd): return type, effects(...), and the
+    // Signature region [pclose+1, sigEnd): return type, effect_list(...), and the
     // default-impl marker `= _`. function_signature_end stops at the body `{` or
     // the next top-level item — so a body exists iff sigEnd lands on a `{`. (A raw
     // find_block_open would wrongly borrow a LATER fn's `{` for a body-less decl.)
@@ -2544,10 +2526,9 @@ fn emit_function(out: mut StringBuilder, program: Program, toks: List<Tok>, star
     let mut bodyOpen = -1
     if at_symbol(toks: toks, i: sigEnd, code: SYM_LBRACE) { bodyOpen = sigEnd }
     // A body exists iff sigEnd lands on `{` — including native fns, whose body may
-    // sit on a line after the `effects(native)` clause (parse_function_decl treats
+    // sit on a line after the `` clause (parse_function_decl treats
     // it as a normal body; the earlier same_stmt_line guard wrongly dropped it).
     let mut hasBody = bodyOpen >= 0
-    let effPos = find_effects_kw(toks, start: (pclose + 1), end: sigEnd)
     let defaultImpl = has_default_impl(toks, start: (pclose + 1), end: sigEnd)
     // A `fresh` anywhere in the return-type region (e.g. `-> Result<fresh String, E>`)
     // also sets returns-fresh, matching parse_function_decl's region scan.
@@ -2559,7 +2540,7 @@ fn emit_function(out: mut StringBuilder, program: Program, toks: List<Tok>, star
     // expression children that the AST has not materialized yet.
     let mut sharedGenerics = List<GenericParam>.new()
     let mut sharedParams = List<Param>.new()
-    let mut sharedEffects = List<EffectName>.new()
+    let mut sharedRetainedParams = List<String>.new()
     let mut sharedStatements = List<Int>.new()
     let mut hasSharedFunction = false
     let item = shared_item_at(program, toks, start, kind: ITEM_FUNCTION)
@@ -2568,11 +2549,10 @@ fn emit_function(out: mut StringBuilder, program: Program, toks: List<Tok>, star
         name = item.name
         isPub = item.isPublic
         isAsync = item.isAsync
-        isNative = item.isNative
         hasBody = item.hasBody
         sharedGenerics = item.generics
         sharedParams = item.params
-        sharedEffects = item.effects
+        sharedRetainedParams = item.retainedParams
         sharedStatements = item.statements
     }
     // Emit fn line.
@@ -2583,8 +2563,6 @@ fn emit_function(out: mut StringBuilder, program: Program, toks: List<Tok>, star
     StringBuilder.push(builder: mut sb, value: boolstr(b: isPub))
     StringBuilder.push(builder: mut sb, value: " async=")
     StringBuilder.push(builder: mut sb, value: boolstr(b: isAsync))
-    StringBuilder.push(builder: mut sb, value: " native=")
-    StringBuilder.push(builder: mut sb, value: boolstr(b: isNative))
     StringBuilder.push(builder: mut sb, value: " has-body=")
     StringBuilder.push(builder: mut sb, value: boolstr(b: hasBody))
     if defaultImpl {
@@ -2625,22 +2603,19 @@ fn emit_function(out: mut StringBuilder, program: Program, toks: List<Tok>, star
     if hasRet {
         emit_type_ref(out: mut out, toks, i: retStart, tag: "return-type", eff: "", d: (d + 1))
     }
-    // effect-name / effect-retains clauses.
-    let mut malEff = 0
-    if effPos >= 0 {
-        let eopen = effPos + 1
-        let eclose = find_matching(toks: toks, open: eopen, openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-        if hasSharedFunction {
-            malEff = emit_shared_effects(out: mut out, sharedEffects, toks, open: eopen, close: eclose, d: (d + 1))
-        } else {
-            malEff = emit_effects(out: mut out, toks, open: eopen, close: eclose, d: (d + 1))
+    // Structured retention clauses.
+    if hasSharedFunction {
+        let mut retainedIndex = 0
+        while retainedIndex < List.len(list: sharedRetainedParams) {
+            let target = List.get<String>(list: sharedRetainedParams, index: retainedIndex)
+            emit(out: mut out, depth: (d + 1), s: String.concat(left: "retains ", right: target))
+            retainedIndex = retainedIndex + 1
         }
     }
     // Dump order (ast_oracle_dump): generics, params, return-type, effects, then
     // malformed-generic / malformed-param / malformed-effect, then body.
     emit_repeat(out: mut out, marker: "malformed-generic", n: malGen, d: (d + 1))
     emit_repeat(out: mut out, marker: "malformed-param", n: malParam, d: (d + 1))
-    emit_repeat(out: mut out, marker: "malformed-effect", n: malEff, d: (d + 1))
     // body — the oracle always emits `body`/`block`, empty when there is no body.
     emit(out: mut out, depth: (d + 1), s: "body")
     if hasBody {
@@ -2667,29 +2642,13 @@ fn same_stmt_line(toks: List<Tok>, a: Int, b: Int) -> Bool {
 fn fresh_in_return(toks: List<Tok>, start: Int, sigEnd: Int) -> Bool {
     let mut k = start
     while k < sigEnd {
-        if is_kw_text(toks, i: k, word: "effects") || at_symbol(toks: toks, i: k, code: SYM_LBRACE) || at_symbol(toks: toks, i: k, code: SYM_EQ) {
+        if is_kw_text(toks, i: k, word: "retains") || at_symbol(toks: toks, i: k, code: SYM_LBRACE) || at_symbol(toks: toks, i: k, code: SYM_EQ) {
             return false
         }
         if at_ident(toks: toks, i: k, wid: WORD_FRESH) { return true }
         k = k + 1
     }
     return false
-}
-
-// Index of a top-level `effects(` keyword in [start, end), or -1.
-fn find_effects_kw(toks: List<Tok>, start: Int, end: Int) -> Int {
-    let mut depth = 0
-    let mut i = start
-    while i < end {
-        let opener = at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) || at_symbol(toks: toks, i: i, code: SYM_LANGLE)
-        let closer = at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) || at_symbol(toks: toks, i: i, code: SYM_RANGLE)
-        if depth == 0 && at_ident(toks: toks, i: i, wid: WORD_EFFECTS) && at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) {
-            return i
-        }
-        if opener { depth = depth + 1 } else if closer { if depth > 0 { depth = depth - 1 } }
-        i = i + 1
-    }
-    return -1
 }
 
 // The default-impl marker `= _` appears at top level in the signature region.
@@ -2708,7 +2667,7 @@ fn has_default_impl(toks: List<Tok>, start: Int, end: Int) -> Bool {
     return false
 }
 
-// `effects(a, retains(self), ...)` → one `effect-name`/`effect-retains` per entry.
+// `effect_list(a, retains(self), ...)` → one `effect-name`/`effect-retains` per entry.
 // -------------------------------------------------------------------------
 // Malformed-recovery predicates + markers (mirror the reference parsers, which
 // record malformed_*_spans; the oracle dumps one `malformed-<kind>` line each,
@@ -2788,36 +2747,6 @@ fn count_malformed_generics(toks: List<Tok>, i: Int) -> Int {
         if comma >= 0 { segEnd = comma }
         if gen_valid(toks, start: k, end: segEnd) == false { mal = mal + 1 }
         if comma < 0 { k = close } else { k = comma + 1 }
-    }
-    return mal
-}
-
-// Emits valid effect-name/effect-retains lines and returns the malformed count
-// (mirrors parse_effects: empty seg / non-ident / bad-`retains(x)` / trailing junk).
-fn emit_effects(out: mut StringBuilder, toks: List<Tok>, open: Int, close: Int, d: Int) -> Int {
-    let mut i = open + 1
-    let mut mal = 0
-    while i < close {
-        let comma = split_comma(toks, start: i, end: close)
-        let segEnd = pick_end(comma, end: close)
-        if i >= segEnd {
-            mal = mal + 1
-        } else if is_ident_tok(toks: toks, i: i) == false {
-            mal = mal + 1
-        } else if is_kw_text(toks, i, word: "retains") {
-            // Valid shape: `retains ( ident )` filling the whole segment.
-            let rclose = find_matching(toks: toks, open: (i + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-            if at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) && rclose >= 0 && (rclose + 1) == segEnd && (i + 3) == rclose && is_ident_tok(toks: toks, i: (i + 2)) {
-                emit(out: mut out, depth: d, s: String.concat(left: "effect-retains ", right: tk_text(toks, i: (i + 2))))
-            } else {
-                mal = mal + 1
-            }
-        } else if (i + 1) == segEnd {
-            emit(out: mut out, depth: d, s: String.concat(left: "effect-name ", right: tk_text(toks, i)))
-        } else {
-            mal = mal + 1
-        }
-        if comma < 0 { i = close } else { i = comma + 1 }
     }
     return mal
 }
@@ -2958,46 +2887,6 @@ fn emit_shared_generics(out: mut StringBuilder, generics: List<GenericParam>, to
         if comma < 0 { k = close } else { k = comma + 1 }
     }
     return close + 1
-}
-
-// Effect records follow the same rule as generic records: shared data supplies
-// semantic names while token boundaries preserve malformed recovery.
-fn emit_shared_effects(out: mut StringBuilder, effects: List<EffectName>, toks: List<Tok>, open: Int, close: Int, d: Int) -> Int {
-    let mut i = open + 1
-    let mut effectIndex = 0
-    let mut mal = 0
-    while i < close {
-        let comma = split_comma(toks, start: i, end: close)
-        let segEnd = pick_end(comma, end: close)
-        let mut valid = false
-        if i < segEnd && is_ident_tok(toks: toks, i: i) {
-            if is_kw_text(toks, i, word: "retains") {
-                let rclose = find_matching(toks: toks, open: (i + 1), openSym: SYM_LPAREN, closeSym: SYM_RPAREN)
-                valid = at_symbol(toks: toks, i: (i + 1), code: SYM_LPAREN) && rclose >= 0 && (rclose + 1) == segEnd && (i + 3) == rclose && is_ident_tok(toks: toks, i: (i + 2))
-            } else {
-                valid = (i + 1) == segEnd
-            }
-        }
-        if valid && effectIndex < List.len(list: effects) {
-            let effect = List.get<EffectName>(list: effects, index: effectIndex)
-            effectIndex = effectIndex + 1
-            if effect.isRetains {
-                emit(out: mut out, depth: d, s: String.concat(left: "effect-retains ", right: effect.target))
-            } else {
-                emit(out: mut out, depth: d, s: String.concat(left: "effect-name ", right: effect.name))
-            }
-        } else if valid {
-            if is_kw_text(toks, i, word: "retains") {
-                emit(out: mut out, depth: d, s: String.concat(left: "effect-retains ", right: tk_text(toks, i: (i + 2))))
-            } else {
-                emit(out: mut out, depth: d, s: String.concat(left: "effect-name ", right: tk_text(toks, i)))
-            }
-        } else {
-            mal = mal + 1
-        }
-        if comma < 0 { i = close } else { i = comma + 1 }
-    }
-    return mal
 }
 
 // -------------------------------------------------------------------------
@@ -4042,21 +3931,6 @@ fn is_known_feature_name(name: String) -> Bool {
 }
 
 fn emit_shared_features(out: mut StringBuilder, program: Program) -> Unit {
-    let mut i = 0
-    while i < Program.len(self: program) {
-        let item = List.get<Item>(list: program.items, index: i)
-        if item.kind == ITEM_FEATURES {
-            let mut k = 0
-            while k < List.len(list: item.features) {
-                let feature = List.get<FeatureName>(list: item.features, index: k)
-                if is_known_feature_name(name: feature.name) {
-                    emit(out: mut out, depth: 1, s: String.concat(left: "feature ", right: feature.name))
-                }
-                k = k + 1
-            }
-        }
-        i = i + 1
-    }
     return Unit
 }
 

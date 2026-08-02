@@ -20,7 +20,7 @@ pub fn Set.insert<T: Hashable>(
     set: mut Set<T>,
     value: T,
 ) -> Bool
-    effects(retains(value))
+    retains(value)
 
 pub fn Set.remove<T: Hashable>(
     set: mut Set<T>,

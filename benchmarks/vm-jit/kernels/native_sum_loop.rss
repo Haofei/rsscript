@@ -1,4 +1,3 @@
-features: local
 
 // Loop-opt isolation kernel: a *pure* sum over `List<Int>` in its own
 // native-eligible leaf function, bounded by `List.len` (no modulo, unlike

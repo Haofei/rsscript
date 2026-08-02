@@ -1,4 +1,3 @@
-features: native, local
 
 fn main() -> Unit {
     local values = List<Int>.new()

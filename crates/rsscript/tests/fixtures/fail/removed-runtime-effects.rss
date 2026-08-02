@@ -5,7 +5,7 @@ struct Image {
 }
 
 fn load(path: Path) -> Result<fresh Image, ImageError>
-    effects(io, allocates, may_panic, may_fail, async)
+    effect_list(io, allocates, may_panic, may_fail, async)
 {
     return Image.load(path)
 }

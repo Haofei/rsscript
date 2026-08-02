@@ -1,5 +1,4 @@
 // expect: RS0801
-features: local
 
 class Scheduler {
     callbacks: List<Callback>
@@ -10,7 +9,7 @@ struct Picture {
 }
 
 fn schedule(scheduler: mut Scheduler, callback: Callback) -> Unit
-    effects(retains(callback))
+    retains(callback)
 {
 }
 

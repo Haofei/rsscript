@@ -1,5 +1,5 @@
 use crate::syntax::ast::{
-    ConstDecl, DataEffect, EffectDecl, FieldDecl, FunctionDecl, GenericBound, Param, SumTypeDecl,
+    ConstDecl, DataEffect, FieldDecl, FunctionDecl, GenericBound, Param, SumTypeDecl,
     TypeAliasDecl, TypeDecl, TypeKind, TypeRef,
 };
 
@@ -95,15 +95,15 @@ impl RustLowerer<'_> {
         }
     }
 
-    pub(super) fn lower_capability_enums(&mut self, out: &mut String) {
+    pub(super) fn lower_external_binding_enums(&mut self, out: &mut String) {
         for protocol in &self.program.protocols {
-            let impls = self.protocol_capability_impls(&protocol.name);
+            let impls = self.protocol_external_binding_impls(&protocol.name);
             if impls.is_empty() {
                 continue;
             }
             out.push_str(&format!(
                 "pub enum {} {{\n",
-                capability_enum_name(&protocol.name)
+                external_binding_enum_name(&protocol.name)
             ));
             for protocol_impl in impls {
                 let variant = self.protocol_impl_variant(protocol_impl);
@@ -114,16 +114,16 @@ impl RustLowerer<'_> {
         }
     }
 
-    pub(super) fn lower_capability_impls(&mut self, out: &mut String) {
+    pub(super) fn lower_external_binding_impls(&mut self, out: &mut String) {
         for protocol in &self.program.protocols {
-            let impls = self.protocol_capability_impls(&protocol.name);
+            let impls = self.protocol_external_binding_impls(&protocol.name);
             if impls.is_empty() {
                 continue;
             }
             out.push_str(&format!(
                 "impl {} for {} {{\n",
                 rust_ident(&protocol.name),
-                capability_enum_name(&protocol.name)
+                external_binding_enum_name(&protocol.name)
             ));
             for method in protocol_methods(self.program, &protocol.name) {
                 out.push_str("    fn ");
@@ -154,13 +154,13 @@ impl RustLowerer<'_> {
                     };
                     out.push_str(&format!(
                         "            {}::{}(inner) => {}({}),\n",
-                        capability_enum_name(&protocol.name),
+                        external_binding_enum_name(&protocol.name),
                         self.protocol_impl_variant(protocol_impl),
                         rust_function_ident(&mapping.target),
                         method
                             .params
                             .iter()
-                            .map(capability_impl_forward_arg)
+                            .map(external_binding_impl_forward_arg)
                             .collect::<Vec<_>>()
                             .join(", ")
                     ));
@@ -175,7 +175,7 @@ impl RustLowerer<'_> {
         }
     }
 
-    pub(super) fn protocol_capability_impls(
+    pub(super) fn protocol_external_binding_impls(
         &self,
         protocol: &str,
     ) -> Vec<&crate::syntax::ast::ProtocolImpl> {
@@ -490,14 +490,7 @@ impl RustLowerer<'_> {
             .filter(|param| self.is_class_type(&param.ty))
             .map(|param| param.name.clone())
             .collect();
-        self.current_retained_params = function
-            .effects
-            .iter()
-            .filter_map(|effect| match effect {
-                EffectDecl::Retains(param) => Some(param.clone()),
-                EffectDecl::Name(_) => None,
-            })
-            .collect();
+        self.current_retained_params = function.retained_params.iter().cloned().collect();
         self.mutated_bindings = collect_mutated_bindings(&function.body);
         self.current_return_type = function.return_ty.clone();
         // A user `async fn` lowers to a pending chain. `task_group` statements
@@ -540,11 +533,6 @@ impl RustLowerer<'_> {
             }
         }
         out.push_str(" {\n");
-        if function.effects.iter().any(is_native_boundary) {
-            out.push_str(
-                "    // RSScript native/unsafe boundary: review before binding implementation.\n",
-            );
-        }
         if lower_as_pending_chain {
             let chain = self.lower_async_chain(&function.body.statements);
             out.push_str(&format!("    {chain}\n"));

@@ -144,7 +144,7 @@ pub(in crate::reg_vm) fn interpreted_work_weight(instr: &RegInstr) -> u32 {
         }
         RegInstr::NativeClosureCapture { .. }
         | RegInstr::NativeFieldClosureCapture { .. }
-        | RegInstr::CallNative { .. }
+        | RegInstr::CallExternal { .. }
         | RegInstr::CallIntrinsic { .. }
         | RegInstr::CallTypedIntrinsic { .. } => W_HOST_CALL as u32,
         _ => W_LOAD_MOVE as u32,

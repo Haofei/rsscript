@@ -256,7 +256,7 @@ pub(crate) fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str
             Some(vec!["T"])
         }
         "FalliblePipeline" => Some(vec!["T", "E"]),
-        "Capability" => Some(vec!["P"]),
+        "Dyn" => Some(vec!["P"]),
         "Map" => Some(vec!["K", "V"]),
         "Result" => Some(vec!["T", "E"]),
         _ => None,

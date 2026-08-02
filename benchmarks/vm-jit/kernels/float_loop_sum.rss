@@ -1,4 +1,3 @@
-features: local
 
 // Slow path: Float value family + float arithmetic in a hot loop.
 // The native (Cranelift) tier handles Int scalars; this kernel keeps the VM on

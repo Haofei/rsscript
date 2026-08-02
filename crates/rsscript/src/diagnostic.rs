@@ -113,18 +113,14 @@ pub mod code {
     pub const REVIEW_FUNCTION_ADDED: &str = "RSR003";
     pub const REVIEW_PARAMS_CHANGED: &str = "RSR004";
     pub const REVIEW_RETURN_CHANGED: &str = "RSR005";
-    pub const REVIEW_EFFECTS_CHANGED: &str = "RSR006";
+    pub const REVIEW_RETENTION_CHANGED: &str = "RSR006";
     pub const REVIEW_TYPE_REMOVED: &str = "RSR007";
     pub const REVIEW_TYPE_ADDED: &str = "RSR008";
     pub const REVIEW_TYPE_KIND_CHANGED: &str = "RSR009";
     pub const REVIEW_TYPE_FIELDS_CHANGED: &str = "RSR010";
     pub const REVIEW_BOUNDARY_CHANGED: &str = "RSR011";
-    pub const REVIEW_UNSAFE_ADDED: &str = "RSR012";
-    pub const REVIEW_GUARANTEE_REMOVED: &str = "RSR013";
     pub const REVIEW_FUNCTION_KIND_CHANGED: &str = "RSR014";
-    pub const REVIEW_NATIVE_ADDED: &str = "RSR015";
     pub const REVIEW_PROTOCOL_IMPL_CHANGED: &str = "RSR016";
-    pub const REVIEW_PARALLEL_ADDED: &str = "RSR017";
     pub const REVIEW_SUM_TYPE_CHANGED: &str = "RSR018";
     pub const REVIEW_CONST_CHANGED: &str = "RSR019";
     pub const REVIEW_TYPE_ALIAS_CHANGED: &str = "RSR020";
@@ -511,7 +507,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::DUPLICATE_FEATURE_DECLARATION,
         title: "duplicate features declaration",
-        explanation: "RSScript files may declare at most one `features:` header. Multiple declarations make review capability boundaries ambiguous.",
+        explanation: "RSScript files may declare at most one `features:` header. Multiple declarations make review external_binding boundaries ambiguous.",
     },
     DiagnosticExplanation {
         code: code::UNKNOWN_RETAINED_PARAMETER,
@@ -531,7 +527,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::REMOVED_PROFILE_DECLARATION,
         title: "removed profile declaration",
-        explanation: "RSScript v0.7 does not include `profile:` declarations. Use `features:` only for advanced file-level capabilities; omitted features means managed-only.",
+        explanation: "RSScript v0.7 does not include `profile:` declarations. Use `features:` only for advanced file-level external_bindings; omitted features means managed-only.",
     },
     DiagnosticExplanation {
         code: code::REMOVED_SHARE_EFFECT,
@@ -561,12 +557,12 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::UNKNOWN_FILE_FEATURE,
         title: "unknown file feature",
-        explanation: "A `features:` header may only list review-relevant capabilities known to this compiler version. Some known names are reserved review markers that do not unlock executable syntax. Unknown feature names are rejected so typos do not silently change review risk.",
+        explanation: "A `features:` header may only list review-relevant external_bindings known to this compiler version. Some known names are reserved review markers that do not unlock executable syntax. Unknown feature names are rejected so typos do not silently change review risk.",
     },
     DiagnosticExplanation {
         code: code::DUPLICATE_FILE_FEATURE,
         title: "duplicate file feature",
-        explanation: "Each review-relevant capability may appear at most once in a `features:` header. Duplicate entries are rejected instead of silently folded away.",
+        explanation: "Each review-relevant external_binding may appear at most once in a `features:` header. Duplicate entries are rejected instead of silently folded away.",
     },
     DiagnosticExplanation {
         code: code::INVALID_NO_BLOCK_CALL,
@@ -641,7 +637,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::UNKNOWN_PROTOCOL,
         title: "unknown protocol",
-        explanation: "Protocol bounds and protocol implementations must name a declared RSScript protocol. Protocols are nominal capability contracts, not structural matches inferred from function names.",
+        explanation: "Protocol bounds and protocol implementations must name a declared RSScript protocol. Protocols are nominal external_binding contracts, not structural matches inferred from function names.",
     },
     DiagnosticExplanation {
         code: code::INVALID_SELF_PARAMETER,
@@ -651,7 +647,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::PROTOCOL_NOT_SATISFIED,
         title: "protocol not satisfied",
-        explanation: "A `Protocol.method(...)` call must prove that the receiver type satisfies the protocol through an explicit generic bound or an explicit `impl Protocol for Type` declaration. Protocols are nominal capability contracts, not structural matches inferred from method names.",
+        explanation: "A `Protocol.method(...)` call must prove that the receiver type satisfies the protocol through an explicit generic bound or an explicit `impl Protocol for Type` declaration. Protocols are nominal external_binding contracts, not structural matches inferred from method names.",
     },
     DiagnosticExplanation {
         code: code::INTEGER_LITERAL_OUT_OF_RANGE,
@@ -661,7 +657,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::FEATURE_VIOLATION,
         title: "feature violation",
-        explanation: "Files must declare review-relevant capabilities before using them. `local`, `manage`, `take`, `native`, `unsafe`, and `async` boundaries require matching `features:` entries, and `native fn` declarations must also spell the boundary as `effects(native)`.",
+        explanation: "Files must declare review-relevant external_bindings before using them. `local`, `manage`, `take`, `native`, `unsafe`, and `async` boundaries require matching `features:` entries, and `native fn` declarations must also spell the boundary as `effects(native)`.",
     },
     DiagnosticExplanation {
         code: code::UNNAMED_ARGUMENT,
@@ -851,12 +847,12 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::NOESCAPE_CALLBACK_ESCAPE,
         title: "noescape callback escape",
-        explanation: "`noescape Fn()` parameters are temporary callback capabilities. They may be called directly or forwarded only to another resolved noescape parameter, but they cannot be returned, stored, retained, or passed as ordinary managed values.",
+        explanation: "`noescape Fn()` parameters are temporary callback external_bindings. They may be called directly or forwarded only to another resolved noescape parameter, but they cannot be returned, stored, retained, or passed as ordinary managed values.",
     },
     DiagnosticExplanation {
         code: code::LOCAL_CLOSURE_ESCAPE,
         title: "local closure escape",
-        explanation: "A closure bound with `local` is an exclusive local capability. It may be called directly or passed to `noescape Fn()` parameters, but it cannot be returned, stored in managed bindings, or passed as an ordinary managed callback.",
+        explanation: "A closure bound with `local` is an exclusive local external_binding. It may be called directly or passed to `noescape Fn()` parameters, but it cannot be returned, stored in managed bindings, or passed as an ordinary managed callback.",
     },
     DiagnosticExplanation {
         code: code::NOESCAPE_CONSUMES_CAPTURE,

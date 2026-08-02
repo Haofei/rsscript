@@ -55,7 +55,6 @@ pub(in crate::hir::lower) struct BodyFacts {
     pub(in crate::hir::lower) field_accesses: Vec<HirFieldAccess>,
     pub(in crate::hir::lower) effect_events: Vec<HirEffectEvent>,
     pub(in crate::hir::lower) returns: Vec<HirReturn>,
-    pub(in crate::hir::lower) feature_uses: Vec<HirFeatureUse>,
 }
 
 pub(super) fn collect_function_body_facts(
@@ -63,39 +62,8 @@ pub(super) fn collect_function_body_facts(
     function: &FunctionDecl,
     facts: &mut BodyFacts,
 ) {
-    if function.is_async {
-        facts.feature_uses.push(HirFeatureUse {
-            function_name: Some(function.name.clone()),
-            kind: HirFeatureUseKind::Async,
-            span: function.span.clone(),
-        });
-    }
-    for effect in &function.effects {
-        if let EffectDecl::Name(name) = effect {
-            let kind = match name.as_str() {
-                "native" => Some(HirFeatureUseKind::Native),
-                "unsafe" => Some(HirFeatureUseKind::Unsafe),
-                _ => None,
-            };
-            if let Some(kind) = kind {
-                facts.feature_uses.push(HirFeatureUse {
-                    function_name: Some(function.name.clone()),
-                    kind,
-                    span: function.span.clone(),
-                });
-            }
-        }
-    }
-
     let mut value_types = HashMap::new();
     for param in &function.params {
-        if param.effect == Some(DataEffect::Take) {
-            facts.feature_uses.push(HirFeatureUse {
-                function_name: Some(function.name.clone()),
-                kind: HirFeatureUseKind::Take,
-                span: param.span.clone(),
-            });
-        }
         let param_type = ResolvedType::from_type_ref(&param.ty);
         value_types.insert(param.name.clone(), param_type.clone());
         facts.bindings.push(HirBinding {
@@ -762,7 +730,6 @@ pub(super) fn lower_hir_expr(
         Expr::Closure {
             params,
             captures,
-            declared_effects,
             explicit,
             body,
             span,
@@ -778,7 +745,6 @@ pub(super) fn lower_hir_expr(
                         span: capture.span.clone(),
                     })
                     .collect(),
-                declared_effects: declared_effects.clone(),
                 explicit: *explicit,
                 body: lower_hir_block(hir, function_name, body, &mut closure_types),
                 span: span.clone(),

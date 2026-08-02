@@ -297,14 +297,14 @@ enum PureFoldSymbol {
 }
 
 impl RegVm {
-    pub(super) fn call_native_key(
+    pub(super) fn call_external_symbol(
         &mut self,
         key: &str,
         args: &[Reg],
         mut_args: &[usize],
         base: usize,
     ) -> Result<VmValue, EvalError> {
-        let Some(function) = self.native_bindings.get(key).cloned() else {
+        let Some(function) = self.external_bindings.get(key).cloned() else {
             return Err(EvalError::Runtime(format!(
                 "reg VM native function `{key}` has no host binding."
             )));

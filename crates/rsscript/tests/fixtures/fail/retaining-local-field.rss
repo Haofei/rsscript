@@ -1,5 +1,4 @@
 // expect: RS0501
-features: local
 
 struct Image {
     pixels: Buffer
@@ -12,7 +11,7 @@ struct Holder {
 struct Cache
 
 fn Cache.store(cache: mut Cache, value: Image) -> Unit
-    effects(retains(value))
+    retains(value)
 
 fn make_holder(path: Path) -> fresh Holder
 

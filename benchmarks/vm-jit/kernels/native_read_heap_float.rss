@@ -1,4 +1,3 @@
-features: local
 
 // JIT hot path: read-only heap access over a `List<Float>` inside a pure scalar
 // loop in its own function — exercises the native tier's *Float* host-helper read

@@ -2,6 +2,26 @@ use super::*;
 
 impl Analyzer<'_> {
     pub(super) fn check_unsupported_syntax(&mut self) {
+        for index in 0..self.tokens.len().saturating_sub(1) {
+            if self.tokens[index].is_ident_text("effects") && self.tokens[index + 1].symbol("(") {
+                self.unsupported_syntax(
+                    self.tokens[index].span.clone(),
+                    "removed effect clause",
+                    "Generic declaration-effect clauses are not part of RSScript; use structured `retains(name)` only when a parameter escapes the call.",
+                );
+            }
+            if (self.tokens[index].is_ident_text("native")
+                || self.tokens[index].is_ident_text("unsafe"))
+                && (self.tokens[index + 1].is_ident_text("fn")
+                    || self.tokens[index + 1].is_ident_text("module"))
+            {
+                self.unsupported_syntax(
+                    self.tokens[index].span.clone(),
+                    "removed implementation marker",
+                    "Implementation origin and host risk belong to package binding metadata, not source declarations.",
+                );
+            }
+        }
         for span in self.syntax_program.unknown_top_level_spans.clone() {
             self.unsupported_syntax(
                 span,
@@ -19,8 +39,28 @@ impl Analyzer<'_> {
         self.check_module_use_layout();
         self.check_reserved_declaration_names();
         self.check_reserved_protocol_generics();
+        let protocol_names = self
+            .syntax_program
+            .protocols
+            .iter()
+            .map(|protocol| protocol.name.clone())
+            .collect::<HashSet<_>>();
         let items = self.syntax_program.items.clone();
         for item in &items {
+            if let Item::Function(function) = item
+                && !function.has_body
+                && !function.span.file.ends_with(".rssi")
+                && !function
+                    .name
+                    .split_once('.')
+                    .is_some_and(|(namespace, _)| protocol_names.contains(namespace))
+            {
+                self.unsupported_syntax(
+                    function.span.clone(),
+                    "bodyless source function",
+                    "Implementation functions in `.rss` files require a body; put external declarations in an `.rssi` package interface.",
+                );
+            }
             self.check_unsupported_syntax_item(item);
         }
     }
@@ -148,20 +188,6 @@ impl Analyzer<'_> {
                         span.clone(),
                         "malformed generic parameter declaration",
                         "Generic parameters must use `T`, `T: Managed`, `T: Struct`, `T: Resource`, or a single protocol bound such as `T: Writer`.",
-                    );
-                }
-                if function.is_native && !function.body.statements.is_empty() {
-                    self.unsupported_syntax(
-                        function.span.clone(),
-                        "unsupported native function body",
-                        "`native fn` declares an external/native boundary in v0.7. Provide a bodyless declaration and bind the implementation through the native wrapper path.",
-                    );
-                }
-                for span in &function.malformed_effect_spans {
-                    self.unsupported_syntax(
-                        span.clone(),
-                        "malformed effect declaration",
-                        "Effects must use a bare effect name or `retains(parameter)`.",
                     );
                 }
                 for span in &function.malformed_param_spans {
@@ -315,7 +341,7 @@ impl Analyzer<'_> {
             );
         }
         // `owned` Fn stays first-class through nested positions; `noescape`
-        // never does (it is strictly a direct-parameter capability).
+        // never does (it is strictly a direct-parameter external_binding).
         for arg in &ty.args {
             self.check_unsupported_syntax_type_ref(arg, false, allow_owned);
         }

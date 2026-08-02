@@ -1,5 +1,4 @@
 // expect: RS0801 RS0601
-features: local
 
 struct Image {
     pixels: Buffer

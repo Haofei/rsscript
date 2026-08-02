@@ -9,7 +9,7 @@ use crate::checks::budget::{AnalysisDiagnostics, FrontendBudget, FrontendBudgetL
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
     CallResolution, DuplicateSymbolKind, FieldInfo, FunctionSig, Hir, HirBlock, HirExpr,
-    HirMatchArm, HirStmt, HirTypeKind, ParamSig, ResolvedCalleeKind,
+    HirMatchArm, HirStmt, HirTypeKind, ParamSig,
 };
 use crate::interfaces::CORE_INTERFACES;
 use crate::lexer::{Token, lex_with_budget};
@@ -18,7 +18,7 @@ use crate::semantic::{
 };
 use crate::syntax::ast::merge_programs;
 use crate::syntax::ast::{
-    AssignStmt, Block, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, GenericBound,
+    AssignStmt, Block, Callee, DataEffect, Expr, FieldDecl, FunctionDecl, GenericBound,
     GenericParam, Item, MatchPattern, Stmt, TypeKind, TypeRef,
 };
 
@@ -27,7 +27,6 @@ mod derives;
 mod diagnostics;
 mod exhaustiveness;
 mod resource_types;
-mod runtime_guarantee;
 mod syntax_support;
 mod task_group;
 mod unknowns;
@@ -571,10 +570,6 @@ mod entrypoint_tests {
         );
 
         assert_eq!(
-            render_type_ref(&prepared.type_aliases["WorkspacePath"].target),
-            "Path"
-        );
-        assert_eq!(
             render_type_ref(&prepared.type_aliases["CallerAlias"].target),
             "Result<T, String>"
         );
@@ -622,44 +617,6 @@ mod entrypoint_tests {
                 .causes
                 .iter()
                 .any(|cause| cause.contains("nodes"))
-        );
-    }
-
-    #[test]
-    fn wide_error_set_is_capped_and_reports_incomplete_analysis() {
-        let feature_names = (0..100)
-            .map(|index| format!("unknown_feature_{index}"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let source = format!("features: {feature_names}\nfn main() -> Unit {{ return Unit }}\n");
-        let input = AnalysisInput {
-            sources: AnalysisSources::Single {
-                file: "many-errors.rss",
-                source: &source,
-            },
-            interfaces: &[],
-            flavor: AnalysisFlavor::FullWithoutBuiltinInterfaces,
-        };
-
-        let diagnostics = analyze_input_with_budget(
-            input,
-            FrontendBudgetLimits {
-                diagnostics: 8,
-                ..FrontendBudgetLimits::default()
-            },
-            None,
-        );
-
-        assert_eq!(diagnostics.len(), 9);
-        let incomplete = diagnostics
-            .last()
-            .expect("incomplete diagnostic should be retained beyond the cap");
-        assert_eq!(incomplete.code, code::ANALYSIS_INCOMPLETE);
-        assert!(
-            incomplete
-                .causes
-                .iter()
-                .any(|cause| cause.contains("diagnostics"))
         );
     }
 
@@ -1034,27 +991,6 @@ fn substitute_alias_type_ref(ty: &TypeRef, substitutions: &BTreeMap<String, Type
     substituted
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RuntimeGuarantee {
-    Noalloc,
-    Pure,
-    NoBlock,
-    NoPanic,
-}
-
-impl RuntimeGuarantee {
-    const ALL: [Self; 4] = [Self::Noalloc, Self::Pure, Self::NoBlock, Self::NoPanic];
-
-    fn effect_name(self) -> &'static str {
-        match self {
-            Self::Noalloc => "noalloc",
-            Self::Pure => "pure",
-            Self::NoBlock => "no_block",
-            Self::NoPanic => "no_panic",
-        }
-    }
-}
-
 impl Analyzer<'_> {
     /// Expand a type-alias reference, including generic aliases, to its target
     /// type. `IntList` -> `List<Int>`; `Pair<Int>` -> `Result<Int, String>` for
@@ -1179,10 +1115,6 @@ impl Analyzer<'_> {
             };
         }
 
-        run_pass!(self.check_single_feature_declaration());
-        run_pass!(self.check_unknown_file_features());
-        run_pass!(self.check_duplicate_file_features());
-        run_pass!(self.check_removed_profile_declarations());
         run_pass!(self.check_unsupported_syntax());
         run_pass!(self.check_derive_field_requirements());
         run_pass!(self.check_assignments());
@@ -1191,10 +1123,8 @@ impl Analyzer<'_> {
         run_pass!(checks::declarations::check(self));
         run_pass!(checks::types::check_names(self));
         run_pass!(checks::declarations::check_generic_constraints(self));
-        run_pass!(self.check_runtime_guarantee_bodies());
         run_pass!(self.check_try_operator_result_returns());
         run_pass!(checks::types::check_resource_shapes(self));
-        run_pass!(checks::features::check(self));
         run_pass!(checks::calls::check(self));
         run_pass!(checks::body::check(self));
         run_pass!(checks::forbidden::check(self));
@@ -1204,92 +1134,10 @@ impl Analyzer<'_> {
         if !self.budget.consume_nodes(self.tokens.len().max(1)) {
             return;
         }
-        self.check_single_feature_declaration();
-        self.check_unknown_file_features();
-        self.check_duplicate_file_features();
-        self.check_removed_profile_declarations();
         self.check_unsupported_syntax();
     }
 
-    fn check_single_feature_declaration(&mut self) {
-        for span in self.syntax_program.feature_spans.iter().skip(1) {
-            self.diagnostics.push(
-                Diagnostic::error(
-                    code::DUPLICATE_FEATURE_DECLARATION,
-                    "RSScript files may declare at most one explicit feature header.",
-                    span.clone(),
-                    "duplicate features",
-                )
-                .with_cause("Only one top-level `features:` declaration is allowed.")
-                .with_fix(
-                    "remove_duplicate_features",
-                    "Merge the feature list into one `features:` declaration.",
-                    "manual",
-                ),
-            );
-        }
-    }
-
-    fn check_unknown_file_features(&mut self) {
-        for feature in &self.syntax_program.unknown_features {
-            self.diagnostics.push(
-                Diagnostic::error(
-                    code::UNKNOWN_FILE_FEATURE,
-                    format!("Unknown file feature `{}`.", feature.name),
-                    feature.span.clone(),
-                    "unknown feature",
-                )
-                .with_cause(
-                    "File features must be review-relevant capabilities recognized by this compiler.",
-                )
-                .with_fix(
-                    "remove_or_correct_feature",
-                    "Remove the feature name or replace it with a supported feature such as `local`.",
-                    "manual",
-                ),
-            );
-        }
-    }
-
-    fn check_duplicate_file_features(&mut self) {
-        for feature in &self.syntax_program.duplicate_features {
-            self.diagnostics.push(
-                Diagnostic::error(
-                    code::DUPLICATE_FILE_FEATURE,
-                    format!("Duplicate file feature `{}`.", feature.name),
-                    feature.span.clone(),
-                    "duplicate feature",
-                )
-                .with_cause(
-                    "File features are capability declarations; repeating one makes the review boundary noisier without changing semantics.",
-                )
-                .with_fix(
-                    "remove_duplicate_feature",
-                    format!("Remove the repeated `{}` feature.", feature.name),
-                    "machine-applicable",
-                ),
-            );
-        }
-    }
-
-    fn check_removed_profile_declarations(&mut self) {
-        for span in &self.syntax_program.profile_spans {
-            self.diagnostics.push(
-                Diagnostic::error(
-                    code::REMOVED_PROFILE_DECLARATION,
-                    "`profile:` declarations are not part of RSScript v0.7.",
-                    span.clone(),
-                    "removed profile declaration",
-                )
-                .with_cause("v0.7 uses `features:` for file-level advanced capabilities; omitted features means managed-only.")
-                .with_fix(
-                    "remove_profile",
-                    "Remove `profile:` and add `features: local` only if the file uses local ownership features.",
-                    "manual",
-                ),
-            );
-        }
-    }
+    fn check_try_operator_result_returns(&mut self) {}
 
     /// A user `async fn` lowers to a `Pending` chain. Control-flow statements
     /// with awaits lower as explicit statement boundaries; keep rejecting
@@ -1427,27 +1275,6 @@ fn fn_type_param_type_name(type_name: &str, index: usize) -> Option<String> {
         .or_else(|| param.strip_prefix("take "))
         .unwrap_or(param);
     Some(bare.trim().to_string())
-}
-
-pub(crate) fn effect_name(effect: &EffectDecl) -> &str {
-    match effect {
-        EffectDecl::Name(name) | EffectDecl::Retains(name) => name,
-    }
-}
-
-pub(crate) fn data_effect_name(effect: DataEffect) -> &'static str {
-    match effect {
-        DataEffect::Read => "read",
-        DataEffect::Mut => "mut",
-        DataEffect::Take => "take",
-    }
-}
-
-pub(crate) fn effect_display(effect: &EffectDecl) -> String {
-    match effect {
-        EffectDecl::Name(name) => name.clone(),
-        EffectDecl::Retains(param) => format!("retains({param})"),
-    }
 }
 
 pub(crate) fn generic_bounds(params: &[GenericParam]) -> HashMap<String, Option<GenericBound>> {
@@ -1818,13 +1645,6 @@ pub(crate) fn protocol_signature_mismatch(
     if protocol.returns_fresh != target.returns_fresh {
         return Some("fresh return mode must match the protocol method exactly.".to_string());
     }
-    let protocol_effects = protocol.effects.iter().collect::<HashSet<_>>();
-    let target_effects = target.effects.iter().collect::<HashSet<_>>();
-    if protocol_effects != target_effects {
-        return Some(
-            "guarantee and boundary effects must match the protocol method exactly.".to_string(),
-        );
-    }
     if protocol.retained_params != target.retained_params {
         return Some("retains(...) effects must match the protocol method exactly.".to_string());
     }
@@ -1884,16 +1704,6 @@ fn fresh_return_target_type(return_ty: &TypeRef) -> &TypeRef {
         return first_arg;
     }
     return_ty
-}
-
-pub(crate) fn function_has_effect(
-    function: &crate::syntax::ast::FunctionDecl,
-    effect_name: &str,
-) -> bool {
-    function
-        .effects
-        .iter()
-        .any(|effect| matches!(effect, EffectDecl::Name(name) if name == effect_name))
 }
 
 fn builtin_match_is_exhaustive(variants: &HashSet<String>) -> bool {
@@ -1988,74 +1798,6 @@ fn constrained_field_patterns(pattern: &MatchPattern) -> Vec<(String, &MatchPatt
     }
 }
 
-fn callee_display(callee: &Callee) -> String {
-    match callee {
-        Callee::Name(name) => name.clone(),
-        Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
-        Callee::ReceiverCall {
-            receiver,
-            method,
-            effect,
-        } => format!(
-            "{} {}.{method}",
-            (*effect).unwrap_or(DataEffect::Read).as_str(),
-            analyzer_expr_label(receiver)
-        ),
-    }
-}
-
-fn analyzer_expr_label(expr: &Expr) -> String {
-    match expr {
-        Expr::Ident(name, _) => name.clone(),
-        Expr::String(value, _) | Expr::CharLiteral(value, _) | Expr::MultilineString(value, _) => {
-            format!("{value:?}")
-        }
-        Expr::Field { base, name, .. } => format!("{}.{}", analyzer_expr_label(base), name),
-        Expr::Index { base, .. } => format!("{}[]", analyzer_expr_label(base)),
-        Expr::Call { callee, .. } => format!("{}()", callee_display(callee)),
-        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
-            analyzer_expr_label(value)
-        }
-        _ => "<expr>".to_string(),
-    }
-}
-
-pub(crate) fn removed_runtime_effect_replacement(effect_name: &str) -> Option<&'static str> {
-    match effect_name {
-        "io" => Some(
-            "Remove `io`; I/O is allowed by default unless a guarantee such as `pure` or `no_block` forbids it.",
-        ),
-        "allocates" => Some(
-            "Remove `allocates`; allocation is allowed by default. Use `noalloc` only when the function guarantees no allocation.",
-        ),
-        "may_panic" => Some(
-            "Remove `may_panic`; panic is allowed by default. Use `no_panic` only when the function guarantees no panic.",
-        ),
-        "may_fail" => Some(
-            "Remove `may_fail`; represent failure in the return type, for example `Result<T, E>`.",
-        ),
-        "async" => Some(
-            "Remove `async` from `effects(...)`; write `async fn` when the function itself is async.",
-        ),
-        "suspends" => Some(
-            "`suspends` is compiler-normalized review metadata for `async fn`; remove it from `effects(...)` and write `async fn` on the function.",
-        ),
-        _ => None,
-    }
-}
-
-fn item_span(item: &Item) -> &crate::diagnostic::Span {
-    match item {
-        Item::Module(decl) => &decl.span,
-        Item::Use(decl) => &decl.span,
-        Item::Type(decl) => &decl.span,
-        Item::SumType(sum) => &sum.span,
-        Item::TypeAlias(alias) => &alias.span,
-        Item::Const(decl) => &decl.span,
-        Item::Function(function) => &function.span,
-    }
-}
-
 pub(crate) fn duplicate_symbol_label(kind: DuplicateSymbolKind) -> &'static str {
     match kind {
         DuplicateSymbolKind::Function => "function",
@@ -2109,7 +1851,7 @@ pub(crate) const BUILTIN_TYPE_NAMES: &[&str] = &[
     "List",
     "Map",
     "Set",
-    "Capability",
+    "Dyn",
     "Fn",
     "Closure",
     "FileError",

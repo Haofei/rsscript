@@ -1,6 +1,6 @@
 #![allow(unused_imports, dead_code)]
 mod common;
-pub(crate) use rsscript::syntax::ast::{DataEffect, EffectDecl, Expr, Item};
+pub(crate) use rsscript::syntax::ast::{DataEffect, Expr, Item};
 pub(crate) use rsscript::syntax::parse_source;
 pub(crate) use rsscript::{
     Severity, analyze_source, analyze_source_with_core, analyze_source_with_interfaces,
@@ -83,20 +83,12 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("package provider declaration violation", "PKG0901"),
 ];
 
-#[path = "checker_frontend/capabilities.rs"]
-mod capabilities;
 #[path = "checker_frontend/conflicts.rs"]
 mod conflicts;
-#[path = "checker_frontend/effects.rs"]
-mod effects;
 #[path = "checker_frontend/lint.rs"]
 mod lint;
-#[path = "checker_frontend/misc.rs"]
-mod misc;
 #[path = "checker_frontend/parse.rs"]
 mod parse;
-#[path = "checker_frontend/resources.rs"]
-mod resources;
 #[path = "checker_frontend/types.rs"]
 mod types;
 #[path = "checker_frontend/world.rs"]

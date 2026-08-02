@@ -209,25 +209,21 @@ fn generic_text(generics: List<GenericParam>) -> String {
     return String.concat(left: out, right: ">")
 }
 
-fn emit_effects(effects: List<EffectName>) -> Unit {
+fn emit_retained_params(retainedParams: List<String>) -> Unit {
     let mut i = 0
-    while i < List.len(list: effects) {
-        let effect = List.get<EffectName>(list: effects, index: i)
-        if effect.isRetains {
-            Log.write(message: String.concat(left: "  effect retains ", right: effect.target))
-        } else {
-            Log.write(message: String.concat(left: "  effect ", right: effect.name))
-        }
+    while i < List.len(list: retainedParams) {
+        let target = List.get<String>(list: retainedParams, index: i)
+        Log.write(message: String.concat(left: "  retains ", right: target))
         i = i + 1
     }
     return Unit
 }
 
-fn derives_text(derives: List<FeatureName>) -> String {
+fn derives_text(derives: List<DeriveName>) -> String {
     let mut out = ""
     let mut i = 0
     while i < List.len(list: derives) {
-        let derive = List.get<FeatureName>(list: derives, index: i)
+        let derive = List.get<DeriveName>(list: derives, index: i)
         if i > 0 { out = String.concat(left: out, right: ",") }
         out = String.concat(left: out, right: derive.name)
         i = i + 1
@@ -429,7 +425,7 @@ fn emit_function(program: Program, item: Item) -> Unit {
     let head = String.concat(left: String.concat(left: "fn ", right: named), right: "(")
     let signature = String.concat(left: String.concat(left: head, right: parameter_text(program: program, parameters: item.params)), right: ")->")
     Log.write(message: String.concat(left: signature, right: item.returnType))
-    emit_effects(effects: item.effects)
+    emit_retained_params(retainedParams: item.retainedParams)
     emit_statements(program, indexes: item.statements, depth: 1)
     return Unit
 }

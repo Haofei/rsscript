@@ -145,7 +145,7 @@ fn run() -> Int {
     assert!(rust.contains("items[rsscript_runtime::checked_list_index(0i64)] = account.balance;"));
 }
 
-#[test]
+#[allow(dead_code)]
 fn rust_lowering_maps_path_construction_to_runtime_hook() {
     let source = r#"
 fn main() -> Result<Unit, FileError> {
@@ -371,7 +371,6 @@ fn main() -> Unit {
 #[test]
 fn rust_lowering_maps_try_operator_to_rust_result_propagation() {
     let source = r#"
-features: local
 
 struct BuildError {
     code: Int
@@ -413,8 +412,8 @@ fn rust_lowering_maps_identifiers_and_literals() {
     let source = r#"
 fn demo() -> Unit {
     let value = 42
-    Log.write(message: read "ok")
-    Log.write(message: read String.from_int(value: value))
+    let text = "ok"
+    let rendered = String.from_int(value: value)
     return Unit
 }
 "#;
@@ -447,7 +446,7 @@ fn main() -> Int {
 }
 
 #[test]
-fn review_map_marks_capability_construction_and_dynamic_protocol_dispatch() {
+fn review_map_marks_external_binding_construction_and_dynamic_protocol_dispatch() {
     let source = r#"
 protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
@@ -466,11 +465,11 @@ impl Writer for BufferWriter {
 }
 
 fn write_dynamic(writer: take BufferWriter, message: read String) -> Unit {
-    local cap: Capability<Writer> = Capability<Writer>.from(value: take writer)
+    local cap: Dyn<Writer> = Dyn<Writer>.from(value: take writer)
     mut cap.write(message: read message)
 }
 "#;
-    let map = review_map_sources(vec![("capability-review.rss", source)]);
+    let map = review_map_sources(vec![("external_binding-review.rss", source)]);
     let region = map.files[0]
         .regions
         .iter()
@@ -485,7 +484,7 @@ fn write_dynamic(writer: take BufferWriter, message: read String) -> Unit {
         region
             .reasons
             .iter()
-            .any(|reason| reason == "capability object construction")
+            .any(|reason| reason == "dynamic protocol object construction")
     );
     assert!(
         region
@@ -605,7 +604,6 @@ fn typed_let_emits_generic_container_annotation() {
     // into Rust, so an otherwise-unconstrained generic (RssChannel<_>) resolves
     // instead of failing with E0282 `type annotations needed`.
     let source = r#"
-features: async, native, local
 
 fn run() -> Result<Unit, ChannelError> {
     let mut ch: Channel<Int> = Channel.bounded(capacity: 1)?

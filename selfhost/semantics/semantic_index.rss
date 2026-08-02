@@ -4,7 +4,6 @@
 // is bound once. Semantic rules consume expression-indexed PreparedCall records
 // instead of rescanning Program.items or rebuilding argument slots.
 
-features: local
 
 module selfhost.semantics.semantic_index
 

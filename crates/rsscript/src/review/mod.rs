@@ -23,9 +23,8 @@ use crate::hir::{
 };
 use crate::interfaces::standard_package_interfaces;
 use crate::syntax::ast::{
-    Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature, FunctionDecl,
-    GenericBound, Item, LetKind, MatchPattern, Param, Program, ProtocolImpl, Stmt, TypeDecl,
-    TypeKind, TypeRef, merge_programs,
+    Block, CallArg, Callee, DataEffect, Expr, FieldDecl, FunctionDecl, GenericBound, Item, LetKind,
+    MatchPattern, Param, Program, ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef, merge_programs,
 };
 use crate::syntax::parse_source;
 
@@ -117,7 +116,6 @@ pub struct ReviewMapCategorySummary {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReviewMapFile {
     pub file: String,
-    pub features: Vec<String>,
     pub risk: ReviewMapFileRisk,
     pub reasons: Vec<String>,
     pub regions: Vec<ReviewMapRegion>,

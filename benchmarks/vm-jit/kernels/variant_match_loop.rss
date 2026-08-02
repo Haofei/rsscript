@@ -1,4 +1,3 @@
-features: local
 
 // Slow path: user-defined sum type construction + match dispatch.
 // Exercises MakeVariant, MatchVariant, and UnwrapVariantValue every iteration

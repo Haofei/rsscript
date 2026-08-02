@@ -20,11 +20,11 @@ pub(in crate::rust_lower) fn match_pattern_span(pattern: &MatchPattern) -> Span 
     }
 }
 
-pub(in crate::rust_lower) fn capability_enum_name(protocol: &str) -> String {
-    format!("Capability{}", rust_ident(protocol))
+pub(in crate::rust_lower) fn external_binding_enum_name(protocol: &str) -> String {
+    format!("ExternalBinding{}", rust_ident(protocol))
 }
 
-pub(in crate::rust_lower) fn capability_impl_forward_arg(param: &Param) -> String {
+pub(in crate::rust_lower) fn external_binding_impl_forward_arg(param: &Param) -> String {
     if param.name == "self" {
         "inner".to_string()
     } else {
@@ -32,18 +32,18 @@ pub(in crate::rust_lower) fn capability_impl_forward_arg(param: &Param) -> Strin
     }
 }
 
-pub(in crate::rust_lower) fn capability_from_protocol(callee: &Callee) -> Option<&str> {
+pub(in crate::rust_lower) fn dyn_from_protocol(callee: &Callee) -> Option<&str> {
     let Callee::Qualified { namespace, name } = callee else {
         return None;
     };
-    if type_root_name(namespace) != "Capability" || type_root_name(name) != "from" {
+    if type_root_name(namespace) != "Dyn" || type_root_name(name) != "from" {
         return None;
     }
     type_arg_names(namespace).and_then(|args| args.first().copied())
 }
 
-pub(in crate::rust_lower) fn capability_protocol_name(type_name: &str) -> Option<&str> {
-    if type_root_name(type_name) != "Capability" {
+pub(in crate::rust_lower) fn dyn_protocol_name(type_name: &str) -> Option<&str> {
+    if type_root_name(type_name) != "Dyn" {
         return None;
     }
     type_arg_names(type_name).and_then(|args| args.first().copied())
@@ -820,15 +820,18 @@ impl Numeric for Float {
     value = Float.value
 }
 
-fn make() -> Capability<Numeric> {
+fn make() -> Dyn<Numeric> {
     let number = 1.0 + 2.0
-    return Capability<Numeric>.from(value: take number)
+    return Dyn<Numeric>.from(value: take number)
 }
 "#;
         let program = crate::syntax::parse_source("float-arithmetic-type.rss", source);
         let rust = crate::rust_lower::lower_program_to_rust(&program);
 
-        assert!(rust.contains("CapabilityNumeric::Float(number)"), "{rust}");
-        assert!(!rust.contains("CapabilityNumeric::Int("), "{rust}");
+        assert!(
+            rust.contains("ExternalBindingNumeric::Float(number)"),
+            "{rust}"
+        );
+        assert!(!rust.contains("ExternalBindingNumeric::Int("), "{rust}");
     }
 }

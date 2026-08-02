@@ -1,5 +1,4 @@
 // expect: RS0201 RS0204
-features: local
 
 pub fn combine(left: String, middle: String, right: String) -> fresh String {
     return String.concat(left, right)

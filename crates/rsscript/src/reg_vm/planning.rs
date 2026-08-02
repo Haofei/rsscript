@@ -423,7 +423,7 @@ pub(super) fn instr_reads_register(instr: &RegInstr, reg: Reg) -> bool {
         RegInstr::ResourceDrop { resource } => *resource == reg,
         RegInstr::CallKnown { args, .. }
         | RegInstr::CallDynamic { args, .. }
-        | RegInstr::CallNative { args, .. }
+        | RegInstr::CallExternal { args, .. }
         | RegInstr::SpawnTask { args, .. } => args.contains(&reg),
         RegInstr::CallClosure { closure, args, .. } => *closure == reg || args.contains(&reg),
         RegInstr::SelectWait { handles, .. } => handles.contains(&reg),

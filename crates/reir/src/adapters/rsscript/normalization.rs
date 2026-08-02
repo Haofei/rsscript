@@ -184,7 +184,7 @@ fn package_implements_from_json(value: &Value) -> Vec<RsScriptProviderImplementa
 
 fn package_capabilities_from_json(value: &Value) -> Vec<RsScriptPackageCapability> {
     value
-        .get("capabilities")
+        .get("external_bindings")
         .and_then(Value::as_array)
         .map(|capabilities| {
             capabilities

@@ -1,4 +1,3 @@
-features: local
 // Shared self-hosted syntax model. This is deliberately small at first: it
 // establishes one materialized Program for top-level declarations before
 // expressions, statements, and patterns migrate from the legacy stream parser.
@@ -14,9 +13,6 @@ const ITEM_CONST: Int = 6
 const ITEM_FUNCTION: Int = 7
 const ITEM_PROTOCOL: Int = 8
 const ITEM_IMPL: Int = 9
-const ITEM_NATIVE_MODULE: Int = 10
-const ITEM_FEATURES: Int = 11
-const ITEM_PROFILE: Int = 12
 const ITEM_UNKNOWN: Int = 13
 
 // Function bodies use flat arenas. Child relationships are indices into
@@ -207,16 +203,7 @@ struct GenericParam {
     length: Int
 }
 
-struct EffectName {
-    name: String
-    target: String
-    isRetains: Bool
-    line: Int
-    column: Int
-    length: Int
-}
-
-struct FeatureName {
+struct DeriveName {
     name: String
     line: Int
     column: Int
@@ -294,7 +281,6 @@ struct Item {
     length: Int
     isPublic: Bool
     isAsync: Bool
-    isNative: Bool
     isOpaque: Bool
     hasBody: Bool
     hasDefaultImplMarker: Bool
@@ -313,9 +299,8 @@ struct Item {
     dataKind: String
     generics: List<GenericParam>
     params: List<Param>
-    effects: List<EffectName>
-    features: List<FeatureName>
-    derives: List<FeatureName>
+    retainedParams: List<String>
+    derives: List<DeriveName>
     fields: List<Field>
     variants: List<Variant>
     statements: List<Int>
@@ -400,12 +385,8 @@ fn GenericParam.from(name: take String, boundText: take String, line: Int, colum
     return GenericParam(name: take name, boundText: take boundText, line: line, column: column, length: length)
 }
 
-fn EffectName.from(name: take String, target: take String, isRetains: Bool, line: Int, column: Int, length: Int) -> fresh EffectName {
-    return EffectName(name: take name, target: take target, isRetains: isRetains, line: line, column: column, length: length)
-}
-
-fn FeatureName.from(name: take String, line: Int, column: Int, length: Int) -> fresh FeatureName {
-    return FeatureName(name: take name, line: line, column: column, length: length)
+fn DeriveName.from(name: take String, line: Int, column: Int, length: Int) -> fresh DeriveName {
+    return DeriveName(name: take name, line: line, column: column, length: length)
 }
 
 fn Field.from(name: take String, typeText: take String, typeSyntax: take TypeSyntax, isHandle: Bool, isWeak: Bool, hasDefault: Bool, defaultLine: Int, defaultColumn: Int, defaultLength: Int, defaultExpression: Int, line: Int, column: Int, length: Int, typeLine: Int, typeColumn: Int, typeLength: Int) -> fresh Field {
@@ -425,11 +406,11 @@ fn FreshReturnTarget.from(name: take String, line: Int, column: Int, length: Int
 }
 
 fn Item.plain(kind: Int, name: take String, line: Int, column: Int, length: Int) -> fresh Item {
-    return Item(kind: kind, name: take name, line: line, column: column, length: length, isPublic: false, isAsync: false, isNative: false, isOpaque: false, hasBody: false, hasDefaultImplMarker: false, hasLowerName: false, lowerName: "", protocol: "", implType: "", aliasTarget: "", constType: "", constValue: "", constExpression: -1, useAlias: "", useGlob: false, mappings: List<ProtocolMapping>.new(), freshReturnTargets: List<FreshReturnTarget>.new(), dataKind: "", generics: List<GenericParam>.new(), params: List<Param>.new(), effects: List<EffectName>.new(), features: List<FeatureName>.new(), derives: List<FeatureName>.new(), fields: List<Field>.new(), variants: List<Variant>.new(), statements: List<Int>.new(), returnType: "")
+    return Item(kind: kind, name: take name, line: line, column: column, length: length, isPublic: false, isAsync: false, isOpaque: false, hasBody: false, hasDefaultImplMarker: false, hasLowerName: false, lowerName: "", protocol: "", implType: "", aliasTarget: "", constType: "", constValue: "", constExpression: -1, useAlias: "", useGlob: false, mappings: List<ProtocolMapping>.new(), freshReturnTargets: List<FreshReturnTarget>.new(), dataKind: "", generics: List<GenericParam>.new(), params: List<Param>.new(), retainedParams: List<String>.new(), derives: List<DeriveName>.new(), fields: List<Field>.new(), variants: List<Variant>.new(), statements: List<Int>.new(), returnType: "")
 }
 
-fn Item.function(name: take String, line: Int, column: Int, length: Int, isPublic: Bool, isAsync: Bool, isNative: Bool, hasBody: Bool, hasLowerName: Bool, lowerName: take String, generics: take List<GenericParam>, params: take List<Param>, effects: take List<EffectName>, statements: take List<Int>, returnType: take String) -> fresh Item {
-    return Item(kind: ITEM_FUNCTION, name: take name, line: line, column: column, length: length, isPublic: isPublic, isAsync: isAsync, isNative: isNative, isOpaque: false, hasBody: hasBody, hasDefaultImplMarker: false, hasLowerName: hasLowerName, lowerName: take lowerName, protocol: "", implType: "", aliasTarget: "", constType: "", constValue: "", constExpression: -1, useAlias: "", useGlob: false, mappings: List<ProtocolMapping>.new(), freshReturnTargets: List<FreshReturnTarget>.new(), dataKind: "", generics: take generics, params: take params, effects: take effects, features: List<FeatureName>.new(), derives: List<FeatureName>.new(), fields: List<Field>.new(), variants: List<Variant>.new(), statements: take statements, returnType: take returnType)
+fn Item.function(name: take String, line: Int, column: Int, length: Int, isPublic: Bool, isAsync: Bool, hasBody: Bool, hasLowerName: Bool, lowerName: take String, generics: take List<GenericParam>, params: take List<Param>, retainedParams: take List<String>, statements: take List<Int>, returnType: take String) -> fresh Item {
+    return Item(kind: ITEM_FUNCTION, name: take name, line: line, column: column, length: length, isPublic: isPublic, isAsync: isAsync, isOpaque: false, hasBody: hasBody, hasDefaultImplMarker: false, hasLowerName: hasLowerName, lowerName: take lowerName, protocol: "", implType: "", aliasTarget: "", constType: "", constValue: "", constExpression: -1, useAlias: "", useGlob: false, mappings: List<ProtocolMapping>.new(), freshReturnTargets: List<FreshReturnTarget>.new(), dataKind: "", generics: take generics, params: take params, retainedParams: take retainedParams, derives: List<DeriveName>.new(), fields: List<Field>.new(), variants: List<Variant>.new(), statements: take statements, returnType: take returnType)
 }
 
 fn Program.empty() -> fresh Program {
@@ -437,13 +418,13 @@ fn Program.empty() -> fresh Program {
 }
 
 fn Program.push(self: mut Program, item: Item) -> Unit
-    effects(retains(item))
+    retains(item)
 {
     List.push<Item>(list: mut self.items, value: item)
 }
 
 fn Program.push_expression(self: mut Program, expression: Expr) -> Int
-    effects(retains(expression))
+    retains(expression)
 {
     let index = List.len(list: self.expressions)
     List.push<Expr>(list: mut self.expressions, value: expression)
@@ -451,7 +432,7 @@ fn Program.push_expression(self: mut Program, expression: Expr) -> Int
 }
 
 fn Program.push_statement(self: mut Program, statement: Stmt) -> Int
-    effects(retains(statement))
+    retains(statement)
 {
     let index = List.len(list: self.statements)
     List.push<Stmt>(list: mut self.statements, value: statement)
@@ -459,7 +440,7 @@ fn Program.push_statement(self: mut Program, statement: Stmt) -> Int
 }
 
 fn Program.push_pattern(self: mut Program, pattern: Pattern) -> Int
-    effects(retains(pattern))
+    retains(pattern)
 {
     let index = List.len(list: self.patterns)
     List.push<Pattern>(list: mut self.patterns, value: pattern)

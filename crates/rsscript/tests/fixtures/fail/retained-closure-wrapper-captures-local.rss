@@ -1,5 +1,4 @@
 // expect: RS0801
-features: local
 
 struct Image
 struct CallbackOption
@@ -8,7 +7,7 @@ class Scheduler
 fn Image.load(path: Path) -> fresh Image
 fn Image.inspect(image: Image) -> Unit
 fn schedule(scheduler: mut Scheduler, callback: CallbackOption) -> Unit
-    effects(retains(callback))
+    retains(callback)
 
 fn bad_schedule(scheduler: mut Scheduler, path: Path) -> Unit {
     local image = Image.load(path)

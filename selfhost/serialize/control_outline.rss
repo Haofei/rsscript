@@ -1,4 +1,3 @@
-features: local
 // Test-only AST-backed control-flow type-rule probe.
 
 module selfhost.serialize.control_outline

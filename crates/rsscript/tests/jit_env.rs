@@ -5,35 +5,35 @@
 fn rss_jit_osr_threshold_is_deterministic_interpreted_work() {
     let heavy_source = "\
 fn hot(limit: Int, seed: Int) -> Int {
-    Log.write(message: \"begin\")
+    let _ = \"begin\"
     let mut i = 0
     let mut total = seed
     while i < limit {
         total = total + i * 3 - i / 2 + 7
         i = i + 1
     }
-    Log.write(message: String.from_int(value: total))
+    let _ = String.from_int(value: total)
     return total
 }
 
 fn main() -> Unit {
-    Log.write(message: String.from_int(value: hot(limit: 8, seed: 0)))
+    let _ = String.from_int(value: hot(limit: 8, seed: 0))
     return Unit
 }
 ";
     let tiny_source = "\
 fn hot(limit: Int) -> Int {
-    Log.write(message: \"begin\")
+    let _ = \"begin\"
     let mut i = 0
     while i < limit {
         i = i + 1
     }
-    Log.write(message: String.from_int(value: i))
+    let _ = String.from_int(value: i)
     return i
 }
 
 fn main() -> Unit {
-    Log.write(message: String.from_int(value: hot(limit: 14)))
+    let _ = String.from_int(value: hot(limit: 14))
     return Unit
 }
 ";

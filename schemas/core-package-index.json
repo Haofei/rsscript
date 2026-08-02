@@ -3,16 +3,6 @@
   "generated_by": "build.rs",
   "default_core": [
     {
-      "path": "stdlib/capability/capability.rssi",
-      "module": "capability.capability",
-      "functions": [
-        "Capability.from"
-      ],
-      "types": [
-        "Capability"
-      ]
-    },
-    {
       "path": "stdlib/clock/clock.rssi",
       "module": "clock.clock",
       "functions": [

@@ -158,12 +158,6 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
             output.push_str(&format!("  - {reason}\n"));
         }
     }
-    if !review.features.is_empty() {
-        output.push_str(&format!(
-            "package features: {}\n",
-            review.features.join(", ")
-        ));
-    }
     output.push_str(&format_package_review_dependencies_human(
         &review.dependencies,
     ));
@@ -193,7 +187,7 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
         &review.await_sites,
     ));
     output.push_str(&format_package_review_capabilities_human(
-        &review.capabilities,
+        &review.external_bindings,
     ));
     output.push_str(&format_package_review_exports_human(&review.exports));
     output
@@ -219,27 +213,29 @@ pub fn format_package_review_markdown(review: &PackageReview) -> String {
         }
     }
 
-    let mut capabilities = review.capabilities.clone();
-    capabilities.sort_by_key(|capability| match capability.risk {
-        crate::CapabilityRisk::High => 0u8,
-        crate::CapabilityRisk::Medium => 1,
-        crate::CapabilityRisk::Low => 2,
+    let mut external_bindings = review.external_bindings.clone();
+    external_bindings.sort_by_key(|external_binding| match external_binding.risk {
+        crate::package::types::PackageRisk::High => 0u8,
+        crate::package::types::PackageRisk::Elevated => 1,
+        crate::package::types::PackageRisk::Low => 2,
+        crate::package::types::PackageRisk::Unknown => 3,
     });
     let mut seen = std::collections::BTreeSet::new();
     let mut rows = Vec::new();
-    for capability in &capabilities {
+    for external_binding in &external_bindings {
         if !seen.insert((
-            capability.category.clone(),
-            capability.binding_symbol.clone(),
+            external_binding.category.clone(),
+            external_binding.binding_symbol.clone(),
         )) {
             continue;
         }
-        let risk = match capability.risk {
-            crate::CapabilityRisk::High => "high",
-            crate::CapabilityRisk::Medium => "medium",
-            crate::CapabilityRisk::Low => "low",
+        let risk = match external_binding.risk {
+            crate::package::types::PackageRisk::High => "high",
+            crate::package::types::PackageRisk::Elevated => "medium",
+            crate::package::types::PackageRisk::Low => "low",
+            crate::package::types::PackageRisk::Unknown => "unknown",
         };
-        let note = capability
+        let note = external_binding
             .unknown_reason
             .as_deref()
             .map(|reason| format!(" ⚠️ {reason}"))
@@ -247,17 +243,17 @@ pub fn format_package_review_markdown(review: &PackageReview) -> String {
         rows.push(format!(
             "| {} | {} | {} | `{}`{} |",
             risk,
-            capability.category,
-            capability.provider.as_deref().unwrap_or("—"),
-            capability.binding_symbol,
+            external_binding.category,
+            external_binding.provider.as_deref().unwrap_or("—"),
+            external_binding.binding_symbol,
             note
         ));
     }
     if rows.is_empty() {
-        let _ = writeln!(out, "\nNo declared capabilities.");
+        let _ = writeln!(out, "\nNo declared external_bindings.");
     } else {
         let _ = writeln!(out, "\n### Capabilities (by risk)\n");
-        let _ = writeln!(out, "| risk | capability | provider | via |");
+        let _ = writeln!(out, "| risk | external_binding | provider | via |");
         let _ = writeln!(out, "|------|------------|----------|-----|");
         for row in rows {
             let _ = writeln!(out, "{row}");
@@ -288,42 +284,43 @@ pub fn format_package_review_markdown(review: &PackageReview) -> String {
     out
 }
 
-/// Distinct capabilities the package requires, ranked high-risk first, so a
+/// Distinct external_bindings the package requires, ranked high-risk first, so a
 /// reviewer sees the powers (and any unrecognized ones) at a glance.
 fn format_package_review_capabilities_human(
-    capabilities: &[crate::package::types::PackageReviewCapability],
+    external_bindings: &[crate::package::types::PackageExternalBinding],
 ) -> String {
-    if capabilities.is_empty() {
+    if external_bindings.is_empty() {
         return String::new();
     }
     let mut seen = std::collections::BTreeSet::new();
     let mut rows: Vec<(u8, String)> = Vec::new();
-    for capability in capabilities {
+    for external_binding in external_bindings {
         if !seen.insert((
-            capability.category.clone(),
-            capability.binding_symbol.clone(),
+            external_binding.category.clone(),
+            external_binding.binding_symbol.clone(),
         )) {
             continue;
         }
-        let (rank, label) = match capability.risk {
-            crate::CapabilityRisk::High => (0u8, "high"),
-            crate::CapabilityRisk::Medium => (1, "medium"),
-            crate::CapabilityRisk::Low => (2, "low"),
+        let (rank, label) = match external_binding.risk {
+            crate::package::types::PackageRisk::High => (0u8, "high"),
+            crate::package::types::PackageRisk::Elevated => (1, "medium"),
+            crate::package::types::PackageRisk::Low => (2, "low"),
+            crate::package::types::PackageRisk::Unknown => (3, "unknown"),
         };
         let mut line = format!(
             "  [{label}] {} via {}",
-            capability.category, capability.binding_symbol
+            external_binding.category, external_binding.binding_symbol
         );
-        if let Some(provider) = &capability.provider {
+        if let Some(provider) = &external_binding.provider {
             line.push_str(&format!(" (provider {provider})"));
         }
-        if let Some(reason) = &capability.unknown_reason {
+        if let Some(reason) = &external_binding.unknown_reason {
             line.push_str(&format!("  -- {reason}"));
         }
         rows.push((rank, line));
     }
     rows.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    let mut output = String::from("capabilities (by risk):\n");
+    let mut output = String::from("external_bindings (by risk):\n");
     for (_, line) in rows {
         output.push_str(&line);
         output.push('\n');
@@ -396,12 +393,6 @@ pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String
     ));
     for reason in &metadata.reasons {
         output.push_str(&format!("reason: {reason}\n"));
-    }
-    if !metadata.metadata.features.is_empty() {
-        output.push_str(&format!(
-            "package features: {}\n",
-            metadata.metadata.features.join(", ")
-        ));
     }
     output.push_str(&format_package_review_dependencies_human(
         &metadata.metadata.dependencies,
@@ -530,17 +521,18 @@ pub fn format_package_diff_human(diff: &PackageDiff) -> String {
             diff.old_review.await_sites, diff.new_review.await_sites
         ));
     }
-    if !diff.capability_changes.is_empty() {
-        output.push_str("capability changes:\n");
-        for change in &diff.capability_changes {
+    if !diff.external_binding_changes.is_empty() {
+        output.push_str("external_binding changes:\n");
+        for change in &diff.external_binding_changes {
             let sign = match change.change {
-                crate::package::types::PackageCapabilityChangeKind::Added => "+",
-                crate::package::types::PackageCapabilityChangeKind::Removed => "-",
+                crate::package::types::PackageExternalBindingChangeKind::Added => "+",
+                crate::package::types::PackageExternalBindingChangeKind::Removed => "-",
             };
             let risk = match change.risk {
-                crate::CapabilityRisk::High => "high",
-                crate::CapabilityRisk::Medium => "medium",
-                crate::CapabilityRisk::Low => "low",
+                crate::package::types::PackageRisk::High => "high",
+                crate::package::types::PackageRisk::Elevated => "medium",
+                crate::package::types::PackageRisk::Low => "low",
+                crate::package::types::PackageRisk::Unknown => "unknown",
             };
             output.push_str(&format!(
                 "  {sign} [{risk}] {} via {}\n",

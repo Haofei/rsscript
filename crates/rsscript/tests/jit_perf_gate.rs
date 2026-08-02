@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
+mod common;
+
 #[derive(Clone, Debug)]
 struct CaseSpec {
     case: String,
@@ -427,7 +429,7 @@ fn run_bench(
     let path_label = path.display().to_string();
     let source = std::fs::read_to_string(&path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
-    let executable = rsscript::reg_vm_compile_source(&path_label, &source)
+    let executable = common::compile_vm_source(&path_label, &source)
         .map_err(|error| format!("compile failed for {}: {error:?}", case.case))?;
     let args = [case.size.as_str()];
     for _ in 0..warmup {
@@ -452,7 +454,7 @@ fn run_bench(
         .eval_main_with_args_native_with_stats_at_threshold(args.iter().copied(), tier_up_threshold)
         .map_err(|error| format!("warm stats failed for {}: {error:?}", case.case))?;
     let mut jit = warm_stats.to_json();
-    let stats_executable = rsscript::reg_vm_compile_source(&path_label, &source)
+    let stats_executable = common::compile_vm_source(&path_label, &source)
         .map_err(|error| format!("stats compile failed for {}: {error:?}", case.case))?;
     let (_output, cold_stats) = stats_executable
         .eval_main_with_args_native_with_stats_at_threshold(args.iter().copied(), tier_up_threshold)

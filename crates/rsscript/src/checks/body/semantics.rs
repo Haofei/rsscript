@@ -815,20 +815,6 @@ pub(super) fn check_match_pattern_effects(
         .as_deref()
         .map(type_root_name)
         .is_some_and(|root| analyzer.hir.type_kind(root) == Some(HirTypeKind::Class));
-    if scrutinee_effect == Some(DataEffect::Take)
-        && !analyzer.syntax_program.has_feature(FileFeature::Local)
-        && let Some(first_arm) = arms.first()
-    {
-        analyzer.diagnostics.push(error_cause_manual_fix(
-            code::FEATURE_VIOLATION,
-            "`match take` requires `features: local`.",
-            first_arm.span.clone(),
-            "missing local feature",
-            "Taking fields out of a pattern is a local ownership capability.",
-            "add_local_feature",
-            "Add `features: local` or match the value with `read`.",
-        ));
-    }
     for arm in arms {
         if matches!(
             arm.pattern,

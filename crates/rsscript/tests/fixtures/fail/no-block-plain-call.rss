@@ -5,7 +5,7 @@ fn may_block(value: Int) -> Int {
 }
 
 fn promised_nonblocking(value: Int) -> Int
-    effects(no_block)
+
 {
     return may_block(value)
 }

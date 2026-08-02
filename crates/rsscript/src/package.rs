@@ -27,7 +27,7 @@ mod review;
 mod source_set;
 mod types;
 
-pub const PACKAGE_REVIEW_METADATA_SCHEMA: &str = "rss.review.package.v1";
+pub const PACKAGE_REVIEW_METADATA_SCHEMA: &str = "rsscript.package_analysis.v1";
 
 const PACKAGE_TREE_MAX_FILES: usize = 20_000;
 const PACKAGE_TREE_MAX_ENTRIES: usize = 40_000;
@@ -40,7 +40,8 @@ pub(crate) const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 pub use artifact_store::ArtifactStore;
 pub use authorization::{
-    AuthorizedPackage, PreparedPackage, prepare_authorized_package, prepare_package_for_execution,
+    ExecutablePackageSnapshot, PreparedPackage, prepare_executable_package,
+    prepare_package_for_execution,
 };
 pub use check::check_package_dir;
 use dependency::{

@@ -1,15 +1,13 @@
-features: native
 
 struct Deadline
 
-pub native fn Deadline.after_ms(ms: Int) -> fresh Deadline
-    effects(native)
+pub fn Deadline.after_ms(ms: Int) -> fresh Deadline
 
-pub native fn Deadline.after(duration: Duration) -> fresh Deadline
-    effects(native)
 
-pub native fn Deadline.is_expired(deadline: Deadline) -> Bool
-    effects(native)
+pub fn Deadline.after(duration: Duration) -> fresh Deadline
 
-pub native fn Deadline.remaining_ms(deadline: Deadline) -> Int
-    effects(native)
+
+pub fn Deadline.is_expired(deadline: Deadline) -> Bool
+
+
+pub fn Deadline.remaining_ms(deadline: Deadline) -> Int

@@ -1,5 +1,4 @@
 // expect: RS0803
-features: local
 
 struct Callback
 

@@ -74,7 +74,7 @@
         let vm = RegVm::new(
             Rc::new(native_test_unit(Vec::new())),
             Vec::<String>::new(),
-            std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
+            std::iter::empty::<(String, ExternalFunction)>().collect(),
         );
 
         let map = VmClosure {
@@ -161,7 +161,6 @@
     #[test]
     fn lowering_omits_deep_copy_for_scalar_params_only() {
         let source = r#"
-features: local
 
 fn scalar(n: Int, ok: Bool) -> Int {
     if ok {
@@ -233,7 +232,6 @@ fn main() -> Unit {
     #[test]
     fn deepcopy_elision_fires_for_read_only_heap_param() {
         let source = r#"
-features: local
 
 struct Bag {
     a: List<Int>,
@@ -372,7 +370,6 @@ fn main() -> Unit {
     #[test]
     fn deepcopy_elision_fires_for_int_list_read_param() {
         let source = r#"
-features: local
 
 fn scan(xs: read List<Int>, i: Int) -> Int {
     let a = List.get<Int>(list: read xs, index: i)
@@ -546,7 +543,6 @@ fn main() -> Unit {
     #[test]
     fn deepcopy_elision_kept_for_stored_read_param() {
         let source = r#"
-features: local
 
 struct Box {
     items: List<Int>
@@ -617,7 +613,6 @@ fn main() -> Unit {
     #[test]
     fn jit_runs_scalar_self_recursion_on_flat_executor() {
         let source = r#"
-features: local
 
 fn fib(n: Int) -> Int {
     if n < 2 {

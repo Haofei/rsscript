@@ -1,4 +1,3 @@
-features: local
 
 struct RowBuffer {
     bytes: Buffer

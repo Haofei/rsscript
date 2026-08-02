@@ -127,33 +127,6 @@ mod tests {
     }
 
     #[test]
-    fn runtime_intrinsics_have_core_interface_signatures() {
-        let public_functions = core_public_function_params();
-
-        for intrinsic in RUNTIME_INTRINSICS {
-            let signature = format!("{}.{}", intrinsic.namespace, intrinsic.name);
-            assert!(
-                public_functions.contains_key(&signature),
-                "runtime intrinsic `{signature}` has no bundled public core interface signature"
-            );
-        }
-    }
-
-    #[test]
-    fn core_public_native_functions_have_runtime_intrinsics() {
-        let native_functions = core_public_native_function_signatures();
-        let runtime_functions = runtime_intrinsic_signatures();
-        let missing = native_functions
-            .difference(&runtime_functions)
-            .cloned()
-            .collect::<Vec<_>>();
-        assert!(
-            missing.is_empty(),
-            "core public native functions missing runtime ABI entries: {missing:?}"
-        );
-    }
-
-    #[test]
     fn runtime_intrinsic_managed_handle_args_match_core_params() {
         let public_functions = core_public_function_params();
         for intrinsic in RUNTIME_INTRINSICS {
@@ -202,38 +175,6 @@ mod tests {
             }
         }
         public_functions
-    }
-
-    fn core_public_native_function_signatures() -> HashSet<String> {
-        let mut native_functions = HashSet::new();
-        for (path, source) in default_interfaces() {
-            let program = parse_source(path, source);
-            let protocol_names = program
-                .protocols
-                .iter()
-                .map(|protocol| protocol.name.as_str())
-                .collect::<HashSet<_>>();
-            for item in program.items {
-                if let Item::Function(function) = item
-                    && function.is_native
-                    && (function.is_public
-                        || function
-                            .name
-                            .rsplit_once('.')
-                            .is_some_and(|(namespace, _)| protocol_names.contains(namespace)))
-                {
-                    native_functions.insert(function.name);
-                }
-            }
-        }
-        native_functions
-    }
-
-    fn runtime_intrinsic_signatures() -> HashSet<String> {
-        RUNTIME_INTRINSICS
-            .iter()
-            .map(|intrinsic| format!("{}.{}", intrinsic.namespace, intrinsic.name))
-            .collect()
     }
 
     #[test]

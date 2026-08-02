@@ -1,4 +1,3 @@
-features: local
 
 // Slow path: closure allocation churn — a fresh closure is created and called
 // every iteration (MakeClosure + CallClosure per loop), distinct from the

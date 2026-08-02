@@ -1,4 +1,3 @@
-features: async, native, local
 
 async fn write_then_read(path: Path) -> Result<String, FileError> {
     await File.write_string_async(path, text: "hello async io")?

@@ -3,7 +3,7 @@ struct Image
 struct ImageError
 
 fn load(path: Path) -> Result<Image, ImageError>
-    effects(fresh)
+
 {
     return Image()
 }

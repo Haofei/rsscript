@@ -352,11 +352,10 @@ fn bootstrap_ir_expr(expr: &Expr) -> String {
         Expr::Closure {
             params,
             captures,
-            declared_effects,
             explicit,
             body,
             ..
-        } if !*explicit && captures.is_empty() && declared_effects.is_empty() => {
+        } if !*explicit && captures.is_empty() => {
             let body = if let [Stmt::Expr(value)] = body.statements.as_slice() {
                 bootstrap_ir_expr(value)
             } else {
@@ -440,16 +439,9 @@ fn bootstrap_ir_generics(generics: &[crate::syntax::ast::GenericParam]) -> Strin
     format!("<{}>", values.join(","))
 }
 
-fn bootstrap_ir_effects(lines: &mut Vec<String>, effects: &[crate::syntax::ast::EffectDecl]) {
-    for effect in effects {
-        match effect {
-            crate::syntax::ast::EffectDecl::Name(name) => {
-                lines.push(format!("  effect {name}"));
-            }
-            crate::syntax::ast::EffectDecl::Retains(name) => {
-                lines.push(format!("  effect retains {name}"));
-            }
-        }
+fn bootstrap_ir_retains(lines: &mut Vec<String>, retained_params: &[String]) {
+    for name in retained_params {
+        lines.push(format!("  retains {name}"));
     }
 }
 
@@ -764,7 +756,7 @@ fn rust_bootstrap_ir(source: &str) -> String {
                         .as_ref()
                         .map_or_else(String::new, bootstrap_ir_type)
                 ));
-                bootstrap_ir_effects(&mut lines, &function.effects);
+                bootstrap_ir_retains(&mut lines, &function.retained_params);
                 bootstrap_ir_statements(&mut lines, &function.body.statements, 1);
             }
         }
@@ -1701,8 +1693,8 @@ fn selfhost_bootstrap_ir_lowers_braced_pipe_closure_statement_blocks() {
 }
 
 #[test]
-fn selfhost_bootstrap_ir_lowers_function_effects() {
-    let source = "fn publish(value: read String) -> Unit\n    effects(noalloc, retains(value), no_panic)\n{\n    return Unit\n}\n";
+fn selfhost_bootstrap_ir_lowers_retention_contracts() {
+    let source = "fn publish(value: read String) -> Unit\n    retains(value)\n{\n    return Unit\n}\n";
     let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
         .expect("rss bootstrap IR should compile");
     let actual = executable
@@ -1713,9 +1705,7 @@ fn selfhost_bootstrap_ir_lowers_function_effects() {
         concat!(
             "rss-ir-v1\n",
             "fn publish(value:read String)->Unit\n",
-            "  effect noalloc\n",
-            "  effect retains value\n",
-            "  effect no_panic\n",
+            "  retains value\n",
             "  return literal Unit\n",
         ),
         actual
@@ -1984,4 +1974,3 @@ fn lexer_perf_corpus() {
         rss_ms / rust_ms,
     );
 }
-

@@ -92,7 +92,7 @@ fn s3_iam_reir_demo_fails_preflight_then_passes_and_shows_async_io_gain() {
         fixed_reconciliations
             .iter()
             .all(|reconciliation| reconciliation.kind != ReconciliationKind::MissingCapability),
-        "fixed Terraform/OpenTofu IAM grants should cover all required capabilities: {fixed_reconciliations:#?}"
+        "fixed Terraform/OpenTofu IAM grants should cover all required external_bindings: {fixed_reconciliations:#?}"
     );
 
     let excess_reconciliations = reir::reconcile_capabilities_for_target(
@@ -179,7 +179,7 @@ fn s3_iam_reir_demo_preflight_reports_missing_fixed_and_excess() {
                 .is_some_and(|capability| capability.action.as_deref() == Some("s3:PutObject"))
             && reconciliation.evidence.iter().any(|evidence| {
                 evidence.file.as_deref() == Some("src/upload.rss")
-                    && evidence.line == Some(8)
+                    && evidence.line == Some(7)
                     && evidence
                         .reason
                         .as_deref()
@@ -241,7 +241,7 @@ fn s3_iam_reir_demo_preflight_reports_missing_fixed_and_excess() {
 }
 
 #[test]
-fn s3_iam_reir_demo_scenarios_report_code_capability_change() {
+fn s3_iam_reir_demo_scenarios_report_code_external_binding_change() {
     let repo = common::workspace_root();
     let demo_dir = repo.join("examples/demos/s3-iam-reir");
     let fixed_dir = demo_dir.join("scenarios/00-fixed");
@@ -323,9 +323,12 @@ fn s3_iam_reir_demo_pr_review_comment_matches_golden_output() {
     let required = review_facts_for_demo(&adds_delete_dir);
     let mut grants = terraform_grants_from_fixture(&demo_dir, "fixed");
     grants.retain(|fact| {
-        fact.capability
-            .as_ref()
-            .is_none_or(|capability| capability.category != CapabilityCategory::NetworkClient)
+        fact.capability.as_ref().is_none_or(|capability| {
+            !matches!(
+                capability.category,
+                CapabilityCategory::NetworkClient | CapabilityCategory::RuntimeNative
+            )
+        })
     });
     let reconciliations = reir::reconcile_capabilities_for_target(&required, &grants, Some("prod"));
     let decision = reir::decide_gate(
@@ -341,54 +344,25 @@ fn s3_iam_reir_demo_pr_review_comment_matches_golden_output() {
 }
 
 #[test]
-fn s3_iam_reir_demo_missing_capability_binding_is_unknown_not_safe() {
+fn s3_iam_reir_demo_missing_external_binding_binding_is_unknown_not_safe() {
     let repo = common::workspace_root();
     let demo_dir = repo.join("examples/demos/s3-iam-reir");
     let missing_binding_dir = demo_dir.join("scenarios/05-missing-capability-binding");
     let review = review_package_dir(&missing_binding_dir)
         .expect("missing-binding scenario review should still parse");
 
-    assert_eq!(review.risk, rsscript::PackageRisk::Unknown);
-    assert_eq!(review.summary.unknown_apis, 1);
+    assert_eq!(review.risk, rsscript::PackageRisk::High);
+    assert_eq!(review.summary.unknown_apis, 0);
+    assert!(review.summary.errors > 0);
     assert!(
         review
             .reasons
             .iter()
-            .any(|reason| { reason == "native/external capability binding unknown" })
+            .any(|reason| reason == "package contains frontend errors")
     );
-    assert!(
-        review.summary.native_apis > 0,
-        "native facade should still be visible even without capability binding"
-    );
-    assert!(review.capabilities.iter().any(|capability| {
-        capability.binding_symbol == "S3.put_object"
-            && capability.category == "unknown"
-            && capability.unknown_reason.as_deref()
-                == Some("native/external facade has no review.capability_bindings entry")
-            && capability.call_chain == ["upload_report", "S3.put_object"]
-    }));
-    let bundle: reir::Bundle =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
-            .expect("missing-binding package review should lower to REIR");
-    assert!(bundle.facts.iter().any(|fact| {
-        fact.kind == reir::FactKind::Capability
-            && fact.role == Some(reir::FactRole::Required)
-            && fact.value == reir::FactValue::Unknown
-            && fact.unknown_reason.as_deref()
-                == Some("native/external facade has no review.capability_bindings entry")
-            && fact.capability.as_ref().is_some_and(|capability| {
-                capability.category == reir::CapabilityCategory::Unknown
-                    && capability.action.as_deref() == Some("S3.put_object")
-            })
-    }));
+    assert!(review.external_bindings.is_empty());
 
-    let report = missing_capability_binding_report(&review);
-    assert_eq!(
-        report,
-        read_demo_text(&demo_dir, "expected/missing-capability-binding.txt")
-    );
-
-    println!("s3 iam negative-control: missing capability binding is unknown");
+    println!("s3 iam negative-control: missing external binding fails validation");
 }
 
 #[test]
@@ -536,33 +510,6 @@ fn review_facts_for_demo(demo_dir: &Path) -> Vec<Fact> {
         serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
             .expect("demo package review REIR should parse");
     bundle.facts
-}
-
-fn missing_capability_binding_report(review: &rsscript::PackageReview) -> String {
-    let native_symbol = review
-        .exports
-        .iter()
-        .find(|export| {
-            export
-                .normalized_effects
-                .iter()
-                .any(|effect| effect == "native")
-        })
-        .map(|export| export.name.as_str())
-        .unwrap_or("S3.put_object");
-    [
-        "RSScript semantic deployment review: FAIL",
-        "",
-        "UNKNOWN capability binding:",
-        &format!("  native symbol: {native_symbol}"),
-        "  evidence: interface/s3.rssi",
-        "  reason: native/external facade has no review.capability_bindings entry",
-        "",
-        "Decision:",
-        "  fail under deny_unknown; absence of capability metadata is not safe",
-        "",
-    ]
-    .join("\n")
 }
 
 fn read_demo_text(demo_dir: &Path, relative_path: &str) -> String {

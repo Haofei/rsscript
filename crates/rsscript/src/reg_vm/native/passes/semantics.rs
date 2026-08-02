@@ -168,7 +168,7 @@ fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
         RegInstr::CallKnown { args, .. }
         | RegInstr::CallDynamic { args, .. }
         | RegInstr::SpawnTask { args, .. }
-        | RegInstr::CallNative { args, .. }
+        | RegInstr::CallExternal { args, .. }
         | RegInstr::CallIntrinsic { args, .. }
         | RegInstr::CallTypedIntrinsic { args, .. } => S(args.clone()),
         RegInstr::CallClosure { closure, args, .. } => {
@@ -309,7 +309,7 @@ fn native_instr_semantics(instr: &RegInstr) -> NativeInstrSemantics {
         | RegInstr::CallDynamic { dst, .. }
         | RegInstr::SpawnTask { dst, .. }
         | RegInstr::AwaitJoin { dst, .. }
-        | RegInstr::CallNative { dst, .. }
+        | RegInstr::CallExternal { dst, .. }
         | RegInstr::CallClosure { dst, .. }
         | RegInstr::CallIntrinsic { dst, .. }
         | RegInstr::CallTypedIntrinsic { dst, .. }

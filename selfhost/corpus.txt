@@ -515,7 +515,6 @@ selfhost/samples/ast/logic.rss
 selfhost/samples/ast/mal_control.rss
 selfhost/samples/ast/mal_empty_call_arg.rss
 selfhost/samples/ast/mal_fn_decl.rss
-selfhost/samples/ast/mal_malformed_effect_declaration.rss
 selfhost/samples/ast/mal_malformed_empty_parameter_declaration.rss
 selfhost/samples/ast/mal_malformed_field_declaration.rss
 selfhost/samples/ast/mal_malformed_generic_parameter_declaration.rss
@@ -571,7 +570,6 @@ selfhost/semantics/check_types.rss
 selfhost/semantics/context.rss
 selfhost/semantics/declarations.rss
 selfhost/semantics/diagnostics.rss
-selfhost/semantics/features.rss
 selfhost/semantics/semantic_index.rss
 selfhost/serialize/call_binding_outline.rss
 selfhost/serialize/control_outline.rss

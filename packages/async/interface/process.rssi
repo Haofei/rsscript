@@ -1,64 +1,62 @@
-features: async, native, local
 
 // Async process IO runs blocking OS process work through the async runtime
 // provider. The RSScript surface stays explicit: command, args, timeout, and
 // result type are visible in the signature.
 
-pub async native fn Process.run_async(
+pub async fn Process.run_async(
     command: String,
     args: List<String>,
 ) -> Result<fresh ProcessOutput, String>
-    effects(native)
 
-pub async native fn Process.run_timeout_async(
+
+pub async fn Process.run_timeout_async(
     command: String,
     args: List<String>,
     timeout_ms: Int,
 ) -> Result<fresh ProcessOutput, String>
-    effects(native)
 
-pub async native fn Process.run_request_async(
+
+pub async fn Process.run_request_async(
     request: ProcessRequest,
 ) -> Result<fresh ProcessOutput, String>
-    effects(native)
 
-pub async native fn Process.run_request_cancellable_async(
+
+pub async fn Process.run_request_cancellable_async(
     request: ProcessRequest,
     token: CancellationToken,
 ) -> Result<fresh ProcessOutput, String>
-    effects(native)
 
-pub native fn Process.stream(
+
+pub fn Process.stream(
     request: ProcessRequest,
 ) -> Result<fresh Stream<ProcessEvent>, String>
-    effects(native)
 
-pub async native fn Process.run_stdout_async(
+
+pub async fn Process.run_stdout_async(
     command: String,
     args: List<String>,
 ) -> Result<String, String>
-    effects(native)
 
-pub async native fn Process.run_stdout_timeout_async(
+
+pub async fn Process.run_stdout_timeout_async(
     command: String,
     args: List<String>,
     timeout_ms: Int,
 ) -> Result<String, String>
-    effects(native)
 
-pub async native fn Process.run_many_stdout_async(
+
+pub async fn Process.run_many_stdout_async(
     command: String,
     args: List<String>,
     appended_args: List<String>,
     jobs: Int,
 ) -> Result<List<String>, String>
-    effects(native)
 
-pub async native fn Process.run_many_stdout_timeout_async(
+
+pub async fn Process.run_many_stdout_timeout_async(
     command: String,
     args: List<String>,
     appended_args: List<String>,
     jobs: Int,
     timeout_ms: Int,
 ) -> Result<List<String>, String>
-    effects(native)

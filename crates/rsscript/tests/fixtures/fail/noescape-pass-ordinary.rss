@@ -2,7 +2,7 @@
 struct Callback
 
 fn store(callback: Callback) -> Unit
-    effects(retains(callback))
+    retains(callback)
 
 fn bad(callback: noescape Fn()) -> Unit {
     store(callback)

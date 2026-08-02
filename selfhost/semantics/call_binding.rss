@@ -3,7 +3,6 @@
 // This mirrors crates/rsscript/src/call_binding.rs. Explicit arguments retain
 // source evaluation order; `byParameter` is the declaration-order ABI view.
 
-features: local
 
 module selfhost.semantics.call_binding
 

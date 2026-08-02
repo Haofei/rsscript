@@ -19,11 +19,6 @@ pub(super) struct ParsedGenericParams {
     pub(super) malformed_spans: Vec<crate::diagnostic::Span>,
 }
 
-pub(super) struct ParsedEffects {
-    pub(super) effects: Vec<EffectDecl>,
-    pub(super) malformed_spans: Vec<crate::diagnostic::Span>,
-}
-
 pub(super) struct ParamRange {
     pub(super) start: usize,
     pub(super) end: usize,
@@ -244,45 +239,6 @@ pub(super) fn split_param_ranges(tokens: &[Token], start: usize, end: usize) -> 
         });
     }
     ranges
-}
-
-pub(super) fn parse_effects(tokens: &[Token], start: usize, end: usize) -> ParsedEffects {
-    let mut effects = Vec::new();
-    let mut malformed_spans = Vec::new();
-    for range in split_param_ranges(tokens, start, end) {
-        if let Some(span) = range.empty_span {
-            malformed_spans.push(span);
-            continue;
-        }
-        let start = range.start;
-        let end = range.end;
-        let Some(name) = tokens.get(start).and_then(ident_name) else {
-            if let Some(token) = tokens.get(start) {
-                malformed_spans.push(token.span.clone());
-            }
-            continue;
-        };
-        if name == "retains" {
-            if tokens.get(start + 1).is_some_and(|token| token.symbol("("))
-                && let Some(close) = find_matching(tokens, start + 1, "(", ")")
-                && close + 1 == end
-                && start + 3 == close
-                && let Some(param) = tokens.get(start + 2).and_then(ident_name)
-            {
-                effects.push(EffectDecl::Retains(param.to_string()));
-            } else {
-                malformed_spans.push(tokens[start].span.clone());
-            }
-        } else if start + 1 == end {
-            effects.push(EffectDecl::Name(name.to_string()));
-        } else {
-            malformed_spans.push(tokens[start].span.clone());
-        }
-    }
-    ParsedEffects {
-        effects,
-        malformed_spans,
-    }
 }
 
 pub(super) fn parse_generic_params(

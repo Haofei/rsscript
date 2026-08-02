@@ -1,4 +1,3 @@
-features: local
 
 struct PackageDiffFacts {
     declared_risk: Int

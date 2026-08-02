@@ -1,28 +1,26 @@
-features: native
 
 struct Instant
 struct Duration
 
-pub native fn Clock.now() -> fresh Instant
-    effects(native)
+pub fn Clock.now() -> fresh Instant
 
-pub native fn Clock.system_unix_ms() -> Int
-    effects(native)
 
-pub native fn Instant.elapsed(start: Instant) -> fresh Duration
-    effects(native)
+pub fn Clock.system_unix_ms() -> Int
 
-pub native fn Duration.ms(value: Int) -> fresh Duration
-    effects(native)
 
-pub native fn Duration.seconds(value: Int) -> fresh Duration
-    effects(native)
+pub fn Instant.elapsed(start: Instant) -> fresh Duration
 
-pub native fn Duration.as_ms(value: Duration) -> Int
-    effects(native)
 
-pub native fn Duration.as_seconds(value: Duration) -> Int
-    effects(native)
+pub fn Duration.ms(value: Int) -> fresh Duration
 
-pub native fn Duration.add(left: Duration, right: Duration) -> fresh Duration
-    effects(native)
+
+pub fn Duration.seconds(value: Int) -> fresh Duration
+
+
+pub fn Duration.as_ms(value: Duration) -> Int
+
+
+pub fn Duration.as_seconds(value: Duration) -> Int
+
+
+pub fn Duration.add(left: Duration, right: Duration) -> fresh Duration

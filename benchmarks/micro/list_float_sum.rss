@@ -1,4 +1,3 @@
-features: local
 
 // TV1 isolation kernel: build a `List<Float>` once, then sum it in a tight loop.
 // Exercises flat `Floats` storage on the build (push) and read (get) paths.

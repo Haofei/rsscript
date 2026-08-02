@@ -1,11 +1,10 @@
-features: local
 
 class MyCache {
     entries: Map<String, String>
 }
 
 fn MyCache.put(self: mut MyCache, key: String, value: String) -> Unit
-    effects(retains(key), retains(value))
+    retains(key) retains(value)
 {
     Map.insert(map: mut self.entries, key, value)
 }
@@ -15,7 +14,7 @@ fn MyCache.get(self: MyCache, key: String) -> Option<String> {
 }
 
 fn use_cache(cache: mut MyCache, key: String, value: String) -> Unit
-    effects(retains(key), retains(value))
+    retains(key) retains(value)
 {
     mut cache.put(key: key, value: value)
 }

@@ -1,4 +1,3 @@
-features: async
 
 // A child task observes the group's cancellation by taking the token as a
 // `read` parameter. The token is minted in the `task_group` block (where it

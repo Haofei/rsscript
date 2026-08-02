@@ -1,0 +1,12 @@
+[package]
+name = "rsscript-lowering"
+version = "0.1.0"
+edition = "2024"
+description = "Provider-independent RSScript lowering model"
+license = "MIT OR Apache-2.0"
+
+[lib]
+doctest = false
+
+[dependencies]
+rsscript-semantics = { path = "../rsscript-semantics" }

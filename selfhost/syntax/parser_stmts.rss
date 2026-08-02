@@ -1,4 +1,3 @@
-features: local
 // First shared function-body AST slice. It owns only the simple statements and
 // expressions needed by signature/body migration; unsupported forms remain
 // explicit unknown nodes until their parser and parity gate move here.

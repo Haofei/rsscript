@@ -1,4 +1,4 @@
-//! Spec §3 — features: / capability gates (native, unsafe, async)
+//! Spec §3 — features: / external_binding gates (native, unsafe, async)
 #![allow(unused_imports, dead_code)]
 use super::*;
 
@@ -97,9 +97,7 @@ fn log(value: read String) -> Unit {
 #[test]
 fn calling_unsafe_function_requires_features_unsafe() {
     let interface = r#"
-features: unsafe
 pub fn Crypto.raw_copy(dst: mut Buffer, src: read Buffer) -> Unit
-    effects(unsafe)
 "#;
     let source = r#"
 fn looks_safe(dst: mut Buffer, src: read Buffer) -> Unit {
@@ -120,12 +118,9 @@ fn looks_safe(dst: mut Buffer, src: read Buffer) -> Unit {
 #[test]
 fn calling_unsafe_function_is_allowed_under_features_unsafe() {
     let interface = r#"
-features: unsafe
 pub fn Crypto.raw_copy(dst: mut Buffer, src: read Buffer) -> Unit
-    effects(unsafe)
 "#;
     let source = r#"
-features: unsafe
 
 fn wrapper(dst: mut Buffer, src: read Buffer) -> Unit {
     Crypto.raw_copy(dst: mut dst, src: read src)
@@ -141,7 +136,6 @@ fn wrapper(dst: mut Buffer, src: read Buffer) -> Unit {
 #[test]
 fn checker_accepts_executable_async_function_body() {
     let source = r#"
-features: async
 
 async fn tick() -> Unit {
     return Unit
@@ -155,7 +149,6 @@ async fn tick() -> Unit {
 #[test]
 fn checker_accepts_await_inside_async_function() {
     let source = r#"
-features: async
 
 async fn TestTimer.sleep(ms: Int) -> Unit
 
@@ -172,7 +165,6 @@ async fn receive() -> Unit {
 #[test]
 fn checker_rejects_await_outside_async_function() {
     let source = r#"
-features: async
 
 async fn TestTimer.sleep(ms: Int) -> Unit
 
@@ -194,7 +186,6 @@ fn receive() -> Unit {
 #[test]
 fn checker_rejects_await_of_non_async_expression() {
     let source = r#"
-features: async
 
 fn sync_sleep(ms: Int) -> Unit
 
@@ -216,7 +207,6 @@ async fn receive() -> Unit {
 #[test]
 fn checker_rejects_await_inside_non_async_closure() {
     let source = r#"
-features: async
 
 async fn Timer.sleep(ms: Int) -> Unit
 fn run(callback: noescape Fn()) -> Unit
@@ -241,7 +231,6 @@ async fn receive() -> Unit {
 #[test]
 fn checker_rejects_resource_live_across_await() {
     let source = r#"
-features: async, local
 
 resource File
 struct IOError
@@ -272,7 +261,6 @@ async fn bad(path: read Path) -> Result<Unit, IOError> {
 #[test]
 fn checker_allows_dead_local_before_await() {
     let source = r#"
-features: async, local
 
 struct Image {
     size: Int
@@ -299,7 +287,6 @@ async fn ok() -> Unit {
 #[test]
 fn checker_rejects_local_used_after_await() {
     let source = r#"
-features: async, local
 
 struct Image {
     size: Int
@@ -331,7 +318,6 @@ async fn bad() -> Unit {
 #[test]
 fn checker_rejects_local_passed_into_awaited_call() {
     let source = r#"
-features: async, local
 
 struct Image {
     size: Int
@@ -361,7 +347,6 @@ async fn bad() -> Unit {
 #[test]
 fn checker_allows_local_taken_into_awaited_call() {
     let source = r#"
-features: async, local
 
 struct Image {
     size: Int
@@ -388,7 +373,6 @@ async fn ok() -> Unit {
 #[test]
 fn checker_reports_spawn_as_unsupported_until_async_lowering_exists() {
     let source = r#"
-features: async
 
 async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
 
@@ -410,7 +394,6 @@ fn schedule(url: read Url) -> Unit {
 #[test]
 fn checker_rejects_async_call_without_await() {
     let source = r#"
-features: async
 
 async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
 
@@ -503,7 +486,6 @@ fn schedule(url: read Url) -> Unit {
 #[test]
 fn checker_rejects_spawn_capturing_local_value() {
     let source = r#"
-features: async, local
 
 struct Image
 
@@ -527,112 +509,20 @@ fn schedule(path: read Path) -> Unit {
 }
 
 #[test]
-fn checker_reports_native_bodies_as_unsupported_until_native_binding_exists() {
-    let source = r#"
-features: native
-
-native fn Host.emit(message: read String) -> Unit
-    effects(native)
-{
-    return Unit
-}
-"#;
-    let diagnostics = analyze_source("native-body.rss", source);
-
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "RS0015"
-                && diagnostic.label == "unsupported native function body")
-    );
-}
-
-#[test]
-fn checker_rejects_unknown_file_features() {
-    let source = r#"
-features: local, locall
-
-fn main() -> Unit {
-    return Unit
-}
-"#;
-    let program = parse_source("features.rss", source);
-
-    assert_eq!(program.features.len(), 1);
-    assert_eq!(program.unknown_features.len(), 1);
-    assert_eq!(program.unknown_features[0].name, "locall");
-    let diagnostics = analyze_source("features.rss", source);
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "RS0016")
-    );
-}
-
-#[test]
-fn checker_rejects_duplicate_file_features() {
-    let source = r#"
-features: local, local
-
-fn main() -> Unit {
-    return Unit
-}
-"#;
-    let program = parse_source("features.rss", source);
-
-    assert_eq!(program.features.len(), 2);
-    assert_eq!(program.duplicate_features.len(), 1);
-    assert_eq!(program.duplicate_features[0].name, "local");
-    let diagnostics = analyze_source("features.rss", source);
-    assert!(
-        diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == "RS0017")
-    );
-}
-
-#[test]
-fn checker_keeps_file_features_scoped_across_source_sets() {
-    let diagnostics = analyze_sources_with_interfaces(
-        &[
-            (
-                "capability.rss",
-                r#"
-features: local
-
-fn helper() -> Unit {
-    local value = String.new()
-    return Unit
-}
-"#,
-            ),
-            (
-                "plain.rss",
-                r#"
-fn bad() -> Unit {
-    local value = String.new()
-    return Unit
-}
-"#,
-            ),
-        ],
-        &[],
-    );
-
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "RS0101"
-            && diagnostic.span.file == "plain.rss"
-            && diagnostic.summary.contains("features: local")
-    }));
-    assert!(!diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "RS0101" && diagnostic.span.file == "capability.rss"
-    }));
+fn removed_language_headers_are_hard_errors() {
+    for source in [
+        "features: local\nfn main() -> Unit { return Unit }",
+        "profile: retired\nfn main() -> Unit { return Unit }",
+        "native fn Host.emit() -> Unit",
+        "fn main() -> Unit effects(pure) { return Unit }",
+    ] {
+        assert!(!analyze_source("removed-syntax.rss", source).is_empty());
+    }
 }
 
 #[test]
 fn task_group_with_async_let_passes_checker() {
     let source = r#"
-features: async
 
 struct NetworkError { message: String }
 
@@ -669,7 +559,6 @@ fn load(id: read Int) -> Result<String, NetworkError> {
 #[test]
 fn async_let_outside_task_group_is_rejected() {
     let source = r#"
-features: async
 
 async fn fetch(id: read Int) -> Int
 
@@ -690,7 +579,6 @@ async fn run(id: read Int) -> Int {
 #[test]
 fn task_group_rejects_unawaited_async_let() {
     let source = r#"
-features: async
 
 async fn fetch(id: read Int) -> Int
 
@@ -717,7 +605,6 @@ async fn run(id: read Int) -> Int {
 #[test]
 fn task_group_rejects_forward_await_of_async_let_handle() {
     let source = r#"
-features: async
 
 async fn fetch(id: read Int) -> Int
 
@@ -745,7 +632,6 @@ fn run(id: read Int) -> Int {
 #[test]
 fn task_group_rejects_duplicate_await_of_async_let_handle() {
     let source = r#"
-features: async
 
 async fn fetch(id: read Int) -> Int
 
@@ -774,7 +660,6 @@ fn run(id: read Int) -> Int {
 #[test]
 fn task_group_allows_discarded_background_async_let() {
     let source = r#"
-features: async
 
 fn run() -> Result<Unit, TimerError> {
     task_group {
@@ -797,7 +682,6 @@ fn run() -> Result<Unit, TimerError> {
 #[test]
 fn task_group_async_let_handle_not_visible_after_group() {
     let source = r#"
-features: async
 
 async fn fetch(id: read Int) -> Int
 
@@ -819,7 +703,6 @@ async fn run(id: read Int) -> Int {
 #[test]
 fn task_group_rejects_nested_async_let() {
     let source = r#"
-features: async
 
 async fn fetch(id: read Int) -> Int
 
@@ -845,7 +728,6 @@ async fn run(id: read Int) -> Int {
 #[test]
 fn task_group_rejects_nested_await_of_async_let_handle() {
     let source = r#"
-features: async
 
 async fn fetch(id: read Int) -> Int
 
@@ -888,7 +770,6 @@ fn run() -> Int {
 #[test]
 fn async_fn_with_task_group_passes_checker() {
     let source = r#"
-features: async
 
 async fn worker() -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
@@ -917,7 +798,6 @@ async fn run() -> Result<Unit, TimerError> {
 #[test]
 fn select_with_await_arms_passes_checker() {
     let source = r#"
-features: async
 
 fn run() -> Result<Unit, TimerError> {
     select {
@@ -942,7 +822,6 @@ fn run() -> Result<Unit, TimerError> {
 #[test]
 fn select_arm_requires_await_operation() {
     let source = r#"
-features: async
 
 fn run() -> Result<Unit, TimerError> {
     select {
@@ -965,7 +844,6 @@ fn run() -> Result<Unit, TimerError> {
 #[test]
 fn async_fn_with_select_passes_checker() {
     let source = r#"
-features: async
 
 async fn run() -> Result<Unit, TimerError> {
     select {
@@ -990,7 +868,6 @@ async fn run() -> Result<Unit, TimerError> {
 #[test]
 fn async_fn_allows_await_inside_select_arm_body() {
     let source = r#"
-features: async
 
 async fn run() -> Result<Unit, TimerError> {
     select {
@@ -1015,7 +892,6 @@ async fn run() -> Result<Unit, TimerError> {
 #[test]
 fn stream_next_from_channel_receiver_passes_checker() {
     let source = r#"
-features: async, local
 
 fn run() -> Result<Unit, ChannelError> {
     let mut channel: Channel<Int> = Channel.bounded(capacity: 1)?
@@ -1040,7 +916,6 @@ fn run() -> Result<Unit, ChannelError> {
 #[test]
 fn stream_sources_and_collect_list_pass_checker() {
     let source = r#"
-features: async, local
 
 fn collect_numbers() -> Result<fresh List<Int>, ChannelError> {
     local items = List<Int>.new()
@@ -1080,7 +955,6 @@ fn read_rows(path: read Path) -> Result<Unit, ChannelError> {
 #[test]
 fn await_for_stream_passes_checker() {
     let source = r#"
-features: async, local
 
 fn run() -> Result<Unit, ChannelError> {
     let mut channel: Channel<Int> = Channel.bounded(capacity: 1)?
@@ -1106,7 +980,6 @@ fn run() -> Result<Unit, ChannelError> {
 #[test]
 fn async_fn_with_await_for_stream_passes_checker() {
     let source = r#"
-features: async, local
 
 async fn run(stream: read Stream<Int>) -> Result<Unit, ChannelError> {
     await for item in stream {

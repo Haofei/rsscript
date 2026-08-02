@@ -1,5 +1,4 @@
 // expect: RS0501
-features: local
 
 class RetainedImageStore {
     entries: Map<String, Image>
@@ -12,7 +11,7 @@ struct Image {
 fn Image.load(path: Path) -> fresh Image
 
 fn RetainedImageStore.store(cache: mut RetainedImageStore, image: Image) -> Unit
-    effects(retains(image))
+    retains(image)
 
 fn bad_store(cache: mut RetainedImageStore, path: Path) -> Unit {
     local image = Image.load(path)

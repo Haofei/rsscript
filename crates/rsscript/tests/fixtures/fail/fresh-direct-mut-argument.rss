@@ -1,5 +1,4 @@
 // expect: RS0604
-features: local
 
 struct Image {
     width: Int

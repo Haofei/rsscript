@@ -1,4 +1,3 @@
-features: local
 
 // Slow path: Set membership (hash-set insert + contains) in a hot loop.
 // Complements the Map kernels: Set has its own intrinsic group (SetInsert,

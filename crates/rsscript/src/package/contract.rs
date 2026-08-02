@@ -4,9 +4,9 @@ use crate::analyzer::analyze_source_with_interfaces;
 use crate::diagnostic::{Diagnostic, code};
 use crate::review::{ReviewMap, ReviewMapClassification};
 use crate::syntax::ast::{
-    ConstDecl, DataEffect, EffectDecl, Expr, FieldDecl, FunctionDecl, GenericBound, GenericParam,
-    Item, Param, ProtocolDecl, ProtocolImpl, SumTypeDecl, SumVariant, TypeAliasDecl, TypeDecl,
-    TypeKind, TypeRef,
+    ConstDecl, DataEffect, Expr, FieldDecl, FunctionDecl, GenericBound, GenericParam, Item, Param,
+    ProtocolDecl, ProtocolImpl, SumTypeDecl, SumVariant, TypeAliasDecl, TypeDecl, TypeKind,
+    TypeRef,
 };
 use crate::syntax::parse_source;
 
@@ -21,7 +21,7 @@ pub(super) struct PackageFunctionContract {
     pub(super) is_async: bool,
     pub(super) default_impl_marker: bool,
     pub(super) deprecated_reason: Option<String>,
-    pub(super) effects: BTreeSet<String>,
+    pub(super) retained_params: BTreeSet<String>,
     pub(super) span: crate::diagnostic::Span,
 }
 
@@ -124,7 +124,7 @@ pub(super) fn package_interface_environment_diagnostics(
 
 pub(super) fn package_interface_contract_diagnostics(
     sources: &[PackageSource],
-    native_bindings: &BTreeMap<String, String>,
+    external_bindings: &BTreeMap<String, String>,
 ) -> Vec<Diagnostic> {
     if !sources
         .iter()
@@ -210,8 +210,7 @@ pub(super) fn package_interface_contract_diagnostics(
 
     for (name, interface_contract) in interface_function_contracts {
         let Some(source_contract) = source_function_contracts.get(&name) else {
-            if interface_contract.effects.contains("native") && native_bindings.contains_key(&name)
-            {
+            if external_bindings.contains_key(&name) {
                 continue;
             }
             diagnostics.push(
@@ -510,7 +509,7 @@ pub(super) fn package_function_contracts_match(
         && interface.returns_fresh == source.returns_fresh
         && interface.is_async == source.is_async
         && interface.deprecated_reason == source.deprecated_reason
-        && interface.effects == source.effects
+        && interface.retained_params == source.retained_params
 }
 
 fn package_sum_type_contracts_match(
@@ -857,7 +856,7 @@ pub(super) fn package_interface_diagnostic_exports(
                 diagnostic.label.clone(),
             ],
             function_kind: None,
-            normalized_effects: Vec::new(),
+            retained_params: Vec::new(),
         });
     }
 
@@ -1000,7 +999,7 @@ fn package_type_review_export(contract: &PackageTypeContract) -> PackageReviewEx
         classification: "review_if_changed".to_string(),
         reasons,
         function_kind: None,
-        normalized_effects: Vec::new(),
+        retained_params: Vec::new(),
     }
 }
 
@@ -1023,7 +1022,7 @@ fn package_sum_type_review_export(contract: &PackageSumTypeContract) -> PackageR
         classification: "review_if_changed".to_string(),
         reasons,
         function_kind: None,
-        normalized_effects: Vec::new(),
+        retained_params: Vec::new(),
     }
 }
 
@@ -1037,7 +1036,7 @@ fn package_type_alias_review_export(contract: &PackageTypeAliasContract) -> Pack
             format!("target `{}`", contract.target),
         ],
         function_kind: None,
-        normalized_effects: Vec::new(),
+        retained_params: Vec::new(),
     }
 }
 
@@ -1054,7 +1053,7 @@ fn package_const_review_export(contract: &PackageConstContract) -> PackageReview
         classification: "review_if_changed".to_string(),
         reasons,
         function_kind: None,
-        normalized_effects: Vec::new(),
+        retained_params: Vec::new(),
     }
 }
 
@@ -1090,20 +1089,8 @@ fn package_function_review_export(
     if contract.returns_fresh {
         reasons.push("returns fresh value".to_string());
     }
-    for effect in &contract.effects {
-        if effect.starts_with("retains(") {
-            reasons.push(effect.clone());
-        } else if matches!(effect.as_str(), "native" | "unsafe") {
-            reasons.push(format!("{effect} boundary"));
-        } else if is_guarantee_effect(effect) {
-            if contract.effects.contains("native") {
-                reasons.push(format!(
-                    "review-only guarantee `{effect}` on native boundary"
-                ));
-            } else {
-                reasons.push(format!("guarantee `{effect}`"));
-            }
-        }
+    for param in &contract.retained_params {
+        reasons.push(format!("retains({param})"));
     }
     let classification = if package_review_map_function_is_unknown(&contract.name, review_map) {
         reasons.push("unknown review-map region".to_string());
@@ -1123,18 +1110,15 @@ fn package_function_review_export(
         } else {
             "sync".to_string()
         }),
-        normalized_effects: package_function_normalized_effects(contract),
+        retained_params: package_function_retained_params(contract),
     }
 }
 
-fn package_function_normalized_effects(contract: &PackageFunctionContract) -> Vec<String> {
-    let mut effects = contract.effects.iter().cloned().collect::<Vec<_>>();
-    if contract.is_async && !effects.iter().any(|effect| effect == "suspends") {
-        effects.push("suspends".to_string());
-    }
-    effects.sort();
-    effects.dedup();
-    effects
+fn package_function_retained_params(contract: &PackageFunctionContract) -> Vec<String> {
+    let mut retained_params = contract.retained_params.iter().cloned().collect::<Vec<_>>();
+    retained_params.sort();
+    retained_params.dedup();
+    retained_params
 }
 
 fn package_protocol_impl_review_export(
@@ -1159,7 +1143,7 @@ fn package_protocol_impl_review_export(
         classification: "review_if_changed".to_string(),
         reasons,
         function_kind: None,
-        normalized_effects: Vec::new(),
+        retained_params: Vec::new(),
     }
 }
 
@@ -1180,12 +1164,8 @@ fn package_protocol_review_export(contract: &PackageProtocolContract) -> Package
         classification: "review_if_changed".to_string(),
         reasons,
         function_kind: None,
-        normalized_effects: Vec::new(),
+        retained_params: Vec::new(),
     }
-}
-
-fn is_guarantee_effect(effect: &str) -> bool {
-    matches!(effect, "no_panic" | "noalloc" | "no_block" | "pure")
 }
 
 fn package_review_map_function_is_unknown(function: &str, review_map: &ReviewMap) -> bool {
@@ -1294,7 +1274,7 @@ fn package_function_contract(function: &FunctionDecl) -> PackageFunctionContract
         is_async: function.is_async,
         default_impl_marker: function.default_impl_marker,
         deprecated_reason: function.deprecated_reason.clone(),
-        effects: function.effects.iter().map(package_effect_name).collect(),
+        retained_params: function.retained_params.iter().cloned().collect(),
         span: function.span.clone(),
     }
 }
@@ -1355,13 +1335,6 @@ fn package_effect_label(effect: DataEffect) -> &'static str {
         DataEffect::Read => "read",
         DataEffect::Mut => "mut",
         DataEffect::Take => "take",
-    }
-}
-
-fn package_effect_name(effect: &EffectDecl) -> String {
-    match effect {
-        EffectDecl::Name(name) => name.clone(),
-        EffectDecl::Retains(param) => format!("retains({param})"),
     }
 }
 
@@ -1570,16 +1543,10 @@ pub(super) fn package_function_contract_label(contract: &PackageFunctionContract
             label.push_str(&format!(" -> {return_type}"));
         }
     }
-    if !contract.effects.is_empty() {
-        label.push_str(&format!(
-            " effects({})",
-            contract
-                .effects
-                .iter()
-                .cloned()
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
+    if !contract.retained_params.is_empty() {
+        for param in &contract.retained_params {
+            label.push_str(&format!(" retains({param})"));
+        }
     }
     if contract.default_impl_marker {
         label.push_str(" = _");
@@ -1692,7 +1659,7 @@ pub(super) fn package_added_function_contract_is_high_risk(
         .params
         .iter()
         .any(|param| matches!(param.effect, Some("mut" | "take")))
-        || contract.effects.iter().any(|effect| {
+        || contract.retained_params.iter().any(|effect| {
             effect.starts_with("retains(") || matches!(effect.as_str(), "native" | "unsafe")
         })
         || package_contract_has_resource_boundary(contract, resource_types)

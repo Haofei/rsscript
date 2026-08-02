@@ -3,7 +3,7 @@
 //! For a package with native dependencies, this reads the binding symbols and
 //! their RSS signatures, generates a cdylib shim crate (see [`super::shim_gen`]),
 //! builds it with cargo, `dlopen`s the result, and pulls out a
-//! `(symbol, NativeInterpreterFn)` table the VM can call. Nothing is hard-coded
+//! `(symbol, ExternalFunction)` table the VM can call. Nothing is hard-coded
 //! per package: the shim is derived entirely from the package's interface and
 //! `bindings.rssbind.toml`.
 //!
@@ -14,9 +14,9 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use rss_native_abi::NativeInterpreterFn;
+use crate::eval_types::ExternalFunction;
 
-use crate::package::{AuthorizedPackage, prepare_package_for_execution};
+use crate::package::{ExecutablePackageSnapshot, prepare_package_for_execution};
 use crate::syntax::ast::{Item, Param, TypeRef};
 use crate::syntax::parse_source;
 
@@ -32,24 +32,24 @@ use shim::{build_binding, build_shim_library};
 ///
 /// The loaded library is leaked so the returned function pointers stay valid for
 /// the lifetime of the process.
-pub fn load_package_native_bindings(
+pub fn load_package_bindings(
     package_dir: &Path,
-) -> Result<Vec<(String, NativeInterpreterFn)>, String> {
+) -> Result<Vec<(String, ExternalFunction)>, String> {
     let prepared = prepare_package_for_execution(package_dir)?;
-    if !prepared.requires_native_authorization() {
+    if !prepared.requires_external_provider() {
         return Ok(Vec::new());
     }
-    let package = prepared.authorize()?;
-    load_authorized_package_native_bindings(&package)
+    let package = prepared.verify()?;
+    load_package_bindings_from_snapshot(&package)
 }
 
 /// Build and load native bindings for a previously reviewed package.
 ///
 /// This is the only entry point that can reach Cargo or `dlopen`; its argument
 /// cannot be constructed outside the package authorization service.
-pub fn load_authorized_package_native_bindings(
-    package: &AuthorizedPackage,
-) -> Result<Vec<(String, NativeInterpreterFn)>, String> {
+pub fn load_package_bindings_from_snapshot(
+    package: &ExecutablePackageSnapshot,
+) -> Result<Vec<(String, ExternalFunction)>, String> {
     let input = package.lowering_input();
     if input.native_dependencies.is_empty() {
         return Ok(Vec::new());
@@ -191,7 +191,7 @@ mod tests {
         )
         .expect("fixture reviewed Cargo lock");
 
-        let error = match load_package_native_bindings(&root) {
+        let error = match load_package_bindings(&root) {
             Ok(_) => {
                 panic!("a package without an approved lock/check must not authorize native load")
             }
@@ -205,8 +205,7 @@ mod tests {
 
     #[test]
     fn builds_plain_scalar_binding() {
-        let (params, ret) =
-            sig("native fn Adder.add(a: Int, b: Int) -> Int\n    effects(native)\n");
+        let (params, ret) = sig("fn Adder.add(a: Int, b: Int) -> Int\n");
         let binding = build_binding("Adder.add", "adder::add", &params, ret.as_ref())
             .expect("scalar binding should build");
         assert_eq!(binding.symbol, "Adder.add");
@@ -218,8 +217,7 @@ mod tests {
 
     #[test]
     fn records_mut_param_positions() {
-        let (params, ret) =
-            sig("native fn Buf.fill(buffer: mut Bytes, value: Int) -> Unit\n    effects(native)\n");
+        let (params, ret) = sig("fn Buf.fill(buffer: mut Bytes, value: Int) -> Unit\n");
         let binding = build_binding("Buf.fill", "buf::fill", &params, ret.as_ref())
             .expect("mut binding should build");
         assert_eq!(binding.mut_indices, vec![0]);
@@ -228,9 +226,8 @@ mod tests {
 
     #[test]
     fn maps_result_and_nested_container_types() {
-        let (params, ret) = sig(
-            "native fn P.run(items: read List<String>) -> Result<Option<Int>, String>\n    effects(native)\n",
-        );
+        let (params, ret) =
+            sig("fn P.run(items: read List<String>) -> Result<Option<Int>, String>\n");
         let binding = build_binding("P.run", "p::run", &params, ret.as_ref())
             .expect("container binding should build");
         assert_eq!(
@@ -245,7 +242,7 @@ mod tests {
 
     #[test]
     fn missing_return_type_is_plain_unit() {
-        let (params, ret) = sig("native fn X.g(a: Int)\n    effects(native)\n");
+        let (params, ret) = sig("fn X.g(a: Int)\n");
         let binding = build_binding("X.g", "x::g", &params, ret.as_ref())
             .expect("unit-return binding should build");
         assert_eq!(binding.ret, ShimReturn::Plain(ShimType::Unit));
@@ -253,7 +250,7 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_param_type() {
-        let (params, ret) = sig("native fn X.f(cfg: read Config) -> Unit\n    effects(native)\n");
+        let (params, ret) = sig("fn X.f(cfg: read Config) -> Unit\n");
         let error = build_binding("X.f", "x::f", &params, ret.as_ref())
             .expect_err("unsupported parameter must fail shim construction");
         assert!(error.contains("parameter `cfg` has unsupported type `Config`"));
@@ -261,7 +258,7 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_return_type() {
-        let (params, ret) = sig("native fn X.h(a: Int) -> Config\n    effects(native)\n");
+        let (params, ret) = sig("fn X.h(a: Int) -> Config\n");
         let error = build_binding("X.h", "x::h", &params, ret.as_ref())
             .expect_err("unsupported return must fail shim construction");
         assert!(error.contains("unsupported return type `Config`"));
@@ -269,8 +266,7 @@ mod tests {
 
     #[test]
     fn rejects_result_with_non_string_error_type() {
-        let (params, ret) =
-            sig("native fn X.h(a: Int) -> Result<Int, Config>\n    effects(native)\n");
+        let (params, ret) = sig("fn X.h(a: Int) -> Result<Int, Config>\n");
         let error = build_binding("X.h", "x::h", &params, ret.as_ref())
             .expect_err("unsupported Result error must fail shim construction");
         assert!(error.contains("Result<T, String>"));

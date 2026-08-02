@@ -1,522 +1,87 @@
-# RSScript (`.rss`) — In-Context Language Guide for LLMs
+# RSScript contributor and generation guide
 
-You are writing **RSScript (RSS)**, a new language with **no presence in your
-training data**. Do not assume Rust/Swift/TS syntax carries over — follow this
-guide literally. RSS is a review-first language for AI-generated systems code: it
-makes mutation, retention, resource lifetime, and ownership transitions
-*explicit and named*, then lowers to Rust source (rustc is the backend).
+## Language boundary
 
-Mental model:
+Generate platform-neutral RSScript. The language models ownership, retention,
+resource lifetime, and structured asynchronous control flow. It does not model
+host permission, deployment policy, OS authority, or provider implementation
+technology.
 
-```text
-Easy by default (managed values, no lifetimes).
-Fast when local (opt-in exclusive values).
-Reviewable by design (every effect is spelled out).
-One canonical spelling per operation — no shorthand alternatives, no inference in public APIs.
-```
+Never generate a file feature/profile header, a generic declaration-effect list,
+an implementation-origin modifier, or a source-level unsafe marker. Use `Dyn<P>`
+for dynamic protocol dispatch.
 
----
+## Functions
 
-## 0. The rules you will most likely get wrong
+Implementation functions in `.rss` have bodies. Interface functions in `.rssi`
+are ordinary bodyless declarations. Parameters use the closed `read`, `mut`, and
+`take` data-effect set.
 
-1. **Every call argument is named**: `f(name: value)`, never `f(value)`.
-2. **Arguments that pass a managed value or reference carry a data-effect
-   keyword**: `read` (inspect), `mut` (modify), `take` (consume). Copy scalars
-   (`Int`, `Bool`) are passed bare: `width: 800`.
-3. **No hidden behavior**: no implicit conversions, no auto-deref/ref, no
-   operator overloading, no getters, no macros. Conversions are explicit calls:
-   `Int64.from(value: x)`.
-4. **Type annotations are checked contracts**, not coercions. `let y: Int64 = x`
-   is rejected unless `x` is already `Int64`.
-5. **Statements end at newline** (no semicolons). Blocks use `{ }`.
-6. **`return` is explicit.** `main` returns `Result<Unit, E>` and ends with
-   `return Ok(Unit)`.
-7. Method calls are **qualified by type**: `Picture.resize(image: mut image, ...)`,
-   not `image.resize(...)` (except the receiver shorthand in §3.4).
-
-### The explicitness budget (the meta-rule behind all of the above)
-
-RSS is explicit *to make review cheap* — not for its own sake. More keywords is
-not safer; ceremony that states nothing buries the one marker that matters. So:
-
-> **Mark the departure, keep the norm silent.** Reach for a marker only when it
-> is true and a reviewer would have to verify it. The safe default needs no word.
-
-| Departure marker | Use **only** when it is actually true |
-|------------------|----------------------------------------|
-| `mut` / `take`   | you really modify / consume the value (else `read`) |
-| `local`          | you need an exclusive fast value (else stay managed — no marker) |
-| `manage`         | you are moving a `local` into the managed world |
-| `fresh`          | you return a newly-created value across the boundary |
-| `effects(retains(...))` | the function keeps a parameter alive after return |
-| `native` / `unsafe` / `async` | the body actually crosses that boundary |
-
-Do not add a marker "to be safe": writing `mut` when you only read, or `local`
-when managed is fine, is wrong (often a checker error) and adds review noise.
-Before emitting any keyword, ask: *is there a real choice here, and would a
-reviewer judge wrong if it were absent?* If not, leave it out. (`read` is the one
-marker that is **default in meaning but mandatory in syntax**: it is the
-least-privilege baseline effect, yet you must still write it at call sites — an
-omitted effect is the error RS0202, never an inferred `read`. Write it, but treat
-it as the lone exception, not the pattern. Spec: Constitution Article VIII, §2A.)
-
----
-
-## 1. Running the toolchain (binary is `rss`)
-
-```sh
-rss check  [--core|--no-core] [--interface <f.rssi> ...] <file.rss>   # type/effect check
-rss check  <package-directory>            # check a package
-rss check  --explain <CODE>               # explain a diagnostic code, e.g. RS0026
-rss check  --lint <file.rss>              # check + style lints
-rss fix    [--write] <file.rss>           # apply machine-applicable fixes
-rss fmt    <file.rss>                     # canonical formatter
-rss run    --vm <file-or-package-dir> [-- <args>...]  # fast VM run
-rss run    <file-or-package-dir> [-- <args>...]       # lower to Rust + build + run
-rss pkg    [--json] [dir]            # package health check
-rss pkg    add <dep|dep@version|path>
-rss pkg    review [--json] [dir]     # review surface
-rss pkg    diff [--json] <old-dir> <new-dir>
-rss pkg    ci [--json] [dir]         # CI-facing package check
-rss pkg    lock [dir]                # (re)write rsspkg.lock from the resolved graph
-rss pkg    tree|metadata [--json|--reir] [dir]
-```
-
-`--core` (default) loads the implicit standard library (`String`, `List`, `Map`,
-`File`, `Path`, `Result`, `Option`, …). Diagnostics have stable codes
-(`RSxxxx`), a summary, a source span, and a JSON form.
-
----
-
-## 2. File anatomy
-
-```rust
-features: local            // optional capability line, MUST be first if present
-
-fn main() -> Result<Unit, FileError> {
-    let path = Path.from_string(value: read "out.txt")
-    Log.write(message: read "hello")          // bare call = statement
-    return Ok(Unit)
+```rsscript
+fn transform(input: take Image, options: read Options) -> fresh Image {
+    return Image.transform(input: take input, options: read options)
 }
 ```
 
-- `features:` declares file-level capabilities. Known values: `local`, `async`,
-  `native`. Combine with commas: `features: async, native, local`. Omit the line
-  for plain managed code.
-- `.rss` = source/implementation. `.rssi` = interface contract (signatures only,
-  see §9).
+If a call retains a parameter after return, add one structured clause per retained
+parameter:
 
----
-
-## 3. Functions, calls, effects
-
-### 3.1 Declaration
-
-```rust
-fn handle(request: read IncomingMessage) -> Result<fresh Reply, HttpError> {
-    let body = IncomingMessage.path(request: read request)
-    return Reply.ok(body: read body)        // last value still needs `return`
-}
-```
-
-Signature = `fn name(params) -> ReturnType [effects(...)] { body }`.
-Each param is `name: <effect> Type`. Return may be `fresh T` (newly created, see
-§5), `T` (managed), or `Result<...>` / `Option<...>`.
-
-### 3.2 Data effects (the core of every call)
-
-| Keyword | Meaning at a parameter / argument                       |
-|---------|---------------------------------------------------------|
-| `read`  | inspected, not modified, not retained                   |
-| `mut`   | modified in place                                       |
-| `take`  | consumed (ownership moves in; caller can't use it after)|
-
-```rust
-fn resize_all(image: mut Picture, width: Int) -> Unit { ... }
-```
-
-Called as:
-
-```rust
-resize_all(image: mut image, width: 800)   // `mut` arg matches `mut` param; Int bare
-```
-
-Copy scalars (`Int`, `Bool`, …) never take an effect keyword. Managed values and
-references always do.
-
-### 3.3 Retention — `effects(retains(...))`
-
-If a function keeps a parameter alive after it returns (stores it in a field, a
-collection, or a closure capture), it must declare it:
-
-```rust
-fn cache_put(cache: mut RetainedImageStore, key: read String, value: read Picture) -> Unit
-    effects(retains(key), retains(value))
+```rsscript
+fn Store.insert(store: mut Store, key: read String, value: read Value) -> Unit
+    retains(key)
+    retains(value)
 {
-    Map.insert(map: mut cache.entries, key: read key, value: read value)
+    // ...
 }
 ```
 
-Other effect/guarantee tokens that may appear in `effects(...)`: `native`,
-`pure`, `no_panic`, `noalloc`, `no_block`.
+Do not use source assertions for purity, allocation, blocking, panic behavior,
+parallelism, native implementation, or host service access. These facts are
+inferred or supplied by external provider metadata.
 
-### 3.4 Receiver-call shorthand (the only alt spelling, expands 1:1)
+## Ownership and lifetime
+
+- `read` observes an argument.
+- `mut` permits mutation and propagates writes.
+- `take` consumes ownership.
+- `local` creates an exclusive local value.
+- `manage` moves a valid local graph into managed storage.
+- `fresh` promises a non-aliasing return.
+- `noescape` prevents callback escape.
+- `resource` and `with` define scoped cleanup.
+- handle/weak rules govern managed references.
+
+These constructs require no file-level enablement.
+
+## Async
+
+Use `async fn`, `await`, `task_group`, `async let`, `select`, channels,
+cancellation, and abstract streams for structured concurrency. Do not generate
+ambient timers, files, sockets, or subprocess access unless an explicit package
+interface and binding are present in the task context.
+
+## Host packages
+
+Filesystem, environment, process, network, time, randomness, logging, CLI
+arguments, and OS handles are not implicit core APIs. A host package declares
+ordinary bodyless `.rssi` functions and supplies `rsscript.bindings.v1` metadata.
+Do not invent or automatically insert a host dependency.
+
+## Validation
+
+Before submitting repository changes, run:
 
 ```rust
-mut image.resize(width: 256, height: 256)   // shorthand
-Picture.resize(self: mut image, width: 256, height: 256)   // canonical expansion
-```
-
-The leading effect keyword (`read`/`mut`/`take`) is **mandatory**; it must
-resolve to exactly one method or it is rejected.
-
-### 3.5 Error handling
-
-`?` propagates the error arm of a `Result`/`Option`:
-
-```rust
-let image = Picture.load(path: read input)?      // returns early on Err
-```
-
-`Result<T, E>` constructors: `Ok(x)`, `Err(e)`. `Option<T>`: `Some(x)`, `None`.
-`Unit` is the unit type and its value.
-
----
-
-## 4. Control flow
-
-```rust
-if count == 1 {
-    Log.write(message: read "one")
-} else {
-    Log.write(message: read "many")
-}
-
-for path in paths {               // `for` iterates a `List<T>` only
-    Log.write(message: read path)
-}
-
-loop { ... }                      // infinite loop (no condition); exit with `break`
-while count == 0 { ... }          // conditional loop; `break` / `continue`
-
-match result {
-    Ok(value) => {
-        return Ok(value)
-    }
-    Err(error) => {
-        Log.write(message: read "failed")
-        return Ok(Unit)
-    }
+fn main() -> Int {
+    return 0
 }
 ```
 
-`match` is exhaustive over a sealed sum type / `Result` / `Option`. Patterns:
-`Variant(binding)`, literals, and `_` wildcard. `match` is also usable in
-expression position.
-
----
-
-## 5. Bindings, freshness, and the managed/local boundary
-
-```text
-let      binding to a managed value (default; no lifetime reasoning)
-let mut  reassignable binding; reassign with `x = e` (no `let`)
-local    exclusive, statically move-checked value (needs `features: local`)
-manage   one-way move of a local value into the managed runtime
-fresh    a newly-created value returned across a boundary
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
 ```
 
-```rust
-let mut total = 0
-total = total + 1          // assignment to a `mut` binding, no `let`
-```
-
-```rust
-features: local
-
-fn make_thumbnail(input: read Path, output: read Path) -> Result<Unit, PictureError> {
-    local image = Picture.load(path: read input)?   // exclusive, fast
-    mut image.resize(width: 256, height: 256)
-    mut image.normalize()
-
-    let shared = manage image                      // local -> managed, one-way
-    read shared.save(path: read output)?
-    return Ok(Unit)
-}
-```
-
-- A `fresh T` return is a value created in the function and handed out clean:
-  `fn load() -> Result<fresh Settings, E>`.
-- `take` a local into a fresh struct field to move it; `read` to copy/share.
-- After `manage x` or `take x`, the original `local` binding is dead.
-
----
-
-## 6. Types
-
-### 6.1 Declarations
-
-```rust
-class RetainedImageStore {            // managed reference type (default for app types)
-    entries: Map<String, Picture>
-}
-
-struct Settings {              // value/struct type
-    name: String
-    rules: handle List<Rule>     // `handle` field: a retained managed handle
-    workspace: Buffer
-    parent: weak Node            // `weak`: non-owning handle, must be upgraded to use
-}
-
-resource File { ... }           // a resource: must be acquired/released via `with`
-
-struct ReadArgs derives(Clone, JsonDecode) {   // derives are explicit & listed
-    path: Option<String>
-    max_lines: Option<Int>
-}
-```
-
-- `class` = managed (heap, ref-counted, GC-swappable); **no user destructor**.
-- `struct` = composite value type.
-- `resource` = lifetime-managed external thing (connections, files, pools).
-- `handle` / `weak` field modifiers control retention vs non-owning references.
-
-### 6.2 Sum types (sealed)
-
-```rust
-sum ToolRuntime {
-    CoreToolRuntime
-    // each line is a variant; may carry fields like a struct variant
-}
-```
-
-Sum types are sealed (closed) — `match` over them is exhaustive.
-
-### 6.3 Protocols & generics
-
-```rust
-protocol Ord {
-    fn compare(self: read Self, other: read Self) -> Int   // `Self` = implementing type
-}
-
-fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit {
-    mut writer.write(message: read message)
-}
-```
-
-Generic bound kinds: `<T: Managed>`, `<T: Struct>`, `<T: Resource>`, or
-`<T: ProtocolName>`. Protocols are the explicit interface mechanism (no implicit
-trait resolution).
-
-### 6.4 Constructors & aliases
-
-```rust
-let cfg = Settings(name: "default", rules: read rules, workspace: take workspace)
-```
-
-Type aliases and constants are top-level declarations:
-
-```rust
-type WorkspacePath = Path        // type alias
-const MAX: Int = 16              // const
-```
-
-Constructors are call-like and use the same named-arg + effect rules.
-
----
-
-## 7. Async (restricted v0.7 surface)
-
-```rust
-features: async
-
-async fn fetch(url: read Url) -> Result<Int, HttpError> {
-    let response = await Http.get_async(url: read url)?   // await directly consumes an async call
-    return Ok(HttpResponse.status(response: read response))
-}
-```
-
-Rules: `await` appears **only inside an `async fn`**. The executable v0.7 surface
-supports direct `await`, structured `task_group { async let ... }`, `select`,
-bounded channels, streams, and `await for` in the single-isolate cooperative
-model. There is no public `Future`/`Poll`/`spawn` surface; unstructured `spawn`,
-async closures, public task handles, and cross-isolate task execution remain
-future work.
-
----
-
-## 8. Forbidden (will be rejected — do not produce these)
-
-```text
-positional call args            f(x)                 -> use f(name: read x)
-missing effect keyword          f(x: image)          -> f(x: read image)
-implicit conversion             let p: Path = "s"    -> Path.from_string(value: read "s")
-auto-deref / auto-ref / getters
-operator overloading / macros
-user destructor on class/struct
-await outside async fn / await not consuming an async call
-unsupported syntax lowering to placeholders (todo!())
-```
-
-Selected diagnostics (run `rss check --explain <code>`): `RS0201` unnamed
-argument, `RS0202` missing data effect, `RS0203` unknown argument, `RS0204`
-missing argument, `RS0026` unknown binding, `RS0206` unknown callee, `RS0207`
-argument type mismatch, `RS0029` await outside async, `RS0601` fresh return not
-clean, `RS0301` managed-to-local, `RS0015` unsupported syntax.
-
----
-
-## 9. Interface files (`.rssi`)
-
-A `.rssi` is the reviewable public contract: signatures only, no bodies.
-
-```rust
-features: async, native, local
-
-pub async native fn File.read_all_async(path: read Path) -> Result<fresh Bytes, FileError>
-    effects(native)
-
-pub fn File.bytes_stream(path: read Path, chunk_size: Int)
-    -> Result<fresh Stream<Bytes>, ChannelError>
-    effects(native)
-
-protocol Ord {
-    fn compare(self: read Self, other: read Self) -> Int
-}
-```
-
-`pub` exports it; `native` marks a body provided by a Rust wrapper; type and
-protocol declarations may appear too.
-
----
-
-## 10. Package manager (`rss pkg`)
-
-The package manager is a **semantic / review layer over Cargo**, not a Cargo
-replacement. Cargo builds native Rust and owns `Cargo.lock`; `rss pkg` owns
-`.rssi` contracts, RSS dependency resolution, `rsspkg.lock`, feature-conditioned
-interfaces, semantic package diff, and computed review/risk metadata.
-
-### 10.1 `rsspkg.toml`
-
-```toml
-[package]
-name = "rss-json"
-version = "0.1.0"
-edition = "2026"
-description = "Reviewable JSON APIs"
-license = "MIT"
-kind = "native-wrapper"            # optional package kind
-
-[interfaces]
-paths = ["interface"]              # where .rssi contracts live
-exports = ["Json"]
-
-[interfaces.features.streaming]    # feature-conditioned interface surface
-paths = ["interface/streaming"]
-exports = ["Json"]
-
-[sources]
-paths = ["src"]                    # where .rss sources live
-
-[dependencies]
-rss-core = "0.5"                   # registry version
-rss-async = { path = "../async" }  # path dependency
-
-[dev-dependencies]
-rss-test = "0.5"
-
-[features]
-default = []
-streaming = []
-
-[providers]                        # executable packages must pick a provider
-async = "rss-async-runtime"        #   for each virtual capability they use
-
-[review.policy]                    # machine-checked review gates
-deny_unknown = false
-deny_native = false
-deny_unsafe_apis = true
-max_public_params = 8
-build_execution_default = "forbid" # forbid | review | allow
-
-[native.rust]                      # optional Rust native wrapper
-enabled = true
-path = "native/rust"
-crate = "rss_json_native"
-```
-
-### 10.2 Virtual capabilities & providers
-
-A capability (e.g. `async`) is a **virtual package**: an interface with no single
-built-in implementation. A **provider** package declares it implements one:
-
-```toml
-# in the provider's rsspkg.toml
-[implements."async"]
-version = "0.1"
-interface_effective_hash = "sha256:..."
-```
-
-A consumer that is **executable** must explicitly select a provider in
-`[providers]` (e.g. `async = "rss-async-runtime"`). Libraries stay
-provider-agnostic.
-
-### 10.3 Layout (typical package)
-
-```text
-my-pkg/
-  rsspkg.toml
-  rsspkg.lock          # semantic lock checked by rss pkg
-  interface/*.rssi     # public contracts
-  src/*.rss            # implementation
-  native/rust/         # optional Rust wrapper (Cargo crate) + bindings
-```
-
-### 10.4 Review-first workflow
-
-```sh
-rss pkg [--json] [dir]                         # manifest + interfaces + sources + lock + graph, NO native build
-rss pkg review [--json] [dir]                  # public-contract / risk / native-boundary report
-rss pkg diff [--json] <old-dir> <new-dir>      # semantic diff of two package versions
-rss pkg ci [--json] [dir]                      # CI-facing package check
-rss pkg lock [dir]                             # (re)write rsspkg.lock from the resolved graph
-rss pkg tree [--json|--reir] [dir]             # dependency graph annotated with risk
-rss pkg metadata [--verify|--dry-run] [dir]    # write/verify review + REIR metadata
-```
-
-Commands that only read/resolve/review **never execute** a dependency's
-build-time code; running native builds is a separate, explicit step. A resolved
-graph is not, by itself, an acceptable review — the point is to answer *what
-public contracts, mutations, retentions, resources, native/unsafe/async
-boundaries, or build-time execution changed* before you build or run.
-
----
-
-## 11. Worked example (managed cache with retention)
-
-```rust
-class RetainedImageStore {
-    entries: Map<String, Picture>
-}
-
-fn cache_put(cache: mut RetainedImageStore, key: read String, value: read Picture) -> Unit
-    effects(retains(key), retains(value))
-{
-    Map.insert(map: mut cache.entries, key: read key, value: read value)
-}
-
-fn main() -> Result<Unit, PictureError> {
-    let cache = RetainedImageStore.new(capacity: 16)
-    let path = Path.from_string(value: read "in.png")
-    let image = Picture.load(path: read path)?
-    cache_put(cache: mut cache, key: read "in", value: read image)
-    return Ok(Unit)
-}
-```
-
-That is the whole canonical style: named args, explicit effects, explicit
-retention, explicit construction, explicit `return`. When unsure, prefer the
-**most explicit** spelling — RSS has exactly one, and inference is never allowed
-in public contracts.
-```
+Also verify the removed source syntax and compiler policy types do not reappear,
+and that `crates/rsscript/src/interfaces.rs` contains no default host includes.

@@ -1,4 +1,3 @@
-features: local
 
 fn sort_descending(numbers: mut List<Int>) -> Unit {
     List.sort_with<Int>(

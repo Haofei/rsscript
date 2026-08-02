@@ -5,7 +5,6 @@ use super::*;
 #[test]
 fn rust_lowering_wraps_async_control_flow_with_await_in_pending_boundary() {
     let source = r#"
-features: async
 
 async fn run(flag: Bool) -> Result<Unit, TimerError> {
     if flag {
@@ -28,7 +27,6 @@ async fn run(flag: Bool) -> Result<Unit, TimerError> {
 #[test]
 fn rust_lowering_maps_async_file_io_to_tokio_pending_hooks() {
     let source = r#"
-features: async
 
 async fn main() -> Result<Unit, FileError> {
     let path = Path.from_string(value: read "/tmp/rsscript-async-file.txt")
@@ -57,7 +55,6 @@ async fn main() -> Result<Unit, FileError> {
 #[test]
 fn rust_lowering_maps_async_timer_await_to_runtime_pending() {
     let source = r#"
-features: async
 
 async fn main() -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
@@ -80,7 +77,6 @@ async fn main() -> Result<Unit, TimerError> {
 #[test]
 fn rust_lowering_omits_async_executor_without_await() {
     let source = r#"
-features: async
 
 async fn tick() -> Unit {
     return Unit
@@ -93,14 +89,12 @@ async fn tick() -> Unit {
 }
 
 #[test]
-fn rust_lowering_wraps_async_native_bindings_in_runtime_pending() {
+fn rust_lowering_wraps_async_external_bindings_in_runtime_pending() {
     let source = r#"
-features: async, native
 
 struct HostError
 
-async native fn Host.wait(ms: Int) -> Result<Unit, HostError>
-    effects(native)
+async fn Host.wait(ms: Int) -> Result<Unit, HostError>
 
 async fn main() -> Result<Unit, HostError> {
     await Host.wait(ms: 1)?
@@ -136,7 +130,6 @@ async fn main() -> Result<Unit, HostError> {
 #[test]
 fn rust_lowering_maps_async_process_calls_to_runtime_pending_hooks() {
     let source = r#"
-features: async
 
 async fn run_command() -> Result<String, String> {
     let args = List<String>.new()
@@ -157,7 +150,6 @@ async fn run_command() -> Result<String, String> {
 #[test]
 fn rust_lowering_maps_async_process_request_calls_to_runtime_pending_hooks() {
     let source = r#"
-features: async
 
 async fn run_command(token: read CancellationToken) -> Result<ProcessOutput, String> {
     let request = ProcessRequest(
@@ -191,7 +183,6 @@ async fn run_command(token: read CancellationToken) -> Result<ProcessOutput, Str
 #[test]
 fn rust_lowering_maps_process_stream_to_runtime_stream() {
     let source = r#"
-features: async
 
 async fn run_command() -> Result<Unit, String> {
     let request = ProcessRequest(
@@ -235,7 +226,6 @@ async fn run_command() -> Result<Unit, String> {
 #[test]
 fn rust_lowering_maps_async_tcp_calls_to_runtime_pending_hooks() {
     let source = r#"
-features: async
 
 async fn ping() -> Result<Bytes, TcpError> {
     let stream = await Tcp.connect(host: read "127.0.0.1", port: 8080)?
@@ -263,7 +253,6 @@ async fn ping() -> Result<Bytes, TcpError> {
 #[test]
 fn rust_lowering_maps_async_websocket_calls_to_runtime_pending_hooks() {
     let source = r#"
-features: async
 
 async fn exchange(url: read Url) -> Result<Option<String>, WebSocketError> {
     let socket = await WebSocket.connect(url: read url)?
@@ -290,7 +279,6 @@ async fn exchange(url: read Url) -> Result<Option<String>, WebSocketError> {
 #[test]
 fn rust_lowering_maps_async_http_client_to_tokio_pending_hooks() {
     let source = r#"
-features: async
 
 async fn fetch_status(url: read Url) -> Result<Int, HttpError> {
     let response = await Http.get_async(url: read url)?
@@ -318,7 +306,6 @@ async fn fetch_status(url: read Url) -> Result<Int, HttpError> {
 #[test]
 fn rust_lowering_maps_agent_async_io_helpers() {
     let source = r#"
-features: async, native, local
 
 async fn call_agent(url: read Url) -> Result<String, HttpError> {
     let fields = List<String>.new()
@@ -362,12 +349,10 @@ async fn probe(url: read Url) -> Result<Int, HttpError> {
 #[test]
 fn rust_lowering_rejects_unbound_async_native_calls_before_generation() {
     let source = r#"
-features: async, native
 
 struct HostError
 
-async native fn Host.wait(ms: Int) -> Result<Unit, HostError>
-    effects(native)
+async fn Host.wait(ms: Int) -> Result<Unit, HostError>
 
 async fn main() -> Result<Unit, HostError> {
     await Host.wait(ms: 1)?
@@ -388,7 +373,6 @@ async fn main() -> Result<Unit, HostError> {
 #[test]
 fn review_map_marks_async_signatures_review_required() {
     let source = r#"
-features: async
 
 async fn ping(url: read Url) -> Result<Unit, NetworkError>
 "#;
@@ -418,7 +402,6 @@ async fn ping(url: read Url) -> Result<Unit, NetworkError>
 #[test]
 fn review_map_marks_spawn_retention_boundary() {
     let source = r#"
-features: async
 
 async fn fetch_user(client: read HttpClient, id: read UserId) -> Result<fresh User, HttpError>
 
@@ -459,7 +442,6 @@ fn schedule(client: read HttpClient, id: read UserId) -> Unit {
 #[test]
 fn review_map_marks_await_suspension_boundary() {
     let source = r#"
-features: async
 
 async fn fetch_user(client: read HttpClient, id: read UserId) -> Result<fresh User, HttpError>
 
@@ -492,7 +474,6 @@ fn receive(client: read HttpClient, id: read UserId) -> Unit {
 #[test]
 fn parser_preserves_async_function_kind() {
     let source = r#"
-features: async
 
 async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
 "#;
@@ -507,7 +488,6 @@ async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
 #[test]
 fn parser_preserves_spawn_expression() {
     let source = r#"
-features: async
 
 async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
 
@@ -541,7 +521,6 @@ fn schedule(url: read Url) -> Unit {
 #[test]
 fn parser_preserves_await_expression() {
     let source = r#"
-features: async
 
 async fn fetch(url: read Url) -> Result<fresh Bytes, NetworkError>
 
@@ -575,7 +554,6 @@ fn receive(url: read Url) -> Unit {
 #[test]
 fn task_group_lowers_to_pending_pattern() {
     let source = r#"
-features: async
 
 struct NetworkError { message: String }
 
@@ -632,7 +610,6 @@ fn load(id: read Int) -> Result<String, NetworkError> {
 #[test]
 fn task_group_async_let_materializes_borrowed_temporaries() {
     let source = r#"
-features: async
 
 struct NetworkError { message: String }
 
@@ -671,7 +648,6 @@ fn run() -> Result<Unit, NetworkError> {
 #[test]
 fn async_fn_with_task_group_lowers_to_pending_boundary() {
     let source = r#"
-features: async
 
 async fn worker() -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
@@ -715,7 +691,6 @@ async fn run() -> Result<Unit, TimerError> {
 #[test]
 fn async_loop_preserves_statements_before_await_pending() {
     let source = r#"
-features: async
 
 async fn run(url: read Url) -> Result<Unit, HttpError> {
     let mut step = 0
@@ -760,7 +735,6 @@ fn task_group_await_only_polls_already_declared_siblings() {
     // task's pending — doing so forward-references a binding that does not yet
     // exist and leaks `cannot find value __rsscript_pending_b` into rustc.
     let source = r#"
-features: async
 
 fn run() -> Result<Unit, TimerError> {
     task_group {
@@ -799,7 +773,6 @@ fn run() -> Result<Unit, TimerError> {
 #[test]
 fn task_group_discarded_async_let_lowers_to_scoped_background_drain() {
     let source = r#"
-features: async
 
 fn run() -> Result<Unit, TimerError> {
     task_group {
@@ -825,7 +798,6 @@ fn run() -> Result<Unit, TimerError> {
 #[test]
 fn select_lowers_to_first_ready_poll_loop() {
     let source = r#"
-features: async
 
 fn run() -> Result<Unit, TimerError> {
     select {
@@ -866,7 +838,6 @@ fn run() -> Result<Unit, TimerError> {
 #[test]
 fn async_fn_with_select_lowers_to_pending_boundary() {
     let source = r#"
-features: async
 
 async fn run() -> Result<Unit, TimerError> {
     select {
@@ -905,7 +876,6 @@ async fn run() -> Result<Unit, TimerError> {
 #[test]
 fn stream_from_receiver_lowers_to_runtime_pending_next() {
     let source = r#"
-features: async, local
 
 fn run() -> Result<Unit, ChannelError> {
     let mut channel: Channel<Int> = Channel.bounded(capacity: 1)?
@@ -937,7 +907,6 @@ fn run() -> Result<Unit, ChannelError> {
 #[test]
 fn stream_sources_and_collect_list_lower_to_runtime_pipeline_hooks() {
     let source = r#"
-features: async, local
 
 fn collect_numbers() -> Result<fresh List<Int>, ChannelError> {
     local items = List<Int>.new()
@@ -979,7 +948,6 @@ fn read_rows(path: read Path) -> Result<Unit, ChannelError> {
 #[test]
 fn await_for_stream_lowers_to_stream_next_loop() {
     let source = r#"
-features: async, local
 
 fn run() -> Result<Unit, ChannelError> {
     let mut channel: Channel<Int> = Channel.bounded(capacity: 1)?
@@ -1011,7 +979,6 @@ fn run() -> Result<Unit, ChannelError> {
 #[test]
 fn async_fn_with_await_for_stream_lowers_to_pending_boundary() {
     let source = r#"
-features: async, local
 
 async fn run(stream: read Stream<Int>) -> Result<Unit, ChannelError> {
     await for item in stream {

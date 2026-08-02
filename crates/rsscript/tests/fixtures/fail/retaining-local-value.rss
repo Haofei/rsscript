@@ -1,5 +1,4 @@
 // expect: RS0501
-features: local
 
 class Cache {
     entries: Map<String, Image>
@@ -10,7 +9,7 @@ struct Image {
 }
 
 fn cache_put(cache: mut Cache, value: Image) -> Unit
-    effects(retains(value))
+    retains(value)
 {
 }
 

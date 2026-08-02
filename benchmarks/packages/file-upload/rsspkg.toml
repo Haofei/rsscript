@@ -19,7 +19,7 @@ unsafe = "forbid"
 native_links = "forbid"
 ffi = "forbid"
 
-[[review.capability_bindings]]
+[[review.external_binding_bindings]]
 symbol = "Upload.put"
 category = "network.client"
 provider = "local"

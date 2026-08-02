@@ -591,7 +591,7 @@ impl<'a> RustLowerer<'a> {
         arg: &CallArg,
         index: usize,
     ) -> Option<TypeRef> {
-        let key = native_boundary_callee_key(callee);
+        let key = external_boundary_callee_key(callee);
         let params = self.function_param_types.get(&key)?;
         if let Some(name) = arg.name.as_deref() {
             params
@@ -609,7 +609,7 @@ impl<'a> RustLowerer<'a> {
         arg: &CallArg,
         index: usize,
     ) -> Option<DataEffect> {
-        let key = native_boundary_callee_key(callee);
+        let key = external_boundary_callee_key(callee);
         let params = self.function_param_effects.get(&key)?;
         if let Some(name) = arg.name.as_deref() {
             params

@@ -44,7 +44,7 @@ pub(super) fn check_call_place_conflicts(
     }
 
     // Field splitting (treating distinct inline fields of one base as disjoint)
-    // is a local-only capability. `local` bindings and `take` parameters are
+    // is a local-only external_binding. `local` bindings and `take` parameters are
     // provably exclusive; `mut` parameters are not, because a caller may pass a
     // managed-backed value.
     for access in &mut accesses {
@@ -458,7 +458,7 @@ pub(super) fn managed_field_split_conflict_diagnostic(
         ),
         right.span.clone(),
         "managed field split conflict",
-        "Field splitting into disjoint inline paths is a local-only capability. A managed object is a single runtime value behind one write guard, so two mutable accesses to its inline fields conflict; the conflict root is the managed object base.",
+        "Field splitting into disjoint inline paths is a local-only external_binding. A managed object is a single runtime value behind one write guard, so two mutable accesses to its inline fields conflict; the conflict root is the managed object base.",
         "split_managed_field_accesses",
         "Split the accesses into separate statements, or move the fields behind explicit `handle` fields so they become distinct managed objects.",
     ));

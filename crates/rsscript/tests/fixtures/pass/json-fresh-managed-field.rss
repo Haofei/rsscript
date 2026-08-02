@@ -1,5 +1,4 @@
 
-features: local
 
 class Schema {
     name: String

@@ -1,2 +1,6 @@
-[bindings]
-"S3.put_object" = "rss_s3_demo_native::put_object_start"
+schema = "rsscript.bindings.v1"
+
+[[function]]
+symbol = "S3.put_object"
+provider = "rss_s3_demo_native"
+entry = "put_object_start"

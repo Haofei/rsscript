@@ -1,4 +1,3 @@
-features: local
 
 fn main() -> Unit {
     local xs = List<Int>.new()

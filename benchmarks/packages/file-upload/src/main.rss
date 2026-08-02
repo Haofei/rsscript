@@ -1,4 +1,3 @@
-features: async
 
 async fn upload_batch_0(body: String) -> Result<Unit, String> {
     task_group {

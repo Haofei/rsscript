@@ -2,7 +2,6 @@
     #[test]
     fn native_osr_finds_later_native_loop_after_setup_loop() {
         let source = r#"
-features: local
 
 fn bench_size(default: Int) -> Int {
     let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
@@ -73,7 +72,6 @@ fn main() -> Unit {
         // params-only), so growing it via the journaled `ListPushInt` helper is safe —
         // unlike a flat PARAM buffer, which would dangle on realloc and stays vetoed.
         let source = r#"
-features: local
 
 fn main() -> Unit {
     let limit = 64
@@ -103,7 +101,6 @@ fn main() -> Unit {
     #[test]
     fn native_osr_enters_later_native_loop_after_setup_loop() {
         let source = r#"
-features: local
 
 fn main() -> Unit {
     let limit = 10
@@ -142,7 +139,7 @@ fn main() -> Unit {
         let mut vm = RegVm::new(
             Rc::clone(&executable.unit),
             Vec::<String>::new(),
-            std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
+            std::iter::empty::<(String, ExternalFunction)>().collect(),
         );
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         assert_eq!(
@@ -279,7 +276,6 @@ fn main() -> Unit {
     #[test]
     fn native_osr_enters_direct_async_call_await_loop() {
         let source = r#"
-features: async
 
 async fn step(value: Int) -> Result<Int, String> {
     return Ok(value + 1)
@@ -320,7 +316,6 @@ async fn main() -> Result<Unit, String> {
     #[test]
     fn native_osr_enters_direct_async_option_call_await_loop() {
         let source = r#"
-features: async
 
 async fn step(value: Int) -> Option<Int> {
     return Some(value + 1)
@@ -391,7 +386,6 @@ async fn main() -> Option<Unit> {
     #[test]
     fn native_osr_selects_and_lowers_readonly_full_list_slice_loop() {
         let source = r#"
-features: local
 
 fn main() -> Unit {
     let limit = 10
@@ -469,7 +463,6 @@ fn main() -> Unit {
     #[test]
     fn native_osr_enters_loop_with_transactional_list_set_int() {
         let source = r#"
-features: local
 
 fn main() -> Unit {
     local values = List<Int>.new()
@@ -507,7 +500,6 @@ fn main() -> Unit {
     #[test]
     fn native_flat_int_list_direct_write_commits_to_vm_list() {
         let source = r#"
-features: local
 
 fn hot(values: mut List<Int>, slot: Int, replacement: Int) -> Int {
     List.set<Int>(list: mut values, index: slot, value: read replacement)
@@ -546,7 +538,6 @@ fn main() -> Unit {
     #[test]
     fn native_osr_direct_flat_int_list_write_with_cold_push_trap() {
         let source = r#"
-features: local
 
 fn hot(values: mut List<Int>, limit: Int) -> Int {
     let mut i = 0
@@ -626,7 +617,6 @@ fn main() -> Unit {
     #[test]
     fn native_osr_selects_outer_loop_with_list_sort_int() {
         let source = r#"
-features: local
 
 fn main() -> Unit {
     let mut outer = 0
@@ -683,7 +673,6 @@ fn main() -> Unit {
     #[test]
     fn native_osr_enters_loop_with_transactional_map_get_int() {
         let source = r#"
-features: local
 
 fn main() -> Unit {
     local table = Map<Int, Int>.new()
@@ -739,7 +728,6 @@ fn main() -> Unit {
     #[test]
     fn native_osr_enters_loop_with_transactional_set_contains_int() {
         let source = r#"
-features: local
 
 fn main() -> Unit {
     local seen = Set.new<Int>()
@@ -790,7 +778,6 @@ fn main() -> Unit {
     #[test]
     fn native_osr_enters_loop_with_transactional_sorted_set_contains_int() {
         let source = r#"
-features: local
 
 fn main() -> Unit {
     local seen = SortedSet.new<Int>()
@@ -841,7 +828,6 @@ fn main() -> Unit {
     #[test]
     fn native_translates_sorted_set_len_int_through_list_len_helper() {
         let source = r#"
-features: local
 
 fn sum_len(seen: read SortedSet<Int>) -> Int {
     let mut i = 0
@@ -897,7 +883,6 @@ fn main() -> Unit {
     #[test]
     fn native_translates_collection_is_empty_helpers() {
         let source = r#"
-features: local
 
 fn collection_empty_score(
     values: read List<Int>,
@@ -1016,7 +1001,6 @@ fn main() -> Unit {
     #[test]
     fn native_translates_map_and_set_len_helpers() {
         let source = r#"
-features: local
 
 fn map_set_len_score(table: read Map<Int, Int>, set: read Set<Int>) -> Int {
     return (Map.len<Int, Int>(map: read table) * 10) + Set.len<Int>(set: read set)
@@ -1066,7 +1050,6 @@ fn main() -> Unit {
     #[test]
     fn native_folds_non_escaping_bytes_slice_len() {
         let source = r#"
-features: local
 
 fn bytes_slice_score(data: read Bytes, reps: Int) -> Int {
     let mut i = 0
@@ -1138,7 +1121,6 @@ fn main() -> Unit {
     #[test]
     fn native_folded_bytes_slice_len_matches_clamped_edge_semantics() {
         let source = r#"
-features: local
 
 fn edge_score(data: read Bytes) -> Int {
     let negative_start = Bytes.slice(value: read data, start: -5, len: 2)
@@ -1189,7 +1171,6 @@ fn main() -> Unit {
     #[test]
     fn native_keeps_escaping_bytes_slice_allocation() {
         let source = r#"
-features: local
 
 fn retained_slice(data: read Bytes) -> Bytes {
     return Bytes.slice(value: read data, start: 1, len: 4)
@@ -1234,7 +1215,6 @@ fn main() -> Unit {
     #[test]
     fn native_keeps_unrelated_dynamic_bytes_len_translatable() {
         let source = r#"
-features: local
 
 fn byte_count(data: read Bytes) -> Int {
     return Bytes.len(value: read data)
@@ -1275,7 +1255,6 @@ fn main() -> Unit {
     #[test]
     fn native_translates_string_slice_helper() {
         let source = r#"
-features: local
 
 fn string_slice_score(value: read String, reps: Int) -> Int {
     let mut i = 0
@@ -1330,7 +1309,6 @@ fn main() -> Unit {
     #[test]
     fn native_osr_enters_loop_with_transactional_sorted_map_insert_int() {
         let source = r#"
-features: local
 
 fn main() -> Unit {
     local table = SortedMap<Int, Int>.new()
@@ -1372,7 +1350,6 @@ fn main() -> Unit {
     #[test]
     fn native_osr_enters_loop_with_sorted_map_get_match_int() {
         let source = r#"
-features: local
 
 fn main() -> Unit {
     local table = SortedMap<Int, Int>.new()
@@ -1756,7 +1733,6 @@ fn main() -> Unit {
     #[test]
     fn native_osr_enters_loop_with_transactional_deque_pop_front_int() {
         let source = r#"
-features: local
 
 fn main() -> Unit {
     local q = Deque<Int>.new()
@@ -1791,7 +1767,7 @@ fn main() -> Unit {
         let mut vm = RegVm::new(
             Rc::clone(&executable.unit),
             Vec::<String>::new(),
-            std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
+            std::iter::empty::<(String, ExternalFunction)>().collect(),
         );
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         assert_eq!(
@@ -1986,7 +1962,6 @@ fn main() -> Unit {
     #[test]
     fn native_translates_bool_returning_mut_struct_list_write_helper() {
         let source = r#"
-features: local
 
 struct MailboxInt {
     capacity: Int

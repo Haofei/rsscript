@@ -701,8 +701,6 @@ fn main() -> Unit {
 #[test]
 fn backends_agree_on_ordered_collection_ops() {
     let source = "\
-features: local
-
 fn main() -> Unit {
     local deque = Deque<Int>.new()
     Deque.push_back<Int>(deque: mut deque, value: read 1)
@@ -963,9 +961,7 @@ fn backends_agree_on_manifest_inspector() {
 /// Regression for ledger SH-013.
 #[test]
 fn backends_agree_on_mut_param_field_assignment() {
-    let source = "features: local\n\
-\n\
-struct Tally {\n\
+    let source = "struct Tally {\n\
     n: Int\n\
 }\n\
 \n\

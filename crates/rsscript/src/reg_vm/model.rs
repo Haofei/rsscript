@@ -478,7 +478,7 @@ pub(crate) enum RegInstr {
     },
     /// Dynamic protocol dispatch: a `Protocol.method(self: x, ...)` call whose
     /// concrete impl is chosen at runtime by `args[0]`'s struct type name. This is
-    /// how capability objects and generic protocol bounds dispatch in the VM,
+    /// how dynamic protocol values and generic protocol bounds dispatch in the VM,
     /// mirroring the compiled backend's closed-world enum dispatch. `dispatch`
     /// maps each implementing struct name to the impl's target function id.
     CallDynamic {
@@ -509,7 +509,7 @@ pub(crate) enum RegInstr {
         winner: Reg,
         value: Reg,
     },
-    CallNative {
+    CallExternal {
         dst: Reg,
         key: String,
         args: Vec<Reg>,
@@ -801,119 +801,6 @@ pub(crate) enum RegInstr {
 }
 
 include!(concat!(env!("OUT_DIR"), "/rss-reg-intrinsic-enum.rs"));
-
-impl RegIntrinsic {
-    pub(crate) const fn host_authority(self) -> Option<crate::HostAuthority> {
-        use crate::HostAuthority;
-        match self {
-            Self::CsvOpenRead
-            | Self::CsvReadInto
-            | Self::CsvRows
-            | Self::DirectoryCopyFile
-            | Self::DirectoryCreate
-            | Self::DirectoryCreateAll
-            | Self::DirectoryCreateDirAll
-            | Self::DirectoryExists
-            | Self::DirectoryIsDir
-            | Self::DirectoryIsFile
-            | Self::DirectoryListFiles
-            | Self::DirectoryListPaths
-            | Self::DirectoryMetadata
-            | Self::DirectoryReadString
-            | Self::DirectoryRemoveDirAll
-            | Self::DirectoryRemoveFile
-            | Self::DirectoryRename
-            | Self::DirectoryWriteString
-            | Self::FileAppendBytes
-            | Self::FileAppendString
-            | Self::FileBytesStream
-            | Self::FileExists
-            | Self::FileOpen
-            | Self::FileOpenRead
-            | Self::FileOpenWrite
-            | Self::FileReadAll
-            | Self::FileReadAllAsync
-            | Self::FileReadAllString
-            | Self::FileReadAllStringAsync
-            | Self::FileReadBytes
-            | Self::FileReadInto
-            | Self::FileReadString
-            | Self::FileRemove
-            | Self::FileWrite
-            | Self::FileWriteAsync
-            | Self::FileWriteAtomic
-            | Self::FileWriteBytes
-            | Self::FileWriteBytesView
-            | Self::FileWriteBuffer
-            | Self::FileWriteBufferView
-            | Self::FileWriteString
-            | Self::FileWriteStringAsync
-            | Self::FileWriteStringToPath
-            | Self::HashSha256File
-            | Self::JsonParseFile
-            | Self::PathExists
-            | Self::PathIsDir
-            | Self::PathIsFile
-            | Self::PathListFiles
-            | Self::PathListPaths
-            | Self::PathReadString
-            | Self::PathWriteString
-            | Self::TempDirKeep
-            | Self::TempDirNew
-            | Self::TempDirNewIn
-            | Self::TomlParseFile
-            | Self::YamlParseFile => Some(HostAuthority::Filesystem),
-            Self::EnvCurrentDir
-            | Self::EnvGet
-            | Self::EnvGetOrDefault
-            | Self::EnvHomeDir
-            | Self::EnvRunWorkspaceRoot
-            | Self::EnvSet
-            | Self::EnvSetCurrentDir
-            | Self::EnvTempDir => Some(HostAuthority::Environment),
-            Self::HttpGet
-            | Self::HttpGetAsync
-            | Self::HttpGetRetryAsync
-            | Self::HttpGetTimeoutAsync
-            | Self::HttpPostForm
-            | Self::HttpPostFormAsync
-            | Self::HttpPostJson
-            | Self::HttpPostJsonAsync
-            | Self::HttpPostJsonBearerRetryAsync
-            | Self::HttpPostJsonRetryAsync
-            | Self::HttpPostJsonTimeoutAsync
-            | Self::HttpSendAsync
-            | Self::TcpConnect
-            | Self::TcpStreamRead
-            | Self::TcpStreamShutdown
-            | Self::TcpStreamWrite
-            | Self::TcpStreamWriteAll
-            | Self::WebSocketClose
-            | Self::WebSocketConnect
-            | Self::WebSocketRecvBytes
-            | Self::WebSocketRecvText
-            | Self::WebSocketSendBytes
-            | Self::WebSocketSendText => Some(HostAuthority::Network),
-            Self::ProcessRun
-            | Self::ProcessRunAsync
-            | Self::ProcessRunManyStdout
-            | Self::ProcessRunManyStdoutAsync
-            | Self::ProcessRunManyStdoutTimeout
-            | Self::ProcessRunManyStdoutTimeoutAsync
-            | Self::ProcessRunRequest
-            | Self::ProcessRunRequestAsync
-            | Self::ProcessRunRequestCancellableAsync
-            | Self::ProcessRunStdout
-            | Self::ProcessRunStdoutAsync
-            | Self::ProcessRunStdoutTimeout
-            | Self::ProcessRunStdoutTimeoutAsync
-            | Self::ProcessRunTimeout
-            | Self::ProcessRunTimeoutAsync
-            | Self::ProcessStream => Some(HostAuthority::Process),
-            _ => None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum RegIntCompare {

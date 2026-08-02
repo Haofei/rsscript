@@ -1,11 +1,11 @@
 fn double(value: Int) -> Int
-    effects(pure)
+
 {
     return value + value
 }
 
 fn quadruple(value: Int) -> Int
-    effects(pure)
+
 {
     return double(value) + double(value)
 }

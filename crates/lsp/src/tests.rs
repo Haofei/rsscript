@@ -886,7 +886,7 @@ fn prepare_rename_returns_symbol_range_and_placeholder() {
 #[test]
 fn semantic_tokens_mark_review_relevant_language_roles() {
     let source = concat!(
-        "native fn read_file(path: read String) -> String effects(file_read) {\n",
+        "fn transform(path: read String) -> String {\n",
         "    return path\n",
         "}\n",
     );
@@ -904,19 +904,7 @@ fn semantic_tokens_mark_review_relevant_language_roles() {
         tokens
             .data
             .iter()
-            .any(|token| token.token_type == TOKEN_NATIVE)
-    );
-    assert!(
-        tokens
-            .data
-            .iter()
-            .any(|token| token.token_type == TOKEN_CAPABILITY)
-    );
-    assert!(
-        tokens
-            .data
-            .iter()
-            .any(|token| token.token_type == TOKEN_EFFECT)
+            .any(|token| token.token_type == TOKEN_KEYWORD)
     );
 }
 
@@ -1261,7 +1249,7 @@ fn hover_symbol_info_uses_package_definition_detail() {
     .expect("write manifest");
     fs::write(
         package_dir.join("src/helper.rss"),
-        "fn helper(value: read Int) -> Int effects(pure) {\n    return value\n}\n",
+        "fn helper(value: read Int) -> Int {\n    return value\n}\n",
     )
     .expect("write helper");
     let caller_text = "fn run() -> Int {\n    return helper(value: read 1)\n}\n";
@@ -1284,7 +1272,7 @@ fn hover_symbol_info_uses_package_definition_detail() {
     let markdown = symbol_hover_markdown(&symbol);
 
     assert_eq!(symbol.name, "helper");
-    assert!(markdown.contains("fn(value: read Int) -> Int effects(pure)"));
+    assert!(markdown.contains("fn(value: read Int) -> Int"));
 
     fs::remove_dir_all(package_dir).expect("cleanup package");
 }
@@ -1317,7 +1305,7 @@ fn signature_help_uses_package_function_detail() {
     fs::write(
         package_dir.join("src/helper.rss"),
         concat!(
-            "fn helper(first: read Int, second: read String) -> Unit effects(pure) {\n",
+            "fn helper(first: read Int, second: read String) -> Unit {\n",
             "    return\n",
             "}\n",
         ),

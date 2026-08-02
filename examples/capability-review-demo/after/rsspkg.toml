@@ -14,13 +14,13 @@ build_scripts = "forbid"
 proc_macros = "forbid"
 unsafe = "forbid"
 
-[[review.capability_bindings]]
+[[review.external_binding_bindings]]
 symbol = "Db.query"
 category = "database.read"
 provider = "sqlite"
 
 # The "PR" adds an outbound HTTP call — a new high-risk capability.
-[[review.capability_bindings]]
+[[review.external_binding_bindings]]
 symbol = "Net.fetch"
 category = "network.client"
 provider = "reqwest"

@@ -477,10 +477,8 @@ fn package_review_map_resolves_path_dependency_interfaces() {
         "rss-review-dep",
         "0.1.0",
         "",
-        r#"features: native
-
-native fn Dep.echo(message: read String) -> String
-    effects(native)
+        r#"
+fn Dep.echo(message: read String) -> String
 "#,
     );
 
@@ -501,8 +499,7 @@ rss-review-dep = {{ path = "{}" }}
     fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
     fs::write(
         root_dir.join("src/main.rss"),
-        r#"features: native
-
+        r#"
 pub fn Api.run(message: read String) -> String {
     return Dep.echo(message: read message)
 }
@@ -524,21 +521,6 @@ pub fn Api.run(message: read String) -> String {
             export["name"] == "Api.run" && export["classification"] == "review_if_changed"
         })
     }));
-    assert!(
-        json["review_map"]["files"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .flat_map(|file| file["regions"].as_array().into_iter().flatten())
-            .any(|region| {
-                region["function"] == "Api.run"
-                    && region["reasons"].as_array().is_some_and(|reasons| {
-                        reasons
-                            .iter()
-                            .any(|reason| reason == "native call `Dep.echo`")
-                    })
-            })
-    );
 }
 
 #[test]
@@ -705,8 +687,7 @@ fn package_requires_explicit_async_dependency_for_timer_api() {
     fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
     fs::write(
         root_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 async fn main() -> Result<Unit, TimerError> {
     await Timer.sleep(ms: 1)?
     return Ok(Unit)
@@ -747,8 +728,7 @@ fn package_requires_explicit_async_dependency_for_async_file_io() {
     fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
     fs::write(
         root_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 async fn load(path: read Path) -> Result<String, FileError> {
     let text = await File.read_all_string_async(path: read path)?
     return Ok(text)
@@ -786,8 +766,7 @@ fn package_requires_explicit_async_dependency_for_async_process_io() {
     fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
     fs::write(
         root_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 async fn run_command() -> Result<String, String> {
     let stdout = await Process.run_stdout_async(command: read "printf", args: read List<String>.new())?
     return Ok(stdout)
@@ -825,8 +804,7 @@ fn package_requires_explicit_async_dependency_for_async_tcp_io() {
     fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
     fs::write(
         root_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 async fn connect() -> Result<TcpStream, TcpError> {
     let stream = await Tcp.connect(host: read "127.0.0.1", port: 8080)?
     return Ok(stream)
@@ -865,8 +843,7 @@ fn package_requires_explicit_async_dependency_for_async_websocket_io() {
     fs::create_dir_all(root_dir.join("src")).expect("source dir should be created");
     fs::write(
         root_dir.join("src/main.rss"),
-        r#"features: async
-
+        r#"
 async fn connect(url: read Url) -> Result<WebSocket, WebSocketError> {
     let socket = await WebSocket.connect(url: read url)?
     return Ok(socket)

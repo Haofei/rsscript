@@ -13,7 +13,6 @@ use super::*;
 #[test]
 fn parity_owned_fn_toy_probe() {
     let source = r#"
-features: local
 
 struct Adder derives(Clone) {
     fxn: owned Fn(Int) -> Int
@@ -22,8 +21,8 @@ struct Adder derives(Clone) {
 fn main() -> Unit {
     let base = 100
     local adders = List.new<Adder>()
-    let a0 = Adder(fxn: fn(value) captures(read base) effects(pure) { return value + base })
-    let a1 = Adder(fxn: fn(value) captures(read base) effects(pure) { return value * base })
+    let a0 = Adder(fxn: fn(value) captures(read base) { return value + base })
+    let a1 = Adder(fxn: fn(value) captures(read base) { return value * base })
     List.push(list: mut adders, value: read a0)
     List.push(list: mut adders, value: read a1)
 
@@ -55,7 +54,6 @@ fn main() -> Unit {
 #[test]
 fn parity_owned_fn_pattern_matcher() {
     let source = r#"
-features: local
 
 pub sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul }
 
@@ -113,7 +111,7 @@ fn build_rules() -> fresh List<RwRule> {
 
     // Rule 1: (x * 1) -> x   (rebuild the left child fresh). No captures; uses
     // only its `u` parameter (typed `read UOp` by the Fn slot) and free fns.
-    let r_mul1 = RwRule(fxn: fn(u) captures() effects(pure) {
+    let r_mul1 = RwRule(fxn: fn(u) captures() {
         if u.op == Mul {
             let lhs = List.get(list: read u.src, index: 0)
             let rhs = List.get(list: read u.src, index: 1)
@@ -130,7 +128,7 @@ fn build_rules() -> fresh List<RwRule> {
     // its own copy and reads it each call) and Copy-captures `zero` (Int).
     let zero = 0
     let tag = "mul0"
-    let r_mul0 = RwRule(fxn: fn(u) captures(read zero, take tag) effects(pure) {
+    let r_mul0 = RwRule(fxn: fn(u) captures(read zero, take tag) {
         if u.op == Mul {
             let rhs = List.get(list: read u.src, index: 1)
             if is_const(u: read rhs, v: zero) {
@@ -258,7 +256,6 @@ fn main() -> Unit {
 #[test]
 fn parity_owned_fn_mut_ctx_rule() {
     let source = r#"
-features: local
 
 pub sum Ops derives(Clone, Eq, Hash) { Const Var Add Mul }
 
@@ -313,7 +310,7 @@ fn build_rules() -> fresh List<RwRule> {
     local rules = List.new<RwRule>()
 
     // Rule 1: (x * 1) -> x. No captures; mutates `ctx` on fire.
-    let r_mul1 = RwRule(fxn: fn(u, ctx) captures() effects(pure) {
+    let r_mul1 = RwRule(fxn: fn(u, ctx) captures() {
         if u.op == Mul {
             let lhs = List.get(list: read u.src, index: 0)
             let rhs = List.get(list: read u.src, index: 1)
@@ -330,7 +327,7 @@ fn build_rules() -> fresh List<RwRule> {
     // `zero`; mutates `ctx` on fire.
     let zero = 0
     let tag = "mul0"
-    let r_mul0 = RwRule(fxn: fn(u, ctx) captures(read zero, take tag) effects(pure) {
+    let r_mul0 = RwRule(fxn: fn(u, ctx) captures(read zero, take tag) {
         if u.op == Mul {
             let rhs = List.get(list: read u.src, index: 1)
             if is_const(u: read rhs, v: zero) {

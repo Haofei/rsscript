@@ -5,7 +5,6 @@ use super::*;
 #[test]
 fn take_with_resource_reports_resource_escape_not_plain_take_error() {
     let source = r#"
-features: local
 
 resource File {
     fd: Int
@@ -36,7 +35,6 @@ fn bad_take(path: read Path) -> Unit {
 #[test]
 fn retained_closure_capture_makes_fresh_local_unclean() {
     let source = r#"
-features: local
 
 class Scheduler {
     callbacks: List<Callback>
@@ -47,7 +45,6 @@ struct Image {
 }
 
 fn schedule(scheduler: mut Scheduler, callback: read Callback) -> Unit
-    effects(retains(callback))
 {
 }
 
@@ -74,7 +71,6 @@ fn bad_schedule(scheduler: mut Scheduler, path: read Path) -> fresh Image {
 #[test]
 fn checker_rejects_retained_wrapped_closure_capturing_local() {
     let source = r#"
-features: local
 
 struct Image
 struct CallbackOption
@@ -83,7 +79,6 @@ class Scheduler
 fn Image.load(path: read Path) -> fresh Image
 fn Image.inspect(image: read Image) -> Unit
 fn schedule(scheduler: mut Scheduler, callback: read CallbackOption) -> Unit
-    effects(retains(callback))
 
 fn bad_schedule(scheduler: mut Scheduler, path: read Path) -> Unit {
     local image = Image.load(path: read path)
@@ -110,7 +105,6 @@ fn bad_schedule(scheduler: mut Scheduler, path: read Path) -> Unit {
 #[test]
 fn checker_materializes_direct_fresh_read_but_rejects_mut_and_take() {
     let source = r#"
-features: local
 
 struct Image {
     width: Int
@@ -145,7 +139,6 @@ fn bad_take(path: read Path) -> Unit {
 #[test]
 fn checker_requires_constructor_field_effects_for_handle_and_local_inline_fields() {
     let source = r#"
-features: local
 
 struct Buffer
 struct Rules
@@ -182,7 +175,6 @@ fn bad_config() -> fresh Config {
 #[test]
 fn checker_rejects_exclusive_use_of_for_read_view() {
     let source = r#"
-features: local
 
 struct Buffer {
     bytes: Int
@@ -215,7 +207,6 @@ fn checker_accepts_inline_manage_of_fresh_rvalue() {
     // A struct constructor and a `fresh`-returning call are freshly produced,
     // owned rvalues: inline `manage` of them is sound and must be accepted.
     let source = r#"
-features: local
 
 struct Frame {
     pixels: Int
@@ -246,7 +237,6 @@ fn checker_rejects_inline_manage_of_unsound_rvalue() {
     let class_diags = analyze_source(
         "inline-manage-class.rss",
         r#"
-features: local
 
 class Session {
     id: Int
@@ -266,7 +256,6 @@ fn bad_class() -> Unit {
     let plain_diags = analyze_source(
         "inline-manage-plain.rss",
         r#"
-features: local
 
 struct Frame {
     pixels: Int
@@ -290,7 +279,6 @@ fn bad_plain_call() -> Unit {
 fn checker_accepts_closure_parameter_without_treating_closure_as_data_effect_param() {
     let source = r#"
 fn Scheduler.run(callback: Closure) -> Unit
-    effects(retains(callback))
 "#;
     let diagnostics = analyze_source("closure-param.rss", source);
 
@@ -422,7 +410,6 @@ fn main(node: read Node) -> Unit {
 #[test]
 fn checker_marks_scrutinee_moved_after_take_match() {
     let source = r#"
-features: local
 
 struct User {
     name: String
@@ -454,7 +441,6 @@ fn describe(user: read User) -> String {
 #[test]
 fn checker_marks_scrutinee_moved_after_take_match_expression() {
     let source = r#"
-features: local
 
 struct User {
     name: String
@@ -487,7 +473,6 @@ fn describe(user: read User) -> String {
 #[test]
 fn checker_rejects_overlapping_mut_pattern_fields() {
     let source = r#"
-features: local
 
 struct User {
     name: String
@@ -540,7 +525,6 @@ fn main(expr: read Expr) -> String {
 #[test]
 fn checker_rejects_noescape_callback_retaining_local_created_inside_callback() {
     let source = r#"
-features: local
 
 struct ImageData {
     size: Int
@@ -551,7 +535,6 @@ class BuildProblem {
 }
 
 fn Cache.store(image: read ImageData) -> Unit
-    effects(retains(image))
 
 fn apply(callback: noescape Fn() -> Result<fresh ImageData, BuildProblem>) -> Unit {
     return Unit
@@ -581,14 +564,12 @@ fn main() -> Unit {
 #[test]
 fn checker_rejects_noescape_callback_retaining_local_inside_wrapper() {
     let source = r#"
-features: local
 
 struct ImageData {
     size: Int
 }
 
 fn Cache.store_option(image: read Option<ImageData>) -> Unit
-    effects(retains(image))
 
 fn apply(callback: noescape Fn()) -> Unit {
     callback()
@@ -619,7 +600,6 @@ fn main() -> Unit {
 fn lint_warns_on_duplicate_effects() {
     let source = r#"
 fn cache(value: read Image) -> Unit
-    effects(no_panic, no_panic, retains(value), retains(value))
 {
     return Unit
 }
@@ -646,7 +626,6 @@ fn cache(value: read Image) -> Unit
 #[test]
 fn rust_lowering_marks_local_closure_mut_when_it_mutates_capture() {
     let source = r#"
-features: local
 
 fn run() -> Unit {
     local buffer = Buffer.new(size: 16)
@@ -694,7 +673,6 @@ fn first(items: read List<ReviewFacts>) -> String {
 #[test]
 fn mut_fn_param_is_mutable_in_closure_body() {
     let source = r#"
-features: local
 
 struct Ctx derives(Clone) {
     fired: Int
@@ -705,7 +683,7 @@ struct Rule derives(Clone) {
 }
 
 fn build() -> fresh Rule {
-    return Rule(fxn: fn(ctx) captures() effects(pure) {
+    return Rule(fxn: fn(ctx) captures() {
         ctx.fired = ctx.fired + 1
         return Unit
     })
@@ -728,7 +706,6 @@ fn build() -> fresh Rule {
 #[test]
 fn mut_fn_param_binding_is_not_reassignable() {
     let source = r#"
-features: local
 
 struct Ctx derives(Clone) {
     fired: Int
@@ -739,7 +716,7 @@ struct Rule derives(Clone) {
 }
 
 fn build() -> fresh Rule {
-    return Rule(fxn: fn(ctx) captures() effects(pure) {
+    return Rule(fxn: fn(ctx) captures() {
         ctx = Ctx(fired: 99)
         return Unit
     })

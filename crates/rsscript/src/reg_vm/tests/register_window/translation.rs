@@ -817,7 +817,7 @@
                 native_status: std::cell::Cell::new(0),
                 call_count: std::cell::Cell::new(0),
                 branch_count: std::cell::Cell::new(0),
-                profile: RefCell::new(None),
+            profile: RefCell::new(None),
                 osr_state: std::cell::Cell::new(OsrTrigger::Unknown),
             }
         }

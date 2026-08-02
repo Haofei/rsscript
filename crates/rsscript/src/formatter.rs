@@ -1,7 +1,7 @@
 use crate::syntax::ast::{
-    BinaryOp, Block, CallArg, Callee, DataEffect, EffectDecl, Expr, FieldDecl, FileFeature,
-    FunctionDecl, GenericBound, GenericParam, Item, LetKind, MapLiteralEntry, MatchPattern,
-    ObjectLiteralField, Param, Program, ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef,
+    BinaryOp, Block, CallArg, Callee, DataEffect, Expr, FieldDecl, FunctionDecl, GenericBound,
+    GenericParam, Item, LetKind, MapLiteralEntry, MatchPattern, ObjectLiteralField, Param, Program,
+    ProtocolImpl, Stmt, TypeDecl, TypeKind, TypeRef,
 };
 use crate::syntax::parse_source_raw;
 
@@ -27,20 +27,6 @@ struct Formatter {
 
 impl Formatter {
     fn program(&mut self, program: &Program) {
-        if !program.features.is_empty() {
-            self.out.push_str("features: ");
-            self.out.push_str(
-                &program
-                    .features
-                    .iter()
-                    .copied()
-                    .map(feature_name)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-            );
-            self.out.push_str("\n\n");
-        }
-
         let mut wrote_item = false;
         for protocol in &program.protocols {
             if wrote_item {
@@ -225,10 +211,10 @@ impl Formatter {
             function.returns_fresh,
             1,
         );
-        if !function.effects.is_empty() {
+        if !function.retained_params.is_empty() {
             self.out.push('\n');
             self.indent(2);
-            self.effects(&function.effects);
+            self.retains(&function.retained_params);
         }
     }
 
@@ -275,9 +261,6 @@ impl Formatter {
         if function.is_async {
             prefix.push_str("async ");
         }
-        if function.is_native {
-            prefix.push_str("native ");
-        }
         prefix.push_str("fn ");
         prefix.push_str(&function.name);
         prefix.push_str(&generic_params_text(&function.type_params));
@@ -288,10 +271,10 @@ impl Formatter {
             function.returns_fresh,
             0,
         );
-        if !function.effects.is_empty() {
+        if !function.retained_params.is_empty() {
             self.out.push('\n');
             self.indent(1);
-            self.effects(&function.effects);
+            self.retains(&function.retained_params);
         }
         if function.body.statements.is_empty() {
             return;
@@ -605,7 +588,6 @@ impl Formatter {
             Expr::Closure {
                 params,
                 captures,
-                declared_effects,
                 explicit,
                 body,
                 ..
@@ -623,11 +605,6 @@ impl Formatter {
                         self.out.push_str(&capture.name);
                     }
                     self.out.push(')');
-                    if !declared_effects.is_empty() {
-                        self.out.push_str(" effects(");
-                        self.out.push_str(&declared_effects.join(", "));
-                        self.out.push(')');
-                    }
                     self.out.push_str(" {\n");
                 } else {
                     self.out.push('|');
@@ -1004,12 +981,12 @@ impl Formatter {
         self.out.push('>');
     }
 
-    fn effects(&mut self, effects: &[EffectDecl]) {
-        self.out.push_str("effects(");
+    fn retains(&mut self, params: &[String]) {
+        self.out.push_str("retains(");
         self.out.push_str(
-            &effects
+            &params
                 .iter()
-                .map(format_effect)
+                .map(String::as_str)
                 .collect::<Vec<_>>()
                 .join(", "),
         );
@@ -1369,13 +1346,6 @@ fn format_generic_param(param: &GenericParam) -> String {
     }
 }
 
-fn format_effect(effect: &EffectDecl) -> String {
-    match effect {
-        EffectDecl::Name(name) => name.clone(),
-        EffectDecl::Retains(name) => format!("retains({name})"),
-    }
-}
-
 /// The tuple arity encoded in a synthetic `__TupleN` name (`N >= 2`), if any.
 fn tuple_arity_of(name: &str) -> Option<usize> {
     name.strip_prefix("__Tuple")
@@ -1438,18 +1408,6 @@ fn type_ref_text(ty: &TypeRef) -> String {
         format!("fresh {name}")
     } else {
         name
-    }
-}
-
-fn feature_name(feature: FileFeature) -> &'static str {
-    match feature {
-        FileFeature::Local => "local",
-        FileFeature::Native => "native",
-        FileFeature::Unsafe => "unsafe",
-        FileFeature::Async => "async",
-        FileFeature::Device => "device",
-        FileFeature::Ffi => "ffi",
-        FileFeature::Reflection => "reflection",
     }
 }
 
@@ -1576,13 +1534,12 @@ mod tests {
 
     #[test]
     fn formats_core_surface_deterministically() {
-        let source = r#"features:   local
-struct   Session {
+        let source = r#"struct   Session {
 owner:weak User
 cache: handle Map<String,String>
 }
 fn  save(image:read Image,path:read Path)->Result<Unit, IOError>
-effects(retains(image), no_panic){
+{
 local tmp=Image.clone(image:read image)?
 Image.save(image:read tmp,path:read path)
 return Unit
@@ -1591,15 +1548,12 @@ return Unit
 
         assert_eq!(
             format_source("fmt.rss", source),
-            r#"features: local
-
-struct Session {
+            r#"struct Session {
     owner: weak User
     cache: handle Map<String, String>
 }
 
-fn save(image: read Image, path: read Path) -> Result<Unit, IOError>
-    effects(retains(image), no_panic) {
+fn save(image: read Image, path: read Path) -> Result<Unit, IOError> {
     local tmp = Image.clone(image: read image)?
     Image.save(image: read tmp, path: read path)
     return Unit
@@ -1645,18 +1599,13 @@ return ""
     }
 
     #[test]
-    fn preserves_native_function_declarations() {
-        let source = r#"features: native
-native   fn Host.emit(message:read String)->Unit
-effects(native)
+    fn preserves_bodyless_interface_declarations() {
+        let source = r#"fn Host.emit(message:read String)->Unit
 "#;
 
         assert_eq!(
             format_source("native.rssi", source),
-            r#"features: native
-
-native fn Host.emit(message: read String) -> Unit
-    effects(native)
+            r#"fn Host.emit(message: read String) -> Unit
 "#
         );
     }
@@ -1832,8 +1781,7 @@ return reason
 
     #[test]
     fn formats_long_calls_and_constructors_for_review() {
-        let source = r#"features: async
-async fn main(config:read AgentConfig)->Result<Unit,HttpError>{
+        let source = r#"async fn main(config:read AgentConfig)->Result<Unit,HttpError>{
 let http=await Http.post_json_bearer_retry_async(url:read config.endpoint,body:read request_body,token:read config.api_key,timeout_ms:config.request_timeout_ms,attempts:config.max_attempts,backoff_ms:config.backoff_ms)?
 return Ok(Unit)
 }
@@ -1844,9 +1792,7 @@ return AgentConfig(model:"AGENT_MODEL".env_or("gpt-5.5:medium"),endpoint:"AGENT_
 
         assert_eq!(
             format_source("call-format.rss", source),
-            r#"features: async
-
-async fn main(config: read AgentConfig) -> Result<Unit, HttpError> {
+            r#"async fn main(config: read AgentConfig) -> Result<Unit, HttpError> {
     let http = await Http.post_json_bearer_retry_async(
         url: read config.endpoint,
         body: read request_body,
@@ -1942,11 +1888,10 @@ return root.array_get(index)
     fn preserves_protocol_declarations_and_impl_mappings() {
         let source = r#"protocol Writer {
 fn write(self:mut Self,message:read String)->Unit
-effects(retains(message))
 }
 struct BufferWriter
 fn BufferWriter.write(self:mut BufferWriter,message:read String)->Unit
-effects(retains(message)){
+{
 Log.write(message:read message)
 }
 impl Writer for BufferWriter {
@@ -1961,13 +1906,11 @@ Writer.write(self:mut writer,message:read message)
             format_source("protocol.rss", source),
             r#"protocol Writer {
     fn write(self: mut Self, message: read String) -> Unit
-        effects(retains(message))
 }
 
 struct BufferWriter
 
-fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit
-    effects(retains(message)) {
+fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit {
     Log.write(message: read message)
 }
 
@@ -2019,9 +1962,7 @@ impl Writer for BufferWriter {
 
     #[test]
     fn renders_list_slice_patterns() {
-        let source = r#"features: local
-
-fn describe(xs:read List<Int>)->Int{
+        let source = r#"fn describe(xs:read List<Int>)->Int{
 match read xs{
 []=>{return 0}
 [only]=>{return only}
@@ -2035,9 +1976,7 @@ _=>{return -1}
 
         assert_eq!(
             format_source("list.rss", source),
-            r#"features: local
-
-fn describe(xs: read List<Int>) -> Int {
+            r#"fn describe(xs: read List<Int>) -> Int {
     match read xs {
         [] => {
             return 0

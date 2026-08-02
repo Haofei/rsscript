@@ -1,4 +1,3 @@
-features: local
 
 // JIT hot path: a native parent passes a read-only flat `List<Float>` parameter
 // to a compiled native child. This pins the native-to-native FlatFloat ABI:

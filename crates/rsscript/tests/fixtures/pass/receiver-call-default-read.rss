@@ -1,4 +1,3 @@
-features: local
 
 class Cache {
     data: Map<String, String>

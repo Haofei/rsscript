@@ -1,8 +1,7 @@
-features: local
 
 protocol Writer {
     fn write(self: mut Self, message: String) -> Unit
-        effects(retains(message))
+        retains(message)
 
     fn flush(self: mut Self) -> Unit
 }
@@ -12,7 +11,7 @@ class BufferWriter {
 }
 
 fn BufferWriter.write(self: mut BufferWriter, message: String) -> Unit
-    effects(retains(message))
+    retains(message)
 {
     List.push<String>(list: mut self.buffer, value: message)
 }
@@ -28,7 +27,7 @@ impl Writer for BufferWriter {
 }
 
 fn write_line<W: Writer>(writer: mut W, message: String) -> Unit
-    effects(retains(message))
+    retains(message)
 {
     Writer.write(self: mut writer, message)
 }

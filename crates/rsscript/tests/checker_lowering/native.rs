@@ -5,10 +5,8 @@ use super::*;
 #[test]
 fn rust_lowering_maps_native_call_boundaries() {
     let source = r#"
-features: native
 
-native fn host_emit(message: read String) -> Unit
-    effects(native)
+fn host_emit(message: read String) -> Unit
 
 pub fn run() -> Unit {
     host_emit(message: read "host")
@@ -49,15 +47,12 @@ pub fn run() -> Unit {
 #[test]
 fn rust_lowering_maps_receiver_native_binding_with_receiver_argument() {
     let source = r#"
-features: native
 
 opaque struct Alpha
 
-native fn Alpha.open() -> Alpha
-    effects(native)
+fn Alpha.open() -> Alpha
 
-native fn Alpha.describe(self: read Alpha) -> String
-    effects(native)
+fn Alpha.describe(self: read Alpha) -> String
 
 pub fn run() -> Unit {
     let alpha = Alpha.open()
@@ -160,7 +155,6 @@ fn review_reports_new_unsafe_native_usage() {
     let old_source = r#"
 
 fn checksum(data: read Bytes) -> UInt64
-    effects(no_panic)
 {
     Bytes.checksum(data: read data)
 }
@@ -168,7 +162,6 @@ fn checksum(data: read Bytes) -> UInt64
     let new_source = r#"
 
 fn checksum(data: read Bytes) -> UInt64
-    effects(no_panic, unsafe, native)
 {
     Native.checksum(data: read data)
 }
@@ -222,8 +215,7 @@ fn host_emit(message: read String) -> Unit
 }
 "#;
     let new_source = r#"
-native fn host_emit(message: read String) -> Unit
-    effects(native)
+fn host_emit(message: read String) -> Unit
 "#;
 
     let findings = review_sources("old.rss", old_source, "new.rss", new_source);
@@ -241,10 +233,8 @@ native fn host_emit(message: read String) -> Unit
 #[test]
 fn review_map_marks_native_calls_inside_noescape_callbacks() {
     let source = r#"
-features: native
 
-native fn Native.echo(message: read String) -> String
-    effects(native)
+fn Native.echo(message: read String) -> String
 
 fn apply(callback: noescape Fn()) -> Unit {
     callback()
@@ -310,13 +300,12 @@ fn review_map_selfhost_classifier_has_no_unknown_regions() {
 #[test]
 fn parser_expands_native_module_declarations_to_native_functions() {
     let source = r#"
-features: native
 
 struct Path
 resource File
 struct IOError
 
-native module File {
+module File {
     fn open(path: read Path) -> Result<File, IOError>
 }
 "#;

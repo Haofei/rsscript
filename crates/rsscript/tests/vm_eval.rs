@@ -15,13 +15,15 @@ use std::net::TcpListener;
 use std::process::Command;
 use std::thread;
 
+use common::{
+    lower_test_source_to_rust_package as lower_source_to_rust_package, reg_vm_eval_source_main,
+    reg_vm_eval_source_main_with_args, reg_vm_eval_source_main_with_args_and_external_bindings,
+    reg_vm_eval_source_main_with_interfaces_and_external_bindings,
+};
 use rsscript::{
-    EvalError, ExecutionContext, HostCapabilities, NativeInterpreterFn, NativeRustDependency,
-    NativeValue, VmLimits, lower_source_to_rust_package,
+    EvalError, ExternalFunction, NativeRustDependency, NativeValue, VmLimits,
     lower_sources_to_rust_package_with_options, reg_vm_eval_package_main_with_args,
-    reg_vm_eval_source_main, reg_vm_eval_source_main_with_args,
-    reg_vm_eval_source_main_with_args_and_native_bindings,
-    reg_vm_eval_source_main_with_context_and_limits, write_generated_rust_package,
+    write_generated_rust_package,
 };
 
 #[test]
@@ -40,99 +42,6 @@ fn main() -> Int {
     assert_eq!(output.value, "14");
     assert_eq!(output.display_value, "14");
     assert_eq!(output.native_value, Some(NativeValue::Int(14)));
-}
-
-#[test]
-fn restricted_execution_context_runs_pure_vm_code() {
-    let output = reg_vm_eval_source_main_with_context_and_limits(
-        "restricted-pure.rss",
-        "fn main() -> Int { return 6 * 7 }",
-        std::iter::empty::<String>(),
-        ExecutionContext::trusted_ci(HostCapabilities::deny_all()),
-        VmLimits::safe_default(),
-    )
-    .expect("pure code should not require host authority");
-
-    assert_eq!(output.native_value, Some(NativeValue::Int(42)));
-}
-
-#[test]
-fn restricted_execution_context_denies_filesystem_before_side_effect() {
-    let root = common::unique_temp_dir("rsscript-restricted-context");
-    let target = root.join("denied.txt");
-    let source = r#"
-features: native, local
-
-fn main() -> Result<Unit, FileError> {
-    let path = Path.from_string(value: read Args.get(index: 0)?)
-    File.write_string_to_path(path: read path, text: read "must-not-exist")?
-    return Ok(Unit)
-}
-"#;
-
-    let error = reg_vm_eval_source_main_with_context_and_limits(
-        "restricted-filesystem.rss",
-        source,
-        [target.display().to_string()],
-        ExecutionContext::trusted_ci(HostCapabilities::deny_all()),
-        VmLimits::safe_default(),
-    )
-    .expect_err("restricted execution must deny ambient filesystem access");
-
-    assert!(matches!(error, EvalError::Runtime(message) if message.contains("filesystem")));
-    assert!(
-        !target.exists(),
-        "authorization must run before file creation"
-    );
-    if root.exists() {
-        fs::remove_dir_all(root).expect("temporary directory cleanup");
-    }
-}
-
-#[test]
-fn restricted_execution_context_uses_scoped_filesystem_grant() {
-    let root = common::unique_temp_dir("rsscript-scoped-filesystem");
-    fs::create_dir_all(&root).expect("temporary directory");
-    let target = root.join("allowed.txt");
-    let outside = root
-        .parent()
-        .expect("temporary directory parent")
-        .join("outside.txt");
-    let source = r#"
-features: native, local
-
-fn main() -> Result<Unit, FileError> {
-    let path = Path.from_string(value: read Args.get(index: 0)?)
-    File.write_string_to_path(path: read path, text: read "scoped")?
-    return Ok(Unit)
-}
-"#;
-    let capabilities = HostCapabilities::deny_all()
-        .grant_filesystem_root(&root)
-        .expect("filesystem root");
-
-    reg_vm_eval_source_main_with_context_and_limits(
-        "scoped-filesystem.rss",
-        source,
-        [target.display().to_string()],
-        ExecutionContext::trusted_ci(capabilities.clone()),
-        VmLimits::safe_default(),
-    )
-    .expect("path inside the granted root should execute");
-    assert_eq!(fs::read_to_string(&target).expect("written file"), "scoped");
-
-    let error = reg_vm_eval_source_main_with_context_and_limits(
-        "scoped-filesystem-denied.rss",
-        source,
-        [outside.display().to_string()],
-        ExecutionContext::trusted_ci(capabilities),
-        VmLimits::safe_default(),
-    )
-    .expect_err("path outside the granted root must be denied");
-    assert!(matches!(error, EvalError::Runtime(message) if message.contains("not authorized")));
-    assert!(!outside.exists());
-
-    fs::remove_dir_all(root).expect("temporary directory cleanup");
 }
 
 #[test]
@@ -189,9 +98,7 @@ fn float_fold_program(folder_body: &str) -> String {
     // Build the list once, then fold it many times so the fold (not the one-time
     // list construction) dominates the measured time.
     format!(
-        r#"features: local
-
-fn main() -> Float {{
+        r#"fn main() -> Float {{
     let mut index = 0
     local values = List<Float>.new()
     while index < 50000 {{
@@ -288,9 +195,38 @@ edition = "2026"
 
 [sources]
 paths = ["src"]
+
+[dependencies]
+test-host = { path = "host" }
 "#,
     )
     .expect("manifest should write");
+    fs::create_dir_all(package_dir.join("host/interface")).expect("interface dir should create");
+    fs::write(
+        package_dir.join("host/rsspkg.toml"),
+        r#"[package]
+name = "test-host"
+version = "0.1.0"
+edition = "2026"
+
+[interfaces]
+paths = ["interface"]
+
+[virtual]
+has_default = false
+provider = "test"
+"#,
+    )
+    .expect("host manifest should write");
+    fs::write(
+        package_dir.join("host/interface/host.rssi"),
+        format!(
+            "{}\n{}",
+            include_str!("../../../stdlib/os/os.rssi"),
+            include_str!("../../../stdlib/log/log.rssi")
+        ),
+    )
+    .expect("host interface should write");
     fs::write(
         package_dir.join("src/helper.rss"),
         r#"
@@ -371,7 +307,6 @@ fn main() -> Int {
 #[test]
 fn parity_async_await_runs_synchronously() {
     let source = r#"
-features: async, native
 
 async fn add_after_sleep(value: Int) -> Result<Int, TimerError> {
     await Timer.sleep(ms: 1)?
@@ -402,7 +337,6 @@ async fn main() -> Result<Unit, TimerError> {
 #[test]
 fn parity_select_runs_first_ready_arm() {
     let source = r#"
-features: async, native
 
 async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
     await Timer.sleep(ms: ms)?
@@ -427,7 +361,6 @@ fn main() -> Result<Unit, TimerError> {
 #[test]
 fn parity_task_group_async_let_runs_spawn_handles() {
     let source = r#"
-features: async
 
 async fn fetch_user() -> Result<String, String> {
     return Ok("user")
@@ -464,7 +397,6 @@ fn parity_async_file_intrinsics() {
     // litter the working tree on every run. Cleaned up afterwards.
     let file = common::unique_temp_dir("rsscript-parity-async-file").with_extension("txt");
     let template = r#"
-features: async, native, local
 
 async fn main() -> Result<Unit, FileError> {
     let path = Path.from_string(value: read "ASYNC_FILE_PATH")
@@ -490,7 +422,6 @@ async fn main() -> Result<Unit, FileError> {
 #[test]
 fn parity_async_process_intrinsics() {
     let source = r#"
-features: async, native, local
 
 async fn main() -> Result<Unit, String> {
     let output = await Process.run_async(command: read "printf", args: read ["ok"])?
@@ -692,15 +623,11 @@ fn eval_dispatches_native_host_bindings() {
         Ok(NativeValue::String(format!("tag:{value}")))
     }
 
+    let interface = r#"
+pub fn Host.echo(message: read String) -> String
+pub fn Host.tag(value: Int) -> String
+"#;
     let source = r#"
-features: native
-
-native fn Host.echo(message: read String) -> String
-    effects(native)
-
-native fn Host.tag(value: Int) -> String
-    effects(native)
-
 fn main() -> Unit {
     Log.write(message: read Host.echo(message: read "hello"))
     Log.write(message: read Host.tag(value: 7))
@@ -708,13 +635,13 @@ fn main() -> Unit {
 }
 "#;
 
-    let eval = reg_vm_eval_source_main_with_args_and_native_bindings(
+    let eval = reg_vm_eval_source_main_with_interfaces_and_external_bindings(
         "eval-native-host.rss",
         source,
-        std::iter::empty::<&str>(),
+        &[("host-bindings.rssi", interface)],
         [
-            ("Host.echo", NativeInterpreterFn::from_fn(host_echo)),
-            ("Host.tag", NativeInterpreterFn::from_fn(host_tag)),
+            ("Host.echo", ExternalFunction::from_fn(host_echo)),
+            ("Host.tag", ExternalFunction::from_fn(host_tag)),
         ],
     )
     .expect("native host binding eval should succeed");
@@ -725,21 +652,23 @@ fn main() -> Unit {
 }
 
 #[test]
-fn eval_reports_unbound_native_declarations() {
+fn eval_reports_unbound_external_declarations() {
+    let interface = "pub fn Host.echo(message: read String) -> String\n";
     let source = r#"
-features: native
-
-native fn Host.echo(message: read String) -> String
-    effects(native)
-
 fn main() -> Unit {
     Log.write(message: read Host.echo(message: read "hello"))
     return Unit
 }
 "#;
 
-    let error = reg_vm_eval_source_main("eval-unbound-native.rss", source)
-        .expect_err("unbound native declaration should fail");
+    let error = common::compile_vm_source_with_interfaces(
+        "eval-unbound-external.rss",
+        source,
+        &[("host-bindings.rssi", interface)],
+    )
+    .expect("external declaration should compile")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect_err("unbound external declaration should fail");
 
     assert!(
         matches!(error, EvalError::Runtime(ref message) if message.contains("Host.echo") && message.contains("no host binding")),
@@ -748,7 +677,7 @@ fn main() -> Unit {
 }
 
 #[test]
-fn eval_receiver_native_bindings_use_resolved_receiver_namespace() {
+fn eval_receiver_external_bindings_use_resolved_receiver_namespace() {
     fn alpha_open(args: Vec<NativeValue>) -> Result<NativeValue, String> {
         let [] = args.as_slice() else {
             return Err(format!("unexpected args: {args:?}"));
@@ -783,24 +712,15 @@ fn eval_receiver_native_bindings_use_resolved_receiver_namespace() {
         Ok(NativeValue::String(format!("beta:{type_name}:{id}")))
     }
 
-    let source = r#"
-features: native
-
+    let interface = r#"
 opaque struct Alpha
 opaque struct Beta
-
-native fn Alpha.open() -> Alpha
-    effects(native)
-
-native fn Alpha.describe(self: read Alpha) -> String
-    effects(native)
-
-native fn Beta.open() -> Beta
-    effects(native)
-
-native fn Beta.describe(self: read Beta) -> String
-    effects(native)
-
+pub fn Alpha.open() -> Alpha
+pub fn Alpha.describe(self: read Alpha) -> String
+pub fn Beta.open() -> Beta
+pub fn Beta.describe(self: read Beta) -> String
+"#;
+    let source = r#"
 fn main() -> Unit {
     let alpha = Alpha.open()
     let beta = Beta.open()
@@ -810,18 +730,15 @@ fn main() -> Unit {
 }
 "#;
 
-    let output = reg_vm_eval_source_main_with_args_and_native_bindings(
+    let output = reg_vm_eval_source_main_with_interfaces_and_external_bindings(
         "receiver-native-bindings.rss",
         source,
-        std::iter::empty::<&str>(),
+        &[("receiver-bindings.rssi", interface)],
         [
-            ("Alpha.open", NativeInterpreterFn::from_fn(alpha_open)),
-            (
-                "Alpha.describe",
-                NativeInterpreterFn::from_fn(alpha_describe),
-            ),
-            ("Beta.open", NativeInterpreterFn::from_fn(beta_open)),
-            ("Beta.describe", NativeInterpreterFn::from_fn(beta_describe)),
+            ("Alpha.open", ExternalFunction::from_fn(alpha_open)),
+            ("Alpha.describe", ExternalFunction::from_fn(alpha_describe)),
+            ("Beta.open", ExternalFunction::from_fn(beta_open)),
+            ("Beta.describe", ExternalFunction::from_fn(beta_describe)),
         ],
     )
     .expect("receiver native host binding eval should succeed");
@@ -836,7 +753,6 @@ fn main() -> Unit {
 #[test]
 fn eval_reg_vm_closure_intrinsics_iterate_live() {
     let source = r#"
-features: local
 
 fn is_even(value: Int) -> Bool {
     let half = value / 2
@@ -1044,20 +960,13 @@ fn parity_native_host_bindings_match_lowered_backend() {
         Ok(NativeValue::String(format!("host:{message}")))
     }
 
-    let source = r#"
-features: native
-
+    let interface = r#"
 opaque struct HostHandle
-
-native fn Host.open() -> HostHandle
-    effects(native)
-
-native fn Host.describe(handle: read HostHandle) -> String
-    effects(native)
-
-native fn Host.echo(message: read String) -> String
-    effects(native)
-
+pub fn Host.open() -> HostHandle
+pub fn Host.describe(handle: read HostHandle) -> String
+pub fn Host.echo(message: read String) -> String
+"#;
+    let source = r#"
 fn main() -> Unit {
     let handle = Host.open()
     Log.write(message: read Host.describe(handle: read handle))
@@ -1066,14 +975,14 @@ fn main() -> Unit {
 }
 "#;
 
-    let eval = reg_vm_eval_source_main_with_args_and_native_bindings(
+    let eval = reg_vm_eval_source_main_with_interfaces_and_external_bindings(
         "parity-native-host.rss",
         source,
-        std::iter::empty::<&str>(),
+        &[("host-bindings.rssi", interface)],
         [
-            ("Host.open", NativeInterpreterFn::from_fn(host_open)),
-            ("Host.describe", NativeInterpreterFn::from_fn(host_describe)),
-            ("Host.echo", NativeInterpreterFn::from_fn(host_echo)),
+            ("Host.open", ExternalFunction::from_fn(host_open)),
+            ("Host.describe", ExternalFunction::from_fn(host_describe)),
+            ("Host.echo", ExternalFunction::from_fn(host_echo)),
         ],
     )
     .expect("interpreter should run native host binding");
@@ -1120,7 +1029,13 @@ pub fn echo(message: &String) -> String {
         &[("parity-native-host.rss".to_string(), source.to_string())],
         package,
         &runtime_path,
-        &[],
+        &[
+            ("host-bindings.rssi".to_string(), interface.to_string()),
+            (
+                "host-log.rssi".to_string(),
+                include_str!("../../../stdlib/log/log.rssi").to_string(),
+            ),
+        ],
         &[NativeRustDependency {
             crate_name: "rsscript_test_native".to_string(),
             path: native_dir.to_string_lossy().to_string(),

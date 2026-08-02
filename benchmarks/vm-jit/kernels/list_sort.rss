@@ -1,4 +1,3 @@
-features: local
 
 // Slow path: List.sort over a freshly-built reverse-ordered list, repeated.
 // Exercises the ListSort intrinsic (comparison-driven, allocation-touching),

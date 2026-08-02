@@ -1,4 +1,3 @@
-features: local
 
 // String construction/inspection in a hot loop.
 // Exercises String.concat (allocation + copy), String.from_int (formatting),

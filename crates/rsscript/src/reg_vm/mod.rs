@@ -24,7 +24,7 @@ use self::calls::PureClosurePlan;
 #[cfg(test)]
 use crate::analyzer::validate_sources_with_interfaces;
 use crate::analyzer::{validate_source, validate_sources_with_interfaces_without_core};
-use crate::eval_types::{EvalError, EvalOutput, NativeInterpreterFn, NativeValue};
+use crate::eval_types::{EvalError, EvalOutput, ExternalFunction, NativeValue};
 use crate::hir::{
     Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirMatchArm, HirStmt, HirTypeKind,
     ParamEffect, TypeInfo,
@@ -63,7 +63,6 @@ mod architecture;
 mod calls;
 mod exec;
 mod execution_plan;
-mod host_adapters;
 mod intrinsics;
 mod lower;
 mod model;
@@ -142,29 +141,17 @@ pub fn reg_vm_eval_source_main_with_limits(
     reg_vm_compile_source(file, source)?.eval_main_with_limits(args, limits)
 }
 
-/// Compile and run `source` with an explicit execution authority and resource
-/// limits. Restricted embedders should use this entry point; the older helpers
-/// are explicit trusted-local compatibility APIs.
-pub fn reg_vm_eval_source_main_with_context_and_limits(
+/// Compile and run `source` with explicit external bindings and resource limits.
+pub fn reg_vm_eval_source_main_with_args_and_external_bindings_and_limits(
     file: &str,
     source: &str,
     args: impl IntoIterator<Item = impl Into<String>>,
-    context: crate::ExecutionContext,
+    external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
     limits: VmLimits,
 ) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_context_and_limits(args, context, limits)
-}
-
-pub fn reg_vm_eval_source_main_with_args_and_native_bindings_and_limits(
-    file: &str,
-    source: &str,
-    args: impl IntoIterator<Item = impl Into<String>>,
-    native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
-    limits: VmLimits,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_args_and_native_bindings_and_limits(
+    reg_vm_compile_source(file, source)?.eval_main_with_args_and_external_bindings_and_limits(
         args,
-        native_bindings,
+        external_bindings,
         limits,
     )
 }
@@ -294,7 +281,7 @@ pub fn reg_vm_eval_source_main_native_osr_report(
 // Conservative DEFAULT: the vast majority of the ~637 `RegIntrinsic` variants
 // are opaque to the JIT — they allocate / write / suspend / are not foldable and
 // not native-lowerable, so they BAIL out of the native subset. The `Default` impl
-// encodes exactly that (`effect: Allocate`, every capability `false`). Only the
+// encodes exactly that (`effect: Allocate`, every external_binding `false`). Only the
 // intrinsics the three sites historically special-cased carry an explicit
 // descriptor; populating richer facts for the rest is incremental future work and
 // changes no behavior until a site is taught to read the new field.
@@ -664,7 +651,7 @@ enum CombinatorKind {
 /// to the caller after the closure body runs. The call-site effect is the
 /// `HirExpr::Effect { ParamEffect::Mut, .. }` wrapper the checker already
 /// type-checked against the stored `Fn`'s declared `mut` parameter — the same
-/// information `CallKnown`/`CallNative` recover from the callee signature, but
+/// information `CallKnown`/`CallExternal` recover from the callee signature, but
 /// for a first-class closure value the effect lives on the call-site argument.
 fn call_arg_mut_positions(args: &[HirCallArg]) -> Vec<usize> {
     args.iter()
@@ -697,14 +684,14 @@ enum PureStep {
     NotPure,
 }
 
-pub fn reg_vm_eval_source_main_with_args_and_native_bindings(
+pub fn reg_vm_eval_source_main_with_args_and_external_bindings(
     file: &str,
     source: &str,
     args: impl IntoIterator<Item = impl Into<String>>,
-    native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+    external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
 ) -> Result<EvalOutput, EvalError> {
     reg_vm_compile_source(file, source)?
-        .eval_main_with_args_and_native_bindings(args, native_bindings)
+        .eval_main_with_args_and_external_bindings(args, external_bindings)
 }
 
 /// Streaming-stdout source entry point: evaluates `main` and
@@ -717,59 +704,59 @@ pub fn reg_vm_eval_source_main_with_args_streaming_stdout(
     source: &str,
     args: impl IntoIterator<Item = impl Into<String>>,
 ) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_args_and_native_bindings_streaming_stdout(
+    reg_vm_compile_source(file, source)?.eval_main_with_args_and_external_bindings_streaming_stdout(
         args,
-        std::iter::empty::<(String, NativeInterpreterFn)>(),
+        std::iter::empty::<(String, ExternalFunction)>(),
     )
 }
 
 /// Streaming-stdout package entry point. See
 /// [`reg_vm_eval_source_main_with_args_streaming_stdout`].
-pub fn reg_vm_eval_package_main_with_args_and_native_bindings_streaming_stdout(
+pub fn reg_vm_eval_package_main_with_args_and_external_bindings_streaming_stdout(
     package_dir: &Path,
     args: impl IntoIterator<Item = impl Into<String>>,
-    native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+    external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
 ) -> Result<EvalOutput, EvalError> {
     reg_vm_compile_package(package_dir)?
-        .eval_main_with_args_and_native_bindings_streaming_stdout(args, native_bindings)
+        .eval_main_with_args_and_external_bindings_streaming_stdout(args, external_bindings)
 }
 
 pub fn reg_vm_eval_package_main_with_args(
     package_dir: &Path,
     args: impl IntoIterator<Item = impl Into<String>>,
 ) -> Result<EvalOutput, EvalError> {
-    reg_vm_eval_package_main_with_args_and_native_bindings(
+    reg_vm_eval_package_main_with_args_and_external_bindings(
         package_dir,
         args,
-        std::iter::empty::<(String, NativeInterpreterFn)>(),
+        std::iter::empty::<(String, ExternalFunction)>(),
     )
 }
 
-pub fn reg_vm_eval_package_main_with_args_and_native_bindings(
+pub fn reg_vm_eval_package_main_with_args_and_external_bindings(
     package_dir: &Path,
     args: impl IntoIterator<Item = impl Into<String>>,
-    native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+    external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
 ) -> Result<EvalOutput, EvalError> {
     reg_vm_compile_package(package_dir)?
-        .eval_main_with_args_and_native_bindings(args, native_bindings)
+        .eval_main_with_args_and_external_bindings(args, external_bindings)
 }
 
-pub fn reg_vm_eval_package_main_with_args_and_native_bindings_and_limits(
+pub fn reg_vm_eval_package_main_with_args_and_external_bindings_and_limits(
     package_dir: &Path,
     args: impl IntoIterator<Item = impl Into<String>>,
-    native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+    external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
     limits: VmLimits,
 ) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_package(package_dir)?.eval_main_with_args_and_native_bindings_and_limits(
+    reg_vm_compile_package(package_dir)?.eval_main_with_args_and_external_bindings_and_limits(
         args,
-        native_bindings,
+        external_bindings,
         limits,
     )
 }
 
 /// Compile a multi-file package (its merged sources plus dependency and builtin
 /// interfaces) into a reusable VM executable. Native functions are resolved at
-/// run time via the `native_bindings` passed to the eval call, so this can be
+/// run time via the `external_bindings` passed to the eval call, so this can be
 /// compiled once and executed repeatedly (e.g. for benchmarking).
 pub fn reg_vm_compile_package(package_dir: &Path) -> Result<RegVmExecutable, EvalError> {
     let prepared = prepare_package_for_execution(package_dir).map_err(EvalError::Runtime)?;
@@ -834,10 +821,10 @@ impl RegVmExecutable {
     fn prepare_vm(
         &self,
         args: Vec<String>,
-        native_bindings: HashMap<String, NativeInterpreterFn>,
+        external_bindings: HashMap<String, ExternalFunction>,
         plan: &ExecutionPlan,
     ) -> Result<RegVm, EvalError> {
-        let mut vm = RegVm::new(Rc::clone(&self.unit), args, native_bindings);
+        let mut vm = RegVm::new(Rc::clone(&self.unit), args, external_bindings);
         vm.set_limits(plan.limits.clone());
         vm.stream_stdout = plan.stdout == StdoutMode::Streaming;
         match &plan.tier {
@@ -883,9 +870,9 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<EvalOutput, EvalError> {
-        self.eval_main_with_args_and_native_bindings(
+        self.eval_main_with_args_and_external_bindings(
             args,
-            std::iter::empty::<(String, NativeInterpreterFn)>(),
+            std::iter::empty::<(String, ExternalFunction)>(),
         )
     }
 
@@ -898,9 +885,9 @@ impl RegVmExecutable {
     ) -> Result<EvalOutput, EvalError> {
         // The differential/parity callers want every supported function JIT'd so
         // the whole covered subset is verified, not just loop functions.
-        self.eval_main_with_args_and_native_bindings_jit_inner(
+        self.eval_main_with_args_and_external_bindings_jit_inner(
             args,
-            std::iter::empty::<(String, NativeInterpreterFn)>(),
+            std::iter::empty::<(String, ExternalFunction)>(),
             true,
         )
     }
@@ -1311,24 +1298,24 @@ impl RegVmExecutable {
 
     /// Like [`eval_main_with_args_jit`] but with native host bindings, using the
     /// production has-loop heuristic (only loop functions are JIT'd).
-    pub fn eval_main_with_args_and_native_bindings_jit(
+    pub fn eval_main_with_args_and_external_bindings_jit(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
-        native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+        external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
     ) -> Result<EvalOutput, EvalError> {
-        self.eval_main_with_args_and_native_bindings_jit_inner(args, native_bindings, false)
+        self.eval_main_with_args_and_external_bindings_jit_inner(args, external_bindings, false)
     }
 
-    fn eval_main_with_args_and_native_bindings_jit_inner(
+    fn eval_main_with_args_and_external_bindings_jit_inner(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
-        native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+        external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
         force_all: bool,
     ) -> Result<EvalOutput, EvalError> {
         let plan = ExecutionPlan::tier0(force_all);
         let mut vm = self.prepare_vm(
             args.into_iter().map(Into::into).collect(),
-            native_bindings
+            external_bindings
                 .into_iter()
                 .map(|(key, function)| (key.into(), function))
                 .collect(),
@@ -1346,36 +1333,36 @@ impl RegVmExecutable {
         })
     }
 
-    /// Like [`Self::eval_main_with_args_and_native_bindings`] but streams program
+    /// Like [`Self::eval_main_with_args_and_external_bindings`] but streams program
     /// stdout (`Log.write` output) live to the real process stdout, line-flushed,
     /// as the program runs. This lets a library caller show output immediately
     /// instead of buffering until exit. The returned
     /// `EvalOutput.stdout` is still the full captured buffer (identical to the
     /// non-streaming call), so the program output has already been written to the
     /// terminal — the caller must NOT print it a second time.
-    pub fn eval_main_with_args_and_native_bindings_streaming_stdout(
+    pub fn eval_main_with_args_and_external_bindings_streaming_stdout(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
-        native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+        external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
     ) -> Result<EvalOutput, EvalError> {
-        self.eval_main_with_args_and_native_bindings_streaming_stdout_with_limits(
+        self.eval_main_with_args_and_external_bindings_streaming_stdout_with_limits(
             args,
-            native_bindings,
+            external_bindings,
             VmLimits::safe_default(),
         )
     }
 
     /// Streaming variant with an explicit output/resource budget.
-    pub fn eval_main_with_args_and_native_bindings_streaming_stdout_with_limits(
+    pub fn eval_main_with_args_and_external_bindings_streaming_stdout_with_limits(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
-        native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+        external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
         limits: VmLimits,
     ) -> Result<EvalOutput, EvalError> {
         let plan = ExecutionPlan::streaming(limits);
         let mut vm = self.prepare_vm(
             args.into_iter().map(Into::into).collect(),
-            native_bindings
+            external_bindings
                 .into_iter()
                 .map(|(key, function)| (key.into(), function))
                 .collect(),
@@ -1432,57 +1419,28 @@ impl RegVmExecutable {
         })
     }
 
-    /// Run the reference VM with explicit host authority and resource limits.
-    ///
-    /// Native bindings are intentionally unavailable on this path: in-process
-    /// native code cannot be constrained by [`ExecutionContext`].
-    pub fn eval_main_with_context_and_limits(
+    pub fn eval_main_with_args_and_external_bindings(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
-        context: crate::ExecutionContext,
-        limits: VmLimits,
+        external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
     ) -> Result<EvalOutput, EvalError> {
-        let mut vm = RegVm::new_with_context(
-            Rc::clone(&self.unit),
-            args.into_iter().map(Into::into).collect(),
-            std::iter::empty::<(String, NativeInterpreterFn)>().collect(),
-            context,
-        );
-        vm.set_limits(limits);
-        let value = vm.run_program("main")?;
-        let display_value = value.display();
-        let native_value = value.native_value();
-        Ok(EvalOutput {
-            value: display_value.clone(),
-            display_value,
-            native_value,
-            stdout: vm.stdout,
-            stderr: vm.stderr,
-        })
-    }
-
-    pub fn eval_main_with_args_and_native_bindings(
-        &self,
-        args: impl IntoIterator<Item = impl Into<String>>,
-        native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
-    ) -> Result<EvalOutput, EvalError> {
-        self.eval_main_with_args_and_native_bindings_and_limits(
+        self.eval_main_with_args_and_external_bindings_and_limits(
             args,
-            native_bindings,
+            external_bindings,
             VmLimits::default(),
         )
     }
 
-    pub fn eval_main_with_args_and_native_bindings_and_limits(
+    pub fn eval_main_with_args_and_external_bindings_and_limits(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
-        native_bindings: impl IntoIterator<Item = (impl Into<String>, NativeInterpreterFn)>,
+        external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
         limits: VmLimits,
     ) -> Result<EvalOutput, EvalError> {
         let plan = ExecutionPlan::interpreter(limits);
         let mut vm = self.prepare_vm(
             args.into_iter().map(Into::into).collect(),
-            native_bindings
+            external_bindings
                 .into_iter()
                 .map(|(key, function)| (key.into(), function))
                 .collect(),
@@ -1779,8 +1737,7 @@ impl VmLimits {
 struct RegVm {
     unit: Rc<RegUnit>,
     args: Vec<String>,
-    native_bindings: HashMap<String, NativeInterpreterFn>,
-    execution_context: crate::ExecutionContext,
+    external_bindings: HashMap<String, ExternalFunction>,
     stdout: String,
     /// When set, complete lines appended to `stdout` are also written live to the
     /// real process stdout (line-flushed). `stream_flushed` tracks how many bytes

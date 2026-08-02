@@ -1,7 +1,6 @@
 // List slice patterns in `match`: `[]`, fixed-length `[only]`, head/rest
 // `[first, ..rest]`, tail `[..init, last]`, and middle-rest `[a, ..mid, z]`.
 // Element bindings come out owned; the rest binding is a `List<T>`.
-features: local
 
 fn head_tail(xs: List<Int>) -> String {
     match read xs {

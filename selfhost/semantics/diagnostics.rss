@@ -1,4 +1,3 @@
-features: local
 // Shared semantic diagnostic model.
 //
 // Input: rules add stable source spans. Output: one ordered bag. This module

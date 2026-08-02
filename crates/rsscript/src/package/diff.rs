@@ -14,7 +14,7 @@ use super::contract::{
 };
 use super::source_set::{ManifestNativeRust, PackageSource, load_package};
 use super::{
-    Manifest, PackageCapabilityChange, PackageCapabilityChangeKind, PackageDiff,
+    Manifest, PackageDiff, PackageExternalBindingChange, PackageExternalBindingChangeKind,
     PackageInterfaceChange, PackageInterfaceChangeKind, PackageManifestChange,
     PackageReviewAwaitBoundary, PackageReviewAwaitSite, PackageReviewFileKind, PackageRisk,
     feature_values_label, package_feature_may_change_boundary_risk, package_identity,
@@ -71,19 +71,21 @@ pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, 
         old_review.await_sites.as_slice(),
         new_review.await_sites.as_slice(),
     );
-    let capability_changes =
-        diff_package_capabilities(&old_review.capabilities, &new_review.capabilities);
+    let external_binding_changes = diff_package_external_bindings(
+        &old_review.external_bindings,
+        &new_review.external_bindings,
+    );
 
     let mut reasons = package_diff_reasons(&manifest_changes, &interface_changes);
     if await_sites_changed {
         reasons.push("await site review metadata changed".to_string());
     }
-    for change in &capability_changes {
-        if change.change == PackageCapabilityChangeKind::Added
-            && change.risk == crate::CapabilityRisk::High
+    for change in &external_binding_changes {
+        if change.change == PackageExternalBindingChangeKind::Added
+            && change.risk == crate::package::types::PackageRisk::High
         {
             reasons.push(format!(
-                "new high-risk capability `{}` via {}",
+                "new high-risk external_binding `{}` via {}",
                 change.category, change.binding_symbol
             ));
         }
@@ -112,29 +114,29 @@ pub fn diff_package_dirs(old_dir: &Path, new_dir: &Path) -> Result<PackageDiff, 
         reasons,
         manifest_changes,
         interface_changes,
-        capability_changes,
+        external_binding_changes,
         old_review: old_review.summary,
         new_review: new_review.summary,
     })
 }
 
-/// Distinct capabilities (by category + binding symbol) added or removed between
+/// Distinct external_bindings (by category + binding symbol) added or removed between
 /// two package versions, high-risk first.
-fn diff_package_capabilities(
-    old: &[crate::package::types::PackageReviewCapability],
-    new: &[crate::package::types::PackageReviewCapability],
-) -> Vec<PackageCapabilityChange> {
+fn diff_package_external_bindings(
+    old: &[crate::package::types::PackageExternalBinding],
+    new: &[crate::package::types::PackageExternalBinding],
+) -> Vec<PackageExternalBindingChange> {
     use std::collections::BTreeMap;
     fn distinct(
-        capabilities: &[crate::package::types::PackageReviewCapability],
-    ) -> BTreeMap<(String, String), crate::CapabilityRisk> {
+        external_bindings: &[crate::package::types::PackageExternalBinding],
+    ) -> BTreeMap<(String, String), crate::package::types::PackageRisk> {
         let mut map = BTreeMap::new();
-        for capability in capabilities {
+        for external_binding in external_bindings {
             map.entry((
-                capability.category.clone(),
-                capability.binding_symbol.clone(),
+                external_binding.category.clone(),
+                external_binding.binding_symbol.clone(),
             ))
-            .or_insert(capability.risk);
+            .or_insert(external_binding.risk);
         }
         map
     }
@@ -143,8 +145,8 @@ fn diff_package_capabilities(
     let mut changes = Vec::new();
     for ((category, binding_symbol), risk) in &new_set {
         if !old_set.contains_key(&(category.clone(), binding_symbol.clone())) {
-            changes.push(PackageCapabilityChange {
-                change: PackageCapabilityChangeKind::Added,
+            changes.push(PackageExternalBindingChange {
+                change: PackageExternalBindingChangeKind::Added,
                 category: category.clone(),
                 binding_symbol: binding_symbol.clone(),
                 risk: *risk,
@@ -153,18 +155,19 @@ fn diff_package_capabilities(
     }
     for ((category, binding_symbol), risk) in &old_set {
         if !new_set.contains_key(&(category.clone(), binding_symbol.clone())) {
-            changes.push(PackageCapabilityChange {
-                change: PackageCapabilityChangeKind::Removed,
+            changes.push(PackageExternalBindingChange {
+                change: PackageExternalBindingChangeKind::Removed,
                 category: category.clone(),
                 binding_symbol: binding_symbol.clone(),
                 risk: *risk,
             });
         }
     }
-    let rank = |risk: crate::CapabilityRisk| match risk {
-        crate::CapabilityRisk::High => 0u8,
-        crate::CapabilityRisk::Medium => 1,
-        crate::CapabilityRisk::Low => 2,
+    let rank = |risk: crate::package::types::PackageRisk| match risk {
+        crate::package::types::PackageRisk::High => 0u8,
+        crate::package::types::PackageRisk::Elevated => 1,
+        crate::package::types::PackageRisk::Low => 2,
+        crate::package::types::PackageRisk::Unknown => 3,
     };
     changes.sort_by(|a, b| {
         rank(a.risk)
@@ -734,13 +737,13 @@ fn manifest_change(
 }
 
 #[cfg(test)]
-mod capability_diff_tests {
+mod external_binding_diff_tests {
     use super::*;
-    use crate::CapabilityRisk;
-    use crate::package::types::PackageReviewCapability;
+    use crate::package::types::PackageExternalBinding;
+    use crate::package::types::PackageRisk;
 
-    fn cap(binding: &str, category: &str, risk: CapabilityRisk) -> PackageReviewCapability {
-        PackageReviewCapability {
+    fn cap(binding: &str, category: &str, risk: PackageRisk) -> PackageExternalBinding {
+        PackageExternalBinding {
             function: binding.to_string(),
             binding_symbol: binding.to_string(),
             category: category.to_string(),
@@ -757,35 +760,35 @@ mod capability_diff_tests {
 
     #[test]
     fn reports_added_and_removed_capabilities_high_risk_first() {
-        let old = vec![cap("Db.read", "database.read", CapabilityRisk::Medium)];
+        let old = vec![cap("Db.read", "database.read", PackageRisk::Elevated)];
         let new = vec![
-            cap("Db.read", "database.read", CapabilityRisk::Medium),
-            cap("Db.write", "database.write", CapabilityRisk::High),
-            cap("Net.get", "network.client", CapabilityRisk::High),
+            cap("Db.read", "database.read", PackageRisk::Elevated),
+            cap("Db.write", "database.write", PackageRisk::High),
+            cap("Net.get", "network.client", PackageRisk::High),
         ];
-        let changes = diff_package_capabilities(&old, &new);
+        let changes = diff_package_external_bindings(&old, &new);
         // Two high-risk additions, sorted high-first by category.
         assert_eq!(changes.len(), 2);
         assert!(
             changes
                 .iter()
-                .all(|c| c.change == PackageCapabilityChangeKind::Added)
+                .all(|c| c.change == PackageExternalBindingChangeKind::Added)
         );
         assert_eq!(changes[0].category, "database.write");
-        assert_eq!(changes[0].risk, CapabilityRisk::High);
+        assert_eq!(changes[0].risk, PackageRisk::High);
         assert_eq!(changes[1].category, "network.client");
     }
 
     #[test]
     fn dedups_per_binding_and_detects_removal() {
         let old = vec![
-            cap("Db.write", "database.write", CapabilityRisk::High),
-            cap("Db.write", "database.write", CapabilityRisk::High),
+            cap("Db.write", "database.write", PackageRisk::High),
+            cap("Db.write", "database.write", PackageRisk::High),
         ];
-        let new: Vec<PackageReviewCapability> = vec![];
-        let changes = diff_package_capabilities(&old, &new);
+        let new: Vec<PackageExternalBinding> = vec![];
+        let changes = diff_package_external_bindings(&old, &new);
         assert_eq!(changes.len(), 1);
-        assert_eq!(changes[0].change, PackageCapabilityChangeKind::Removed);
+        assert_eq!(changes[0].change, PackageExternalBindingChangeKind::Removed);
         assert_eq!(changes[0].binding_symbol, "Db.write");
     }
 }

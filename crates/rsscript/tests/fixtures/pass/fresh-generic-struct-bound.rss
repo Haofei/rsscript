@@ -1,4 +1,3 @@
-features: local
 
 struct Pair<T: Struct> {
     left: T

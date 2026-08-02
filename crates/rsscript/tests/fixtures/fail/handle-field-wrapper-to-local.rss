@@ -1,5 +1,4 @@
 // expect: RS0301
-features: local
 
 struct Rules
 struct Holder {

@@ -1,4 +1,3 @@
-features: local
 
 // Slow path: stored first-class `owned Fn` values invoked dynamically.
 // Closures are stored in a struct inside a List, fetched, and called each
@@ -27,12 +26,12 @@ fn main() -> Unit {
     let base = 7
     local ops = List.new<Op>()
 
-    let double_plus = Op(apply: fn(value) captures(read base) effects(pure) {
+    let double_plus = Op(apply: fn(value) captures(read base) {
         return value * 2 + base
     })
     List.push(list: mut ops, value: double_plus)
 
-    let shift = Op(apply: fn(value) captures(read base) effects(pure) {
+    let shift = Op(apply: fn(value) captures(read base) {
         return value + base * 3
     })
     List.push(list: mut ops, value: shift)

@@ -171,7 +171,7 @@ fn main() -> Unit {
         let mut vm = RegVm::new(
             Rc::clone(&executable.unit),
             Vec::new(),
-            HashMap::<String, NativeInterpreterFn>::new(),
+            HashMap::<String, ExternalFunction>::new(),
         );
         let mut native = NativeState::new_with_opt(1, false, true, false, true, true, false)
             .expect("native ladder");
@@ -288,7 +288,6 @@ fn main() -> Unit {
     #[test]
     fn native_translation_memoizes_read_only_collection_metadata_once() {
         let source = r#"
-features: local
 
 fn hot(
     table: read Map<Int, Int>,
@@ -396,7 +395,6 @@ fn main() -> Unit {
     #[test]
     fn native_nested_loop_memo_resets_once_per_outer_activation() {
         let source = r#"
-features: local
 
 fn hot(queue: mut Deque<Int>, outer_limit: Int, inner_limit: Int) -> Int {
     let mut outer = 0
@@ -498,7 +496,6 @@ fn main() -> Unit {
     #[test]
     fn native_translation_memoizes_length_across_unrelated_fresh_collection_write() {
         let source = r#"
-features: local
 
 fn hot(values: read List<Int>, limit: Int) -> Int {
     local scratch = List.new<Int>()
@@ -540,7 +537,6 @@ fn main() -> Unit {
     #[test]
     fn native_translation_external_collection_receivers_may_alias() {
         let source = r#"
-features: local
 
 fn hot(values: mut List<Int>, other: mut List<Int>, limit: Int) -> Int {
     let mut index = 0
@@ -583,7 +579,6 @@ fn main() -> Unit {
         let translate = |name: &str, mutation: &str| {
             let source = format!(
                 r#"
-features: local
 
 fn hot(values: mut List<Int>, limit: Int) -> Int {{
     let mut index = 0
@@ -723,7 +718,6 @@ fn main() -> Unit {{
     #[test]
     fn native_translation_does_not_memoize_length_across_insert() {
         let source = r#"
-features: local
 
 fn hot(table: mut Map<Int, Int>, limit: Int) -> Int {
     let mut index = 0
@@ -905,7 +899,7 @@ fn main() -> Unit {
                 base: 0,
                 slot: 0,
             },
-            RegInstr::CallNative {
+            RegInstr::CallExternal {
                 dst: 2,
                 key: "unknown".to_string(),
                 args: Vec::new(),

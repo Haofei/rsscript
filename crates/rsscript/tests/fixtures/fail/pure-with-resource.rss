@@ -9,10 +9,10 @@ resource File {
 }
 
 fn File.fake() -> File
-    effects(pure)
+
 
 fn read_fake() -> Unit
-    effects(pure)
+
 {
     with File.fake() as file {
         return Unit

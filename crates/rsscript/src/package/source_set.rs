@@ -100,12 +100,12 @@ pub(super) struct ManifestReview {
     #[serde(default)]
     pub(super) expect: ManifestReviewExpect,
     #[serde(default)]
-    pub(super) capability_bindings: Vec<ManifestCapabilityBinding>,
+    pub(super) external_binding_bindings: Vec<ManifestExternalBindingBinding>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct ManifestCapabilityBinding {
+pub(super) struct ManifestExternalBindingBinding {
     pub(super) symbol: String,
     pub(super) category: String,
     pub(super) provider: Option<String>,

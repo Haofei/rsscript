@@ -1,4 +1,3 @@
-features: async, native, local
 
 // Bounded MPSC channel: explicit endpoints, explicit waiting, and explicit
 // ownership transfer. Values move into the channel via `take T`.
@@ -8,49 +7,49 @@ struct Channel<T>
 struct Sender<T>
 struct Receiver<T>
 
-pub native fn Channel.bounded<T>(capacity: Int) -> Result<fresh Channel<T>, ChannelError>
-    effects(native)
+pub fn Channel.bounded<T>(capacity: Int) -> Result<fresh Channel<T>, ChannelError>
+
 
 // A *message* channel: a bounded channel whose payload `T` is statically verified
 // cross-isolate-safe (a self-contained value with no managed handle), so messages
 // can cross an isolate boundary without sharing mutable state (spec §20.2-3). Same
 // runtime as `Channel.bounded`; the difference is the compile-time payload
 // contract. v1 payloads: Copy scalars, `String`, `Bytes`.
-pub native fn Channel.message<T>(capacity: Int) -> Result<fresh Channel<T>, ChannelError>
-    effects(native)
+pub fn Channel.message<T>(capacity: Int) -> Result<fresh Channel<T>, ChannelError>
 
-pub native fn Channel.sender<T>(channel: Channel<T>) -> fresh Sender<T>
-    effects(native)
 
-pub native fn Channel.receiver<T>(channel: mut Channel<T>) -> Result<fresh Receiver<T>, ChannelError>
-    effects(native)
+pub fn Channel.sender<T>(channel: Channel<T>) -> fresh Sender<T>
 
-pub async native fn Sender.send<T>(
+
+pub fn Channel.receiver<T>(channel: mut Channel<T>) -> Result<fresh Receiver<T>, ChannelError>
+
+
+pub async fn Sender.send<T>(
     sender: Sender<T>,
     value: take T,
 ) -> Result<Unit, ChannelError>
-    effects(native)
 
-pub async native fn Sender.send_cancellable<T>(
+
+pub async fn Sender.send_cancellable<T>(
     sender: Sender<T>,
     value: take T,
     token: CancellationToken,
 ) -> Result<Unit, ChannelError>
-    effects(native)
 
-pub native fn Sender.close<T>(sender: mut Sender<T>) -> Unit
-    effects(native)
 
-pub async native fn Receiver.recv<T>(receiver: Receiver<T>) -> Result<Option<T>, ChannelError>
-    effects(native)
+pub fn Sender.close<T>(sender: mut Sender<T>) -> Unit
 
-pub async native fn Receiver.recv_cancellable<T>(
+
+pub async fn Receiver.recv<T>(receiver: Receiver<T>) -> Result<Option<T>, ChannelError>
+
+
+pub async fn Receiver.recv_cancellable<T>(
     receiver: Receiver<T>,
     token: CancellationToken,
 ) -> Result<Option<T>, ChannelError>
-    effects(native)
 
-pub native fn Receiver.close<T>(receiver: mut Receiver<T>) -> Unit
-    effects(native)
+
+pub fn Receiver.close<T>(receiver: mut Receiver<T>) -> Unit
+
 
 pub fn ChannelError.message(error: ChannelError) -> fresh String

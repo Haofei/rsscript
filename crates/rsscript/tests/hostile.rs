@@ -4,7 +4,10 @@
 //! yielding a "clean" partial result.
 
 use proptest::prelude::*;
-use rsscript::{EvalError, VmLimits, reg_vm_eval_source_main_with_limits};
+use rsscript::{EvalError, VmLimits};
+
+mod common;
+use common::reg_vm_eval_source_main_with_limits;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -76,9 +79,7 @@ fn main() -> Int {
 /// clean "memory limit" error rather than getting OOM-killed.
 #[test]
 fn runaway_allocation_with_memory_ceiling_returns_clean_error() {
-    let source = r#"features: local
-
-fn main() -> Int {
+    let source = r#"fn main() -> Int {
     let mut index = 0
     local values = List<Int>.new()
     while index < 100000000 {
@@ -137,8 +138,7 @@ fn fresh_collection_intrinsics_are_charged_to_memory_budget() {
     let cases = [
         (
             "list-reverse",
-            r#"features: local
-fn main() -> Int {
+            r#"fn main() -> Int {
     local values = List<Int>.new()
     let mut i = 0
     while i < 64 {
@@ -171,8 +171,7 @@ fn main() -> Int {
         ),
         (
             "bytes-concat",
-            r#"features: local
-fn main() -> Int {
+            r#"fn main() -> Int {
     local left = Bytes.from_string(value: "abcd")
     local right = Bytes.from_string(value: "efgh")
     local joined = Bytes.concat(left: left, right: right)
@@ -204,8 +203,7 @@ fn intrinsic_and_constructor_results_are_charged_before_publication() {
     let cases = [
         (
             "buffer-new",
-            r#"features: local
-fn main() -> Int {
+            r#"fn main() -> Int {
     local buffer = Buffer.new(size: 1048576)
     return Buffer.len(buffer: buffer)
 }"#
@@ -215,7 +213,7 @@ fn main() -> Int {
         (
             "base64-encode",
             format!(
-                "features: native\nfn main() -> Int {{\n    let encoded = Base64.encode(value: \"{}\")\n    return String.len(value: encoded)\n}}",
+                "fn main() -> Int {{\n    let encoded = Base64.encode(value: \"{}\")\n    return String.len(value: encoded)\n}}",
                 "x".repeat(8192)
             ),
             4096,
@@ -260,8 +258,7 @@ fn ordinary_vm_growth_paths_respect_memory_budget() {
         ),
         (
             "string-builder",
-            r#"features: local
-fn main() -> Int {
+            r#"fn main() -> Int {
     local builder = StringBuilder.new()
     StringBuilder.push(builder: mut builder, value: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
     return String.len(value: StringBuilder.finish(builder: take builder))
@@ -270,8 +267,7 @@ fn main() -> Int {
         ),
         (
             "deque-growth",
-            r#"features: local
-fn main() -> Int {
+            r#"fn main() -> Int {
     local values = Deque<Int>.new()
     let mut i = 0
     while i < 64 {
@@ -284,8 +280,7 @@ fn main() -> Int {
         ),
         (
             "sorted-set-growth",
-            r#"features: local
-fn main() -> Int {
+            r#"fn main() -> Int {
     local values = SortedSet<Int>.new()
     let mut i = 0
     while i < 32 {
@@ -298,8 +293,7 @@ fn main() -> Int {
         ),
         (
             "sorted-map-growth",
-            r#"features: local
-fn main() -> Int {
+            r#"fn main() -> Int {
     local values = SortedMap<Int, Int>.new()
     let mut i = 0
     while i < 24 {
@@ -312,8 +306,7 @@ fn main() -> Int {
         ),
         (
             "list-sort-scratch",
-            r#"features: local
-fn main() -> Int {
+            r#"fn main() -> Int {
     let mut values = [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1]
     List.sort_with<Int>(list: mut values, compare: |left, right| {
         return left - right
@@ -391,9 +384,7 @@ fn integer_math_invalid_domains_return_language_errors() {
 /// (modest recursion + a real loop + a list build) completes cleanly.
 #[test]
 fn default_limits_do_not_trip_on_normal_code() {
-    let source = r#"features: local
-
-fn fib(n: Int) -> Int {
+    let source = r#"fn fib(n: Int) -> Int {
     if n < 2 {
         return n
     }
@@ -514,9 +505,7 @@ fn main() -> Int {
 /// must bound regardless of whether the retained graph is acyclic or cyclic.
 #[test]
 fn self_referential_container_is_bounded_by_memory_ceiling() {
-    let source = r#"features: local
-
-fn main() -> Int {
+    let source = r#"fn main() -> Int {
     local values = List<String>.new()
     let mut index = 0
     while index < 100000000 {

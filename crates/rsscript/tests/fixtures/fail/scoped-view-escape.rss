@@ -2,7 +2,6 @@
 // A scoped-view binding (`view name = expr`, spec §20.2-1) desugars to a
 // `with`-lease whose scope ends at the enclosing block, so it cannot escape via
 // return — same rule as any `with` resource.
-features: local
 
 fn bad(data: Bytes) -> BytesView {
     view v = Bytes.view(value: data, start: 0, len: 1)

@@ -1,6 +1,5 @@
 // expect: RS0101
-features: native
 
-native fn Host.emit(message: String) -> Unit {
+fn Host.emit(message: String) -> Unit {
     return Unit
 }

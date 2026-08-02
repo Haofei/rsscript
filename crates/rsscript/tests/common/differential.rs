@@ -67,7 +67,8 @@ impl Backend for Jit {
     }
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript::reg_vm_eval_source_main_jit(file, source, args.iter().copied())
+        super::compile_vm_source(file, source)
+            .and_then(|executable| executable.eval_main_with_args_jit(args.iter().copied()))
             .map_err(|error| format!("{error:?}"))
             .and_then(stdout_or_main_err)
     }
@@ -87,7 +88,8 @@ impl Backend for NativeJit {
     }
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript::reg_vm_eval_source_main_native(file, source, args.iter().copied())
+        super::compile_vm_source(file, source)
+            .and_then(|executable| executable.eval_main_with_args_native(args.iter().copied()))
             .map_err(|error| format!("{error:?}"))
             .and_then(stdout_or_main_err)
     }
@@ -106,7 +108,10 @@ impl Backend for NativeJitForceDeopt {
     }
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript::reg_vm_eval_source_main_native_force_deopt(file, source, args.iter().copied())
+        super::compile_vm_source(file, source)
+            .and_then(|executable| {
+                executable.eval_main_with_args_native_force_deopt(args.iter().copied())
+            })
             .map_err(|error| format!("{error:?}"))
             .and_then(stdout_or_main_err)
     }
@@ -131,14 +136,12 @@ impl Backend for NativeJitForceSafepoint {
     }
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript::reg_vm_eval_source_main_native_force_safepoint(
-            file,
-            source,
-            args.iter().copied(),
-            self.0,
-        )
-        .map_err(|error| format!("{error:?}"))
-        .and_then(stdout_or_main_err)
+        super::compile_vm_source(file, source)
+            .and_then(|executable| {
+                executable.eval_main_with_args_native_force_safepoint(args.iter().copied(), self.0)
+            })
+            .map_err(|error| format!("{error:?}"))
+            .and_then(stdout_or_main_err)
     }
 }
 
@@ -156,13 +159,12 @@ impl Backend for NativeJitForceAllSafepoints {
     }
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript::reg_vm_eval_source_main_native_force_all_safepoints(
-            file,
-            source,
-            args.iter().copied(),
-        )
-        .map_err(|error| format!("{error:?}"))
-        .and_then(stdout_or_main_err)
+        super::compile_vm_source(file, source)
+            .and_then(|executable| {
+                executable.eval_main_with_args_native_force_all_safepoints(args.iter().copied())
+            })
+            .map_err(|error| format!("{error:?}"))
+            .and_then(stdout_or_main_err)
     }
 }
 
@@ -181,7 +183,8 @@ impl Backend for NativeJitOsr {
     }
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript::reg_vm_eval_source_main_native_osr(file, source, args.iter().copied())
+        super::compile_vm_source(file, source)
+            .and_then(|executable| executable.eval_main_with_args_native_osr(args.iter().copied()))
             .map_err(|error| format!("{error:?}"))
             .and_then(stdout_or_main_err)
     }

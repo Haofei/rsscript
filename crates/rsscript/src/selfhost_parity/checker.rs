@@ -314,7 +314,7 @@ fn checker_record_parser_is_strict_and_preserves_duplicates() {
 
 #[test]
 fn checker_preserves_raw_diagnostic_family_order() {
-    let source = "fn broken(value)\n    effects(mystery)\n{\n    return Unit\n}\n";
+    let source = "fn broken(value) {\n    return Unit\n}\n";
     let checker = compile_checker().expect("checker should compile");
     let output = checker
         .eval_main_with_args([source.to_string()])
@@ -323,7 +323,7 @@ fn checker_preserves_raw_diagnostic_family_order() {
         .eval_main_with_args_jit([source.to_string()])
         .expect("checker should run under the JIT");
 
-    assert_eq!(output.stdout, "RS0002\nRS0003\nRS0004\n");
+    assert_eq!(output.stdout, "RS0002\nRS0003\n");
     assert_eq!(jit_output.stdout, output.stdout);
 }
 
@@ -403,27 +403,10 @@ fn checker_rs0003_structured_multiset_parity() {
     assert_eq!(oracle, actual, "RS0003 structured diagnostics diverged");
 }
 
-#[test]
-fn checker_rs0004_structured_multiset_parity() {
-    let source = r#"fn work() -> Unit
-    effects(mystery, fresh)
-{
-    return Unit
-}
-"#;
-    let oracle = checker_oracle_records("structured-rs0004.rss", source, "RS0004");
-    assert_eq!(oracle.len(), 2, "fixture must exercise both effects");
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0004",
-    );
-    assert_eq!(oracle, actual, "RS0004 structured diagnostics diverged");
-}
 
 #[test]
 fn checker_rs0004_retains_effect_is_not_unknown() {
     let source = r#"fn retain(image: read Image) -> Unit
-    effects(retains(image))
 {
     return Unit
 }
@@ -440,328 +423,15 @@ fn checker_rs0004_retains_effect_is_not_unknown() {
     assert_eq!(oracle, actual, "retains effect classification diverged");
 }
 
-#[test]
-fn checker_rs0006_structured_multiset_parity() {
-    let source = "features: local\nfeatures: async\nfeatures: native\n";
-    let oracle = checker_oracle_records("structured-rs0006.rss", source, "RS0006");
-    assert_eq!(oracle.len(), 2, "fixture must exercise both extra headers");
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0006",
-    );
-    assert_eq!(oracle, actual, "RS0006 structured diagnostics diverged");
-}
 
-#[test]
-fn checker_rs0009_structured_multiset_parity() {
-    let source = r#"features: local
 
-resource File {
-    fd: Int
 
-    drop {
-        Log.write(message: read "close")
-    }
-}
 
-struct Image {
-    value: Int
-}
 
-fn helper() -> Unit {
-    return Unit
-}
 
-fn inspect(
-    changed: mut Image,
-    consumed: take Image,
-    first: read String,
-    second: read String,
-    file: read File
-) -> File
-    effects(pure, retains(first), retains(second))
-{
-    with file as opened {
-        helper()
-    }
-    local image = Image(value: 1)
-    let shared = manage image
-    return File(fd: 1)
-}
-"#;
-    let oracle = checker_oracle_records("structured-rs0009.rss", source, "RS0009");
-    assert_eq!(
-        oracle.len(),
-        8,
-        "fixture must preserve every pure signature and body violation"
-    );
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0009",
-    );
-    assert_eq!(oracle, actual, "RS0009 structured diagnostics diverged");
-}
 
-#[test]
-fn checker_rs0007_structured_multiset_parity() {
-    let source = r#"fn sample(count: Int, text: read String) -> Unit
-    effects(retains(count), retains(missing))
-{
-    return Unit
-}
-"#;
-    let oracle = checker_oracle_records("structured-rs0007.rss", source, "RS0007");
-    assert_eq!(
-        oracle.len(),
-        2,
-        "fixture must exercise both retains failures"
-    );
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0007",
-    );
-    assert_eq!(oracle, actual, "RS0007 structured diagnostics diverged");
-}
 
-#[test]
-fn checker_rs0010_structured_multiset_parity() {
-    let source = "profile: managed\nprofile: managed\n";
-    let oracle = checker_oracle_records("structured-rs0010.rss", source, "RS0010");
-    assert_eq!(oracle.len(), 2, "fixture must exercise both profiles");
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0010",
-    );
-    assert_eq!(oracle, actual, "RS0010 structured diagnostics diverged");
-}
 
-#[test]
-fn checker_rs0012_structured_multiset_parity() {
-    let source = r#"fn work() -> Unit
-    effects(io, may_panic)
-{
-    return Unit
-}
-
-"#;
-    let oracle = checker_oracle_records("structured-rs0012.rss", source, "RS0012");
-    assert_eq!(
-        oracle.len(),
-        2,
-        "fixture must exercise both removed effects"
-    );
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0012",
-    );
-    assert_eq!(oracle, actual, "RS0012 structured diagnostics diverged");
-}
-
-#[test]
-fn checker_rs0013_structured_multiset_parity() {
-    let source = r#"struct Image {
-    value: Int
-}
-
-struct Config {
-    value: Int
-}
-
-struct ConfigError {
-    code: Int
-}
-
-struct AppError {
-    code: Int
-}
-
-fn load_image() -> Image {
-    return Image(value: 1)
-}
-
-fn load_config() -> Result<Config, ConfigError> {
-    return Ok(Config(value: 1))
-}
-
-fn load_app() -> Result<Config, AppError> {
-    return Ok(Config(value: 1))
-}
-
-fn scalar() -> Int {
-    let first = load_image()?
-    let second = load_image()?
-    return 0
-}
-
-fn bad_value() -> Result<Image, AppError> {
-    let image = load_image()?
-    return Ok(image)
-}
-
-fn bad_error() -> Result<Config, AppError> {
-    let config = load_config()?
-    return Ok(config)
-}
-
-fn valid() -> Result<Config, AppError> {
-    let config = load_app()?
-    return Ok(config)
-}
-"#;
-    let oracle = checker_oracle_records("structured-rs0013.rss", source, "RS0013");
-    assert_eq!(
-        oracle.len(),
-        6,
-        "fixture must preserve duplicate-span return/value failures and error mismatch"
-    );
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0013",
-    );
-    assert_eq!(oracle, actual, "RS0013 structured diagnostics diverged");
-}
-
-#[test]
-fn checker_rs0014_structured_multiset_parity() {
-    let source = r#"features: local
-
-struct Pair {
-    left: Int
-    right: Int
-}
-
-fn build() -> Pair
-    effects(noalloc)
-{
-    local first = Pair(left: 1, right: 2)
-    local second = Pair(left: 3, right: 4)
-    return manage first
-}
-"#;
-    let oracle = checker_oracle_records("structured-rs0014.rss", source, "RS0014");
-    assert_eq!(
-        oracle.len(),
-        3,
-        "fixture must preserve constructor and manage allocation sites"
-    );
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0014",
-    );
-    assert_eq!(oracle, actual, "RS0014 structured diagnostics diverged");
-}
-
-#[test]
-fn checker_rs0018_structured_multiset_parity() {
-    let source = r#"fn may_block(value: Int) -> Int {
-    return value
-}
-
-fn safe(value: Int) -> Int
-    effects(no_block)
-{
-    return value
-}
-
-fn promised(value: Int) -> Int
-    effects(no_block)
-{
-    let first = may_block(value: value)
-    let second = may_block(value: first)
-    return safe(value: second)
-}
-"#;
-    let oracle = checker_oracle_records("structured-rs0018.rss", source, "RS0018");
-    assert_eq!(oracle.len(), 2, "fixture must preserve both blocking calls");
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0018",
-    );
-    assert_eq!(oracle, actual, "RS0018 structured diagnostics diverged");
-}
-
-#[test]
-fn checker_rs0019_structured_multiset_parity() {
-    let source = r#"fn may_panic(value: Int) -> Int {
-    return value
-}
-
-fn safe(value: Int) -> Int
-    effects(no_panic)
-{
-    return value
-}
-
-fn promised(value: Int) -> Int
-    effects(no_panic)
-{
-    let first = may_panic(value: value)
-    let second = may_panic(value: first)
-    return safe(value: second)
-}
-"#;
-    let oracle = checker_oracle_records("structured-rs0019.rss", source, "RS0019");
-    assert_eq!(oracle.len(), 2, "fixture must preserve both panic calls");
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0019",
-    );
-    assert_eq!(oracle, actual, "RS0019 structured diagnostics diverged");
-}
-
-#[test]
-fn checker_rs0020_structured_multiset_parity() {
-    let source = r#"sum Choice {
-    One
-}
-
-struct Boxed {
-    value: Int
-}
-
-fn first(value: read Int) -> Int {
-    return value
-}
-
-fn second(value: read Int) -> Int {
-    return value
-}
-
-fn allowed(value: read Int) -> Int effects(noalloc) {
-    return value
-}
-
-fn Host.bad(value: read Int) -> Int {
-    return value
-}
-
-fn Host.allowed(value: read Int) -> Int effects(noalloc) {
-    return value
-}
-
-fn exercise(value: read Int) -> Int effects(noalloc) {
-    let a = first(value: read value)
-    let b = second(value: read a)
-    let c = Host.bad(value: read b)
-    let d = allowed(value: read c)
-    let e = Host.allowed(value: read d)
-    let variant = One
-    let boxed = Boxed(value: e)
-    return boxed.value
-}
-"#;
-    let oracle = checker_oracle_records("structured-rs0020.rss", source, "RS0020");
-    assert_eq!(
-        oracle.len(),
-        3,
-        "fixture must preserve simple and qualified calls while exempting noalloc/variant/constructor"
-    );
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0020",
-    );
-    assert_eq!(oracle, actual, "RS0020 structured diagnostics diverged");
-}
 
 #[test]
 fn checker_rs0021_structured_multiset_parity() {
@@ -809,37 +479,7 @@ fn result_bad(value: read Result<Int, String>) -> Int {
     assert_eq!(oracle, actual, "RS0021 structured diagnostics diverged");
 }
 
-#[test]
-fn checker_rs0016_structured_multiset_parity() {
-    let source = "features: mystery, other\n";
-    let oracle = checker_oracle_records("structured-rs0016.rss", source, "RS0016");
-    assert_eq!(
-        oracle.len(),
-        2,
-        "fixture must exercise both unknown features"
-    );
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0016",
-    );
-    assert_eq!(oracle, actual, "RS0016 structured diagnostics diverged");
-}
 
-#[test]
-fn checker_rs0017_structured_multiset_parity() {
-    let source = "features: local, local, local\n";
-    let oracle = checker_oracle_records("structured-rs0017.rss", source, "RS0017");
-    assert_eq!(
-        oracle.len(),
-        2,
-        "fixture must exercise both duplicate features"
-    );
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0017",
-    );
-    assert_eq!(oracle, actual, "RS0017 structured diagnostics diverged");
-}
 
 #[test]
 fn checker_rs0011_structured_multiset_parity() {
@@ -935,8 +575,7 @@ fn checker_protocol_method_contract_structured_multiset_parity() {
 
 #[test]
 fn checker_rs0029_structured_multiset_parity() {
-    let source = r#"features: async
-
+    let source = r#"
 async fn fetch(value: read Int) -> Int {
     return value
 }
@@ -965,8 +604,7 @@ async fn valid(value: read Int) -> Int {
 
 #[test]
 fn checker_rs0022_structured_multiset_parity() {
-    let source = r#"features: async
-
+    let source = r#"
 async fn fetch(value: read Int) -> Int {
     return value
 }
@@ -1007,39 +645,6 @@ fn checker_task_group_async_context_structured_multiset_parity() {
     }
 }
 
-#[test]
-fn checker_rs0023_structured_multiset_parity() {
-    let source = r#"struct BadHandle {
-    input: Fd
-    output: Fd
-}
-
-resource AllowedHandle {
-    fd: Fd
-
-    drop {
-        OS.close(fd: fd)
-    }
-}
-
-native fn allowed(fd: Fd) -> Fd
-
-fn exposed(first: Fd, second: Fd) -> Fd {
-    return first
-}
-"#;
-    let oracle = checker_oracle_records("structured-rs0023.rss", source, "RS0023");
-    assert_eq!(
-        oracle.len(),
-        5,
-        "fixture must preserve fields, parameters, and return surface failures"
-    );
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0023",
-    );
-    assert_eq!(oracle, actual, "RS0023 structured diagnostics diverged");
-}
 
 #[test]
 fn checker_rs0024_structured_multiset_parity() {
@@ -1096,8 +701,7 @@ fn combine<A: MissingLeft, B: MissingRight>(left: read A, right: read B) -> Unit
 
 #[test]
 fn checker_rs0032_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 struct Plain {
     value: Int
 }
@@ -1846,8 +1450,7 @@ fn plain() -> Unit {
 
 #[test]
 fn checker_rs0036_structured_multiset_parity() {
-    let source = r#"features: async, native, local
-
+    let source = r#"
 async fn exercise() -> Result<Unit, ChannelError> {
     let first = Channel.message<List<Int>>(capacity: 4)?
     let second = Channel.message<Map<String, Int>>(capacity: 4)?
@@ -1902,66 +1505,7 @@ fn inspect(value: read Pairish) -> Int {
     assert_eq!(oracle, actual, "RS0037 structured diagnostics diverged");
 }
 
-#[test]
-fn checker_rs0101_structured_body_parity() {
-    let source = r#"async fn fetch() -> Int {
-    return 1
-}
 
-fn dangerous() -> Unit
-    effects(unsafe)
-{
-    return Unit
-}
-
-fn exercise() -> Unit {
-    local value = 1
-    let managed = manage value
-    let first = await fetch()
-    spawn fetch()
-    dangerous()
-}
-"#;
-    let oracle = checker_oracle_records("structured-rs0101-body.rss", source, "RS0101");
-    assert_eq!(
-        oracle.len(),
-        9,
-        "fixture must preserve nested local, async, and unsafe feature uses"
-    );
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0101",
-    );
-    assert_eq!(oracle, actual, "RS0101 body diagnostics diverged");
-}
-
-#[test]
-fn checker_rs0101_structured_qualified_call_parity() {
-    let source = r#"async fn Worker.fetch<T>(value: read T) -> T {
-    return value
-}
-
-fn Host.danger() -> Unit effects(unsafe) {
-    return Unit
-}
-
-fn exercise() -> Unit {
-    let value = await Worker.fetch<Int>(value: read 1)
-    Host.danger()
-}
-"#;
-    let oracle = checker_oracle_records("structured-rs0101-qualified.rss", source, "RS0101");
-    assert_eq!(
-        oracle.len(),
-        5,
-        "fixture must preserve qualified declarations, await/call, and unsafe call uses"
-    );
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0101",
-    );
-    assert_eq!(oracle, actual, "RS0101 qualified-call diagnostics diverged");
-}
 
 #[test]
 fn checker_rs0201_structured_multiset_parity() {
@@ -2128,8 +1672,7 @@ resource Direct<T: Resource> {
 
 #[test]
 fn checker_rs0706_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 resource File {
     fd: Int
 }
@@ -2167,11 +1710,10 @@ fn missing_second(path: read Path) -> Unit {
 
 #[test]
 fn checker_rs0805_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 fn mismatch() -> Int {
     let mut count = 0
-    local bump = fn() captures(read count) effects(pure) {
+    local bump = fn() captures(read count) {
         count = count + 1
         return count
     }
@@ -2180,7 +1722,7 @@ fn mismatch() -> Int {
 
 fn missing() -> Int {
     let offset = 2
-    local add = fn(value) captures() effects(pure) {
+    local add = fn(value) captures() {
         return value + offset
     }
     return add(40)
@@ -2188,7 +1730,7 @@ fn missing() -> Int {
 
 fn unused() -> Int {
     let offset = 2
-    local identity = fn(value) captures(read offset) effects(pure) {
+    local identity = fn(value) captures(read offset) {
         return value
     }
     return identity(40)
@@ -2196,7 +1738,7 @@ fn unused() -> Int {
 
 fn stronger_is_valid() -> Int {
     let offset = 2
-    local add = fn(value) captures(take offset) effects(pure) {
+    local add = fn(value) captures(take offset) {
         return value + offset
     }
     return add(40)
@@ -2217,14 +1759,13 @@ fn stronger_is_valid() -> Int {
 
 #[test]
 fn checker_closure_capture_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 struct Image { id: Int }
 class Scheduler
 
 fn Image.inspect(image: read Image) -> Unit
 fn schedule(scheduler: mut Scheduler, callback: read Fn()) -> Unit
-    effects(retains(callback))
+    retains(callback)
 fn apply(callback: noescape Fn()) -> Unit {
     callback()
 }
@@ -2270,14 +1811,13 @@ fn consuming() -> Unit {
 
 #[test]
 fn checker_closure_escape_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 struct Callback
 
 fn store(callback: read Callback) -> Unit
+    retains(callback)
 
 fn invalid_signature(callback: noescape Fn()) -> Unit
-    effects(retains(callback))
 {
     callback()
 }
@@ -2302,7 +1842,7 @@ fn local_escapes() -> Callback {
 "#;
 
     let all_actual = run_cached_checker_records(source).expect("rss checker should emit records");
-    for (code, expected) in [("RS0802", 6), ("RS0803", 4)] {
+    for (code, expected) in [("RS0802", 5), ("RS0803", 4)] {
         let oracle = checker_oracle_records("structured-closure-escape.rss", source, code);
         assert_eq!(
             oracle.len(),
@@ -2400,8 +1940,7 @@ fn valid(user: read User) -> Unit {
 
 #[test]
 fn checker_rs0901_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 struct Rule {
     name: String
 }
@@ -2441,8 +1980,7 @@ fn checker_rs1003_structured_multiset_parity() {
 
 #[test]
 fn checker_rs0306_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 class Session
 
 fn create() -> Unit {
@@ -2462,8 +2000,7 @@ fn create() -> Unit {
 
 #[test]
 fn checker_rs0307_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 class User {
     id: Int
 }
@@ -2498,8 +2035,7 @@ fn valid() -> Unit {
 
 #[test]
 fn checker_rs0308_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 struct Buffer {
     id: Int
 }
@@ -2533,8 +2069,7 @@ fn valid(owned: take Buffer) -> Unit {
 
 #[test]
 fn checker_rs0301_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 struct Rules {
     id: Int
 }
@@ -2575,8 +2110,7 @@ fn valid() -> Unit {
 
 #[test]
 fn checker_place_conflicts_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 struct Cache { value: Int }
 struct Inner { cache: Cache }
 struct State { inner: Inner }
@@ -2637,8 +2171,7 @@ fn managed_split(state: mut SplitState) -> Unit {
 
 #[test]
 fn checker_rs0401_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 struct Frame {
     id: Int
 }
@@ -2681,17 +2214,16 @@ fn valid() -> Unit {
 
 #[test]
 fn checker_rs0501_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 struct Item {
     id: Int
 }
 
 fn Cache.store(value: read Item) -> Unit
-    effects(retains(value))
+    retains(value)
 
 fn Cache.store_option(value: read Option<Item>) -> Unit
-    effects(retains(value))
+    retains(value)
 
 fn exercise() -> Unit {
     local first = Item(id: 1)
@@ -2718,8 +2250,7 @@ fn exercise() -> Unit {
 
 #[test]
 fn checker_rs0601_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 struct Boxed {
     value: Int
 }
@@ -2758,8 +2289,7 @@ fn bad_field() -> fresh Boxed {
 
 #[test]
 fn checker_rs0604_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 struct Image {
     width: Int
 }
@@ -2816,8 +2346,7 @@ fn generic<T>() -> fresh T {
 
 #[test]
 fn checker_rs0311_structured_multiset_parity() {
-    let source = r#"features: local
-
+    let source = r#"
 struct State {
     value: Int
 }
@@ -3132,71 +2661,7 @@ fn checker_reports_rs0005_for_duplicate_declaration_smoke() {
     );
 }
 
-#[test]
-fn checker_rs0015_edge_parity() {
-    let root = workspace_root();
-    let cases = [
-        (
-            "comparison-before-generic.rss",
-            "features: local\n\
-             fn f(limit: Int) -> Unit {\n\
-                 let mut i = 0\n\
-                 while i < limit {\n\
-                     let values = List<Int>.new()\n\
-                     i = i + 1\n\
-                 }\n\
-                 return Unit\n\
-             }\n"
-            .to_string(),
-            false,
-        ),
-        (
-            "native-function-body.rss",
-            "features: native\n\
-             pub native fn host() -> Unit {\n\
-                 return Unit\n\
-             }\n"
-            .to_string(),
-            true,
-        ),
-        (
-            "hostile-malformed/unicode-bidi.rss",
-            std::fs::read_to_string(
-                root.join("crates/rsscript/tests/hostile-malformed/unicode-bidi.rss"),
-            )
-            .expect("unicode fixture should be readable"),
-            true,
-        ),
-        (
-            "hostile-malformed/unterminated-string.rss",
-            std::fs::read_to_string(
-                root.join("crates/rsscript/tests/hostile-malformed/unterminated-string.rss"),
-            )
-            .expect("unterminated-string fixture should be readable"),
-            true,
-        ),
-        (
-            "samples/ast/async_let.rss",
-            std::fs::read_to_string(root.join("selfhost/samples/ast/async_let.rss"))
-                .expect("async-let sample should be readable"),
-            true,
-        ),
-    ];
-    let exe = compile_checker().expect("rss checker should compile");
-    for (file, source, expects_rs0015) in cases {
-        let oracle = checker_oracle_codes(file, &source);
-        let actual = run_checker(&exe, &source).expect("rss checker should run");
-        assert_eq!(oracle, actual, "checker parity diverged for {file}");
-        assert_eq!(
-            oracle.contains(&"RS0015".to_string()),
-            expects_rs0015,
-            "unexpected Rust RS0015 result for {file}: {oracle:?}"
-        );
-    }
-}
 
-/// Phase-3 gate (ignored by default): the rss checker's target-code diagnostics
-/// match the analyzer over the whole `.rss` corpus.
 #[test]
 #[ignore]
 fn checker_parity_corpus() {

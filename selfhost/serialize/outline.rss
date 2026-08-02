@@ -17,9 +17,6 @@ fn kind_name(kind: Int) -> String {
     if kind == ITEM_FUNCTION { return "function" }
     if kind == ITEM_PROTOCOL { return "protocol" }
     if kind == ITEM_IMPL { return "impl" }
-    if kind == ITEM_NATIVE_MODULE { return "native-module" }
-    if kind == ITEM_FEATURES { return "features" }
-    if kind == ITEM_PROFILE { return "profile" }
     return "unknown"
 }
 
@@ -231,15 +228,6 @@ fn main() -> Unit {
     while i < Program.len(self: program) {
         let item = List.get<Item>(list: program.items, index: i)
         Log.write(message: item_line(item))
-        if item.kind == ITEM_FEATURES {
-            let mut f = 0
-            while f < List.len(list: item.features) {
-                let feature = List.get<FeatureName>(list: item.features, index: f)
-                let pos = String.concat(left: String.concat(left: String.from_int(value: feature.line), right: ":"), right: String.concat(left: String.from_int(value: feature.column), right: String.concat(left: ":", right: String.from_int(value: feature.length))))
-                Log.write(message: String.concat(left: String.concat(left: "  feature\t", right: feature.name), right: String.concat(left: "\t", right: pos)))
-                f = f + 1
-            }
-        }
         if item.kind == ITEM_TYPE || item.kind == ITEM_SUM {
             Log.write(message: data_header_line(item))
             let mut g = 0
@@ -250,7 +238,7 @@ fn main() -> Unit {
             }
             let mut d = 0
             while d < List.len(list: item.derives) {
-                let derive = List.get<FeatureName>(list: item.derives, index: d)
+                let derive = List.get<DeriveName>(list: item.derives, index: d)
                 Log.write(message: String.concat(left: "  derive\t", right: derive.name))
                 d = d + 1
             }
@@ -286,8 +274,6 @@ fn main() -> Unit {
             header = String.concat(left: header, right: String.from_bool(value: item.isPublic))
             header = String.concat(left: header, right: "\tasync=")
             header = String.concat(left: header, right: String.from_bool(value: item.isAsync))
-            header = String.concat(left: header, right: "\tnative=")
-            header = String.concat(left: header, right: String.from_bool(value: item.isNative))
             header = String.concat(left: header, right: "\tbody=")
             header = String.concat(left: header, right: String.from_bool(value: item.hasBody))
             header = String.concat(left: header, right: "\treturn=")
@@ -316,10 +302,9 @@ fn main() -> Unit {
                 p = p + 1
             }
             let mut e = 0
-            while e < List.len(list: item.effects) {
-                let effect = List.get<EffectName>(list: item.effects, index: e)
-                let pos = String.concat(left: String.concat(left: String.from_int(value: effect.line), right: ":"), right: String.concat(left: String.from_int(value: effect.column), right: String.concat(left: ":", right: String.from_int(value: effect.length))))
-                Log.write(message: String.concat(left: String.concat(left: "  effect\t", right: effect.name), right: String.concat(left: "\t", right: pos)))
+            while e < List.len(list: item.retainedParams) {
+                let target = List.get<String>(list: item.retainedParams, index: e)
+                Log.write(message: String.concat(left: "  retains\t", right: target))
                 e = e + 1
             }
             let mut s = 0

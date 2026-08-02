@@ -1,4 +1,3 @@
-features: native
 
 fn main() -> Result<Unit, FileError> {
     let root = Env.run_workspace_root()

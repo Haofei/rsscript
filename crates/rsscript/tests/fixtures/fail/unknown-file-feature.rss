@@ -1,5 +1,4 @@
 // expect: RS0016
-features: locall
 
 fn main() -> Unit {
     return Unit

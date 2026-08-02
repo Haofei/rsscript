@@ -1,7 +1,6 @@
 // expect: RS0401
 // Use-after-move inside a match-*expression* arm body must be diagnosed, like the
 // match-statement form. The arm body is analyzed with the threaded move state.
-features: local
 
 struct Box { v: Int }
 

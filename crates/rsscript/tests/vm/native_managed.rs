@@ -5,7 +5,6 @@ use super::*;
 #[test]
 fn reg_vm_runs_weak_intrinsics_like_compiled_backend() {
     let source = r#"
-features: local
 
 class User {
     id: Int
@@ -60,20 +59,13 @@ fn reg_vm_runs_native_host_bindings_like_interpreter() {
         Ok(NativeValue::String(format!("host:{message}")))
     }
 
-    let source = r#"
-features: native
-
+    let interface = r#"
 opaque struct HostHandle
-
-native fn Host.open() -> HostHandle
-    effects(native)
-
-native fn Host.describe(handle: read HostHandle) -> String
-    effects(native)
-
-native fn Host.echo(message: read String) -> String
-    effects(native)
-
+pub fn Host.open() -> HostHandle
+pub fn Host.describe(handle: read HostHandle) -> String
+pub fn Host.echo(message: read String) -> String
+"#;
+    let source = r#"
 fn main() -> Unit {
     let handle = Host.open()
     Log.write(message: read Host.describe(handle: read handle))
@@ -85,11 +77,12 @@ fn main() -> Unit {
     assert_reg_vm_with_native_output(
         "reg-vm-native-host.rss",
         source,
+        &[("host-bindings.rssi", interface)],
         [],
         [
-            ("Host.open", NativeInterpreterFn::from_fn(host_open)),
-            ("Host.describe", NativeInterpreterFn::from_fn(host_describe)),
-            ("Host.echo", NativeInterpreterFn::from_fn(host_echo)),
+            ("Host.open", ExternalFunction::from_fn(host_open)),
+            ("Host.describe", ExternalFunction::from_fn(host_describe)),
+            ("Host.echo", ExternalFunction::from_fn(host_echo)),
         ],
         "HostHandle:7\nhost:native\n",
     );
@@ -131,24 +124,15 @@ fn reg_vm_runs_receiver_native_host_bindings_like_interpreter() {
         Ok(NativeValue::String(format!("beta:{type_name}:{id}")))
     }
 
-    let source = r#"
-features: native
-
+    let interface = r#"
 opaque struct Alpha
 opaque struct Beta
-
-native fn Alpha.open() -> Alpha
-    effects(native)
-
-native fn Alpha.describe(self: read Alpha) -> String
-    effects(native)
-
-native fn Beta.open() -> Beta
-    effects(native)
-
-native fn Beta.describe(self: read Beta) -> String
-    effects(native)
-
+pub fn Alpha.open() -> Alpha
+pub fn Alpha.describe(self: read Alpha) -> String
+pub fn Beta.open() -> Beta
+pub fn Beta.describe(self: read Beta) -> String
+"#;
+    let source = r#"
 fn main() -> Unit {
     let alpha = Alpha.open()
     let beta = Beta.open()
@@ -161,15 +145,13 @@ fn main() -> Unit {
     assert_reg_vm_with_native_output(
         "reg-vm-receiver-native-host.rss",
         source,
+        &[("receiver-bindings.rssi", interface)],
         [],
         [
-            ("Alpha.open", NativeInterpreterFn::from_fn(alpha_open)),
-            (
-                "Alpha.describe",
-                NativeInterpreterFn::from_fn(alpha_describe),
-            ),
-            ("Beta.open", NativeInterpreterFn::from_fn(beta_open)),
-            ("Beta.describe", NativeInterpreterFn::from_fn(beta_describe)),
+            ("Alpha.open", ExternalFunction::from_fn(alpha_open)),
+            ("Alpha.describe", ExternalFunction::from_fn(alpha_describe)),
+            ("Beta.open", ExternalFunction::from_fn(beta_open)),
+            ("Beta.describe", ExternalFunction::from_fn(beta_describe)),
         ],
         "alpha:Alpha:1\nbeta:Beta:2\n",
     );
@@ -178,7 +160,6 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_resource_drop_unwind_like_interpreter() {
     let source = r#"
-features: local
 
 resource Handle {
     id: Int

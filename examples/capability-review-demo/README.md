@@ -15,7 +15,7 @@ the canonical taxonomy in
 [`crates/rsscript/src/capability.rs`](../../crates/rsscript/src/capability.rs):
 
 ```toml
-[[review.capability_bindings]]
+[[review.external_binding_bindings]]
 symbol   = "Net.fetch"
 category = "network.client"   # domain.action, carries a default risk
 provider = "reqwest"

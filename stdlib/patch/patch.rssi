@@ -1,7 +1,5 @@
-features: native
 
 pub fn Patch.apply_text(
     original: String,
     patch: String,
 ) -> Result<fresh String, String>
-    effects(native)

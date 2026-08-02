@@ -15,13 +15,115 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rsscript::{
-    EvalError, EvalOutput, Severity, analyze_source, lower_source_to_rust_package,
-    reg_vm_eval_source_main_with_args, write_generated_rust_package,
+    EvalError, EvalOutput, RegVmExecutable, Severity, analyze_source_with_interfaces_result,
+    lower_source_to_rust_package_with_interfaces, reg_vm_compile_validated,
+    write_generated_rust_package,
 };
 
 pub const FULL_BACKEND_PARITY_ENV: &str = "RSSCRIPT_FULL_BACKEND_PARITY";
 
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+/// Host contracts used explicitly by cross-backend fixtures. They are test
+/// dependencies, not part of the language's default interface surface.
+pub const TEST_HOST_INTERFACES: &[(&str, &str)] = &[
+    (
+        "async/cancellation.rssi",
+        include_str!("../../../../packages/async/interface/cancellation.rssi"),
+    ),
+    (
+        "async/channel.rssi",
+        include_str!("../../../../packages/async/interface/channel.rssi"),
+    ),
+    (
+        "async/stream.rssi",
+        include_str!("../../../../packages/async/interface/stream.rssi"),
+    ),
+    (
+        "async/task.rssi",
+        include_str!("../../../../packages/async/interface/task.rssi"),
+    ),
+    (
+        "host/async-csv.rssi",
+        include_str!("../../../../packages/async/interface/csv.rssi"),
+    ),
+    (
+        "host/deadline.rssi",
+        include_str!("../../../../packages/async/interface/deadline.rssi"),
+    ),
+    (
+        "host/async-file.rssi",
+        include_str!("../../../../packages/async/interface/file.rssi"),
+    ),
+    (
+        "host/async-http.rssi",
+        include_str!("../../../../packages/async/interface/http.rssi"),
+    ),
+    (
+        "host/async-process.rssi",
+        include_str!("../../../../packages/async/interface/process.rssi"),
+    ),
+    (
+        "host/tcp.rssi",
+        include_str!("../../../../packages/async/interface/tcp.rssi"),
+    ),
+    (
+        "host/timer.rssi",
+        include_str!("../../../../packages/async/interface/timer.rssi"),
+    ),
+    (
+        "host/websocket.rssi",
+        include_str!("../../../../packages/async/interface/websocket.rssi"),
+    ),
+    (
+        "host/args.rssi",
+        include_str!("../../../../stdlib/os/os.rssi"),
+    ),
+    (
+        "host/clock.rssi",
+        include_str!("../../../../stdlib/clock/clock.rssi"),
+    ),
+    (
+        "host/env.rssi",
+        include_str!("../../../../stdlib/env/env.rssi"),
+    ),
+    (
+        "host/directory.rssi",
+        include_str!("../../../../stdlib/fs/directory.rssi"),
+    ),
+    (
+        "host/file.rssi",
+        include_str!("../../../../stdlib/fs/file.rssi"),
+    ),
+    (
+        "host/http.rssi",
+        include_str!("../../../../stdlib/http/client.rssi"),
+    ),
+    (
+        "host/log.rssi",
+        include_str!("../../../../stdlib/log/log.rssi"),
+    ),
+    (
+        "host/path.rssi",
+        include_str!("../../../../stdlib/path/path.rssi"),
+    ),
+    (
+        "host/process.rssi",
+        include_str!("../../../../stdlib/process/process.rssi"),
+    ),
+    (
+        "host/random.rssi",
+        include_str!("../../../../stdlib/random/random.rssi"),
+    ),
+    (
+        "host/tempdir.rssi",
+        include_str!("../../../../stdlib/tempdir/tempdir.rssi"),
+    ),
+    (
+        "host/workspace.rssi",
+        include_str!("../../../../stdlib/workspace/workspace.rssi"),
+    ),
+];
 
 pub fn full_backend_parity_enabled() -> bool {
     std::env::var(FULL_BACKEND_PARITY_ENV)
@@ -99,16 +201,149 @@ pub fn generated_target_dir() -> PathBuf {
 
 /// Evaluate a single-file program's `main` on the register VM.
 pub fn run_vm_source(file: &str, source: &str, args: &[&str]) -> Result<EvalOutput, EvalError> {
-    reg_vm_eval_source_main_with_args(file, source, args.iter().copied())
+    compile_vm_source(file, source)?.eval_main_with_args(args.iter().copied())
+}
+
+pub fn compile_vm_source(file: &str, source: &str) -> Result<RegVmExecutable, EvalError> {
+    compile_vm_source_with_interfaces(file, source, &[])
+}
+
+pub fn compile_vm_source_with_interfaces(
+    file: &str,
+    source: &str,
+    extra_interfaces: &[(&str, &str)],
+) -> Result<RegVmExecutable, EvalError> {
+    let mut interfaces = TEST_HOST_INTERFACES.to_vec();
+    interfaces.extend_from_slice(extra_interfaces);
+    let validated = analyze_source_with_interfaces_result(file, source, &interfaces)
+        .into_validated()
+        .map_err(EvalError::Diagnostics)?;
+    reg_vm_compile_validated(&validated)
+}
+
+pub fn reg_vm_eval_source_main(file: &str, source: &str) -> Result<EvalOutput, EvalError> {
+    run_vm_source(file, source, &[])
+}
+
+pub fn reg_vm_eval_source_main_with_args(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<EvalOutput, EvalError> {
+    compile_vm_source(file, source)?.eval_main_with_args(args)
+}
+
+pub fn reg_vm_eval_source_main_with_limits(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    limits: rsscript::VmLimits,
+) -> Result<EvalOutput, EvalError> {
+    compile_vm_source(file, source)?.eval_main_with_limits(args, limits)
+}
+
+pub fn reg_vm_eval_source_main_with_args_and_external_bindings(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+    external_bindings: impl IntoIterator<Item = (impl Into<String>, rsscript::ExternalFunction)>,
+) -> Result<EvalOutput, EvalError> {
+    compile_vm_source(file, source)?
+        .eval_main_with_args_and_external_bindings(args, external_bindings)
+}
+
+pub fn reg_vm_eval_source_main_with_interfaces_and_external_bindings(
+    file: &str,
+    source: &str,
+    extra_interfaces: &[(&str, &str)],
+    external_bindings: impl IntoIterator<Item = (impl Into<String>, rsscript::ExternalFunction)>,
+) -> Result<EvalOutput, EvalError> {
+    compile_vm_source_with_interfaces(file, source, extra_interfaces)?
+        .eval_main_with_args_and_external_bindings(std::iter::empty::<String>(), external_bindings)
+}
+
+#[cfg(feature = "native-jit")]
+pub fn reg_vm_eval_source_main_native(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<EvalOutput, EvalError> {
+    compile_vm_source(file, source)?.eval_main_with_args_native(args)
+}
+
+#[cfg(feature = "native-jit")]
+pub fn reg_vm_eval_source_main_native_force_all_safepoints(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<EvalOutput, EvalError> {
+    compile_vm_source(file, source)?.eval_main_with_args_native_force_all_safepoints(args)
+}
+
+#[cfg(feature = "native-jit")]
+pub fn reg_vm_eval_source_main_native_precise(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<EvalOutput, EvalError> {
+    compile_vm_source(file, source)?.eval_main_with_args_native_precise(args)
+}
+
+#[cfg(feature = "native-jit")]
+pub fn reg_vm_eval_source_main_native_osr(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<EvalOutput, EvalError> {
+    compile_vm_source(file, source)?.eval_main_with_args_native_osr(args)
+}
+
+#[cfg(feature = "native-jit")]
+pub fn reg_vm_eval_source_main_native_osr_report(
+    file: &str,
+    source: &str,
+    args: impl IntoIterator<Item = impl Into<String>>,
+) -> Result<(EvalOutput, rsscript::NativeStats, Vec<String>), EvalError> {
+    compile_vm_source(file, source)?.eval_main_with_args_native_osr_report(args)
+}
+
+pub fn lower_test_source_to_rust_package(
+    file: &str,
+    source: &str,
+    package_name: &str,
+    runtime_path: &str,
+) -> Result<rsscript::GeneratedRustPackage, Vec<rsscript::Diagnostic>> {
+    let interfaces = TEST_HOST_INTERFACES
+        .iter()
+        .filter(|(path, _)| {
+            !matches!(
+                *path,
+                "async/cancellation.rssi"
+                    | "async/channel.rssi"
+                    | "async/stream.rssi"
+                    | "async/task.rssi"
+                    | "host/async-csv.rssi"
+            )
+        })
+        .map(|(path, contents)| ((*path).to_string(), (*contents).to_string()))
+        .collect::<Vec<_>>();
+    lower_source_to_rust_package_with_interfaces(
+        file,
+        source,
+        package_name,
+        runtime_path,
+        &interfaces,
+    )
 }
 
 /// Error-severity diagnostic codes (sorted, unique) the checker reports for a
 /// single-file program.
 pub fn error_codes(file: &str, source: &str) -> Vec<String> {
-    let mut codes = analyze_source(file, source)
-        .into_iter()
+    let mut codes = analyze_source_with_interfaces_result(file, source, TEST_HOST_INTERFACES)
+        .diagnostics()
+        .iter()
         .filter(|diagnostic| diagnostic.severity == Severity::Error)
-        .map(|diagnostic| diagnostic.code)
+        .map(|diagnostic| diagnostic.code.clone())
         .collect::<Vec<_>>();
     codes.sort();
     codes.dedup();
@@ -179,8 +414,28 @@ fn compile_and_run(
             .trim_matches('_'),
         &cache_key[..12],
     );
-    let package = lower_source_to_rust_package(file, source, &package_name, &runtime_path)
-        .expect("source should lower to a Rust package");
+    let interfaces = TEST_HOST_INTERFACES
+        .iter()
+        .filter(|(path, _)| {
+            !matches!(
+                *path,
+                "async/cancellation.rssi"
+                    | "async/channel.rssi"
+                    | "async/stream.rssi"
+                    | "async/task.rssi"
+                    | "host/async-csv.rssi"
+            )
+        })
+        .map(|(path, contents)| ((*path).to_string(), (*contents).to_string()))
+        .collect::<Vec<_>>();
+    let package = lower_source_to_rust_package_with_interfaces(
+        file,
+        source,
+        &package_name,
+        &runtime_path,
+        &interfaces,
+    )
+    .expect("source should lower to a Rust package");
     let package_dir = unique_temp_dir("rsscript-corpus-compiled");
     write_generated_rust_package(&package_dir, &package).expect("generated package should write");
 
@@ -668,9 +923,11 @@ pub fn assert_vm_eval_matches_backend_internal(
         || source.contains("HttpResponse")
         || source.contains("HttpRequest");
     if !does_network_io {
-        let eval_jit =
-            rsscript::reg_vm_eval_source_main_jit(name, source, interpreter_args.iter().copied())
-                .unwrap_or_else(|error| panic!("jit eval failed for {name}: {error:?}"));
+        let eval_jit = compile_vm_source(name, source)
+            .and_then(|executable| {
+                executable.eval_main_with_args_jit(interpreter_args.iter().copied())
+            })
+            .unwrap_or_else(|error| panic!("jit eval failed for {name}: {error:?}"));
         assert_eq!(
             eval_jit.stdout, eval.stdout,
             "JIT vs interpreter stdout divergence for {name}"
@@ -684,12 +941,9 @@ pub fn assert_vm_eval_matches_backend_internal(
         // machine code; everything else falls back. Must also match exactly.
         #[cfg(feature = "native-jit")]
         {
-            let eval_native = rsscript::reg_vm_eval_source_main_native(
-                name,
-                source,
-                interpreter_args.iter().copied(),
-            )
-            .unwrap_or_else(|error| panic!("native jit eval failed for {name}: {error:?}"));
+            let eval_native =
+                reg_vm_eval_source_main_native(name, source, interpreter_args.iter().copied())
+                    .unwrap_or_else(|error| panic!("native jit eval failed for {name}: {error:?}"));
             assert_eq!(
                 eval_native.stdout, eval.stdout,
                 "native JIT vs interpreter stdout divergence for {name}"
@@ -719,7 +973,7 @@ pub fn assert_vm_eval_matches_backend_internal(
         (out, err)
     } else {
         let runtime_path = runtime_path();
-        let lowered = lower_source_to_rust_package(name, source, package, &runtime_path)
+        let lowered = lower_test_source_to_rust_package(name, source, package, &runtime_path)
             .expect("parity fixture should lower");
         let package_dir = unique_temp_dir(package);
         write_generated_rust_package(&package_dir, &lowered)

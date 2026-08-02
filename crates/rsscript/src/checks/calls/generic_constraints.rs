@@ -60,9 +60,7 @@ pub(super) fn type_satisfies_protocol_bound(
     protocol: &str,
 ) -> bool {
     let actual_root = type_root_name(strip_fresh_type(actual));
-    if capability_protocol(actual)
-        .is_some_and(|capability_protocol| capability_protocol == protocol)
-    {
+    if dyn_protocol(actual).is_some_and(|dyn_protocol| dyn_protocol == protocol) {
         return true;
     }
     if protocol == "Ord" && builtin_type_is_ord(actual_root) {
@@ -116,14 +114,14 @@ pub(super) fn type_satisfies_protocol_bound(
     type_derives_protocol(&analyzer.syntax_program.items, actual_root, protocol)
 }
 
-pub(super) fn check_capability_from_call(
+pub(super) fn check_dyn_from_call(
     analyzer: &mut Analyzer<'_>,
     function: &FunctionDecl,
     callee: &Callee,
     args: &[HirCallArg],
     call_span: &Span,
 ) {
-    let Some(protocol) = capability_from_protocol(callee) else {
+    let Some(protocol) = dyn_from_protocol(callee) else {
         return;
     };
     if !analyzer.protocol_name_is_visible(protocol) {
@@ -137,30 +135,30 @@ pub(super) fn check_capability_from_call(
         return;
     };
     let Some(value_type) = hir_expr_type_name(&value_arg.value) else {
-        analyzer.diagnostics.push(capability_from_diagnostic(
+        analyzer.diagnostics.push(dyn_from_diagnostic(
             protocol,
             "<unknown>",
             call_span.clone(),
-            "Capability construction requires a typed value binding.",
+            "ExternalBinding construction requires a typed value binding.",
         ));
         return;
     };
     let value_type = strip_fresh_type(value_type);
-    if capability_protocol(value_type).is_some() {
-        analyzer.diagnostics.push(capability_from_diagnostic(
+    if dyn_protocol(value_type).is_some() {
+        analyzer.diagnostics.push(dyn_from_diagnostic(
             protocol,
             value_type,
             call_span.clone(),
-            "Nested capability objects are not supported; wrap a concrete implementation value.",
+            "Nested dynamic protocol values are not supported; wrap a concrete implementation value.",
         ));
         return;
     }
     if !type_satisfies_protocol_bound(analyzer, function, value_type, protocol) {
-        analyzer.diagnostics.push(capability_from_diagnostic(
+        analyzer.diagnostics.push(dyn_from_diagnostic(
             protocol,
             value_type,
             call_span.clone(),
-            "The wrapped value must satisfy the capability protocol via an explicit impl.",
+            "The wrapped value must satisfy the external_binding protocol via an explicit impl.",
         ));
     }
 }
@@ -268,25 +266,25 @@ pub(super) fn type_derives_protocol(items: &[Item], type_name: &str, protocol: &
     })
 }
 
-pub(super) fn capability_protocol(type_name: &str) -> Option<&str> {
+pub(super) fn dyn_protocol(type_name: &str) -> Option<&str> {
     let root = type_root_name(strip_fresh_type(type_name));
-    if root != "Capability" {
+    if root != "Dyn" {
         return None;
     }
     type_arg_names(type_name).and_then(|args| args.first().copied())
 }
 
-pub(super) fn capability_from_protocol(callee: &Callee) -> Option<&str> {
+pub(super) fn dyn_from_protocol(callee: &Callee) -> Option<&str> {
     let Callee::Qualified { namespace, name } = callee else {
         return None;
     };
-    if type_root_name(namespace) != "Capability" || type_root_name(name) != "from" {
+    if type_root_name(namespace) != "Dyn" || type_root_name(name) != "from" {
         return None;
     }
     type_arg_names(namespace).and_then(|args| args.first().copied())
 }
 
-pub(super) fn capability_from_diagnostic(
+pub(super) fn dyn_from_diagnostic(
     protocol: &str,
     value_type: &str,
     span: Span,
@@ -294,13 +292,13 @@ pub(super) fn capability_from_diagnostic(
 ) -> Diagnostic {
     Diagnostic::error(
         code::PROTOCOL_NOT_SATISFIED,
-        format!("cannot construct `Capability<{protocol}>` from `{value_type}`."),
+        format!("cannot construct `Dyn<{protocol}>` from `{value_type}`."),
         span,
-        "capability protocol not satisfied",
+        "external_binding protocol not satisfied",
     )
     .with_cause(cause)
     .with_cause(
-        "Capability objects are explicit dynamic protocol boundaries; construction requires a concrete value with a visible protocol implementation.",
+        "Dyn values are explicit dynamic protocol boundaries; construction requires a concrete value with a visible protocol implementation.",
     )
     .with_fix(
         "add_protocol_impl",
@@ -509,7 +507,7 @@ pub(super) fn check_protocol_receiver_satisfaction(
             call_span.clone(),
             "protocol not satisfied",
         )
-        .with_cause("Protocols are nominal capability contracts. A protocol call must be backed by an explicit generic bound or an explicit protocol implementation.")
+        .with_cause("Protocols are nominal external_binding contracts. A protocol call must be backed by an explicit generic bound or an explicit protocol implementation.")
         .with_fix(
             "add_protocol_bound_or_impl",
             format!("Add a `{receiver_root}: {namespace}` generic bound or declare `impl {namespace} for {receiver_root} {{ ... }}`."),

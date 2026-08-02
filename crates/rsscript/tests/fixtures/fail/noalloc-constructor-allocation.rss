@@ -6,7 +6,7 @@ struct Pair {
 }
 
 fn make_pair(left: Int, right: Int) -> fresh Pair
-    effects(noalloc)
+
 {
     return Pair(left: left, right: right)
 }

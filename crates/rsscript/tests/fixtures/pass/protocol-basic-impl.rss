@@ -1,4 +1,3 @@
-features: local
 
 protocol Formatter {
     fn format(self: Self) -> fresh String

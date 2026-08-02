@@ -1,4 +1,3 @@
-features: local
 
 // A fixed-capacity ring-buffer mailbox (message queue) implemented in RSS itself.
 // `head`/`count` index a circular live window over `values`/`sources` (grown lazily

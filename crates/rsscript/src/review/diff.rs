@@ -10,21 +10,6 @@ pub fn review_sources(
     let new_program = parse_source(new_file, new_source);
     let mut findings = Vec::new();
 
-    if feature_label(&old_program.features) != feature_label(&new_program.features) {
-        findings.push(review_finding(
-            code::REVIEW_FEATURES_CHANGED,
-            ReviewRisk::Feature,
-            format!(
-                "file features changed from {} to {}.",
-                feature_label(&old_program.features),
-                feature_label(&new_program.features)
-            ),
-            Vec::new(),
-            Some(feature_label(&old_program.features)),
-            Some(feature_label(&new_program.features)),
-        ));
-    }
-
     let old_types = collect_type_sigs(&old_program.items);
     let new_types = collect_type_sigs(&new_program.items);
     let type_names: BTreeSet<_> = old_types.keys().chain(new_types.keys()).cloned().collect();
@@ -294,7 +279,7 @@ pub(super) fn review_fixes(code: &str) -> Vec<ReviewFix> {
     let (kind, title) = match code {
         code::REVIEW_FEATURES_CHANGED => (
             "review_file_features",
-            "Review whether this file should enable the changed advanced capabilities.",
+            "Review whether this file should enable the changed advanced external_bindings.",
         ),
         code::REVIEW_FUNCTION_REMOVED => (
             "restore_or_migrate_function",
@@ -312,9 +297,9 @@ pub(super) fn review_fixes(code: &str) -> Vec<ReviewFix> {
             "review_return_contract",
             "Review callers that depend on the old return and freshness contract.",
         ),
-        code::REVIEW_EFFECTS_CHANGED => (
-            "review_effect_contract",
-            "Review added or removed effects and update callers.",
+        code::REVIEW_RETENTION_CHANGED => (
+            "review_retention_contract",
+            "Review changed retained parameters and update callers.",
         ),
         code::REVIEW_TYPE_REMOVED => (
             "restore_or_migrate_type",
@@ -335,18 +320,6 @@ pub(super) fn review_fixes(code: &str) -> Vec<ReviewFix> {
         code::REVIEW_BOUNDARY_CHANGED => (
             "review_local_manage_boundary",
             "Review the changed local ownership and manage boundary.",
-        ),
-        code::REVIEW_UNSAFE_ADDED => (
-            "review_unsafe_boundary",
-            "Review the new unsafe boundary and require explicit justification.",
-        ),
-        code::REVIEW_NATIVE_ADDED => (
-            "review_native_boundary",
-            "Review the new native boundary and wrapper contract.",
-        ),
-        code::REVIEW_GUARANTEE_REMOVED => (
-            "review_removed_guarantee",
-            "Review callers that relied on the removed runtime guarantee.",
         ),
         code::REVIEW_FUNCTION_KIND_CHANGED => (
             "review_function_kind",
@@ -382,7 +355,7 @@ pub(super) struct FunctionSig {
     params: Vec<ParamSig>,
     return_type: Option<String>,
     returns_fresh: bool,
-    effects: BTreeSet<String>,
+    retained_params: BTreeSet<String>,
     boundary: BoundarySig,
     span: Span,
 }
@@ -626,7 +599,7 @@ pub(super) fn function_sig(function: &FunctionDecl) -> FunctionSig {
         params: function.params.iter().map(param_sig).collect(),
         return_type: function.return_ty.as_ref().map(type_name),
         returns_fresh: function.returns_fresh,
-        effects: function.effects.iter().map(effect_name).collect(),
+        retained_params: function.retained_params.iter().cloned().collect(),
         boundary: boundary_sig(&function.body),
         span: function.span.clone(),
     }
@@ -680,81 +653,14 @@ pub(super) fn compare_function(
             Some(return_contract(new)),
         ));
     }
-    if old.effects != new.effects {
+    if old.retained_params != new.retained_params {
         findings.push(review_finding(
-            code::REVIEW_EFFECTS_CHANGED,
+            code::REVIEW_RETENTION_CHANGED,
             ReviewRisk::Effect,
-            format!("function `{}` effects changed.", old.name),
+            format!("function `{}` retention contract changed.", old.name),
             paired_spans(&old.span, &new.span, "old function", "new function"),
-            Some(effects_contract(&old.effects)),
-            Some(effects_contract(&new.effects)),
-        ));
-    }
-    if !has_effect(&old.effects, "unsafe") && has_effect(&new.effects, "unsafe") {
-        findings.push(review_finding(
-            code::REVIEW_UNSAFE_ADDED,
-            ReviewRisk::Unsafe,
-            format!("function `{}` added unsafe boundary.", old.name),
-            paired_spans(&old.span, &new.span, "old function", "new unsafe boundary"),
-            Some(if has_effect(&old.effects, "unsafe") {
-                "unsafe".to_string()
-            } else {
-                "<none>".to_string()
-            }),
-            Some("unsafe".to_string()),
-        ));
-    }
-    if !has_effect(&old.effects, "native") && has_effect(&new.effects, "native") {
-        findings.push(review_finding(
-            code::REVIEW_NATIVE_ADDED,
-            ReviewRisk::Boundary,
-            format!("function `{}` added native boundary.", old.name),
-            paired_spans(&old.span, &new.span, "old function", "new native boundary"),
-            Some(if has_effect(&old.effects, "native") {
-                "native".to_string()
-            } else {
-                "<none>".to_string()
-            }),
-            Some("native".to_string()),
-        ));
-    }
-    if !has_effect(&old.effects, "parallel") && has_effect(&new.effects, "parallel") {
-        findings.push(review_finding(
-            code::REVIEW_PARALLEL_ADDED,
-            ReviewRisk::Boundary,
-            format!("function `{}` added parallel boundary.", old.name),
-            paired_spans(
-                &old.span,
-                &new.span,
-                "old function",
-                "new parallel boundary",
-            ),
-            Some(if has_effect(&old.effects, "parallel") {
-                "parallel".to_string()
-            } else {
-                "<none>".to_string()
-            }),
-            Some("parallel".to_string()),
-        ));
-    }
-    let old_guarantees = guarantee_effects(&old.effects);
-    let new_guarantees = guarantee_effects(&new.effects);
-    let removed_guarantees: BTreeSet<_> = old_guarantees
-        .difference(&new_guarantees)
-        .cloned()
-        .collect();
-    if !removed_guarantees.is_empty() {
-        findings.push(review_finding(
-            code::REVIEW_GUARANTEE_REMOVED,
-            ReviewRisk::Guarantee,
-            format!(
-                "function `{}` removed guarantee(s): {}.",
-                old.name,
-                effects_contract(&removed_guarantees)
-            ),
-            paired_spans(&old.span, &new.span, "old guarantees", "new guarantees"),
-            Some(effects_contract(&old_guarantees)),
-            Some(effects_contract(&new_guarantees)),
+            Some(retention_contract(&old.retained_params)),
+            Some(retention_contract(&new.retained_params)),
         ));
     }
     if old.boundary != new.boundary {
@@ -850,11 +756,10 @@ pub(super) fn function_contract(function: &FunctionSig) -> String {
             contract.push_str(&format!(" -> {return_type}"));
         }
     }
-    if !function.effects.is_empty() {
-        contract.push_str(&format!(
-            " effects({})",
-            effects_contract(&function.effects)
-        ));
+    if !function.retained_params.is_empty() {
+        for param in &function.retained_params {
+            contract.push_str(&format!(" retains({param})"));
+        }
     }
     contract
 }
@@ -886,28 +791,15 @@ pub(super) fn return_contract(function: &FunctionSig) -> String {
     }
 }
 
-pub(super) fn effects_contract(effects: &BTreeSet<String>) -> String {
-    if effects.is_empty() {
+pub(super) fn retention_contract(retained_params: &BTreeSet<String>) -> String {
+    if retained_params.is_empty() {
         return "<none>".to_string();
     }
-    effects.iter().cloned().collect::<Vec<_>>().join(", ")
-}
-
-pub(super) fn has_effect(effects: &BTreeSet<String>, effect: &str) -> bool {
-    effects.contains(effect)
-}
-
-pub(super) fn guarantee_effects(effects: &BTreeSet<String>) -> BTreeSet<String> {
-    effects
+    retained_params
         .iter()
-        .filter(|effect| {
-            matches!(
-                effect.as_str(),
-                "no_panic" | "noalloc" | "no_block" | "pure"
-            )
-        })
         .cloned()
-        .collect()
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 pub(super) fn type_contract(ty: &TypeSig) -> String {
@@ -989,13 +881,6 @@ pub(super) fn type_name(ty: &TypeRef) -> String {
         format!("owned {name}")
     } else {
         name
-    }
-}
-
-pub(super) fn effect_name(effect: &EffectDecl) -> String {
-    match effect {
-        EffectDecl::Name(name) => name.clone(),
-        EffectDecl::Retains(param) => format!("retains({param})"),
     }
 }
 

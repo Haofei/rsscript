@@ -109,24 +109,6 @@ pub(super) fn collect_body_facts_in_stmt(
 ) {
     match statement {
         Stmt::Let(stmt) => {
-            if stmt.is_async {
-                facts.feature_uses.push(HirFeatureUse {
-                    function_name: Some(function_name.to_string()),
-                    kind: HirFeatureUseKind::Async,
-                    span: stmt.span.clone(),
-                });
-            }
-            if stmt.kind == LetKind::Local {
-                facts.feature_uses.push(HirFeatureUse {
-                    function_name: Some(function_name.to_string()),
-                    kind: if matches!(stmt.value, Some(Expr::Closure { .. })) {
-                        HirFeatureUseKind::LocalClosure
-                    } else {
-                        HirFeatureUseKind::LocalLet
-                    },
-                    span: stmt.span.clone(),
-                });
-            }
             let value_type_name = stmt
                 .value
                 .as_ref()
@@ -193,13 +175,6 @@ pub(super) fn collect_body_facts_in_stmt(
             collect_body_facts_in_block(hir, function_name, &stmt.body, value_types, facts);
         }
         Stmt::For(stmt) => {
-            if stmt.is_async {
-                facts.feature_uses.push(HirFeatureUse {
-                    function_name: Some(function_name.to_string()),
-                    kind: HirFeatureUseKind::Async,
-                    span: stmt.span.clone(),
-                });
-            }
             collect_body_facts_in_expr(hir, function_name, &stmt.iterable, value_types, facts);
             let iterable_type = infer_hir_expr_type(hir, &stmt.iterable, value_types);
             let item_type = if stmt.is_async {
@@ -223,20 +198,10 @@ pub(super) fn collect_body_facts_in_stmt(
             collect_body_facts_in_block(hir, function_name, &stmt.body, &mut body_types, facts);
         }
         Stmt::TaskGroup(stmt) => {
-            facts.feature_uses.push(HirFeatureUse {
-                function_name: Some(function_name.to_string()),
-                kind: HirFeatureUseKind::Async,
-                span: stmt.span.clone(),
-            });
             let mut body_types = value_types.clone();
             collect_body_facts_in_block(hir, function_name, &stmt.body, &mut body_types, facts);
         }
         Stmt::Select(stmt) => {
-            facts.feature_uses.push(HirFeatureUse {
-                function_name: Some(function_name.to_string()),
-                kind: HirFeatureUseKind::Async,
-                span: stmt.span.clone(),
-            });
             for arm in &stmt.arms {
                 collect_body_facts_in_expr(hir, function_name, &arm.operation, value_types, facts);
                 let binding_type = infer_hir_expr_type(hir, &arm.operation, value_types);
@@ -354,27 +319,6 @@ pub(super) fn collect_body_facts_in_expr(
                 }
                 _ => hir.resolve_call(callee),
             };
-            if matches!(
-                &resolution,
-                CallResolution::Resolved { signature, .. } if signature.is_async
-            ) {
-                facts.feature_uses.push(HirFeatureUse {
-                    function_name: Some(function_name.to_string()),
-                    kind: HirFeatureUseKind::Async,
-                    span: span.clone(),
-                });
-            }
-            if matches!(
-                &resolution,
-                CallResolution::Resolved { signature, .. }
-                    if signature.effects.iter().any(|effect| effect == "unsafe")
-            ) {
-                facts.feature_uses.push(HirFeatureUse {
-                    function_name: Some(function_name.to_string()),
-                    kind: HirFeatureUseKind::Unsafe,
-                    span: span.clone(),
-                });
-            }
             facts.call_sites.push(HirCallSite {
                 function_name: function_name.to_string(),
                 callee: callee.clone(),
@@ -395,11 +339,6 @@ pub(super) fn collect_body_facts_in_expr(
             }
         }
         Expr::Manage { value, span } => {
-            facts.feature_uses.push(HirFeatureUse {
-                function_name: Some(function_name.to_string()),
-                kind: HirFeatureUseKind::Manage,
-                span: span.clone(),
-            });
             if let Some((binding_name, value_span)) = direct_move_binding(value) {
                 facts.effect_events.push(HirEffectEvent {
                     function_name: function_name.to_string(),
@@ -411,20 +350,10 @@ pub(super) fn collect_body_facts_in_expr(
             }
             collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
         }
-        Expr::Spawn { value, span } => {
-            facts.feature_uses.push(HirFeatureUse {
-                function_name: Some(function_name.to_string()),
-                kind: HirFeatureUseKind::Async,
-                span: span.clone(),
-            });
+        Expr::Spawn { value, .. } => {
             collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
         }
-        Expr::Await { value, span } => {
-            facts.feature_uses.push(HirFeatureUse {
-                function_name: Some(function_name.to_string()),
-                kind: HirFeatureUseKind::Async,
-                span: span.clone(),
-            });
+        Expr::Await { value, .. } => {
             collect_body_facts_in_expr(hir, function_name, value, value_types, facts);
         }
         Expr::Effect {
@@ -432,11 +361,6 @@ pub(super) fn collect_body_facts_in_expr(
             value,
             span,
         } => {
-            facts.feature_uses.push(HirFeatureUse {
-                function_name: Some(function_name.to_string()),
-                kind: HirFeatureUseKind::Take,
-                span: span.clone(),
-            });
             if let Some((binding_name, value_span)) = direct_ident(value) {
                 facts.effect_events.push(HirEffectEvent {
                     function_name: function_name.to_string(),

@@ -1,55 +1,53 @@
-features: native, local
 
 struct HttpResponse
 struct HttpRequest
 struct HttpError
 
-pub native fn HttpRequest.json(url: Url, body: String) -> fresh HttpRequest
-    effects(native)
+pub fn HttpRequest.json(url: Url, body: String) -> fresh HttpRequest
 
-pub native fn HttpRequest.with_timeout(
+
+pub fn HttpRequest.with_timeout(
     request: take HttpRequest,
     timeout_ms: Int,
 ) -> fresh HttpRequest
-    effects(native)
 
-pub native fn HttpRequest.with_retry(
+
+pub fn HttpRequest.with_retry(
     request: take HttpRequest,
     attempts: Int,
     backoff_ms: Int,
 ) -> fresh HttpRequest
-    effects(native)
 
-pub native fn HttpRequest.with_header(
+
+pub fn HttpRequest.with_header(
     request: take HttpRequest,
     name: String,
     value: String,
 ) -> fresh HttpRequest
-    effects(native)
 
-pub native fn Http.get(url: Url) -> Result<fresh HttpResponse, HttpError>
-    effects(native)
 
-pub native fn Http.post_json(url: Url, body: String) -> Result<fresh HttpResponse, HttpError>
-    effects(native)
+pub fn Http.get(url: Url) -> Result<fresh HttpResponse, HttpError>
 
-pub native fn Http.post_form(url: Url, body: String) -> Result<fresh HttpResponse, HttpError>
-    effects(native)
 
-pub native fn HttpResponse.status(response: HttpResponse) -> Int
-    effects(native)
+pub fn Http.post_json(url: Url, body: String) -> Result<fresh HttpResponse, HttpError>
 
-pub native fn HttpResponse.text(response: HttpResponse) -> fresh String
-    effects(native)
 
-pub native fn HttpResponse.bytes(response: HttpResponse) -> fresh Bytes
-    effects(native)
+pub fn Http.post_form(url: Url, body: String) -> Result<fresh HttpResponse, HttpError>
 
-pub native fn HttpResponse.lines(response: HttpResponse) -> fresh List<String>
-    effects(native)
 
-pub native fn HttpResponse.is_success(response: HttpResponse) -> Bool
-    effects(native)
+pub fn HttpResponse.status(response: HttpResponse) -> Int
 
-pub native fn HttpError.message(error: HttpError) -> String
-    effects(native)
+
+pub fn HttpResponse.text(response: HttpResponse) -> fresh String
+
+
+pub fn HttpResponse.bytes(response: HttpResponse) -> fresh Bytes
+
+
+pub fn HttpResponse.lines(response: HttpResponse) -> fresh List<String>
+
+
+pub fn HttpResponse.is_success(response: HttpResponse) -> Bool
+
+
+pub fn HttpError.message(error: HttpError) -> String

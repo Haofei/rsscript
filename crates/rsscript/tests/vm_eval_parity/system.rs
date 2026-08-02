@@ -5,7 +5,6 @@ use super::*;
 #[test]
 fn parity_args_intrinsics() {
     let source = r#"
-features: native
 
 fn main() -> Unit {
     let args = Args.all()
@@ -60,7 +59,6 @@ fn main() -> Unit {
 #[test]
 fn parity_clock_and_instant_intrinsics() {
     let source = r#"
-features: native
 
 fn main() -> Unit {
     let unix = Clock.system_unix_ms()

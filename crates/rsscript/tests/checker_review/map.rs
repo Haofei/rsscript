@@ -199,7 +199,6 @@ fn handle_request(request: read InboundMessage) -> OutboundMessage {
 fn review_map_marks_callers_of_review_required_functions() {
     let source = r#"
 fn store(value: read Payload) -> Unit
-    effects(retains(value))
 {
     return Unit
 }
@@ -229,7 +228,6 @@ struct Payload
 struct Cache
 
 fn Cache.remember(cache: read Cache, value: read Payload) -> Unit
-    effects(retains(value))
 
 fn wrapper(cache: read Cache, value: read Payload) -> Unit {
     Cache.remember(cache: read cache, value: read value)
@@ -254,13 +252,11 @@ fn wrapper(cache: read Cache, value: read Payload) -> Unit {
 fn review_map_marks_runtime_guarantee_boundaries() {
     let source = r#"
 fn checksum(data: read Bytes) -> UInt64
-    effects(noalloc, no_panic)
 {
     return 1
 }
 
 fn pure_helper(value: read Int) -> Int
-    effects(pure)
 {
     return value
 }
@@ -295,10 +291,8 @@ fn pure_helper(value: read Int) -> Int
 #[test]
 fn review_map_marks_native_calls_as_review_required_boundaries() {
     let source = r#"
-features: native
 
-native fn Native.echo(message: read String) -> String
-    effects(native)
+fn Native.echo(message: read String) -> String
 
 fn caller(message: read String) -> String {
     return Native.echo(message: read message)
@@ -344,11 +338,10 @@ fn load() -> Result<Unit, IOError> {
 #[test]
 fn review_map_records_explicit_fn_capture_contracts() {
     let source = r#"
-features: local
 
 fn run() -> Int {
     let offset = 2
-    local add = fn(value) captures(read offset) effects(pure) {
+    local add = fn(value) captures(read offset) {
         return value + offset
     }
     return add(40)
@@ -373,7 +366,7 @@ fn run() -> Int {
         region
             .reasons
             .iter()
-            .any(|reason| reason == "explicit closure effects(pure)"),
+            .any(|reason| reason == "explicit closure"),
         "{region:?}"
     );
 }
@@ -406,7 +399,6 @@ fn update(counter: read Counter) -> Unit {
 #[test]
 fn review_map_marks_writes_to_managed_state() {
     let source = r#"
-features: local
 
 struct Counter {
     value: Int
@@ -484,83 +476,8 @@ fn update(state: read State) -> Unit {
 }
 
 #[test]
-fn review_map_reports_file_features() {
-    let source = r#"
-features: local, native, device, ffi, reflection
-
-fn process() -> Unit {
-    return Unit
-}
-"#;
-    let map = review_map_sources(vec![("features.rss", source)]);
-
-    assert_eq!(
-        map.files[0].features,
-        vec!["device", "ffi", "local", "native", "reflection"]
-    );
-    assert_eq!(map.files[0].risk, ReviewMapFileRisk::High);
-    assert!(
-        map.files[0]
-            .reasons
-            .iter()
-            .any(|reason| reason == "local capability enabled")
-    );
-    assert!(
-        map.files[0]
-            .reasons
-            .iter()
-            .any(|reason| reason == "native boundary capability enabled")
-    );
-    assert!(
-        map.files[0]
-            .reasons
-            .iter()
-            .any(|reason| reason == "reserved device review marker enabled")
-    );
-    assert!(
-        map.files[0]
-            .reasons
-            .iter()
-            .any(|reason| reason == "reserved ffi review marker enabled")
-    );
-    assert!(
-        map.files[0]
-            .reasons
-            .iter()
-            .any(|reason| reason == "reserved reflection review marker enabled")
-    );
-    let human = format_review_map_human(&map);
-    assert!(
-        human.contains("features.rss: features device, ffi, local, native, reflection; risk high")
-    );
-    let json: Value =
-        serde_json::from_str(&format_review_map_json(&map)).expect("review map JSON should parse");
-    assert_eq!(json["files"][0]["features"][0], "device");
-    assert_eq!(json["files"][0]["features"][1], "ffi");
-    assert_eq!(json["files"][0]["features"][2], "local");
-    assert_eq!(json["files"][0]["features"][3], "native");
-    assert_eq!(json["files"][0]["features"][4], "reflection");
-    assert_eq!(json["files"][0]["risk"], "high");
-    assert!(
-        json["files"][0]["reasons"]
-            .as_array()
-            .is_some_and(|reasons| reasons
-                .iter()
-                .any(|reason| reason == "native boundary capability enabled"))
-    );
-    assert!(
-        json["files"][0]["reasons"]
-            .as_array()
-            .is_some_and(|reasons| reasons
-                .iter()
-                .any(|reason| reason == "reserved ffi review marker enabled"))
-    );
-}
-
-#[test]
 fn review_map_json_records_receiver_call_canonical_expansion() {
     let source = r#"
-features: local
 
 struct Cache
 

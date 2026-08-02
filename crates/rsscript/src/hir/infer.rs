@@ -9,75 +9,7 @@ use super::*;
 /// the sole remaining textual input here; inferred local types never round-trip
 /// through a display string.
 pub(crate) fn resolved_type_from_source(source: &str) -> ResolvedType {
-    let mut rest = source.trim();
-    let mut qualifiers = crate::semantic::TypeQualifiers::default();
-    loop {
-        if let Some(value) = rest.strip_prefix("fresh ").map(str::trim) {
-            qualifiers.fresh = true;
-            rest = value;
-        } else if let Some(value) = rest.strip_prefix("noescape ").map(str::trim) {
-            qualifiers.noescape = true;
-            rest = value;
-        } else if let Some(value) = rest.strip_prefix("owned ").map(str::trim) {
-            qualifiers.owned = true;
-            rest = value;
-        } else {
-            break;
-        }
-    }
-    if let Some(parameters) = rest.strip_prefix("Fn(")
-        && let Some(close) = matching_function_close(parameters)
-    {
-        let parameter_text = &parameters[..close];
-        let parameters = crate::text_util::split_top_level_type_args(parameter_text);
-        let (parameters, effects): (Vec<_>, Vec<_>) = parameters
-            .into_iter()
-            .filter(|parameter| !parameter.is_empty())
-            .map(|parameter| {
-                let (effect, parameter) = if let Some(parameter) = parameter.strip_prefix("read ") {
-                    (Some(crate::semantic::ResolvedParamEffect::Read), parameter)
-                } else if let Some(parameter) = parameter.strip_prefix("mut ") {
-                    (Some(crate::semantic::ResolvedParamEffect::Mut), parameter)
-                } else if let Some(parameter) = parameter.strip_prefix("take ") {
-                    (Some(crate::semantic::ResolvedParamEffect::Take), parameter)
-                } else {
-                    (None, parameter)
-                };
-                (resolved_type_from_source(parameter), effect)
-            })
-            .unzip();
-        let return_type = rest
-            .get("Fn(".len() + close + 1..)
-            .map(str::trim)
-            .and_then(|suffix| suffix.strip_prefix("->"))
-            .map(str::trim)
-            .filter(|suffix| !suffix.is_empty())
-            .map(resolved_type_from_source);
-        return ResolvedType::function(parameters, effects, return_type, qualifiers);
-    }
-    let mut resolved = ResolvedType::named(
-        type_root_name(rest),
-        type_arg_names(rest)
-            .unwrap_or_default()
-            .into_iter()
-            .map(resolved_type_from_source),
-    );
-    resolved.qualifiers = qualifiers;
-    resolved
-}
-
-fn matching_function_close(parameters: &str) -> Option<usize> {
-    let mut nested = 0usize;
-    for (index, character) in parameters.char_indices() {
-        match character {
-            '<' | '(' => nested = nested.saturating_add(1),
-            '>' => nested = nested.saturating_sub(1),
-            ')' if nested == 0 => return Some(index),
-            ')' => nested = nested.saturating_sub(1),
-            _ => {}
-        }
-    }
-    None
+    ResolvedType::from_display(source)
 }
 
 /// Infer the type of a built-in `Option`/`Result` variant constructor call so an
@@ -454,10 +386,8 @@ pub(super) fn substituted_field_type(
 
 use crate::text_util::builtin_generic_type_params;
 
-pub(super) fn capability_protocol(type_name: &ResolvedType) -> Option<String> {
-    type_name
-        .named_argument("Capability", 0)
-        .map(ToString::to_string)
+pub(super) fn dyn_protocol(type_name: &ResolvedType) -> Option<String> {
+    type_name.named_argument("Dyn", 0).map(ToString::to_string)
 }
 
 fn fn_return_type(type_name: &ResolvedType) -> Option<ResolvedType> {

@@ -1,5 +1,4 @@
 // expect: RS0804
-features: local
 
 struct Image {
     id: Int

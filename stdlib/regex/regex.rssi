@@ -1,29 +1,27 @@
-features: native
 
 struct Regex
 struct RegexError
 
-pub native fn Regex.compile(pattern: String) -> Result<fresh Regex, RegexError>
-    effects(native)
+pub fn Regex.compile(pattern: String) -> Result<fresh Regex, RegexError>
 
-pub native fn Regex.is_match(regex: Regex, value: String) -> Bool
-    effects(native)
 
-pub native fn Regex.find(regex: Regex, value: String) -> Option<fresh String>
-    effects(native)
+pub fn Regex.is_match(regex: Regex, value: String) -> Bool
 
-pub native fn Regex.captures(regex: Regex, value: String) -> fresh List<String>
-    effects(native)
 
-pub native fn Regex.replace_all(
+pub fn Regex.find(regex: Regex, value: String) -> Option<fresh String>
+
+
+pub fn Regex.captures(regex: Regex, value: String) -> fresh List<String>
+
+
+pub fn Regex.replace_all(
     regex: Regex,
     value: String,
     replacement: String,
 ) -> fresh String
-    effects(native)
 
-pub native fn Regex.split(regex: Regex, value: String) -> fresh List<String>
-    effects(native)
 
-pub native fn RegexError.message(error: RegexError) -> String
-    effects(native)
+pub fn Regex.split(regex: Regex, value: String) -> fresh List<String>
+
+
+pub fn RegexError.message(error: RegexError) -> String
