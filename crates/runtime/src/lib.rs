@@ -8,10 +8,13 @@ mod collections;
 mod compatibility;
 mod date;
 mod diagnostics;
+#[cfg(feature = "legacy-host")]
 mod domain;
 mod encoding;
+#[cfg(feature = "legacy-host")]
 mod env;
 mod error;
+#[cfg(feature = "legacy-host")]
 mod fs;
 mod hash;
 mod json;
@@ -20,13 +23,16 @@ mod math;
 #[cfg(feature = "net")]
 mod network;
 mod operation_context;
+#[cfg(feature = "legacy-host")]
 mod process;
+#[cfg(feature = "legacy-host")]
 mod random;
 mod regex;
 mod resource_budget;
 #[cfg(feature = "net")]
 mod socket;
 mod string_helpers;
+#[cfg(feature = "legacy-host")]
 mod tempdir;
 mod text_edit;
 #[cfg(feature = "net")]
@@ -45,8 +51,8 @@ macro_rules! runtime_abi_exports {
             AsyncPoll, CancellationToken, Context, DeferredPending, Executor, LoopControl,
             LoopResultPending, NativeAsyncCompleter, NativeAsyncPending, Pending, PollFnPending,
             ReadyPending, RssCancellationSource, RssCancellationToken, RuntimeServices, TaskGroup,
-            TaskGroupJoin, TaskGroupScope, ThenPending, TimerSleepPending, TryPending, WakeHandle,
-            cancellation_never, cancellation_source_cancel, cancellation_source_new,
+            TaskGroupJoin, TaskGroupScope, ThenPending, TimerError, TimerSleepPending, TryPending,
+            WakeHandle, cancellation_never, cancellation_source_cancel, cancellation_source_new,
             cancellation_source_token, cancellation_token_is_cancelled, native_async_pending,
             pending_defer, pending_loop_result, pending_poll_fn, pending_ready, pending_then,
             pending_try, run_pending, spawn_tokio_native, spawn_tokio_native_with_cancellation,
@@ -113,13 +119,14 @@ macro_rules! runtime_abi_exports {
             ManagedValue, RUNTIME_DIAGNOSTIC_PREFIX, Resource,
             install_runtime_diagnostic_panic_hook,
         };
+        #[cfg(feature = "legacy-host")]
         pub use crate::domain::{
-            CsvError, HttpError, HttpRequest, HttpResponse, Row, RowBuffer, TimerError,
-            csv_open_read, csv_parse_row, csv_read_into, csv_read_into_with_budget, csv_rows,
-            http_error_message, http_request_debug_summary, http_request_json,
-            http_request_with_header, http_request_with_retry, http_request_with_timeout,
-            http_response_bytes, http_response_is_success, http_response_lines,
-            http_response_status, http_response_text, row_buffer_new, row_field_string,
+            CsvError, HttpError, HttpRequest, HttpResponse, Row, RowBuffer, csv_open_read,
+            csv_parse_row, csv_read_into, csv_read_into_with_budget, csv_rows, http_error_message,
+            http_request_debug_summary, http_request_json, http_request_with_header,
+            http_request_with_retry, http_request_with_timeout, http_response_bytes,
+            http_response_is_success, http_response_lines, http_response_status,
+            http_response_text, row_buffer_new, row_field_string,
         };
         #[cfg(feature = "net")]
         pub use crate::domain::{
@@ -133,11 +140,13 @@ macro_rules! runtime_abi_exports {
             decode_error_message, gzip_decompress_bytes, gzip_decompress_bytes_with_budget,
             hex_decode, hex_encode, hex_encode_string, url_decode_component, url_encode_component,
         };
+        #[cfg(feature = "legacy-host")]
         pub use crate::env::{
             env_current_dir, env_get, env_get_or_default, env_home_dir, env_run_workspace_root,
             env_set, env_set_current_dir, env_temp_dir,
         };
         pub use crate::error::{RuntimeError, RuntimeErrorKind, SourceSpan};
+        #[cfg(feature = "legacy-host")]
         #[allow(deprecated)]
         pub use crate::fs::{
             File, FileError, FileMetadata, RUNTIME_DIRECTORY_MAX_DEPTH,
@@ -160,9 +169,11 @@ macro_rules! runtime_abi_exports {
             path_parent, path_resolve_relative, path_safe_relative, path_starts_with,
             path_to_string, path_with_extension,
         };
+        #[cfg(feature = "legacy-host")]
+        pub use crate::hash::hash_sha256_file;
         pub use crate::hash::{
-            hash_sha3_224_bytes, hash_sha3_256_bytes, hash_sha256_bytes, hash_sha256_file,
-            hash_sha256_string, hash_shake128_bytes, hmac_sha256_bytes, hmac_sha256_string,
+            hash_sha3_224_bytes, hash_sha3_256_bytes, hash_sha256_bytes, hash_sha256_string,
+            hash_shake128_bytes, hmac_sha256_bytes, hmac_sha256_string,
         };
         pub use crate::json::{
             JsonError, JsonValue, json_array, json_array_bools, json_array_contains_prefix,
@@ -177,11 +188,13 @@ macro_rules! runtime_abi_exports {
             json_field_optional_bool, json_field_optional_int, json_field_optional_string,
             json_field_string, json_int_at, json_int_at_or, json_int_field, json_is_array,
             json_is_null, json_is_object, json_kind, json_object, json_object_keys,
-            json_object_len, json_parse, json_parse_file, json_quote_string, json_raw_field,
-            json_string_array, json_string_at, json_string_at_or, json_string_field, json_strings,
-            json_to_string, json_to_string_at, json_to_string_at_or, json_value, json_value_at,
-            json_values, toml_parse_file, yaml_parse, yaml_parse_file,
+            json_object_len, json_parse, json_quote_string, json_raw_field, json_string_array,
+            json_string_at, json_string_at_or, json_string_field, json_strings, json_to_string,
+            json_to_string_at, json_to_string_at_or, json_value, json_value_at, json_values,
+            yaml_parse,
         };
+        #[cfg(feature = "legacy-host")]
+        pub use crate::json::{json_parse_file, toml_parse_file, yaml_parse_file};
         #[allow(deprecated)]
         pub use crate::managed::{
             Managed, ManagedRead, ManagedWrite, WeakManaged, manage, manage_at, unwrap_runtime,
@@ -195,6 +208,7 @@ macro_rules! runtime_abi_exports {
             math_trunc_float, math_wrapping_add, math_wrapping_mul, math_wrapping_sub,
         };
         pub use crate::operation_context::OperationContext;
+        #[cfg(feature = "legacy-host")]
         pub use crate::process::{
             DEFAULT_RUNTIME_PROCESS_TIMEOUT_MS, ProcessEnv, ProcessEvent, ProcessOutput,
             ProcessRequest, RUNTIME_PROCESS_CONCURRENCY_CEILING,
@@ -208,6 +222,7 @@ macro_rules! runtime_abi_exports {
             process_run_stdout_timeout_async, process_run_timeout, process_run_timeout_async,
             process_stream,
         };
+        #[cfg(feature = "legacy-host")]
         pub use crate::random::{
             random_bool, random_bytes, random_float, random_int, random_string, uuid_new_v4,
         };
@@ -244,6 +259,7 @@ macro_rules! runtime_abi_exports {
             string_view_contains, string_view_is_empty, string_view_len, string_view_slice,
             string_view_starts_with, string_view_to_string,
         };
+        #[cfg(feature = "legacy-host")]
         pub use crate::tempdir::{
             TempDir, tempdir_keep, tempdir_new, tempdir_new_in, tempdir_path,
         };
@@ -277,6 +293,7 @@ pub mod host {
         spawn_tokio_native, spawn_tokio_native_with_cancellation,
     };
 
+    #[cfg(feature = "legacy-host")]
     pub mod filesystem {
         pub use crate::{
             File, FileError, RuntimeBytes, RuntimePath, directory_create_all, directory_exists,
@@ -286,6 +303,7 @@ pub mod host {
         };
     }
 
+    #[cfg(feature = "legacy-host")]
     pub mod process {
         pub use crate::{
             ProcessEnv, ProcessEvent, ProcessOutput, ProcessRequest, process_run_request_async,
@@ -340,10 +358,12 @@ pub mod api {
         pub use crate::net;
 
         pub mod data {
+            #[cfg(feature = "legacy-host")]
+            pub use crate::toml_parse_file;
             pub use crate::{
                 DecodeError, JsonError, JsonValue, base64_decode, base64_encode_bytes,
                 gzip_decompress_bytes_with_budget, hash_sha256_bytes, hex_decode, hex_encode,
-                json_parse, json_to_string, toml_parse_file, yaml_parse,
+                json_parse, json_to_string, yaml_parse,
             };
         }
 

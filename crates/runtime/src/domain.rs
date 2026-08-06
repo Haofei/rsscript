@@ -108,19 +108,6 @@ pub fn http_error_message(error: &HttpError) -> String {
     error.to_string()
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TimerError {
-    message: String,
-}
-
-impl fmt::Display for TimerError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}", self.message)
-    }
-}
-
-impl std::error::Error for TimerError {}
-
 impl From<CsvError> for HttpError {
     fn from(error: CsvError) -> Self {
         Self {

@@ -625,6 +625,23 @@ fn runtime_does_not_depend_on_the_compiler_package() {
         "the default runtime must not enable concrete network services"
     );
 
+    let runtime_source = read(&root.join("crates/runtime/src/lib.rs"));
+    for host_module in ["domain", "env", "fs", "process", "random", "tempdir"] {
+        assert!(
+            runtime_source.contains(&format!(
+                "#[cfg(feature = \"legacy-host\")]\nmod {host_module};"
+            )),
+            "runtime-core must not compile concrete `{host_module}` services"
+        );
+    }
+    for optional_dependency in ["rand", "rss-process-guard", "uuid"] {
+        assert_eq!(
+            manifest["dependencies"][optional_dependency]["optional"].as_bool(),
+            Some(true),
+            "runtime-core dependency `{optional_dependency}` must be opt-in"
+        );
+    }
+
     assert!(
         !dependencies.contains("rsscript"),
         "{} must not depend on the rsscript compiler/package",

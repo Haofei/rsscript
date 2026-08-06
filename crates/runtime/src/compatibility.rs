@@ -6,10 +6,9 @@
 
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use crate::{
-    OperationContext, ResourceBudget, RssCancellationToken, RssDeadline, RuntimeServices,
-    async_runtime::ProcessPermit,
-};
+#[cfg(feature = "legacy-host")]
+use crate::async_runtime::ProcessPermit;
+use crate::{OperationContext, ResourceBudget, RssCancellationToken, RssDeadline, RuntimeServices};
 
 /// The only process-wide runtime factory. It exists solely for generated-ABI
 /// compatibility entrypoints; canonical operations receive an explicit owner.
@@ -44,6 +43,7 @@ pub(crate) fn generated_abi_operation_context(
     )
 }
 
+#[cfg(feature = "legacy-host")]
 pub(crate) fn generated_abi_process_permit(
     cancellation: Option<&RssCancellationToken>,
 ) -> Result<ProcessPermit, String> {

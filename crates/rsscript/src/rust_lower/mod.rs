@@ -337,7 +337,7 @@ pub fn lower_sources_to_rust_package_with_options(
     // and enable incremental compilation so repeated builds are fast. The `dev`
     // profile gets a light opt-level for runnable-but-quick debug builds.
     let cargo_toml = format!(
-        "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[profile.release]\noverflow-checks = true\ncodegen-units = 256\nlto = false\nincremental = true\n\n[profile.dev]\nopt-level = 1\nincremental = true\ncodegen-units = 256\n\n[dependencies]\nrsscript-runtime = {{ path = \"{}\" }}\n{serde_dependency_toml}{native_dependency_toml}",
+        "[package]\nname = \"{package_name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[workspace]\n\n[profile.release]\noverflow-checks = true\ncodegen-units = 256\nlto = false\nincremental = true\n\n[profile.dev]\nopt-level = 1\nincremental = true\ncodegen-units = 256\n\n[dependencies]\nrsscript-runtime = {{ path = \"{}\", features = [\"legacy-host\", \"net\"] }}\n{serde_dependency_toml}{native_dependency_toml}",
         toml_string(runtime_path),
     );
     let main_rs = rust_package_main(&program, &package_name);

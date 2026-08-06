@@ -27,7 +27,9 @@ rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-lowering = { path = "../rsscript-lowering" }
 rsscript-provider-api = { path = "../rsscript-provider-api" }
 rsscript-semantics = { path = "../rsscript-semantics" }
-rsscript-runtime = { path = "../runtime", default-features = false, features = ["core"] }
+# Transitional VM/AOT compatibility intrinsics opt into the legacy host layer;
+# the runtime's own default and provider-neutral core stay host-free.
+rsscript-runtime = { path = "../runtime", default-features = false, features = ["core", "legacy-host"] }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-work-budget = { path = "../rsscript-work-budget" }
 serde = { version = "1", features = ["derive"] }

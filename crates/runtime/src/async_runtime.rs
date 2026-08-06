@@ -4,7 +4,18 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::{Duration, Instant};
 
-use crate::domain::TimerError;
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TimerError {
+    message: String,
+}
+
+impl std::fmt::Display for TimerError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+
+impl std::error::Error for TimerError {}
 use tracing::info;
 
 pub enum AsyncPoll<T> {
@@ -678,6 +689,7 @@ impl OwnedTokioRuntime {
     }
 }
 
+#[cfg(feature = "legacy-host")]
 struct ProcessConcurrency {
     active: Mutex<usize>,
     ready: Condvar,
@@ -685,11 +697,13 @@ struct ProcessConcurrency {
     closed: AtomicBool,
 }
 
+#[cfg(feature = "legacy-host")]
 pub(crate) struct ProcessPermit {
     concurrency: Arc<ProcessConcurrency>,
     _runtime_owner: Arc<RuntimeServices>,
 }
 
+#[cfg(feature = "legacy-host")]
 impl Drop for ProcessPermit {
     fn drop(&mut self) {
         let mut active = self
@@ -702,6 +716,7 @@ impl Drop for ProcessPermit {
     }
 }
 
+#[cfg(feature = "legacy-host")]
 impl ProcessConcurrency {
     fn new(limit: usize) -> Self {
         Self {
@@ -753,6 +768,7 @@ impl ProcessConcurrency {
 pub struct RuntimeServices {
     runtime: OwnedTokioRuntime,
     worker_threads: usize,
+    #[cfg(feature = "legacy-host")]
     process_concurrency: Arc<ProcessConcurrency>,
     #[cfg(feature = "net")]
     http_client: reqwest::Client,
@@ -779,6 +795,7 @@ impl RuntimeServices {
         Ok(Self {
             runtime,
             worker_threads,
+            #[cfg(feature = "legacy-host")]
             process_concurrency: Arc::new(ProcessConcurrency::new(
                 std::thread::available_parallelism()
                     .map(usize::from)
@@ -790,6 +807,7 @@ impl RuntimeServices {
     }
 
     pub fn shutdown(&self, timeout: Duration) {
+        #[cfg(feature = "legacy-host")]
         self.process_concurrency.shutdown();
         self.runtime.shutdown(timeout);
     }
@@ -806,6 +824,7 @@ impl RuntimeServices {
         self.runtime.handle()
     }
 
+    #[cfg(feature = "legacy-host")]
     pub(crate) fn acquire_process_permit(
         self: &Arc<Self>,
         cancellation: Option<&RssCancellationToken>,

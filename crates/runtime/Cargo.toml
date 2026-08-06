@@ -14,7 +14,14 @@ path = "src/lib.rs"
 # networking only from their composition root.
 default = ["core"]
 core = []
-net = ["tokio/net", "dep:reqwest", "dep:tokio-tungstenite"]
+legacy-host = [
+    "dep:rand",
+    "dep:rss-process-guard",
+    "dep:uuid",
+    "tokio/fs",
+    "tokio/io-util",
+]
+net = ["legacy-host", "tokio/net", "dep:reqwest", "dep:tokio-tungstenite"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -29,16 +36,16 @@ chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 flate2 = "1"
 hex = "0.4"
 hmac = "0.12"
-uuid = { version = "1", features = ["v4"] }
-rand = "0.8"
+uuid = { version = "1", features = ["v4"], optional = true }
+rand = { version = "0.8", optional = true }
 percent-encoding = "2"
 futures-util = "0.3"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"], optional = true }
 tracing = "0.1"
 imbl = "7.0.0"
-rss-process-guard = { path = "../process-guard" }
+rss-process-guard = { path = "../process-guard", optional = true }
 
 [dev-dependencies]
 static_assertions = "1"

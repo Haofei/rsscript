@@ -24,7 +24,10 @@ and standard-package interface sources are owned by the data-only
 `rsscript-interface-catalog`. These are re-exported through the compatibility
 façade while the remaining checks are migrated. `rsscript-lowering` now owns the
 provider-neutral `ExecutableIr` gate; the VM and Rust AOT path both receive this
-checked representation, and JIT remains downstream of the VM unit. The runtime
-still contains concrete host services behind explicit composition, and its
-default feature set is network-free. The current roadmap prioritizes those
-boundaries over new language, JIT, self-hosting, or package-system scope.
+checked representation, and JIT remains downstream of the VM unit. Runtime-core
+now compiles without filesystem, environment, process, network, entropy, or
+temporary-directory modules and its default feature set is network-free. The
+existing VM/AOT compatibility surface still opts into those modules through the
+explicit `legacy-host` composition feature while external calls move to provider
+packages. The current roadmap prioritizes those boundaries over new language,
+JIT, self-hosting, or package-system scope.
