@@ -298,7 +298,7 @@ pub struct EvalExecutionReport {
     pub failure: Option<EvalError>,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize)]
 pub struct ExecutionUsage {
     pub steps_consumed: u64,
     pub allocation_bytes_consumed: usize,

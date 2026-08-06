@@ -452,6 +452,7 @@ impl LinkedPackage<'_> {
         };
         let failure = output.failure.map(RuntimeError::from);
         ExecutionReport {
+            schema: EXECUTION_REPORT_SCHEMA,
             artifact_digest: self.package.module_digest().to_string(),
             termination_reason: failure
                 .as_ref()
@@ -490,8 +491,12 @@ impl Default for Runtime {
 }
 
 #[cfg(feature = "execution")]
-#[derive(Debug, Clone, PartialEq)]
+pub const EXECUTION_REPORT_SCHEMA: &str = "rsscript.execution_report.v1";
+
+#[cfg(feature = "execution")]
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ExecutionReport {
+    pub schema: &'static str,
     pub artifact_digest: String,
     pub termination_reason: TerminationReason,
     pub usage: ExecutionUsage,
@@ -513,6 +518,7 @@ impl ExecutionReport {
         diagnostics: Vec<Diagnostic>,
     ) -> Self {
         Self {
+            schema: EXECUTION_REPORT_SCHEMA,
             artifact_digest: artifact_digest.into(),
             termination_reason: failure.reason,
             usage: ExecutionUsage::default(),
@@ -637,7 +643,8 @@ impl fmt::Display for CompileError {
 impl Error for CompileError {}
 
 #[cfg(feature = "execution")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum TerminationReason {
     Completed,
     ScriptError,
@@ -676,7 +683,7 @@ impl TerminationReason {
 }
 
 #[cfg(feature = "execution")]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct RuntimeError {
     pub reason: TerminationReason,
     pub message: String,
@@ -827,6 +834,10 @@ mod tests {
         assert_eq!(report.artifact_digest, loaded.module_digest());
         assert!(report.usage.steps_consumed > 0);
         assert_eq!(report.termination_reason.as_str(), "completed");
+        let json = serde_json::to_value(&report).expect("serialize execution report");
+        assert_eq!(json["schema"], EXECUTION_REPORT_SCHEMA);
+        assert_eq!(json["termination_reason"], "completed");
+        assert!(json["usage"]["steps_consumed"].as_u64().unwrap() > 0);
         assert_eq!(
             CompileErrorCode::PackageSnapshot.as_str(),
             "package_snapshot"

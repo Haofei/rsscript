@@ -1933,6 +1933,9 @@ dependencies = [
 [[package]]
 name = "rsscript-operation"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "rsscript-provider-api"
@@ -2044,6 +2047,8 @@ dependencies = [
  "rsscript-compiler",
  "rsscript-operation",
  "rsscript-provider-api",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

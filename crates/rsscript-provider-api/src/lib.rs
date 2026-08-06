@@ -166,7 +166,7 @@ impl ProviderAuthority {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProviderCallTrace {
     pub call_id: OperationId,
     pub provider_id: String,

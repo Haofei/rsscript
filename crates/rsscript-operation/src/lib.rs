@@ -49,7 +49,8 @@ impl MonotonicDeadline {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, serde::Serialize)]
+#[serde(transparent)]
 pub struct OperationId(pub u64);
 
 #[derive(Debug, Clone, Default)]
