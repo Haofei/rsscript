@@ -876,6 +876,24 @@ impl RegVmExecutable {
         })
     }
 
+    pub fn from_bytecode_with_operation(
+        bytes: &[u8],
+        operation: &rsscript_operation::OperationContext,
+    ) -> Result<Self, EvalError> {
+        let verified = bytecode::verify_bytes_with_context(
+            bytes,
+            rsscript_bytecode::VerificationContext {
+                cancellation: operation.cancellation.as_ref(),
+                deadline: operation.deadline,
+            },
+        )?;
+        let (artifact, unit) = verified.into_parts();
+        Ok(Self {
+            unit: Rc::new(unit),
+            artifact,
+        })
+    }
+
     /// Serialize this already-verified executable as `rsscript.bytecode.v1`.
     pub fn to_bytecode(&self) -> Result<Vec<u8>, EvalError> {
         self.artifact

@@ -243,7 +243,7 @@ pub struct VerificationContext<'a> {
 }
 
 impl VerificationContext<'_> {
-    fn check(self) -> Result<(), BytecodeError> {
+    pub fn check(self) -> Result<(), BytecodeError> {
         if self
             .cancellation
             .is_some_and(CancellationToken::is_cancelled)

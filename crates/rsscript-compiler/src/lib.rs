@@ -13,29 +13,33 @@ use std::path::Path;
 pub mod language {
     pub use rsscript_compiler_core::{
         Definition, Diagnostic, DiagnosticExplanation, Reference, RssDocumentSymbol, Severity,
-        Span, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, analyze_source_with_core,
-        analyze_source_with_interfaces, analyze_sources_with_interfaces, document_symbols,
-        explain_diagnostic_code, format_source, lint_source, symbol_index,
+        Span, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
+        analyze_source_result_with_operation, analyze_source_with_core,
+        analyze_source_with_interfaces, analyze_source_with_interfaces_result_with_operation,
+        analyze_sources_with_interfaces, document_symbols, explain_diagnostic_code, format_source,
+        lint_source, symbol_index,
     };
 }
 #[cfg(feature = "execution")]
 pub use rsscript_compiler_core::ExecutionUsage;
 #[cfg(feature = "execution")]
 pub use rsscript_compiler_core::WorkspaceSnapshot;
-#[cfg(feature = "execution")]
-pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
+pub use rsscript_operation::{
+    CancellationToken, MonotonicDeadline, OperationAbort, OperationContext, OperationId,
+};
 #[cfg(feature = "execution")]
 pub use rsscript_provider_api as provider;
 
 #[cfg(feature = "execution")]
 use provider::{NativeInterpreterFn, ProviderDescriptor, ProviderFunction, ProviderLoadError};
-use rsscript_compiler_core::analyze_source;
 #[cfg(feature = "execution")]
 use rsscript_compiler_core::{
     EvalError, ExecutionFailureKind, ExternalFunctionRegistry, NativeValue, PackageAnalysis,
     RegVmExecutable, VmLimits, load_workspace_snapshot, reg_vm_compile_package_input,
-    reg_vm_compile_source, reg_vm_compile_validated, validate_sources_with_interfaces,
+    reg_vm_compile_source, reg_vm_compile_validated, validate_source_with_operation,
+    validate_sources_with_interfaces, validate_sources_with_interfaces_with_operation,
 };
+use rsscript_compiler_core::{analyze_source, analyze_source_result_with_operation};
 
 #[derive(Default)]
 pub struct Compiler;
@@ -45,9 +49,42 @@ impl Compiler {
         analyze_source(file, source)
     }
 
+    pub fn check_with_operation(
+        &self,
+        file: &str,
+        source: &str,
+        operation: &OperationContext,
+    ) -> Vec<Diagnostic> {
+        analyze_source_result_with_operation(file, source, operation).into_diagnostics()
+    }
+
     #[cfg(feature = "execution")]
     pub fn compile(&self, file: &str, source: &str) -> Result<CompiledPackage, CompileError> {
         let executable = reg_vm_compile_source(file, source).map_err(CompileError::from)?;
+        Ok(CompiledPackage {
+            executable,
+            analysis: None,
+            snapshot_digest: None,
+        })
+    }
+
+    #[cfg(feature = "execution")]
+    pub fn compile_with_operation(
+        &self,
+        file: &str,
+        source: &str,
+        operation: &OperationContext,
+    ) -> Result<CompiledPackage, CompileError> {
+        let validated =
+            validate_source_with_operation(file, source, operation).map_err(|diagnostics| {
+                match operation.check() {
+                    Ok(()) => CompileError::Diagnostics(diagnostics),
+                    Err(abort) => CompileError::from(abort),
+                }
+            })?;
+        operation.check().map_err(CompileError::from)?;
+        let executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
+        operation.check().map_err(CompileError::from)?;
         Ok(CompiledPackage {
             executable,
             analysis: None,
@@ -67,6 +104,29 @@ impl Compiler {
         let validated = validate_sources_with_interfaces(sources, interfaces)
             .map_err(CompileError::Diagnostics)?;
         let executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
+        Ok(CompiledPackage {
+            executable,
+            analysis: None,
+            snapshot_digest: None,
+        })
+    }
+
+    #[cfg(feature = "execution")]
+    pub fn compile_with_interfaces_and_operation(
+        &self,
+        sources: &[(&str, &str)],
+        interfaces: &[(&str, &str)],
+        operation: &OperationContext,
+    ) -> Result<CompiledPackage, CompileError> {
+        let validated =
+            validate_sources_with_interfaces_with_operation(sources, interfaces, operation)
+                .map_err(|diagnostics| match operation.check() {
+                    Ok(()) => CompileError::Diagnostics(diagnostics),
+                    Err(abort) => CompileError::from(abort),
+                })?;
+        operation.check().map_err(CompileError::from)?;
+        let executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
+        operation.check().map_err(CompileError::from)?;
         Ok(CompiledPackage {
             executable,
             analysis: None,
@@ -114,8 +174,40 @@ impl Compiler {
     }
 
     #[cfg(feature = "execution")]
+    pub fn build_with_operation(
+        &self,
+        snapshot: &WorkspaceSnapshot,
+        operation: &OperationContext,
+    ) -> Result<CompiledPackage, CompileError> {
+        operation.check().map_err(CompileError::from)?;
+        let package = self.build(snapshot)?;
+        operation.check().map_err(CompileError::from)?;
+        Ok(package)
+    }
+
+    #[cfg(feature = "execution")]
     pub fn load_verified(&self, bytecode: &[u8]) -> Result<CompiledPackage, CompileError> {
         let executable = RegVmExecutable::from_bytecode(bytecode).map_err(CompileError::from)?;
+        Ok(CompiledPackage {
+            executable,
+            analysis: None,
+            snapshot_digest: None,
+        })
+    }
+
+    #[cfg(feature = "execution")]
+    pub fn load_verified_with_operation(
+        &self,
+        bytecode: &[u8],
+        operation: &OperationContext,
+    ) -> Result<CompiledPackage, CompileError> {
+        operation.check().map_err(CompileError::from)?;
+        let executable = RegVmExecutable::from_bytecode_with_operation(bytecode, operation)
+            .map_err(|error| match operation.check() {
+                Ok(()) => CompileError::from(error),
+                Err(abort) => CompileError::from(abort),
+            })?;
+        operation.check().map_err(CompileError::from)?;
         Ok(CompiledPackage {
             executable,
             analysis: None,
@@ -125,6 +217,7 @@ impl Compiler {
 }
 
 #[cfg(feature = "execution")]
+#[derive(Debug)]
 pub struct CompiledPackage {
     executable: RegVmExecutable,
     analysis: Option<PackageAnalysis>,
@@ -391,6 +484,10 @@ pub enum CompileError {
         code: CompileErrorCode,
         message: String,
     },
+    Operation {
+        code: CompileErrorCode,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -398,13 +495,32 @@ pub enum CompileErrorCode {
     Diagnostics,
     PackageSnapshot,
     Bytecode,
+    Cancelled,
+    DeadlineExceeded,
 }
 
 impl CompileError {
     pub fn code(&self) -> CompileErrorCode {
         match self {
             Self::Diagnostics(_) => CompileErrorCode::Diagnostics,
-            Self::Package { code, .. } | Self::Bytecode { code, .. } => *code,
+            Self::Package { code, .. }
+            | Self::Bytecode { code, .. }
+            | Self::Operation { code, .. } => *code,
+        }
+    }
+}
+
+impl From<OperationAbort> for CompileError {
+    fn from(abort: OperationAbort) -> Self {
+        match abort {
+            OperationAbort::Cancelled => Self::Operation {
+                code: CompileErrorCode::Cancelled,
+                message: "compiler operation cancelled".to_string(),
+            },
+            OperationAbort::DeadlineExceeded => Self::Operation {
+                code: CompileErrorCode::DeadlineExceeded,
+                message: "compiler operation deadline exceeded".to_string(),
+            },
         }
     }
 }
@@ -446,6 +562,7 @@ impl fmt::Display for CompileError {
             Self::Bytecode { message, .. } => {
                 write!(formatter, "bytecode compilation failed: {message}")
             }
+            Self::Operation { message, .. } => formatter.write_str(message),
         }
     }
 }
@@ -599,6 +716,40 @@ mod tests {
         assert_eq!(report.termination_reason, TerminationReason::Completed);
         assert_eq!(report.artifact_digest, loaded.module_digest());
         assert!(report.usage.steps_consumed > 0);
+    }
+
+    #[test]
+    fn compiler_and_loader_observe_shared_operation_control() {
+        let compiler = Compiler;
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = OperationContext {
+            cancellation: Some(cancellation),
+            ..OperationContext::default()
+        };
+        let error = compiler
+            .compile_with_operation(
+                "cancelled.rss",
+                "fn main() -> Unit { return Unit }",
+                &cancelled,
+            )
+            .expect_err("cancelled compile");
+        assert_eq!(error.code(), CompileErrorCode::Cancelled);
+
+        let package = compiler
+            .compile("main.rss", "fn main() -> Unit { return Unit }")
+            .expect("compile fixture");
+        let expired = OperationContext {
+            deadline: Some(MonotonicDeadline::at(
+                std::time::Instant::now() - std::time::Duration::from_millis(1),
+            )),
+            ..OperationContext::default()
+        };
+        let error = compiler
+            .load_verified_with_operation(&package.bytecode().unwrap(), &expired)
+            .expect_err("expired verifier deadline");
+        assert_eq!(error.code(), CompileErrorCode::DeadlineExceeded);
+        assert!(error.to_string().contains("deadline exceeded"));
     }
 
     #[test]

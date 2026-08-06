@@ -52,6 +52,35 @@ impl MonotonicDeadline {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct OperationId(pub u64);
 
+#[derive(Debug, Clone, Default)]
+pub struct OperationContext {
+    pub id: OperationId,
+    pub cancellation: Option<CancellationToken>,
+    pub deadline: Option<MonotonicDeadline>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationAbort {
+    Cancelled,
+    DeadlineExceeded,
+}
+
+impl OperationContext {
+    pub fn check(&self) -> Result<(), OperationAbort> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Err(OperationAbort::Cancelled);
+        }
+        if self.deadline.is_some_and(MonotonicDeadline::is_expired) {
+            return Err(OperationAbort::DeadlineExceeded);
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

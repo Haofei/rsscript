@@ -49,13 +49,15 @@ mod text_util;
 mod vm_value;
 
 pub use analyzer::{
-    analyze_source, analyze_source_result, analyze_source_with_core,
-    analyze_source_with_interfaces, analyze_source_with_interfaces_result,
+    analyze_source, analyze_source_result, analyze_source_result_with_operation,
+    analyze_source_with_core, analyze_source_with_interfaces,
+    analyze_source_with_interfaces_result, analyze_source_with_interfaces_result_with_operation,
     analyze_source_with_interfaces_without_core, analyze_source_without_core,
     analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
     analyze_sources_with_interfaces_without_core,
     analyze_sources_with_interfaces_without_core_result, analyze_syntax_source, core_interfaces,
-    standard_package_interfaces, validate_source, validate_sources_with_interfaces,
+    standard_package_interfaces, validate_source, validate_source_with_operation,
+    validate_sources_with_interfaces, validate_sources_with_interfaces_with_operation,
     validate_sources_with_interfaces_without_core,
 };
 pub use core_index::core_package_index_json;

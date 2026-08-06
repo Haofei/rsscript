@@ -6,15 +6,15 @@
 //! deliberately document-oriented so editor clients do not couple themselves to
 //! analyzer databases, runtime values, VM registers, or optional backends.
 
-use rsscript_operation::{CancellationToken, MonotonicDeadline};
+use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationContext};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub use rsscript_compiler::language::{
     Definition, Diagnostic, DiagnosticExplanation, Reference, RssDocumentSymbol, Severity, Span,
-    SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, analyze_source_with_core,
-    analyze_source_with_interfaces, analyze_sources_with_interfaces, document_symbols,
-    explain_diagnostic_code, format_source, lint_source, symbol_index,
+    SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, analyze_source_result_with_operation,
+    analyze_source_with_interfaces_result_with_operation, analyze_sources_with_interfaces,
+    document_symbols, explain_diagnostic_code, format_source, lint_source, symbol_index,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,20 +166,36 @@ impl LanguageService {
             .filter(|(_, candidate)| candidate.kind == DocumentKind::Interface)
             .map(|(path, candidate)| (path.as_str(), candidate.text.as_ref()))
             .collect::<Vec<_>>();
+        let operation = OperationContext {
+            cancellation: request.cancellation.cloned(),
+            deadline: request.deadline,
+            ..OperationContext::default()
+        };
         let mut diagnostics = match document.kind {
             DocumentKind::Source if interfaces.is_empty() => {
-                analyze_source_with_core(path, &document.text)
+                analyze_source_result_with_operation(path, &document.text, &operation)
+                    .into_diagnostics()
             }
-            DocumentKind::Source => {
-                analyze_source_with_interfaces(path, &document.text, &interfaces)
-            }
+            DocumentKind::Source => analyze_source_with_interfaces_result_with_operation(
+                path,
+                &document.text,
+                &interfaces,
+                &operation,
+            )
+            .into_diagnostics(),
             DocumentKind::Interface => {
                 let visible = interfaces
                     .iter()
                     .copied()
                     .filter(|(candidate, _)| *candidate != path)
                     .collect::<Vec<_>>();
-                analyze_source_with_interfaces(path, &document.text, &visible)
+                analyze_source_with_interfaces_result_with_operation(
+                    path,
+                    &document.text,
+                    &visible,
+                    &operation,
+                )
+                .into_diagnostics()
             }
         };
         diagnostics.extend(lint_source(path, &document.text));

@@ -1809,6 +1809,7 @@ dependencies = [
 name = "rsscript-work-budget"
 version = "0.1.0"
 dependencies = [
+ "rsscript-operation",
  "rsscript-source-model",
 ]
 

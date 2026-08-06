@@ -17,6 +17,7 @@ pub enum FrontendStopReason {
     Diagnostics,
     SemanticRecursion,
     Cancelled,
+    DeadlineExceeded,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

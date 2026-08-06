@@ -57,6 +57,9 @@ pub(crate) fn budget_completion(budget: &FrontendBudget) -> FrontendCompletion {
         Some(BudgetExhaustion::Cancelled) => {
             FrontendCompletion::Incomplete(FrontendStopReason::Cancelled)
         }
+        Some(BudgetExhaustion::DeadlineExceeded) => {
+            FrontendCompletion::Incomplete(FrontendStopReason::DeadlineExceeded)
+        }
     }
 }
 

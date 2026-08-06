@@ -1,8 +1,8 @@
 use crate::text_util::{split_top_level_type_args, type_arg_names, type_root_name};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+
+use rsscript_operation::OperationContext;
 
 use crate::checks;
 use crate::checks::budget::{
@@ -343,18 +343,18 @@ fn analyze_input(input: AnalysisInput<'_>) -> Vec<Diagnostic> {
 fn analyze_input_with_budget(
     input: AnalysisInput<'_>,
     limits: FrontendBudgetLimits,
-    cancel: Option<Arc<AtomicBool>>,
+    operation: Option<&OperationContext>,
 ) -> Vec<Diagnostic> {
-    analyze_input_result(input, limits, cancel).into_diagnostics()
+    analyze_input_result(input, limits, operation).into_diagnostics()
 }
 
 fn analyze_input_result(
     input: AnalysisInput<'_>,
     limits: FrontendBudgetLimits,
-    cancel: Option<Arc<AtomicBool>>,
+    operation: Option<&OperationContext>,
 ) -> AnalysisResult {
     let flavor = input.flavor;
-    let budget = FrontendBudget::with_cancellation(limits, input.start_span(), cancel);
+    let budget = FrontendBudget::with_operation(limits, input.start_span(), operation);
     let prepared = prepare_analysis(input, budget);
     match flavor {
         AnalysisFlavor::SyntaxOnly => analyze_syntax_program(prepared),
@@ -384,8 +384,32 @@ pub fn analyze_source_result(file: &str, source: &str) -> AnalysisResult {
     )
 }
 
+pub fn analyze_source_result_with_operation(
+    file: &str,
+    source: &str,
+    operation: &OperationContext,
+) -> AnalysisResult {
+    analyze_input_result(
+        AnalysisInput {
+            sources: AnalysisSources::Single { file, source },
+            interfaces: &[],
+            flavor: AnalysisFlavor::FullWithStandardPackages,
+        },
+        FrontendBudgetLimits::default(),
+        Some(operation),
+    )
+}
+
 pub fn validate_source(file: &str, source: &str) -> Result<ValidatedProgram, Vec<Diagnostic>> {
     analyze_source_result(file, source).into_validated()
+}
+
+pub fn validate_source_with_operation(
+    file: &str,
+    source: &str,
+    operation: &OperationContext,
+) -> Result<ValidatedProgram, Vec<Diagnostic>> {
+    analyze_source_result_with_operation(file, source, operation).into_validated()
 }
 
 pub fn analyze_syntax_source(file: &str, source: &str) -> Vec<Diagnostic> {
@@ -444,6 +468,23 @@ pub fn analyze_source_with_interfaces_result(
     )
 }
 
+pub fn analyze_source_with_interfaces_result_with_operation(
+    file: &str,
+    source: &str,
+    interfaces: &[(&str, &str)],
+    operation: &OperationContext,
+) -> AnalysisResult {
+    analyze_input_result(
+        AnalysisInput {
+            sources: AnalysisSources::Single { file, source },
+            interfaces,
+            flavor: AnalysisFlavor::FullWithBuiltinInterfaces,
+        },
+        FrontendBudgetLimits::default(),
+        Some(operation),
+    )
+}
+
 pub fn analyze_source_with_interfaces_without_core(
     file: &str,
     source: &str,
@@ -487,6 +528,23 @@ pub fn validate_sources_with_interfaces(
     interfaces: &[(&str, &str)],
 ) -> Result<ValidatedProgram, Vec<Diagnostic>> {
     analyze_sources_with_interfaces_result(sources, interfaces).into_validated()
+}
+
+pub fn validate_sources_with_interfaces_with_operation(
+    sources: &[(&str, &str)],
+    interfaces: &[(&str, &str)],
+    operation: &OperationContext,
+) -> Result<ValidatedProgram, Vec<Diagnostic>> {
+    analyze_input_result(
+        AnalysisInput {
+            sources: AnalysisSources::Many(sources),
+            interfaces,
+            flavor: AnalysisFlavor::FullWithBuiltinInterfaces,
+        },
+        FrontendBudgetLimits::default(),
+        Some(operation),
+    )
+    .into_validated()
 }
 
 pub fn analyze_sources_with_interfaces_without_core(
@@ -536,8 +594,7 @@ mod entrypoint_tests {
     use crate::checks::budget::{FrontendBudget, FrontendBudgetLimits};
     use crate::diagnostic::code;
     use crate::semantic::{FrontendCompletion, FrontendStopReason};
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
+    use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationContext};
 
     const SOURCE: &str = "fn helper(value: read Int) -> Int { return value }\n\
         fn main() -> Int { return helper(value: 1) }\n";
@@ -826,7 +883,12 @@ mod entrypoint_tests {
 
     #[test]
     fn cancellation_stops_frontend_work() {
-        let cancel = Arc::new(AtomicBool::new(true));
+        let cancel = CancellationToken::new();
+        cancel.cancel();
+        let operation = OperationContext {
+            cancellation: Some(cancel),
+            ..OperationContext::default()
+        };
         let result = analyze_input_result(
             AnalysisInput {
                 sources: AnalysisSources::Single {
@@ -837,7 +899,7 @@ mod entrypoint_tests {
                 flavor: AnalysisFlavor::SyntaxOnly,
             },
             FrontendBudgetLimits::default(),
-            Some(cancel),
+            Some(&operation),
         );
 
         assert_eq!(
@@ -846,6 +908,34 @@ mod entrypoint_tests {
         );
         assert_incomplete_cause(result.diagnostics(), "cancellation");
         assert!(result.into_validated().is_err());
+    }
+
+    #[test]
+    fn deadline_stops_frontend_work() {
+        let operation = OperationContext {
+            deadline: Some(MonotonicDeadline::at(
+                std::time::Instant::now() - std::time::Duration::from_millis(1),
+            )),
+            ..OperationContext::default()
+        };
+        let result = analyze_input_result(
+            AnalysisInput {
+                sources: AnalysisSources::Single {
+                    file: "expired.rss",
+                    source: SOURCE,
+                },
+                interfaces: &[],
+                flavor: AnalysisFlavor::SyntaxOnly,
+            },
+            FrontendBudgetLimits::default(),
+            Some(&operation),
+        );
+
+        assert_eq!(
+            result.completion(),
+            FrontendCompletion::Incomplete(FrontendStopReason::DeadlineExceeded)
+        );
+        assert_incomplete_cause(result.diagnostics(), "deadline");
     }
 
     #[test]

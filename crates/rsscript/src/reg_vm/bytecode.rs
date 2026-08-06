@@ -145,10 +145,18 @@ pub(super) fn encode_and_verify(
 }
 
 pub(super) fn verify_bytes(bytes: &[u8]) -> Result<VerifiedRegBytecode, EvalError> {
+    verify_bytes_with_context(bytes, rsscript_bytecode::VerificationContext::default())
+}
+
+pub(super) fn verify_bytes_with_context(
+    bytes: &[u8],
+    context: rsscript_bytecode::VerificationContext<'_>,
+) -> Result<VerifiedRegBytecode, EvalError> {
     let artifact = BytecodeVerifier::default()
-        .verify(bytes)
+        .verify_with_context(bytes, context)
         .map_err(bytecode_error)?
         .into_artifact();
+    context.check().map_err(bytecode_error)?;
     let executable = verify_payload(&artifact.payload, &artifact.imports)
         .map_err(|message| bytecode_error(BytecodeError::InvalidPayload(message)))?;
     Ok(VerifiedRegBytecode {

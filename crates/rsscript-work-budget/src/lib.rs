@@ -2,9 +2,8 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
+use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationContext};
 pub use rsscript_source_model::Span;
 
 #[derive(Debug, Clone, Copy)]
@@ -45,6 +44,7 @@ pub enum BudgetExhaustion {
     Diagnostics,
     SemanticRecursion,
     Cancelled,
+    DeadlineExceeded,
 }
 
 impl BudgetExhaustion {
@@ -59,6 +59,7 @@ impl BudgetExhaustion {
             Self::Diagnostics => "diagnostics",
             Self::SemanticRecursion => "semantic recursion",
             Self::Cancelled => "cancellation",
+            Self::DeadlineExceeded => "deadline",
         }
     }
 }
@@ -76,18 +77,19 @@ pub struct FrontendBudget {
     semantic_recursion_depth: Cell<usize>,
     exhausted: Cell<Option<BudgetExhaustion>>,
     span: RefCell<Span>,
-    cancel: Option<Arc<AtomicBool>>,
+    cancellation: Option<CancellationToken>,
+    deadline: Option<MonotonicDeadline>,
 }
 
 impl FrontendBudget {
     pub fn new(limits: FrontendBudgetLimits, span: Span) -> Rc<Self> {
-        Self::with_cancellation(limits, span, None)
+        Self::with_operation(limits, span, None)
     }
 
-    pub fn with_cancellation(
+    pub fn with_operation(
         limits: FrontendBudgetLimits,
         span: Span,
-        cancel: Option<Arc<AtomicBool>>,
+        operation: Option<&OperationContext>,
     ) -> Rc<Self> {
         Rc::new(Self {
             limits,
@@ -101,7 +103,8 @@ impl FrontendBudget {
             semantic_recursion_depth: Cell::new(0),
             exhausted: Cell::new(None),
             span: RefCell::new(span),
-            cancel,
+            cancellation: operation.and_then(|context| context.cancellation.clone()),
+            deadline: operation.and_then(|context| context.deadline),
         })
     }
 
@@ -204,11 +207,15 @@ impl FrontendBudget {
             return false;
         }
         if self
-            .cancel
+            .cancellation
             .as_ref()
-            .is_some_and(|cancel| cancel.load(Ordering::Relaxed))
+            .is_some_and(CancellationToken::is_cancelled)
         {
             self.exhaust(BudgetExhaustion::Cancelled);
+            return false;
+        }
+        if self.deadline.is_some_and(MonotonicDeadline::is_expired) {
+            self.exhaust(BudgetExhaustion::DeadlineExceeded);
             return false;
         }
         true
