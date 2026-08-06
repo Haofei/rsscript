@@ -481,6 +481,7 @@ mod tests {
         assert_eq!(error, "unexpected extra path `two.rss`.");
     }
 
+    #[cfg(feature = "execution")]
     #[test]
     fn runtime_path_selection_uses_first_valid_candidate() {
         let root = unique_temp_dir("runtime-path-selection");
@@ -506,6 +507,7 @@ mod tests {
         fs::remove_dir_all(root).expect("temp runtime path should clean up");
     }
 
+    #[cfg(feature = "execution")]
     #[test]
     fn runtime_path_selection_reports_checked_candidates() {
         let root = unique_temp_dir("runtime-path-missing");
@@ -518,6 +520,7 @@ mod tests {
         fs::remove_dir_all(root).expect("temp runtime path should clean up");
     }
 
+    #[cfg(feature = "execution")]
     #[test]
     fn run_cache_dir_is_stable_per_input_path() {
         let first = super::run_cache_dir("examples/one.rss", "demo");
@@ -534,6 +537,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "execution")]
     #[test]
     fn run_fingerprint_changes_for_every_run_specific_input() {
         let root = unique_temp_dir("run-fingerprint");
@@ -573,6 +577,7 @@ mod tests {
         fs::remove_dir_all(root).expect("temp directory should clean up");
     }
 
+    #[cfg(feature = "execution")]
     #[test]
     fn aot_execution_input_preserves_unlocked_pure_package_compatibility() {
         let root = package_fixture("aot-pure-package", "");
@@ -623,6 +628,7 @@ unsafe = "forbid"
         fs::remove_dir_all(root).expect("temp directory should clean up");
     }
 
+    #[cfg(feature = "execution")]
     fn package_fixture(name: &str, extra_manifest: &str) -> PathBuf {
         let root = unique_temp_dir(name);
         fs::create_dir_all(root.join("src")).expect("package source directory");
