@@ -78,23 +78,20 @@ impl HttpProvider {
                             format!("HTTP origin `{origin}` is not configured for this Provider"),
                         ));
                     }
-                    let timeout = context
-                        .deadline
-                        .map_or(DEFAULT_REQUEST_TIMEOUT, |deadline| {
-                            deadline
-                                .instant()
-                                .saturating_duration_since(Instant::now())
-                                .min(DEFAULT_REQUEST_TIMEOUT)
-                        });
-                    let mut response =
-                        provider
-                            .client
-                            .get(url)
-                            .timeout(timeout)
-                            .send()
-                            .map_err(|error| {
-                                ProviderError::unavailable(format!("HTTP GET: {error}"))
-                            })?;
+                    let deadline_timeout = context.deadline.map(|deadline| {
+                        deadline.instant().saturating_duration_since(Instant::now())
+                    });
+                    let timeout = deadline_timeout
+                        .unwrap_or(DEFAULT_REQUEST_TIMEOUT)
+                        .min(DEFAULT_REQUEST_TIMEOUT);
+                    let deadline_controls_timeout = deadline_timeout
+                        .is_some_and(|deadline| deadline <= DEFAULT_REQUEST_TIMEOUT);
+                    let mut response = provider
+                        .client
+                        .get(url)
+                        .timeout(timeout)
+                        .send()
+                        .map_err(|error| http_request_error(error, deadline_controls_timeout))?;
                     let status = i64::from(response.status().as_u16());
                     let limit = context
                         .remaining_byte_budget
@@ -110,7 +107,6 @@ impl HttpProvider {
                         return Err(response_too_large(limit));
                     }
                     let body = read_response_bounded(&mut response, limit)?;
-                    context.check_cancelled()?;
                     Ok(NativeValue::Struct {
                         name: "HttpResponse".into(),
                         fields: BTreeMap::from([
@@ -121,6 +117,17 @@ impl HttpProvider {
                 }),
             },
         )])
+    }
+}
+
+fn http_request_error(error: reqwest::Error, deadline_controls_timeout: bool) -> ProviderError {
+    if error.is_timeout() && deadline_controls_timeout {
+        ProviderError::new(
+            rsscript_provider_api::ProviderErrorCode::DeadlineExceeded,
+            format!("HTTP deadline exceeded: {error}"),
+        )
+    } else {
+        ProviderError::unavailable(format!("HTTP GET: {error}"))
     }
 }
 
@@ -157,6 +164,7 @@ fn response_too_large(limit: usize) -> ProviderError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
 
     #[test]
     fn descriptor_and_implementation_link_without_network_access() {
@@ -205,5 +213,39 @@ mod tests {
             error.code,
             rsscript_provider_api::ProviderErrorCode::ResourceExhausted
         );
+    }
+
+    #[test]
+    fn execution_deadline_maps_to_structured_provider_error() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            let _ = stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+        });
+        let origin = format!("http://{address}");
+        let provider = HttpProvider::new(reqwest::blocking::Client::builder(), [&origin]).unwrap();
+        let function = provider.functions().into_values().next().unwrap();
+        let mut context = rsscript_provider_api::ProviderCallContext {
+            deadline: Some(rsscript_provider_api::MonotonicDeadline::after(
+                Duration::from_millis(20),
+            )),
+            blocking_allowed: true,
+            ..rsscript_provider_api::ProviderCallContext::default()
+        };
+        let error = function
+            .callable
+            .call_with_context(
+                &mut context,
+                vec![NativeValue::String(format!("{origin}/slow"))],
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.code,
+            rsscript_provider_api::ProviderErrorCode::DeadlineExceeded
+        );
+        server.join().unwrap();
     }
 }
