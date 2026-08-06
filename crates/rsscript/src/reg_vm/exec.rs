@@ -17,6 +17,7 @@ impl RegVm {
             provider_calls: self.provider_calls,
             resources_created: self.provider_resources.created(),
             resources_cleaned: self.provider_resources.cleaned(),
+            resource_cleanup_failures: self.provider_resources.cleanup_failures(),
             resources_live_at_return: self.provider_resources.live(),
         }
     }

@@ -299,6 +299,7 @@ pub struct ProviderResourceTable {
     live: usize,
     created: u64,
     cleaned: u64,
+    cleanup_failures: u64,
 }
 
 impl ProviderResourceTable {
@@ -309,6 +310,7 @@ impl ProviderResourceTable {
             live: 0,
             created: 0,
             cleaned: 0,
+            cleanup_failures: 0,
         }
     }
 
@@ -372,7 +374,11 @@ impl ProviderResourceTable {
         let result = resource.cleanup();
         slot.generation = slot.generation.wrapping_add(1);
         self.live = self.live.saturating_sub(1);
-        self.cleaned += 1;
+        if result.is_ok() {
+            self.cleaned += 1;
+        } else {
+            self.cleanup_failures += 1;
+        }
         result
     }
 
@@ -403,6 +409,10 @@ impl ProviderResourceTable {
 
     pub fn cleaned(&self) -> u64 {
         self.cleaned
+    }
+
+    pub fn cleanup_failures(&self) -> u64 {
+        self.cleanup_failures
     }
 }
 
@@ -891,5 +901,25 @@ mod tests {
         assert_eq!(table.live(), 0);
         assert_eq!(table.created(), 2);
         assert_eq!(table.cleaned(), 2);
+        assert_eq!(table.cleanup_failures(), 0);
+    }
+
+    #[test]
+    fn failed_resource_cleanup_is_not_reported_as_successful() {
+        struct FailingResource;
+        impl ProviderResource for FailingResource {
+            fn cleanup(&mut self) -> Result<(), ProviderError> {
+                Err(ProviderError::internal("cleanup failed"))
+            }
+        }
+
+        let mut table = ProviderResourceTable::new(Some(1));
+        let handle = table.register(Box::new(FailingResource)).unwrap();
+        let error = table.cleanup(handle).expect_err("cleanup must fail");
+        assert_eq!(error.code, ProviderErrorCode::Internal);
+        assert_eq!(table.live(), 0);
+        assert_eq!(table.created(), 1);
+        assert_eq!(table.cleaned(), 0);
+        assert_eq!(table.cleanup_failures(), 1);
     }
 }

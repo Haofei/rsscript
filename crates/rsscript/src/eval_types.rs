@@ -307,6 +307,7 @@ pub struct ExecutionUsage {
     pub provider_calls: u64,
     pub resources_created: u64,
     pub resources_cleaned: u64,
+    pub resource_cleanup_failures: u64,
     pub resources_live_at_return: usize,
 }
 
