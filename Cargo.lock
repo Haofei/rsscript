@@ -1687,6 +1687,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-provider-bindgen"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "rsscript-syntax",
+]
+
+[[package]]
 name = "rsscript-provider-cli"
 version = "0.1.0"
 dependencies = [
@@ -1709,6 +1717,7 @@ version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
  "rsscript-provider-api",
+ "rsscript-provider-bindgen",
 ]
 
 [[package]]

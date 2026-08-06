@@ -1136,6 +1136,38 @@ fn concrete_host_providers_are_leaf_composition_packages() {
 }
 
 #[test]
+fn provider_contracts_can_be_generated_without_the_engine_or_runtime() {
+    let root = workspace_root();
+    let manifest: toml::Value = toml::from_str(&read(
+        &root.join("crates/rsscript-provider-bindgen/Cargo.toml"),
+    ))
+    .expect("Provider bindgen manifest should parse");
+    let dependencies = dependency_packages(&manifest);
+    assert!(dependencies.contains("rsscript-abi-model"));
+    assert!(dependencies.contains("rsscript-syntax"));
+    for forbidden in [
+        "rsscript",
+        "rsscript-engine",
+        "rsscript-runtime",
+        "rsscript-aot-runtime",
+        "rsscript-provider-api",
+        "rsscript-semantics",
+        "vm-jit",
+    ] {
+        assert!(
+            !dependencies.contains(forbidden),
+            "Provider bindgen must not depend on `{forbidden}`"
+        );
+    }
+
+    let env_source = read(&root.join("providers/env/src/lib.rs"));
+    assert!(env_source.contains("provider_contract.rs"));
+    assert!(!env_source.contains("host.env.get"));
+    assert!(!env_source.contains("FunctionSignature"));
+    assert!(root.join("providers/env/interface/lib.rssi").is_file());
+}
+
+#[test]
 fn interface_catalog_is_platform_neutral() {
     let root = workspace_root();
     let manifest: toml::Value = toml::from_str(&read(

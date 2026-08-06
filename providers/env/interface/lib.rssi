@@ -1,0 +1,3 @@
+module host.env
+
+pub fn get(name: read String) -> Option<String>
