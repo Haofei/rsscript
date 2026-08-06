@@ -281,8 +281,15 @@ fn verify_instruction(
 
     let value = serde_json::to_value(instruction)
         .map_err(|error| format!("cannot inspect instruction {ip}: {error}"))?;
+    // Serde's externally tagged representation encodes unit variants (currently
+    // `TailCallGuard`) as a string and data-carrying variants as a one-entry
+    // object. Both are canonical instruction encodings.
+    if value.as_str().is_some() {
+        return Ok(());
+    }
     let (opcode, fields) = value
         .as_object()
+        .filter(|outer| outer.len() == 1)
         .and_then(|outer| outer.iter().next())
         .ok_or_else(|| format!("function {function_id} instruction {ip} has invalid encoding"))?;
     if let Some(fields) = fields.as_object() {
@@ -528,5 +535,20 @@ mod tests {
         let error = RegVmExecutable::from_bytecode(&artifact.to_bytes().expect("bytes"))
             .expect_err("invalid register must fail before execution");
         assert!(matches!(error, EvalError::Runtime(message) if message.contains("register")));
+    }
+
+    #[test]
+    fn verifier_accepts_unit_variant_instructions() {
+        let function = WireFunction {
+            name: "tail_recursive".to_string(),
+            params: 0,
+            captures: 0,
+            regs: 0,
+            local_regs: BTreeMap::new(),
+            code: vec![RegInstr::TailCallGuard],
+        };
+
+        verify_instruction(0, 0, &function, 1, &function.code[0])
+            .expect("unit instruction variants are valid bytecode");
     }
 }
