@@ -162,6 +162,12 @@ pub struct ProviderRegistry {
 
 #[cfg(feature = "execution")]
 impl ProviderRegistry {
+    /// Attach host-defined, instance-local authority to every resolved call.
+    /// Providers decide how to interpret these scopes; the language does not.
+    pub fn set_authority(&mut self, authority: provider::ProviderAuthority) {
+        self.inner.set_authority(authority);
+    }
+
     pub fn register(
         &mut self,
         descriptor: &ProviderDescriptor,
@@ -285,6 +291,7 @@ impl Runtime {
             native_value: output.native_value,
             stdout: output.stdout,
             stderr: output.stderr,
+            provider_call_traces: output.provider_call_traces,
         })
     }
 }
@@ -307,6 +314,7 @@ pub struct ExecutionReport {
     pub native_value: Option<NativeValue>,
     pub stdout: String,
     pub stderr: String,
+    pub provider_call_traces: Vec<provider::ProviderCallTrace>,
 }
 
 #[derive(Debug)]
@@ -697,5 +705,79 @@ mod tests {
             .expect_err("structured Provider error must propagate");
         assert_eq!(error.reason, TerminationReason::ProviderError);
         assert!(error.message.contains("InvalidArgument"));
+    }
+
+    #[test]
+    fn provider_authority_and_trace_reach_the_execution_report() {
+        let compiler = Compiler;
+        let package = compiler
+            .compile_with_interfaces(
+                &[(
+                    "main.rss",
+                    "module app\nuse host.log.*\nfn main() -> Unit { emit(message: read \"ok\"); return Unit }",
+                )],
+                &[(
+                    "log.rssi",
+                    "module host.log\npub fn emit(message: read String) -> Unit\n",
+                )],
+            )
+            .expect("compile external call");
+        let signature = FunctionSignature {
+            parameters: vec![ParameterSignature {
+                name: "message".into(),
+                effect: DataEffect::Read,
+                ty: "String".into(),
+                retained: false,
+            }],
+            result: "Unit".into(),
+            asynchronous: false,
+        };
+        let symbol = ExternalSymbol::new("host.log.emit").expect("symbol");
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.log".into(),
+            provider_version: "1".into(),
+            supported_abi: vec![RUNTIME_ABI_VERSION],
+            functions: vec![ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                entry: "emit".into(),
+                call_mode: ProviderCallMode::Sync,
+                blocking: BlockingBehavior::NonBlocking,
+                cancellation: CancellationBehavior::NotApplicable,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup: provider::ResourceCleanupContract::None,
+                error_mapping: provider::ProviderErrorMapping::StructuredV1,
+            }],
+        };
+        let mut providers = ProviderRegistry::default();
+        providers.set_authority(provider::ProviderAuthority::scoped(["log.emit"]));
+        providers
+            .register(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    ProviderFunction {
+                        signature,
+                        callable: NativeInterpreterFn::new_contextual(|context, _| {
+                            assert!(context.authority.allows("log.emit"));
+                            assert_eq!(context.provider_id, "test.log");
+                            assert_eq!(context.symbol, "host.log.emit");
+                            Ok(NativeValue::Unit)
+                        }),
+                    },
+                )]),
+            )
+            .expect("register provider");
+
+        let report = Runtime::new(providers, RunLimits::bounded())
+            .run(&package, Vec::<String>::new())
+            .expect("run provider");
+        assert_eq!(report.provider_call_traces.len(), 1);
+        let trace = &report.provider_call_traces[0];
+        assert_eq!(trace.provider_id, "test.log");
+        assert_eq!(trace.provider_version, "1");
+        assert_eq!(trace.symbol, "host.log.emit");
+        assert_eq!(trace.result, Ok(()));
     }
 }

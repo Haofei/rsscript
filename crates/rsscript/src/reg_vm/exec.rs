@@ -66,6 +66,9 @@ impl RegVm {
             allocated_bytes: 0,
             intrinsic_calls: 0,
             provider_calls: 0,
+            provider_trace: std::sync::Arc::new(
+                crate::eval_types::ProviderTraceCollector::default(),
+            ),
             provider_resources: ProviderResourceTable::new(VmLimits::default().resource_limit),
             #[cfg(feature = "native-jit")]
             native: None,

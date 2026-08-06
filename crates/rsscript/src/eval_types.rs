@@ -1,14 +1,39 @@
 use crate::diagnostic::Diagnostic;
 use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 pub use rsscript_abi_model::{ExternalImport, ExternalSymbol, FunctionSignature, SignatureHash};
 pub use rsscript_provider_api::{
-    BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderCallContext,
-    ProviderCallMode, ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderErrorMapping,
-    ProviderFunction, ProviderFunctionDescriptor, ProviderInvocationContract, ProviderLoadError,
-    ProviderResource, ProviderResourceTable, ResolvedProviderFunction, ResourceCleanupContract,
-    ResourceHandle,
+    BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderAuthority,
+    ProviderCallContext, ProviderCallMode, ProviderCallTrace, ProviderDescriptor, ProviderError,
+    ProviderErrorCode, ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor,
+    ProviderInvocationContract, ProviderLoadError, ProviderResource, ProviderResourceTable,
+    ProviderTraceSink, ResolvedProviderFunction, ResourceCleanupContract, ResourceHandle,
 };
+
+#[derive(Default)]
+pub(crate) struct ProviderTraceCollector {
+    traces: Mutex<Vec<ProviderCallTrace>>,
+}
+
+impl ProviderTraceSink for ProviderTraceCollector {
+    fn record(&self, trace: ProviderCallTrace) {
+        self.traces
+            .lock()
+            .expect("provider trace mutex poisoned")
+            .push(trace);
+    }
+}
+
+impl ProviderTraceCollector {
+    pub(crate) fn snapshot(&self) -> Vec<ProviderCallTrace> {
+        self.traces
+            .lock()
+            .expect("provider trace mutex poisoned")
+            .clone()
+    }
+}
 
 /// A linked provider callable. Registry resolution attaches the complete
 /// provider contract so invocation cannot silently discard descriptor metadata.
@@ -16,6 +41,7 @@ pub use rsscript_provider_api::{
 pub struct ExternalFunction {
     callable: NativeInterpreterFn,
     contract: Option<ProviderInvocationContract>,
+    authority: Arc<ProviderAuthority>,
 }
 
 impl ExternalFunction {
@@ -48,59 +74,90 @@ impl ExternalFunction {
         self.contract.as_ref()
     }
 
+    pub fn authority(&self) -> &ProviderAuthority {
+        &self.authority
+    }
+
     pub fn call_with_context(
         &self,
         context: &mut ProviderCallContext<'_>,
         args: Vec<NativeValue>,
     ) -> Result<NativeValue, ProviderError> {
-        context.check_cancelled()?;
         if let Some(contract) = self.contract() {
-            if contract.descriptor.blocking == BlockingBehavior::MayBlock
-                && !context.blocking_allowed
-            {
-                return Err(ProviderError::unavailable(format!(
-                    "blocking provider function `{}` requires a blocking execution lane",
-                    contract.descriptor.symbol
-                )));
-            }
-            if contract.descriptor.call_mode == ProviderCallMode::Async && !context.async_allowed {
-                return Err(ProviderError::unavailable(format!(
-                    "async provider function `{}` requires an async execution lane",
-                    contract.descriptor.symbol
-                )));
-            }
+            context.provider_id.clone_from(&contract.provider_id);
+            context
+                .provider_version
+                .clone_from(&contract.provider_version);
+            context.symbol = contract.descriptor.symbol.as_str().to_string();
         }
-        let resources_before = context
-            .resources
-            .as_deref()
-            .map(ProviderResourceTable::created);
-        let result = self.callable.call_with_context(context, args);
-        if self.contract().is_some_and(|contract| {
-            matches!(
-                contract.descriptor.cancellation,
-                CancellationBehavior::Cooperative | CancellationBehavior::AbortSafe
-            )
-        }) {
+        let started = Instant::now();
+        let result = (|| {
             context.check_cancelled()?;
-        }
-        if result.is_ok()
-            && self.contract().is_some_and(|contract| {
-                contract.descriptor.resource_cleanup == ResourceCleanupContract::RuntimeRegistered
-            })
-            && resources_before
-                == context
-                    .resources
-                    .as_deref()
-                    .map(ProviderResourceTable::created)
-        {
-            return Err(ProviderError::internal(
-                "runtime-registered provider call returned without registering a resource",
-            ));
+            if let Some(contract) = self.contract() {
+                if contract.descriptor.blocking == BlockingBehavior::MayBlock
+                    && !context.blocking_allowed
+                {
+                    return Err(ProviderError::unavailable(format!(
+                        "blocking provider function `{}` requires a blocking execution lane",
+                        contract.descriptor.symbol
+                    )));
+                }
+                if contract.descriptor.call_mode == ProviderCallMode::Async
+                    && !context.async_allowed
+                {
+                    return Err(ProviderError::unavailable(format!(
+                        "async provider function `{}` requires an async execution lane",
+                        contract.descriptor.symbol
+                    )));
+                }
+            }
+            let resources_before = context
+                .resources
+                .as_deref()
+                .map(ProviderResourceTable::created);
+            let result = self.callable.call_with_context(context, args);
+            if self.contract().is_some_and(|contract| {
+                matches!(
+                    contract.descriptor.cancellation,
+                    CancellationBehavior::Cooperative | CancellationBehavior::AbortSafe
+                )
+            }) {
+                context.check_cancelled()?;
+            }
+            if result.is_ok()
+                && self.contract().is_some_and(|contract| {
+                    contract.descriptor.resource_cleanup
+                        == ResourceCleanupContract::RuntimeRegistered
+                })
+                && resources_before
+                    == context
+                        .resources
+                        .as_deref()
+                        .map(ProviderResourceTable::created)
+            {
+                return Err(ProviderError::internal(
+                    "runtime-registered provider call returned without registering a resource",
+                ));
+            }
+            result
+        })();
+        if let Some(trace) = context.trace {
+            trace.record(ProviderCallTrace {
+                call_id: context.call_id,
+                provider_id: context.provider_id.clone(),
+                provider_version: context.provider_version.clone(),
+                symbol: context.symbol.clone(),
+                elapsed: started.elapsed(),
+                result: result.as_ref().map(|_| ()).map_err(|error| error.code),
+            });
         }
         result
     }
 
-    fn from_resolved(function: ResolvedProviderFunction<NativeInterpreterFn>) -> Self {
+    fn from_resolved(
+        function: ResolvedProviderFunction<NativeInterpreterFn>,
+        authority: Arc<ProviderAuthority>,
+    ) -> Self {
         Self {
             callable: function.callable,
             contract: Some(ProviderInvocationContract {
@@ -108,6 +165,7 @@ impl ExternalFunction {
                 provider_version: function.provider_version,
                 descriptor: function.descriptor,
             }),
+            authority,
         }
     }
 }
@@ -123,6 +181,7 @@ impl From<NativeInterpreterFn> for ExternalFunction {
         Self {
             callable,
             contract: None,
+            authority: Arc::new(ProviderAuthority::default()),
         }
     }
 }
@@ -138,6 +197,7 @@ impl From<ExternalFunction> for NativeInterpreterFn {
 /// deliberately deferred until execution.
 pub struct ExternalFunctionRegistry {
     registry: rsscript_provider_api::ProviderRegistry<NativeInterpreterFn>,
+    authority: Arc<ProviderAuthority>,
 }
 
 impl ExternalFunctionRegistry {
@@ -146,7 +206,12 @@ impl ExternalFunctionRegistry {
             registry: rsscript_provider_api::ProviderRegistry::new(
                 rsscript_abi_model::RUNTIME_ABI_VERSION,
             ),
+            authority: Arc::new(ProviderAuthority::default()),
         }
+    }
+
+    pub fn set_authority(&mut self, authority: ProviderAuthority) {
+        self.authority = Arc::new(authority);
     }
 
     pub fn register_provider<T: Into<NativeInterpreterFn>>(
@@ -177,23 +242,25 @@ impl ExternalFunctionRegistry {
     }
 
     pub fn into_bindings(self) -> impl Iterator<Item = (String, ExternalFunction)> {
+        let authority = self.authority;
         self.registry
             .into_resolved_functions()
-            .map(|(symbol, function)| {
+            .map(move |(symbol, function)| {
                 (
                     symbol.as_str().to_string(),
-                    ExternalFunction::from_resolved(function),
+                    ExternalFunction::from_resolved(function, Arc::clone(&authority)),
                 )
             })
     }
 
     pub fn bindings(&self) -> impl Iterator<Item = (String, ExternalFunction)> + '_ {
+        let authority = Arc::clone(&self.authority);
         self.registry
             .resolved_functions()
-            .map(|(symbol, function)| {
+            .map(move |(symbol, function)| {
                 (
                     symbol.as_str().to_string(),
-                    ExternalFunction::from_resolved(function.clone()),
+                    ExternalFunction::from_resolved(function.clone(), Arc::clone(&authority)),
                 )
             })
     }
@@ -213,6 +280,7 @@ pub struct EvalOutput {
     pub native_value: Option<NativeValue>,
     pub stdout: String,
     pub stderr: String,
+    pub provider_call_traces: Vec<ProviderCallTrace>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

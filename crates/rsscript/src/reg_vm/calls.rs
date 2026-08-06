@@ -327,6 +327,11 @@ impl RegVm {
                 .stdout_budget
                 .map(|limit| limit.saturating_sub(self.stdout.len())),
             call_id: rsscript_operation::OperationId(self.provider_calls),
+            provider_id: String::new(),
+            provider_version: String::new(),
+            symbol: key.to_string(),
+            authority: function.authority(),
+            trace: Some(self.provider_trace.as_ref()),
             resources: Some(&mut self.provider_resources),
             blocking_allowed: true,
             async_allowed: false,

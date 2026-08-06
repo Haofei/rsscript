@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
+use std::time::Duration;
 
 pub use rsscript_abi_model::{
     DataEffect, ExternalImport, ExternalSymbol, FunctionSignature, InvalidExternalSymbol,
@@ -124,12 +125,57 @@ impl fmt::Display for ProviderError {
 
 impl Error for ProviderError {}
 
+/// Host-constructed, instance-local authority presented to Provider calls.
+///
+/// RSScript does not interpret these scopes as a language policy. A Provider
+/// may use them to narrow an already configured host capability (for example,
+/// selecting one of several rooted filesystem views).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProviderAuthority {
+    scopes: BTreeSet<String>,
+}
+
+impl ProviderAuthority {
+    pub fn scoped(scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            scopes: scopes.into_iter().map(Into::into).collect(),
+        }
+    }
+
+    pub fn allows(&self, scope: &str) -> bool {
+        self.scopes.contains(scope)
+    }
+
+    pub fn scopes(&self) -> impl Iterator<Item = &str> {
+        self.scopes.iter().map(String::as_str)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderCallTrace {
+    pub call_id: OperationId,
+    pub provider_id: String,
+    pub provider_version: String,
+    pub symbol: String,
+    pub elapsed: Duration,
+    pub result: Result<(), ProviderErrorCode>,
+}
+
+pub trait ProviderTraceSink: Send + Sync {
+    fn record(&self, trace: ProviderCallTrace);
+}
+
 pub struct ProviderCallContext<'a> {
     pub cancellation: Option<&'a CancellationToken>,
     pub deadline: Option<MonotonicDeadline>,
     pub remaining_byte_budget: Option<usize>,
     pub remaining_output_budget: Option<usize>,
     pub call_id: OperationId,
+    pub provider_id: String,
+    pub provider_version: String,
+    pub symbol: String,
+    pub authority: &'a ProviderAuthority,
+    pub trace: Option<&'a dyn ProviderTraceSink>,
     pub resources: Option<&'a mut ProviderResourceTable>,
     /// Set only by a runtime lane that is prepared for a synchronous provider
     /// call to block its worker. Inline callers remain fail-closed by default.
@@ -162,12 +208,19 @@ impl ProviderCallContext<'_> {
 
 impl Default for ProviderCallContext<'static> {
     fn default() -> Self {
+        static EMPTY_AUTHORITY: std::sync::LazyLock<ProviderAuthority> =
+            std::sync::LazyLock::new(ProviderAuthority::default);
         Self {
             cancellation: None,
             deadline: None,
             remaining_byte_budget: None,
             remaining_output_budget: None,
             call_id: OperationId(0),
+            provider_id: String::new(),
+            provider_version: String::new(),
+            symbol: String::new(),
+            authority: &EMPTY_AUTHORITY,
+            trace: None,
             resources: None,
             blocking_allowed: false,
             async_allowed: false,

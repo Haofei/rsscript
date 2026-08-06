@@ -1378,6 +1378,7 @@ impl RegVmExecutable {
                 native_value,
                 stdout: vm.stdout,
                 stderr: vm.stderr,
+                provider_call_traces: vm.provider_trace.snapshot(),
             },
             stats,
             report_lines,
@@ -1426,6 +1427,7 @@ impl RegVmExecutable {
             native_value,
             stdout: vm.stdout,
             stderr: vm.stderr,
+            provider_call_traces: vm.provider_trace.snapshot(),
         })
     }
 
@@ -1486,6 +1488,7 @@ impl RegVmExecutable {
             native_value,
             stdout: vm.stdout,
             stderr: vm.stderr,
+            provider_call_traces: vm.provider_trace.snapshot(),
         })
     }
 
@@ -1515,6 +1518,7 @@ impl RegVmExecutable {
             native_value,
             stdout: vm.stdout,
             stderr: vm.stderr,
+            provider_call_traces: vm.provider_trace.snapshot(),
         })
     }
 
@@ -1556,6 +1560,7 @@ impl RegVmExecutable {
             native_value,
             stdout: vm.stdout,
             stderr: vm.stderr,
+            provider_call_traces: vm.provider_trace.snapshot(),
         })
     }
 }
@@ -1912,6 +1917,8 @@ struct RegVm {
     intrinsic_calls: u64,
     /// Number of calls dispatched through explicitly linked Provider symbols.
     provider_calls: u64,
+    /// Structured trace of calls crossing the Provider boundary.
+    provider_trace: std::sync::Arc<crate::eval_types::ProviderTraceCollector>,
     /// VM-owned, generation-checked Provider resource slots.
     provider_resources: ProviderResourceTable,
     /// Native (Cranelift) JIT state, `Some` when the native tier is enabled. The
