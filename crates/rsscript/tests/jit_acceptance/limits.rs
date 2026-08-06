@@ -248,7 +248,7 @@ fn main() -> Unit {
         .eval_main_with_args_native_osr_with_limits(
             std::iter::empty::<String>(),
             rsscript::VmLimits {
-                host_call_budget: Some(10_000),
+                intrinsic_call_budget: Some(10_000),
                 ..rsscript::VmLimits::default()
             },
         )
@@ -263,7 +263,7 @@ fn main() -> Unit {
         .eval_main_with_args_native_osr_with_limits(
             std::iter::empty::<String>(),
             rsscript::VmLimits {
-                host_call_budget: Some(10),
+                intrinsic_call_budget: Some(10),
                 ..rsscript::VmLimits::default()
             },
         )

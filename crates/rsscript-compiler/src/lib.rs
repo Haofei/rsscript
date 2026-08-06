@@ -129,6 +129,7 @@ pub struct RunLimits {
     pub memory_budget: Option<usize>,
     pub cancellation: Option<Arc<AtomicBool>>,
     pub output_budget: Option<usize>,
+    pub intrinsic_call_budget: Option<u64>,
     pub provider_call_budget: Option<u64>,
 }
 
@@ -164,7 +165,8 @@ impl From<VmLimits> for RunLimits {
             memory_budget: limits.mem_budget,
             cancellation: limits.cancel,
             output_budget: limits.stdout_budget,
-            provider_call_budget: limits.host_call_budget,
+            intrinsic_call_budget: limits.intrinsic_call_budget,
+            provider_call_budget: limits.provider_call_budget,
         }
     }
 }
@@ -178,7 +180,8 @@ impl From<RunLimits> for VmLimits {
             mem_budget: limits.memory_budget,
             cancel: limits.cancellation,
             stdout_budget: limits.output_budget,
-            host_call_budget: limits.provider_call_budget,
+            intrinsic_call_budget: limits.intrinsic_call_budget,
+            provider_call_budget: limits.provider_call_budget,
         }
     }
 }
@@ -401,5 +404,72 @@ mod tests {
             .expect_err("import signature must fail before execution");
         assert!(error.0.contains("ImportSignatureMismatch"));
         assert!(!called.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn provider_calls_have_a_budget_separate_from_intrinsics() {
+        let compiler = Compiler;
+        let package = compiler
+            .compile_with_interfaces(
+                &[(
+                    "main.rss",
+                    "module app\nuse host.log.*\nfn main() -> Unit { emit(message: read \"one\"); emit(message: read \"two\"); return Unit }",
+                )],
+                &[(
+                    "log.rssi",
+                    "module host.log\npub fn emit(message: read String) -> Unit\n",
+                )],
+            )
+            .expect("compile external calls");
+        let signature = FunctionSignature {
+            parameters: vec![ParameterSignature {
+                name: "message".into(),
+                effect: DataEffect::Read,
+                type_name: "String".into(),
+                retained: false,
+            }],
+            return_type: "Unit".into(),
+            asynchronous: false,
+        };
+        let symbol = ExternalSymbol::new("host.log.emit").expect("symbol");
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.log".into(),
+            provider_version: "1".into(),
+            supported_abi: vec![RUNTIME_ABI_VERSION],
+            functions: vec![ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                entry: "emit".into(),
+                call_mode: ProviderCallMode::Sync,
+                blocking: BlockingBehavior::NonBlocking,
+                cancellation: CancellationBehavior::NotApplicable,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup_contract: "none".into(),
+                error_mapping: "string".into(),
+            }],
+        };
+        let mut providers = ProviderRegistry::default();
+        providers
+            .register(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    ProviderFunction {
+                        signature,
+                        callable: NativeInterpreterFn::new(|_| Ok(NativeValue::Unit)),
+                    },
+                )]),
+            )
+            .expect("register provider");
+        let limits = RunLimits {
+            provider_call_budget: Some(1),
+            ..RunLimits::default()
+        };
+
+        let error = Runtime::new(providers, limits)
+            .run(&package, Vec::<String>::new())
+            .expect_err("second provider call must exceed the provider budget");
+        assert!(error.0.contains("provider call budget exceeded"));
     }
 }

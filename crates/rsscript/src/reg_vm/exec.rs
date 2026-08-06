@@ -42,7 +42,8 @@ impl RegVm {
             limits: VmLimits::default(),
             steps: 0,
             live_bytes: 0,
-            host_calls: 0,
+            intrinsic_calls: 0,
+            provider_calls: 0,
             #[cfg(feature = "native-jit")]
             native: None,
             noncapturing_closure_cache: Vec::new(),
@@ -105,10 +106,11 @@ impl RegVm {
             && self.limits.cancel.is_none()
             && self.limits.mem_budget.is_none()
             // Native code runs whole-function without routing intrinsic dispatch
-            // through `charge_host_call`, so an armed `host_call_budget` must also
+            // through `charge_intrinsic_call`, so an armed intrinsic budget must also
             // force the interpreter/tier-0 path — otherwise the host-call cap is
             // silently unenforced once a function tiers up to native.
-            && self.limits.host_call_budget.is_none()
+            && self.limits.intrinsic_call_budget.is_none()
+            && self.limits.provider_call_budget.is_none()
     }
 
     /// Charge one instruction against the step budget. Always increments the
@@ -178,21 +180,35 @@ impl RegVm {
         Ok(())
     }
 
-    /// Charge one stdlib/runtime intrinsic dispatch against `host_call_budget`.
+    /// Charge one stdlib/runtime intrinsic dispatch against `intrinsic_call_budget`.
     /// Always increments the counter (the single unconditional add is the whole
-    /// cost when the budget is off), and — only when `limits.host_call_budget` is
+    /// cost when the budget is off), and — only when the configured budget is
     /// `Some` — trips once the count exceeds the limit. Called once at the entry of
     /// both intrinsic dispatch functions, so it caps the number of host-library
     /// calls (file/process/net/clock/log effects all enter here) independently of
     /// raw instruction count.
     #[inline]
-    pub(super) fn charge_host_call(&mut self) -> Result<(), EvalError> {
-        self.host_calls += 1;
-        if let Some(limit) = self.limits.host_call_budget
-            && self.host_calls > limit
+    pub(super) fn charge_intrinsic_call(&mut self) -> Result<(), EvalError> {
+        self.intrinsic_calls += 1;
+        if let Some(limit) = self.limits.intrinsic_call_budget
+            && self.intrinsic_calls > limit
         {
             return Err(EvalError::Runtime(format!(
-                "host call budget exceeded ({limit} stdlib calls)"
+                "intrinsic call budget exceeded ({limit} calls)"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Charge one call through an explicitly linked Provider symbol.
+    #[inline]
+    pub(super) fn charge_provider_call(&mut self) -> Result<(), EvalError> {
+        self.provider_calls += 1;
+        if let Some(limit) = self.limits.provider_call_budget
+            && self.provider_calls > limit
+        {
+            return Err(EvalError::Runtime(format!(
+                "provider call budget exceeded ({limit} calls)"
             )));
         }
         Ok(())

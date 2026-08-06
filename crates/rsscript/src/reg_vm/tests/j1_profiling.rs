@@ -811,13 +811,15 @@ fn main() -> Unit {{
         assert!(limits.step_budget.is_some());
         assert!(limits.mem_budget.is_some());
         assert!(limits.stdout_budget.is_some());
-        assert!(limits.host_call_budget.is_some());
+        assert!(limits.intrinsic_call_budget.is_some());
+        assert!(limits.provider_call_budget.is_some());
 
         let trusted = VmLimits::unbounded_for_trusted_host();
         assert!(trusted.max_depth > limits.max_depth);
         assert!(trusted.step_budget.is_none());
         assert!(trusted.mem_budget.is_none());
         assert!(trusted.stdout_budget.is_none());
-        assert!(trusted.host_call_budget.is_none());
+        assert!(trusted.intrinsic_call_budget.is_none());
+        assert!(trusted.provider_call_budget.is_none());
     }
 }

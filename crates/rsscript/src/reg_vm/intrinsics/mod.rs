@@ -35,7 +35,7 @@ impl RegVm {
         base: usize,
         next_base: usize,
     ) -> Result<VmValue, EvalError> {
-        self.charge_host_call()?;
+        self.charge_intrinsic_call()?;
         match intrinsic {
             RegIntrinsic::ArgsAll => Ok(VmValue::List(Rc::new(RefCell::new(
                 self.args.iter().cloned().map(VmValue::string).collect(),

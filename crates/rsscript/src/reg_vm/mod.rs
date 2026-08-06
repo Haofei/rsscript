@@ -1734,12 +1734,15 @@ pub struct VmLimits {
     /// `call_intrinsic`/`call_typed_intrinsic` boundary), which is where all file /
     /// process / network / clock / logging effects (and the pure stdlib) enter.
     /// `None` means uncounted. When `Some(limit)`, the call that would exceed
-    /// `limit` fails with a "host call budget exceeded" error. This caps the volume
-    /// of host-library calls independently of raw instruction count (a single
+    /// `limit` fails with an "intrinsic call budget exceeded" error. This caps the volume
+    /// of runtime-library calls independently of raw instruction count (a single
     /// intrinsic can do unbounded I/O), so an agent program can be limited to N
-    /// effectful operations even if each is individually cheap in `step_budget`
+    /// operation even if it is individually cheap in `step_budget`
     /// terms.
-    pub host_call_budget: Option<u64>,
+    pub intrinsic_call_budget: Option<u64>,
+    /// Maximum number of calls through an explicitly linked external Provider
+    /// symbol. This counter does not include VM/runtime intrinsics.
+    pub provider_call_budget: Option<u64>,
 }
 
 /// Default recursion-depth cap: generous enough never to trip real code (deep
@@ -1768,7 +1771,8 @@ impl Default for VmLimits {
             mem_budget: Some(256 * 1024 * 1024),
             cancel: None,
             stdout_budget: Some(4 * 1024 * 1024),
-            host_call_budget: Some(1_000_000),
+            intrinsic_call_budget: Some(1_000_000),
+            provider_call_budget: Some(100_000),
         }
     }
 }
@@ -1791,7 +1795,8 @@ impl VmLimits {
             mem_budget: None,
             cancel: None,
             stdout_budget: None,
-            host_call_budget: None,
+            intrinsic_call_budget: None,
+            provider_call_budget: None,
         }
     }
 }
@@ -1850,9 +1855,11 @@ struct RegVm {
     /// outputs such as SHAKE digests.
     live_bytes: usize,
     /// Number of stdlib/runtime intrinsic calls dispatched so far (the
-    /// `host_call_budget` fuel gauge). Only consulted when that budget is `Some`;
+    /// `intrinsic_call_budget` fuel gauge). Only consulted when that budget is `Some`;
     /// the unconditional increment is the entire overhead when it is off.
-    host_calls: u64,
+    intrinsic_calls: u64,
+    /// Number of calls dispatched through explicitly linked Provider symbols.
+    provider_calls: u64,
     /// Native (Cranelift) JIT state, `Some` when the native tier is enabled. The
     /// native tier compiles the integer/control core to machine code and is tried
     /// before the tier-0 executor; anything it can't compile (or bails on) falls

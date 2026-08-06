@@ -304,6 +304,7 @@ impl RegVm {
         mut_args: &[usize],
         base: usize,
     ) -> Result<VmValue, EvalError> {
+        self.charge_provider_call()?;
         let Some(function) = self.external_bindings.get(key).cloned() else {
             return Err(EvalError::Runtime(format!(
                 "reg VM native function `{key}` has no host binding."
@@ -1704,7 +1705,7 @@ impl RegVm {
         args: &[Reg],
         base: usize,
     ) -> Result<VmValue, EvalError> {
-        self.charge_host_call()?;
+        self.charge_intrinsic_call()?;
         match intrinsic {
             RegIntrinsic::JsonDecode => {
                 let value = expect_json_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

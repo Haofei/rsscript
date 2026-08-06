@@ -562,12 +562,11 @@ fn main() -> Int {
     }
 }
 
-/// B6 (host-call flood): a loop that performs a stdlib call every iteration is
-/// bounded by `host_call_budget` — even though each call is individually cheap in
-/// `step_budget` terms, the run trips a clean "host call budget" error once it
-/// exceeds the configured number of host-library calls.
+/// B6 (intrinsic-call flood): a loop that performs a stdlib call every iteration
+/// is bounded by `intrinsic_call_budget`. The run trips a clean error once it
+/// exceeds the configured number of runtime-library calls.
 #[test]
-fn host_call_flood_with_call_budget_returns_clean_error() {
+fn intrinsic_call_flood_with_call_budget_returns_clean_error() {
     let source = r#"
 fn main() -> Int {
     let mut index = 0
@@ -580,23 +579,22 @@ fn main() -> Int {
 }
 "#;
     let limits = VmLimits {
-        host_call_budget: Some(1_000),
+        intrinsic_call_budget: Some(1_000),
         step_budget: Some(50_000_000),
         ..VmLimits::default()
     };
-    let err = eval_limited(source, limits).expect_err("must trip on host-call flood");
+    let err = eval_limited(source, limits).expect_err("must trip on intrinsic-call flood");
     match err {
         EvalError::Runtime(msg) => assert!(
-            msg.contains("host call budget"),
-            "expected host-call-budget error, got: {msg}"
+            msg.contains("intrinsic call budget"),
+            "expected intrinsic-call-budget error, got: {msg}"
         ),
         other => panic!("expected EvalError::Runtime, got {other:?}"),
     }
 }
 
-/// Both new budgets, like the others, must be off by default: a normal program
-/// that writes a little output and makes a few stdlib calls completes cleanly
-/// under `VmLimits::default()`.
+/// A normal program that writes a little output and makes a few stdlib calls
+/// completes within the bounded defaults.
 #[test]
 fn default_limits_allow_normal_output_and_host_calls() {
     let source = r#"
