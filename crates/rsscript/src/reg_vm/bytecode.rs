@@ -5,7 +5,7 @@ use rsscript_abi_model::{
     DataEffect, ExternalImport, ExternalSymbol, FunctionSignature, ParameterSignature,
     RUNTIME_ABI_VERSION,
 };
-use rsscript_bytecode::{BytecodeArtifact, BytecodeError, BytecodeVerifier, VerifiedBytecode};
+use rsscript_bytecode::{BytecodeArtifact, BytecodeError, BytecodeVerifier};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -33,6 +33,17 @@ struct WireFunction {
     regs: usize,
     local_regs: BTreeMap<String, Reg>,
     code: Vec<RegInstr>,
+}
+
+pub(super) struct VerifiedRegBytecode {
+    artifact: BytecodeArtifact,
+    executable: RegUnit,
+}
+
+impl VerifiedRegBytecode {
+    pub(super) fn into_parts(self) -> (BytecodeArtifact, RegUnit) {
+        (self.artifact, self.executable)
+    }
 }
 
 impl From<&RegUnit> for WireUnit {
@@ -120,7 +131,7 @@ impl WireUnit {
 pub(super) fn encode_and_verify(
     unit: &RegUnit,
     validated: &ValidatedProgram,
-) -> Result<VerifiedBytecode<RegUnit>, EvalError> {
+) -> Result<VerifiedRegBytecode, EvalError> {
     let payload = serde_json::to_vec(&WireUnit::from(unit))
         .map_err(|error| EvalError::Runtime(format!("cannot encode VM bytecode: {error}")))?;
     let imports = external_imports(unit, validated);
@@ -135,10 +146,17 @@ pub(super) fn encode_and_verify(
     verify_bytes(&artifact.to_bytes().map_err(bytecode_error)?)
 }
 
-pub(super) fn verify_bytes(bytes: &[u8]) -> Result<VerifiedBytecode<RegUnit>, EvalError> {
-    BytecodeVerifier::default()
-        .verify(bytes, verify_payload)
-        .map_err(bytecode_error)
+pub(super) fn verify_bytes(bytes: &[u8]) -> Result<VerifiedRegBytecode, EvalError> {
+    let artifact = BytecodeVerifier::default()
+        .verify(bytes)
+        .map_err(bytecode_error)?
+        .into_artifact();
+    let executable = verify_payload(&artifact.payload, &artifact.imports)
+        .map_err(|message| bytecode_error(BytecodeError::InvalidPayload(message)))?;
+    Ok(VerifiedRegBytecode {
+        artifact,
+        executable,
+    })
 }
 
 fn verify_payload(payload: &[u8], imports: &[ExternalImport]) -> Result<RegUnit, String> {

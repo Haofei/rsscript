@@ -112,22 +112,17 @@ impl Default for BytecodeLimits {
 }
 
 #[derive(Debug, Clone)]
-pub struct VerifiedBytecode<T> {
+pub struct VerifiedBytecode {
     artifact: BytecodeArtifact,
-    executable: T,
 }
 
-impl<T> VerifiedBytecode<T> {
+impl VerifiedBytecode {
     pub fn artifact(&self) -> &BytecodeArtifact {
         &self.artifact
     }
 
-    pub fn executable(&self) -> &T {
-        &self.executable
-    }
-
-    pub fn into_parts(self) -> (BytecodeArtifact, T) {
-        (self.artifact, self.executable)
+    pub fn into_artifact(self) -> BytecodeArtifact {
+        self.artifact
     }
 }
 
@@ -140,14 +135,7 @@ impl BytecodeVerifier {
         Self { limits }
     }
 
-    pub fn verify<T, E>(
-        &self,
-        bytes: &[u8],
-        verify_payload: impl FnOnce(&[u8], &[ExternalImport]) -> Result<T, E>,
-    ) -> Result<VerifiedBytecode<T>, BytecodeError>
-    where
-        E: fmt::Display,
-    {
+    pub fn verify(&self, bytes: &[u8]) -> Result<VerifiedBytecode, BytecodeError> {
         if bytes.len() > self.limits.max_artifact_bytes {
             return Err(BytecodeError::LimitExceeded("artifact bytes"));
         }
@@ -181,12 +169,7 @@ impl BytecodeVerifier {
         {
             return Err(BytecodeError::ImportAbiMismatch);
         }
-        let executable = verify_payload(&artifact.payload, &artifact.imports)
-            .map_err(|error| BytecodeError::InvalidPayload(error.to_string()))?;
-        Ok(VerifiedBytecode {
-            artifact,
-            executable,
-        })
+        Ok(VerifiedBytecode { artifact })
     }
 }
 
@@ -256,17 +239,13 @@ mod tests {
             .expect("artifact");
         let bytes = artifact.to_bytes().expect("bytes");
         let verified = BytecodeVerifier::default()
-            .verify(&bytes, |payload, _| Ok::<_, String>(payload.to_vec()))
+            .verify(&bytes)
             .expect("verified");
-        assert_eq!(verified.executable(), &[1, 2, 3]);
+        assert_eq!(verified.artifact().payload, [1, 2, 3]);
 
         let mut corrupt = bytes;
         *corrupt.last_mut().expect("non-empty") ^= 1;
-        assert!(
-            BytecodeVerifier::default()
-                .verify(&corrupt, |_, _| Ok::<_, String>(()))
-                .is_err()
-        );
+        assert!(BytecodeVerifier::default().verify(&corrupt).is_err());
     }
 
     proptest! {
@@ -277,13 +256,7 @@ mod tests {
                 max_payload_bytes: 1024,
                 max_imports: 32,
             });
-            let _ = verifier.verify(&bytes, |payload, _| {
-                if payload.len() > 1024 {
-                    Err("payload exceeded test limit")
-                } else {
-                    Ok(payload.len())
-                }
-            });
+            let _ = verifier.verify(&bytes);
         }
     }
 }

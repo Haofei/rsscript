@@ -34,3 +34,9 @@ under `schemas/`.
 Package graph snapshots, hashes, bounded file reads, reduced build environments,
 and atomic artifact writes remain integrity/correctness controls. They do not
 grant authority.
+
+`BytecodeVerifier::verify(bytes)` owns envelope validation and returns a
+`VerifiedBytecode` phase value; it no longer accepts a caller-supplied callback
+that could define arbitrary payload validity. The VM performs its typed
+instruction decode only after this phase succeeds and exposes no public
+half-verified module constructor.
