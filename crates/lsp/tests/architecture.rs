@@ -21,7 +21,13 @@ fn lsp_depends_on_the_language_service_boundary() {
         "the LSP must not depend directly on the product façade"
     );
 
-    for forbidden in ["rsscript-runtime", "vm-jit", "reir", "rss-native-abi"] {
+    for forbidden in [
+        "rsscript-aot-runtime",
+        "rsscript-runtime",
+        "vm-jit",
+        "reir",
+        "rss-native-abi",
+    ] {
         assert!(
             !manifest.contains(forbidden),
             "the LSP manifest must not depend on `{forbidden}`"

@@ -93,6 +93,7 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
     let compiler = metadata_direct_dependencies(&metadata, "rsscript-compiler");
     for forbidden in [
         "rsscript-cli",
+        "rsscript-aot-runtime",
         "rsscript-review-reir",
         "reir",
         "rss-native-abi",
@@ -154,6 +155,7 @@ fn rss_check_default_cargo_closure_is_frontend_only() {
     let closure = String::from_utf8(output.stdout).expect("cargo tree should be UTF-8");
     for forbidden in [
         "rsscript-runtime ",
+        "rsscript-aot-runtime ",
         "rsscript-bytecode ",
         "rsscript-provider-api ",
         "rss-process-guard ",
@@ -688,6 +690,7 @@ fn syntax_model_is_owned_by_the_boundary_crate() {
         "rsscript",
         "rsscript-semantics",
         "rsscript-runtime",
+        "rsscript-aot-runtime",
         "rsscript-provider-api",
         "reir",
         "vm-jit",
@@ -843,6 +846,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     for forbidden in [
         "rsscript",
         "rsscript-runtime",
+        "rsscript-aot-runtime",
         "rsscript-provider-api",
         "rss-native-abi",
         "rss-process-guard",
@@ -938,11 +942,16 @@ fn lsp_dependency_closure_selects_frontend_only() {
 
     let compiler_manifest: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript/Cargo.toml"))).unwrap();
+    for forbidden in ["rsscript-runtime", "rsscript-aot-runtime"] {
+        assert!(
+            compiler_manifest["dependencies"].get(forbidden).is_none(),
+            "language-service compiler dependency must not select `{forbidden}`"
+        );
+    }
     for dependency in [
         "rsscript-bytecode",
         "rsscript-lowering",
         "rsscript-provider-api",
-        "rsscript-runtime",
         "rss-native-abi",
         "rss-process-guard",
         "vm-jit",
@@ -1009,15 +1018,12 @@ fn compiler_default_dependency_closure_is_host_neutral() {
 
     let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript/Cargo.toml")))
         .expect("compiler manifest should parse");
-    assert_eq!(
-        manifest["dependencies"]["rsscript-runtime"]["features"]
-            .as_array()
-            .expect("runtime features should be explicit")
-            .iter()
-            .filter_map(toml::Value::as_str)
-            .collect::<Vec<_>>(),
-        vec!["core"]
-    );
+    for forbidden in ["rsscript-runtime", "rsscript-aot-runtime"] {
+        assert!(
+            manifest["dependencies"].get(forbidden).is_none(),
+            "compiler/VM core must not depend on generated-Rust runtime `{forbidden}`"
+        );
+    }
     for dependency in ["rss-native-abi", "rss-process-guard", "vm-jit"] {
         assert_eq!(
             manifest["dependencies"][dependency]["optional"].as_bool(),
@@ -1045,6 +1051,7 @@ fn concrete_host_providers_are_leaf_composition_packages() {
         for forbidden in [
             "rsscript",
             "rsscript-runtime",
+            "rsscript-aot-runtime",
             "rsscript-semantics",
             "reir",
             "vm-jit",
@@ -1090,6 +1097,11 @@ fn runtime_does_not_depend_on_the_compiler_package() {
     let manifest: toml::Value =
         toml::from_str(&read(&manifest_path)).expect("runtime Cargo.toml should parse");
     let dependencies = dependency_packages(&manifest);
+    assert_eq!(
+        manifest["package"]["name"].as_str(),
+        Some("rsscript-aot-runtime"),
+        "the generated-Rust runtime must be named as an AOT-only integration"
+    );
 
     let default_features = manifest["features"]["default"]
         .as_array()
@@ -1107,7 +1119,7 @@ fn runtime_does_not_depend_on_the_compiler_package() {
     for host_module in ["domain", "env", "fs", "process", "random", "tempdir"] {
         assert!(
             runtime_source.contains(&format!(
-                "#[cfg(feature = \"legacy-host\")]\nmod {host_module};"
+                "#[cfg(feature = \"host-compat\")]\nmod {host_module};"
             )),
             "runtime-core must not compile concrete `{host_module}` services"
         );
@@ -1151,6 +1163,7 @@ fn abi_and_provider_crates_keep_one_way_dependencies() {
     for forbidden in [
         "rsscript",
         "rsscript-runtime",
+        "rsscript-aot-runtime",
         "rss-native-abi",
         "rss-process-guard",
         "reir",
@@ -1275,6 +1288,7 @@ fn executable_backends_consume_validated_frontend_results() {
     for forbidden in [
         "rsscript",
         "rsscript-runtime",
+        "rsscript-aot-runtime",
         "rsscript-provider-api",
         "rss-native-abi",
         "rss-process-guard",

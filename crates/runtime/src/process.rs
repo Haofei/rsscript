@@ -477,7 +477,7 @@ mod tests {
     #[cfg(unix)]
     fn normal_root_exit_terminates_background_descendants() {
         let marker = std::env::temp_dir().join(format!(
-            "rsscript-runtime-descendant-{}",
+            "rsscript-aot-runtime-descendant-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_file(&marker);

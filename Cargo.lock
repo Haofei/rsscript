@@ -1560,7 +1560,6 @@ dependencies = [
  "rsscript-operation",
  "rsscript-provider-api",
  "rsscript-review-reir",
- "rsscript-runtime",
  "rsscript-semantics",
  "rsscript-syntax",
  "rsscript-work-budget",
@@ -1586,6 +1585,35 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "rsscript-aot-runtime"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "flate2",
+ "futures-util",
+ "hex",
+ "hmac",
+ "imbl",
+ "percent-encoding",
+ "rand 0.8.7",
+ "regex",
+ "reqwest",
+ "rss-process-guard",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha2",
+ "sha3",
+ "static_assertions",
+ "tokio",
+ "tokio-tungstenite",
+ "toml",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -1732,35 +1760,6 @@ dependencies = [
  "reir",
  "rsscript",
  "serde_json",
-]
-
-[[package]]
-name = "rsscript-runtime"
-version = "0.1.0"
-dependencies = [
- "base64",
- "chrono",
- "flate2",
- "futures-util",
- "hex",
- "hmac",
- "imbl",
- "percent-encoding",
- "rand 0.8.7",
- "regex",
- "reqwest",
- "rss-process-guard",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "sha2",
- "sha3",
- "static_assertions",
- "tokio",
- "tokio-tungstenite",
- "toml",
- "tracing",
- "uuid",
 ]
 
 [[package]]

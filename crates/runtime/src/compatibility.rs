@@ -6,7 +6,7 @@
 
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-#[cfg(feature = "legacy-host")]
+#[cfg(feature = "host-compat")]
 use crate::async_runtime::ProcessPermit;
 use crate::{OperationContext, ResourceBudget, RssCancellationToken, RssDeadline, RuntimeServices};
 
@@ -43,7 +43,7 @@ pub(crate) fn generated_abi_operation_context(
     )
 }
 
-#[cfg(feature = "legacy-host")]
+#[cfg(feature = "host-compat")]
 pub(crate) fn generated_abi_process_permit(
     cancellation: Option<&RssCancellationToken>,
 ) -> Result<ProcessPermit, String> {

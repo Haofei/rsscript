@@ -184,7 +184,7 @@ pub fn runtime_path() -> String {
 pub fn generated_target_dir() -> PathBuf {
     // A SINGLE shared target dir across every generated-package build. Each test
     // writes its package into its own temp dir (so sources never collide), but the
-    // build output is shared: the heavy `rsscript-runtime` dependency tree
+    // build output is shared: the heavy experimental AOT-runtime dependency tree
     // (tokio, reqwest, flate2, sha3, …) is then compiled *once* and reused by
     // every test instead of being rebuilt from scratch per nextest process.
     // Cargo's build lock serializes concurrent builds into this dir safely, and
@@ -447,7 +447,7 @@ fn compile_and_run(
         .arg(package_dir.join("Cargo.toml"))
         .env("CARGO_TARGET_DIR", generated_target_dir())
         .env("RUSTFLAGS", "-Awarnings")
-        // Build the generated crate offline. Every dependency (`rsscript-runtime`
+        // Build the generated crate offline. Every dependency (`rsscript-aot-runtime`
         // and its transitive deps such as `imbl`/`archery`) is already vendored
         // in the shared cargo registry by the workspace build, so no download is
         // ever needed. Without this, `cargo` may contact crates.io to refresh the

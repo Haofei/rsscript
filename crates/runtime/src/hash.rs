@@ -4,10 +4,10 @@ use sha3::{
     Sha3_224, Sha3_256, Shake128,
     digest::{ExtendableOutput, Update, XofReader},
 };
-#[cfg(feature = "legacy-host")]
+#[cfg(feature = "host-compat")]
 use std::io::Read;
 
-#[cfg(feature = "legacy-host")]
+#[cfg(feature = "host-compat")]
 use crate::fs::RuntimePath;
 
 type HmacSha256 = Hmac<Sha256>;
@@ -56,7 +56,7 @@ pub fn hash_shake128_bytes(value: &[u8], out_len: i64) -> Vec<u8> {
     out
 }
 
-#[cfg(feature = "legacy-host")]
+#[cfg(feature = "host-compat")]
 pub fn hash_sha256_file<P: RuntimePath + ?Sized>(path: &P) -> std::io::Result<String> {
     let mut file = std::fs::File::open(path.as_path())?;
     let mut hasher = Sha256::new();

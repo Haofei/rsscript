@@ -1,8 +1,8 @@
 [package]
-name = "rsscript-runtime"
+name = "rsscript-aot-runtime"
 version = "0.1.0"
 edition = "2024"
-description = "Execution runtime and compatibility hooks for RSScript"
+description = "Experimental runtime support for RSScript-generated Rust/AOT artifacts"
 license = "MIT OR Apache-2.0"
 
 [lib]
@@ -14,14 +14,14 @@ path = "src/lib.rs"
 # networking only from their composition root.
 default = ["core"]
 core = []
-legacy-host = [
+host-compat = [
     "dep:rand",
     "dep:rss-process-guard",
     "dep:uuid",
     "tokio/fs",
     "tokio/io-util",
 ]
-net = ["legacy-host", "tokio/net", "dep:reqwest", "dep:tokio-tungstenite"]
+net = ["host-compat", "tokio/net", "dep:reqwest", "dep:tokio-tungstenite"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

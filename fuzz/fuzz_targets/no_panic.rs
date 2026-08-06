@@ -38,12 +38,13 @@ fuzz_target!(|data: &[u8]| {
     let limits = VmLimits {
         max_depth: 16_384,
         step_budget: Some(50_000_000),
-        mem_budget: Some(512 * 1024 * 1024),
+        allocation_budget: Some(512 * 1024 * 1024),
         // No ambient cancel flag: the fuzzer relies on the step/mem budgets to
         // bound each run; the host-level preemption hook is not exercised here.
         cancel: None,
         stdout_budget: Some(16 * 1024 * 1024),
-        host_call_budget: Some(1_000_000),
+        intrinsic_call_budget: Some(1_000_000),
+        provider_call_budget: Some(1_000_000),
         ..VmLimits::default()
     };
 
@@ -59,6 +60,10 @@ fuzz_target!(|data: &[u8]| {
     // match makes the contract explicit (and the binding is consumed so the
     // optimizer can't elide the call).
     match result {
-        Ok(_) | Err(EvalError::Diagnostics(_)) | Err(EvalError::Runtime(_)) => {}
+        Ok(_)
+        | Err(EvalError::Diagnostics(_))
+        | Err(EvalError::Runtime(_))
+        | Err(EvalError::Execution { .. })
+        | Err(EvalError::Provider(_)) => {}
     }
 });

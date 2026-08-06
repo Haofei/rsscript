@@ -626,11 +626,11 @@ impl OwnedTokioRuntime {
         let (ready_sender, ready_receiver) = std::sync::mpsc::sync_channel(1);
         let (shutdown_sender, shutdown_receiver) = std::sync::mpsc::sync_channel(1);
         let thread = std::thread::Builder::new()
-            .name("rsscript-runtime-owner".to_string())
+            .name("rsscript-aot-runtime-owner".to_string())
             .spawn(move || {
                 let runtime = tokio::runtime::Builder::new_multi_thread()
                     .worker_threads(worker_threads)
-                    .thread_name("rsscript-runtime-tokio")
+                    .thread_name("rsscript-aot-runtime-tokio")
                     .enable_all()
                     .build();
                 match runtime {
@@ -689,7 +689,7 @@ impl OwnedTokioRuntime {
     }
 }
 
-#[cfg(feature = "legacy-host")]
+#[cfg(feature = "host-compat")]
 struct ProcessConcurrency {
     active: Mutex<usize>,
     ready: Condvar,
@@ -697,13 +697,13 @@ struct ProcessConcurrency {
     closed: AtomicBool,
 }
 
-#[cfg(feature = "legacy-host")]
+#[cfg(feature = "host-compat")]
 pub(crate) struct ProcessPermit {
     concurrency: Arc<ProcessConcurrency>,
     _runtime_owner: Arc<RuntimeServices>,
 }
 
-#[cfg(feature = "legacy-host")]
+#[cfg(feature = "host-compat")]
 impl Drop for ProcessPermit {
     fn drop(&mut self) {
         let mut active = self
@@ -716,7 +716,7 @@ impl Drop for ProcessPermit {
     }
 }
 
-#[cfg(feature = "legacy-host")]
+#[cfg(feature = "host-compat")]
 impl ProcessConcurrency {
     fn new(limit: usize) -> Self {
         Self {
@@ -768,7 +768,7 @@ impl ProcessConcurrency {
 pub struct RuntimeServices {
     runtime: OwnedTokioRuntime,
     worker_threads: usize,
-    #[cfg(feature = "legacy-host")]
+    #[cfg(feature = "host-compat")]
     process_concurrency: Arc<ProcessConcurrency>,
     #[cfg(feature = "net")]
     http_client: reqwest::Client,
@@ -795,7 +795,7 @@ impl RuntimeServices {
         Ok(Self {
             runtime,
             worker_threads,
-            #[cfg(feature = "legacy-host")]
+            #[cfg(feature = "host-compat")]
             process_concurrency: Arc::new(ProcessConcurrency::new(
                 std::thread::available_parallelism()
                     .map(usize::from)
@@ -807,7 +807,7 @@ impl RuntimeServices {
     }
 
     pub fn shutdown(&self, timeout: Duration) {
-        #[cfg(feature = "legacy-host")]
+        #[cfg(feature = "host-compat")]
         self.process_concurrency.shutdown();
         self.runtime.shutdown(timeout);
     }
@@ -824,7 +824,7 @@ impl RuntimeServices {
         self.runtime.handle()
     }
 
-    #[cfg(feature = "legacy-host")]
+    #[cfg(feature = "host-compat")]
     pub(crate) fn acquire_process_permit(
         self: &Arc<Self>,
         cancellation: Option<&RssCancellationToken>,

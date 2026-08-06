@@ -79,7 +79,7 @@ jobs:
           cargo clippy --locked -p rss-native-abi --all-targets -- -D warnings
           cargo clippy --locked -p rss-process-guard --all-targets -- -D warnings
           cargo clippy --locked -p reir -p rss-lsp --all-targets -- -D warnings
-          cargo clippy --locked -p rsscript-runtime --all-targets --all-features -- -D warnings
+          cargo clippy --locked -p rsscript-aot-runtime --all-targets --all-features -- -D warnings
           cargo clippy --locked -p rss_native_abi_fixture_bridge --all-targets -- -D warnings
 
       - name: Test JIT allocation and differential boundaries
@@ -99,5 +99,5 @@ jobs:
         run: |
           cargo test --locked -p reir
           cargo test --locked -p rss-lsp
-          cargo test --locked -p rsscript-runtime --lib
+          cargo test --locked -p rsscript-aot-runtime --lib
           cargo test --locked -p rss_native_abi_fixture_bridge

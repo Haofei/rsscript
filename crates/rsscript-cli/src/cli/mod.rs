@@ -228,8 +228,8 @@ pub(crate) fn default_runtime_path() -> Result<PathBuf, String> {
         env::current_dir().map_err(|error| format!("failed to read current directory: {error}"))?;
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let mut candidates = Vec::new();
-    if let Some(path) = env::var_os("RSSCRIPT_RUNTIME_PATH") {
-        candidates.push(("RSSCRIPT_RUNTIME_PATH", PathBuf::from(path)));
+    if let Some(path) = env::var_os("RSSCRIPT_AOT_RUNTIME_PATH") {
+        candidates.push(("RSSCRIPT_AOT_RUNTIME_PATH", PathBuf::from(path)));
     }
     candidates.push(("current directory", current_dir.join("crates/runtime")));
     candidates.push((
@@ -253,7 +253,7 @@ pub(crate) fn select_runtime_path(
         }
     }
     Err(format!(
-        "failed to locate rsscript-runtime crate; checked {}. Set RSSCRIPT_RUNTIME_PATH to the runtime crate directory.",
+        "failed to locate rsscript-aot-runtime crate; checked {}. Set RSSCRIPT_AOT_RUNTIME_PATH to the AOT runtime crate directory.",
         checked.join(", ")
     ))
 }
@@ -487,7 +487,7 @@ mod tests {
         fs::create_dir_all(&valid).expect("runtime directory should create");
         fs::write(
             valid.join("Cargo.toml"),
-            "[package]\nname = \"rsscript-runtime\"\n",
+            "[package]\nname = \"rsscript-aot-runtime\"\n",
         )
         .expect("runtime manifest should write");
 
@@ -511,7 +511,7 @@ mod tests {
         let error = super::select_runtime_path(vec![("env", missing.clone())])
             .expect_err("missing runtime should fail");
 
-        assert!(error.contains("RSSCRIPT_RUNTIME_PATH"));
+        assert!(error.contains("RSSCRIPT_AOT_RUNTIME_PATH"));
         assert!(error.contains(&missing.display().to_string()));
         fs::remove_dir_all(root).expect("temp runtime path should clean up");
     }

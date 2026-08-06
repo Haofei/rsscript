@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-rsscript-runtime = { path = "../../../../runtime" }
+rsscript-runtime = { package = "rsscript-aot-runtime", path = "../../../../runtime", features = ["host-compat"] }

@@ -1,6 +1,6 @@
 use std::fmt;
 
-#[cfg(feature = "legacy-host")]
+#[cfg(feature = "host-compat")]
 use crate::fs::RuntimePath;
 
 #[derive(Debug, Clone)]
@@ -75,7 +75,7 @@ where
     serde_json::from_str(text).map_err(JsonError::from)
 }
 
-#[cfg(feature = "legacy-host")]
+#[cfg(feature = "host-compat")]
 pub fn json_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
     let text =
         crate::fs::file_read_string(path).map_err(|error| JsonError::new(error.to_string()))?;
@@ -139,7 +139,7 @@ pub fn json_values(items: &[JsonValue]) -> JsonValue {
     }
 }
 
-#[cfg(feature = "legacy-host")]
+#[cfg(feature = "host-compat")]
 pub fn toml_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
     let text =
         crate::fs::file_read_string(path).map_err(|error| JsonError::new(error.to_string()))?;
@@ -157,7 +157,7 @@ pub fn yaml_parse(text: &str) -> Result<JsonValue, JsonError> {
     Ok(JsonValue { inner })
 }
 
-#[cfg(feature = "legacy-host")]
+#[cfg(feature = "host-compat")]
 pub fn yaml_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
     let text =
         crate::fs::file_read_string(path).map_err(|error| JsonError::new(error.to_string()))?;
@@ -765,7 +765,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "legacy-host")]
+    #[cfg(feature = "host-compat")]
     fn json_file_loader_rejects_oversized_inputs_before_reading() {
         let path = std::env::temp_dir().join(format!(
             "rsscript-json-oversized-{}-{}",
