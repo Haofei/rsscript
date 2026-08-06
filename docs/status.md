@@ -14,6 +14,8 @@ The platform-neutral language cut is active:
   output uses the distinct `rsscript.package_review.v1` schema.
 
 The physical dependency cut is not complete: the main crate still contains the
-frontend, package tooling, VM, AOT lowering, native loading, and review adapters;
+parser/analyzer orchestration, package tooling, VM, AOT lowering, native loading,
+and review adapters. The source AST and spans are now owned by the independent
+`rsscript-syntax` crate and re-exported through the compatibility façade;
 the runtime still contains concrete host services. The current roadmap prioritizes
 those boundaries over new language, JIT, self-hosting, or package-system scope.

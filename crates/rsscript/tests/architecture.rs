@@ -500,6 +500,31 @@ fn syntax_sources_do_not_reference_later_layers() {
 }
 
 #[test]
+fn syntax_model_is_owned_by_the_boundary_crate() {
+    let root = workspace_root();
+    assert!(root.join("crates/rsscript-syntax/src/ast.rs").is_file());
+    assert!(!root.join("crates/rsscript/src/syntax/ast.rs").exists());
+
+    let manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-syntax/Cargo.toml")))
+            .expect("syntax manifest should parse");
+    let dependencies = dependency_packages(&manifest);
+    for forbidden in [
+        "rsscript",
+        "rsscript-semantics",
+        "rsscript-runtime",
+        "rsscript-provider-api",
+        "reir",
+        "vm-jit",
+    ] {
+        assert!(
+            !dependencies.contains(forbidden),
+            "syntax model must not depend on `{forbidden}`"
+        );
+    }
+}
+
+#[test]
 fn runtime_does_not_depend_on_the_compiler_package() {
     let root = workspace_root();
     let manifest_path = root.join("crates/runtime/Cargo.toml");

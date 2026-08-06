@@ -127,7 +127,7 @@ fn prepare_analysis(input: AnalysisInput<'_>, budget: Rc<FrontendBudget>) -> Pre
     let (tokens, source_programs) = match input.sources {
         AnalysisSources::Single { file, source } => {
             let tokens = lex_with_budget(file, source, budget.clone());
-            let program = crate::syntax::ast::Program::parse_tokens(file, &tokens, budget.clone());
+            let program = crate::syntax::parse_source_tokens(file, &tokens, budget.clone());
             (tokens, vec![program])
         }
         AnalysisSources::Many(sources) => {
@@ -135,7 +135,7 @@ fn prepare_analysis(input: AnalysisInput<'_>, budget: Rc<FrontendBudget>) -> Pre
             let mut programs = Vec::new();
             for (file, source) in sources {
                 let source_tokens = lex_with_budget(file, source, budget.clone());
-                programs.push(crate::syntax::ast::Program::parse_tokens(
+                programs.push(crate::syntax::parse_source_tokens(
                     file,
                     &source_tokens,
                     budget.clone(),
@@ -168,7 +168,7 @@ fn prepare_analysis(input: AnalysisInput<'_>, budget: Rc<FrontendBudget>) -> Pre
     let default_interface_programs = crate::interfaces::default_interfaces()
         .map(|(file, source)| {
             let tokens = lex_with_budget(file, source, budget.clone());
-            crate::syntax::ast::Program::parse_tokens(file, &tokens, budget.clone())
+            crate::syntax::parse_source_tokens(file, &tokens, budget.clone())
         })
         .collect::<Vec<_>>();
     let supplied_interface_programs = input
@@ -176,7 +176,7 @@ fn prepare_analysis(input: AnalysisInput<'_>, budget: Rc<FrontendBudget>) -> Pre
         .iter()
         .map(|(file, source)| {
             let tokens = lex_with_budget(file, source, budget.clone());
-            crate::syntax::ast::Program::parse_tokens(file, &tokens, budget.clone())
+            crate::syntax::parse_source_tokens(file, &tokens, budget.clone())
         })
         .collect::<Vec<_>>();
     let hir = match input.flavor {

@@ -25,6 +25,7 @@ rss-process-guard = { path = "../process-guard" }
 rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-provider-api = { path = "../rsscript-provider-api" }
 rsscript-runtime = { path = "../runtime", default-features = false, features = ["core"] }
+rsscript-syntax = { path = "../rsscript-syntax" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"

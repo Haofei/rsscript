@@ -53,12 +53,6 @@ pub(crate) fn parse_source_tokens(
     program
 }
 
-impl Program {
-    pub(crate) fn parse_tokens(file: &str, tokens: &[Token], budget: Rc<FrontendBudget>) -> Self {
-        parse_source_tokens(file, tokens, budget)
-    }
-}
-
 /// Parse `source` without desugaring — the AST mirrors the written surface.
 pub fn parse_source_raw(file: &str, source: &str) -> Program {
     let budget = FrontendBudget::new(

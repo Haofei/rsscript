@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::fs;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+
+pub use rsscript_syntax::Span;
 
 pub mod code {
     pub const RESERVED_DIAGNOSTIC_RS0001: &str = "RS0001";
@@ -225,14 +227,6 @@ impl Severity {
             Self::Warning => "warning",
         }
     }
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Span {
-    pub file: String,
-    pub line: usize,
-    pub column: usize,
-    pub length: usize,
 }
 
 /// A concrete source edit attached to a fix: replace the `length` characters of
