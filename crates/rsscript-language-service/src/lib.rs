@@ -200,9 +200,9 @@ impl LanguageService {
         };
         diagnostics.extend(lint_source(path, &document.text));
         check_request(request)?;
-        diagnostics.truncate(request.max_diagnostics);
         self.diagnostic_cache
             .insert(cache_key, Arc::from(diagnostics.clone()));
+        diagnostics.truncate(request.max_diagnostics);
         Ok(diagnostics)
     }
 
@@ -376,5 +376,38 @@ mod tests {
             Err(LanguageServiceError::DeadlineExceeded)
         );
         assert_eq!(service.stats(), LanguageServiceStats::default());
+    }
+
+    #[test]
+    fn response_budget_does_not_truncate_the_revision_cache() {
+        let mut service = LanguageService::default();
+        service.set_file(
+            "main.rss",
+            1,
+            DocumentKind::Source,
+            "fn first() -> Missing { return absent }\nfn second() -> Missing { return absent }\n",
+        );
+        let limited = service
+            .diagnostics_with(
+                "main.rss",
+                LanguageRequest {
+                    max_diagnostics: 1,
+                    ..LanguageRequest::default()
+                },
+            )
+            .unwrap();
+        assert_eq!(limited.len(), 1);
+
+        let complete = service
+            .diagnostics_with(
+                "main.rss",
+                LanguageRequest {
+                    max_diagnostics: 100,
+                    ..LanguageRequest::default()
+                },
+            )
+            .unwrap();
+        assert!(complete.len() > limited.len());
+        assert_eq!(service.stats().cache_hits, 1);
     }
 }
