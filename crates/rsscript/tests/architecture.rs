@@ -613,6 +613,18 @@ fn runtime_does_not_depend_on_the_compiler_package() {
         toml::from_str(&read(&manifest_path)).expect("runtime Cargo.toml should parse");
     let dependencies = dependency_packages(&manifest);
 
+    let default_features = manifest["features"]["default"]
+        .as_array()
+        .expect("runtime default features should be an array")
+        .iter()
+        .map(|feature| feature.as_str().expect("feature should be a string"))
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        default_features,
+        BTreeSet::from(["core"]),
+        "the default runtime must not enable concrete network services"
+    );
+
     assert!(
         !dependencies.contains("rsscript"),
         "{} must not depend on the rsscript compiler/package",

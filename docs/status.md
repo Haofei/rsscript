@@ -25,5 +25,6 @@ and standard-package interface sources are owned by the data-only
 façade while the remaining checks are migrated. `rsscript-lowering` now owns the
 provider-neutral `ExecutableIr` gate; the VM and Rust AOT path both receive this
 checked representation, and JIT remains downstream of the VM unit. The runtime
-still contains concrete host services. The current roadmap prioritizes those
+still contains concrete host services behind explicit composition, and its
+default feature set is network-free. The current roadmap prioritizes those
 boundaries over new language, JIT, self-hosting, or package-system scope.

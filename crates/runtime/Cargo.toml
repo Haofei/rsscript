@@ -10,10 +10,9 @@ name = "rsscript_runtime"
 path = "src/lib.rs"
 
 [features]
-# Generated RSS packages retain the complete runtime by default. The compiler
-# itself depends on `core` only, so its edit/test loop does not compile HTTP or
-# WebSocket support it never executes.
-default = ["core", "net"]
+# The default runtime is deliberately network-free. Hosts opt into concrete
+# networking only from their composition root.
+default = ["core"]
 core = []
 net = ["tokio/net", "dep:reqwest", "dep:tokio-tungstenite"]
 
