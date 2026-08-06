@@ -433,7 +433,9 @@ pub(crate) fn is_package_directory(path: &str) -> bool {
 }
 pub(crate) fn print_usage() {
     eprintln!("usage:");
-    eprintln!("  rss build [--out <artifact.rssbc>] <file-or-package-directory>");
+    eprintln!(
+        "  rss build [--out <artifact.rssbc>] [--analysis-out <analysis.json>] <file-or-package-directory>"
+    );
     eprintln!(
         "  rss check [--json] [--lint] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>"
     );

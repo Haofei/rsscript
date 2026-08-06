@@ -4,25 +4,29 @@ use std::process::ExitCode;
 
 use rsscript::{
     BYTECODE_MAGIC, PackageAnalysis, RegVmExecutable, analyze_package_dir,
-    format_package_analysis_json, reg_vm_compile_package_input, reg_vm_compile_source,
+    format_package_analysis_json, load_workspace_snapshot, reg_vm_compile_package_input,
+    reg_vm_compile_source,
 };
 use serde_json::json;
 
 use super::{is_package_directory, package_execution_lowering_input, read_cli_source};
 
 pub(crate) fn run_build(args: &[String]) -> ExitCode {
-    let (input, output) = match parse_build_args(args) {
+    let (input, output, analysis_output) = match parse_build_args(args) {
         Ok(parsed) => parsed,
         Err(error) => return usage_error(error),
     };
-    let executable = match compile_input(input) {
-        Ok(executable) => executable,
+    if analysis_output.is_some() && !is_package_directory(input) {
+        return usage_error("`--analysis-out` requires a package directory".to_string());
+    }
+    let build = match build_input(input) {
+        Ok(build) => build,
         Err(error) => {
             eprintln!("{error:?}");
             return ExitCode::from(1);
         }
     };
-    let bytes = match executable.to_bytecode() {
+    let bytes = match build.executable.to_bytecode() {
         Ok(bytes) => bytes,
         Err(error) => {
             eprintln!("{error:?}");
@@ -41,7 +45,59 @@ pub(crate) fn run_build(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
     println!("{}", output.display());
+    if let Some(analysis) = build.analysis {
+        let analysis_output = analysis_output
+            .map(PathBuf::from)
+            .unwrap_or_else(|| default_analysis_path(&output));
+        if let Some(parent) = analysis_output.parent()
+            && let Err(error) = fs::create_dir_all(parent)
+        {
+            eprintln!("cannot create {}: {error}", parent.display());
+            return ExitCode::from(2);
+        }
+        if let Err(error) = fs::write(&analysis_output, format_package_analysis_json(&analysis)) {
+            eprintln!("cannot write {}: {error}", analysis_output.display());
+            return ExitCode::from(2);
+        }
+        println!("analysis: {}", analysis_output.display());
+    }
     ExitCode::SUCCESS
+}
+
+struct BuildProduct {
+    executable: RegVmExecutable,
+    analysis: Option<PackageAnalysis>,
+}
+
+fn build_input(input: &str) -> Result<BuildProduct, rsscript::EvalError> {
+    if !is_package_directory(input) {
+        return compile_input(input).map(|executable| BuildProduct {
+            executable,
+            analysis: None,
+        });
+    }
+
+    let snapshot =
+        load_workspace_snapshot(Path::new(input)).map_err(rsscript::EvalError::Runtime)?;
+    if snapshot.analysis().summary.errors != 0 {
+        return Err(rsscript::EvalError::Diagnostics(
+            snapshot.analysis().diagnostics.clone(),
+        ));
+    }
+    let mut executable = reg_vm_compile_package_input(snapshot.lowering_input())?;
+    executable.bind_snapshot_digest(snapshot.digest())?;
+    let mut analysis = snapshot.analysis().clone();
+    analysis.module_digest = Some(
+        executable
+            .bytecode_artifact()
+            .header
+            .executable_hash
+            .clone(),
+    );
+    Ok(BuildProduct {
+        executable,
+        analysis: Some(analysis),
+    })
 }
 
 pub(crate) fn run_inspect(args: &[String]) -> ExitCode {
@@ -216,9 +272,10 @@ fn compile_input(input: &str) -> Result<RegVmExecutable, rsscript::EvalError> {
     }
 }
 
-fn parse_build_args(args: &[String]) -> Result<(&str, Option<&str>), String> {
+fn parse_build_args(args: &[String]) -> Result<(&str, Option<&str>, Option<&str>), String> {
     let mut input = None;
     let mut output = None;
+    let mut analysis_output = None;
     let mut index = 0;
     while let Some(argument) = args.get(index) {
         match argument.as_str() {
@@ -227,6 +284,14 @@ fn parse_build_args(args: &[String]) -> Result<(&str, Option<&str>), String> {
                 output = Some(
                     args.get(index)
                         .ok_or_else(|| "missing value for `--out`".to_string())?
+                        .as_str(),
+                );
+            }
+            "--analysis-out" => {
+                index += 1;
+                analysis_output = Some(
+                    args.get(index)
+                        .ok_or_else(|| "missing value for `--analysis-out`".to_string())?
                         .as_str(),
                 );
             }
@@ -239,6 +304,7 @@ fn parse_build_args(args: &[String]) -> Result<(&str, Option<&str>), String> {
     Ok((
         input.ok_or_else(|| "missing build input".to_string())?,
         output,
+        analysis_output,
     ))
 }
 
@@ -275,6 +341,10 @@ fn default_artifact_path(input: &str) -> PathBuf {
     PathBuf::from("target").join(format!("{name}.rssbc"))
 }
 
+fn default_analysis_path(artifact: &Path) -> PathBuf {
+    artifact.with_extension("analysis.json")
+}
+
 fn usage_error(error: String) -> ExitCode {
     eprintln!("{error}");
     ExitCode::from(2)
@@ -290,10 +360,16 @@ mod tests {
 
     #[test]
     fn build_and_inspect_arguments_are_bounded() {
-        let build = args(&["demo.rss", "--out", "demo.rssbc"]);
+        let build = args(&[
+            "demo.rss",
+            "--out",
+            "demo.rssbc",
+            "--analysis-out",
+            "demo.analysis.json",
+        ]);
         assert_eq!(
             parse_build_args(&build).unwrap(),
-            ("demo.rss", Some("demo.rssbc"))
+            ("demo.rss", Some("demo.rssbc"), Some("demo.analysis.json"))
         );
         let inspect = args(&["imports", "--json", "demo.rssbc"]);
         assert_eq!(
@@ -301,5 +377,9 @@ mod tests {
             ("imports", true, "demo.rssbc")
         );
         assert!(parse_build_args(&args(&["a.rss", "b.rss"])).is_err());
+        assert_eq!(
+            default_analysis_path(Path::new("target/demo.rssbc")),
+            PathBuf::from("target/demo.analysis.json")
+        );
     }
 }

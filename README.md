@@ -68,11 +68,16 @@ with the validated call graph; its conclusions never change language validity.
 ```text
 rss check <file-or-package>
 rss fmt <file>
-rss build [--out <artifact.rssbc>] <file-or-package>
+rss build [--out <artifact.rssbc>] [--analysis-out <analysis.json>] <file-or-package>
 rss run [--json] <file-or-package> [-- <args>...]
 rss run --aot <file-or-package> [-- <args>...]  # Experimental
 rss inspect <imports|bytecode|analysis|resources|async|call-graph> <input>
 ```
+
+Building a package captures one immutable workspace snapshot and emits both the
+verified bytecode container and a `rsscript.package_analysis.v1` sidecar. By
+default the sidecar is written beside the bytecode as `<name>.analysis.json`;
+`--analysis-out` selects an explicit path. Single-file builds emit bytecode only.
 
 The default Cargo feature set builds the frontend-only `check`, `fix`, and
 `fmt` path without runtime dependencies. Build the CLI with `--features
