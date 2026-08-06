@@ -22,7 +22,7 @@ use std::collections::{BTreeSet, HashMap};
 use super::ast::{
     Block, Callee, Expr, FieldDecl, GenericParam, Item, Program, Stmt, TypeDecl, TypeKind, TypeRef,
 };
-use crate::diagnostic::Span;
+use crate::Span;
 
 /// Flatten the associated name `Device.DEFAULT` to an ordinary constant
 /// identifier. Constants follow Rust's `SCREAMING_SNAKE_CASE` (the Rust backend

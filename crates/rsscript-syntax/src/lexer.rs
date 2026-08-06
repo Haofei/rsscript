@@ -1,7 +1,6 @@
 use std::rc::Rc;
 
-use crate::checks::budget::{FrontendBudget, FrontendBudgetLimits};
-use crate::diagnostic::Span;
+use crate::{FrontendBudget, FrontendBudgetLimits, Span};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TokenKind {
@@ -60,11 +59,11 @@ pub fn lex(file: &str, source: &str) -> Vec<Token> {
     lex_with_budget(file, source, budget)
 }
 
-pub(crate) fn lex_with_budget(file: &str, source: &str, budget: Rc<FrontendBudget>) -> Vec<Token> {
+pub fn lex_with_budget(file: &str, source: &str, budget: Rc<FrontendBudget>) -> Vec<Token> {
     lex_with_budget_inner(file, source, budget, true)
 }
 
-pub(crate) fn lex_embedded_with_budget(
+pub fn lex_embedded_with_budget(
     file: &str,
     source: &str,
     budget: Rc<FrontendBudget>,

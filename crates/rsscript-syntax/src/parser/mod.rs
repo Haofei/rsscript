@@ -1,10 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::checks::budget::{FrontendBudget, FrontendBudgetLimits, ParseRecursionGuard};
-use crate::diagnostic::Span;
-use crate::lexer::{Token, TokenKind, lex_with_budget};
-use crate::syntax::ast::{
+use crate::ast::{
     AssignStmt, BinaryOp, Block, CallArg, Callee, ConstDecl, DataEffect, Expr, FieldDecl, ForStmt,
     FunctionDecl, GenericBound, GenericParam, IfStmt, Item, LetElseStmt, LetKind, LetStmt,
     LoopStmt, MapLiteralEntry, MatchArm, MatchFieldPattern, MatchLiteral, MatchPattern, MatchStmt,
@@ -12,6 +9,8 @@ use crate::syntax::ast::{
     ProtocolImplMapping, ReturnStmt, SelectArm, SelectStmt, Stmt, SumTypeDecl, SumVariant,
     TaskGroupStmt, TypeAliasDecl, TypeDecl, TypeKind, TypeRef, UseDecl, WithStmt,
 };
+use crate::lexer::{Token, TokenKind, lex_with_budget};
+use crate::{FrontendBudget, FrontendBudgetLimits, ParseRecursionGuard, Span};
 
 mod expr;
 mod items;
@@ -39,11 +38,7 @@ pub fn parse_source(file: &str, source: &str) -> Program {
     parse_source_tokens(file, &tokens, budget)
 }
 
-pub(crate) fn parse_source_tokens(
-    file: &str,
-    tokens: &[Token],
-    budget: Rc<FrontendBudget>,
-) -> Program {
+pub fn parse_source_tokens(file: &str, tokens: &[Token], budget: Rc<FrontendBudget>) -> Program {
     let mut program = parse_source_tokens_raw(file, tokens, budget.clone());
     if budget.check_active() {
         super::desugar::desugar_associated_consts(&mut program);

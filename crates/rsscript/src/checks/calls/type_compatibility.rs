@@ -484,8 +484,7 @@ mod substitution_tests {
         let budget = budget();
 
         assert_eq!(substitute_type_params(&budget, &ty, &subs), Err(()));
-        let diagnostic = budget
-            .incomplete_diagnostic()
+        let diagnostic = crate::checks::budget::incomplete_diagnostic(&budget)
             .expect("deep substitution should exhaust recursion budget");
         assert_eq!(
             diagnostic.code,

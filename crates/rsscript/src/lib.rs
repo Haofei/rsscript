@@ -38,7 +38,9 @@ mod hir;
 #[cfg(test)]
 mod interface_metadata;
 mod interfaces;
-mod lexer;
+mod lexer {
+    pub(crate) use rsscript_syntax::lexer::*;
+}
 mod lint;
 mod native_plugin;
 mod package;

@@ -4,6 +4,7 @@ members = [
     "crates/rsscript-abi-model",
     "crates/rsscript-provider-api",
     "crates/rsscript-syntax",
+    "crates/rsscript-work-budget",
     "crates/rsscript-semantics",
     "crates/rsscript-lowering",
     "crates/rsscript",

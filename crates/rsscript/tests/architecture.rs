@@ -464,8 +464,7 @@ fn selfhost_parity_domains_remain_separate_modules() {
 #[test]
 fn syntax_sources_do_not_reference_later_layers() {
     let root = workspace_root();
-    let mut files = rust_files_below(&root.join("crates/rsscript/src/syntax"));
-    files.push(root.join("crates/rsscript/src/lexer.rs"));
+    let files = rust_files_below(&root.join("crates/rsscript-syntax/src"));
 
     let forbidden = [
         ("package", "crate::package"),
@@ -503,7 +502,14 @@ fn syntax_sources_do_not_reference_later_layers() {
 fn syntax_model_is_owned_by_the_boundary_crate() {
     let root = workspace_root();
     assert!(root.join("crates/rsscript-syntax/src/ast.rs").is_file());
+    assert!(root.join("crates/rsscript-syntax/src/lexer.rs").is_file());
+    assert!(
+        root.join("crates/rsscript-syntax/src/parser/mod.rs")
+            .is_file()
+    );
     assert!(!root.join("crates/rsscript/src/syntax/ast.rs").exists());
+    assert!(!root.join("crates/rsscript/src/lexer.rs").exists());
+    assert!(rust_files_below(&root.join("crates/rsscript/src/syntax/parser")).is_empty());
 
     let manifest: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-syntax/Cargo.toml")))

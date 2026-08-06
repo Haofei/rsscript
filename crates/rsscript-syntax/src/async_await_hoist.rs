@@ -1,4 +1,4 @@
-//! `await`-in-expression support via await-hoisting (A-normal form).
+//! Syntax-level `await`-in-expression support via await-hoisting (A-normal form).
 //!
 //! The async lowering only handles `await` at a statement boundary (`let x =
 //! await f()`, `return await f()`, a bare `await f()` statement) or inside an

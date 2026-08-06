@@ -1,4 +1,4 @@
-//! Named-function values via forwarding-closure desugaring.
+//! Syntax-level named-function values via forwarding-closure desugaring.
 //!
 //! RSScript has no first-class function-pointer value, but a *named function*
 //! passed where a `Fn(...)` is expected is exactly what the tinygrad port needs

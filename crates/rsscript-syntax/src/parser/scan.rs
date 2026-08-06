@@ -77,9 +77,7 @@ pub(super) fn statement_end(tokens: &[Token], start: usize, limit: usize) -> usi
             } else if is_statement_postfix_token(token) {
                 postfix_continuation_line = Some(token.span.line);
             } else if is_continuation_operator(token)
-                || tokens
-                    .get(index - 1)
-                    .is_some_and(|prev| is_continuation_operator(prev))
+                || tokens.get(index - 1).is_some_and(is_continuation_operator)
             {
                 // Binary-operator line continuation: a line that *begins* with a
                 // binary operator (leading style) or *follows* a line ending in

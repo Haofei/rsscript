@@ -21,10 +21,10 @@ pub(super) fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<E
         return Some(number);
     }
 
-    if tokens[start].is_ident_text("if") {
-        if let Some(if_expr) = parse_if_expr(tokens, start, end) {
-            return Some(if_expr);
-        }
+    if tokens[start].is_ident_text("if")
+        && let Some(if_expr) = parse_if_expr(tokens, start, end)
+    {
+        return Some(if_expr);
     }
 
     if tokens[start].symbol("|")
@@ -74,10 +74,10 @@ pub(super) fn parse_expr(tokens: &[Token], start: usize, end: usize) -> Option<E
     }
 
     // Match expression: match <value> { arms }
-    if tokens[start].is_ident_text("match") {
-        if let Some(match_expr) = parse_match_expr(tokens, start, end) {
-            return Some(match_expr);
-        }
+    if tokens[start].is_ident_text("match")
+        && let Some(match_expr) = parse_match_expr(tokens, start, end)
+    {
+        return Some(match_expr);
     }
 
     if let Some(effect) = parse_data_effect(tokens.get(start)) {
@@ -509,9 +509,7 @@ fn parse_object_literal_expr(tokens: &[Token], start: usize, end: usize) -> Opti
             return None;
         }
         saw_object_field = true;
-        let Some(colon) = find_top_level_symbol(tokens, range.start, range.end, ":") else {
-            return None;
-        };
+        let colon = find_top_level_symbol(tokens, range.start, range.end, ":")?;
         let Some(TokenKind::String(name)) = tokens.get(range.start).map(|token| &token.kind) else {
             return None;
         };
@@ -910,7 +908,7 @@ fn parse_closure_captures(
     tokens: &[Token],
     start: usize,
     end: usize,
-) -> Option<Vec<crate::syntax::ast::ClosureCapture>> {
+) -> Option<Vec<crate::ast::ClosureCapture>> {
     let mut captures = Vec::new();
     for range in split_param_ranges(tokens, start, end) {
         if range.empty_span.is_some() {
@@ -921,7 +919,7 @@ fn parse_closure_captures(
         }
         let effect = parse_data_effect(tokens.get(range.start))?;
         let name = ident_name(&tokens[range.start + 1])?.to_string();
-        captures.push(crate::syntax::ast::ClosureCapture {
+        captures.push(crate::ast::ClosureCapture {
             effect,
             name,
             span: tokens[range.start].span.clone(),

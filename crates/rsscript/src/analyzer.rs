@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use crate::checks;
-use crate::checks::budget::{AnalysisDiagnostics, FrontendBudget, FrontendBudgetLimits};
+use crate::checks::budget::{
+    AnalysisDiagnostics, FrontendBudget, FrontendBudgetLimits, budget_completion,
+};
 use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::{
     CallResolution, DuplicateSymbolKind, FieldInfo, FunctionSig, Hir, HirBlock, HirExpr,
@@ -808,7 +810,7 @@ fn analyze_program(prepared: PreparedAnalysis) -> AnalysisResult {
         &analyzer.syntax_program,
         analyzer.diagnostics.as_mut_slice(),
     );
-    let completion = analyzer.budget.completion();
+    let completion = budget_completion(&analyzer.budget);
     let diagnostics = analyzer.diagnostics.into_vec();
     AnalysisResult::new(
         SemanticDatabase::new(
@@ -887,7 +889,7 @@ fn analyze_syntax_program(prepared: PreparedAnalysis) -> AnalysisResult {
         &analyzer.syntax_program,
         analyzer.diagnostics.as_mut_slice(),
     );
-    let completion = analyzer.budget.completion();
+    let completion = budget_completion(&analyzer.budget);
     let diagnostics = analyzer.diagnostics.into_vec();
     AnalysisResult::new(
         SemanticDatabase::new(

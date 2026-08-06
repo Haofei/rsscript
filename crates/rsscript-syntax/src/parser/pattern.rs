@@ -9,9 +9,7 @@ pub(super) fn parse_match_expr(tokens: &[Token], start: usize, end: usize) -> Op
     // match <value> { arms... }
     // The arms block is the top-level brace group whose close ends the expression.
     let brace_start = find_match_expr_arms_open(tokens, start + 1, end)?;
-    let Some(close) = find_matching(tokens, brace_start, "{", "}") else {
-        return None;
-    };
+    let close = find_matching(tokens, brace_start, "{", "}")?;
     // The closing brace must be the end of the expression
     if close + 1 != end {
         return None;
@@ -59,10 +57,12 @@ fn find_match_expr_arms_open(tokens: &[Token], start: usize, end: usize) -> Opti
             bracket_depth += 1;
         } else if token.symbol("]") {
             bracket_depth = bracket_depth.saturating_sub(1);
-        } else if paren_depth == 0 && bracket_depth == 0 && token.symbol("{") {
-            if find_matching(tokens, index, "{", "}").is_some_and(|close| close + 1 == end) {
-                return Some(index);
-            }
+        } else if paren_depth == 0
+            && bracket_depth == 0
+            && token.symbol("{")
+            && find_matching(tokens, index, "{", "}").is_some_and(|close| close + 1 == end)
+        {
+            return Some(index);
         }
     }
     None
@@ -70,7 +70,7 @@ fn find_match_expr_arms_open(tokens: &[Token], start: usize, end: usize) -> Opti
 
 pub(super) struct ParsedMatchArms {
     pub(super) arms: Vec<MatchArm>,
-    pub(super) malformed_spans: Vec<crate::diagnostic::Span>,
+    pub(super) malformed_spans: Vec<crate::Span>,
 }
 
 pub(super) fn parse_match_arms(tokens: &[Token], start: usize, end: usize) -> ParsedMatchArms {

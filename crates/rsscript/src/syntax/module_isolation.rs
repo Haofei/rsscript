@@ -47,11 +47,11 @@ pub fn isolate_module_namespaces(program: &mut Program) {
     // synthesized calls are then mangled by isolation like any other reference.
     // This runs for every program (module-less ones included), unlike the module
     // rewriting below.
-    super::function_value_desugar::desugar_function_values(program);
+    super::desugar_function_values(program);
     // Hoist `await` out of expression positions into statement-boundary `let`
     // bindings, so a nested `await f(await g())` lowers like the linear awaits the
     // backends already support. Runs for every program (module-less included).
-    super::async_await_hoist::hoist_async_awaits(program);
+    super::hoist_async_awaits(program);
     let file_module = collect_file_modules(program);
     if file_module.is_empty() {
         // No `module` declarations anywhere: pure root namespace, nothing to do.

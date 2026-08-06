@@ -1543,6 +1543,7 @@ dependencies = [
  "rsscript-provider-api",
  "rsscript-runtime",
  "rsscript-syntax",
+ "rsscript-work-budget",
  "rustix",
  "semver",
  "serde",
@@ -1619,6 +1620,13 @@ dependencies = [
 
 [[package]]
 name = "rsscript-syntax"
+version = "0.1.0"
+dependencies = [
+ "rsscript-work-budget",
+]
+
+[[package]]
+name = "rsscript-work-budget"
 version = "0.1.0"
 dependencies = [
  "serde",

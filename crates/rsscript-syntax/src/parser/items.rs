@@ -6,23 +6,23 @@ use super::*;
 
 pub(super) struct ParsedFields {
     pub(super) fields: Vec<FieldDecl>,
-    pub(super) malformed_spans: Vec<crate::diagnostic::Span>,
+    pub(super) malformed_spans: Vec<crate::Span>,
 }
 
 pub(super) struct ParsedParams {
     pub(super) params: Vec<Param>,
-    pub(super) malformed_spans: Vec<crate::diagnostic::Span>,
+    pub(super) malformed_spans: Vec<crate::Span>,
 }
 
 pub(super) struct ParsedGenericParams {
     pub(super) params: Vec<GenericParam>,
-    pub(super) malformed_spans: Vec<crate::diagnostic::Span>,
+    pub(super) malformed_spans: Vec<crate::Span>,
 }
 
 pub(super) struct ParamRange {
     pub(super) start: usize,
     pub(super) end: usize,
-    pub(super) empty_span: Option<crate::diagnostic::Span>,
+    pub(super) empty_span: Option<crate::Span>,
 }
 
 pub(super) fn parse_fields(tokens: &[Token], start: usize, end: usize) -> ParsedFields {
