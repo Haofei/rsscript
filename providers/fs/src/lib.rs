@@ -9,7 +9,7 @@ use rsscript_abi_model::{
 };
 use rsscript_provider_api::{
     BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderCallMode,
-    ProviderDescriptor, ProviderFunction, ProviderFunctionDescriptor,
+    ProviderDescriptor, ProviderError, ProviderFunction, ProviderFunctionDescriptor,
 };
 
 pub fn descriptor() -> ProviderDescriptor {
@@ -85,7 +85,7 @@ impl RootedFsProvider {
                     .map_err(|error| error.to_string())?;
                 std::fs::read_to_string(path)
                     .map(NativeValue::String)
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| ProviderError::internal(error.to_string()))
             }),
             binding("host.fs.write_text", write, move |mut args| {
                 let NativeValue::String(path) = args.remove(0) else {
@@ -99,7 +99,7 @@ impl RootedFsProvider {
                     .map_err(|error| error.to_string())?;
                 std::fs::write(path, text)
                     .map(|_| NativeValue::Unit)
-                    .map_err(|error| error.to_string())
+                    .map_err(|error| ProviderError::internal(error.to_string()))
             }),
         ])
     }
@@ -180,14 +180,14 @@ fn function(symbol: &str, signature: FunctionSignature, entry: &str) -> Provider
         cancellation: CancellationBehavior::NotApplicable,
         thread_safe: true,
         reentrant: true,
-        resource_cleanup_contract: "no retained handles".into(),
-        error_mapping: "provider error string".into(),
+        resource_cleanup: rsscript_provider_api::ResourceCleanupContract::None,
+        error_mapping: rsscript_provider_api::ProviderErrorMapping::StructuredV1,
     }
 }
 fn binding(
     symbol: &str,
     signature: FunctionSignature,
-    call: impl Fn(Vec<NativeValue>) -> Result<NativeValue, String> + Send + Sync + 'static,
+    call: impl Fn(Vec<NativeValue>) -> Result<NativeValue, ProviderError> + Send + Sync + 'static,
 ) -> (ExternalSymbol, ProviderFunction<NativeInterpreterFn>) {
     (
         ExternalSymbol::new(symbol).unwrap(),

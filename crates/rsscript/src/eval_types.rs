@@ -3,8 +3,9 @@ use std::collections::BTreeMap;
 
 pub use rsscript_abi_model::{ExternalImport, ExternalSymbol, FunctionSignature, SignatureHash};
 pub use rsscript_provider_api::{
-    BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderCallMode,
-    ProviderDescriptor, ProviderFunction, ProviderFunctionDescriptor, ProviderLoadError,
+    BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderCallContext,
+    ProviderCallMode, ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderErrorMapping,
+    ProviderFunction, ProviderFunctionDescriptor, ProviderLoadError, ResourceCleanupContract,
 };
 pub type ExternalFunction = NativeInterpreterFn;
 
@@ -33,7 +34,9 @@ impl ExternalFunctionRegistry {
     }
 
     pub fn resolve(&self, import: &ExternalImport) -> Result<&ExternalFunction, ProviderLoadError> {
-        self.registry.resolve(import)
+        self.registry
+            .resolve(import)
+            .map(|function| &function.callable)
     }
 
     pub fn into_bindings(self) -> impl Iterator<Item = (String, ExternalFunction)> {

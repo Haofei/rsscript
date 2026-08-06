@@ -165,6 +165,7 @@ pub struct RunLimits {
     pub step_budget: Option<u64>,
     pub memory_budget: Option<usize>,
     pub cancellation: Option<Arc<AtomicBool>>,
+    pub deadline: Option<std::time::Instant>,
     pub output_budget: Option<usize>,
     pub intrinsic_call_budget: Option<u64>,
     pub provider_call_budget: Option<u64>,
@@ -201,6 +202,7 @@ impl From<VmLimits> for RunLimits {
             step_budget: limits.step_budget,
             memory_budget: limits.mem_budget,
             cancellation: limits.cancel,
+            deadline: limits.deadline,
             output_budget: limits.stdout_budget,
             intrinsic_call_budget: limits.intrinsic_call_budget,
             provider_call_budget: limits.provider_call_budget,
@@ -216,6 +218,7 @@ impl From<RunLimits> for VmLimits {
             step_budget: limits.step_budget,
             mem_budget: limits.memory_budget,
             cancel: limits.cancellation,
+            deadline: limits.deadline,
             stdout_budget: limits.output_budget,
             intrinsic_call_budget: limits.intrinsic_call_budget,
             provider_call_budget: limits.provider_call_budget,
@@ -451,8 +454,8 @@ mod tests {
                 cancellation: CancellationBehavior::NotApplicable,
                 thread_safe: true,
                 reentrant: true,
-                resource_cleanup_contract: "none".into(),
-                error_mapping: "string".into(),
+                resource_cleanup: provider::ResourceCleanupContract::None,
+                error_mapping: provider::ProviderErrorMapping::StructuredV1,
             }],
         };
         let called = Arc::new(AtomicBool::new(false));
@@ -520,8 +523,8 @@ mod tests {
                 cancellation: CancellationBehavior::NotApplicable,
                 thread_safe: true,
                 reentrant: true,
-                resource_cleanup_contract: "none".into(),
-                error_mapping: "string".into(),
+                resource_cleanup: provider::ResourceCleanupContract::None,
+                error_mapping: provider::ProviderErrorMapping::StructuredV1,
             }],
         };
         let mut providers = ProviderRegistry::default();

@@ -30,8 +30,8 @@ pub fn descriptor() -> ProviderDescriptor {
             cancellation: CancellationBehavior::NotApplicable,
             thread_safe: true,
             reentrant: true,
-            resource_cleanup_contract: "none".into(),
-            error_mapping: "clock error string".into(),
+            resource_cleanup: rsscript_provider_api::ResourceCleanupContract::None,
+            error_mapping: rsscript_provider_api::ProviderErrorMapping::StructuredV1,
         }],
     }
 }

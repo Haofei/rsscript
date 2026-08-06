@@ -50,8 +50,15 @@ The descriptor fields are:
 | `blocking` | Whether the call may block its executing thread |
 | `cancellation` | Not applicable, cooperative, or abort-safe |
 | `thread_safe`, `reentrant` | Concurrency guarantees |
-| `resource_cleanup_contract` | Ownership and cleanup behavior on success, error, and cancellation |
-| `error_mapping` | How host errors become RSScript errors |
+| `resource_cleanup` | Structured ownership/cleanup mode on success, error, and cancellation |
+| `error_mapping` | Versioned structured host-to-RSScript error mapping |
+
+Provider callables return `ProviderError { code, message, retryable, details }`
+and may use `NativeInterpreterFn::new_contextual` to receive a
+`ProviderCallContext`. The context carries the monotonic deadline, cancellation
+flag, call id, and remaining byte/output budgets from the VM. Providers should
+check cancellation around potentially blocking work; the runtime checks it once
+before entering every callable.
 
 Use `rsscript-provider-api` for the safe value and descriptor types. Dynamic
 library or native-plugin ABI concerns belong in a separate adapter and must not

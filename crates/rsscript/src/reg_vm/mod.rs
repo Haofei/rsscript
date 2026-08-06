@@ -50,7 +50,9 @@ use self::calls::PureClosurePlan;
 #[cfg(test)]
 use crate::analyzer::validate_sources_with_interfaces;
 use crate::analyzer::{validate_source, validate_sources_with_interfaces_without_core};
-use crate::eval_types::{EvalError, EvalOutput, ExternalFunction, NativeValue};
+use crate::eval_types::{
+    EvalError, EvalOutput, ExternalFunction, NativeValue, ProviderCallContext,
+};
 use crate::hir::{
     Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirMatchArm, HirStmt, HirTypeKind,
     ParamEffect,
@@ -1731,6 +1733,8 @@ pub struct VmLimits {
     /// returns `EvalError::Runtime("evaluation cancelled")`. This stops the *whole*
     /// eval; see the note in `tick()` on per-task preemption.
     pub cancel: Option<Arc<AtomicBool>>,
+    /// Monotonic execution deadline shared with Provider calls.
+    pub deadline: Option<std::time::Instant>,
     /// Maximum total bytes a program may write to captured stdout (every
     /// `Log.write`/`Debug.print`/trace path funnels through `push_stdout`). `None`
     /// (default) = unlimited. When `Some(limit)`, the write that would push the
@@ -1779,6 +1783,7 @@ impl Default for VmLimits {
             step_budget: Some(50_000_000),
             mem_budget: Some(256 * 1024 * 1024),
             cancel: None,
+            deadline: None,
             stdout_budget: Some(4 * 1024 * 1024),
             intrinsic_call_budget: Some(1_000_000),
             provider_call_budget: Some(100_000),
@@ -1803,6 +1808,7 @@ impl VmLimits {
             step_budget: None,
             mem_budget: None,
             cancel: None,
+            deadline: None,
             stdout_budget: None,
             intrinsic_call_budget: None,
             provider_call_budget: None,

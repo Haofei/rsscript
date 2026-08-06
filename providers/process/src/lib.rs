@@ -45,8 +45,8 @@ pub fn descriptor() -> ProviderDescriptor {
             cancellation: CancellationBehavior::AbortSafe,
             thread_safe: true,
             reentrant: true,
-            resource_cleanup_contract: "child process group terminated on host drop".into(),
-            error_mapping: "spawn and exit errors".into(),
+            resource_cleanup: rsscript_provider_api::ResourceCleanupContract::ProviderManaged,
+            error_mapping: rsscript_provider_api::ProviderErrorMapping::StructuredV1,
         }],
     }
 }

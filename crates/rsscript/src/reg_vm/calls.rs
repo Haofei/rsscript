@@ -314,9 +314,23 @@ impl RegVm {
             .iter()
             .map(|reg| native_value_from_vm_value(self.reg(base + *reg).clone()))
             .collect::<Result<Vec<_>, _>>()?;
+        let cancellation = self.limits.cancel.clone();
+        let mut context = ProviderCallContext {
+            cancellation: cancellation.as_deref(),
+            deadline: self.limits.deadline,
+            remaining_byte_budget: self
+                .limits
+                .mem_budget
+                .map(|limit| limit.saturating_sub(self.live_bytes)),
+            remaining_output_budget: self
+                .limits
+                .stdout_budget
+                .map(|limit| limit.saturating_sub(self.stdout.len())),
+            call_id: self.provider_calls,
+        };
         let mut raw = function
-            .call(arg_values)
-            .map_err(|error| EvalError::Runtime(format!("native host binding failed: {error}")))?;
+            .call_with_context(&mut context, arg_values)
+            .map_err(|error| EvalError::Runtime(format!("provider call failed: {error}")))?;
 
         // No `mut` params: the binding returns its result directly.
         if mut_args.is_empty() {

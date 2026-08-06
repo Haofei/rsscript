@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 
 pub use rsscript_abi_model::{
     DataEffect, ExternalImport, ExternalSymbol, FunctionSignature, InvalidExternalSymbol,
@@ -40,12 +42,121 @@ pub enum NativeValue {
     },
 }
 
-pub type NativeHostFn = fn(Vec<NativeValue>) -> Result<NativeValue, String>;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderErrorCode {
+    InvalidArgument,
+    NotFound,
+    PermissionDenied,
+    Cancelled,
+    DeadlineExceeded,
+    ResourceExhausted,
+    Unavailable,
+    Internal,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ProviderError {
+    pub code: ProviderErrorCode,
+    pub message: String,
+    pub retryable: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<serde_json::Value>,
+}
+
+impl ProviderError {
+    pub fn new(code: ProviderErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            retryable: false,
+            details: None,
+        }
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::new(ProviderErrorCode::Internal, message)
+    }
+}
+
+impl fmt::Display for ProviderError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{:?}: {}", self.code, self.message)
+    }
+}
+
+impl Error for ProviderError {}
+
+impl From<String> for ProviderError {
+    fn from(message: String) -> Self {
+        Self::internal(message)
+    }
+}
+
+impl From<&str> for ProviderError {
+    fn from(message: &str) -> Self {
+        Self::internal(message)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ProviderCallContext<'a> {
+    pub cancellation: Option<&'a AtomicBool>,
+    pub deadline: Option<Instant>,
+    pub remaining_byte_budget: Option<usize>,
+    pub remaining_output_budget: Option<usize>,
+    pub call_id: u64,
+}
+
+impl ProviderCallContext<'_> {
+    pub fn check_cancelled(&self) -> Result<(), ProviderError> {
+        if self
+            .cancellation
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        {
+            return Err(ProviderError::new(
+                ProviderErrorCode::Cancelled,
+                "provider call cancelled",
+            ));
+        }
+        if self
+            .deadline
+            .is_some_and(|deadline| Instant::now() >= deadline)
+        {
+            return Err(ProviderError::new(
+                ProviderErrorCode::DeadlineExceeded,
+                "provider call deadline exceeded",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl Default for ProviderCallContext<'static> {
+    fn default() -> Self {
+        Self {
+            cancellation: None,
+            deadline: None,
+            remaining_byte_budget: None,
+            remaining_output_budget: None,
+            call_id: 0,
+        }
+    }
+}
+
+pub type NativeHostFn = fn(Vec<NativeValue>) -> Result<NativeValue, ProviderError>;
 
 /// Cloneable provider callable used by the runtime registry.
 #[derive(Clone)]
 pub struct NativeInterpreterFn {
-    inner: Arc<dyn Fn(Vec<NativeValue>) -> Result<NativeValue, String> + Send + Sync>,
+    inner: Arc<
+        dyn for<'a> Fn(
+                &mut ProviderCallContext<'a>,
+                Vec<NativeValue>,
+            ) -> Result<NativeValue, ProviderError>
+            + Send
+            + Sync,
+    >,
 }
 
 impl NativeInterpreterFn {
@@ -54,15 +165,39 @@ impl NativeInterpreterFn {
     }
 
     pub fn new(
-        function: impl Fn(Vec<NativeValue>) -> Result<NativeValue, String> + Send + Sync + 'static,
+        function: impl Fn(Vec<NativeValue>) -> Result<NativeValue, ProviderError>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self::new_contextual(move |_, args| function(args))
+    }
+
+    pub fn new_contextual(
+        function: impl for<'a> Fn(
+            &mut ProviderCallContext<'a>,
+            Vec<NativeValue>,
+        ) -> Result<NativeValue, ProviderError>
+        + Send
+        + Sync
+        + 'static,
     ) -> Self {
         Self {
             inner: Arc::new(function),
         }
     }
 
-    pub fn call(&self, args: Vec<NativeValue>) -> Result<NativeValue, String> {
-        (self.inner)(args)
+    pub fn call(&self, args: Vec<NativeValue>) -> Result<NativeValue, ProviderError> {
+        self.call_with_context(&mut ProviderCallContext::default(), args)
+    }
+
+    pub fn call_with_context(
+        &self,
+        context: &mut ProviderCallContext<'_>,
+        args: Vec<NativeValue>,
+    ) -> Result<NativeValue, ProviderError> {
+        context.check_cancelled()?;
+        (self.inner)(context, args)
     }
 }
 
@@ -94,6 +229,20 @@ pub enum CancellationBehavior {
     AbortSafe,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceCleanupContract {
+    None,
+    ProviderManaged,
+    RuntimeRegistered,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderErrorMapping {
+    StructuredV1,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderFunctionDescriptor {
     pub symbol: ExternalSymbol,
@@ -104,8 +253,8 @@ pub struct ProviderFunctionDescriptor {
     pub cancellation: CancellationBehavior,
     pub thread_safe: bool,
     pub reentrant: bool,
-    pub resource_cleanup_contract: String,
-    pub error_mapping: String,
+    pub resource_cleanup: ResourceCleanupContract,
+    pub error_mapping: ProviderErrorMapping,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -121,9 +270,16 @@ pub struct ProviderFunction<T> {
     pub callable: T,
 }
 
+pub struct ResolvedProviderFunction<T> {
+    pub provider_id: String,
+    pub provider_version: String,
+    pub descriptor: ProviderFunctionDescriptor,
+    pub callable: T,
+}
+
 pub struct ProviderRegistry<T> {
     runtime_abi: u32,
-    functions: BTreeMap<ExternalSymbol, ProviderFunction<T>>,
+    functions: BTreeMap<ExternalSymbol, ResolvedProviderFunction<T>>,
 }
 
 impl<T> ProviderRegistry<T> {
@@ -170,8 +326,18 @@ impl<T> ProviderRegistry<T> {
                     function.symbol.clone(),
                 ));
             }
-            self.functions
-                .insert(function.symbol.clone(), implementation);
+            if (function.call_mode == ProviderCallMode::Async) != function.signature.asynchronous {
+                return Err(ProviderLoadError::CallModeMismatch(function.symbol.clone()));
+            }
+            self.functions.insert(
+                function.symbol.clone(),
+                ResolvedProviderFunction {
+                    provider_id: descriptor.provider_id.clone(),
+                    provider_version: descriptor.provider_version.clone(),
+                    descriptor: function.clone(),
+                    callable: implementation.callable,
+                },
+            );
         }
         if let Some(symbol) = implementations.into_keys().next() {
             return Err(ProviderLoadError::UndeclaredImplementation(symbol));
@@ -179,7 +345,10 @@ impl<T> ProviderRegistry<T> {
         Ok(())
     }
 
-    pub fn resolve(&self, import: &ExternalImport) -> Result<&T, ProviderLoadError> {
+    pub fn resolve(
+        &self,
+        import: &ExternalImport,
+    ) -> Result<&ResolvedProviderFunction<T>, ProviderLoadError> {
         if import.abi_version != self.runtime_abi {
             return Err(ProviderLoadError::ImportAbiMismatch {
                 symbol: import.symbol.clone(),
@@ -191,12 +360,12 @@ impl<T> ProviderRegistry<T> {
             .functions
             .get(&import.symbol)
             .ok_or_else(|| ProviderLoadError::UnresolvedImport(import.symbol.clone()))?;
-        if function.signature.hash() != import.signature_hash {
+        if function.descriptor.signature.hash() != import.signature_hash {
             return Err(ProviderLoadError::ImportSignatureMismatch(
                 import.symbol.clone(),
             ));
         }
-        Ok(&function.callable)
+        Ok(function)
     }
 
     pub fn into_functions(self) -> impl Iterator<Item = (ExternalSymbol, T)> {
@@ -231,6 +400,7 @@ pub enum ProviderLoadError {
         runtime_abi: u32,
     },
     ImportSignatureMismatch(ExternalSymbol),
+    CallModeMismatch(ExternalSymbol),
 }
 
 impl fmt::Display for ProviderLoadError {
@@ -245,6 +415,7 @@ impl Error for ProviderLoadError {}
 mod tests {
     use super::*;
     use rsscript_abi_model::{DataEffect, ParameterSignature};
+    use std::sync::atomic::AtomicBool;
 
     fn signature(effect: DataEffect) -> FunctionSignature {
         FunctionSignature {
@@ -273,8 +444,8 @@ mod tests {
                 cancellation: CancellationBehavior::NotApplicable,
                 thread_safe: true,
                 reentrant: true,
-                resource_cleanup_contract: "none".to_string(),
-                error_mapping: "string".to_string(),
+                resource_cleanup: ResourceCleanupContract::None,
+                error_mapping: ProviderErrorMapping::StructuredV1,
             }],
         }
     }
@@ -306,5 +477,58 @@ mod tests {
             registry.resolve(&import),
             Err(ProviderLoadError::ImportSignatureMismatch(_))
         ));
+    }
+
+    #[test]
+    fn resolved_function_retains_provider_and_behavior_metadata() {
+        let symbol = ExternalSymbol::new("host.test.identity").unwrap();
+        let declared = signature(DataEffect::Read);
+        let mut registry = ProviderRegistry::new(1);
+        registry
+            .register_provider(
+                &descriptor(&symbol, declared.clone()),
+                BTreeMap::from([(
+                    symbol.clone(),
+                    ProviderFunction {
+                        signature: declared.clone(),
+                        callable: 7,
+                    },
+                )]),
+            )
+            .unwrap();
+        let resolved = registry
+            .resolve(&ExternalImport {
+                symbol,
+                signature_hash: declared.hash(),
+                abi_version: 1,
+            })
+            .unwrap();
+        assert_eq!(resolved.provider_id, "test");
+        assert_eq!(resolved.provider_version, "1.0.0");
+        assert_eq!(
+            resolved.descriptor.resource_cleanup,
+            ResourceCleanupContract::None
+        );
+        assert_eq!(resolved.callable, 7);
+    }
+
+    #[test]
+    fn contextual_callable_observes_cancellation_before_provider_code() {
+        let called = Arc::new(AtomicBool::new(false));
+        let called_by_provider = Arc::clone(&called);
+        let cancelled = AtomicBool::new(true);
+        let callable = NativeInterpreterFn::new_contextual(move |_, _| {
+            called_by_provider.store(true, Ordering::Relaxed);
+            Ok(NativeValue::Unit)
+        });
+        let mut context = ProviderCallContext {
+            cancellation: Some(&cancelled),
+            ..ProviderCallContext::default()
+        };
+        let error = callable
+            .call_with_context(&mut context, vec![])
+            .expect_err("cancelled call must not enter Provider code");
+        assert_eq!(error.code, ProviderErrorCode::Cancelled);
+        assert!(!called.load(Ordering::Relaxed));
     }
 }

@@ -22,8 +22,8 @@ pub fn descriptor() -> ProviderDescriptor {
             cancellation: CancellationBehavior::NotApplicable,
             thread_safe: true,
             reentrant: true,
-            resource_cleanup_contract: "none".into(),
-            error_mapping: "missing value maps to None".into(),
+            resource_cleanup: rsscript_provider_api::ResourceCleanupContract::None,
+            error_mapping: rsscript_provider_api::ProviderErrorMapping::StructuredV1,
         }],
     }
 }
@@ -45,7 +45,7 @@ pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterprete
                         name: "None".into(),
                         fields: BTreeMap::new(),
                     },
-                    Err(error) => return Err(error.to_string()),
+                    Err(error) => return Err(error.to_string().into()),
                 })
             }),
         },

@@ -102,6 +102,7 @@ impl RegVm {
     pub(super) fn native_limits_unarmed(&self) -> bool {
         self.limits.step_budget.is_none()
             && self.limits.cancel.is_none()
+            && self.limits.deadline.is_none()
             && self.limits.mem_budget.is_none()
             // Native code runs whole-function without routing intrinsic dispatch
             // through `charge_intrinsic_call`, so an armed intrinsic budget must also
@@ -148,6 +149,13 @@ impl RegVm {
         {
             return Err(EvalError::Runtime("evaluation cancelled".into()));
         }
+        if self
+            .limits
+            .deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            return Err(EvalError::Runtime("execution deadline exceeded".into()));
+        }
         Ok(())
     }
 
@@ -157,7 +165,10 @@ impl RegVm {
     /// nominal VM instruction.
     #[inline]
     pub(super) fn charge_work(&mut self, units: usize) -> Result<(), EvalError> {
-        if self.limits.step_budget.is_none() && self.limits.cancel.is_none() {
+        if self.limits.step_budget.is_none()
+            && self.limits.cancel.is_none()
+            && self.limits.deadline.is_none()
+        {
             return Ok(());
         }
         self.steps = self
@@ -174,6 +185,13 @@ impl RegVm {
             && cancel.load(std::sync::atomic::Ordering::Relaxed)
         {
             return Err(EvalError::Runtime("evaluation cancelled".into()));
+        }
+        if self
+            .limits
+            .deadline
+            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+        {
+            return Err(EvalError::Runtime("execution deadline exceeded".into()));
         }
         Ok(())
     }

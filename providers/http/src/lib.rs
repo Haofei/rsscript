@@ -41,8 +41,8 @@ pub fn descriptor() -> ProviderDescriptor {
             cancellation: CancellationBehavior::NotApplicable,
             thread_safe: true,
             reentrant: true,
-            resource_cleanup_contract: "response body is consumed before return".into(),
-            error_mapping: "transport and body errors".into(),
+            resource_cleanup: rsscript_provider_api::ResourceCleanupContract::None,
+            error_mapping: rsscript_provider_api::ProviderErrorMapping::StructuredV1,
         }],
     }
 }

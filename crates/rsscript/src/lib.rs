@@ -65,8 +65,9 @@ pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
 pub use eval_types::{
     BlockingBehavior, CancellationBehavior, CoverageBucket, EvalError, EvalOutput,
     ExternalFunction, ExternalFunctionRegistry, ExternalImport, ExternalSymbol, FunctionSignature,
-    NativeValue, ProviderCallMode, ProviderDescriptor, ProviderFunction,
-    ProviderFunctionDescriptor, ProviderLoadError, SignatureHash,
+    NativeValue, ProviderCallContext, ProviderCallMode, ProviderDescriptor, ProviderError,
+    ProviderErrorCode, ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor,
+    ProviderLoadError, ResourceCleanupContract, SignatureHash,
 };
 pub use formatter::{format_program, format_source};
 pub use generate::{

@@ -148,8 +148,8 @@ fn validate_loaded_provider(
                 },
                 thread_safe: true,
                 reentrant: false,
-                resource_cleanup_contract: "RSScript interface resource contract".to_string(),
-                error_mapping: "native ABI result string".to_string(),
+                resource_cleanup: rsscript_provider_api::ResourceCleanupContract::ProviderManaged,
+                error_mapping: rsscript_provider_api::ProviderErrorMapping::StructuredV1,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;

@@ -24,7 +24,9 @@ use std::sync::{Mutex, OnceLock, Weak};
 
 use serde::Serialize;
 
-pub use rsscript_provider_api::{NativeHostFn, NativeInterpreterFn, NativeValue};
+pub use rsscript_provider_api::{
+    NativeHostFn, NativeInterpreterFn, NativeValue, ProviderError, ProviderErrorCode,
+};
 
 pub const ABI_MAGIC: u64 = 0x5253_534E_4154_4956;
 pub const ABI_VERSION: u32 = rsscript_abi_model::RUNTIME_ABI_VERSION;
@@ -176,10 +178,15 @@ pub unsafe fn dispatch_serialized(
     };
     let result = std::panic::catch_unwind(|| {
         serde_json::from_slice::<Vec<NativeValue>>(input)
-            .map_err(|error| format!("invalid native call payload: {error}"))
+            .map_err(|error| {
+                ProviderError::new(
+                    ProviderErrorCode::InvalidArgument,
+                    format!("invalid native call payload: {error}"),
+                )
+            })
             .and_then(function)
     })
-    .unwrap_or_else(|_| Err("native binding panicked".to_string()));
+    .unwrap_or_else(|_| Err(ProviderError::internal("native binding panicked")));
     let mut bytes = match to_json_bounded(&result, MAX_NATIVE_RESULT_BYTES) {
         Ok(bytes) => bytes,
         Err(BoundedJsonError::LimitExceeded) => return 4,
@@ -270,16 +277,19 @@ fn call_native(
     function: NativeAbiFn,
     free_buffer: NativeFreeBufferFn,
     args: Vec<NativeValue>,
-) -> Result<NativeValue, String> {
+) -> Result<NativeValue, ProviderError> {
     let input = match to_json_bounded(&args, MAX_NATIVE_REQUEST_BYTES) {
         Ok(input) => input,
         Err(BoundedJsonError::LimitExceeded) => {
-            return Err(format!(
-                "native ABI request exceeds the {MAX_NATIVE_REQUEST_BYTES} byte limit"
+            return Err(ProviderError::new(
+                ProviderErrorCode::ResourceExhausted,
+                format!("native ABI request exceeds the {MAX_NATIVE_REQUEST_BYTES} byte limit"),
             ));
         }
         Err(BoundedJsonError::Serialize(error)) => {
-            return Err(format!("failed to encode native arguments: {error}"));
+            return Err(ProviderError::internal(format!(
+                "failed to encode native arguments: {error}"
+            )));
         }
     };
     let mut output = NativeBuffer::empty();
@@ -287,15 +297,19 @@ fn call_native(
     let status = unsafe { function(input.as_ptr(), input.len(), &mut output) };
     if status != 0 {
         if !output.is_empty() {
-            return Err(format!(
+            return Err(ProviderError::internal(format!(
                 "native ABI call failed with status {status} and returned a non-empty output buffer"
-            ));
+            )));
         }
-        return Err(format!("native ABI call failed with status {status}"));
+        return Err(ProviderError::internal(format!(
+            "native ABI call failed with status {status}"
+        )));
     }
-    let output = OwnedNativeBuffer::from_validated(output, free_buffer)?;
-    serde_json::from_slice::<Result<NativeValue, String>>(output.bytes())
-        .map_err(|error| format!("invalid native result payload: {error}"))?
+    let output =
+        OwnedNativeBuffer::from_validated(output, free_buffer).map_err(ProviderError::internal)?;
+    serde_json::from_slice::<Result<NativeValue, ProviderError>>(output.bytes()).map_err(
+        |error| ProviderError::internal(format!("invalid native result payload: {error}")),
+    )?
 }
 
 #[cfg(feature = "host")]
@@ -687,7 +701,7 @@ mod tests {
     #[test]
     fn registry_symbol_and_version_are_stable() {
         assert_eq!(REGISTRY_SYMBOL, "rss_native_registry");
-        assert_eq!(ABI_VERSION, 1);
+        assert_eq!(ABI_VERSION, 2);
     }
 
     #[test]
@@ -703,7 +717,7 @@ mod tests {
 
     #[test]
     fn in_process_callable_wraps_rust_function() {
-        fn echo(mut args: Vec<NativeValue>) -> Result<NativeValue, String> {
+        fn echo(mut args: Vec<NativeValue>) -> Result<NativeValue, ProviderError> {
             Ok(args.remove(0))
         }
         let callable = NativeInterpreterFn::from(echo as NativeHostFn);
@@ -715,7 +729,7 @@ mod tests {
 
     #[test]
     fn serialized_dispatch_round_trips_and_uses_plugin_free() {
-        fn echo(mut args: Vec<NativeValue>) -> Result<NativeValue, String> {
+        fn echo(mut args: Vec<NativeValue>) -> Result<NativeValue, ProviderError> {
             Ok(args.remove(0))
         }
         let input = serde_json::to_vec(&vec![NativeValue::Int(9)]).expect("args serialize");
@@ -734,7 +748,7 @@ mod tests {
         );
         // SAFETY: the dispatcher initialized this buffer.
         let bytes = unsafe { std::slice::from_raw_parts(output.ptr, output.len) };
-        let result: Result<NativeValue, String> =
+        let result: Result<NativeValue, ProviderError> =
             serde_json::from_slice(bytes).expect("result parses");
         assert_eq!(result, Ok(NativeValue::Int(9)));
         // SAFETY: this is the matching release function and is called once.
@@ -766,7 +780,7 @@ mod tests {
 
     #[test]
     fn serialized_dispatch_rejects_oversized_result() {
-        fn oversized(_: Vec<NativeValue>) -> Result<NativeValue, String> {
+        fn oversized(_: Vec<NativeValue>) -> Result<NativeValue, ProviderError> {
             Ok(NativeValue::String("x".repeat(MAX_NATIVE_RESULT_BYTES)))
         }
 
@@ -805,7 +819,7 @@ mod tests {
             let error = call_native(state_machine_plugin, state_machine_free, vec![])
                 .expect_err("malicious output must fail");
             assert!(
-                error.contains(expected_error),
+                error.message.contains(expected_error),
                 "unexpected mode {mode} error: {error}"
             );
             assert_eq!(PLUGIN_FREES.load(Ordering::SeqCst), expected_frees);
@@ -838,7 +852,7 @@ mod tests {
         let error = call_native(state_machine_plugin, state_machine_free, vec![])
             .expect_err("plugin status must fail");
 
-        assert!(error.contains("status 99"));
+        assert!(error.message.contains("status 99"));
         assert_eq!(PLUGIN_CALLS.load(Ordering::SeqCst), 1);
         assert_eq!(PLUGIN_FREES.load(Ordering::SeqCst), 0);
     }
@@ -851,7 +865,7 @@ mod tests {
         let args = vec![NativeValue::String("x".repeat(MAX_NATIVE_REQUEST_BYTES))];
         let error = call_native(state_machine_plugin, state_machine_free, args)
             .expect_err("oversized request must fail");
-        assert!(error.contains("request exceeds"));
+        assert!(error.message.contains("request exceeds"));
         assert_eq!(PLUGIN_CALLS.load(Ordering::SeqCst), 0);
     }
 
