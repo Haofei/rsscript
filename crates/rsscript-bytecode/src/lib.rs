@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 
@@ -510,9 +510,12 @@ fn verify_executable_payload(
         if registers > limits.max_registers_per_function {
             return Err(BytecodeError::LimitExceeded("register count"));
         }
-        if params > registers || captures > registers {
+        let initialized_inputs = params.checked_add(captures).ok_or_else(|| {
+            invalid_payload(format!("function {function_id} input count overflow"))
+        })?;
+        if initialized_inputs > registers {
             return Err(invalid_payload(format!(
-                "function {function_id} has more parameters/captures than registers"
+                "function {function_id} has more parameters and captures than registers"
             )));
         }
         let locals = function["local_regs"].as_object().ok_or_else(|| {
@@ -544,6 +547,7 @@ fn verify_executable_payload(
                 &mut called_imports,
             )?;
         }
+        verify_register_initialization(function_id, initialized_inputs, code)?;
         let _ = name;
     }
 
@@ -560,6 +564,272 @@ fn verify_executable_payload(
         )));
     }
     Ok(())
+}
+
+/// Prove definite register initialization over every reachable control-flow
+/// path. Incoming states are intersected at joins, so a value initialized on
+/// only one branch cannot be consumed after the merge.
+fn verify_register_initialization(
+    function_id: usize,
+    initialized_inputs: usize,
+    code: &[serde_json::Value],
+) -> Result<(), BytecodeError> {
+    if code.is_empty() {
+        return Ok(());
+    }
+    let mut incoming = vec![None::<BTreeSet<usize>>; code.len()];
+    incoming[0] = Some((0..initialized_inputs).collect());
+    let mut work = VecDeque::from([0usize]);
+
+    while let Some(ip) = work.pop_front() {
+        let state = incoming[ip]
+            .clone()
+            .expect("queued instructions always have incoming state");
+        let (opcode, fields) = instruction_parts(function_id, ip, &code[ip])?;
+        let (reads, writes) = register_accesses(opcode, fields)?;
+        if let Some(register) = reads.iter().find(|register| !state.contains(register)) {
+            return Err(invalid_payload(format!(
+                "function {function_id} instruction {ip} `{opcode}` reads uninitialized register {register}"
+            )));
+        }
+        let mut after = state;
+        after.extend(writes);
+
+        match opcode {
+            "Return" | "RuntimeError" => {}
+            "Jump" => enqueue_state(
+                &mut incoming,
+                &mut work,
+                required_index(fields, "target")?,
+                after,
+            ),
+            "JumpIfBool" | "JumpIfIntCompare" => {
+                enqueue_state(
+                    &mut incoming,
+                    &mut work,
+                    required_index(fields, "target")?,
+                    after.clone(),
+                );
+                enqueue_fallthrough(&mut incoming, &mut work, ip, after);
+            }
+            "MatchOption" => enqueue_two_targets(
+                &mut incoming,
+                &mut work,
+                fields,
+                "some_ip",
+                "none_ip",
+                after,
+            )?,
+            "MatchResult" => {
+                enqueue_two_targets(&mut incoming, &mut work, fields, "ok_ip", "err_ip", after)?
+            }
+            "MatchVariant" => enqueue_two_targets(
+                &mut incoming,
+                &mut work,
+                fields,
+                "match_ip",
+                "else_ip",
+                after,
+            )?,
+            "MatchMapGet" | "MatchSortedMapGet" => {
+                let mut some = after.clone();
+                some.insert(required_index(fields, "value_dst")?);
+                enqueue_state(
+                    &mut incoming,
+                    &mut work,
+                    required_index(fields, "some_ip")?,
+                    some,
+                );
+                enqueue_state(
+                    &mut incoming,
+                    &mut work,
+                    required_index(fields, "none_ip")?,
+                    after,
+                );
+            }
+            _ => enqueue_fallthrough(&mut incoming, &mut work, ip, after),
+        }
+    }
+    Ok(())
+}
+
+fn required_index(
+    fields: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Result<usize, BytecodeError> {
+    json_usize(
+        fields
+            .get(field)
+            .ok_or_else(|| invalid_payload(format!("missing `{field}` field")))?,
+        field,
+    )
+}
+
+fn instruction_parts(
+    function_id: usize,
+    ip: usize,
+    instruction: &serde_json::Value,
+) -> Result<(&str, &serde_json::Map<String, serde_json::Value>), BytecodeError> {
+    if let Some(opcode) = instruction.as_str()
+        && opcode == "TailCallGuard"
+    {
+        static EMPTY: std::sync::LazyLock<serde_json::Map<String, serde_json::Value>> =
+            std::sync::LazyLock::new(serde_json::Map::new);
+        return Ok(("TailCallGuard", &EMPTY));
+    }
+    let (opcode, fields) = instruction
+        .as_object()
+        .filter(|outer| outer.len() == 1)
+        .and_then(|outer| outer.iter().next())
+        .and_then(|(opcode, fields)| fields.as_object().map(|fields| (opcode, fields)))
+        .ok_or_else(|| {
+            invalid_payload(format!(
+                "function {function_id} instruction {ip} has invalid encoding"
+            ))
+        })?;
+    Ok((opcode, fields))
+}
+
+fn register_accesses(
+    opcode: &str,
+    fields: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(BTreeSet<usize>, BTreeSet<usize>), BytecodeError> {
+    let mut reads = BTreeSet::new();
+    let mut writes = BTreeSet::new();
+    for (field, value) in fields {
+        if field == "dst" {
+            writes.insert(json_usize(value, field)?);
+        } else if field == "value_dst" {
+            // MatchMapGet initializes this register only on its `some` edge.
+        } else if opcode == "SelectWait" && matches!(field.as_str(), "winner" | "value") {
+            writes.insert(json_usize(value, field)?);
+        } else if scalar_register_field(opcode, field) {
+            reads.insert(json_usize(value, field)?);
+        } else if matches!(
+            field.as_str(),
+            "args" | "captures" | "cleanup" | "handles" | "items"
+        ) {
+            for register in value
+                .as_array()
+                .ok_or_else(|| invalid_payload(format!("{field} is not an array")))?
+            {
+                reads.insert(json_usize(register, field)?);
+            }
+        } else if field == "fields" {
+            collect_tuple_registers(value, &[1], &mut reads)?;
+        } else if field == "entries" {
+            collect_tuple_registers(value, &[0, 1], &mut reads)?;
+        }
+    }
+    if matches!(opcode, "DeepCopy" | "DeepCopyElided") {
+        writes.extend(reads.iter().copied());
+    }
+    Ok((reads, writes))
+}
+
+fn scalar_register_field(opcode: &str, field: &str) -> bool {
+    matches!(
+        field,
+        "src"
+            | "reg"
+            | "base"
+            | "lhs"
+            | "rhs"
+            | "cond"
+            | "resource"
+            | "map"
+            | "list"
+            | "closure"
+            | "buffer"
+            | "builder"
+            | "left"
+            | "right"
+            | "state"
+            | "folder"
+            | "predicate"
+            | "mapper"
+            | "values"
+            | "deque"
+            | "set"
+            | "callback"
+            | "compare"
+    ) || (field == "key" && opcode != "CallExternal")
+        || (field == "value" && !opcode.starts_with("Load") && opcode != "SelectWait")
+        || (field == "index" && matches!(opcode, "ListGet" | "ListRemoveAt" | "ListSet"))
+}
+
+fn collect_tuple_registers(
+    value: &serde_json::Value,
+    positions: &[usize],
+    output: &mut BTreeSet<usize>,
+) -> Result<(), BytecodeError> {
+    for entry in value
+        .as_array()
+        .ok_or_else(|| invalid_payload("register tuple list is not an array"))?
+    {
+        let tuple = entry
+            .as_array()
+            .ok_or_else(|| invalid_payload("register tuple entry is not an array"))?;
+        for position in positions {
+            output.insert(json_usize(
+                tuple
+                    .get(*position)
+                    .ok_or_else(|| invalid_payload("register tuple is incomplete"))?,
+                "tuple",
+            )?);
+        }
+    }
+    Ok(())
+}
+
+fn enqueue_two_targets(
+    incoming: &mut [Option<BTreeSet<usize>>],
+    work: &mut VecDeque<usize>,
+    fields: &serde_json::Map<String, serde_json::Value>,
+    first: &str,
+    second: &str,
+    state: BTreeSet<usize>,
+) -> Result<(), BytecodeError> {
+    enqueue_state(
+        incoming,
+        work,
+        required_index(fields, first)?,
+        state.clone(),
+    );
+    enqueue_state(incoming, work, required_index(fields, second)?, state);
+    Ok(())
+}
+
+fn enqueue_fallthrough(
+    incoming: &mut [Option<BTreeSet<usize>>],
+    work: &mut VecDeque<usize>,
+    ip: usize,
+    state: BTreeSet<usize>,
+) {
+    if ip + 1 < incoming.len() {
+        enqueue_state(incoming, work, ip + 1, state);
+    }
+}
+
+fn enqueue_state(
+    incoming: &mut [Option<BTreeSet<usize>>],
+    work: &mut VecDeque<usize>,
+    target: usize,
+    state: BTreeSet<usize>,
+) {
+    match &mut incoming[target] {
+        None => {
+            incoming[target] = Some(state);
+            work.push_back(target);
+        }
+        Some(existing) => {
+            let intersection = existing.intersection(&state).copied().collect();
+            if *existing != intersection {
+                *existing = intersection;
+                work.push_back(target);
+            }
+        }
+    }
 }
 
 fn verify_function_map(
@@ -688,36 +958,10 @@ fn verify_register_field(
     field: &str,
     value: &serde_json::Value,
 ) -> Result<(), BytecodeError> {
-    let scalar_register = matches!(
-        field,
-        "dst"
-            | "src"
-            | "reg"
-            | "base"
-            | "lhs"
-            | "rhs"
-            | "cond"
-            | "resource"
-            | "map"
-            | "list"
-            | "closure"
-            | "winner"
-            | "buffer"
-            | "builder"
-            | "left"
-            | "right"
-            | "state"
-            | "folder"
-            | "predicate"
-            | "mapper"
-            | "values"
-            | "deque"
-            | "set"
-            | "callback"
-            | "compare"
-    ) || (field == "key" && opcode != "CallExternal")
-        || (field == "value" && !opcode.starts_with("Load"))
-        || (field == "index" && matches!(opcode, "ListGet" | "ListRemoveAt" | "ListSet"));
+    let scalar_register = field == "dst"
+        || field == "value_dst"
+        || (opcode == "SelectWait" && matches!(field, "winner" | "value"))
+        || scalar_register_field(opcode, field);
     if scalar_register {
         return verify_register(
             function_id,
@@ -1335,6 +1579,99 @@ mod tests {
         assert!(matches!(
             BytecodeVerifier::default().verify(&artifact.to_bytes().expect("bytes")),
             Err(BytecodeError::InvalidPayload(message)) if message.contains("register 1")
+        ));
+    }
+
+    #[test]
+    fn verifier_rejects_uninitialized_register_reads() {
+        let payload = encode_executable_payload(&serde_json::json!({
+            "functions": [{
+                "name": "main", "params": 0, "captures": 0, "regs": 1,
+                "local_regs": {}, "code": [{"Return": {"src": 0}}]
+            }],
+            "function_ids": {"main": 0}, "resource_drop_functions": {},
+            "types": {}, "native_signatures": {}, "closure_identity_observable": false
+        }))
+        .unwrap();
+        let artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            payload,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact.to_bytes().unwrap()),
+            Err(BytecodeError::InvalidPayload(message))
+                if message.contains("reads uninitialized register 0")
+        ));
+    }
+
+    #[test]
+    fn verifier_intersects_register_state_at_control_flow_joins() {
+        let payload = encode_executable_payload(&serde_json::json!({
+            "functions": [{
+                "name": "main", "params": 0, "captures": 0, "regs": 2,
+                "local_regs": {},
+                "code": [
+                    {"LoadBool": {"dst": 0, "value": true}},
+                    {"JumpIfBool": {"cond": 0, "expected": true, "target": 3}},
+                    {"LoadInt": {"dst": 1, "value": 7}},
+                    {"Return": {"src": 1}}
+                ]
+            }],
+            "function_ids": {"main": 0}, "resource_drop_functions": {},
+            "types": {}, "native_signatures": {}, "closure_identity_observable": false
+        }))
+        .unwrap();
+        let artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            payload,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact.to_bytes().unwrap()),
+            Err(BytecodeError::InvalidPayload(message))
+                if message.contains("reads uninitialized register 1")
+        ));
+    }
+
+    #[test]
+    fn verifier_counts_captures_and_parameters_in_the_input_window() {
+        let payload = encode_executable_payload(&serde_json::json!({
+            "functions": [{
+                "name": "closure", "params": 1, "captures": 1, "regs": 1,
+                "local_regs": {}, "code": []
+            }],
+            "function_ids": {"closure": 0}, "resource_drop_functions": {},
+            "types": {}, "native_signatures": {}, "closure_identity_observable": false
+        }))
+        .unwrap();
+        let artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            payload,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact.to_bytes().unwrap()),
+            Err(BytecodeError::InvalidPayload(message))
+                if message.contains("parameters and captures")
         ));
     }
 
