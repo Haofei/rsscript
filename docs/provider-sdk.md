@@ -8,7 +8,8 @@ are not a sandbox boundary.
 
 Keep these three kinds of data separate:
 
-- Language semantics: symbol, parameter names/types, `read`/`mut`/`take`,
+- Language semantics: symbol, parameter names and structured `WireType` values,
+  `read`/`mut`/`take`,
   retention, return type, and sync/async shape. These form the
   `FunctionSignature` and its deterministic `signature_hash`.
 - Runtime linkage: provider identity/version, supported runtime ABI, entry

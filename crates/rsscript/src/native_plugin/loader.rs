@@ -193,14 +193,14 @@ fn semantic_signature(declaration: &FunctionDecl) -> FunctionSignature {
                     DataEffect::Mut => AbiDataEffect::Mut,
                     DataEffect::Take => AbiDataEffect::Take,
                 },
-                type_name: signature_type_name(&parameter.ty),
+                ty: signature_type_name(&parameter.ty).into(),
                 retained: declaration.retained_params.contains(&parameter.name),
             })
             .collect(),
-        return_type: declaration
+        result: declaration
             .return_ty
             .as_ref()
-            .map_or_else(|| "Unit".to_string(), signature_type_name),
+            .map_or_else(|| "Unit".into(), |ty| signature_type_name(ty).into()),
         asynchronous: declaration.is_async,
     }
 }

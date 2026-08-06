@@ -12,7 +12,7 @@ fn symbol() -> ExternalSymbol {
 fn signature() -> FunctionSignature {
     FunctionSignature {
         parameters: vec![],
-        return_type: "List<String>".into(),
+        result: "List<String>".into(),
         asynchronous: false,
     }
 }

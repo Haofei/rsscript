@@ -446,14 +446,14 @@ fn external_imports(unit: &RegUnit, validated: &ValidatedProgram) -> Vec<Externa
                                 ParamEffect::Mut => DataEffect::Mut,
                                 ParamEffect::Take => DataEffect::Take,
                             },
-                            type_name: parameter.ty.to_string(),
+                            ty: parameter.ty.to_string().into(),
                             retained: signature.retained_params.contains(&parameter.name),
                         })
                         .collect(),
-                    return_type: signature
+                    result: signature
                         .return_ty
                         .as_ref()
-                        .map_or_else(|| "Unit".to_string(), ToString::to_string),
+                        .map_or_else(|| "Unit".into(), |ty| ty.to_string().into()),
                     asynchronous: signature.is_async,
                 };
                 Some(ExternalImport {

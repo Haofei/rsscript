@@ -21,8 +21,8 @@ JSON. `rss pkg review` derives optional review output separately.
 
 Provider loading uses the platform-neutral types in `rsscript-abi-model` and the
 registry contract in `rsscript-provider-api`. Semantic signatures are hashed from
-parameter names, `read`/`mut`/`take`, structural type names, retention, return
-type, and sync/async mode. Provider ABI or signature mismatches fail before a
+parameter names, `read`/`mut`/`take`, canonical structured `WireType` values,
+retention, result type, and sync/async mode. Provider ABI or signature mismatches fail before a
 callable can be resolved. Native plugins are adapted to this contract after their
 generated shim is loaded; the provider API itself has no native-loader dependency.
 

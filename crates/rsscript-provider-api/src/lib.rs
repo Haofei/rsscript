@@ -251,10 +251,10 @@ mod tests {
             parameters: vec![ParameterSignature {
                 name: "value".to_string(),
                 effect,
-                type_name: "Int".to_string(),
+                ty: "Int".into(),
                 retained: false,
             }],
-            return_type: "Int".to_string(),
+            result: "Int".into(),
             asynchronous: false,
         }
     }

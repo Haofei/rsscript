@@ -6,7 +6,186 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 /// Version of the provider/runtime semantic call ABI.
-pub const RUNTIME_ABI_VERSION: u32 = 1;
+pub const RUNTIME_ABI_VERSION: u32 = 2;
+
+/// Canonical, serializable type representation used by artifacts and Providers.
+/// Semantic arenas may use local IDs internally; those IDs never cross the ABI.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WireType {
+    Unit,
+    Bool,
+    Int {
+        bits: u16,
+        signed: bool,
+    },
+    Float {
+        bits: u16,
+    },
+    String,
+    Bytes,
+    List {
+        element: Box<WireType>,
+    },
+    Option {
+        value: Box<WireType>,
+    },
+    Result {
+        ok: Box<WireType>,
+        error: Box<WireType>,
+    },
+    Tuple {
+        elements: Vec<WireType>,
+    },
+    Named {
+        package: Option<String>,
+        name: String,
+        arguments: Vec<WireType>,
+    },
+    Resource {
+        name: String,
+    },
+    Handle {
+        name: String,
+    },
+    Qualified {
+        qualifier: WireQualifier,
+        value: Box<WireType>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WireQualifier {
+    Fresh,
+    Owned,
+    NoEscape,
+}
+
+impl WireType {
+    pub fn parse(source: &str) -> Self {
+        let source = source.trim();
+        for (prefix, qualifier) in [
+            ("fresh ", WireQualifier::Fresh),
+            ("owned ", WireQualifier::Owned),
+            ("noescape ", WireQualifier::NoEscape),
+        ] {
+            if let Some(value) = source.strip_prefix(prefix) {
+                return Self::Qualified {
+                    qualifier,
+                    value: Box::new(Self::parse(value)),
+                };
+            }
+        }
+        match source {
+            "Unit" => return Self::Unit,
+            "Bool" => return Self::Bool,
+            "Int" => {
+                return Self::Int {
+                    bits: 64,
+                    signed: true,
+                };
+            }
+            "Float" => return Self::Float { bits: 64 },
+            "String" => return Self::String,
+            "Bytes" => return Self::Bytes,
+            _ => {}
+        }
+        if source.starts_with('(') && source.ends_with(')') {
+            return Self::Tuple {
+                elements: split_type_arguments(&source[1..source.len() - 1])
+                    .into_iter()
+                    .map(Self::parse)
+                    .collect(),
+            };
+        }
+        let (root, arguments) = split_generic(source);
+        let arguments = arguments
+            .map(split_type_arguments)
+            .unwrap_or_default()
+            .into_iter()
+            .map(Self::parse)
+            .collect::<Vec<_>>();
+        match (root, arguments.as_slice()) {
+            ("List", [element]) => Self::List {
+                element: Box::new(element.clone()),
+            },
+            ("Option", [value]) => Self::Option {
+                value: Box::new(value.clone()),
+            },
+            ("Result", [ok, error]) => Self::Result {
+                ok: Box::new(ok.clone()),
+                error: Box::new(error.clone()),
+            },
+            ("Resource", []) => Self::Resource {
+                name: "Resource".into(),
+            },
+            ("Handle", []) => Self::Handle {
+                name: "Handle".into(),
+            },
+            _ => {
+                let (package, name) = root.rsplit_once('.').map_or_else(
+                    || (None, root.to_string()),
+                    |(package, name)| (Some(package.to_string()), name.to_string()),
+                );
+                Self::Named {
+                    package,
+                    name,
+                    arguments,
+                }
+            }
+        }
+    }
+
+    fn encode_canonical(&self, output: &mut Vec<u8>) {
+        let encoded = serde_json::to_vec(self).expect("WireType serialization cannot fail");
+        output.extend_from_slice(&(encoded.len() as u64).to_be_bytes());
+        output.extend_from_slice(&encoded);
+    }
+}
+
+impl From<&str> for WireType {
+    fn from(value: &str) -> Self {
+        Self::parse(value)
+    }
+}
+
+impl From<String> for WireType {
+    fn from(value: String) -> Self {
+        Self::parse(&value)
+    }
+}
+
+fn split_generic(source: &str) -> (&str, Option<&str>) {
+    source
+        .find('<')
+        .filter(|_| source.ends_with('>'))
+        .map_or((source, None), |start| {
+            (&source[..start], Some(&source[start + 1..source.len() - 1]))
+        })
+}
+
+fn split_type_arguments(source: &str) -> Vec<&str> {
+    let mut depth = 0usize;
+    let mut start = 0usize;
+    let mut arguments = Vec::new();
+    for (index, character) in source.char_indices() {
+        match character {
+            '<' | '(' => depth += 1,
+            '>' | ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                arguments.push(source[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    let tail = source[start..].trim();
+    if !tail.is_empty() {
+        arguments.push(tail);
+    }
+    arguments
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
@@ -56,14 +235,14 @@ pub enum DataEffect {
 pub struct ParameterSignature {
     pub name: String,
     pub effect: DataEffect,
-    pub type_name: String,
+    pub ty: WireType,
     pub retained: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FunctionSignature {
     pub parameters: Vec<ParameterSignature>,
-    pub return_type: String,
+    pub result: WireType,
     pub asynchronous: bool,
 }
 
@@ -75,7 +254,7 @@ impl FunctionSignature {
             &mut canonical,
             if self.asynchronous { "async" } else { "sync" },
         );
-        append_field(&mut canonical, &self.return_type);
+        self.result.encode_canonical(&mut canonical);
         canonical.extend_from_slice(&(self.parameters.len() as u64).to_be_bytes());
         for parameter in &self.parameters {
             append_field(&mut canonical, &parameter.name);
@@ -87,7 +266,7 @@ impl FunctionSignature {
                     DataEffect::Take => "take",
                 },
             );
-            append_field(&mut canonical, &parameter.type_name);
+            parameter.ty.encode_canonical(&mut canonical);
             canonical.push(u8::from(parameter.retained));
         }
         let digest = Sha256::digest(canonical);
@@ -126,10 +305,10 @@ mod tests {
             parameters: vec![ParameterSignature {
                 name: "message".to_string(),
                 effect,
-                type_name: "String".to_string(),
+                ty: "String".into(),
                 retained: false,
             }],
-            return_type: "Unit".to_string(),
+            result: "Unit".into(),
             asynchronous: false,
         }
     }
@@ -144,5 +323,41 @@ mod tests {
             signature(DataEffect::Read).hash(),
             signature(DataEffect::Take).hash()
         );
+    }
+
+    #[test]
+    fn wire_types_parse_nested_structure_without_textual_abi_fields() {
+        assert_eq!(
+            WireType::parse("Result<List<String>, host.errors.Failure>"),
+            WireType::Result {
+                ok: Box::new(WireType::List {
+                    element: Box::new(WireType::String),
+                }),
+                error: Box::new(WireType::Named {
+                    package: Some("host.errors".into()),
+                    name: "Failure".into(),
+                    arguments: vec![],
+                }),
+            }
+        );
+        assert_eq!(
+            WireType::parse("fresh List<Int>"),
+            WireType::Qualified {
+                qualifier: WireQualifier::Fresh,
+                value: Box::new(WireType::List {
+                    element: Box::new(WireType::Int {
+                        bits: 64,
+                        signed: true,
+                    }),
+                }),
+            }
+        );
+    }
+
+    #[test]
+    fn parameter_names_remain_part_of_named_argument_abi() {
+        let mut renamed = signature(DataEffect::Read);
+        renamed.parameters[0].name = "text".into();
+        assert_ne!(signature(DataEffect::Read).hash(), renamed.hash());
     }
 }

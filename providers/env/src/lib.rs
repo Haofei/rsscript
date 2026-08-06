@@ -59,10 +59,10 @@ fn signature() -> FunctionSignature {
         parameters: vec![ParameterSignature {
             name: "name".into(),
             effect: DataEffect::Read,
-            type_name: "String".into(),
+            ty: "String".into(),
             retained: false,
         }],
-        return_type: "Option<String>".into(),
+        result: "Option<String>".into(),
         asynchronous: false,
     }
 }

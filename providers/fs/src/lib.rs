@@ -162,11 +162,11 @@ fn signature(params: Vec<(&str, DataEffect, &str)>, result: &str) -> FunctionSig
             .map(|(name, effect, type_name)| ParameterSignature {
                 name: name.into(),
                 effect,
-                type_name: type_name.into(),
+                ty: type_name.into(),
                 retained: false,
             })
             .collect(),
-        return_type: result.into(),
+        result: result.into(),
         asynchronous: false,
     }
 }

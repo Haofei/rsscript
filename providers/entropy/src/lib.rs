@@ -16,10 +16,10 @@ fn signature() -> FunctionSignature {
         parameters: vec![ParameterSignature {
             name: "length".into(),
             effect: DataEffect::Read,
-            type_name: "Int".into(),
+            ty: "Int".into(),
             retained: false,
         }],
-        return_type: "Bytes".into(),
+        result: "Bytes".into(),
         asynchronous: false,
     }
 }
