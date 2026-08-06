@@ -1539,6 +1539,8 @@ dependencies = [
  "rss-native-abi",
  "rss-process-guard",
  "rss-testgen",
+ "rsscript-abi-model",
+ "rsscript-provider-api",
  "rsscript-runtime",
  "rustix",
  "semver",
@@ -1556,10 +1558,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-abi-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sha2",
+]
+
+[[package]]
 name = "rsscript-lowering"
 version = "0.1.0"
 dependencies = [
  "rsscript-semantics",
+]
+
+[[package]]
+name = "rsscript-provider-api"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "serde",
 ]
 
 [[package]]
@@ -1594,6 +1612,9 @@ dependencies = [
 [[package]]
 name = "rsscript-semantics"
 version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+]
 
 [[package]]
 name = "rustc-hash"

@@ -14,10 +14,15 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::eval_types::ExternalFunction;
+use crate::eval_types::{
+    BlockingBehavior, CancellationBehavior, ExternalFunction, ExternalFunctionRegistry,
+    ExternalSymbol, FunctionSignature, ProviderCallMode, ProviderDescriptor, ProviderFunction,
+    ProviderFunctionDescriptor,
+};
+use rsscript_abi_model::{DataEffect as AbiDataEffect, ParameterSignature};
 
 use crate::package::{ExecutablePackageSnapshot, prepare_package_for_execution};
-use crate::syntax::ast::{Item, Param, TypeRef};
+use crate::syntax::ast::{DataEffect, FunctionDecl, Item, TypeRef};
 use crate::syntax::parse_source;
 
 use super::shim_gen::ShimDependency;
@@ -62,15 +67,12 @@ pub fn load_package_bindings_from_snapshot(
     })?;
 
     // Collect the native-fn signatures declared across the package interfaces.
-    let mut signatures: BTreeMap<String, (Vec<Param>, Option<TypeRef>)> = BTreeMap::new();
+    let mut signatures: BTreeMap<String, FunctionDecl> = BTreeMap::new();
     for (path, contents) in &input.interfaces {
         let program = parse_source(path, contents);
         for item in &program.items {
             if let Item::Function(decl) = item {
-                signatures.insert(
-                    decl.name.clone(),
-                    (decl.params.clone(), decl.return_ty.clone()),
-                );
+                signatures.insert(decl.name.clone(), decl.clone());
             }
         }
     }
@@ -86,14 +88,14 @@ pub fn load_package_bindings_from_snapshot(
             default_features: dependency.default_features,
         });
         for (symbol, rust_path) in &dependency.bindings {
-            let (params, return_ty) = signatures.get(symbol).ok_or_else(|| {
+            let declaration = signatures.get(symbol).ok_or_else(|| {
                 format!("native binding `{symbol}` has no interface signature for the VM shim.")
             })?;
             bindings.push(build_binding(
                 symbol,
                 rust_path,
-                params,
-                return_ty.as_ref(),
+                &declaration.params,
+                declaration.return_ty.as_ref(),
             )?);
         }
     }
@@ -108,7 +110,149 @@ pub fn load_package_bindings_from_snapshot(
     bindings.sort_by(|left, right| left.symbol.cmp(&right.symbol));
 
     let library_path = build_shim_library(snapshot_root, abi_path, &native_deps, &bindings)?;
-    rss_native_abi::load_registry(&library_path)
+    let loaded = rss_native_abi::load_registry(&library_path)?;
+    validate_loaded_provider(package, &signatures, &bindings, loaded)
+}
+
+fn validate_loaded_provider(
+    package: &ExecutablePackageSnapshot,
+    signatures: &BTreeMap<String, FunctionDecl>,
+    bindings: &[super::shim_gen::ShimBinding],
+    loaded: Vec<(String, ExternalFunction)>,
+) -> Result<Vec<(String, ExternalFunction)>, String> {
+    let functions = bindings
+        .iter()
+        .map(|binding| {
+            let declaration = signatures.get(&binding.symbol).ok_or_else(|| {
+                format!(
+                    "native binding `{}` lost its interface signature before provider linking",
+                    binding.symbol
+                )
+            })?;
+            let symbol = ExternalSymbol::new(binding.symbol.clone())
+                .map_err(|_| format!("invalid external symbol `{}`", binding.symbol))?;
+            Ok(ProviderFunctionDescriptor {
+                symbol,
+                signature: semantic_signature(declaration),
+                entry: binding.rust_path.clone(),
+                call_mode: if declaration.is_async {
+                    ProviderCallMode::Async
+                } else {
+                    ProviderCallMode::Sync
+                },
+                blocking: BlockingBehavior::MayBlock,
+                cancellation: if declaration.is_async {
+                    CancellationBehavior::Cooperative
+                } else {
+                    CancellationBehavior::NotApplicable
+                },
+                thread_safe: true,
+                reentrant: false,
+                resource_cleanup_contract: "RSScript interface resource contract".to_string(),
+                error_mapping: "native ABI result string".to_string(),
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    let descriptor = ProviderDescriptor {
+        provider_id: format!("native.{}", package.lowering_input().package.name),
+        provider_version: package.lowering_input().package.version.clone(),
+        supported_abi: vec![rss_native_abi::ABI_VERSION],
+        functions,
+    };
+    let mut implementations = BTreeMap::new();
+    for (symbol, callable) in loaded {
+        let symbol = ExternalSymbol::new(symbol.clone())
+            .map_err(|_| format!("native provider exported invalid symbol `{symbol}`"))?;
+        let declaration = signatures
+            .get(symbol.as_str())
+            .ok_or_else(|| format!("native provider exported undeclared symbol `{symbol}`"))?;
+        implementations.insert(
+            symbol,
+            ProviderFunction {
+                signature: semantic_signature(declaration),
+                callable,
+            },
+        );
+    }
+    let mut registry = ExternalFunctionRegistry::new();
+    registry
+        .register_provider(&descriptor, implementations)
+        .map_err(|error| error.to_string())?;
+    Ok(registry.into_bindings().collect())
+}
+
+fn semantic_signature(declaration: &FunctionDecl) -> FunctionSignature {
+    FunctionSignature {
+        parameters: declaration
+            .params
+            .iter()
+            .map(|parameter| ParameterSignature {
+                name: parameter.name.clone(),
+                effect: match parameter.effect.unwrap_or(DataEffect::Read) {
+                    DataEffect::Read => AbiDataEffect::Read,
+                    DataEffect::Mut => AbiDataEffect::Mut,
+                    DataEffect::Take => AbiDataEffect::Take,
+                },
+                type_name: signature_type_name(&parameter.ty),
+                retained: declaration.retained_params.contains(&parameter.name),
+            })
+            .collect(),
+        return_type: declaration
+            .return_ty
+            .as_ref()
+            .map_or_else(|| "Unit".to_string(), signature_type_name),
+        asynchronous: declaration.is_async,
+    }
+}
+
+fn signature_type_name(ty: &TypeRef) -> String {
+    let body = if ty.name == "Fn" {
+        let parameters = ty
+            .fn_params
+            .iter()
+            .enumerate()
+            .map(|(index, parameter)| {
+                let effect = ty
+                    .fn_param_effects
+                    .get(index)
+                    .copied()
+                    .flatten()
+                    .unwrap_or(DataEffect::Read)
+                    .as_str();
+                format!("{effect} {}", signature_type_name(parameter))
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        let result = ty
+            .fn_return
+            .as_ref()
+            .map_or_else(|| "Unit".to_string(), |result| signature_type_name(result));
+        format!("Fn({parameters})->{result}")
+    } else if ty.args.is_empty() {
+        ty.name.clone()
+    } else {
+        format!(
+            "{}<{}>",
+            ty.name,
+            ty.args
+                .iter()
+                .map(signature_type_name)
+                .collect::<Vec<_>>()
+                .join(",")
+        )
+    };
+    let body = if ty.is_owned {
+        format!("owned {body}")
+    } else if ty.is_noescape {
+        format!("noescape {body}")
+    } else {
+        body
+    };
+    if ty.is_fresh {
+        format!("fresh {body}")
+    } else {
+        body
+    }
 }
 
 #[cfg(test)]
@@ -126,6 +270,7 @@ mod tests {
     use super::cache::{create_private_dir, hash_file_streaming_bounded, open_private_lock};
     use super::*;
     use crate::syntax::ast::Item;
+    use crate::syntax::ast::{Param, TypeRef};
     use crate::syntax::parse_source;
 
     fn sig(src: &str) -> (Vec<Param>, Option<TypeRef>) {

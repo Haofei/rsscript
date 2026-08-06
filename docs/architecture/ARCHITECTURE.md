@@ -22,6 +22,11 @@ The required dependency direction is syntax → semantics → lowering. Runtime-
 consumes lowered programs. Host providers depend on the host API/runtime boundary;
 the compiler does not depend on providers, deployment policy, or REIR.
 
+`rsscript-abi-model` owns external symbols and semantic signature hashes without
+depending on provider implementations. `rsscript-provider-api` owns versioned
+provider descriptors and load-time linking. Concrete native or OS providers
+adapt to that API and are never part of the semantic model.
+
 ## Compiler boundary
 
 Parsing, validation, lowering, formatting, symbols, and package structural checks

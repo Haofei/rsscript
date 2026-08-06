@@ -22,6 +22,8 @@ test = false
 reir = { path = "../reir" }
 rss-native-abi = { path = "../native-abi", features = ["host"] }
 rss-process-guard = { path = "../process-guard" }
+rsscript-abi-model = { path = "../rsscript-abi-model" }
+rsscript-provider-api = { path = "../rsscript-provider-api" }
 rsscript-runtime = { path = "../runtime", default-features = false, features = ["core"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

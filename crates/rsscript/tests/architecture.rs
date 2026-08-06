@@ -524,6 +524,41 @@ fn runtime_does_not_depend_on_the_compiler_package() {
 }
 
 #[test]
+fn abi_and_provider_crates_keep_one_way_dependencies() {
+    let root = workspace_root();
+    let abi_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-abi-model/Cargo.toml")))
+            .expect("ABI model manifest should parse");
+    let provider_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-provider-api/Cargo.toml")))
+            .expect("provider API manifest should parse");
+    let abi_dependencies = dependency_packages(&abi_manifest);
+    let provider_dependencies = dependency_packages(&provider_manifest);
+
+    for forbidden in [
+        "rsscript",
+        "rsscript-runtime",
+        "rss-native-abi",
+        "rss-process-guard",
+        "reir",
+        "vm-jit",
+    ] {
+        assert!(
+            !abi_dependencies.contains(forbidden),
+            "ABI model must not depend on `{forbidden}`"
+        );
+        assert!(
+            !provider_dependencies.contains(forbidden),
+            "provider API must not depend on `{forbidden}`"
+        );
+    }
+    assert!(
+        provider_dependencies.contains("rsscript-abi-model"),
+        "provider API must consume the shared ABI model"
+    );
+}
+
+#[test]
 fn unsafe_boundary_crates_are_explicit_dependencies() {
     let root = workspace_root();
     let mut violations = Vec::new();

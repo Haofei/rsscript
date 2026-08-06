@@ -1,6 +1,12 @@
 use crate::diagnostic::Diagnostic;
 use std::collections::BTreeMap;
 
+pub use rsscript_abi_model::{ExternalImport, ExternalSymbol, FunctionSignature, SignatureHash};
+pub use rsscript_provider_api::{
+    BlockingBehavior, CancellationBehavior, ProviderCallMode, ProviderDescriptor, ProviderFunction,
+    ProviderFunctionDescriptor, ProviderLoadError,
+};
+
 // The native bridge value type and host-function signature live in the shared
 // `rss-native-abi` crate so dynamically loaded plugin cdylibs agree on their
 // layout. Re-exported so existing `eval_types::NativeValue` paths stay stable.
@@ -10,26 +16,39 @@ pub type ExternalFunction = rss_native_abi::NativeInterpreterFn;
 /// Runtime-owned symbol table for functions supplied by package providers.
 /// Compilation and lowering only record the symbol name; provider selection is
 /// deliberately deferred until execution.
-#[derive(Default)]
 pub struct ExternalFunctionRegistry {
-    functions: BTreeMap<String, ExternalFunction>,
+    registry: rsscript_provider_api::ProviderRegistry<ExternalFunction>,
 }
 
 impl ExternalFunctionRegistry {
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            registry: rsscript_provider_api::ProviderRegistry::new(rss_native_abi::ABI_VERSION),
+        }
     }
 
-    pub fn register(&mut self, symbol: impl Into<String>, function: ExternalFunction) {
-        self.functions.insert(symbol.into(), function);
+    pub fn register_provider(
+        &mut self,
+        descriptor: &ProviderDescriptor,
+        functions: BTreeMap<ExternalSymbol, ProviderFunction<ExternalFunction>>,
+    ) -> Result<(), ProviderLoadError> {
+        self.registry.register_provider(descriptor, functions)
     }
 
-    pub fn resolve(&self, symbol: &str) -> Option<&ExternalFunction> {
-        self.functions.get(symbol)
+    pub fn resolve(&self, import: &ExternalImport) -> Result<&ExternalFunction, ProviderLoadError> {
+        self.registry.resolve(import)
     }
 
     pub fn into_bindings(self) -> impl Iterator<Item = (String, ExternalFunction)> {
-        self.functions.into_iter()
+        self.registry
+            .into_functions()
+            .map(|(symbol, function)| (symbol.as_str().to_string(), function))
+    }
+}
+
+impl Default for ExternalFunctionRegistry {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

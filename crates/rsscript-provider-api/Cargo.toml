@@ -1,8 +1,8 @@
 [package]
-name = "rsscript-semantics"
+name = "rsscript-provider-api"
 version = "0.1.0"
 edition = "2024"
-description = "Platform-neutral semantic contracts for RSScript"
+description = "Versioned provider descriptors and load-time linking for RSScript"
 license = "MIT OR Apache-2.0"
 
 [lib]
@@ -10,3 +10,4 @@ doctest = false
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
+serde = { version = "1", features = ["derive"] }

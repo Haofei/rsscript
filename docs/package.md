@@ -17,6 +17,13 @@ language features.
 `rss pkg analysis [package-directory]` prints the neutral analysis artifact as
 JSON. `rss pkg review` derives optional review output separately.
 
+Provider loading uses the platform-neutral types in `rsscript-abi-model` and the
+registry contract in `rsscript-provider-api`. Semantic signatures are hashed from
+parameter names, `read`/`mut`/`take`, structural type names, retention, return
+type, and sync/async mode. Provider ABI or signature mismatches fail before a
+callable can be resolved. Native plugins are adapted to this contract after their
+generated shim is loaded; the provider API itself has no native-loader dependency.
+
 Optional package review uses the distinct `rsscript.package_review.v1` schema.
 Risk, provider selection, native implementation details, and deployment evidence
 must not appear in package analysis. The authoritative schemas are checked in
