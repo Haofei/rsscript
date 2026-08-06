@@ -1,0 +1,3 @@
+module host.http
+
+pub fn get(url: read String) -> HttpResponse

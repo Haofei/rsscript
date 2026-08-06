@@ -1700,6 +1700,7 @@ version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
  "rsscript-provider-api",
+ "rsscript-provider-bindgen",
 ]
 
 [[package]]
@@ -1709,6 +1710,7 @@ dependencies = [
  "rand 0.8.7",
  "rsscript-abi-model",
  "rsscript-provider-api",
+ "rsscript-provider-bindgen",
 ]
 
 [[package]]
@@ -1726,6 +1728,7 @@ version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
  "rsscript-provider-api",
+ "rsscript-provider-bindgen",
 ]
 
 [[package]]
@@ -1735,6 +1738,7 @@ dependencies = [
  "reqwest",
  "rsscript-abi-model",
  "rsscript-provider-api",
+ "rsscript-provider-bindgen",
 ]
 
 [[package]]
@@ -1743,6 +1747,7 @@ version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
  "rsscript-provider-api",
+ "rsscript-provider-bindgen",
 ]
 
 [[package]]
@@ -1752,6 +1757,7 @@ dependencies = [
  "rss-process-guard",
  "rsscript-abi-model",
  "rsscript-provider-api",
+ "rsscript-provider-bindgen",
 ]
 
 [[package]]
@@ -1760,6 +1766,7 @@ version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
  "rsscript-provider-api",
+ "rsscript-provider-bindgen",
 ]
 
 [[package]]

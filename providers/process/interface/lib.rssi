@@ -1,0 +1,3 @@
+module host.process
+
+pub fn run(program: read String, args: read List<String>) -> ProcessOutput

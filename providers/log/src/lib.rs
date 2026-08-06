@@ -1,55 +1,19 @@
 #![forbid(unsafe_code)]
-use rsscript_abi_model::{
-    DataEffect, ExternalSymbol, FunctionSignature, ParameterSignature, RUNTIME_ABI_VERSION,
-};
-use rsscript_provider_api::{
-    BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderCallMode,
-    ProviderDescriptor, ProviderError, ProviderFunction, ProviderFunctionDescriptor,
-};
+use rsscript_abi_model::ExternalSymbol;
+use rsscript_provider_api::{NativeInterpreterFn, NativeValue, ProviderError, ProviderFunction};
 use std::collections::BTreeMap;
 use std::sync::Arc;
-fn symbol() -> ExternalSymbol {
-    ExternalSymbol::new("host.log.emit").unwrap()
-}
-fn signature() -> FunctionSignature {
-    FunctionSignature {
-        parameters: vec![ParameterSignature {
-            name: "message".into(),
-            effect: DataEffect::Read,
-            ty: "String".into(),
-            retained: false,
-        }],
-        result: "Unit".into(),
-        asynchronous: false,
-    }
-}
-pub fn descriptor() -> ProviderDescriptor {
-    ProviderDescriptor {
-        provider_id: "rsscript.log".into(),
-        provider_version: env!("CARGO_PKG_VERSION").into(),
-        supported_abi: vec![RUNTIME_ABI_VERSION],
-        functions: vec![ProviderFunctionDescriptor {
-            symbol: symbol(),
-            signature: signature(),
-            entry: "emit".into(),
-            call_mode: ProviderCallMode::Sync,
-            blocking: BlockingBehavior::NonBlocking,
-            cancellation: CancellationBehavior::NotApplicable,
-            thread_safe: true,
-            reentrant: true,
-            resource_cleanup: rsscript_provider_api::ResourceCleanupContract::None,
-            error_mapping: rsscript_provider_api::ProviderErrorMapping::StructuredV1,
-        }],
-    }
-}
+include!(concat!(env!("OUT_DIR"), "/provider_contract.rs"));
+
 pub fn functions(
     sink: impl Fn(&str) -> Result<(), ProviderError> + Send + Sync + 'static,
 ) -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>> {
     let sink = Arc::new(sink);
+    let function = descriptor().functions.into_iter().next().unwrap();
     BTreeMap::from([(
-        symbol(),
+        function.symbol,
         ProviderFunction {
-            signature: signature(),
+            signature: function.signature,
             callable: NativeInterpreterFn::new(move |mut args| {
                 let NativeValue::String(message) = args.remove(0) else {
                     return Err(ProviderError::invalid_argument("message must be String"));
@@ -71,7 +35,8 @@ mod tests {
     use super::*;
     #[test]
     fn links() {
-        let mut r = rsscript_provider_api::ProviderRegistry::new(RUNTIME_ABI_VERSION);
+        let mut r =
+            rsscript_provider_api::ProviderRegistry::new(rsscript_abi_model::RUNTIME_ABI_VERSION);
         r.register_provider(&descriptor(), functions(|_| Ok(())))
             .unwrap();
     }

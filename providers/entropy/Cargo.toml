@@ -7,3 +7,6 @@ license = "MIT OR Apache-2.0"
 rand = "0.8"
 rsscript-abi-model = { path = "../../crates/rsscript-abi-model" }
 rsscript-provider-api = { path = "../../crates/rsscript-provider-api" }
+
+[build-dependencies]
+rsscript-provider-bindgen = { path = "../../crates/rsscript-provider-bindgen" }

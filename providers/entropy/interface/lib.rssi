@@ -1,0 +1,3 @@
+module host.entropy
+
+pub fn bytes(length: read Int) -> Bytes

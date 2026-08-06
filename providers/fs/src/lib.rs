@@ -4,39 +4,12 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-use rsscript_abi_model::{
-    DataEffect, ExternalSymbol, FunctionSignature, ParameterSignature, RUNTIME_ABI_VERSION,
-};
+use rsscript_abi_model::ExternalSymbol;
 use rsscript_provider_api::{
-    BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderCallMode,
-    ProviderDescriptor, ProviderError, ProviderFunction, ProviderFunctionDescriptor,
+    NativeInterpreterFn, NativeValue, ProviderError, ProviderFunction, ProviderFunctionDescriptor,
 };
 
-pub fn descriptor() -> ProviderDescriptor {
-    ProviderDescriptor {
-        provider_id: "rsscript.fs".into(),
-        provider_version: env!("CARGO_PKG_VERSION").into(),
-        supported_abi: vec![RUNTIME_ABI_VERSION],
-        functions: vec![
-            function(
-                "host.fs.read_text",
-                signature(vec![("path", DataEffect::Read, "String")], "String"),
-                "read_text",
-            ),
-            function(
-                "host.fs.write_text",
-                signature(
-                    vec![
-                        ("path", DataEffect::Read, "String"),
-                        ("text", DataEffect::Read, "String"),
-                    ],
-                    "Unit",
-                ),
-                "write_text",
-            ),
-        ],
-    }
-}
+include!(concat!(env!("OUT_DIR"), "/provider_contract.rs"));
 
 /// Filesystem authority rooted at one host-selected directory.
 ///
@@ -65,18 +38,17 @@ impl RootedFsProvider {
     }
 
     pub fn functions(&self) -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>> {
-        let read = signature(vec![("path", DataEffect::Read, "String")], "String");
-        let write = signature(
-            vec![
-                ("path", DataEffect::Read, "String"),
-                ("text", DataEffect::Read, "String"),
-            ],
-            "Unit",
-        );
+        let mut generated = descriptor()
+            .functions
+            .into_iter()
+            .map(|function| (function.entry.clone(), function))
+            .collect::<BTreeMap<_, _>>();
+        let read = generated.remove("read_text").unwrap();
+        let write = generated.remove("write_text").unwrap();
         let read_provider = self.clone();
         let write_provider = self.clone();
         BTreeMap::from([
-            binding("host.fs.read_text", read, move |mut args| {
+            binding(read, move |mut args| {
                 let NativeValue::String(path) = args.remove(0) else {
                     return Err(ProviderError::invalid_argument("path must be String"));
                 };
@@ -87,7 +59,7 @@ impl RootedFsProvider {
                     .map(NativeValue::String)
                     .map_err(|error| ProviderError::internal(error.to_string()))
             }),
-            binding("host.fs.write_text", write, move |mut args| {
+            binding(write, move |mut args| {
                 let NativeValue::String(path) = args.remove(0) else {
                     return Err(ProviderError::invalid_argument("path must be String"));
                 };
@@ -155,44 +127,14 @@ impl RootedFsProvider {
     }
 }
 
-fn signature(params: Vec<(&str, DataEffect, &str)>, result: &str) -> FunctionSignature {
-    FunctionSignature {
-        parameters: params
-            .into_iter()
-            .map(|(name, effect, type_name)| ParameterSignature {
-                name: name.into(),
-                effect,
-                ty: type_name.into(),
-                retained: false,
-            })
-            .collect(),
-        result: result.into(),
-        asynchronous: false,
-    }
-}
-fn function(symbol: &str, signature: FunctionSignature, entry: &str) -> ProviderFunctionDescriptor {
-    ProviderFunctionDescriptor {
-        symbol: ExternalSymbol::new(symbol).unwrap(),
-        signature,
-        entry: entry.into(),
-        call_mode: ProviderCallMode::Sync,
-        blocking: BlockingBehavior::MayBlock,
-        cancellation: CancellationBehavior::NotApplicable,
-        thread_safe: true,
-        reentrant: true,
-        resource_cleanup: rsscript_provider_api::ResourceCleanupContract::None,
-        error_mapping: rsscript_provider_api::ProviderErrorMapping::StructuredV1,
-    }
-}
 fn binding(
-    symbol: &str,
-    signature: FunctionSignature,
+    descriptor: ProviderFunctionDescriptor,
     call: impl Fn(Vec<NativeValue>) -> Result<NativeValue, ProviderError> + Send + Sync + 'static,
 ) -> (ExternalSymbol, ProviderFunction<NativeInterpreterFn>) {
     (
-        ExternalSymbol::new(symbol).unwrap(),
+        descriptor.symbol,
         ProviderFunction {
-            signature,
+            signature: descriptor.signature,
             callable: NativeInterpreterFn::new(call),
         },
     )
@@ -210,7 +152,8 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         let provider = RootedFsProvider::new(&root).unwrap();
-        let mut registry = rsscript_provider_api::ProviderRegistry::new(RUNTIME_ABI_VERSION);
+        let mut registry =
+            rsscript_provider_api::ProviderRegistry::new(rsscript_abi_model::RUNTIME_ABI_VERSION);
         registry
             .register_provider(&descriptor(), provider.functions())
             .unwrap();

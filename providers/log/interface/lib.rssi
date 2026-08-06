@@ -1,0 +1,3 @@
+module host.log
+
+pub fn emit(message: read String) -> Unit

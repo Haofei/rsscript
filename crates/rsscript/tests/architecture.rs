@@ -1204,11 +1204,32 @@ fn provider_contracts_can_be_generated_without_the_engine_or_runtime() {
         );
     }
 
-    let env_source = read(&root.join("providers/env/src/lib.rs"));
-    assert!(env_source.contains("provider_contract.rs"));
-    assert!(!env_source.contains("host.env.get"));
-    assert!(!env_source.contains("FunctionSignature"));
-    assert!(root.join("providers/env/interface/lib.rssi").is_file());
+    for provider in [
+        "cli", "entropy", "env", "fs", "http", "log", "process", "time",
+    ] {
+        let source = read(&root.join(format!("providers/{provider}/src/lib.rs")));
+        assert!(
+            source.contains("provider_contract.rs"),
+            "Provider `{provider}` must include its generated contract"
+        );
+        assert!(
+            !source.contains("FunctionSignature"),
+            "Provider `{provider}` must not hand-author ABI signatures"
+        );
+        assert!(
+            root.join(format!("providers/{provider}/interface/lib.rssi"))
+                .is_file(),
+            "Provider `{provider}` must own a canonical .rssi interface"
+        );
+        let provider_manifest: toml::Value = toml::from_str(&read(
+            &root.join(format!("providers/{provider}/Cargo.toml")),
+        ))
+        .unwrap();
+        assert_eq!(
+            provider_manifest["build-dependencies"]["rsscript-provider-bindgen"]["path"].as_str(),
+            Some("../../crates/rsscript-provider-bindgen")
+        );
+    }
 }
 
 #[test]
