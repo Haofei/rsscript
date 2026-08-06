@@ -9,8 +9,16 @@ use sha2::{Digest, Sha256};
 
 pub const BYTECODE_SCHEMA: &str = "rsscript.bytecode.v1";
 pub const BYTECODE_MAGIC: &[u8; 8] = b"RSSBC\0\x01\0";
+const SECTION_HEADER: u8 = 1;
+const SECTION_IMPORTS: u8 = 2;
+const SECTION_CODE: u8 = 3;
+const SECTION_CHECKSUM: u8 = 4;
+const SECTION_REQUIRED: u8 = 1;
+const SECTION_HEADER_BYTES: usize = 1 + 1 + 8 + 32;
+const MAX_SECTIONS: usize = 64;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BytecodeHeader {
     pub schema: String,
     pub language_version: String,
@@ -22,6 +30,7 @@ pub struct BytecodeHeader {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BytecodeArtifact {
     pub header: BytecodeHeader,
     pub imports: Vec<ExternalImport>,
@@ -57,8 +66,31 @@ impl BytecodeArtifact {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, BytecodeError> {
-        let mut bytes = BYTECODE_MAGIC.to_vec();
-        bytes.extend(serde_json::to_vec(self).map_err(BytecodeError::Encode)?);
+        let header = serde_json::to_vec(&self.header).map_err(BytecodeError::Encode)?;
+        let imports = serde_json::to_vec(&self.imports).map_err(BytecodeError::Encode)?;
+        let sections = [
+            (SECTION_HEADER, header.as_slice()),
+            (SECTION_IMPORTS, imports.as_slice()),
+            (SECTION_CODE, self.payload.as_slice()),
+            (SECTION_CHECKSUM, self.checksum.as_bytes()),
+        ];
+        let mut bytes = Vec::with_capacity(
+            BYTECODE_MAGIC.len()
+                + 2
+                + sections
+                    .iter()
+                    .map(|(_, data)| SECTION_HEADER_BYTES + data.len())
+                    .sum::<usize>(),
+        );
+        bytes.extend_from_slice(BYTECODE_MAGIC);
+        bytes.extend_from_slice(&(sections.len() as u16).to_be_bytes());
+        for (kind, data) in sections {
+            bytes.push(kind);
+            bytes.push(SECTION_REQUIRED);
+            bytes.extend_from_slice(&(data.len() as u64).to_be_bytes());
+            bytes.extend_from_slice(&Sha256::digest(data));
+            bytes.extend_from_slice(data);
+        }
         Ok(bytes)
     }
 
@@ -71,10 +103,79 @@ impl BytecodeArtifact {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, BytecodeError> {
-        let body = bytes
+        let mut body = bytes
             .strip_prefix(BYTECODE_MAGIC)
             .ok_or(BytecodeError::InvalidMagic)?;
-        serde_json::from_slice(body).map_err(BytecodeError::Decode)
+        let section_count = take_array::<2>(&mut body)
+            .map(u16::from_be_bytes)
+            .map(usize::from)?;
+        if section_count == 0 || section_count > MAX_SECTIONS {
+            return Err(BytecodeError::MalformedSectionTable);
+        }
+        let mut header = None;
+        let mut imports = None;
+        let mut payload = None;
+        let mut checksum = None;
+        let mut previous_kind = 0u8;
+        for _ in 0..section_count {
+            let kind = take_array::<1>(&mut body)?[0];
+            let flags = take_array::<1>(&mut body)?[0];
+            if flags & !SECTION_REQUIRED != 0 {
+                return Err(BytecodeError::InvalidSectionFlags { kind, flags });
+            }
+            let length = usize::try_from(u64::from_be_bytes(take_array::<8>(&mut body)?))
+                .map_err(|_| BytecodeError::MalformedSectionTable)?;
+            let expected_hash = take_array::<32>(&mut body)?;
+            let data = take_bytes(&mut body, length)?;
+            if Sha256::digest(data).as_slice() != expected_hash {
+                return Err(BytecodeError::SectionHashMismatch(kind));
+            }
+            if kind <= previous_kind {
+                return Err(BytecodeError::SectionsNotCanonical);
+            }
+            previous_kind = kind;
+            match kind {
+                SECTION_HEADER => {
+                    require_section(kind, flags)?;
+                    let decoded: BytecodeHeader =
+                        serde_json::from_slice(data).map_err(BytecodeError::Decode)?;
+                    require_canonical_json(data, &decoded)?;
+                    header = Some(decoded);
+                }
+                SECTION_IMPORTS => {
+                    require_section(kind, flags)?;
+                    let decoded: Vec<ExternalImport> =
+                        serde_json::from_slice(data).map_err(BytecodeError::Decode)?;
+                    require_canonical_json(data, &decoded)?;
+                    imports = Some(decoded);
+                }
+                SECTION_CODE => {
+                    require_section(kind, flags)?;
+                    payload = Some(data.to_vec());
+                }
+                SECTION_CHECKSUM => {
+                    require_section(kind, flags)?;
+                    checksum = Some(
+                        std::str::from_utf8(data)
+                            .map_err(|_| BytecodeError::MalformedChecksum)?
+                            .to_string(),
+                    );
+                }
+                unknown if flags & SECTION_REQUIRED != 0 => {
+                    return Err(BytecodeError::UnknownRequiredSection(unknown));
+                }
+                _ => {}
+            }
+        }
+        if !body.is_empty() {
+            return Err(BytecodeError::TrailingBytes);
+        }
+        Ok(Self {
+            header: header.ok_or(BytecodeError::MissingSection(SECTION_HEADER))?,
+            imports: imports.ok_or(BytecodeError::MissingSection(SECTION_IMPORTS))?,
+            payload: payload.ok_or(BytecodeError::MissingSection(SECTION_CODE))?,
+            checksum: checksum.ok_or(BytecodeError::MissingSection(SECTION_CHECKSUM))?,
+        })
     }
 
     fn compute_checksum(&self) -> Result<String, BytecodeError> {
@@ -183,6 +284,37 @@ fn digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
+fn take_array<const N: usize>(input: &mut &[u8]) -> Result<[u8; N], BytecodeError> {
+    let bytes = take_bytes(input, N)?;
+    bytes
+        .try_into()
+        .map_err(|_| BytecodeError::MalformedSectionTable)
+}
+
+fn take_bytes<'a>(input: &mut &'a [u8], length: usize) -> Result<&'a [u8], BytecodeError> {
+    if length > input.len() {
+        return Err(BytecodeError::MalformedSectionTable);
+    }
+    let (value, rest) = input.split_at(length);
+    *input = rest;
+    Ok(value)
+}
+
+fn require_section(kind: u8, flags: u8) -> Result<(), BytecodeError> {
+    if flags & SECTION_REQUIRED == 0 {
+        return Err(BytecodeError::KnownSectionNotRequired(kind));
+    }
+    Ok(())
+}
+
+fn require_canonical_json<T: Serialize>(bytes: &[u8], value: &T) -> Result<(), BytecodeError> {
+    let canonical = serde_json::to_vec(value).map_err(BytecodeError::Encode)?;
+    if canonical != bytes {
+        return Err(BytecodeError::SectionsNotCanonical);
+    }
+    Ok(())
+}
+
 #[derive(Debug)]
 pub enum BytecodeError {
     InvalidMagic,
@@ -193,6 +325,15 @@ pub enum BytecodeError {
     ImportsNotCanonical,
     ImportAbiMismatch,
     InvalidPayload(String),
+    MalformedSectionTable,
+    SectionsNotCanonical,
+    MissingSection(u8),
+    UnknownRequiredSection(u8),
+    KnownSectionNotRequired(u8),
+    InvalidSectionFlags { kind: u8, flags: u8 },
+    SectionHashMismatch(u8),
+    MalformedChecksum,
+    TrailingBytes,
     Encode(serde_json::Error),
     Decode(serde_json::Error),
 }
@@ -220,6 +361,36 @@ impl fmt::Display for BytecodeError {
             Self::InvalidPayload(message) => {
                 write!(formatter, "invalid bytecode payload: {message}")
             }
+            Self::MalformedSectionTable => formatter.write_str("malformed bytecode section table"),
+            Self::SectionsNotCanonical => {
+                formatter.write_str("bytecode sections are duplicated or not canonical")
+            }
+            Self::MissingSection(section) => {
+                write!(formatter, "bytecode is missing required section {section}")
+            }
+            Self::UnknownRequiredSection(section) => {
+                write!(
+                    formatter,
+                    "bytecode contains unknown required section {section}"
+                )
+            }
+            Self::KnownSectionNotRequired(section) => {
+                write!(
+                    formatter,
+                    "bytecode section {section} is not marked required"
+                )
+            }
+            Self::InvalidSectionFlags { kind, flags } => {
+                write!(
+                    formatter,
+                    "bytecode section {kind} has invalid flags {flags:#04x}"
+                )
+            }
+            Self::SectionHashMismatch(section) => {
+                write!(formatter, "bytecode section {section} hash mismatch")
+            }
+            Self::MalformedChecksum => formatter.write_str("bytecode checksum is not UTF-8"),
+            Self::TrailingBytes => formatter.write_str("bytecode has trailing bytes"),
             Self::Encode(error) => write!(formatter, "cannot encode bytecode: {error}"),
             Self::Decode(error) => write!(formatter, "cannot decode bytecode: {error}"),
         }
@@ -246,6 +417,67 @@ mod tests {
         let mut corrupt = bytes;
         *corrupt.last_mut().expect("non-empty") ^= 1;
         assert!(BytecodeVerifier::default().verify(&corrupt).is_err());
+    }
+
+    #[test]
+    fn unknown_optional_sections_are_forward_compatible() {
+        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], vec![1, 2, 3])
+            .expect("artifact");
+        let mut bytes = artifact.to_bytes().expect("bytes");
+        bytes[BYTECODE_MAGIC.len()..BYTECODE_MAGIC.len() + 2].copy_from_slice(&5u16.to_be_bytes());
+        append_test_section(&mut bytes, 5, 0, b"future metadata");
+
+        BytecodeVerifier::default()
+            .verify(&bytes)
+            .expect("optional section should be ignored");
+    }
+
+    #[test]
+    fn unknown_required_sections_fail_closed() {
+        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], vec![1, 2, 3])
+            .expect("artifact");
+        let mut bytes = artifact.to_bytes().expect("bytes");
+        bytes[BYTECODE_MAGIC.len()..BYTECODE_MAGIC.len() + 2].copy_from_slice(&5u16.to_be_bytes());
+        append_test_section(&mut bytes, 5, SECTION_REQUIRED, b"future semantics");
+
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&bytes),
+            Err(BytecodeError::UnknownRequiredSection(5))
+        ));
+    }
+
+    #[test]
+    fn noncanonical_json_section_is_rejected() {
+        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], vec![1, 2, 3])
+            .expect("artifact");
+        let bytes = artifact.to_bytes().expect("bytes");
+        let header_offset = BYTECODE_MAGIC.len() + 2;
+        let data_offset = header_offset + SECTION_HEADER_BYTES;
+        let data_length = u64::from_be_bytes(
+            bytes[header_offset + 2..header_offset + 10]
+                .try_into()
+                .expect("section length"),
+        ) as usize;
+        let mut rewritten = Vec::new();
+        rewritten.extend_from_slice(&bytes[..header_offset]);
+        let mut header = Vec::with_capacity(data_length + 1);
+        header.push(b' ');
+        header.extend_from_slice(&bytes[data_offset..data_offset + data_length]);
+        append_test_section(&mut rewritten, SECTION_HEADER, SECTION_REQUIRED, &header);
+        rewritten.extend_from_slice(&bytes[data_offset + data_length..]);
+
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&rewritten),
+            Err(BytecodeError::SectionsNotCanonical)
+        ));
+    }
+
+    fn append_test_section(bytes: &mut Vec<u8>, kind: u8, flags: u8, data: &[u8]) {
+        bytes.push(kind);
+        bytes.push(flags);
+        bytes.extend_from_slice(&(data.len() as u64).to_be_bytes());
+        bytes.extend_from_slice(&Sha256::digest(data));
+        bytes.extend_from_slice(data);
     }
 
     proptest! {
