@@ -9,15 +9,6 @@ autotests = false
 [lib]
 doctest = false
 
-[[bin]]
-name = "rss"
-path = "src/main.rs"
-
-[[bin]]
-name = "gen-grammar"
-path = "src/bin/gen-grammar.rs"
-test = false
-
 [dependencies]
 rss-native-abi = { path = "../native-abi", features = ["host"], optional = true }
 rss-process-guard = { path = "../process-guard", optional = true }

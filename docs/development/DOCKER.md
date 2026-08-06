@@ -47,7 +47,7 @@ cargo test -p rsscript --no-run            # compile rsscript tests only
 cargo test -p rsscript --features native-jit --no-run
 cargo clippy --all-targets                 # lints
 cargo fmt --all                            # format
-cargo run -p rsscript --bin rss -- <args>              # drive the rss CLI
+cargo run -p rsscript-cli --bin rss --features host-tools -- <args> # drive the rss CLI
 ```
 
 ## Test feedback budgets

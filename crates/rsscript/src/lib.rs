@@ -1,5 +1,9 @@
 #![forbid(unsafe_code)]
 
+/// Build fingerprint used by external composition roots to invalidate compiler
+/// output caches whenever the implementation inputs change.
+pub const COMPILED_CACHE_FINGERPRINT: &str = env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT");
+
 mod analyzer;
 #[cfg(feature = "execution")]
 mod call_binding;

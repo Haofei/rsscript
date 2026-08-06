@@ -1,0 +1,32 @@
+[package]
+name = "rsscript-cli"
+version = "0.1.0"
+edition = "2024"
+description = "Command-line composition root for RSScript"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "rss"
+path = "src/main.rs"
+
+[[bin]]
+name = "gen-grammar"
+path = "src/bin/gen-grammar.rs"
+test = false
+
+[features]
+default = []
+execution = ["rsscript/execution"]
+host-tools = ["execution", "rsscript/host-tools", "dep:rss-process-guard"]
+native-plugin = ["rsscript/native-plugin", "host-tools"]
+native-jit = ["rsscript/native-jit", "execution"]
+
+[dependencies]
+rsscript = { path = "../rsscript", default-features = false }
+rss-process-guard = { path = "../process-guard", optional = true }
+hex = "0.4"
+serde_json = "1"
+sha2 = "0.10"
+tempfile = "3"
+toml = "0.8"
+toml_edit = "0.22"

@@ -118,7 +118,7 @@ fn intrinsic_catalog_is_the_only_generated_registry_source() {
 #[test]
 fn cli_defaults_to_verified_vm_and_requires_explicit_aot() {
     let root = workspace_root();
-    let run = read(&root.join("crates/rsscript/src/cli/run_cmd.rs"));
+    let run = read(&root.join("crates/rsscript-cli/src/cli/run_cmd.rs"));
     assert!(run.contains("if !options.aot {\n        return run_via_vm"));
     assert!(run.contains("arg == \"--aot\""));
     assert!(!run.contains("arg == \"--vm\""));
@@ -655,7 +655,7 @@ fn reir_is_a_one_way_optional_integration() {
         !compiler_library.contains("reir"),
         "the compiler façade must not expose REIR formatting APIs"
     );
-    let package_cli = read(&root.join("crates/rsscript/src/cli/package.rs"));
+    let package_cli = read(&root.join("crates/rsscript-cli/src/cli/package.rs"));
     assert!(
         !package_cli.contains("--reir") && !package_cli.contains("_reir"),
         "package commands must emit neutral artifacts only"

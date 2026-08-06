@@ -299,7 +299,7 @@ pub(crate) fn run_input_fingerprint(
     // version bump. build.rs derives this fingerprint from every source file.
     parts.push(format!(
         "rss-compiler:{}",
-        env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT")
+        rsscript::COMPILED_CACHE_FINGERPRINT
     ));
     parts.push(format!("runtime:{}", runtime_path.display()));
     parts.push(format!("release:{release}"));
@@ -582,6 +582,7 @@ mod tests {
         fs::remove_dir_all(root).expect("temp directory should clean up");
     }
 
+    #[cfg(feature = "host-tools")]
     #[test]
     fn aot_execution_input_rejects_unreviewed_native_package() {
         let native = r#"

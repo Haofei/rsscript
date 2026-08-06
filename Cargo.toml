@@ -11,6 +11,7 @@ members = [
     "crates/rsscript-semantics",
     "crates/rsscript-lowering",
     "crates/rsscript-language-service",
+    "crates/rsscript-cli",
     "integrations/rsscript-review-reir",
     "providers/fs",
     "providers/env",

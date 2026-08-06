@@ -93,7 +93,7 @@ jobs:
 
       - name: Build validated release binaries
         run: |
-          cargo build --locked --frozen --release --bin rss -p rsscript
+          cargo build --locked --frozen --release --bin rss -p rsscript-cli --features host-tools
           cargo build --locked --frozen --release --bin reir -p reir
           mkdir -p dist
           cp target/release/rss dist/rss-linux-x86_64
