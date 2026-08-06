@@ -107,7 +107,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(())
             }),
         ),
-        RunLimits::bounded(),
+        RunLimits {
+            allow_blocking_provider_calls: true,
+            ..RunLimits::bounded()
+        },
     );
     memory_runtime.link(&package)?.run(Vec::<String>::new())?;
 
@@ -127,7 +130,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             disk_provider.functions(),
             rsscript_provider_log::stderr_functions(),
         ),
-        RunLimits::bounded(),
+        RunLimits {
+            allow_blocking_provider_calls: true,
+            ..RunLimits::bounded()
+        },
     );
     let production_result = production_runtime.link(&package)?.run(Vec::<String>::new());
     production_result?;

@@ -333,7 +333,7 @@ impl RegVm {
             authority: function.authority(),
             trace: Some(self.provider_trace.as_ref()),
             resources: Some(&mut self.provider_resources),
-            blocking_allowed: true,
+            blocking_allowed: self.limits.allow_blocking_provider_calls,
             async_allowed: false,
         };
         let mut raw = function

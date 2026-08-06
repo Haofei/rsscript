@@ -315,6 +315,7 @@ pub struct RunLimits {
     pub intrinsic_call_budget: Option<u64>,
     pub provider_call_budget: Option<u64>,
     pub resource_limit: Option<usize>,
+    pub allow_blocking_provider_calls: bool,
 }
 
 #[cfg(feature = "execution")]
@@ -353,6 +354,7 @@ impl From<VmLimits> for RunLimits {
             intrinsic_call_budget: limits.intrinsic_call_budget,
             provider_call_budget: limits.provider_call_budget,
             resource_limit: limits.resource_limit,
+            allow_blocking_provider_calls: limits.allow_blocking_provider_calls,
         }
     }
 }
@@ -370,6 +372,7 @@ impl From<RunLimits> for VmLimits {
             intrinsic_call_budget: limits.intrinsic_call_budget,
             provider_call_budget: limits.provider_call_budget,
             resource_limit: limits.resource_limit,
+            allow_blocking_provider_calls: limits.allow_blocking_provider_calls,
         }
     }
 }
@@ -842,6 +845,8 @@ mod tests {
             CompileErrorCode::PackageSnapshot.as_str(),
             "package_snapshot"
         );
+        assert!(!RunLimits::bounded().allow_blocking_provider_calls);
+        assert!(RunLimits::unbounded_for_trusted_host().allow_blocking_provider_calls);
     }
 
     #[test]

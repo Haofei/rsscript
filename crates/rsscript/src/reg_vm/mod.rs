@@ -1805,6 +1805,10 @@ pub struct VmLimits {
     pub provider_call_budget: Option<u64>,
     /// Maximum simultaneously live Provider-owned resources.
     pub resource_limit: Option<usize>,
+    /// Whether the synchronous interpreter may invoke a Provider function that
+    /// declares `MayBlock`. Disabled by default so embedding hosts must choose
+    /// an execution lane deliberately before admitting blocking host work.
+    pub allow_blocking_provider_calls: bool,
 }
 
 /// Default recursion-depth cap: generous enough never to trip real code (deep
@@ -1837,6 +1841,7 @@ impl Default for VmLimits {
             intrinsic_call_budget: Some(1_000_000),
             provider_call_budget: Some(100_000),
             resource_limit: Some(4_096),
+            allow_blocking_provider_calls: false,
         }
     }
 }
@@ -1863,6 +1868,7 @@ impl VmLimits {
             intrinsic_call_budget: None,
             provider_call_budget: None,
             resource_limit: None,
+            allow_blocking_provider_calls: true,
         }
     }
 }
