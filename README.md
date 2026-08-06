@@ -90,8 +90,8 @@ limits, not a language authority model or a sandbox claim.
 Frontend tooling uses `rsscript-compiler` with its default features; that
 closure contains no runtime or provider. Rust hosts depend on `rsscript-sdk`
 and enable its `execution` feature to use the stable embedding surface: `Compiler`,
-`CompiledPackage`, `Runtime`, `ProviderRegistry`, `RunLimits`, `Diagnostic`, and
-`ExecutionReport`. VM registers, JIT plans, generated Rust source maps, and
+`CompiledPackage`, `Runtime`, `LinkedPackage`, `ProviderRegistry`, `RunLimits`,
+`Diagnostic`, and `ExecutionReport`. VM registers, JIT plans, generated Rust source maps, and
 review implementation types are not part of that embedding contract.
 
 Provider authors should follow the versioned linkage, lifecycle, cancellation,

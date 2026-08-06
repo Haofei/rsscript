@@ -21,9 +21,11 @@ Keep these three kinds of data separate:
 
 `ProviderRegistry` rejects an invalid provider identity, unsupported ABI,
 duplicate symbol, missing/extra implementation, or descriptor/implementation
-signature mismatch. Before execution, `Runtime` resolves every bytecode import
-and rejects an unresolved symbol, ABI mismatch, or import signature mismatch.
-Provider code is not called until this preflight succeeds.
+signature mismatch. `Runtime::link` resolves every bytecode import and rejects
+an unresolved symbol, ABI mismatch, or import signature mismatch. It returns an
+unforgeable `LinkedPackage` that owns the resolved call table and execution
+limits; only that linked phase exposes `run` and `execute`. Provider code is not
+called until this preflight succeeds.
 
 ## Implementing a provider
 
@@ -34,7 +36,8 @@ Provider code is not called until this preflight succeeds.
 3. Return a `BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>>`
    containing exactly the declared symbols and the same semantic signatures.
 4. Register descriptor and implementations at the host composition root.
-5. Test descriptor/implementation linking and test every advertised
+5. Call `Runtime::link`, then run the resulting `LinkedPackage`.
+6. Test descriptor/implementation linking and test every advertised
    cancellation, cleanup, and error-mapping behavior.
 
 The descriptor fields are:
@@ -60,10 +63,17 @@ flag, call id, and remaining byte/output budgets from the VM. Providers should
 check cancellation around potentially blocking work; the runtime checks it once
 before entering every callable.
 
+The synchronous VM rejects `MayBlock` functions by default. A host that has
+placed execution on an appropriate blocking lane must opt in with
+`RunLimits::allow_blocking_provider_calls = true`. Async Provider descriptors
+remain rejected by the synchronous dispatcher.
+
 Providers that create retained host resources register a `ProviderResource`
 through the context and expose the returned generation-safe `ResourceHandle`.
 The VM owns the table, rejects stale/reused handles, enforces `resource_limit`,
 and invokes cleanup exactly once on explicit close or execution exit.
+`ExecutionUsage` distinguishes `resources_cleaned` from
+`resource_cleanup_failures`; a failed cleanup is never reported as successful.
 
 Use `rsscript-provider-api` for the safe value and descriptor types. Dynamic
 library or native-plugin ABI concerns belong in a separate adapter and must not
