@@ -1585,6 +1585,7 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "rsscript-abi-model",
+ "rsscript-operation",
  "serde",
  "serde_cbor",
  "serde_json",

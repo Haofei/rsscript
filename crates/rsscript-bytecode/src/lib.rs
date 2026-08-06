@@ -5,6 +5,7 @@ use std::error::Error;
 use std::fmt;
 
 use rsscript_abi_model::ExternalImport;
+use rsscript_operation::{CancellationToken, MonotonicDeadline};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -235,16 +236,47 @@ pub struct BytecodeVerifier {
     limits: BytecodeLimits,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct VerificationContext<'a> {
+    pub cancellation: Option<&'a CancellationToken>,
+    pub deadline: Option<MonotonicDeadline>,
+}
+
+impl VerificationContext<'_> {
+    fn check(self) -> Result<(), BytecodeError> {
+        if self
+            .cancellation
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Err(BytecodeError::Cancelled);
+        }
+        if self.deadline.is_some_and(MonotonicDeadline::is_expired) {
+            return Err(BytecodeError::DeadlineExceeded);
+        }
+        Ok(())
+    }
+}
+
 impl BytecodeVerifier {
     pub fn new(limits: BytecodeLimits) -> Self {
         Self { limits }
     }
 
     pub fn verify(&self, bytes: &[u8]) -> Result<VerifiedBytecode, BytecodeError> {
+        self.verify_with_context(bytes, VerificationContext::default())
+    }
+
+    pub fn verify_with_context(
+        &self,
+        bytes: &[u8],
+        context: VerificationContext<'_>,
+    ) -> Result<VerifiedBytecode, BytecodeError> {
+        context.check()?;
         if bytes.len() > self.limits.max_artifact_bytes {
             return Err(BytecodeError::LimitExceeded("artifact bytes"));
         }
         let artifact = BytecodeArtifact::from_bytes(bytes)?;
+        context.check()?;
         if artifact.header.schema != BYTECODE_SCHEMA {
             return Err(BytecodeError::UnsupportedSchema(artifact.header.schema));
         }
@@ -281,7 +313,8 @@ impl BytecodeVerifier {
         {
             return Err(BytecodeError::ImportSignatureHashMismatch);
         }
-        verify_executable_payload(&artifact.payload, &artifact.imports, self.limits)?;
+        verify_executable_payload(&artifact.payload, &artifact.imports, self.limits, context)?;
+        context.check()?;
         Ok(VerifiedBytecode { artifact })
     }
 }
@@ -338,7 +371,9 @@ fn verify_executable_payload(
     payload: &[u8],
     imports: &[ExternalImport],
     limits: BytecodeLimits,
+    context: VerificationContext<'_>,
 ) -> Result<(), BytecodeError> {
+    context.check()?;
     let value: serde_json::Value = decode_executable_payload(payload)
         .map_err(|error| BytecodeError::InvalidPayload(error.to_string()))?;
     if encode_executable_payload(&value)? != payload {
@@ -369,6 +404,7 @@ fn verify_executable_payload(
     let mut total_instructions = 0usize;
     let mut called_imports = BTreeSet::new();
     for (function_id, value) in functions.iter().enumerate() {
+        context.check()?;
         let function = value
             .as_object()
             .ok_or_else(|| invalid_payload(format!("function {function_id} is not an object")))?;
@@ -407,6 +443,9 @@ fn verify_executable_payload(
             return Err(BytecodeError::LimitExceeded("instruction count"));
         }
         for (ip, instruction) in code.iter().enumerate() {
+            if ip & 0xff == 0 {
+                context.check()?;
+            }
             verify_wire_instruction(
                 function_id,
                 ip,
@@ -421,6 +460,7 @@ fn verify_executable_payload(
     }
 
     verify_function_map(unit, "function_ids", functions, true)?;
+    context.check()?;
     verify_function_map(unit, "resource_drop_functions", functions, false)?;
     let declared_imports = imports
         .iter()
@@ -835,6 +875,8 @@ fn decode_canonical_section<T: Serialize + DeserializeOwned>(
 
 #[derive(Debug)]
 pub enum BytecodeError {
+    Cancelled,
+    DeadlineExceeded,
     InvalidMagic,
     UnsupportedSchema(String),
     LimitExceeded(&'static str),
@@ -860,6 +902,10 @@ pub enum BytecodeError {
 impl fmt::Display for BytecodeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Cancelled => formatter.write_str("bytecode verification cancelled"),
+            Self::DeadlineExceeded => {
+                formatter.write_str("bytecode verification deadline exceeded")
+            }
             Self::InvalidMagic => formatter.write_str("invalid RSScript bytecode magic"),
             Self::UnsupportedSchema(schema) => {
                 write!(formatter, "unsupported bytecode schema `{schema}`")
@@ -941,6 +987,34 @@ mod tests {
         let mut corrupt = bytes;
         *corrupt.last_mut().expect("non-empty") ^= 1;
         assert!(BytecodeVerifier::default().verify(&corrupt).is_err());
+    }
+
+    #[test]
+    fn verification_observes_cancellation_and_deadline_before_decoding() {
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        assert!(matches!(
+            BytecodeVerifier::default().verify_with_context(
+                b"not bytecode",
+                VerificationContext {
+                    cancellation: Some(&cancellation),
+                    deadline: None,
+                },
+            ),
+            Err(BytecodeError::Cancelled)
+        ));
+        assert!(matches!(
+            BytecodeVerifier::default().verify_with_context(
+                b"not bytecode",
+                VerificationContext {
+                    cancellation: None,
+                    deadline: Some(MonotonicDeadline::at(
+                        std::time::Instant::now() - std::time::Duration::from_millis(1),
+                    )),
+                },
+            ),
+            Err(BytecodeError::DeadlineExceeded)
+        ));
     }
 
     #[test]
