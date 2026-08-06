@@ -28,6 +28,11 @@ source + interfaces
   -> execution report
 ```
 
+Successful reports identify the artifact, use a structured termination reason,
+and record steps, cumulative allocation bytes, output bytes, intrinsic calls,
+and Provider calls. Failed executions return a machine-readable termination
+reason plus a diagnostic message instead of a bare string error.
+
 The bytecode VM is the reference execution model. Rust AOT, Cranelift JIT,
 native plugins, REIR, and self-hosting remain optional Experimental, Integration,
 or Research surfaces. They must not create dependencies in the Core compiler or
@@ -43,4 +48,3 @@ change language validity.
 - Execution limits are availability controls, not permissions or isolation.
 - New syntax is frozen until semantic IR, provider ABI, bytecode verification,
   diagnostics, and VM conformance are stable.
-

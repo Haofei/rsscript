@@ -160,8 +160,11 @@ pub struct NativeInterpreterFn {
 }
 
 impl NativeInterpreterFn {
-    pub fn from_fn(function: NativeHostFn) -> Self {
-        Self::new(function)
+    pub fn from_fn<E>(function: fn(Vec<NativeValue>) -> Result<NativeValue, E>) -> Self
+    where
+        E: Into<ProviderError> + 'static,
+    {
+        Self::new(move |args| function(args).map_err(Into::into))
     }
 
     pub fn new(

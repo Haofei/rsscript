@@ -60,11 +60,21 @@ impl Default for ExternalFunctionRegistry {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct EvalOutput {
+    pub usage: ExecutionUsage,
     pub value: String,
     pub display_value: String,
     pub native_value: Option<NativeValue>,
     pub stdout: String,
     pub stderr: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExecutionUsage {
+    pub steps_consumed: u64,
+    pub allocation_bytes_consumed: usize,
+    pub output_bytes: usize,
+    pub intrinsic_calls: u64,
+    pub provider_calls: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

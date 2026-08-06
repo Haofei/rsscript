@@ -1354,6 +1354,7 @@ impl RegVmExecutable {
         let native_value = value.native_value();
         Ok((
             EvalOutput {
+                usage: vm.usage(),
                 value: display_value.clone(),
                 display_value,
                 native_value,
@@ -1394,6 +1395,7 @@ impl RegVmExecutable {
         let display_value = value.display();
         let native_value = value.native_value();
         Ok(EvalOutput {
+            usage: vm.usage(),
             value: display_value.clone(),
             display_value,
             native_value,
@@ -1452,6 +1454,7 @@ impl RegVmExecutable {
         let display_value = value.display();
         let native_value = value.native_value();
         Ok(EvalOutput {
+            usage: vm.usage(),
             value: display_value.clone(),
             display_value,
             native_value,
@@ -1479,6 +1482,7 @@ impl RegVmExecutable {
         let display_value = value.display();
         let native_value = value.native_value();
         Ok(EvalOutput {
+            usage: vm.usage(),
             value: display_value.clone(),
             display_value,
             native_value,
@@ -1518,6 +1522,7 @@ impl RegVmExecutable {
         let display_value = value.display();
         let native_value = value.native_value();
         Ok(EvalOutput {
+            usage: vm.usage(),
             value: display_value.clone(),
             display_value,
             native_value,

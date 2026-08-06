@@ -8,6 +8,16 @@ fn accumulate_osr_work(current: u32, iteration_work: u32) -> u32 {
 }
 
 impl RegVm {
+    pub(super) fn usage(&self) -> crate::ExecutionUsage {
+        crate::ExecutionUsage {
+            steps_consumed: self.steps,
+            allocation_bytes_consumed: self.live_bytes,
+            output_bytes: self.stdout.len().saturating_add(self.stderr.len()),
+            intrinsic_calls: self.intrinsic_calls,
+            provider_calls: self.provider_calls,
+        }
+    }
+
     pub(super) fn new(
         unit: Rc<RegUnit>,
         args: Vec<String>,

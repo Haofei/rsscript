@@ -13,6 +13,8 @@ use std::sync::atomic::AtomicBool;
 
 pub use rsscript::Diagnostic;
 #[cfg(feature = "execution")]
+pub use rsscript::ExecutionUsage;
+#[cfg(feature = "execution")]
 pub use rsscript::WorkspaceSnapshot;
 #[cfg(feature = "execution")]
 pub use rsscript_provider_api as provider;
@@ -73,7 +75,10 @@ impl Compiler {
     /// Capture all package and dependency inputs exactly once.
     #[cfg(feature = "execution")]
     pub fn snapshot(&self, path: &Path) -> Result<WorkspaceSnapshot, CompileError> {
-        load_workspace_snapshot(path).map_err(CompileError::Package)
+        load_workspace_snapshot(path).map_err(|message| CompileError::Package {
+            code: CompileErrorCode::PackageSnapshot,
+            message,
+        })
     }
 
     /// Build analysis and executable bytes from one immutable snapshot.
@@ -247,7 +252,10 @@ impl Runtime {
             self.providers
                 .inner
                 .resolve(import)
-                .map_err(|error| RuntimeError(error.to_string()))?;
+                .map_err(|error| RuntimeError {
+                    reason: TerminationReason::VerificationFailure,
+                    message: error.to_string(),
+                })?;
         }
         let output = package
             .executable
@@ -258,6 +266,9 @@ impl Runtime {
             )
             .map_err(RuntimeError::from)?;
         Ok(ExecutionReport {
+            artifact_digest: package.module_digest().to_string(),
+            termination_reason: TerminationReason::Completed,
+            usage: output.usage,
             value: output.value,
             display_value: output.display_value,
             native_value: output.native_value,
@@ -277,6 +288,9 @@ impl Default for Runtime {
 #[cfg(feature = "execution")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionReport {
+    pub artifact_digest: String,
+    pub termination_reason: TerminationReason,
+    pub usage: ExecutionUsage,
     pub value: String,
     pub display_value: String,
     pub native_value: Option<NativeValue>,
@@ -287,8 +301,30 @@ pub struct ExecutionReport {
 #[derive(Debug)]
 pub enum CompileError {
     Diagnostics(Vec<Diagnostic>),
-    Package(String),
-    Runtime(String),
+    Package {
+        code: CompileErrorCode,
+        message: String,
+    },
+    Bytecode {
+        code: CompileErrorCode,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompileErrorCode {
+    Diagnostics,
+    PackageSnapshot,
+    Bytecode,
+}
+
+impl CompileError {
+    pub fn code(&self) -> CompileErrorCode {
+        match self {
+            Self::Diagnostics(_) => CompileErrorCode::Diagnostics,
+            Self::Package { code, .. } | Self::Bytecode { code, .. } => *code,
+        }
+    }
 }
 
 #[cfg(feature = "execution")]
@@ -296,7 +332,10 @@ impl From<EvalError> for CompileError {
     fn from(error: EvalError) -> Self {
         match error {
             EvalError::Diagnostics(diagnostics) => Self::Diagnostics(diagnostics),
-            EvalError::Runtime(message) => Self::Runtime(message),
+            EvalError::Runtime(message) => Self::Bytecode {
+                code: CompileErrorCode::Bytecode,
+                message,
+            },
         }
     }
 }
@@ -311,8 +350,12 @@ impl fmt::Display for CompileError {
                     diagnostics.len()
                 )
             }
-            Self::Package(message) => write!(formatter, "package compilation failed: {message}"),
-            Self::Runtime(message) => write!(formatter, "bytecode compilation failed: {message}"),
+            Self::Package { message, .. } => {
+                write!(formatter, "package compilation failed: {message}")
+            }
+            Self::Bytecode { message, .. } => {
+                write!(formatter, "bytecode compilation failed: {message}")
+            }
         }
     }
 }
@@ -320,33 +363,77 @@ impl fmt::Display for CompileError {
 impl Error for CompileError {}
 
 #[cfg(feature = "execution")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminationReason {
+    Completed,
+    ScriptError,
+    Cancelled,
+    DeadlineExceeded,
+    StepBudgetExceeded,
+    MemoryLimitExceeded,
+    OutputLimitExceeded,
+    ProviderError,
+    ProviderBudgetExceeded,
+    VerificationFailure,
+    InternalError,
+}
+
+#[cfg(feature = "execution")]
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeError(pub String);
+pub struct RuntimeError {
+    pub reason: TerminationReason,
+    pub message: String,
+}
 
 #[cfg(feature = "execution")]
 impl From<EvalError> for RuntimeError {
     fn from(error: EvalError) -> Self {
-        Self(match error {
-            EvalError::Diagnostics(diagnostics) => {
-                format!(
+        match error {
+            EvalError::Diagnostics(diagnostics) => Self {
+                reason: TerminationReason::VerificationFailure,
+                message: format!(
                     "execution rejected with {} diagnostic(s)",
                     diagnostics.len()
-                )
-            }
-            EvalError::Runtime(message) => message,
-        })
+                ),
+            },
+            EvalError::Runtime(message) => Self {
+                reason: classify_runtime_error(&message),
+                message,
+            },
+        }
     }
 }
 
 #[cfg(feature = "execution")]
 impl fmt::Display for RuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.0)
+        formatter.write_str(&self.message)
     }
 }
 
 #[cfg(feature = "execution")]
 impl Error for RuntimeError {}
+
+#[cfg(feature = "execution")]
+fn classify_runtime_error(message: &str) -> TerminationReason {
+    if message.contains("provider call budget exceeded") {
+        TerminationReason::ProviderBudgetExceeded
+    } else if message.contains("provider call failed") {
+        TerminationReason::ProviderError
+    } else if message.contains("step budget exceeded") {
+        TerminationReason::StepBudgetExceeded
+    } else if message.contains("memory") && message.contains("exceeded") {
+        TerminationReason::MemoryLimitExceeded
+    } else if message.contains("stdout budget exceeded") {
+        TerminationReason::OutputLimitExceeded
+    } else if message.contains("deadline exceeded") {
+        TerminationReason::DeadlineExceeded
+    } else if message.contains("cancelled") {
+        TerminationReason::Cancelled
+    } else {
+        TerminationReason::ScriptError
+    }
+}
 
 #[cfg(all(test, feature = "execution"))]
 mod tests {
@@ -407,6 +494,9 @@ mod tests {
             .run(&loaded, Vec::<String>::new())
             .expect("run");
         assert_eq!(report.value, "Unit");
+        assert_eq!(report.termination_reason, TerminationReason::Completed);
+        assert_eq!(report.artifact_digest, loaded.module_digest());
+        assert!(report.usage.steps_consumed > 0);
     }
 
     #[test]
@@ -480,7 +570,8 @@ mod tests {
         let error = Runtime::new(providers, RunLimits::bounded())
             .run(&package, Vec::<String>::new())
             .expect_err("import signature must fail before execution");
-        assert!(error.0.contains("ImportSignatureMismatch"));
+        assert_eq!(error.reason, TerminationReason::VerificationFailure);
+        assert!(error.message.contains("ImportSignatureMismatch"));
         assert!(!called.load(Ordering::SeqCst));
     }
 
@@ -548,6 +639,7 @@ mod tests {
         let error = Runtime::new(providers, limits)
             .run(&package, Vec::<String>::new())
             .expect_err("second provider call must exceed the provider budget");
-        assert!(error.0.contains("provider call budget exceeded"));
+        assert_eq!(error.reason, TerminationReason::ProviderBudgetExceeded);
+        assert!(error.message.contains("provider call budget exceeded"));
     }
 }
