@@ -1,10 +1,11 @@
 #![forbid(unsafe_code)]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
 use rsscript_abi_model::ExternalImport;
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -67,8 +68,8 @@ impl BytecodeArtifact {
     }
 
     pub fn to_bytes(&self) -> Result<Vec<u8>, BytecodeError> {
-        let header = serde_json::to_vec(&self.header).map_err(BytecodeError::Encode)?;
-        let imports = serde_json::to_vec(&self.imports).map_err(BytecodeError::Encode)?;
+        let header = encode_executable_payload(&self.header)?;
+        let imports = encode_executable_payload(&self.imports)?;
         let sections = [
             (SECTION_HEADER, header.as_slice()),
             (SECTION_IMPORTS, imports.as_slice()),
@@ -138,16 +139,12 @@ impl BytecodeArtifact {
             match kind {
                 SECTION_HEADER => {
                     require_section(kind, flags)?;
-                    let decoded: BytecodeHeader =
-                        serde_json::from_slice(data).map_err(BytecodeError::Decode)?;
-                    require_canonical_json(data, &decoded)?;
+                    let decoded: BytecodeHeader = decode_canonical_section(data)?;
                     header = Some(decoded);
                 }
                 SECTION_IMPORTS => {
                     require_section(kind, flags)?;
-                    let decoded: Vec<ExternalImport> =
-                        serde_json::from_slice(data).map_err(BytecodeError::Decode)?;
-                    require_canonical_json(data, &decoded)?;
+                    let decoded: Vec<ExternalImport> = decode_canonical_section(data)?;
                     imports = Some(decoded);
                 }
                 SECTION_CODE => {
@@ -295,6 +292,44 @@ impl Default for BytecodeVerifier {
     }
 }
 
+/// Encode the executable section as deterministic binary CBOR. Object keys are
+/// sorted before serialization, so equivalent wire values have one byte form.
+pub fn encode_executable_payload<T: Serialize>(value: &T) -> Result<Vec<u8>, BytecodeError> {
+    let value = serde_json::to_value(value).map_err(BytecodeError::Encode)?;
+    serde_cbor::to_vec(&canonical_cbor(value)).map_err(BytecodeError::Cbor)
+}
+
+/// Decode the executable section owned by this crate.
+pub fn decode_executable_payload<T: DeserializeOwned>(payload: &[u8]) -> Result<T, BytecodeError> {
+    serde_cbor::from_slice(payload).map_err(BytecodeError::Cbor)
+}
+
+fn canonical_cbor(value: serde_json::Value) -> serde_cbor::Value {
+    match value {
+        serde_json::Value::Null => serde_cbor::Value::Null,
+        serde_json::Value::Bool(value) => serde_cbor::Value::Bool(value),
+        serde_json::Value::Number(value) => {
+            if let Some(value) = value.as_i64() {
+                serde_cbor::Value::Integer(value.into())
+            } else if let Some(value) = value.as_u64() {
+                serde_cbor::Value::Integer(value.into())
+            } else {
+                serde_cbor::Value::Float(value.as_f64().expect("JSON number"))
+            }
+        }
+        serde_json::Value::String(value) => serde_cbor::Value::Text(value),
+        serde_json::Value::Array(values) => {
+            serde_cbor::Value::Array(values.into_iter().map(canonical_cbor).collect())
+        }
+        serde_json::Value::Object(values) => serde_cbor::Value::Map(
+            values
+                .into_iter()
+                .map(|(key, value)| (serde_cbor::Value::Text(key), canonical_cbor(value)))
+                .collect::<BTreeMap<_, _>>(),
+        ),
+    }
+}
+
 /// Validate the executable instruction payload without linking the compiler or
 /// VM implementation. The wire format is intentionally inspected as data so a
 /// verifier-only process can reject malformed control-flow, register, function,
@@ -304,8 +339,11 @@ fn verify_executable_payload(
     imports: &[ExternalImport],
     limits: BytecodeLimits,
 ) -> Result<(), BytecodeError> {
-    let value: serde_json::Value = serde_json::from_slice(payload)
+    let value: serde_json::Value = decode_executable_payload(payload)
         .map_err(|error| BytecodeError::InvalidPayload(error.to_string()))?;
+    if encode_executable_payload(&value)? != payload {
+        return Err(invalid_payload("executable CBOR is not canonical"));
+    }
     let unit = value
         .as_object()
         .ok_or_else(|| invalid_payload("unit is not an object"))?;
@@ -785,12 +823,14 @@ fn require_section(kind: u8, flags: u8) -> Result<(), BytecodeError> {
     Ok(())
 }
 
-fn require_canonical_json<T: Serialize>(bytes: &[u8], value: &T) -> Result<(), BytecodeError> {
-    let canonical = serde_json::to_vec(value).map_err(BytecodeError::Encode)?;
-    if canonical != bytes {
+fn decode_canonical_section<T: Serialize + DeserializeOwned>(
+    bytes: &[u8],
+) -> Result<T, BytecodeError> {
+    let value = decode_executable_payload(bytes)?;
+    if encode_executable_payload(&value)? != bytes {
         return Err(BytecodeError::SectionsNotCanonical);
     }
-    Ok(())
+    Ok(value)
 }
 
 #[derive(Debug)]
@@ -814,7 +854,7 @@ pub enum BytecodeError {
     MalformedChecksum,
     TrailingBytes,
     Encode(serde_json::Error),
-    Decode(serde_json::Error),
+    Cbor(serde_cbor::Error),
 }
 
 impl fmt::Display for BytecodeError {
@@ -874,7 +914,7 @@ impl fmt::Display for BytecodeError {
             Self::MalformedChecksum => formatter.write_str("bytecode checksum is not UTF-8"),
             Self::TrailingBytes => formatter.write_str("bytecode has trailing bytes"),
             Self::Encode(error) => write!(formatter, "cannot encode bytecode: {error}"),
-            Self::Decode(error) => write!(formatter, "cannot decode bytecode: {error}"),
+            Self::Cbor(error) => write!(formatter, "cannot encode/decode executable CBOR: {error}"),
         }
     }
 }
@@ -901,6 +941,18 @@ mod tests {
         let mut corrupt = bytes;
         *corrupt.last_mut().expect("non-empty") ^= 1;
         assert!(BytecodeVerifier::default().verify(&corrupt).is_err());
+    }
+
+    #[test]
+    fn artifact_sections_and_instruction_payload_use_binary_cbor() {
+        let payload = minimal_payload();
+        assert_ne!(payload.first(), Some(&b'{'));
+        let artifact =
+            BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], payload).expect("artifact");
+        let bytes = artifact.to_bytes().expect("bytes");
+        let first_section_data = BYTECODE_MAGIC.len() + 2 + SECTION_HEADER_BYTES;
+        assert_ne!(bytes.get(first_section_data), Some(&b'{'));
+        BytecodeVerifier::default().verify(&bytes).unwrap();
     }
 
     #[test]
@@ -931,7 +983,7 @@ mod tests {
     }
 
     #[test]
-    fn noncanonical_json_section_is_rejected() {
+    fn malformed_binary_metadata_section_is_rejected() {
         let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], minimal_payload())
             .expect("artifact");
         let bytes = artifact.to_bytes().expect("bytes");
@@ -950,15 +1002,12 @@ mod tests {
         append_test_section(&mut rewritten, SECTION_HEADER, SECTION_REQUIRED, &header);
         rewritten.extend_from_slice(&bytes[data_offset + data_length..]);
 
-        assert!(matches!(
-            BytecodeVerifier::default().verify(&rewritten),
-            Err(BytecodeError::SectionsNotCanonical)
-        ));
+        assert!(BytecodeVerifier::default().verify(&rewritten).is_err());
     }
 
     #[test]
     fn verifier_rejects_unknown_instruction_with_a_valid_envelope() {
-        let payload = serde_json::to_vec(&serde_json::json!({
+        let payload = encode_executable_payload(&serde_json::json!({
             "functions": [{
                 "name": "main",
                 "params": 0,
@@ -985,7 +1034,7 @@ mod tests {
 
     #[test]
     fn verifier_rejects_out_of_range_register_with_a_valid_envelope() {
-        let payload = serde_json::to_vec(&serde_json::json!({
+        let payload = encode_executable_payload(&serde_json::json!({
             "functions": [{
                 "name": "main",
                 "params": 0,
@@ -1038,7 +1087,7 @@ mod tests {
                 signature_hash: wrong_hash,
                 abi_version: 1,
             }],
-            serde_json::to_vec(&serde_json::json!({
+            encode_executable_payload(&serde_json::json!({
                 "functions": [{
                     "name": "main", "params": 0, "captures": 0, "regs": 1,
                     "local_regs": {},
@@ -1066,7 +1115,7 @@ mod tests {
     }
 
     fn minimal_payload() -> Vec<u8> {
-        serde_json::to_vec(&serde_json::json!({
+        encode_executable_payload(&serde_json::json!({
             "functions": [],
             "function_ids": {},
             "resource_drop_functions": {},

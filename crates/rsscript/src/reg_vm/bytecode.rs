@@ -130,7 +130,7 @@ pub(super) fn encode_and_verify(
     validated: &ValidatedProgram,
     executable: &rsscript_lowering::ExecutableIr,
 ) -> Result<VerifiedRegBytecode, EvalError> {
-    let payload = serde_json::to_vec(&WireUnit::from(unit))
+    let payload = rsscript_bytecode::encode_executable_payload(&WireUnit::from(unit))
         .map_err(|error| EvalError::Runtime(format!("cannot encode VM bytecode: {error}")))?;
     let imports = external_imports(unit, executable);
     let artifact = BytecodeArtifact::new(
@@ -158,7 +158,7 @@ pub(super) fn verify_bytes(bytes: &[u8]) -> Result<VerifiedRegBytecode, EvalErro
 }
 
 fn verify_payload(payload: &[u8], imports: &[ExternalImport]) -> Result<RegUnit, String> {
-    let wire: WireUnit = serde_json::from_slice(payload)
+    let wire: WireUnit = rsscript_bytecode::decode_executable_payload(payload)
         .map_err(|error| format!("cannot decode VM instruction stream: {error}"))?;
     verify_wire_unit(&wire, imports)?;
     Ok(wire.into_reg_unit())
@@ -507,7 +507,8 @@ mod tests {
         let executable = reg_vm_compile_source("bad-reg.rss", "fn main() -> Unit { return Unit }")
             .expect("compile");
         let mut artifact = executable.bytecode_artifact().clone();
-        let mut wire: WireUnit = serde_json::from_slice(&artifact.payload).expect("wire payload");
+        let mut wire: WireUnit =
+            rsscript_bytecode::decode_executable_payload(&artifact.payload).expect("wire payload");
         wire.functions[0].code[0] = RegInstr::LoadUnit {
             dst: wire.functions[0].regs,
         };
@@ -516,7 +517,7 @@ mod tests {
             artifact.header.runtime_abi_version,
             artifact.header.source_content_hash,
             artifact.imports,
-            serde_json::to_vec(&wire).expect("payload"),
+            rsscript_bytecode::encode_executable_payload(&wire).expect("payload"),
         )
         .expect("checksummed artifact");
         let error = RegVmExecutable::from_bytecode(&artifact.to_bytes().expect("bytes"))

@@ -40,3 +40,9 @@ grant authority.
 that could define arbitrary payload validity. The VM performs its typed
 instruction decode only after this phase succeeds and exposes no public
 half-verified module constructor.
+
+The `rsscript.bytecode.v1` envelope is a canonical sectioned binary format.
+Header, structural import signatures, and executable instructions use
+deterministic CBOR; every section has an explicit length and SHA-256 digest.
+Equivalent metadata or instructions therefore have one accepted byte encoding,
+and non-canonical encodings fail verification before VM deserialization.
