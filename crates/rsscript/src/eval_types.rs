@@ -41,6 +41,12 @@ impl ExternalFunctionRegistry {
             .into_functions()
             .map(|(symbol, function)| (symbol.as_str().to_string(), function))
     }
+
+    pub fn bindings(&self) -> impl Iterator<Item = (String, ExternalFunction)> + '_ {
+        self.registry
+            .functions()
+            .map(|(symbol, function)| (symbol.as_str().to_string(), function.clone()))
+    }
 }
 
 impl Default for ExternalFunctionRegistry {

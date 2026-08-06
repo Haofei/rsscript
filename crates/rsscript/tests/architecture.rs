@@ -697,6 +697,37 @@ fn lsp_dependency_closure_selects_frontend_only() {
 }
 
 #[test]
+fn embedding_facade_exposes_only_product_level_objects() {
+    let root = workspace_root();
+    let source = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
+    for object in [
+        "pub struct Compiler",
+        "pub struct CompiledPackage",
+        "pub struct Runtime",
+        "pub struct ProviderRegistry",
+        "pub struct RunLimits",
+        "pub struct ExecutionReport",
+    ] {
+        assert!(
+            source.contains(object),
+            "missing stable façade object `{object}`"
+        );
+    }
+    for forbidden in [
+        "JitPlan",
+        "RegInstr",
+        "RustSourceMapEntry",
+        "ReviewFinding",
+        "reir",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "stable embedding façade must not expose `{forbidden}`"
+        );
+    }
+}
+
+#[test]
 fn compiler_default_dependency_closure_is_host_neutral() {
     let root = workspace_root();
     let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript/Cargo.toml")))

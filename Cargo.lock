@@ -1587,6 +1587,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-compiler"
+version = "0.1.0"
+dependencies = [
+ "rsscript",
+ "rsscript-provider-api",
+]
+
+[[package]]
 name = "rsscript-interface-catalog"
 version = "0.1.0"
 

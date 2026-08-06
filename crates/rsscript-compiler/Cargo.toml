@@ -1,0 +1,11 @@
+[package]
+name = "rsscript-compiler"
+version = "0.1.0"
+edition = "2024"
+description = "Stable compiler and embedding facade for RSScript"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rsscript = { path = "../rsscript" }
+rsscript-provider-api = { path = "../rsscript-provider-api" }
+

@@ -36,6 +36,11 @@ external symbols. Link/provider failures are not language type errors.
 The default interface set contains deterministic core APIs only. Host packages
 must be explicit dependencies and are never injected for single-file analysis.
 
+`rsscript-compiler` is the stable embedding façade. The larger `rsscript` crate
+is the current implementation and CLI composition root; embedders do not depend
+on its analyzer database, register VM, Rust AOT, JIT, package review, or source-map
+types directly.
+
 ## Runtime boundary
 
 The VM owns values, managed handles, resource slots, scheduling, cancellation,

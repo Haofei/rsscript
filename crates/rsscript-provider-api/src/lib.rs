@@ -201,6 +201,12 @@ impl<T> ProviderRegistry<T> {
             .into_iter()
             .map(|(symbol, function)| (symbol, function.callable))
     }
+
+    pub fn functions(&self) -> impl Iterator<Item = (&ExternalSymbol, &T)> {
+        self.functions
+            .iter()
+            .map(|(symbol, function)| (symbol, &function.callable))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

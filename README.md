@@ -68,12 +68,20 @@ with the validated call graph; its conclusions never change language validity.
 ```text
 rss check <file-or-package>
 rss fmt <file>
+rss build [--out <artifact.rssbc>] <file-or-package>
 rss run [--json] [--vm] <file-or-package> [-- <args>...]
+rss inspect <imports|bytecode|analysis|resources|async|call-graph> <input>
 ```
 
 Execution is bounded by step, memory, host-call, output, recursion, cancellation,
 deadline, and child-process limits where applicable. Those controls are resource
 limits, not a language authority model or a sandbox claim.
+
+Rust hosts should depend on `rsscript-compiler`, whose stable embedding surface
+is limited to `Compiler`, `CompiledPackage`, `Runtime`, `ProviderRegistry`,
+`RunLimits`, `Diagnostic`, and `ExecutionReport`. VM registers, JIT plans,
+generated Rust source maps, and review implementation types are not part of that
+embedding contract.
 
 ## Development
 
