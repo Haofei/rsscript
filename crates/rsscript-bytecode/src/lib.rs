@@ -548,6 +548,7 @@ fn verify_executable_payload(
             )?;
         }
         verify_register_initialization(function_id, initialized_inputs, code)?;
+        verify_call_shapes(function_id, code, functions, imports)?;
         let _ = name;
     }
 
@@ -564,6 +565,178 @@ fn verify_executable_payload(
         )));
     }
     Ok(())
+}
+
+fn verify_call_shapes(
+    function_id: usize,
+    code: &[serde_json::Value],
+    functions: &[serde_json::Value],
+    imports: &[ExternalImport],
+) -> Result<(), BytecodeError> {
+    let imports = imports
+        .iter()
+        .map(|import| (import.symbol.as_str(), import))
+        .collect::<BTreeMap<_, _>>();
+    for (ip, instruction) in code.iter().enumerate() {
+        let (opcode, fields) = instruction_parts(function_id, ip, instruction)?;
+        let args = fields.get("args").and_then(serde_json::Value::as_array);
+        if let Some(args) = args {
+            verify_mut_argument_indexes(function_id, ip, fields, args.len())?;
+        }
+        match opcode {
+            "MakeClosure" => {
+                let target = required_index(fields, "function")?;
+                let (_, captures) = function_inputs(functions, target)?;
+                let actual = fields
+                    .get("captures")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or_else(|| invalid_payload("MakeClosure captures is not an array"))?
+                    .len();
+                require_arity(function_id, ip, opcode, captures, actual)?;
+            }
+            "CallKnown" | "SpawnTask" => {
+                let target = required_index(fields, "function")?;
+                let (parameters, captures) = function_inputs(functions, target)?;
+                if captures != 0 {
+                    return Err(invalid_payload(format!(
+                        "function {function_id} instruction {ip} `{opcode}` directly calls function {target} with {captures} capture(s)"
+                    )));
+                }
+                let actual = args
+                    .ok_or_else(|| invalid_payload(format!("{opcode} args is not an array")))?
+                    .len();
+                require_arity(function_id, ip, opcode, parameters, actual)?;
+            }
+            "CallDynamic" => {
+                let actual = args
+                    .ok_or_else(|| invalid_payload("CallDynamic args is not an array"))?
+                    .len();
+                for entry in fields
+                    .get("dispatch")
+                    .and_then(serde_json::Value::as_array)
+                    .ok_or_else(|| invalid_payload("CallDynamic dispatch is not an array"))?
+                {
+                    let tuple = entry
+                        .as_array()
+                        .filter(|tuple| tuple.len() == 2)
+                        .ok_or_else(|| invalid_payload("CallDynamic dispatch entry is invalid"))?;
+                    let target = json_usize(&tuple[1], "dispatch target")?;
+                    let (parameters, captures) = function_inputs(functions, target)?;
+                    if captures != 0 {
+                        return Err(invalid_payload(format!(
+                            "function {function_id} instruction {ip} dynamic target {target} has captures"
+                        )));
+                    }
+                    require_arity(function_id, ip, opcode, parameters, actual)?;
+                }
+            }
+            "CallExternal" => {
+                let symbol = fields
+                    .get("key")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| invalid_payload("CallExternal key is not a string"))?;
+                let import = imports.get(symbol).ok_or_else(|| {
+                    invalid_payload(format!("CallExternal `{symbol}` has no import"))
+                })?;
+                let args =
+                    args.ok_or_else(|| invalid_payload("CallExternal args is not an array"))?;
+                require_arity(
+                    function_id,
+                    ip,
+                    opcode,
+                    import.signature.parameters.len(),
+                    args.len(),
+                )?;
+                let actual_mut = mut_argument_indexes(fields, args.len())?;
+                let expected_mut = import
+                    .signature
+                    .parameters
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, parameter)| {
+                        (parameter.effect == rsscript_abi_model::DataEffect::Mut).then_some(index)
+                    })
+                    .collect::<BTreeSet<_>>();
+                if actual_mut != expected_mut {
+                    return Err(invalid_payload(format!(
+                        "function {function_id} instruction {ip} external `{symbol}` mut_args differ: actual={actual_mut:?}, expected={expected_mut:?}"
+                    )));
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+fn function_inputs(
+    functions: &[serde_json::Value],
+    target: usize,
+) -> Result<(usize, usize), BytecodeError> {
+    let function = functions
+        .get(target)
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| invalid_payload(format!("missing function {target}")))?;
+    Ok((
+        required_index(function, "params")?,
+        required_index(function, "captures")?,
+    ))
+}
+
+fn verify_mut_argument_indexes(
+    function_id: usize,
+    ip: usize,
+    fields: &serde_json::Map<String, serde_json::Value>,
+    argument_count: usize,
+) -> Result<(), BytecodeError> {
+    mut_argument_indexes(fields, argument_count)
+        .map(|_| ())
+        .map_err(|error| {
+            invalid_payload(format!(
+                "function {function_id} instruction {ip} has invalid mut_args: {error}"
+            ))
+        })
+}
+
+fn mut_argument_indexes(
+    fields: &serde_json::Map<String, serde_json::Value>,
+    argument_count: usize,
+) -> Result<BTreeSet<usize>, BytecodeError> {
+    let Some(values) = fields.get("mut_args") else {
+        return Ok(BTreeSet::new());
+    };
+    let values = values
+        .as_array()
+        .ok_or_else(|| invalid_payload("mut_args is not an array"))?;
+    let mut indexes = BTreeSet::new();
+    for value in values {
+        let index = json_usize(value, "mut_args")?;
+        if index >= argument_count {
+            return Err(invalid_payload(format!(
+                "index {index} exceeds argument count {argument_count}"
+            )));
+        }
+        if !indexes.insert(index) {
+            return Err(invalid_payload(format!("duplicate index {index}")));
+        }
+    }
+    Ok(indexes)
+}
+
+fn require_arity(
+    function_id: usize,
+    ip: usize,
+    opcode: &str,
+    expected: usize,
+    actual: usize,
+) -> Result<(), BytecodeError> {
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(invalid_payload(format!(
+            "function {function_id} instruction {ip} `{opcode}` has {actual} argument(s), expected {expected}"
+        )))
+    }
 }
 
 /// Prove definite register initialization over every reachable control-flow
@@ -1721,6 +1894,96 @@ mod tests {
         assert!(matches!(
             BytecodeVerifier::default().verify(&artifact.to_bytes().unwrap()),
             Err(BytecodeError::ImportSignatureHashMismatch)
+        ));
+    }
+
+    #[test]
+    fn verifier_rejects_static_call_arity_mismatch() {
+        let payload = encode_executable_payload(&serde_json::json!({
+            "functions": [
+                {
+                    "name": "main", "params": 0, "captures": 0, "regs": 1,
+                    "local_regs": {},
+                    "code": [{"CallKnown": {"dst": 0, "function": 1, "args": [], "mut_args": []}}]
+                },
+                {
+                    "name": "callee", "params": 1, "captures": 0, "regs": 1,
+                    "local_regs": {}, "code": [{"Return": {"src": 0}}]
+                }
+            ],
+            "function_ids": {"main": 0, "callee": 1}, "resource_drop_functions": {},
+            "types": {}, "native_signatures": {}, "closure_identity_observable": false
+        }))
+        .unwrap();
+        let artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            payload,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact.to_bytes().unwrap()),
+            Err(BytecodeError::InvalidPayload(message)) if message.contains("expected 1")
+        ));
+    }
+
+    #[test]
+    fn verifier_rejects_external_argument_and_effect_mismatch() {
+        let signature = FunctionSignature {
+            parameters: vec![ParameterSignature {
+                name: "value".into(),
+                effect: DataEffect::Mut,
+                ty: "Int".into(),
+                retained: false,
+            }],
+            result: "Unit".into(),
+            asynchronous: false,
+        };
+        let symbol = ExternalSymbol::new("host.test.mutate").unwrap();
+        let artifact_for = |args: serde_json::Value, mut_args: serde_json::Value| {
+            BytecodeArtifact::new(
+                "0.1.0",
+                "0.1.0",
+                TEST_CATALOG_DIGEST,
+                RUNTIME_ABI_VERSION,
+                TEST_SOURCE_DIGEST,
+                vec![ExternalImport {
+                    symbol: symbol.clone(),
+                    signature: signature.clone(),
+                    signature_hash: signature.hash(),
+                    abi_version: RUNTIME_ABI_VERSION,
+                }],
+                encode_executable_payload(&serde_json::json!({
+                    "functions": [{
+                        "name": "main", "params": 1, "captures": 0, "regs": 2,
+                        "local_regs": {},
+                        "code": [{"CallExternal": {
+                            "dst": 1, "key": "host.test.mutate", "args": args, "mut_args": mut_args
+                        }}]
+                    }],
+                    "function_ids": {"main": 0}, "resource_drop_functions": {},
+                    "types": {}, "native_signatures": {}, "closure_identity_observable": false
+                }))
+                .unwrap(),
+            )
+            .unwrap()
+        };
+
+        let missing_argument = artifact_for(serde_json::json!([]), serde_json::json!([]));
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&missing_argument.to_bytes().unwrap()),
+            Err(BytecodeError::InvalidPayload(message)) if message.contains("expected 1")
+        ));
+
+        let missing_mut = artifact_for(serde_json::json!([0]), serde_json::json!([]));
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&missing_mut.to_bytes().unwrap()),
+            Err(BytecodeError::InvalidPayload(message)) if message.contains("mut_args differ")
         ));
     }
 
