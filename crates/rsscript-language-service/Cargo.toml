@@ -8,4 +8,3 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 rsscript-compiler = { path = "../rsscript-compiler" }
 rsscript-operation = { path = "../rsscript-operation" }
-toml = "0.8"

@@ -1,0 +1,9 @@
+[package]
+name = "rsscript-workspace-loader"
+version = "0.1.0"
+edition = "2024"
+description = "Bounded OS workspace loader for RSScript tools"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+toml = "0.8"

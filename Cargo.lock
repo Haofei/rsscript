@@ -1496,6 +1496,7 @@ name = "rss-lsp"
 version = "0.1.0"
 dependencies = [
  "rsscript-language-service",
+ "rsscript-workspace-loader",
  "serde_json",
  "tokio",
  "tower-lsp",
@@ -1662,7 +1663,6 @@ version = "0.1.0"
 dependencies = [
  "rsscript-compiler",
  "rsscript-operation",
- "toml",
 ]
 
 [[package]]
@@ -1791,6 +1791,13 @@ name = "rsscript-work-budget"
 version = "0.1.0"
 dependencies = [
  "rsscript-source-model",
+]
+
+[[package]]
+name = "rsscript-workspace-loader"
+version = "0.1.0"
+dependencies = [
+ "toml",
 ]
 
 [[package]]

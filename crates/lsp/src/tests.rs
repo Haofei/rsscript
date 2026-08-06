@@ -5,9 +5,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rsscript_language_service::{
-    Diagnostic as RsDiagnostic, PackageReviewFileKind, Span, symbol_index,
-};
+use rsscript_language_service::{Diagnostic as RsDiagnostic, Span, symbol_index};
+use rsscript_workspace_loader::WorkspaceFileKind;
 use tokio::sync::{Semaphore, oneshot};
 use tower_lsp::lsp_types::*;
 
@@ -41,7 +40,7 @@ fn workspace_document(uri: Url, text: &str) -> WorkspaceDocument {
     WorkspaceDocument {
         uri,
         text: Arc::from(text),
-        kind: Some(PackageReviewFileKind::Source),
+        kind: Some(WorkspaceFileKind::Source),
         revision: 0,
         semantic_generation: 0,
         source_index: Arc::new(SourceIndexCache::default()),

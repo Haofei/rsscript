@@ -775,10 +775,41 @@ fn provider_and_workspace_boundaries_use_structured_errors() {
         );
     }
 
+    let workspace_loader = read(&root.join("crates/rsscript-workspace-loader/src/lib.rs"));
+    assert!(workspace_loader.contains("pub enum WorkspaceLoadErrorCode"));
+    assert!(workspace_loader.contains("pub struct WorkspaceLoadError"));
+    assert!(!workspace_loader.contains("Result<Vec<WorkspaceSourceFile>, String>"));
+}
+
+#[test]
+fn language_engine_does_not_read_the_operating_system() {
+    let root = workspace_root();
     let language_service = read(&root.join("crates/rsscript-language-service/src/lib.rs"));
-    assert!(language_service.contains("pub enum WorkspaceLoadErrorCode"));
-    assert!(language_service.contains("pub struct WorkspaceLoadError"));
-    assert!(!language_service.contains("Result<Vec<PackageSourceFile>, String>"));
+    for forbidden in [
+        "std::fs",
+        "std::path",
+        "current_dir",
+        "read_dir",
+        "read_to_string",
+        "WorkspaceLoader",
+    ] {
+        assert!(
+            !language_service.contains(forbidden),
+            "language engine must not contain OS loader operation `{forbidden}`"
+        );
+    }
+    let language_manifest: toml::Value = toml::from_str(&read(
+        &root.join("crates/rsscript-language-service/Cargo.toml"),
+    ))
+    .unwrap();
+    assert!(language_manifest["dependencies"].get("toml").is_none());
+
+    let loader_manifest: toml::Value = toml::from_str(&read(
+        &root.join("crates/rsscript-workspace-loader/Cargo.toml"),
+    ))
+    .unwrap();
+    let loader_dependencies = dependency_packages(&loader_manifest);
+    assert_eq!(loader_dependencies, BTreeSet::from(["toml".to_string()]));
 }
 
 #[test]

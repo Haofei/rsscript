@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use rsscript_language_service::{Diagnostic as RsDiagnostic, *};
+use rsscript_workspace_loader::WorkspaceFileKind;
 use serde_json::json;
 use tower_lsp::lsp_types::{Diagnostic as LspDiagnostic, *};
 
@@ -89,12 +90,12 @@ pub(crate) fn package_frontend_diagnostics_cancellable(
     }
     let interfaces = documents
         .iter()
-        .filter(|document| document.kind == Some(PackageReviewFileKind::Interface))
+        .filter(|document| document.kind == Some(WorkspaceFileKind::Interface))
         .map(|document| (document.uri.path(), document.text.as_ref()))
         .collect::<Vec<_>>();
     let sources = documents
         .iter()
-        .filter(|document| document.kind == Some(PackageReviewFileKind::Source))
+        .filter(|document| document.kind == Some(WorkspaceFileKind::Source))
         .map(|document| (document.uri.path(), document.text.as_ref()))
         .collect::<Vec<_>>();
 

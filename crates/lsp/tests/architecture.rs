@@ -16,6 +16,7 @@ fn lsp_depends_on_the_language_service_boundary() {
     let manifest = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
         .expect("LSP manifest should be readable");
     assert!(manifest.contains("rsscript-language-service"));
+    assert!(manifest.contains("rsscript-workspace-loader"));
     assert!(
         !manifest.lines().any(|line| line.starts_with("rsscript =")),
         "the LSP must not depend directly on the product façade"

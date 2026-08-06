@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rsscript_language_service::*;
+use rsscript_workspace_loader::{WorkspaceFileKind, WorkspaceLoader};
 use tower_lsp::lsp_types::*;
 
 use crate::documents::*;
@@ -16,7 +17,7 @@ use crate::source_index::*;
 pub(crate) struct WorkspaceDocument {
     pub(crate) uri: Url,
     pub(crate) text: Arc<str>,
-    pub(crate) kind: Option<PackageReviewFileKind>,
+    pub(crate) kind: Option<WorkspaceFileKind>,
     pub(crate) revision: u64,
     pub(crate) semantic_generation: u64,
     pub(crate) source_index: Arc<SourceIndexCache>,
@@ -212,7 +213,7 @@ fn load_package_documents_at_generation(
     package_dir: &Path,
     semantic_generation: u64,
 ) -> HashMap<Url, WorkspaceDocument> {
-    let Ok(sources) = package_sources_with_dependency_interfaces(package_dir) else {
+    let Ok(sources) = WorkspaceLoader::default().load(package_dir) else {
         return HashMap::new();
     };
     sources
@@ -237,12 +238,12 @@ fn load_package_documents_at_generation(
         .collect()
 }
 
-pub(crate) fn infer_document_kind(uri: &Url) -> Option<PackageReviewFileKind> {
+pub(crate) fn infer_document_kind(uri: &Url) -> Option<WorkspaceFileKind> {
     let path = uri.path();
     if path.ends_with(".rssi") {
-        Some(PackageReviewFileKind::Interface)
+        Some(WorkspaceFileKind::Interface)
     } else if path.ends_with(".rss") {
-        Some(PackageReviewFileKind::Source)
+        Some(WorkspaceFileKind::Source)
     } else {
         None
     }
