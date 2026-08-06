@@ -67,12 +67,12 @@ pub use diagnostic::{
 pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
 #[cfg(feature = "execution")]
 pub use eval_types::{
-    BlockingBehavior, CancellationBehavior, CoverageBucket, EvalError, EvalOutput, ExecutionUsage,
-    ExternalFunction, ExternalFunctionRegistry, ExternalImport, ExternalSymbol, FunctionSignature,
-    NativeValue, ProviderCallContext, ProviderCallMode, ProviderDescriptor, ProviderError,
-    ProviderErrorCode, ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor,
-    ProviderLoadError, ProviderResource, ProviderResourceTable, ResourceCleanupContract,
-    ResourceHandle, SignatureHash,
+    BlockingBehavior, CancellationBehavior, CoverageBucket, EvalError, EvalOutput,
+    ExecutionFailureKind, ExecutionUsage, ExternalFunction, ExternalFunctionRegistry,
+    ExternalImport, ExternalSymbol, FunctionSignature, NativeValue, ProviderCallContext,
+    ProviderCallMode, ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderErrorMapping,
+    ProviderFunction, ProviderFunctionDescriptor, ProviderLoadError, ProviderResource,
+    ProviderResourceTable, ResourceCleanupContract, ResourceHandle, SignatureHash,
 };
 pub use formatter::{format_program, format_source};
 pub use generate::{

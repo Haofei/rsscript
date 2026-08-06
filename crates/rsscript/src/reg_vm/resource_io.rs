@@ -12,15 +12,8 @@ impl RegVm {
                 "{operation} exceeds the {MAX_NETWORK_IO_BYTES}-byte limit"
             )));
         }
-        self.account_bytes(bytes).map_err(|limit| {
-            let message = match limit {
-                EvalError::Runtime(message) => message,
-                EvalError::Diagnostics(_) => {
-                    "network allocation rejected by VM diagnostics".to_string()
-                }
-            };
-            error(message)
-        })
+        self.account_bytes(bytes)
+            .map_err(|limit| error(limit.into_message()))
     }
 
     pub(super) fn run_resource_drop(

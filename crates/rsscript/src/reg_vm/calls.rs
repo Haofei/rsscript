@@ -331,7 +331,7 @@ impl RegVm {
         };
         let mut raw = function
             .call_with_context(&mut context, arg_values)
-            .map_err(|error| EvalError::Runtime(format!("provider call failed: {error}")))?;
+            .map_err(EvalError::Provider)?;
 
         // No `mut` params: the binding returns its result directly.
         if mut_args.is_empty() {

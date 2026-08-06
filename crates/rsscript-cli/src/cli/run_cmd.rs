@@ -288,8 +288,8 @@ fn finish_vm_run(result: Result<EvalOutput, EvalError>, json: bool) -> ExitCode 
             }
             ExitCode::from(1)
         }
-        Err(EvalError::Runtime(error)) => {
-            eprintln!("{error}");
+        Err(error) => {
+            eprintln!("{}", error.into_message());
             ExitCode::from(1)
         }
     }

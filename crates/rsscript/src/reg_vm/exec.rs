@@ -22,14 +22,11 @@ impl RegVm {
     }
 
     pub(super) fn cleanup_provider_resources(&mut self) -> Result<(), EvalError> {
-        let errors = self.provider_resources.cleanup_all();
+        let mut errors = self.provider_resources.cleanup_all();
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(EvalError::Runtime(format!(
-                "provider resource cleanup failed: {}",
-                errors[0]
-            )))
+            Err(EvalError::Provider(errors.remove(0)))
         }
     }
 
@@ -165,22 +162,29 @@ impl RegVm {
         if let Some(limit) = self.limits.step_budget
             && self.steps > limit
         {
-            return Err(EvalError::Runtime(format!(
-                "step budget exceeded ({limit} instructions)"
-            )));
+            return Err(EvalError::execution(
+                crate::ExecutionFailureKind::StepBudgetExceeded,
+                format!("step budget exceeded ({limit} instructions)"),
+            ));
         }
         if self.steps.is_multiple_of(CANCEL_POLL_INTERVAL)
             && let Some(flag) = self.limits.cancel.as_ref()
             && flag.is_cancelled()
         {
-            return Err(EvalError::Runtime("evaluation cancelled".into()));
+            return Err(EvalError::execution(
+                crate::ExecutionFailureKind::Cancelled,
+                "evaluation cancelled",
+            ));
         }
         if self
             .limits
             .deadline
             .is_some_and(rsscript_operation::MonotonicDeadline::is_expired)
         {
-            return Err(EvalError::Runtime("execution deadline exceeded".into()));
+            return Err(EvalError::execution(
+                crate::ExecutionFailureKind::DeadlineExceeded,
+                "execution deadline exceeded",
+            ));
         }
         Ok(())
     }
@@ -203,21 +207,28 @@ impl RegVm {
         if let Some(limit) = self.limits.step_budget
             && self.steps > limit
         {
-            return Err(EvalError::Runtime(format!(
-                "step budget exceeded ({limit} steps)"
-            )));
+            return Err(EvalError::execution(
+                crate::ExecutionFailureKind::StepBudgetExceeded,
+                format!("step budget exceeded ({limit} steps)"),
+            ));
         }
         if let Some(cancel) = &self.limits.cancel
             && cancel.is_cancelled()
         {
-            return Err(EvalError::Runtime("evaluation cancelled".into()));
+            return Err(EvalError::execution(
+                crate::ExecutionFailureKind::Cancelled,
+                "evaluation cancelled",
+            ));
         }
         if self
             .limits
             .deadline
             .is_some_and(rsscript_operation::MonotonicDeadline::is_expired)
         {
-            return Err(EvalError::Runtime("execution deadline exceeded".into()));
+            return Err(EvalError::execution(
+                crate::ExecutionFailureKind::DeadlineExceeded,
+                "execution deadline exceeded",
+            ));
         }
         Ok(())
     }
@@ -235,9 +246,10 @@ impl RegVm {
         if let Some(limit) = self.limits.intrinsic_call_budget
             && self.intrinsic_calls > limit
         {
-            return Err(EvalError::Runtime(format!(
-                "intrinsic call budget exceeded ({limit} calls)"
-            )));
+            return Err(EvalError::execution(
+                crate::ExecutionFailureKind::IntrinsicBudgetExceeded,
+                format!("intrinsic call budget exceeded ({limit} calls)"),
+            ));
         }
         Ok(())
     }
@@ -249,9 +261,10 @@ impl RegVm {
         if let Some(limit) = self.limits.provider_call_budget
             && self.provider_calls > limit
         {
-            return Err(EvalError::Runtime(format!(
-                "provider call budget exceeded ({limit} calls)"
-            )));
+            return Err(EvalError::execution(
+                crate::ExecutionFailureKind::ProviderBudgetExceeded,
+                format!("provider call budget exceeded ({limit} calls)"),
+            ));
         }
         Ok(())
     }
@@ -270,9 +283,10 @@ impl RegVm {
         if let Some(limit) = self.limits.stdout_budget
             && self.stdout.len().saturating_add(text.len()) > limit
         {
-            return Err(EvalError::Runtime(format!(
-                "stdout budget exceeded ({limit} bytes)"
-            )));
+            return Err(EvalError::execution(
+                crate::ExecutionFailureKind::OutputLimitExceeded,
+                format!("stdout budget exceeded ({limit} bytes)"),
+            ));
         }
         self.stdout.push_str(text);
         if self.stream_stdout {

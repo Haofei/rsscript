@@ -21,7 +21,7 @@ use common::{
     reg_vm_eval_source_main_with_interfaces_and_external_bindings,
 };
 use rsscript::{
-    EvalError, ExternalFunction, NativeRustDependency, NativeValue, VmLimits,
+    EvalError, ExternalFunction, NativeRustDependency, NativeValue, ProviderError, VmLimits,
     lower_sources_to_rust_package_with_options, reg_vm_eval_package_main_with_args,
     write_generated_rust_package,
 };
@@ -609,16 +609,20 @@ fn eval_matches_backend_for_declared_host_boundary() {
 
 #[test]
 fn eval_dispatches_native_host_bindings() {
-    fn host_echo(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+    fn host_echo(args: Vec<NativeValue>) -> Result<NativeValue, ProviderError> {
         let [NativeValue::String(message)] = args.as_slice() else {
-            return Err(format!("unexpected args: {args:?}"));
+            return Err(ProviderError::internal(format!(
+                "unexpected args: {args:?}"
+            )));
         };
         Ok(NativeValue::String(format!("host:{message}")))
     }
 
-    fn host_tag(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+    fn host_tag(args: Vec<NativeValue>) -> Result<NativeValue, ProviderError> {
         let [NativeValue::Int(value)] = args.as_slice() else {
-            return Err(format!("unexpected args: {args:?}"));
+            return Err(ProviderError::internal(format!(
+                "unexpected args: {args:?}"
+            )));
         };
         Ok(NativeValue::String(format!("tag:{value}")))
     }
@@ -678,9 +682,11 @@ fn main() -> Unit {
 
 #[test]
 fn eval_receiver_external_bindings_use_resolved_receiver_namespace() {
-    fn alpha_open(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+    fn alpha_open(args: Vec<NativeValue>) -> Result<NativeValue, ProviderError> {
         let [] = args.as_slice() else {
-            return Err(format!("unexpected args: {args:?}"));
+            return Err(ProviderError::internal(format!(
+                "unexpected args: {args:?}"
+            )));
         };
         Ok(NativeValue::Native {
             type_name: "Alpha".to_string(),
@@ -688,9 +694,11 @@ fn eval_receiver_external_bindings_use_resolved_receiver_namespace() {
         })
     }
 
-    fn beta_open(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+    fn beta_open(args: Vec<NativeValue>) -> Result<NativeValue, ProviderError> {
         let [] = args.as_slice() else {
-            return Err(format!("unexpected args: {args:?}"));
+            return Err(ProviderError::internal(format!(
+                "unexpected args: {args:?}"
+            )));
         };
         Ok(NativeValue::Native {
             type_name: "Beta".to_string(),
@@ -698,16 +706,20 @@ fn eval_receiver_external_bindings_use_resolved_receiver_namespace() {
         })
     }
 
-    fn alpha_describe(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+    fn alpha_describe(args: Vec<NativeValue>) -> Result<NativeValue, ProviderError> {
         let [NativeValue::Native { type_name, id }] = args.as_slice() else {
-            return Err(format!("unexpected args: {args:?}"));
+            return Err(ProviderError::internal(format!(
+                "unexpected args: {args:?}"
+            )));
         };
         Ok(NativeValue::String(format!("alpha:{type_name}:{id}")))
     }
 
-    fn beta_describe(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+    fn beta_describe(args: Vec<NativeValue>) -> Result<NativeValue, ProviderError> {
         let [NativeValue::Native { type_name, id }] = args.as_slice() else {
-            return Err(format!("unexpected args: {args:?}"));
+            return Err(ProviderError::internal(format!(
+                "unexpected args: {args:?}"
+            )));
         };
         Ok(NativeValue::String(format!("beta:{type_name}:{id}")))
     }
@@ -936,9 +948,11 @@ stop-b\n\
 
 #[test]
 fn parity_native_host_bindings_match_lowered_backend() {
-    fn host_open(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+    fn host_open(args: Vec<NativeValue>) -> Result<NativeValue, ProviderError> {
         let [] = args.as_slice() else {
-            return Err(format!("unexpected args: {args:?}"));
+            return Err(ProviderError::internal(format!(
+                "unexpected args: {args:?}"
+            )));
         };
         Ok(NativeValue::Native {
             type_name: "HostHandle".to_string(),
@@ -946,16 +960,20 @@ fn parity_native_host_bindings_match_lowered_backend() {
         })
     }
 
-    fn host_describe(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+    fn host_describe(args: Vec<NativeValue>) -> Result<NativeValue, ProviderError> {
         let [NativeValue::Native { type_name, id }] = args.as_slice() else {
-            return Err(format!("unexpected args: {args:?}"));
+            return Err(ProviderError::internal(format!(
+                "unexpected args: {args:?}"
+            )));
         };
         Ok(NativeValue::String(format!("{type_name}:{id}")))
     }
 
-    fn host_echo(args: Vec<NativeValue>) -> Result<NativeValue, String> {
+    fn host_echo(args: Vec<NativeValue>) -> Result<NativeValue, ProviderError> {
         let [NativeValue::String(message)] = args.as_slice() else {
-            return Err(format!("unexpected args: {args:?}"));
+            return Err(ProviderError::internal(format!(
+                "unexpected args: {args:?}"
+            )));
         };
         Ok(NativeValue::String(format!("host:{message}")))
     }

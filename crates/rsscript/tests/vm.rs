@@ -1,5 +1,7 @@
 #![allow(unused_imports, dead_code)]
-pub(crate) use rsscript::{ExternalFunction, NativeValue, write_generated_rust_package};
+pub(crate) use rsscript::{
+    ExternalFunction, NativeValue, ProviderError, write_generated_rust_package,
+};
 pub(crate) use sha1::{Digest, Sha1};
 pub(crate) use std::fs;
 pub(crate) use std::path::Path;

@@ -32,9 +32,9 @@ use provider::{NativeInterpreterFn, ProviderDescriptor, ProviderFunction, Provid
 use rsscript::analyze_source;
 #[cfg(feature = "execution")]
 use rsscript::{
-    EvalError, ExternalFunctionRegistry, NativeValue, PackageAnalysis, RegVmExecutable, VmLimits,
-    load_workspace_snapshot, reg_vm_compile_package_input, reg_vm_compile_source,
-    reg_vm_compile_validated, validate_sources_with_interfaces,
+    EvalError, ExecutionFailureKind, ExternalFunctionRegistry, NativeValue, PackageAnalysis,
+    RegVmExecutable, VmLimits, load_workspace_snapshot, reg_vm_compile_package_input,
+    reg_vm_compile_source, reg_vm_compile_validated, validate_sources_with_interfaces,
 };
 
 #[derive(Default)]
@@ -347,6 +347,14 @@ impl From<EvalError> for CompileError {
                 code: CompileErrorCode::Bytecode,
                 message,
             },
+            EvalError::Execution { message, .. } => Self::Bytecode {
+                code: CompileErrorCode::Bytecode,
+                message,
+            },
+            EvalError::Provider(error) => Self::Bytecode {
+                code: CompileErrorCode::Bytecode,
+                message: error.to_string(),
+            },
         }
     }
 }
@@ -385,6 +393,8 @@ pub enum TerminationReason {
     OutputLimitExceeded,
     ProviderError,
     ProviderBudgetExceeded,
+    IntrinsicBudgetExceeded,
+    ResourceLimitExceeded,
     VerificationFailure,
     InternalError,
 }
@@ -408,8 +418,37 @@ impl From<EvalError> for RuntimeError {
                 ),
             },
             EvalError::Runtime(message) => Self {
-                reason: classify_runtime_error(&message),
+                reason: TerminationReason::ScriptError,
                 message,
+            },
+            EvalError::Execution { kind, message } => Self {
+                reason: match kind {
+                    ExecutionFailureKind::Cancelled => TerminationReason::Cancelled,
+                    ExecutionFailureKind::DeadlineExceeded => TerminationReason::DeadlineExceeded,
+                    ExecutionFailureKind::StepBudgetExceeded => {
+                        TerminationReason::StepBudgetExceeded
+                    }
+                    ExecutionFailureKind::MemoryLimitExceeded => {
+                        TerminationReason::MemoryLimitExceeded
+                    }
+                    ExecutionFailureKind::OutputLimitExceeded => {
+                        TerminationReason::OutputLimitExceeded
+                    }
+                    ExecutionFailureKind::ProviderBudgetExceeded => {
+                        TerminationReason::ProviderBudgetExceeded
+                    }
+                    ExecutionFailureKind::IntrinsicBudgetExceeded => {
+                        TerminationReason::IntrinsicBudgetExceeded
+                    }
+                    ExecutionFailureKind::ResourceLimitExceeded => {
+                        TerminationReason::ResourceLimitExceeded
+                    }
+                },
+                message,
+            },
+            EvalError::Provider(error) => Self {
+                reason: TerminationReason::ProviderError,
+                message: error.to_string(),
             },
         }
     }
@@ -424,27 +463,6 @@ impl fmt::Display for RuntimeError {
 
 #[cfg(feature = "execution")]
 impl Error for RuntimeError {}
-
-#[cfg(feature = "execution")]
-fn classify_runtime_error(message: &str) -> TerminationReason {
-    if message.contains("provider call budget exceeded") {
-        TerminationReason::ProviderBudgetExceeded
-    } else if message.contains("provider call failed") {
-        TerminationReason::ProviderError
-    } else if message.contains("step budget exceeded") {
-        TerminationReason::StepBudgetExceeded
-    } else if message.contains("memory") && message.contains("exceeded") {
-        TerminationReason::MemoryLimitExceeded
-    } else if message.contains("stdout budget exceeded") {
-        TerminationReason::OutputLimitExceeded
-    } else if message.contains("deadline exceeded") {
-        TerminationReason::DeadlineExceeded
-    } else if message.contains("cancelled") {
-        TerminationReason::Cancelled
-    } else {
-        TerminationReason::ScriptError
-    }
-}
 
 #[cfg(all(test, feature = "execution"))]
 mod tests {
@@ -654,5 +672,30 @@ mod tests {
             .expect_err("second provider call must exceed the provider budget");
         assert_eq!(error.reason, TerminationReason::ProviderBudgetExceeded);
         assert!(error.message.contains("provider call budget exceeded"));
+
+        let failure_symbol = descriptor.functions[0].symbol.clone();
+        let failure_signature = descriptor.functions[0].signature.clone();
+        let mut failing_providers = ProviderRegistry::default();
+        failing_providers
+            .register(
+                &descriptor,
+                BTreeMap::from([(
+                    failure_symbol,
+                    ProviderFunction {
+                        signature: failure_signature,
+                        callable: NativeInterpreterFn::new(|_| {
+                            Err(provider::ProviderError::invalid_argument(
+                                "rejected by provider",
+                            ))
+                        }),
+                    },
+                )]),
+            )
+            .expect("register failing provider");
+        let error = Runtime::new(failing_providers, RunLimits::bounded())
+            .run(&package, Vec::<String>::new())
+            .expect_err("structured Provider error must propagate");
+        assert_eq!(error.reason, TerminationReason::ProviderError);
+        assert!(error.message.contains("InvalidArgument"));
     }
 }

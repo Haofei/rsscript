@@ -775,6 +775,20 @@ fn provider_and_workspace_boundaries_use_structured_errors() {
 }
 
 #[test]
+fn execution_termination_does_not_classify_message_text() {
+    let root = workspace_root();
+    let facade = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
+    assert!(!facade.contains("fn classify_runtime_error"));
+    assert!(!facade.contains("reason: classify_runtime_error"));
+    assert!(facade.contains("EvalError::Execution { kind, message }"));
+    assert!(facade.contains("EvalError::Provider(error)"));
+
+    let eval = read(&root.join("crates/rsscript/src/eval_types.rs"));
+    assert!(eval.contains("pub enum ExecutionFailureKind"));
+    assert!(eval.contains("Provider(ProviderError)"));
+}
+
+#[test]
 fn structural_semantics_are_owned_by_the_semantics_crate() {
     let root = workspace_root();
     let types = root.join("crates/rsscript-semantics/src/types.rs");

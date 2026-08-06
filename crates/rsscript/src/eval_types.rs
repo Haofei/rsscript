@@ -84,7 +84,46 @@ pub struct ExecutionUsage {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EvalError {
     Diagnostics(Vec<Diagnostic>),
+    Execution {
+        kind: ExecutionFailureKind,
+        message: String,
+    },
+    Provider(ProviderError),
     Runtime(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ExecutionFailureKind {
+    Cancelled,
+    DeadlineExceeded,
+    StepBudgetExceeded,
+    MemoryLimitExceeded,
+    OutputLimitExceeded,
+    IntrinsicBudgetExceeded,
+    ProviderBudgetExceeded,
+    ResourceLimitExceeded,
+}
+
+impl EvalError {
+    pub fn execution(kind: ExecutionFailureKind, message: impl Into<String>) -> Self {
+        Self::Execution {
+            kind,
+            message: message.into(),
+        }
+    }
+
+    pub fn into_message(self) -> String {
+        match self {
+            Self::Diagnostics(diagnostics) => {
+                format!(
+                    "execution rejected with {} diagnostic(s)",
+                    diagnostics.len()
+                )
+            }
+            Self::Execution { message, .. } | Self::Runtime(message) => message,
+            Self::Provider(error) => error.to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]

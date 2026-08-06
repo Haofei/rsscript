@@ -54,7 +54,7 @@ pub enum ProviderErrorCode {
     Internal,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderError {
     pub code: ProviderErrorCode,
     pub message: String,

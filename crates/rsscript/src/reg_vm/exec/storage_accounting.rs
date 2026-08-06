@@ -18,9 +18,10 @@ impl RegVm {
         if let Some(limit) = self.limits.mem_budget
             && self.live_bytes.saturating_add(bytes) > limit
         {
-            return Err(EvalError::Runtime(format!(
-                "memory limit exceeded ({limit} bytes)"
-            )));
+            return Err(EvalError::execution(
+                crate::ExecutionFailureKind::MemoryLimitExceeded,
+                format!("memory limit exceeded ({limit} bytes)"),
+            ));
         }
         Ok(())
     }
