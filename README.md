@@ -84,6 +84,9 @@ is limited to `Compiler`, `CompiledPackage`, `Runtime`, `ProviderRegistry`,
 generated Rust source maps, and review implementation types are not part of that
 embedding contract.
 
+Provider authors should follow the versioned linkage, lifecycle, cancellation,
+and conformance rules in [`docs/provider-sdk.md`](docs/provider-sdk.md).
+
 ## Development
 
 ```bash

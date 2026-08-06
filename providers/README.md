@@ -16,3 +16,8 @@ The compiler, semantics, executable IR, and runtime-core do not depend on these
 packages. Hosts select and register only the providers they need. A provider
 descriptor and its implementation signatures are validated together before any
 script executes.
+
+The complete descriptor, ABI, cancellation, cleanup, and conformance contract
+is documented in [`docs/provider-sdk.md`](../docs/provider-sdk.md). The
+[`embedded-report-pipeline`](../examples/embedded-report-pipeline) example shows
+two provider implementations running identical bytecode.
