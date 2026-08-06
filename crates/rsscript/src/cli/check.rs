@@ -8,6 +8,7 @@ use rsscript::{
     standard_package_interfaces,
 };
 
+#[cfg(feature = "execution")]
 use super::package::run_package_check;
 use super::{is_package_directory, print_usage, read_interface_sources, required_flag_value};
 
@@ -130,7 +131,15 @@ pub(crate) fn run_check(args: &[String]) -> ExitCode {
             eprintln!("{error}");
             return ExitCode::from(2);
         }
+        #[cfg(feature = "execution")]
         return run_package_check(options.json, path);
+        #[cfg(not(feature = "execution"))]
+        {
+            eprintln!(
+                "package checks require the `execution` feature; single-file checks are frontend-only"
+            );
+            return ExitCode::from(2);
+        }
     }
 
     let source = match fs::read_to_string(path) {

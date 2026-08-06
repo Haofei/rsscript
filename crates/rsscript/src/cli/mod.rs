@@ -2,21 +2,29 @@ use std::env;
 use std::fs;
 use std::fs::File;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(feature = "execution")]
+use std::path::PathBuf;
 use std::process::ExitCode;
 
+#[cfg(feature = "execution")]
 use rsscript::{
     Diagnostic, format_diagnostics_human, format_diagnostics_json, lower_source_to_rust_package,
     lower_sources_to_rust_package_with_options, prepare_package_for_execution,
 };
+#[cfg(feature = "execution")]
 use sha2::{Digest, Sha256};
 
+#[cfg(feature = "execution")]
 mod artifact;
 mod check;
 mod fix;
 mod fmt;
+#[cfg(feature = "execution")]
 mod package;
+#[cfg(feature = "execution")]
 mod process;
+#[cfg(feature = "execution")]
 mod run_cmd;
 
 pub fn run() -> ExitCode {
@@ -27,14 +35,24 @@ pub fn run() -> ExitCode {
     };
 
     match command {
+        #[cfg(feature = "execution")]
         "build" => artifact::run_build(&args[2..]),
         "check" => check::run_check(&args[2..]),
         "fix" => fix::run_fix(&args[2..]),
         "fmt" => fmt::run_fmt(&args[2..]),
+        #[cfg(feature = "execution")]
         "inspect" => artifact::run_inspect(&args[2..]),
+        #[cfg(feature = "execution")]
         "new" => package::run_new_package(&args[2..]),
+        #[cfg(feature = "execution")]
         "pkg" => package::run_package(&args[2..]),
+        #[cfg(feature = "execution")]
         "run" => run_cmd::run_input(&args[2..]),
+        #[cfg(not(feature = "execution"))]
+        "build" | "inspect" | "new" | "pkg" | "run" => {
+            eprintln!("`rss {command}` requires the `execution` feature");
+            ExitCode::from(2)
+        }
         _ => {
             print_usage();
             ExitCode::from(2)
@@ -42,6 +60,7 @@ pub fn run() -> ExitCode {
     }
 }
 
+#[cfg(feature = "execution")]
 pub(crate) fn generated_target_dir_from_env() -> Option<PathBuf> {
     let path = env::var_os("RSSCRIPT_GENERATED_TARGET_DIR")
         .filter(|value| !value.is_empty())
@@ -51,6 +70,7 @@ pub(crate) fn generated_target_dir_from_env() -> Option<PathBuf> {
 
     Some(path)
 }
+#[cfg(feature = "execution")]
 pub(crate) fn print_diagnostics(json: bool, diagnostics: &[Diagnostic]) {
     if json {
         println!("{}", format_diagnostics_json(diagnostics));
@@ -152,6 +172,7 @@ pub(crate) fn read_interface_sources(paths: &[&str]) -> Result<Vec<InterfaceSour
         })
         .collect()
 }
+#[cfg(feature = "execution")]
 pub(crate) fn lower_cli_input_to_rust_package(
     path: &str,
     runtime_path: &Path,
@@ -189,6 +210,7 @@ pub(crate) fn lower_cli_input_to_rust_package(
     )
 }
 
+#[cfg(feature = "execution")]
 fn package_execution_lowering_input(
     package_dir: &Path,
 ) -> Result<rsscript::PackageLoweringInput, String> {
@@ -200,6 +222,7 @@ fn package_execution_lowering_input(
     Ok(package.lowering_input().clone())
 }
 
+#[cfg(feature = "execution")]
 pub(crate) fn default_runtime_path() -> Result<PathBuf, String> {
     let current_dir =
         env::current_dir().map_err(|error| format!("failed to read current directory: {error}"))?;
@@ -216,6 +239,7 @@ pub(crate) fn default_runtime_path() -> Result<PathBuf, String> {
     select_runtime_path(candidates)
 }
 
+#[cfg(feature = "execution")]
 pub(crate) fn select_runtime_path(
     candidates: Vec<(&'static str, PathBuf)>,
 ) -> Result<PathBuf, String> {
@@ -238,6 +262,7 @@ pub(crate) fn select_runtime_path(
 /// full lowering, so the run cache directory can be located before deciding
 /// whether re-lowering is needed. Returns `None` for a package directory whose
 /// manifest can't be read (the caller then falls back to lowering).
+#[cfg(feature = "execution")]
 pub(crate) fn cli_input_package_name(input_path: &str) -> Option<String> {
     if is_package_directory(input_path) {
         package_execution_lowering_input(Path::new(input_path))
@@ -248,6 +273,7 @@ pub(crate) fn cli_input_package_name(input_path: &str) -> Option<String> {
     }
 }
 
+#[cfg(feature = "execution")]
 pub(crate) fn generated_package_name(path: &str) -> String {
     Path::new(path)
         .file_stem()
@@ -262,6 +288,7 @@ pub(crate) fn generated_package_name(path: &str) -> String {
 /// release flag, and a compiler-version marker (so a rebuilt `rss` invalidates
 /// stale generated output). Returns `None` if any input can't be read, which
 /// forces the cautious full lower+write path.
+#[cfg(feature = "execution")]
 pub(crate) fn run_input_fingerprint(
     input_path: &str,
     runtime_path: &Path,
@@ -316,6 +343,7 @@ pub(crate) fn run_input_fingerprint(
 }
 
 /// Reads the fingerprint stored alongside a cached generated package.
+#[cfg(feature = "execution")]
 pub(crate) fn read_cached_fingerprint(cache_dir: &Path) -> Option<String> {
     fs::read_to_string(cache_dir.join(".rss-cache-hash"))
         .ok()
@@ -324,11 +352,13 @@ pub(crate) fn read_cached_fingerprint(cache_dir: &Path) -> Option<String> {
 }
 
 /// Stores the fingerprint alongside the cached generated package.
+#[cfg(feature = "execution")]
 pub(crate) fn write_cached_fingerprint(cache_dir: &Path, fingerprint: &str) {
     let _ = fs::create_dir_all(cache_dir);
     let _ = fs::write(cache_dir.join(".rss-cache-hash"), fingerprint);
 }
 
+#[cfg(feature = "execution")]
 pub(crate) fn run_cache_dir(input_path: &str, package_name: &str) -> PathBuf {
     let key = stable_input_key(input_path);
     run_cache_root_dir().join(format!(
@@ -338,6 +368,7 @@ pub(crate) fn run_cache_dir(input_path: &str, package_name: &str) -> PathBuf {
     ))
 }
 
+#[cfg(feature = "execution")]
 fn run_cache_root_dir() -> PathBuf {
     let root = env::var_os("RSSCRIPT_RUN_CACHE_DIR")
         .filter(|value| !value.is_empty())
@@ -352,6 +383,7 @@ fn run_cache_root_dir() -> PathBuf {
     root
 }
 
+#[cfg(feature = "execution")]
 fn stable_input_key(input_path: &str) -> String {
     let path = Path::new(input_path);
     path.canonicalize()
@@ -360,10 +392,12 @@ fn stable_input_key(input_path: &str) -> String {
         .to_string()
 }
 
+#[cfg(feature = "execution")]
 fn stable_hash_hex(value: &str) -> String {
     hex::encode(Sha256::digest(value.as_bytes()))
 }
 
+#[cfg(feature = "execution")]
 fn sanitize_path_component(value: &str) -> String {
     let sanitized = value
         .chars()
@@ -382,12 +416,14 @@ fn sanitize_path_component(value: &str) -> String {
     }
 }
 
+#[cfg(feature = "execution")]
 fn ramdisk_root_dir() -> Option<PathBuf> {
     env::var_os("RSSCRIPT_RAMDISK_PATH")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
 }
 
+#[cfg(feature = "execution")]
 pub(crate) fn cleanup_temp_dir(path: &Path) {
     let _ = fs::remove_dir_all(path);
 }

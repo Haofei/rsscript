@@ -74,6 +74,10 @@ rss run --aot <file-or-package> [-- <args>...]  # Experimental
 rss inspect <imports|bytecode|analysis|resources|async|call-graph> <input>
 ```
 
+The default Cargo feature set builds the frontend-only `check`, `fix`, and
+`fmt` path without runtime dependencies. Build the CLI with `--features
+execution` to enable `build`, `run`, `inspect`, and package execution tooling.
+
 Execution is bounded by step, memory, host-call, output, recursion, cancellation,
 deadline, and child-process limits where applicable. Those controls are resource
 limits, not a language authority model or a sandbox claim.

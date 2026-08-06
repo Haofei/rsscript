@@ -54,7 +54,9 @@ tempfile = "3"
 vm-jit = { path = "../vm-jit", optional = true }
 
 [features]
-default = ["execution"]
+# Frontend-only by default so `rss check`, formatting, and language tooling do
+# not compile the VM/runtime/provider closure. Hosts opt into execution.
+default = []
 execution = ["dep:rsscript-bytecode", "dep:rsscript-lowering", "dep:rsscript-provider-api", "dep:rsscript-runtime"]
 language-service = []
 host-tools = ["execution", "dep:rss-process-guard"]

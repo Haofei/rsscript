@@ -667,6 +667,12 @@ fn native_plugin_loader_is_opt_in() {
     let root = workspace_root();
     let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript/Cargo.toml")))
         .expect("compiler manifest should parse");
+    assert!(
+        manifest["features"]["default"]
+            .as_array()
+            .is_some_and(Vec::is_empty),
+        "frontend CLI commands must not select execution dependencies by default"
+    );
     assert_eq!(
         manifest["dependencies"]["rss-native-abi"]["optional"].as_bool(),
         Some(true)
