@@ -523,6 +523,9 @@ pub fn validate_sources_with_interfaces_without_core(
 }
 
 #[cfg(test)]
+// These entrypoint tests intentionally sit next to the public entrypoint family
+// they cover; keep this exception scoped to the test module instead of the crate.
+#[allow(clippy::items_after_test_module)]
 mod entrypoint_tests {
     use super::{
         AnalysisFlavor, AnalysisInput, AnalysisSources, PreparedAnalysis, analyze_input_result,
