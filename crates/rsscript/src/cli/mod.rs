@@ -410,6 +410,7 @@ pub(crate) fn print_usage() {
     );
     eprintln!("  rss pkg [--json] [package-directory]");
     eprintln!("  rss pkg add <dependency|dependency@version|path-to-package>");
+    eprintln!("  rss pkg analysis [package-directory]");
     eprintln!("  rss pkg review [--json] [package-directory]");
     eprintln!("  rss pkg diff [--json] <old-package-directory> <new-package-directory>");
     eprintln!("  rss pkg ci [--json] [package-directory]");

@@ -27,7 +27,7 @@ mod review;
 mod source_set;
 mod types;
 
-pub const PACKAGE_REVIEW_METADATA_SCHEMA: &str = "rsscript.package_analysis.v1";
+pub const PACKAGE_REVIEW_METADATA_SCHEMA: &str = "rsscript.package_review.v1";
 
 const PACKAGE_TREE_MAX_FILES: usize = 20_000;
 const PACKAGE_TREE_MAX_ENTRIES: usize = 40_000;
@@ -56,7 +56,7 @@ pub use lock::{diff_package_locks, lock_package_dir};
 pub use metadata::{package_lowering_input, package_metadata, package_metadata_verify};
 pub(crate) use native::package_native_plugin_build_dependencies;
 use native::{manifest_native_enabled, manifest_native_unsafe_boundary};
-pub use review::review_package_dir;
+pub use review::{analyze_package_dir, review_package_dir};
 use source_set::{LoadedPackage, Manifest, ManifestNativeRust, PackageSource};
 pub use types::*;
 

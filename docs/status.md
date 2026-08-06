@@ -10,7 +10,8 @@ The platform-neutral language cut is active:
 - external package functions lower through `CallExternal` and are resolved by an
   execution-time registry;
 - execution/deployment policy types and legacy API facade are removed;
-- package analysis uses the breaking `rsscript.package_analysis.v1` schema.
+- neutral package analysis uses `rsscript.package_analysis.v1`; optional review
+  output uses the distinct `rsscript.package_review.v1` schema.
 
 The physical dependency cut is not complete: the main crate still contains the
 frontend, package tooling, VM, AOT lowering, native loading, and review adapters;

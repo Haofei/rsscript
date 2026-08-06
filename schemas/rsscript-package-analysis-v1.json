@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsscript.dev/schemas/rsscript-package-analysis-v1.json",
+  "title": "RSScript package analysis v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "producer", "package", "files", "summary", "exports", "external_imports", "await_sites", "diagnostics"],
+  "properties": {
+    "$schema": { "const": "rsscript.package_analysis.v1" },
+    "producer": { "$ref": "#/$defs/producer" },
+    "package": { "$ref": "#/$defs/package" },
+    "files": { "type": "array", "items": { "type": "object" } },
+    "summary": { "type": "object" },
+    "exports": { "type": "array", "items": { "type": "object" } },
+    "external_imports": { "type": "array", "items": { "$ref": "#/$defs/import" } },
+    "await_sites": { "type": "array", "items": { "type": "object" } },
+    "diagnostics": { "type": "array", "items": { "type": "object" } }
+  },
+  "$defs": {
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "source_revision", "ruleset_digest"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "source_revision": { "type": "string" },
+        "ruleset_digest": { "type": "string" }
+      }
+    },
+    "package": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "edition"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "edition": { "type": "string" }
+      }
+    },
+    "import": {
+      "type": "object",
+      "required": ["function", "symbol", "call_chain"],
+      "properties": {
+        "function": { "type": "string" },
+        "symbol": { "type": "string" },
+        "call_chain": { "type": "array", "items": { "type": "string" } },
+        "span": { "type": "object" }
+      }
+    }
+  }
+}

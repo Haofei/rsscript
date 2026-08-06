@@ -3,14 +3,14 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use rsscript::{
-    ArtifactStore, check_package_dir, diff_package_dirs, format_diagnostics_human,
-    format_package_check_human, format_package_check_json, format_package_diff_human,
-    format_package_diff_json, format_package_lock_json, format_package_lock_reir_json,
-    format_package_lock_toml, format_package_metadata_human, format_package_metadata_json,
-    format_package_metadata_reir_json, format_package_review_human, format_package_review_json,
-    format_package_review_markdown, format_package_tree_human, format_package_tree_json,
-    format_package_tree_reir_json, lock_package_dir, package_metadata, package_metadata_verify,
-    package_tree, review_package_dir,
+    ArtifactStore, analyze_package_dir, check_package_dir, diff_package_dirs,
+    format_diagnostics_human, format_package_analysis_json, format_package_check_human,
+    format_package_check_json, format_package_diff_human, format_package_diff_json,
+    format_package_lock_json, format_package_lock_reir_json, format_package_lock_toml,
+    format_package_metadata_human, format_package_metadata_json, format_package_metadata_reir_json,
+    format_package_review_human, format_package_review_json, format_package_review_markdown,
+    format_package_tree_human, format_package_tree_json, format_package_tree_reir_json,
+    lock_package_dir, package_metadata, package_metadata_verify, package_tree, review_package_dir,
 };
 
 use super::print_usage;
@@ -25,6 +25,7 @@ pub(crate) fn run_package(args: &[String]) -> ExitCode {
         }
     };
     match command {
+        PackageCommand::Analysis { path } => run_package_analysis(path),
         PackageCommand::Ci { json, path } => run_package_check(json, path),
         PackageCommand::Check { json, path } => run_package_check(json, path),
         PackageCommand::Review {
@@ -52,6 +53,9 @@ pub(crate) fn run_package(args: &[String]) -> ExitCode {
 
 #[derive(Debug)]
 pub(crate) enum PackageCommand<'a> {
+    Analysis {
+        path: &'a str,
+    },
     Check {
         json: bool,
         path: &'a str,
@@ -117,7 +121,7 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
             return Err(format!("unknown argument `{arg}`."));
         } else if matches!(
             arg.as_str(),
-            "review" | "diff" | "ci" | "lock" | "tree" | "metadata" | "add"
+            "analysis" | "review" | "diff" | "ci" | "lock" | "tree" | "metadata" | "add"
         ) {
             words.push(arg.as_str());
         } else {
@@ -147,6 +151,8 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
     match (words.as_slice(), paths.as_slice()) {
         ([], []) => Ok(PackageCommand::Check { json, path: "." }),
         ([], [path]) => Ok(PackageCommand::Check { json, path }),
+        (["analysis"], []) => Ok(PackageCommand::Analysis { path: "." }),
+        (["analysis"], [path]) => Ok(PackageCommand::Analysis { path }),
         (["review"], []) => Ok(PackageCommand::Review {
             json,
             markdown,
@@ -192,6 +198,26 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
         }),
         (["add"], [dependency]) => Ok(PackageCommand::Add { dependency }),
         _ => Err("invalid package arguments.".to_string()),
+    }
+}
+
+fn run_package_analysis(path: &str) -> ExitCode {
+    let analysis = match analyze_package_dir(Path::new(path)) {
+        Ok(analysis) => analysis,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    println!("{}", format_package_analysis_json(&analysis));
+    if analysis
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity.is_error())
+    {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
     }
 }
 
@@ -595,7 +621,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_package_args_accepts_review_diff_ci_and_publish() {
+    fn parse_package_args_accepts_analysis_review_diff_and_ci() {
+        let values = args(&["analysis", "package"]);
+        let command = super::parse_package_args(&values).expect("analysis should parse");
+        match command {
+            super::PackageCommand::Analysis { path } => assert_eq!(path, "package"),
+            other => panic!("unexpected package command: {other:?}"),
+        }
+
         let values = args(&["review", "--json", "package"]);
         let command = super::parse_package_args(&values).expect("review should parse");
         match command {

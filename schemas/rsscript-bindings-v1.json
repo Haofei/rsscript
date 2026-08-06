@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsscript.dev/schemas/rsscript-bindings-v1.json",
+  "title": "RSScript bindings v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "function"],
+  "properties": {
+    "schema": { "const": "rsscript.bindings.v1" },
+    "function": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "required": ["symbol", "provider", "entry"],
+        "properties": {
+          "symbol": { "type": "string", "minLength": 1 },
+          "provider": { "type": "string", "minLength": 1 },
+          "entry": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  }
+}

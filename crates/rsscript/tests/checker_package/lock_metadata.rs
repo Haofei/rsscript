@@ -271,7 +271,7 @@ fast = []
             .as_str()
             .is_some_and(|path| path.ends_with("review/reir/rsscript.json"))
     );
-    assert_eq!(json["metadata"]["schema"], "rsscript.package_analysis.v1");
+    assert_eq!(json["metadata"]["schema"], "rsscript.package_review.v1");
     assert_eq!(json["metadata"]["package"]["name"], "rss-metadata");
     assert_eq!(json["metadata"]["features"], serde_json::json!(["fast"]));
 }
@@ -351,7 +351,7 @@ fn package_metadata_verify_reports_missing_or_stale_artifacts() {
     package_metadata(&temp_dir, false).expect("metadata write should succeed");
     fs::write(
         temp_dir.join("review").join("package-review.json"),
-        "{\"schema\":\"rsscript.package_analysis.v1\",\"stale\":true}",
+        "{\"schema\":\"rsscript.package_review.v1\",\"stale\":true}",
     )
     .expect("package review artifact should be made stale");
     fs::remove_file(temp_dir.join("review").join("reir").join("rsscript.json"))

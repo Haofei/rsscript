@@ -1,10 +1,11 @@
 #![allow(unused_imports, dead_code)]
 mod common;
 pub(crate) use rsscript::{
-    check_package_dir, diff_package_dirs, diff_package_locks, format_package_lock_toml,
-    format_package_review_reir_diff_json, format_package_review_reir_json, lock_package_dir,
-    lower_sources_to_rust_package_with_options, package_lowering_input, package_metadata,
-    package_metadata_verify, package_tree, review_package_dir,
+    analyze_package_dir, check_package_dir, diff_package_dirs, diff_package_locks,
+    format_package_analysis_json, format_package_lock_toml, format_package_review_reir_diff_json,
+    format_package_review_reir_json, lock_package_dir, lower_sources_to_rust_package_with_options,
+    package_lowering_input, package_metadata, package_metadata_verify, package_tree,
+    review_package_dir,
 };
 pub(crate) use serde_json::Value;
 pub(crate) use std::collections::HashMap;

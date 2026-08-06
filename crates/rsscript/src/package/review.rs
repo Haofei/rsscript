@@ -44,6 +44,10 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     Ok(review)
 }
 
+pub fn analyze_package_dir(package_dir: &Path) -> Result<super::PackageAnalysis, String> {
+    review_package_dir(package_dir).map(|review| super::PackageAnalysis::from(&review))
+}
+
 pub(super) fn review_package_dir_captured_with_features(
     package_dir: &Path,
     selected_features: Option<&[String]>,
@@ -284,7 +288,7 @@ pub(super) fn review_package_dir_captured_with_features(
     });
 
     Ok(PackageReview {
-        schema: super::types::PACKAGE_ANALYSIS_SCHEMA.to_string(),
+        schema: super::types::PACKAGE_REVIEW_SCHEMA.to_string(),
         producer: super::types::ArtifactProducer::current(),
         package: super::package_identity(manifest),
         manifest_path: package.manifest_path.display().to_string(),

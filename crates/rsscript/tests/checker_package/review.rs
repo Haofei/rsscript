@@ -3,6 +3,52 @@
 use super::*;
 
 #[test]
+fn package_analysis_excludes_review_and_provider_fields() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-analysis-neutral");
+    fs::create_dir_all(temp_dir.join("src")).expect("source dir should be created");
+    fs::write(
+        temp_dir.join("rsspkg.toml"),
+        r#"[package]
+name = "neutral-analysis"
+version = "0.1.0"
+edition = "2026"
+
+[sources]
+paths = ["src"]
+"#,
+    )
+    .expect("manifest should be written");
+    fs::write(
+        temp_dir.join("src/lib.rss"),
+        "pub fn identity(value: read Int) -> Int { return value }\n",
+    )
+    .expect("source should be written");
+
+    let analysis = analyze_package_dir(&temp_dir).expect("package analysis should succeed");
+    let json: Value = serde_json::from_str(&format_package_analysis_json(&analysis))
+        .expect("package analysis JSON should parse");
+    let review = review_package_dir(&temp_dir).expect("package review should succeed");
+    let review_json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
+        .expect("package review JSON should parse");
+    let _ = fs::remove_dir_all(&temp_dir);
+
+    assert_eq!(json["$schema"], "rsscript.package_analysis.v1");
+    assert_eq!(review_json["$schema"], "rsscript.package_review.v1");
+    for forbidden in [
+        "risk",
+        "reasons",
+        "review_map",
+        "native_rust",
+        "implements",
+        "virtual_package",
+    ] {
+        assert!(json.get(forbidden).is_none(), "analysis leaked `{forbidden}`");
+    }
+    assert!(json["producer"].get("target").is_none());
+    assert!(json["producer"].get("rustc_version").is_none());
+}
+
+#[test]
 fn package_review_reads_manifest_and_reports_semantic_risk() {
     let temp_dir = common::unique_temp_dir("rsscript-package-review");
     fs::create_dir_all(temp_dir.join("interface")).expect("interface dir should be created");

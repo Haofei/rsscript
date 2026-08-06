@@ -8,6 +8,151 @@ use crate::rust_lower::NativeRustDependency;
 
 /// Schema id for the platform-neutral package analysis artifact.
 pub const PACKAGE_ANALYSIS_SCHEMA: &str = "rsscript.package_analysis.v1";
+/// Schema id for optional review output derived from package analysis and
+/// implementation metadata.
+pub const PACKAGE_REVIEW_SCHEMA: &str = "rsscript.package_review.v1";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisProducer {
+    pub name: String,
+    pub version: String,
+    pub source_revision: String,
+    pub ruleset_digest: String,
+}
+
+impl PackageAnalysisProducer {
+    pub fn current() -> Self {
+        Self {
+            name: "rsscript".to_string(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            source_revision: env!("RSSCRIPT_SOURCE_REVISION").to_string(),
+            ruleset_digest: env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT").to_string(),
+        }
+    }
+}
+
+/// Provider- and review-neutral semantic facts for one immutable package
+/// snapshot. Host selection, risk classification, native implementation details,
+/// and deployment evidence deliberately live outside this artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysis {
+    #[serde(rename = "$schema")]
+    pub schema: String,
+    pub producer: PackageAnalysisProducer,
+    pub package: PackageIdentity,
+    pub files: Vec<PackageReviewFile>,
+    pub summary: PackageAnalysisSummary,
+    pub exports: Vec<PackageAnalysisExport>,
+    pub external_imports: Vec<PackageAnalysisExternalImport>,
+    pub await_sites: Vec<PackageAnalysisAwaitSite>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisSummary {
+    pub interface_files: usize,
+    pub source_files: usize,
+    pub public_types: usize,
+    pub public_sum_types: usize,
+    pub public_type_aliases: usize,
+    pub public_consts: usize,
+    pub public_functions: usize,
+    pub mutating_apis: usize,
+    pub retaining_apis: usize,
+    pub resource_apis: usize,
+    pub fresh_returning_apis: usize,
+    pub async_apis: usize,
+    pub await_sites: usize,
+    pub diagnostics: usize,
+    pub errors: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisExport {
+    pub name: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function_kind: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub retained_params: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisExternalImport {
+    pub function: String,
+    pub symbol: String,
+    pub call_chain: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub span: Option<Span>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisAwaitSite {
+    pub function: String,
+    pub callee: Option<String>,
+    pub live_across_await: Vec<String>,
+    pub span: Span,
+}
+
+impl From<&PackageReview> for PackageAnalysis {
+    fn from(review: &PackageReview) -> Self {
+        let summary = &review.summary;
+        Self {
+            schema: PACKAGE_ANALYSIS_SCHEMA.to_string(),
+            producer: PackageAnalysisProducer::current(),
+            package: review.package.clone(),
+            files: review.files.clone(),
+            summary: PackageAnalysisSummary {
+                interface_files: summary.interface_files,
+                source_files: summary.source_files,
+                public_types: summary.public_types,
+                public_sum_types: summary.public_sum_types,
+                public_type_aliases: summary.public_type_aliases,
+                public_consts: summary.public_consts,
+                public_functions: summary.public_functions,
+                mutating_apis: summary.mutating_apis,
+                retaining_apis: summary.retaining_apis,
+                resource_apis: summary.resource_apis,
+                fresh_returning_apis: summary.fresh_returning_apis,
+                async_apis: summary.async_apis,
+                await_sites: summary.await_sites,
+                diagnostics: summary.diagnostics,
+                errors: summary.errors,
+            },
+            exports: review
+                .exports
+                .iter()
+                .map(|export| PackageAnalysisExport {
+                    name: export.name.clone(),
+                    kind: export.kind.clone(),
+                    function_kind: export.function_kind.clone(),
+                    retained_params: export.retained_params.clone(),
+                })
+                .collect(),
+            external_imports: review
+                .external_bindings
+                .iter()
+                .map(|binding| PackageAnalysisExternalImport {
+                    function: binding.function.clone(),
+                    symbol: binding.binding_symbol.clone(),
+                    call_chain: binding.call_chain.clone(),
+                    span: binding.span.clone(),
+                })
+                .collect(),
+            await_sites: review
+                .await_sites
+                .iter()
+                .map(|site| PackageAnalysisAwaitSite {
+                    function: site.function.clone(),
+                    callee: site.callee.clone(),
+                    live_across_await: site.live_across_await.clone(),
+                    span: site.span.clone(),
+                })
+                .collect(),
+            diagnostics: review.diagnostics.clone(),
+        }
+    }
+}
 
 /// The tool + version that produced an artifact, so consumers can reason about
 /// schema compatibility instead of guessing.
