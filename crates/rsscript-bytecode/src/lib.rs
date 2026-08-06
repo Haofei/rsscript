@@ -4,8 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
-use rsscript_abi_model::ExternalImport;
+use rsscript_abi_model::{ExternalImport, RUNTIME_ABI_VERSION};
 use rsscript_operation::{CancellationToken, MonotonicDeadline};
+use semver::{Version, VersionReq};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -234,6 +235,36 @@ impl VerifiedBytecode {
 
 pub struct BytecodeVerifier {
     limits: BytecodeLimits,
+    compatibility: BytecodeCompatibility,
+}
+
+#[derive(Debug, Clone)]
+pub struct BytecodeCompatibility {
+    pub language: VersionReq,
+    pub runtime_abi_version: u32,
+}
+
+impl Default for BytecodeCompatibility {
+    fn default() -> Self {
+        let current = Version::parse(env!("CARGO_PKG_VERSION"))
+            .expect("workspace package version must be semantic");
+        let requirement = if current.major == 0 {
+            format!(
+                ">={}.{}.{}, <0.{}.0",
+                current.major,
+                current.minor,
+                current.patch,
+                current.minor + 1
+            )
+        } else {
+            format!(">={current}, <{}.0.0", current.major + 1)
+        };
+        Self {
+            language: VersionReq::parse(&requirement)
+                .expect("generated language compatibility requirement"),
+            runtime_abi_version: RUNTIME_ABI_VERSION,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -259,7 +290,20 @@ impl VerificationContext<'_> {
 
 impl BytecodeVerifier {
     pub fn new(limits: BytecodeLimits) -> Self {
-        Self { limits }
+        Self {
+            limits,
+            compatibility: BytecodeCompatibility::default(),
+        }
+    }
+
+    pub fn with_compatibility(
+        limits: BytecodeLimits,
+        compatibility: BytecodeCompatibility,
+    ) -> Self {
+        Self {
+            limits,
+            compatibility,
+        }
     }
 
     pub fn verify(&self, bytes: &[u8]) -> Result<VerifiedBytecode, BytecodeError> {
@@ -279,6 +323,20 @@ impl BytecodeVerifier {
         context.check()?;
         if artifact.header.schema != BYTECODE_SCHEMA {
             return Err(BytecodeError::UnsupportedSchema(artifact.header.schema));
+        }
+        let language = Version::parse(&artifact.header.language_version).map_err(|_| {
+            BytecodeError::UnsupportedLanguageVersion(artifact.header.language_version.clone())
+        })?;
+        if !self.compatibility.language.matches(&language) {
+            return Err(BytecodeError::UnsupportedLanguageVersion(
+                artifact.header.language_version.clone(),
+            ));
+        }
+        if artifact.header.runtime_abi_version != self.compatibility.runtime_abi_version {
+            return Err(BytecodeError::UnsupportedRuntimeAbi {
+                artifact: artifact.header.runtime_abi_version,
+                runtime: self.compatibility.runtime_abi_version,
+            });
         }
         if artifact.payload.len() > self.limits.max_payload_bytes {
             return Err(BytecodeError::LimitExceeded("payload bytes"));
@@ -879,6 +937,8 @@ pub enum BytecodeError {
     DeadlineExceeded,
     InvalidMagic,
     UnsupportedSchema(String),
+    UnsupportedLanguageVersion(String),
+    UnsupportedRuntimeAbi { artifact: u32, runtime: u32 },
     LimitExceeded(&'static str),
     ExecutableHashMismatch,
     ChecksumMismatch,
@@ -910,6 +970,16 @@ impl fmt::Display for BytecodeError {
             Self::UnsupportedSchema(schema) => {
                 write!(formatter, "unsupported bytecode schema `{schema}`")
             }
+            Self::UnsupportedLanguageVersion(version) => {
+                write!(
+                    formatter,
+                    "unsupported RSScript language version `{version}`"
+                )
+            }
+            Self::UnsupportedRuntimeAbi { artifact, runtime } => write!(
+                formatter,
+                "bytecode runtime ABI {artifact} is incompatible with runtime ABI {runtime}"
+            ),
             Self::LimitExceeded(limit) => {
                 write!(formatter, "bytecode {limit} exceeds verifier limit")
             }
@@ -976,8 +1046,14 @@ mod tests {
     #[test]
     fn round_trip_requires_intact_artifact() {
         let payload = minimal_payload();
-        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], payload.clone())
-            .expect("artifact");
+        let artifact = BytecodeArtifact::new(
+            "0.1.0",
+            RUNTIME_ABI_VERSION,
+            "sha256:source",
+            vec![],
+            payload.clone(),
+        )
+        .expect("artifact");
         let bytes = artifact.to_bytes().expect("bytes");
         let verified = BytecodeVerifier::default()
             .verify(&bytes)
@@ -1018,11 +1094,47 @@ mod tests {
     }
 
     #[test]
+    fn verifier_rejects_incompatible_language_and_runtime_versions() {
+        let future_language = BytecodeArtifact::new(
+            "9.0.0",
+            RUNTIME_ABI_VERSION,
+            "sha256:source",
+            vec![],
+            minimal_payload(),
+        )
+        .unwrap();
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&future_language.to_bytes().unwrap()),
+            Err(BytecodeError::UnsupportedLanguageVersion(version)) if version == "9.0.0"
+        ));
+
+        let future_abi = BytecodeArtifact::new(
+            "0.1.0",
+            RUNTIME_ABI_VERSION + 1,
+            "sha256:source",
+            vec![],
+            minimal_payload(),
+        )
+        .unwrap();
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&future_abi.to_bytes().unwrap()),
+            Err(BytecodeError::UnsupportedRuntimeAbi { artifact, runtime })
+                if artifact == RUNTIME_ABI_VERSION + 1 && runtime == RUNTIME_ABI_VERSION
+        ));
+    }
+
+    #[test]
     fn artifact_sections_and_instruction_payload_use_binary_cbor() {
         let payload = minimal_payload();
         assert_ne!(payload.first(), Some(&b'{'));
-        let artifact =
-            BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], payload).expect("artifact");
+        let artifact = BytecodeArtifact::new(
+            "0.1.0",
+            RUNTIME_ABI_VERSION,
+            "sha256:source",
+            vec![],
+            payload,
+        )
+        .expect("artifact");
         let bytes = artifact.to_bytes().expect("bytes");
         let first_section_data = BYTECODE_MAGIC.len() + 2 + SECTION_HEADER_BYTES;
         assert_ne!(bytes.get(first_section_data), Some(&b'{'));
@@ -1031,8 +1143,14 @@ mod tests {
 
     #[test]
     fn unknown_optional_sections_are_forward_compatible() {
-        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], minimal_payload())
-            .expect("artifact");
+        let artifact = BytecodeArtifact::new(
+            "0.1.0",
+            RUNTIME_ABI_VERSION,
+            "sha256:source",
+            vec![],
+            minimal_payload(),
+        )
+        .expect("artifact");
         let mut bytes = artifact.to_bytes().expect("bytes");
         bytes[BYTECODE_MAGIC.len()..BYTECODE_MAGIC.len() + 2].copy_from_slice(&5u16.to_be_bytes());
         append_test_section(&mut bytes, 5, 0, b"future metadata");
@@ -1044,8 +1162,14 @@ mod tests {
 
     #[test]
     fn unknown_required_sections_fail_closed() {
-        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], minimal_payload())
-            .expect("artifact");
+        let artifact = BytecodeArtifact::new(
+            "0.1.0",
+            RUNTIME_ABI_VERSION,
+            "sha256:source",
+            vec![],
+            minimal_payload(),
+        )
+        .expect("artifact");
         let mut bytes = artifact.to_bytes().expect("bytes");
         bytes[BYTECODE_MAGIC.len()..BYTECODE_MAGIC.len() + 2].copy_from_slice(&5u16.to_be_bytes());
         append_test_section(&mut bytes, 5, SECTION_REQUIRED, b"future semantics");
@@ -1058,8 +1182,14 @@ mod tests {
 
     #[test]
     fn malformed_binary_metadata_section_is_rejected() {
-        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], minimal_payload())
-            .expect("artifact");
+        let artifact = BytecodeArtifact::new(
+            "0.1.0",
+            RUNTIME_ABI_VERSION,
+            "sha256:source",
+            vec![],
+            minimal_payload(),
+        )
+        .expect("artifact");
         let bytes = artifact.to_bytes().expect("bytes");
         let header_offset = BYTECODE_MAGIC.len() + 2;
         let data_offset = header_offset + SECTION_HEADER_BYTES;
@@ -1097,8 +1227,14 @@ mod tests {
             "closure_identity_observable": false
         }))
         .expect("payload");
-        let artifact =
-            BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], payload).expect("artifact");
+        let artifact = BytecodeArtifact::new(
+            "0.1.0",
+            RUNTIME_ABI_VERSION,
+            "sha256:source",
+            vec![],
+            payload,
+        )
+        .expect("artifact");
 
         assert!(matches!(
             BytecodeVerifier::default().verify(&artifact.to_bytes().expect("bytes")),
@@ -1124,8 +1260,14 @@ mod tests {
             "closure_identity_observable": false
         }))
         .expect("payload");
-        let artifact =
-            BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], payload).expect("artifact");
+        let artifact = BytecodeArtifact::new(
+            "0.1.0",
+            RUNTIME_ABI_VERSION,
+            "sha256:source",
+            vec![],
+            payload,
+        )
+        .expect("artifact");
 
         assert!(matches!(
             BytecodeVerifier::default().verify(&artifact.to_bytes().expect("bytes")),
@@ -1152,14 +1294,14 @@ mod tests {
         }
         .hash();
         let artifact = BytecodeArtifact::new(
-            "0.1",
-            1,
+            "0.1.0",
+            RUNTIME_ABI_VERSION,
             "sha256:source",
             vec![ExternalImport {
                 symbol: ExternalSymbol::new("host.log.emit").unwrap(),
                 signature,
                 signature_hash: wrong_hash,
-                abi_version: 1,
+                abi_version: RUNTIME_ABI_VERSION,
             }],
             encode_executable_payload(&serde_json::json!({
                 "functions": [{

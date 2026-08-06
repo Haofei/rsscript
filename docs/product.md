@@ -39,6 +39,9 @@ native plugins, REIR, and self-hosting remain optional Experimental, Integration
 or Research surfaces. They must not create dependencies in the Core compiler or
 change language validity.
 
+Language, Artifact, runtime ABI, and Provider compatibility are independent,
+fail-closed contracts defined in [compatibility.md](compatibility.md).
+
 ## Product invariants
 
 - Provider selection does not change language validity or the provider-neutral
