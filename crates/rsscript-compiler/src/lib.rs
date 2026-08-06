@@ -386,29 +386,52 @@ impl Runtime {
         Self { providers, limits }
     }
 
-    /// Execute and always return an audit report, including partial evidence
-    /// for cancellation, budget exhaustion, Provider failures, and preflight
-    /// rejection.
-    pub fn execute(
+    /// Resolve every external import and bind the execution limits before any
+    /// instruction can run. `LinkedPackage` has no public constructor, so the
+    /// stable SDK cannot bypass Provider preflight.
+    pub fn link<'package>(
         &self,
-        package: &CompiledPackage,
-        args: impl IntoIterator<Item = impl Into<String>>,
-    ) -> ExecutionReport {
+        package: &'package CompiledPackage,
+    ) -> Result<LinkedPackage<'package>, RuntimeError> {
         for import in package.external_imports() {
             if let Err(error) = self.providers.inner.resolve(import) {
-                let failure = RuntimeError {
+                return Err(RuntimeError {
                     reason: TerminationReason::VerificationFailure,
                     message: error.to_string(),
-                };
-                return ExecutionReport::failed(package.module_digest(), failure, Vec::new());
+                });
             }
         }
-        let output = match package
+        Ok(LinkedPackage {
+            package,
+            bindings: self.providers.inner.bindings().collect(),
+            limits: self.limits.clone().into(),
+        })
+    }
+}
+
+#[cfg(feature = "execution")]
+pub struct LinkedPackage<'package> {
+    package: &'package CompiledPackage,
+    bindings: Vec<(String, rsscript_compiler_core::ExternalFunction)>,
+    limits: VmLimits,
+}
+
+#[cfg(feature = "execution")]
+impl LinkedPackage<'_> {
+    pub fn module_digest(&self) -> &str {
+        self.package.module_digest()
+    }
+
+    /// Execute and always return an audit report, including partial evidence
+    /// for cancellation, budget exhaustion, and Provider failures.
+    pub fn execute(&self, args: impl IntoIterator<Item = impl Into<String>>) -> ExecutionReport {
+        let output = match self
+            .package
             .executable
             .execute_main_with_args_and_external_bindings_and_limits(
                 args,
-                self.providers.inner.bindings(),
-                self.limits.clone().into(),
+                self.bindings.iter().cloned(),
+                self.limits.clone(),
             ) {
             Ok(output) => output,
             Err(error) => {
@@ -417,7 +440,7 @@ impl Runtime {
                     _ => Vec::new(),
                 };
                 return ExecutionReport::failed(
-                    package.module_digest(),
+                    self.package.module_digest(),
                     RuntimeError::from(error),
                     diagnostics,
                 );
@@ -429,7 +452,7 @@ impl Runtime {
         };
         let failure = output.failure.map(RuntimeError::from);
         ExecutionReport {
-            artifact_digest: package.module_digest().to_string(),
+            artifact_digest: self.package.module_digest().to_string(),
             termination_reason: failure
                 .as_ref()
                 .map_or(TerminationReason::Completed, |error| error.reason),
@@ -449,10 +472,9 @@ impl Runtime {
     /// control flow. Use [`Self::execute`] when failure evidence is required.
     pub fn run(
         &self,
-        package: &CompiledPackage,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<ExecutionReport, RuntimeError> {
-        let report = self.execute(package, args);
+        let report = self.execute(args);
         match report.failure.clone() {
             Some(error) => Err(error),
             None => Ok(report),
@@ -777,8 +799,11 @@ mod tests {
             analysis.interface_catalog_digest,
             artifact.header.interface_catalog_digest
         );
-        let output = Runtime::default()
-            .run(&first, Vec::<String>::new())
+        let runtime = Runtime::default();
+        let output = runtime
+            .link(&first)
+            .expect("link captured source")
+            .run(Vec::<String>::new())
             .expect("run captured source");
         assert_eq!(output.value, "1");
     }
@@ -791,8 +816,11 @@ mod tests {
             .expect("compile");
         let bytecode = package.bytecode().expect("bytecode");
         let loaded = compiler.load_verified(&bytecode).expect("load verified");
-        let report = Runtime::default()
-            .run(&loaded, Vec::<String>::new())
+        let runtime = Runtime::default();
+        let report = runtime
+            .link(&loaded)
+            .expect("link")
+            .run(Vec::<String>::new())
             .expect("run");
         assert_eq!(report.value, "Unit");
         assert_eq!(report.termination_reason, TerminationReason::Completed);
@@ -915,9 +943,11 @@ mod tests {
             )
             .expect("provider descriptor and implementation should match");
 
-        let error = Runtime::new(providers, RunLimits::bounded())
-            .run(&package, Vec::<String>::new())
-            .expect_err("import signature must fail before execution");
+        let runtime = Runtime::new(providers, RunLimits::bounded());
+        let error = match runtime.link(&package) {
+            Ok(_) => panic!("import signature must fail before execution"),
+            Err(error) => error,
+        };
         assert_eq!(error.reason, TerminationReason::VerificationFailure);
         assert!(error.message.contains("ImportSignatureMismatch"));
         assert!(!called.load(Ordering::SeqCst));
@@ -984,7 +1014,11 @@ mod tests {
             ..RunLimits::default()
         };
 
-        let report = Runtime::new(providers, limits).execute(&package, Vec::<String>::new());
+        let runtime = Runtime::new(providers, limits);
+        let report = runtime
+            .link(&package)
+            .expect("link providers")
+            .execute(Vec::<String>::new());
         assert_eq!(
             report.termination_reason,
             TerminationReason::ProviderBudgetExceeded
@@ -1017,8 +1051,11 @@ mod tests {
                 )]),
             )
             .expect("register failing provider");
-        let report = Runtime::new(failing_providers, RunLimits::bounded())
-            .execute(&package, Vec::<String>::new());
+        let runtime = Runtime::new(failing_providers, RunLimits::bounded());
+        let report = runtime
+            .link(&package)
+            .expect("link failing provider")
+            .execute(Vec::<String>::new());
         assert_eq!(report.termination_reason, TerminationReason::ProviderError);
         assert_eq!(report.provider_call_traces.len(), 1);
         assert_eq!(
@@ -1096,8 +1133,11 @@ mod tests {
             )
             .expect("register provider");
 
-        let report = Runtime::new(providers, RunLimits::bounded())
-            .run(&package, Vec::<String>::new())
+        let runtime = Runtime::new(providers, RunLimits::bounded());
+        let report = runtime
+            .link(&package)
+            .expect("link provider")
+            .run(Vec::<String>::new())
             .expect("run provider");
         assert_eq!(report.provider_call_traces.len(), 1);
         let trace = &report.provider_call_traces[0];

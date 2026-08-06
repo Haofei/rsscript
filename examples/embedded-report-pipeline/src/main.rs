@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )])));
     let memory_log = Arc::new(Mutex::new(Vec::<String>::new()));
     let captured_log = Arc::clone(&memory_log);
-    Runtime::new(
+    let memory_runtime = Runtime::new(
         registry(
             memory_fs(Arc::clone(&memory_files)),
             rsscript_provider_log::functions(move |message| {
@@ -108,8 +108,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }),
         ),
         RunLimits::bounded(),
-    )
-    .run(&package, Vec::<String>::new())?;
+    );
+    memory_runtime.link(&package)?.run(Vec::<String>::new())?;
 
     let memory_report = memory_files
         .lock()
@@ -122,14 +122,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&demo_dir)?;
     fs::write(demo_dir.join("input.csv"), "name,total\nbob,7\n")?;
     let disk_provider = rsscript_provider_fs::RootedFsProvider::new(&demo_dir)?;
-    let production_result = Runtime::new(
+    let production_runtime = Runtime::new(
         registry(
             disk_provider.functions(),
             rsscript_provider_log::stderr_functions(),
         ),
         RunLimits::bounded(),
-    )
-    .run(&package, Vec::<String>::new());
+    );
+    let production_result = production_runtime.link(&package)?.run(Vec::<String>::new());
     production_result?;
     let disk_report = fs::read_to_string(demo_dir.join("report.txt"))?;
     fs::remove_dir_all(&demo_dir)?;
