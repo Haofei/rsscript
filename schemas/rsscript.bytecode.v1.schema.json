@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsscript.dev/schemas/rsscript.bytecode.v1.schema.json",
+  "title": "RSScript bytecode v1 envelope",
+  "type": "object",
+  "required": ["header", "imports", "payload", "checksum"],
+  "properties": {
+    "header": {
+      "type": "object",
+      "required": ["schema", "language_version", "runtime_abi_version", "source_content_hash", "executable_hash"],
+      "properties": {
+        "schema": { "const": "rsscript.bytecode.v1" },
+        "language_version": { "type": "string", "minLength": 1 },
+        "runtime_abi_version": { "type": "integer", "minimum": 1 },
+        "source_content_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "executable_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+      },
+      "additionalProperties": false
+    },
+    "imports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["symbol", "signature_hash", "abi_version"],
+        "properties": {
+          "symbol": { "type": "string", "minLength": 1 },
+          "signature_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+          "abi_version": { "type": "integer", "minimum": 1 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "payload": {
+      "description": "JSON byte array containing the deterministic register instruction stream.",
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+    },
+    "checksum": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
+  },
+  "additionalProperties": false
+}

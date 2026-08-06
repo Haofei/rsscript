@@ -160,6 +160,10 @@ pub use review::{
     format_review_human, format_review_json, format_review_map_human, format_review_map_json,
     review_map_sources, review_sources,
 };
+pub use rsscript_bytecode::{
+    BYTECODE_MAGIC, BYTECODE_SCHEMA, BytecodeArtifact, BytecodeError, BytecodeHeader,
+    BytecodeLimits, BytecodeVerifier, VerifiedBytecode,
+};
 pub use rust_lower::lowered_symbol_name;
 pub use rust_lower::{
     GeneratedRustPackage, LowerCoverageReport, LoweredRust, NativeRustDependency,

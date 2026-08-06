@@ -22,6 +22,7 @@ test = false
 rss-native-abi = { path = "../native-abi", features = ["host"], optional = true }
 rss-process-guard = { path = "../process-guard", optional = true }
 rsscript-abi-model = { path = "../rsscript-abi-model" }
+rsscript-bytecode = { path = "../rsscript-bytecode" }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-lowering = { path = "../rsscript-lowering" }
 rsscript-provider-api = { path = "../rsscript-provider-api" }
@@ -29,7 +30,7 @@ rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-runtime = { path = "../runtime", default-features = false, features = ["core"] }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-work-budget = { path = "../rsscript-work-budget" }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"
 sha3 = "0.10"

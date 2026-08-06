@@ -1,0 +1,13 @@
+[package]
+name = "rsscript-bytecode"
+version = "0.1.0"
+edition = "2024"
+description = "Versioned, verified bytecode artifact envelope for RSScript"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rsscript-abi-model = { path = "../rsscript-abi-model" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+

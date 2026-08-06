@@ -324,7 +324,7 @@ fn write_reg_vm_runtime_intrinsics() -> Result<(), String> {
         .collect::<Vec<_>>()
         .join("\n");
     let generated_enum = format!(
-        "#[allow(dead_code)]\n#[derive(Debug, Clone, Copy)]\npub(crate) enum RegIntrinsic {{\n{enum_variants}\n}}\n"
+        "#[allow(dead_code)]\n#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]\npub(crate) enum RegIntrinsic {{\n{enum_variants}\n}}\n"
     );
     let direct_arms = catalog
         .binding

@@ -922,7 +922,17 @@ pub fn assert_vm_eval_matches_backend_internal(
         || source.contains("WebSocket")
         || source.contains("HttpResponse")
         || source.contains("HttpRequest");
-    if !does_network_io {
+    let does_nonrepeatable_host_io = does_network_io
+        || source.contains("Directory.create")
+        || source.contains("Directory.remove")
+        || source.contains("Directory.rename")
+        || source.contains("Directory.copy")
+        || source.contains("File.write")
+        || source.contains("File.append")
+        || source.contains("File.remove")
+        || source.contains("Path.write")
+        || source.contains("Process.");
+    if !does_nonrepeatable_host_io {
         let eval_jit = compile_vm_source(name, source)
             .and_then(|executable| {
                 executable.eval_main_with_args_jit(interpreter_args.iter().copied())

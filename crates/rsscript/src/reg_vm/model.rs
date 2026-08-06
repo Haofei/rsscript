@@ -5,7 +5,7 @@ pub(crate) struct RegUnit {
     pub(crate) functions: Vec<Rc<RegFunction>>,
     pub(crate) function_ids: HashMap<String, usize>,
     pub(crate) resource_drop_functions: HashMap<String, usize>,
-    pub(crate) types: HashMap<String, TypeInfo>,
+    pub(crate) types: HashMap<String, RegTypeInfo>,
     /// Declared HIR signatures keyed by lowered function name. The register VM
     /// bytecode remains untyped, but native lowering can use this as a conservative
     /// seed for scalar/handle ABI inference when a function body is otherwise
@@ -29,7 +29,22 @@ pub(crate) struct RegUnit {
     pub(crate) closure_identity_observable: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Runtime-only projection of a checked type. Keeping syntax expressions and
+/// semantic caches out of bytecode makes the artifact deterministic and keeps
+/// the VM independent from frontend implementation details.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct RegTypeInfo {
+    pub(crate) name: String,
+    pub(crate) fields: Vec<RegFieldInfo>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct RegFieldInfo {
+    pub(crate) name: String,
+    pub(crate) type_name: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct RegNativeSignature {
     pub(crate) params: Vec<String>,
     pub(crate) return_type: Option<String>,
@@ -203,7 +218,7 @@ impl RegFunction {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) enum RegInstr {
     LoadUnit {
         dst: Reg,
@@ -802,7 +817,7 @@ pub(crate) enum RegInstr {
 
 include!(concat!(env!("OUT_DIR"), "/rss-reg-intrinsic-enum.rs"));
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub(crate) enum RegIntCompare {
     Less,
     LessEqual,
@@ -1013,7 +1028,22 @@ impl RegUnit {
             resource_drop_functions,
             types: hir
                 .types()
-                .map(|type_info| (type_info.name.clone(), type_info.clone()))
+                .map(|type_info| {
+                    (
+                        type_info.name.clone(),
+                        RegTypeInfo {
+                            name: type_info.name.clone(),
+                            fields: type_info
+                                .fields_ordered
+                                .iter()
+                                .map(|field| RegFieldInfo {
+                                    name: field.name.clone(),
+                                    type_name: field.ty.to_string(),
+                                })
+                                .collect(),
+                        },
+                    )
+                })
                 .collect(),
             native_signatures,
             closure_identity_observable: closure_identity_observable.get(),

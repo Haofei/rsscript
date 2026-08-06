@@ -750,7 +750,7 @@ impl ExactSizeIterator for TypedVecIter<'_> {}
 ///    can be **interned** (see [`intern_layout`]): a repeated `(name, field_names)`
 ///    shape reuses one `Rc<TypeLayout>` (a refcount bump) instead of allocating a
 ///    fresh `Rc<StructLayout>` on every construction (the old `from_named` did).
-#[derive(Debug)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct TypeLayout {
     pub(crate) name: Rc<str>,
     pub(crate) field_names: Vec<Rc<str>>,

@@ -1544,6 +1544,7 @@ dependencies = [
  "rss-process-guard",
  "rss-testgen",
  "rsscript-abi-model",
+ "rsscript-bytecode",
  "rsscript-interface-catalog",
  "rsscript-lowering",
  "rsscript-provider-api",
@@ -1572,6 +1573,16 @@ name = "rsscript-abi-model"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "sha2",
+]
+
+[[package]]
+name = "rsscript-bytecode"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "serde",
+ "serde_json",
  "sha2",
 ]
 

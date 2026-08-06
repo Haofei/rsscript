@@ -27,7 +27,7 @@ use crate::analyzer::{validate_source, validate_sources_with_interfaces_without_
 use crate::eval_types::{EvalError, EvalOutput, ExternalFunction, NativeValue};
 use crate::hir::{
     Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirMatchArm, HirStmt, HirTypeKind,
-    ParamEffect, TypeInfo,
+    ParamEffect,
 };
 use crate::interfaces::builtin_interfaces;
 use crate::package::prepare_package_for_execution;
@@ -60,6 +60,7 @@ fn intern_struct_layout(name: &str, fields: &[(String, Reg)]) -> Rc<TypeLayout> 
 
 #[cfg(test)]
 mod architecture;
+mod bytecode;
 mod calls;
 mod exec;
 mod execution_plan;
@@ -792,6 +793,7 @@ pub fn reg_vm_compile_package_input(
 #[derive(Debug, Clone)]
 pub struct RegVmExecutable {
     unit: Rc<RegUnit>,
+    artifact: rsscript_bytecode::BytecodeArtifact,
 }
 
 pub fn reg_vm_compile_source(file: &str, source: &str) -> Result<RegVmExecutable, EvalError> {
@@ -802,10 +804,14 @@ pub fn reg_vm_compile_source(file: &str, source: &str) -> Result<RegVmExecutable
 pub fn reg_vm_compile_validated(
     validated: &ValidatedProgram,
 ) -> Result<RegVmExecutable, EvalError> {
+    let lowered = RegUnit::lower(&rsscript_lowering::ExecutableIr::from_validated_hir(
+        validated.database().hir(),
+    ))?;
+    let verified = bytecode::encode_and_verify(&lowered, validated)?;
+    let (artifact, unit) = verified.into_parts();
     Ok(RegVmExecutable {
-        unit: Rc::new(RegUnit::lower(
-            &rsscript_lowering::ExecutableIr::from_validated_hir(validated.database().hir()),
-        )?),
+        unit: Rc::new(unit),
+        artifact,
     })
 }
 
@@ -820,6 +826,29 @@ pub(crate) fn reg_vm_compile_sources(
 }
 
 impl RegVmExecutable {
+    /// Load a serialized `rsscript.bytecode.v1` artifact. The returned
+    /// executable exists only after checksum, ABI, import-table, control-flow,
+    /// function and register verification succeeds.
+    pub fn from_bytecode(bytes: &[u8]) -> Result<Self, EvalError> {
+        let verified = bytecode::verify_bytes(bytes)?;
+        let (artifact, unit) = verified.into_parts();
+        Ok(Self {
+            unit: Rc::new(unit),
+            artifact,
+        })
+    }
+
+    /// Serialize this already-verified executable as `rsscript.bytecode.v1`.
+    pub fn to_bytecode(&self) -> Result<Vec<u8>, EvalError> {
+        self.artifact
+            .to_bytes()
+            .map_err(|error| EvalError::Runtime(error.to_string()))
+    }
+
+    pub fn bytecode_artifact(&self) -> &rsscript_bytecode::BytecodeArtifact {
+        &self.artifact
+    }
+
     fn prepare_vm(
         &self,
         args: Vec<String>,
