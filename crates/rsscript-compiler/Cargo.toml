@@ -5,7 +5,10 @@ edition = "2024"
 description = "Stable compiler and embedding facade for RSScript"
 license = "MIT OR Apache-2.0"
 
-[dependencies]
-rsscript = { path = "../rsscript" }
-rsscript-provider-api = { path = "../rsscript-provider-api" }
+[features]
+default = []
+execution = ["rsscript/execution", "dep:rsscript-provider-api"]
 
+[dependencies]
+rsscript = { path = "../rsscript", default-features = false, features = ["language-service"] }
+rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }

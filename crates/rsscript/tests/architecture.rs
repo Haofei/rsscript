@@ -754,6 +754,24 @@ fn embedding_facade_exposes_only_product_level_objects() {
 #[test]
 fn compiler_default_dependency_closure_is_host_neutral() {
     let root = workspace_root();
+    let facade: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-compiler/Cargo.toml")))
+            .expect("embedding compiler manifest should parse");
+    assert!(
+        facade["features"]["default"]
+            .as_array()
+            .is_some_and(Vec::is_empty),
+        "the compiler facade must be frontend-only unless execution is explicitly enabled"
+    );
+    assert_eq!(
+        facade["dependencies"]["rsscript"]["default-features"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        facade["dependencies"]["rsscript-provider-api"]["optional"].as_bool(),
+        Some(true)
+    );
+
     let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript/Cargo.toml")))
         .expect("compiler manifest should parse");
     assert_eq!(

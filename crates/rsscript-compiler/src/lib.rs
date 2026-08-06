@@ -1,20 +1,28 @@
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "execution")]
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
+#[cfg(feature = "execution")]
 use std::path::Path;
+#[cfg(feature = "execution")]
 use std::sync::Arc;
+#[cfg(feature = "execution")]
 use std::sync::atomic::AtomicBool;
 
 pub use rsscript::Diagnostic;
+#[cfg(feature = "execution")]
 pub use rsscript_provider_api as provider;
 
+#[cfg(feature = "execution")]
 use provider::{NativeInterpreterFn, ProviderDescriptor, ProviderFunction, ProviderLoadError};
+use rsscript::analyze_source;
+#[cfg(feature = "execution")]
 use rsscript::{
     EvalError, ExternalFunctionRegistry, NativeValue, PackageAnalysis, RegVmExecutable, VmLimits,
-    analyze_package_dir, analyze_source, reg_vm_compile_package, reg_vm_compile_source,
-    reg_vm_compile_validated, validate_sources_with_interfaces,
+    analyze_package_dir, reg_vm_compile_package, reg_vm_compile_source, reg_vm_compile_validated,
+    validate_sources_with_interfaces,
 };
 
 #[derive(Default)]
@@ -25,6 +33,7 @@ impl Compiler {
         analyze_source(file, source)
     }
 
+    #[cfg(feature = "execution")]
     pub fn compile(&self, file: &str, source: &str) -> Result<CompiledPackage, CompileError> {
         let executable = reg_vm_compile_source(file, source).map_err(CompileError::from)?;
         Ok(CompiledPackage {
@@ -36,6 +45,7 @@ impl Compiler {
     /// Compile a source snapshot against explicit host interfaces. The
     /// interfaces contribute semantic signatures only; provider selection is
     /// intentionally deferred until execution.
+    #[cfg(feature = "execution")]
     pub fn compile_with_interfaces(
         &self,
         sources: &[(&str, &str)],
@@ -50,6 +60,7 @@ impl Compiler {
         })
     }
 
+    #[cfg(feature = "execution")]
     pub fn compile_package(&self, path: &Path) -> Result<CompiledPackage, CompileError> {
         let analysis = analyze_package_dir(path).map_err(CompileError::Package)?;
         if analysis.summary.errors != 0 {
@@ -62,6 +73,7 @@ impl Compiler {
         })
     }
 
+    #[cfg(feature = "execution")]
     pub fn load_verified(&self, bytecode: &[u8]) -> Result<CompiledPackage, CompileError> {
         let executable = RegVmExecutable::from_bytecode(bytecode).map_err(CompileError::from)?;
         Ok(CompiledPackage {
@@ -71,11 +83,13 @@ impl Compiler {
     }
 }
 
+#[cfg(feature = "execution")]
 pub struct CompiledPackage {
     executable: RegVmExecutable,
     analysis: Option<PackageAnalysis>,
 }
 
+#[cfg(feature = "execution")]
 impl CompiledPackage {
     pub fn bytecode(&self) -> Result<Vec<u8>, CompileError> {
         self.executable.to_bytecode().map_err(CompileError::from)
@@ -90,11 +104,13 @@ impl CompiledPackage {
     }
 }
 
+#[cfg(feature = "execution")]
 #[derive(Default)]
 pub struct ProviderRegistry {
     inner: ExternalFunctionRegistry,
 }
 
+#[cfg(feature = "execution")]
 impl ProviderRegistry {
     pub fn register(
         &mut self,
@@ -105,6 +121,7 @@ impl ProviderRegistry {
     }
 }
 
+#[cfg(feature = "execution")]
 #[derive(Debug, Clone)]
 pub struct RunLimits {
     pub max_depth: usize,
@@ -115,18 +132,21 @@ pub struct RunLimits {
     pub provider_call_budget: Option<u64>,
 }
 
+#[cfg(feature = "execution")]
 impl RunLimits {
     pub fn bounded() -> Self {
         VmLimits::safe_default().into()
     }
 }
 
+#[cfg(feature = "execution")]
 impl Default for RunLimits {
     fn default() -> Self {
         VmLimits::default().into()
     }
 }
 
+#[cfg(feature = "execution")]
 impl From<VmLimits> for RunLimits {
     fn from(limits: VmLimits) -> Self {
         Self {
@@ -140,6 +160,7 @@ impl From<VmLimits> for RunLimits {
     }
 }
 
+#[cfg(feature = "execution")]
 impl From<RunLimits> for VmLimits {
     fn from(limits: RunLimits) -> Self {
         Self {
@@ -153,11 +174,13 @@ impl From<RunLimits> for VmLimits {
     }
 }
 
+#[cfg(feature = "execution")]
 pub struct Runtime {
     providers: ProviderRegistry,
     limits: RunLimits,
 }
 
+#[cfg(feature = "execution")]
 impl Runtime {
     pub fn new(providers: ProviderRegistry, limits: RunLimits) -> Self {
         Self { providers, limits }
@@ -192,12 +215,14 @@ impl Runtime {
     }
 }
 
+#[cfg(feature = "execution")]
 impl Default for Runtime {
     fn default() -> Self {
         Self::new(ProviderRegistry::default(), RunLimits::default())
     }
 }
 
+#[cfg(feature = "execution")]
 #[derive(Debug, Clone, PartialEq)]
 pub struct ExecutionReport {
     pub value: String,
@@ -214,6 +239,7 @@ pub enum CompileError {
     Runtime(String),
 }
 
+#[cfg(feature = "execution")]
 impl From<EvalError> for CompileError {
     fn from(error: EvalError) -> Self {
         match error {
@@ -241,9 +267,11 @@ impl fmt::Display for CompileError {
 
 impl Error for CompileError {}
 
+#[cfg(feature = "execution")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeError(pub String);
 
+#[cfg(feature = "execution")]
 impl From<EvalError> for RuntimeError {
     fn from(error: EvalError) -> Self {
         Self(match error {
@@ -258,15 +286,17 @@ impl From<EvalError> for RuntimeError {
     }
 }
 
+#[cfg(feature = "execution")]
 impl fmt::Display for RuntimeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(&self.0)
     }
 }
 
+#[cfg(feature = "execution")]
 impl Error for RuntimeError {}
 
-#[cfg(test)]
+#[cfg(all(test, feature = "execution"))]
 mod tests {
     use super::*;
     use provider::{

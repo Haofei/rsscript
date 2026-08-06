@@ -78,11 +78,12 @@ Execution is bounded by step, memory, host-call, output, recursion, cancellation
 deadline, and child-process limits where applicable. Those controls are resource
 limits, not a language authority model or a sandbox claim.
 
-Rust hosts should depend on `rsscript-compiler`, whose stable embedding surface
-is limited to `Compiler`, `CompiledPackage`, `Runtime`, `ProviderRegistry`,
-`RunLimits`, `Diagnostic`, and `ExecutionReport`. VM registers, JIT plans,
-generated Rust source maps, and review implementation types are not part of that
-embedding contract.
+Frontend-only tools should depend on `rsscript-compiler` with its default
+features; that closure contains no runtime or provider. Rust hosts enable its
+`execution` feature to use the stable embedding surface: `Compiler`,
+`CompiledPackage`, `Runtime`, `ProviderRegistry`, `RunLimits`, `Diagnostic`, and
+`ExecutionReport`. VM registers, JIT plans, generated Rust source maps, and
+review implementation types are not part of that embedding contract.
 
 Provider authors should follow the versioned linkage, lifecycle, cancellation,
 and conformance rules in [`docs/provider-sdk.md`](docs/provider-sdk.md).

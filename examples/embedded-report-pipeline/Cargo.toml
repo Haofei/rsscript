@@ -5,8 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-rsscript-compiler = { path = "../../crates/rsscript-compiler" }
+rsscript-compiler = { path = "../../crates/rsscript-compiler", features = ["execution"] }
 rsscript-provider-fs = { path = "../../providers/fs" }
 rsscript-provider-log = { path = "../../providers/log" }
 sha2 = "0.10"
-
