@@ -643,22 +643,10 @@ impl<T> ProviderRegistry<T> {
         Ok(function)
     }
 
-    pub fn into_functions(self) -> impl Iterator<Item = (ExternalSymbol, T)> {
-        self.functions
-            .into_iter()
-            .map(|(symbol, function)| (symbol, function.callable))
-    }
-
     pub fn into_resolved_functions(
         self,
     ) -> impl Iterator<Item = (ExternalSymbol, ResolvedProviderFunction<T>)> {
         self.functions.into_iter()
-    }
-
-    pub fn functions(&self) -> impl Iterator<Item = (&ExternalSymbol, &T)> {
-        self.functions
-            .iter()
-            .map(|(symbol, function)| (symbol, &function.callable))
     }
 
     pub fn resolved_functions(

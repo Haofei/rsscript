@@ -846,6 +846,14 @@ fn linked_provider_contracts_reach_the_invocation_path() {
             "provider API must retain `{contract}`"
         );
     }
+    assert!(
+        !provider_api.contains("pub fn into_functions"),
+        "provider registry must not discard resolved descriptor metadata"
+    );
+    assert!(
+        !provider_api.contains("pub fn functions(&self)"),
+        "provider registry must not expose descriptor-free registered entries"
+    );
     let execution = read(&root.join("crates/rsscript/src/eval_types.rs"));
     assert!(execution.contains("ExternalFunction::from_resolved"));
     assert!(execution.contains("requires a blocking execution lane"));
