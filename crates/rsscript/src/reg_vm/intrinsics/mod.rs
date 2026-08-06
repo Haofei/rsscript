@@ -241,8 +241,6 @@ impl RegVm {
             | RegIntrinsic::CharToUpper => {
                 self.exec_char_intrinsics(unit, intrinsic, args, base, next_base)
             }
-            RegIntrinsic::ClockNow => Ok(instant_value(clock_system_unix_ms())),
-            RegIntrinsic::ClockSystemUnixMs => Ok(VmValue::Int(clock_system_unix_ms())),
             RegIntrinsic::DateAddDays
             | RegIntrinsic::DateAddMs
             | RegIntrinsic::DateDay
@@ -427,54 +425,6 @@ impl RegVm {
                 let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Int(value * 1000))
             }
-            RegIntrinsic::EnvCurrentDir => Ok(json_result(
-                std::env::current_dir()
-                    .map(|path| VmValue::string(path.to_string_lossy()))
-                    .map_err(|error| file_error_value(error.to_string())),
-            )),
-            RegIntrinsic::EnvGet => {
-                let name = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(std::env::var(name)
-                    .ok()
-                    .map(VmValue::string)
-                    .map(|value| VmValue::some(value))
-                    .unwrap_or(VmValue::OptionNone))
-            }
-            RegIntrinsic::EnvGetOrDefault => {
-                let name = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let default = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(VmValue::string(
-                    std::env::var(name).unwrap_or_else(|_| default.to_string()),
-                ))
-            }
-            RegIntrinsic::EnvHomeDir => Ok(std::env::var("HOME")
-                .ok()
-                .filter(|value| !value.is_empty())
-                .map(VmValue::string)
-                .map(|value| VmValue::some(value))
-                .unwrap_or(VmValue::OptionNone)),
-            RegIntrinsic::EnvRunWorkspaceRoot => Ok(VmValue::string(
-                std::env::var("RSS_RUN_WORKSPACE_ROOT")
-                    .ok()
-                    .or_else(|| {
-                        std::env::current_dir()
-                            .ok()
-                            .map(|path| path.display().to_string())
-                    })
-                    .unwrap_or_else(|| ".".to_string()),
-            )),
-            RegIntrinsic::EnvSet => {
-                let _ = intrinsic_arg(&self.stack, base, args, 0)?;
-                let _ = intrinsic_arg(&self.stack, base, args, 1)?;
-                self.stderr
-                    .push_str("[rsscript] warning: Env.set is a no-op in the safe runtime\n");
-                Ok(VmValue::Unit)
-            }
-            RegIntrinsic::EnvSetCurrentDir => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(file_result_unit(std::env::set_current_dir(path)))
-            }
-            RegIntrinsic::EnvTempDir => Ok(VmValue::string(std::env::temp_dir().to_string_lossy())),
             RegIntrinsic::FileAppendBytes => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let data = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_vec();
@@ -1386,40 +1336,6 @@ impl RegVm {
                 sorted_map_remove(&mut entries, key);
                 Ok(sorted_map_value(entries))
             }
-            RegIntrinsic::RandomBool => {
-                let mut rng = rand::thread_rng();
-                Ok(VmValue::Bool(rng.r#gen()))
-            }
-            RegIntrinsic::RandomBytes => {
-                let len = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let mut rng = rand::thread_rng();
-                let mut bytes = vec![0u8; len.max(0) as usize];
-                rng.fill(bytes.as_mut_slice());
-                Ok(VmValue::Bytes(Rc::new(bytes)))
-            }
-            RegIntrinsic::RandomFloat => {
-                let mut rng = rand::thread_rng();
-                Ok(VmValue::Float(rng.r#gen()))
-            }
-            RegIntrinsic::RandomInt => {
-                let min = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let max = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let mut rng = rand::thread_rng();
-                Ok(VmValue::Int(rng.gen_range(min..=max)))
-            }
-            RegIntrinsic::RandomString => {
-                const CHARSET: &[u8] =
-                    b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-                let len = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let mut rng = rand::thread_rng();
-                let value = (0..len.max(0))
-                    .map(|_| {
-                        let idx = rng.gen_range(0..CHARSET.len());
-                        CHARSET[idx] as char
-                    })
-                    .collect::<String>();
-                Ok(VmValue::string(value))
-            }
             RegIntrinsic::RegexCaptures
             | RegIntrinsic::RegexCompile
             | RegIntrinsic::RegexErrorMessage
@@ -1714,7 +1630,6 @@ impl RegVm {
             | RegIntrinsic::UrlToString => {
                 self.exec_url_intrinsics(unit, intrinsic, args, base, next_base)
             }
-            RegIntrinsic::UuidNewV4 => Ok(VmValue::string(uuid::Uuid::new_v4().to_string())),
             RegIntrinsic::WebSocketConnect => {
                 let url =
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string();

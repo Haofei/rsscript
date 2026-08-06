@@ -37,7 +37,6 @@ use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat, TimeZone, Timelike, U
 use flate2::read::GzDecoder;
 use hmac::{Hmac, Mac};
 use percent_encoding::{NON_ALPHANUMERIC, percent_decode_str, utf8_percent_encode};
-use rand::Rng;
 use sha2::{Digest, Sha256};
 use sha3::{
     Sha3_224, Sha3_256, Shake128,

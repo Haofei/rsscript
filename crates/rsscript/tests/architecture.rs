@@ -861,7 +861,8 @@ fn linked_provider_contracts_reach_the_invocation_path() {
     assert!(execution.contains("without registering a resource"));
 
     let vm_calls = read(&root.join("crates/rsscript/src/reg_vm/calls.rs"));
-    assert!(vm_calls.contains("blocking_allowed: true"));
+    assert!(vm_calls.contains("blocking_allowed: self.limits.allow_blocking_provider_calls"));
+    assert!(!vm_calls.contains("blocking_allowed: true"));
     assert!(vm_calls.contains("async_allowed: false"));
 }
 
