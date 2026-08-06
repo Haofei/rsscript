@@ -283,6 +283,21 @@ pub struct EvalOutput {
     pub provider_call_traces: Vec<ProviderCallTrace>,
 }
 
+/// VM result that preserves audit evidence even when execution terminates with
+/// an error. Public embedding façades should prefer this over a bare
+/// `Result<EvalOutput, EvalError>` when reporting bounded execution.
+#[derive(Debug, Clone, PartialEq)]
+pub struct EvalExecutionReport {
+    pub usage: ExecutionUsage,
+    pub value: Option<String>,
+    pub display_value: Option<String>,
+    pub native_value: Option<NativeValue>,
+    pub stdout: String,
+    pub stderr: String,
+    pub provider_call_traces: Vec<ProviderCallTrace>,
+    pub failure: Option<EvalError>,
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ExecutionUsage {
     pub steps_consumed: u64,

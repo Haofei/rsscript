@@ -49,7 +49,7 @@ use self::calls::PureClosurePlan;
 use crate::analyzer::validate_sources_with_interfaces;
 use crate::analyzer::{validate_source, validate_sources_with_interfaces_without_core};
 use crate::eval_types::{
-    EvalError, EvalOutput, ExternalFunction, NativeValue, ProviderCallContext,
+    EvalError, EvalExecutionReport, EvalOutput, ExternalFunction, NativeValue, ProviderCallContext,
     ProviderResourceTable,
 };
 use crate::interfaces::builtin_interfaces;
@@ -1532,6 +1532,60 @@ impl RegVmExecutable {
             external_bindings,
             VmLimits::default(),
         )
+    }
+
+    /// Execute under explicit limits while retaining partial usage, output,
+    /// Provider traces, and cleanup counters on failure.
+    pub fn execute_main_with_args_and_external_bindings_and_limits(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
+        limits: VmLimits,
+    ) -> Result<EvalExecutionReport, EvalError> {
+        let plan = ExecutionPlan::interpreter(limits);
+        let mut vm = self.prepare_vm(
+            args.into_iter().map(Into::into).collect(),
+            external_bindings
+                .into_iter()
+                .map(|(key, function)| (key.into(), function))
+                .collect(),
+            &plan,
+        )?;
+        let execution = vm.run_program("main");
+        let cleanup = vm.cleanup_provider_resources();
+        let result = match (execution, cleanup) {
+            (Err(error), _) | (Ok(_), Err(error)) => Err(error),
+            (Ok(value), Ok(())) => Ok(value),
+        };
+        let usage = vm.usage();
+        let provider_call_traces = vm.provider_trace.snapshot();
+        let stdout = vm.stdout;
+        let stderr = vm.stderr;
+        match result {
+            Ok(value) => {
+                let display_value = value.display();
+                Ok(EvalExecutionReport {
+                    usage,
+                    value: Some(display_value.clone()),
+                    display_value: Some(display_value),
+                    native_value: value.native_value(),
+                    stdout,
+                    stderr,
+                    provider_call_traces,
+                    failure: None,
+                })
+            }
+            Err(error) => Ok(EvalExecutionReport {
+                usage,
+                value: None,
+                display_value: None,
+                native_value: None,
+                stdout,
+                stderr,
+                provider_call_traces,
+                failure: Some(error),
+            }),
+        }
     }
 
     pub fn eval_main_with_args_and_external_bindings_and_limits(

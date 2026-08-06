@@ -260,39 +260,77 @@ impl Runtime {
         Self { providers, limits }
     }
 
+    /// Execute and always return an audit report, including partial evidence
+    /// for cancellation, budget exhaustion, Provider failures, and preflight
+    /// rejection.
+    pub fn execute(
+        &self,
+        package: &CompiledPackage,
+        args: impl IntoIterator<Item = impl Into<String>>,
+    ) -> ExecutionReport {
+        for import in package.external_imports() {
+            if let Err(error) = self.providers.inner.resolve(import) {
+                let failure = RuntimeError {
+                    reason: TerminationReason::VerificationFailure,
+                    message: error.to_string(),
+                };
+                return ExecutionReport::failed(package.module_digest(), failure, Vec::new());
+            }
+        }
+        let output = match package
+            .executable
+            .execute_main_with_args_and_external_bindings_and_limits(
+                args,
+                self.providers.inner.bindings(),
+                self.limits.clone().into(),
+            ) {
+            Ok(output) => output,
+            Err(error) => {
+                let diagnostics = match &error {
+                    EvalError::Diagnostics(diagnostics) => diagnostics.clone(),
+                    _ => Vec::new(),
+                };
+                return ExecutionReport::failed(
+                    package.module_digest(),
+                    RuntimeError::from(error),
+                    diagnostics,
+                );
+            }
+        };
+        let diagnostics = match &output.failure {
+            Some(EvalError::Diagnostics(diagnostics)) => diagnostics.clone(),
+            _ => Vec::new(),
+        };
+        let failure = output.failure.map(RuntimeError::from);
+        ExecutionReport {
+            artifact_digest: package.module_digest().to_string(),
+            termination_reason: failure
+                .as_ref()
+                .map_or(TerminationReason::Completed, |error| error.reason),
+            usage: output.usage,
+            value: output.value.unwrap_or_default(),
+            display_value: output.display_value.unwrap_or_default(),
+            native_value: output.native_value,
+            stdout: output.stdout,
+            stderr: output.stderr,
+            provider_call_traces: output.provider_call_traces,
+            diagnostics,
+            failure,
+        }
+    }
+
+    /// Compatibility helper for callers that prefer ordinary `Result`
+    /// control flow. Use [`Self::execute`] when failure evidence is required.
     pub fn run(
         &self,
         package: &CompiledPackage,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<ExecutionReport, RuntimeError> {
-        for import in package.external_imports() {
-            self.providers
-                .inner
-                .resolve(import)
-                .map_err(|error| RuntimeError {
-                    reason: TerminationReason::VerificationFailure,
-                    message: error.to_string(),
-                })?;
+        let report = self.execute(package, args);
+        match report.failure.clone() {
+            Some(error) => Err(error),
+            None => Ok(report),
         }
-        let output = package
-            .executable
-            .eval_main_with_args_and_external_bindings_and_limits(
-                args,
-                self.providers.inner.bindings(),
-                self.limits.clone().into(),
-            )
-            .map_err(RuntimeError::from)?;
-        Ok(ExecutionReport {
-            artifact_digest: package.module_digest().to_string(),
-            termination_reason: TerminationReason::Completed,
-            usage: output.usage,
-            value: output.value,
-            display_value: output.display_value,
-            native_value: output.native_value,
-            stdout: output.stdout,
-            stderr: output.stderr,
-            provider_call_traces: output.provider_call_traces,
-        })
     }
 }
 
@@ -315,6 +353,31 @@ pub struct ExecutionReport {
     pub stdout: String,
     pub stderr: String,
     pub provider_call_traces: Vec<provider::ProviderCallTrace>,
+    pub diagnostics: Vec<Diagnostic>,
+    pub failure: Option<RuntimeError>,
+}
+
+#[cfg(feature = "execution")]
+impl ExecutionReport {
+    fn failed(
+        artifact_digest: impl Into<String>,
+        failure: RuntimeError,
+        diagnostics: Vec<Diagnostic>,
+    ) -> Self {
+        Self {
+            artifact_digest: artifact_digest.into(),
+            termination_reason: failure.reason,
+            usage: ExecutionUsage::default(),
+            value: String::new(),
+            display_value: String::new(),
+            native_value: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            provider_call_traces: Vec::new(),
+            diagnostics,
+            failure: Some(failure),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -675,11 +738,19 @@ mod tests {
             ..RunLimits::default()
         };
 
-        let error = Runtime::new(providers, limits)
-            .run(&package, Vec::<String>::new())
-            .expect_err("second provider call must exceed the provider budget");
-        assert_eq!(error.reason, TerminationReason::ProviderBudgetExceeded);
-        assert!(error.message.contains("provider call budget exceeded"));
+        let report = Runtime::new(providers, limits).execute(&package, Vec::<String>::new());
+        assert_eq!(
+            report.termination_reason,
+            TerminationReason::ProviderBudgetExceeded
+        );
+        assert_eq!(report.usage.provider_calls, 2);
+        assert_eq!(report.provider_call_traces.len(), 1);
+        assert!(
+            report
+                .failure
+                .as_ref()
+                .is_some_and(|error| error.message.contains("provider call budget exceeded"))
+        );
 
         let failure_symbol = descriptor.functions[0].symbol.clone();
         let failure_signature = descriptor.functions[0].signature.clone();
@@ -700,11 +771,20 @@ mod tests {
                 )]),
             )
             .expect("register failing provider");
-        let error = Runtime::new(failing_providers, RunLimits::bounded())
-            .run(&package, Vec::<String>::new())
-            .expect_err("structured Provider error must propagate");
-        assert_eq!(error.reason, TerminationReason::ProviderError);
-        assert!(error.message.contains("InvalidArgument"));
+        let report = Runtime::new(failing_providers, RunLimits::bounded())
+            .execute(&package, Vec::<String>::new());
+        assert_eq!(report.termination_reason, TerminationReason::ProviderError);
+        assert_eq!(report.provider_call_traces.len(), 1);
+        assert_eq!(
+            report.provider_call_traces[0].result,
+            Err(provider::ProviderErrorCode::InvalidArgument)
+        );
+        assert!(
+            report
+                .failure
+                .as_ref()
+                .is_some_and(|error| error.message.contains("InvalidArgument"))
+        );
     }
 
     #[test]
