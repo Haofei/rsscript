@@ -3,18 +3,25 @@
 //! these tests does not make the in-process VM an isolation boundary.
 
 use proptest::prelude::*;
-use rsscript::{CancellationToken, EvalError, VmLimits};
+use rsscript::{CancellationToken, EvalError, ExecutionFailureKind, VmLimits};
 
 mod common;
 use common::reg_vm_eval_source_main_with_limits;
 
 /// Invariant 1 (runtime resilience): configured VM limits turn selected
-/// resource-exhaustion cases into recoverable `EvalError::Runtime` values. They
+/// resource-exhaustion cases into machine-readable `EvalError::Execution` values. They
 /// do not replace process isolation for untrusted execution.
 ///
 /// Helper: eval `source`'s `main` under `limits`, returning the result.
 fn eval_limited(source: &str, limits: VmLimits) -> Result<rsscript::EvalOutput, EvalError> {
     reg_vm_eval_source_main_with_limits("hostile.rss", source, std::iter::empty::<String>(), limits)
+}
+
+fn assert_execution_failure(error: &EvalError, expected: ExecutionFailureKind) {
+    assert!(
+        matches!(error, EvalError::Execution { kind, .. } if *kind == expected),
+        "expected {expected:?}, got {error:?}"
+    );
 }
 
 /// A1: unbounded self-recursion hits the default-on depth cap and returns a
@@ -59,13 +66,7 @@ fn main() -> Int {
         ..VmLimits::default()
     };
     let err = eval_limited(source, limits).expect_err("must error, not hang");
-    match err {
-        EvalError::Runtime(msg) => assert!(
-            msg.contains("step budget"),
-            "expected step-budget error, got: {msg}"
-        ),
-        other => panic!("expected EvalError::Runtime, got {other:?}"),
-    }
+    assert_execution_failure(&err, ExecutionFailureKind::StepBudgetExceeded);
 }
 
 /// B4: an unbounded allocation loop with a memory ceiling configured returns a
@@ -92,13 +93,7 @@ fn runaway_allocation_with_memory_ceiling_returns_clean_error() {
         ..VmLimits::default()
     };
     let err = eval_limited(source, limits).expect_err("must error, not OOM");
-    match err {
-        EvalError::Runtime(msg) => assert!(
-            msg.contains("memory limit"),
-            "expected memory-limit error, got: {msg}"
-        ),
-        other => panic!("expected EvalError::Runtime, got {other:?}"),
-    }
+    assert_execution_failure(&err, ExecutionFailureKind::AllocationBudgetExceeded);
 }
 
 #[test]
@@ -123,7 +118,7 @@ fn main() -> Int {
         },
     )
     .expect_err("map growth must hit allocation budget");
-    assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+    assert_execution_failure(&error, ExecutionFailureKind::AllocationBudgetExceeded);
 }
 
 #[test]
@@ -174,7 +169,7 @@ fn fresh_collection_intrinsics_are_charged_to_allocation_budget() {
         ),
     ];
 
-    for (name, source, allocation_budget) in cases {
+    for (_name, source, allocation_budget) in cases {
         let error = eval_limited(
             source,
             VmLimits {
@@ -184,10 +179,7 @@ fn fresh_collection_intrinsics_are_charged_to_allocation_budget() {
             },
         )
         .unwrap_err();
-        assert!(
-            matches!(error, EvalError::Runtime(ref message) if message.contains("memory limit")),
-            "{name}: expected memory-limit error, got {error:?}"
-        );
+        assert_execution_failure(&error, ExecutionFailureKind::AllocationBudgetExceeded);
     }
 }
 
@@ -221,7 +213,7 @@ fn intrinsic_and_constructor_results_are_charged_before_publication() {
         ),
     ];
 
-    for (name, source, allocation_budget) in cases {
+    for (_name, source, allocation_budget) in cases {
         let error = eval_limited(
             &source,
             VmLimits {
@@ -231,10 +223,7 @@ fn intrinsic_and_constructor_results_are_charged_before_publication() {
             },
         )
         .expect_err("fresh intrinsic result must exceed the tight allocation budget");
-        assert!(
-            matches!(error, EvalError::Runtime(ref message) if message.contains("memory limit")),
-            "{name}: expected memory-limit error, got {error:?}"
-        );
+        assert_execution_failure(&error, ExecutionFailureKind::AllocationBudgetExceeded);
     }
 }
 
@@ -310,7 +299,7 @@ fn ordinary_vm_growth_paths_respect_allocation_budget() {
         ),
     ];
 
-    for (name, source, allocation_budget) in cases {
+    for (_name, source, allocation_budget) in cases {
         let error = eval_limited(
             source,
             VmLimits {
@@ -320,10 +309,7 @@ fn ordinary_vm_growth_paths_respect_allocation_budget() {
             },
         )
         .expect_err("allocation path must exceed its tight allocation budget");
-        assert!(
-            matches!(error, EvalError::Runtime(ref message) if message.contains("memory limit")),
-            "{name}: expected memory-limit error, got {error:?}"
-        );
+        assert_execution_failure(&error, ExecutionFailureKind::AllocationBudgetExceeded);
     }
 }
 
@@ -344,7 +330,7 @@ fn main() -> Int {
         },
     )
     .expect_err("SHAKE output must hit allocation budget");
-    assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+    assert_execution_failure(&error, ExecutionFailureKind::AllocationBudgetExceeded);
 
     let too_large = source.replace("1048576", "67108865");
     let error = eval_limited(&too_large, VmLimits::default())
@@ -421,13 +407,7 @@ fn main() -> Int {
         ..VmLimits::default()
     };
     let err = eval_limited(source, limits).expect_err("must error, not hang");
-    match err {
-        EvalError::Runtime(msg) => assert!(
-            msg.contains("cancelled"),
-            "expected cancellation error, got: {msg}"
-        ),
-        other => panic!("expected EvalError::Runtime, got {other:?}"),
-    }
+    assert_execution_failure(&err, ExecutionFailureKind::Cancelled);
 }
 
 /// B3 follow-up (negative): a cancel flag that is present but `false` must not
@@ -515,13 +495,7 @@ fn self_referential_container_is_bounded_by_memory_ceiling() {
         ..VmLimits::default()
     };
     let err = eval_limited(source, limits).expect_err("must trip a bounded error, not leak/crash");
-    match err {
-        EvalError::Runtime(msg) => assert!(
-            msg.contains("memory limit"),
-            "expected memory-limit (bounded) error, got: {msg}"
-        ),
-        other => panic!("expected EvalError::Runtime, got {other:?}"),
-    }
+    assert_execution_failure(&err, ExecutionFailureKind::AllocationBudgetExceeded);
 }
 
 /// B5 (output flood): a loop that writes to stdout every iteration is bounded by
@@ -547,13 +521,7 @@ fn main() -> Int {
         ..VmLimits::default()
     };
     let err = eval_limited(source, limits).expect_err("must trip on output flood, not OOM");
-    match err {
-        EvalError::Runtime(msg) => assert!(
-            msg.contains("stdout budget"),
-            "expected stdout-budget error, got: {msg}"
-        ),
-        other => panic!("expected EvalError::Runtime, got {other:?}"),
-    }
+    assert_execution_failure(&err, ExecutionFailureKind::OutputLimitExceeded);
 }
 
 /// B6 (intrinsic-call flood): a loop that performs a stdlib call every iteration
@@ -578,13 +546,7 @@ fn main() -> Int {
         ..VmLimits::default()
     };
     let err = eval_limited(source, limits).expect_err("must trip on intrinsic-call flood");
-    match err {
-        EvalError::Runtime(msg) => assert!(
-            msg.contains("intrinsic call budget"),
-            "expected intrinsic-call-budget error, got: {msg}"
-        ),
-        other => panic!("expected EvalError::Runtime, got {other:?}"),
-    }
+    assert_execution_failure(&err, ExecutionFailureKind::IntrinsicBudgetExceeded);
 }
 
 /// A normal program that writes a little output and makes a few stdlib calls

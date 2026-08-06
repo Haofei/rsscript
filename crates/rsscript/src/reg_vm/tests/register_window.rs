@@ -4,6 +4,7 @@ mod register_window_tests {
     use crate::reg_vm::tier::native_scalar_callee_pending_on_branch_profile;
 
     use super::super::*;
+    use crate::ExecutionFailureKind;
 
     /// Build a bare `RegVm` with an empty unit — enough to exercise the
     /// register-stack helpers (`ensure_regs`/`set_reg`/`prepare_frame`) directly,
@@ -18,6 +19,16 @@ mod register_window_tests {
             closure_identity_observable: true,
         };
         RegVm::new(Rc::new(unit), Vec::new(), HashMap::new())
+    }
+
+    fn is_allocation_failure(error: &EvalError) -> bool {
+        matches!(
+            error,
+            EvalError::Execution {
+                kind: ExecutionFailureKind::AllocationBudgetExceeded,
+                ..
+            }
+        )
     }
 
     fn connected_tcp_pair() -> (TcpStream, TcpStream) {
@@ -171,7 +182,7 @@ mod register_window_tests {
             vec![VmValue::List(Rc::clone(&list)), VmValue::Int(1)],
         )
         .expect_err("list growth must exceed a zero-byte budget");
-        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert!(is_allocation_failure(&error));
         assert_eq!(list.borrow().len(), 0);
         assert_eq!(list.borrow().capacity(), 0);
 
@@ -188,7 +199,7 @@ mod register_window_tests {
             vec![VmValue::Deque(Rc::clone(&deque)), VmValue::Int(1)],
         )
         .expect_err("deque growth must exceed a zero-byte budget");
-        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert!(is_allocation_failure(&error));
         assert!(deque.borrow().is_empty());
         assert_eq!(deque.borrow().capacity(), 0);
 
@@ -205,7 +216,7 @@ mod register_window_tests {
             vec![VmValue::List(Rc::clone(&sorted_set)), VmValue::Int(1)],
         )
         .expect_err("sorted-set growth must exceed a zero-byte budget");
-        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert!(is_allocation_failure(&error));
         assert_eq!(sorted_set.borrow().len(), 0);
         assert_eq!(sorted_set.borrow().capacity(), 0);
 
@@ -227,7 +238,7 @@ mod register_window_tests {
             ],
         )
         .expect_err("sorted-map growth must exceed a zero-byte budget");
-        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert!(is_allocation_failure(&error));
         assert_eq!(sorted_map.borrow().len(), 0);
         assert_eq!(sorted_map.borrow().capacity(), 0);
 
@@ -247,7 +258,7 @@ mod register_window_tests {
             ],
         )
         .expect_err("string-builder growth must exceed a zero-byte budget");
-        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert!(is_allocation_failure(&error));
         assert!(matches!(&*builder.borrow(), VmValue::String(value) if value.is_empty()));
     }
 
@@ -290,7 +301,7 @@ mod register_window_tests {
             let error = run_budgeted_instruction(code, vec![VmValue::Int(1)])
                 .expect_err("aggregate outer storage must exceed a zero-byte budget");
             assert!(
-                matches!(&error, EvalError::Runtime(message) if message.contains("memory limit")),
+                is_allocation_failure(&error),
                 "{error:?}"
             );
         }
@@ -306,7 +317,7 @@ mod register_window_tests {
             vec![VmValue::Int(1), VmValue::Int(2)],
         )
         .expect_err("map outer storage must exceed a zero-byte budget");
-        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert!(is_allocation_failure(&error));
     }
 
     /// Execution spec §4.1: a reused register window must be *non-retaining*.
@@ -381,7 +392,7 @@ mod register_window_tests {
         let error = vm
             .call_external_symbol("test.big", &[], &[], 0)
             .expect_err("large native result must be rejected before materialization");
-        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert!(is_allocation_failure(&error));
     }
 
     #[test]
@@ -422,7 +433,7 @@ mod register_window_tests {
                 .call_external_symbol(key, &[], &[], 0)
                 .expect_err("spare native capacity must be charged before publication");
             assert!(
-                matches!(&error, EvalError::Runtime(message) if message.contains("memory limit")),
+                is_allocation_failure(&error),
                 "{key}: {error:?}"
             );
         }
@@ -458,7 +469,7 @@ mod register_window_tests {
         let error = vm
             .call_external_symbol("test.mutate", &[0], &[0], 0)
             .expect_err("mutation envelope must be rejected atomically");
-        assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
+        assert!(is_allocation_failure(&error));
         assert_eq!(vm.reg(0), &VmValue::Int(7));
     }
 

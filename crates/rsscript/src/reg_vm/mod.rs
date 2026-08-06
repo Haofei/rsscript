@@ -958,6 +958,23 @@ impl RegVmExecutable {
             args,
             std::iter::empty::<(String, ExternalFunction)>(),
             true,
+            VmLimits::default(),
+        )
+    }
+
+    /// Run the tier-0 executor with explicit limits. Trusted hosts that require
+    /// unrestricted native-style recursion must opt in with
+    /// [`VmLimits::unbounded_for_trusted_host`].
+    pub fn eval_main_with_args_jit_and_limits(
+        &self,
+        args: impl IntoIterator<Item = impl Into<String>>,
+        limits: VmLimits,
+    ) -> Result<EvalOutput, EvalError> {
+        self.eval_main_with_args_and_external_bindings_jit_inner(
+            args,
+            std::iter::empty::<(String, ExternalFunction)>(),
+            true,
+            limits,
         )
     }
 
@@ -1374,7 +1391,12 @@ impl RegVmExecutable {
         args: impl IntoIterator<Item = impl Into<String>>,
         external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
     ) -> Result<EvalOutput, EvalError> {
-        self.eval_main_with_args_and_external_bindings_jit_inner(args, external_bindings, false)
+        self.eval_main_with_args_and_external_bindings_jit_inner(
+            args,
+            external_bindings,
+            false,
+            VmLimits::default(),
+        )
     }
 
     fn eval_main_with_args_and_external_bindings_jit_inner(
@@ -1382,8 +1404,9 @@ impl RegVmExecutable {
         args: impl IntoIterator<Item = impl Into<String>>,
         external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
         force_all: bool,
+        limits: VmLimits,
     ) -> Result<EvalOutput, EvalError> {
-        let plan = ExecutionPlan::tier0(force_all);
+        let plan = ExecutionPlan::tier0(limits, force_all);
         let mut vm = self.prepare_vm(
             args.into_iter().map(Into::into).collect(),
             external_bindings

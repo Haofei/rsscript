@@ -630,7 +630,10 @@ fn main() -> Unit {
         let executable =
             reg_vm_compile_source("scalar-recursion.rss", source).expect("lowering should succeed");
         let output = executable
-            .eval_main_with_args_jit(Vec::<String>::new())
+            .eval_main_with_args_jit_and_limits(
+                Vec::<String>::new(),
+                VmLimits::unbounded_for_trusted_host(),
+            )
             .expect("JIT run should succeed");
         assert_eq!(output.stdout, "55\n");
         let fib_id = executable.unit.function_ids["fib"];
@@ -642,4 +645,3 @@ fn main() -> Unit {
             "fib should be recognized as an Int scalar self-recursive JIT candidate",
         );
     }
-

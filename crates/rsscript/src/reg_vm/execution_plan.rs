@@ -40,9 +40,9 @@ impl ExecutionPlan {
         }
     }
 
-    pub(super) fn tier0(force_all: bool) -> Self {
+    pub(super) fn tier0(limits: VmLimits, force_all: bool) -> Self {
         Self {
-            limits: VmLimits::default(),
+            limits,
             stdout: StdoutMode::Captured,
             tier: TierPlan::Tier0 { force_all },
         }
@@ -148,7 +148,7 @@ mod tests {
             TierPlan::Interpreter
         ));
         assert!(matches!(
-            ExecutionPlan::tier0(true).tier,
+            ExecutionPlan::tier0(VmLimits::default(), true).tier,
             TierPlan::Tier0 { force_all: true }
         ));
         assert_eq!(
