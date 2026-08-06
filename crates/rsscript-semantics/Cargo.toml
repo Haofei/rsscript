@@ -10,3 +10,4 @@ doctest = false
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
+rsscript-syntax = { path = "../rsscript-syntax" }

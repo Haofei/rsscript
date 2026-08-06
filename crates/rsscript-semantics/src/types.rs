@@ -1,8 +1,41 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 
-use crate::syntax::ast::{DataEffect, TypeRef};
-use crate::syntax::ast::{Item, Program};
+use rsscript_syntax::Span;
+use rsscript_syntax::ast::{DataEffect, Item, Program, TypeRef};
+
+fn type_root_name(name: &str) -> &str {
+    let trimmed = name.trim();
+    let base = trimmed.strip_prefix("fresh ").unwrap_or(trimmed);
+    base.split_once('<').map_or(base, |(root, _)| root)
+}
+
+fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
+    let (_, rest) = type_name.split_once('<')?;
+    let inner = rest.strip_suffix('>')?;
+    Some(split_top_level_type_args(inner))
+}
+
+fn split_top_level_type_args(args: &str) -> Vec<&str> {
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut depth = 0usize;
+    for (index, character) in args.char_indices() {
+        match character {
+            '<' | '(' => depth += 1,
+            '>' | ')' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                parts.push(args[start..index].trim());
+                start = index + character.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    if start < args.len() {
+        parts.push(args[start..].trim());
+    }
+    parts
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct TypeId(u32);
@@ -185,7 +218,7 @@ impl ResolvedType {
 
     /// Compatibility conversion for legacy HIR fields that still expose a
     /// rendered type. New semantic facts are built with `from_type_ref`.
-    pub(crate) fn from_display(type_name: &str) -> Self {
+    pub fn from_display(type_name: &str) -> Self {
         let mut rest = type_name.trim();
         let mut qualifiers = TypeQualifiers::default();
         loop {
@@ -207,7 +240,7 @@ impl ResolvedType {
             if let Some(close) = close {
                 let parameter_text = &parameters[..close];
                 let mut effects = Vec::new();
-                let parameters = crate::text_util::split_top_level_type_args(parameter_text)
+                let parameters = split_top_level_type_args(parameter_text)
                     .into_iter()
                     .filter(|parameter| !parameter.is_empty())
                     .map(|parameter| {
@@ -245,8 +278,8 @@ impl ResolvedType {
             }
         } else {
             ResolvedTypeKind::Named {
-                name: crate::text_util::type_root_name(rest).to_string(),
-                arguments: crate::text_util::type_arg_names(rest)
+                name: type_root_name(rest).to_string(),
+                arguments: type_arg_names(rest)
                     .unwrap_or_default()
                     .into_iter()
                     .map(Self::from_display)
@@ -257,7 +290,7 @@ impl ResolvedType {
         Self { qualifiers, kind }
     }
 
-    pub fn to_type_ref(&self, span: &crate::diagnostic::Span) -> TypeRef {
+    pub fn to_type_ref(&self, span: &Span) -> TypeRef {
         let (name, args, fn_params, fn_param_effects, fn_return) = match &self.kind {
             ResolvedTypeKind::Named { name, arguments } => (
                 name.clone(),
@@ -504,7 +537,7 @@ pub struct SemanticTypeFacts {
 }
 
 impl SemanticTypeFacts {
-    pub(crate) fn from_programs<'a>(
+    pub fn from_programs<'a>(
         program: &Program,
         interfaces: impl IntoIterator<Item = &'a Program>,
     ) -> Self {
@@ -628,6 +661,10 @@ impl TypeArena {
 
     pub fn len(&self) -> usize {
         self.types.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.types.is_empty()
     }
 }
 

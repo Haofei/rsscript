@@ -17,6 +17,9 @@ The physical dependency cut is not complete: the main crate still contains the
 analyzer orchestration, package tooling, VM, AOT lowering, native loading, and
 review adapters. The lexer, parser, source AST, syntax desugarings, spans, and
 bounded parse budget are now owned by the independent `rsscript-syntax` and
-`rsscript-work-budget` crates and re-exported through the compatibility façade;
-the runtime still contains concrete host services. The current roadmap prioritizes
-those boundaries over new language, JIT, self-hosting, or package-system scope.
+`rsscript-work-budget` crates. Structural types, type interning, substitution,
+parameter effects, and package-wide semantic type facts are now owned by
+`rsscript-semantics`. These are re-exported through the compatibility façade while
+Typed HIR and the remaining checks are migrated; the runtime still contains
+concrete host services. The current roadmap prioritizes those boundaries over new
+language, JIT, self-hosting, or package-system scope.

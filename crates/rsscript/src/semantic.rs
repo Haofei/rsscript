@@ -4,9 +4,7 @@ use crate::diagnostic::Diagnostic;
 use crate::hir::Hir;
 use crate::syntax::ast::Program;
 
-#[path = "semantic_types.rs"]
-mod semantic_types;
-pub(crate) use semantic_types::{ResolvedType, SemanticTypeFacts, TypeQualifiers};
+pub(crate) use rsscript_semantics::{ResolvedType, SemanticTypeFacts, TypeQualifiers};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrontendStopReason {

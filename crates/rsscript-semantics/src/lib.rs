@@ -10,6 +10,12 @@ pub use rsscript_abi_model::{
     ParameterSignature, SignatureHash,
 };
 
+mod types;
+pub use types::{
+    ResolvedParamEffect, ResolvedType, ResolvedTypeKind, SemanticTypeFacts, TypeArena, TypeId,
+    TypeQualifiers,
+};
+
 /// Structured retention facts attached to a callable signature.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RetainedParams(BTreeSet<String>);

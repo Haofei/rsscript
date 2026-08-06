@@ -531,6 +531,49 @@ fn syntax_model_is_owned_by_the_boundary_crate() {
 }
 
 #[test]
+fn structural_semantics_are_owned_by_the_semantics_crate() {
+    let root = workspace_root();
+    let types = root.join("crates/rsscript-semantics/src/types.rs");
+    assert!(types.is_file());
+    assert!(!root.join("crates/rsscript/src/semantic_types.rs").exists());
+
+    let semantics = read(&root.join("crates/rsscript-semantics/src/lib.rs"));
+    for exported in [
+        "ResolvedParamEffect",
+        "ResolvedType",
+        "ResolvedTypeKind",
+        "SemanticTypeFacts",
+        "TypeArena",
+        "TypeId",
+        "TypeQualifiers",
+    ] {
+        assert!(
+            semantics.contains(exported),
+            "semantics must export structural model `{exported}`"
+        );
+    }
+
+    let manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-semantics/Cargo.toml")))
+            .expect("semantics manifest should parse");
+    let dependencies = dependency_packages(&manifest);
+    for forbidden in [
+        "rsscript",
+        "rsscript-runtime",
+        "rsscript-provider-api",
+        "rss-native-abi",
+        "rss-process-guard",
+        "reir",
+        "vm-jit",
+    ] {
+        assert!(
+            !dependencies.contains(forbidden),
+            "semantics must not depend on `{forbidden}`"
+        );
+    }
+}
+
+#[test]
 fn runtime_does_not_depend_on_the_compiler_package() {
     let root = workspace_root();
     let manifest_path = root.join("crates/runtime/Cargo.toml");

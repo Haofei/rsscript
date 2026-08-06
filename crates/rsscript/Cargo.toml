@@ -24,6 +24,7 @@ rss-native-abi = { path = "../native-abi", features = ["host"] }
 rss-process-guard = { path = "../process-guard" }
 rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-provider-api = { path = "../rsscript-provider-api" }
+rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-runtime = { path = "../runtime", default-features = false, features = ["core"] }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-work-budget = { path = "../rsscript-work-budget" }
