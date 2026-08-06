@@ -845,9 +845,7 @@ pub(crate) enum MatchFailurePatch {
 }
 
 impl RegUnit {
-    pub(crate) fn lower(
-        executable: &rsscript_lowering::ExecutableIr<'_>,
-    ) -> Result<Self, EvalError> {
+    pub(crate) fn lower(executable: &rsscript_lowering::ExecutableIr) -> Result<Self, EvalError> {
         let hir = executable.typed_hir();
         let names = executable
             .functions()

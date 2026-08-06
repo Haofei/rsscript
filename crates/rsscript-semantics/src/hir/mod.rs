@@ -474,7 +474,7 @@ pub struct HirFunctionBody {
     pub returns: Vec<HirReturn>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Hir {
     semantic_types: Arc<SemanticTypeFacts>,
     signatures: HashMap<String, FunctionSig>,

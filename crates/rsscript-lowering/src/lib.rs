@@ -22,21 +22,21 @@ pub struct ExecutableFunction {
     pub is_async: bool,
 }
 
-/// A validated, provider-neutral view over Typed HIR.
+/// An owned, validated, provider-neutral executable input.
 ///
-/// Keeping the checked HIR reference here makes ownership and resource facts
-/// available to every backend while the bytecode encoder progressively replaces
-/// compatibility projections. Backends must accept this type rather than raw AST
-/// or unchecked HIR.
-#[derive(Debug)]
-pub struct ExecutableIr<'hir> {
-    typed_hir: &'hir Hir,
+/// The current instruction lowering still consumes the checked HIR projection,
+/// but that projection is owned by this phase value. No backend borrows the
+/// compiler database or depends on its lifetime. Subsequent instruction-model
+/// extraction can therefore happen without changing the phase API.
+#[derive(Debug, Clone)]
+pub struct ExecutableIr {
+    typed_hir: Hir,
     functions: Box<[ExecutableFunction]>,
     external_imports: Box<[ExternalSymbol]>,
 }
 
-impl<'hir> ExecutableIr<'hir> {
-    pub fn from_validated_hir(typed_hir: &'hir Hir) -> Self {
+impl ExecutableIr {
+    pub fn from_validated_hir(typed_hir: &Hir) -> Self {
         let functions = typed_hir
             .function_bodies()
             .filter_map(|(name, body)| {
@@ -69,14 +69,14 @@ impl<'hir> ExecutableIr<'hir> {
             .into_boxed_slice();
 
         Self {
-            typed_hir,
+            typed_hir: typed_hir.clone(),
             functions,
             external_imports,
         }
     }
 
-    pub fn typed_hir(&self) -> &'hir Hir {
-        self.typed_hir
+    pub fn typed_hir(&self) -> &Hir {
+        &self.typed_hir
     }
 
     pub fn semantic_types(&self) -> &SemanticTypeFacts {

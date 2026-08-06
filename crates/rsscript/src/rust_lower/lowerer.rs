@@ -220,7 +220,7 @@ impl<'a> RustLowerer<'a> {
 
     pub(super) fn new_validated(
         program: &'a Program,
-        executable: &'a rsscript_lowering::ExecutableIr<'a>,
+        executable: &'a rsscript_lowering::ExecutableIr,
         external_bindings: BTreeMap<String, String>,
         interface_programs: &[Program],
     ) -> Self {
