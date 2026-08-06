@@ -97,7 +97,6 @@ impl RootedFsProvider {
                     .map_err(|error| ProviderError::from_io("resolve write path", error))?;
                 std::fs::write(path, text)
                     .map_err(|error| ProviderError::from_io("write text", error))?;
-                context.check_cancelled()?;
                 Ok(NativeValue::Unit)
             }),
         ])
