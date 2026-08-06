@@ -117,6 +117,21 @@ impl ProviderError {
     }
 }
 
+impl ProviderErrorCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::InvalidArgument => "invalid_argument",
+            Self::NotFound => "not_found",
+            Self::PermissionDenied => "permission_denied",
+            Self::Cancelled => "cancelled",
+            Self::DeadlineExceeded => "deadline_exceeded",
+            Self::ResourceExhausted => "resource_exhausted",
+            Self::Unavailable => "unavailable",
+            Self::Internal => "internal",
+        }
+    }
+}
+
 impl fmt::Display for ProviderError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{:?}: {}", self.code, self.message)
@@ -675,6 +690,42 @@ pub enum ProviderLoadError {
     CallModeMismatch(ExternalSymbol),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderLoadErrorCode {
+    InvalidProviderIdentity,
+    UnsupportedAbi,
+    DuplicateDescriptorSymbol,
+    DuplicateRegisteredSymbol,
+    MissingImplementation,
+    UndeclaredImplementation,
+    DescriptorSignatureMismatch,
+    UnresolvedImport,
+    ImportAbiMismatch,
+    ImportSignatureMismatch,
+    CallModeMismatch,
+}
+
+impl ProviderLoadError {
+    pub fn code(&self) -> ProviderLoadErrorCode {
+        match self {
+            Self::InvalidProviderIdentity => ProviderLoadErrorCode::InvalidProviderIdentity,
+            Self::UnsupportedAbi { .. } => ProviderLoadErrorCode::UnsupportedAbi,
+            Self::DuplicateDescriptorSymbol(_) => ProviderLoadErrorCode::DuplicateDescriptorSymbol,
+            Self::DuplicateRegisteredSymbol(_) => ProviderLoadErrorCode::DuplicateRegisteredSymbol,
+            Self::MissingImplementation(_) => ProviderLoadErrorCode::MissingImplementation,
+            Self::UndeclaredImplementation(_) => ProviderLoadErrorCode::UndeclaredImplementation,
+            Self::DescriptorSignatureMismatch(_) => {
+                ProviderLoadErrorCode::DescriptorSignatureMismatch
+            }
+            Self::UnresolvedImport(_) => ProviderLoadErrorCode::UnresolvedImport,
+            Self::ImportAbiMismatch { .. } => ProviderLoadErrorCode::ImportAbiMismatch,
+            Self::ImportSignatureMismatch(_) => ProviderLoadErrorCode::ImportSignatureMismatch,
+            Self::CallModeMismatch(_) => ProviderLoadErrorCode::CallModeMismatch,
+        }
+    }
+}
+
 impl fmt::Display for ProviderLoadError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "RSScript provider load failed: {self:?}")
@@ -746,10 +797,18 @@ mod tests {
             signature_hash: signature(DataEffect::Take).hash(),
             abi_version: 1,
         };
+        let Err(error) = registry.resolve(&import) else {
+            panic!("mismatched import must fail")
+        };
         assert!(matches!(
-            registry.resolve(&import),
-            Err(ProviderLoadError::ImportSignatureMismatch(_))
+            error,
+            ProviderLoadError::ImportSignatureMismatch(_)
         ));
+        assert_eq!(error.code(), ProviderLoadErrorCode::ImportSignatureMismatch);
+        assert_eq!(
+            ProviderErrorCode::ResourceExhausted.as_str(),
+            "resource_exhausted"
+        );
     }
 
     #[test]

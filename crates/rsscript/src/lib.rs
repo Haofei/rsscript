@@ -160,8 +160,8 @@ pub use review::{
 };
 #[cfg(feature = "execution")]
 pub use rsscript_bytecode::{
-    BYTECODE_MAGIC, BYTECODE_SCHEMA, BytecodeArtifact, BytecodeError, BytecodeHeader,
-    BytecodeLimits, BytecodeVerifier, VerifiedBytecode,
+    BYTECODE_MAGIC, BYTECODE_SCHEMA, BytecodeArtifact, BytecodeError, BytecodeErrorCode,
+    BytecodeHeader, BytecodeLimits, BytecodeVerifier, VerifiedBytecode,
 };
 #[cfg(feature = "execution")]
 pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};

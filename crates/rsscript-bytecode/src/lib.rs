@@ -1413,6 +1413,68 @@ pub enum BytecodeError {
     Cbor(serde_cbor::Error),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BytecodeErrorCode {
+    Cancelled,
+    DeadlineExceeded,
+    InvalidMagic,
+    UnsupportedSchema,
+    UnsupportedLanguageVersion,
+    UnsupportedRuntimeAbi,
+    InvalidProvenance,
+    LimitExceeded,
+    ExecutableHashMismatch,
+    ChecksumMismatch,
+    ImportsNotCanonical,
+    ImportAbiMismatch,
+    ImportSignatureHashMismatch,
+    InvalidPayload,
+    MalformedSectionTable,
+    SectionsNotCanonical,
+    MissingSection,
+    UnknownRequiredSection,
+    KnownSectionNotRequired,
+    InvalidSectionFlags,
+    SectionHashMismatch,
+    MalformedChecksum,
+    TrailingBytes,
+    Encode,
+    Cbor,
+}
+
+impl BytecodeError {
+    pub fn code(&self) -> BytecodeErrorCode {
+        match self {
+            Self::Cancelled => BytecodeErrorCode::Cancelled,
+            Self::DeadlineExceeded => BytecodeErrorCode::DeadlineExceeded,
+            Self::InvalidMagic => BytecodeErrorCode::InvalidMagic,
+            Self::UnsupportedSchema(_) => BytecodeErrorCode::UnsupportedSchema,
+            Self::UnsupportedLanguageVersion(_) => BytecodeErrorCode::UnsupportedLanguageVersion,
+            Self::UnsupportedRuntimeAbi { .. } => BytecodeErrorCode::UnsupportedRuntimeAbi,
+            Self::InvalidProvenance(_) => BytecodeErrorCode::InvalidProvenance,
+            Self::LimitExceeded(_) => BytecodeErrorCode::LimitExceeded,
+            Self::ExecutableHashMismatch => BytecodeErrorCode::ExecutableHashMismatch,
+            Self::ChecksumMismatch => BytecodeErrorCode::ChecksumMismatch,
+            Self::ImportsNotCanonical => BytecodeErrorCode::ImportsNotCanonical,
+            Self::ImportAbiMismatch => BytecodeErrorCode::ImportAbiMismatch,
+            Self::ImportSignatureHashMismatch => BytecodeErrorCode::ImportSignatureHashMismatch,
+            Self::InvalidPayload(_) => BytecodeErrorCode::InvalidPayload,
+            Self::MalformedSectionTable => BytecodeErrorCode::MalformedSectionTable,
+            Self::SectionsNotCanonical => BytecodeErrorCode::SectionsNotCanonical,
+            Self::MissingSection(_) => BytecodeErrorCode::MissingSection,
+            Self::UnknownRequiredSection(_) => BytecodeErrorCode::UnknownRequiredSection,
+            Self::KnownSectionNotRequired(_) => BytecodeErrorCode::KnownSectionNotRequired,
+            Self::InvalidSectionFlags { .. } => BytecodeErrorCode::InvalidSectionFlags,
+            Self::SectionHashMismatch(_) => BytecodeErrorCode::SectionHashMismatch,
+            Self::MalformedChecksum => BytecodeErrorCode::MalformedChecksum,
+            Self::TrailingBytes => BytecodeErrorCode::TrailingBytes,
+            Self::Encode(_) => BytecodeErrorCode::Encode,
+            Self::Cbor(_) => BytecodeErrorCode::Cbor,
+        }
+    }
+}
+
 impl fmt::Display for BytecodeError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1555,6 +1617,26 @@ mod tests {
             ),
             Err(BytecodeError::DeadlineExceeded)
         ));
+    }
+
+    #[test]
+    fn verifier_errors_expose_stable_machine_codes() {
+        assert_eq!(
+            BytecodeError::InvalidMagic.code(),
+            BytecodeErrorCode::InvalidMagic
+        );
+        assert_eq!(
+            serde_json::to_string(&BytecodeError::InvalidMagic.code()).unwrap(),
+            "\"invalid_magic\""
+        );
+        assert_eq!(
+            BytecodeError::UnsupportedRuntimeAbi {
+                artifact: 9,
+                runtime: 1,
+            }
+            .code(),
+            BytecodeErrorCode::UnsupportedRuntimeAbi
+        );
     }
 
     #[test]

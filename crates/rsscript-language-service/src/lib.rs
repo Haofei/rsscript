@@ -75,6 +75,15 @@ pub enum LanguageServiceError {
     DeadlineExceeded,
 }
 
+impl LanguageServiceError {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Cancelled => "cancelled",
+            Self::DeadlineExceeded => "deadline_exceeded",
+        }
+    }
+}
+
 impl LanguageService {
     pub fn set_file(
         &mut self,
@@ -375,6 +384,7 @@ mod tests {
             ),
             Err(LanguageServiceError::DeadlineExceeded)
         );
+        assert_eq!(LanguageServiceError::Cancelled.as_str(), "cancelled");
         assert_eq!(service.stats(), LanguageServiceStats::default());
     }
 

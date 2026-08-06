@@ -539,6 +539,18 @@ impl CompileError {
     }
 }
 
+impl CompileErrorCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Diagnostics => "diagnostics",
+            Self::PackageSnapshot => "package_snapshot",
+            Self::Bytecode => "bytecode",
+            Self::Cancelled => "cancelled",
+            Self::DeadlineExceeded => "deadline_exceeded",
+        }
+    }
+}
+
 impl From<OperationAbort> for CompileError {
     fn from(abort: OperationAbort) -> Self {
         match abort {
@@ -614,6 +626,27 @@ pub enum TerminationReason {
     ResourceLimitExceeded,
     VerificationFailure,
     InternalError,
+}
+
+#[cfg(feature = "execution")]
+impl TerminationReason {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::ScriptError => "script_error",
+            Self::Cancelled => "cancelled",
+            Self::DeadlineExceeded => "deadline_exceeded",
+            Self::StepBudgetExceeded => "step_budget_exceeded",
+            Self::AllocationBudgetExceeded => "allocation_budget_exceeded",
+            Self::OutputLimitExceeded => "output_limit_exceeded",
+            Self::ProviderError => "provider_error",
+            Self::ProviderBudgetExceeded => "provider_budget_exceeded",
+            Self::IntrinsicBudgetExceeded => "intrinsic_budget_exceeded",
+            Self::ResourceLimitExceeded => "resource_limit_exceeded",
+            Self::VerificationFailure => "verification_failure",
+            Self::InternalError => "internal_error",
+        }
+    }
 }
 
 #[cfg(feature = "execution")]
@@ -761,6 +794,11 @@ mod tests {
         assert_eq!(report.termination_reason, TerminationReason::Completed);
         assert_eq!(report.artifact_digest, loaded.module_digest());
         assert!(report.usage.steps_consumed > 0);
+        assert_eq!(report.termination_reason.as_str(), "completed");
+        assert_eq!(
+            CompileErrorCode::PackageSnapshot.as_str(),
+            "package_snapshot"
+        );
     }
 
     #[test]
