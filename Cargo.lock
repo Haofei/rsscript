@@ -1616,7 +1616,7 @@ version = "0.1.0"
 name = "rsscript-language-service"
 version = "0.1.0"
 dependencies = [
- "rsscript",
+ "rsscript-compiler",
  "toml",
 ]
 

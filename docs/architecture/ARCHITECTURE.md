@@ -41,6 +41,12 @@ is the current implementation and CLI composition root; embedders do not depend
 on its analyzer database, register VM, Rust AOT, JIT, package review, or source-map
 types directly.
 
+`WorkspaceLoader` is the OS/VFS adapter for editor files. The
+`LanguageService` itself consumes explicit document revisions, rejects stale
+updates, caches diagnostics by document plus interface revision, and accepts
+cancellation, monotonic deadlines, and diagnostic budgets. It depends on the
+frontend-only compiler API and never enables execution features.
+
 ## Runtime boundary
 
 The VM owns values, managed handles, resource slots, scheduling, cancellation,

@@ -695,16 +695,12 @@ fn lsp_dependency_closure_selects_frontend_only() {
         &root.join("crates/rsscript-language-service/Cargo.toml"),
     ))
     .unwrap();
-    let compiler = &language_service["dependencies"]["rsscript"];
-    assert_eq!(compiler["default-features"].as_bool(), Some(false));
-    assert_eq!(
-        compiler["features"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(toml::Value::as_str)
-            .collect::<Vec<_>>(),
-        vec!["language-service"]
+    assert!(language_service["dependencies"].get("rsscript").is_none());
+    assert!(
+        language_service["dependencies"]
+            .get("rsscript-compiler")
+            .is_some(),
+        "language service must consume the frontend compiler API, not the product monolith"
     );
 
     let compiler_manifest: toml::Value =

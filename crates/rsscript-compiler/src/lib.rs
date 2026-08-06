@@ -12,6 +12,17 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 pub use rsscript::Diagnostic;
+
+/// Frontend-only editor API consumed by `rsscript-language-service` during the
+/// monolith extraction. Runtime and Provider types are deliberately excluded.
+pub mod language {
+    pub use rsscript::{
+        Definition, Diagnostic, DiagnosticExplanation, Reference, RssDocumentSymbol, Severity,
+        Span, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, analyze_source_with_core,
+        analyze_source_with_interfaces, analyze_sources_with_interfaces, document_symbols,
+        explain_diagnostic_code, format_source, lint_source, symbol_index,
+    };
+}
 #[cfg(feature = "execution")]
 pub use rsscript::ExecutionUsage;
 #[cfg(feature = "execution")]
