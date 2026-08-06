@@ -320,8 +320,8 @@ impl RegVm {
             deadline: self.limits.deadline,
             remaining_byte_budget: self
                 .limits
-                .mem_budget
-                .map(|limit| limit.saturating_sub(self.live_bytes)),
+                .allocation_budget
+                .map(|limit| limit.saturating_sub(self.allocated_bytes)),
             remaining_output_budget: self
                 .limits
                 .stdout_budget

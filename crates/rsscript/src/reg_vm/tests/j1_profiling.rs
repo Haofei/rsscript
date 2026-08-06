@@ -809,7 +809,7 @@ fn main() -> Unit {{
     fn public_default_arms_resource_budgets() {
         let limits = VmLimits::default();
         assert!(limits.step_budget.is_some());
-        assert!(limits.mem_budget.is_some());
+        assert!(limits.allocation_budget.is_some());
         assert!(limits.stdout_budget.is_some());
         assert!(limits.intrinsic_call_budget.is_some());
         assert!(limits.provider_call_budget.is_some());
@@ -817,7 +817,7 @@ fn main() -> Unit {{
         let trusted = VmLimits::unbounded_for_trusted_host();
         assert!(trusted.max_depth > limits.max_depth);
         assert!(trusted.step_budget.is_none());
-        assert!(trusted.mem_budget.is_none());
+        assert!(trusted.allocation_budget.is_none());
         assert!(trusted.stdout_budget.is_none());
         assert!(trusted.intrinsic_call_budget.is_none());
         assert!(trusted.provider_call_budget.is_none());

@@ -9,7 +9,7 @@ mutation write-back positions. An unresolved symbol is a link/execution error.
 Provider choice must not alter parsing, validation, HIR, lowering, or the compiled
 artifact.
 
-Execution control includes cancellation, deadline, step budget, memory budget,
+Execution control includes cancellation, deadline, step budget, allocation budget,
 external-call budget, output bounds, and recursion bounds. It does not include a
 language authority model. Resource slots are opaque and provider-owned at the
 external boundary; cleanup occurs on normal return, error, cancellation, and

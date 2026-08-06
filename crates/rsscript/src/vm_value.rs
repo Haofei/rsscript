@@ -234,7 +234,7 @@ impl TypedVec {
         TypedVec::Boxed(values)
     }
 
-    /// Per-element heap cost for `mem_budget` accounting (plan §4.6). A typed
+    /// Per-element heap cost for `allocation_budget` accounting (plan §4.6). A typed
     /// `Ints`/`Floats` element is a flat 8-byte scalar; a `Boxed` element is a full
     /// `VmValue`. The allocation budget charges this per element of growth so
     /// the accounting tracks the *actual* flat buffer cost, not a misleading
@@ -247,7 +247,7 @@ impl TypedVec {
         }
     }
 
-    /// The `mem_budget` cost of appending `value` to this list: the kind's
+    /// The `allocation_budget` cost of appending `value` to this list: the kind's
     /// per-element cost, but an empty list that will *specialize* to a scalar kind
     /// on push charges the scalar (8 B) cost, and an empty `Boxed` taking a heap
     /// value charges the `VmValue` cost.
@@ -1851,7 +1851,7 @@ mod tests {
     }
 
     #[test]
-    fn mem_budget_charges_per_kind() {
+    fn allocation_budget_charges_per_kind() {
         // 8 B/elem for the flat scalar kinds, VmValue cost for Boxed (plan §4.6).
         assert_eq!(TypedVec::Ints(vec![1, 2, 3]).elem_bytes(), 8);
         assert_eq!(TypedVec::Floats(vec![1.0]).elem_bytes(), 8);

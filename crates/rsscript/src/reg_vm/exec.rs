@@ -11,7 +11,7 @@ impl RegVm {
     pub(super) fn usage(&self) -> crate::ExecutionUsage {
         crate::ExecutionUsage {
             steps_consumed: self.steps,
-            allocation_bytes_consumed: self.live_bytes,
+            allocation_bytes_consumed: self.allocated_bytes,
             output_bytes: self.stdout.len().saturating_add(self.stderr.len()),
             intrinsic_calls: self.intrinsic_calls,
             provider_calls: self.provider_calls,
@@ -63,7 +63,7 @@ impl RegVm {
             jit_force_all: false,
             limits: VmLimits::default(),
             steps: 0,
-            live_bytes: 0,
+            allocated_bytes: 0,
             intrinsic_calls: 0,
             provider_calls: 0,
             provider_resources: ProviderResourceTable::new(VmLimits::default().resource_limit),
@@ -126,7 +126,7 @@ impl RegVm {
         self.limits.step_budget.is_none()
             && self.limits.cancel.is_none()
             && self.limits.deadline.is_none()
-            && self.limits.mem_budget.is_none()
+            && self.limits.allocation_budget.is_none()
             // Native code runs whole-function without routing intrinsic dispatch
             // through `charge_intrinsic_call`, so an armed intrinsic budget must also
             // force the interpreter/tier-0 path — otherwise the host-call cap is
@@ -452,7 +452,7 @@ impl RegVm {
                 for (_field, reg) in fields {
                     values.push(self.reg(base + *reg).clone());
                 }
-                let roots = self.limits.mem_budget.map(|_| {
+                let roots = self.limits.allocation_budget.map(|_| {
                     self.storage_roots_from_regs(
                         &fields.iter().map(|(_, r)| *r).collect::<Vec<_>>(),
                         base,
@@ -461,7 +461,7 @@ impl RegVm {
                 let value =
                     VmValue::Struct(Rc::new(VmStruct::with_layout(Rc::clone(layout), values)));
                 if let Some(roots) = &roots {
-                    self.account_result_storage_delta(&value, roots, self.live_bytes)?;
+                    self.account_result_storage_delta(&value, roots, self.allocated_bytes)?;
                 }
                 self.set_reg(base + *dst, value);
             }
@@ -474,7 +474,7 @@ impl RegVm {
                 for (_field, reg) in fields {
                     values.push(self.reg(base + *reg).clone());
                 }
-                let roots = self.limits.mem_budget.map(|_| {
+                let roots = self.limits.allocation_budget.map(|_| {
                     self.storage_roots_from_regs(
                         &fields.iter().map(|(_, r)| *r).collect::<Vec<_>>(),
                         base,
@@ -483,16 +483,16 @@ impl RegVm {
                 let value =
                     VmValue::Variant(Rc::new(VmStruct::with_layout(Rc::clone(layout), values)));
                 if let Some(roots) = &roots {
-                    self.account_result_storage_delta(&value, roots, self.live_bytes)?;
+                    self.account_result_storage_delta(&value, roots, self.allocated_bytes)?;
                 }
                 self.set_reg(base + *dst, value);
             }
             RegInstr::MakeList { dst, items } => {
                 let roots = self
                     .limits
-                    .mem_budget
+                    .allocation_budget
                     .map(|_| self.storage_roots_from_regs(items, base));
-                let live_bytes_before = self.live_bytes;
+                let allocated_bytes_before = self.allocated_bytes;
                 let mut list = Vec::with_capacity(items.len());
                 for reg in items {
                     list.push(self.reg(base + *reg).clone());
@@ -500,18 +500,18 @@ impl RegVm {
                 let typed = TypedVec::from_values(list);
                 let value = VmValue::List(Rc::new(RefCell::new(typed)));
                 if let Some(roots) = &roots {
-                    self.account_result_storage_delta(&value, roots, live_bytes_before)?;
+                    self.account_result_storage_delta(&value, roots, allocated_bytes_before)?;
                 }
                 self.set_reg(base + *dst, value);
             }
             RegInstr::MakeObject { dst, fields } => {
-                let roots = self.limits.mem_budget.map(|_| {
+                let roots = self.limits.allocation_budget.map(|_| {
                     self.storage_roots_from_regs(
                         &fields.iter().map(|(_, r)| *r).collect::<Vec<_>>(),
                         base,
                     )
                 });
-                let live_bytes_before = self.live_bytes;
+                let allocated_bytes_before = self.allocated_bytes;
                 let mut object = serde_json::Map::new();
                 for (field, reg) in fields {
                     let value = vm_value_to_json_literal(self.reg(base + *reg))?;
@@ -519,7 +519,7 @@ impl RegVm {
                 }
                 let value = VmValue::Json(Rc::new(serde_json::Value::Object(object)));
                 if let Some(roots) = &roots {
-                    self.account_result_storage_delta(&value, roots, live_bytes_before)?;
+                    self.account_result_storage_delta(&value, roots, allocated_bytes_before)?;
                 }
                 self.set_reg(base + *dst, value);
             }
@@ -530,9 +530,9 @@ impl RegVm {
                     .collect::<Vec<_>>();
                 let roots = self
                     .limits
-                    .mem_budget
+                    .allocation_budget
                     .map(|_| self.storage_roots_from_regs(&entry_regs, base));
-                let live_bytes_before = self.live_bytes;
+                let allocated_bytes_before = self.allocated_bytes;
                 let projected_entries = if entries.is_empty() {
                     0
                 } else {
@@ -548,7 +548,7 @@ impl RegVm {
                 }
                 let value = VmValue::Map(Rc::new(RefCell::new(map)));
                 if let Some(roots) = &roots {
-                    self.account_result_storage_delta(&value, roots, live_bytes_before)?;
+                    self.account_result_storage_delta(&value, roots, allocated_bytes_before)?;
                 }
                 self.set_reg(base + *dst, value);
             }
@@ -1030,7 +1030,7 @@ impl RegVm {
         // growth is charged, so the bound is conservative.
         let list = expect_list_ref(self.reg(base + list))?;
         let value = self.reg(base + value).clone();
-        if self.limits.mem_budget.is_some() {
+        if self.limits.allocation_budget.is_some() {
             let before = list.borrow().allocated_bytes();
             let mut replacement = list.borrow().clone_preserving_capacity();
             replacement.checked_push_accounted(value).map_err(|v| {
@@ -1072,7 +1072,7 @@ impl RegVm {
         // `VmValue` slots, which `extend_accounted` bills correctly (the old
         // source-`elem_bytes` charge under-counted that mixed-layout case).
         let list = expect_list_ref(self.reg(base + list))?;
-        if self.limits.mem_budget.is_some() {
+        if self.limits.allocation_budget.is_some() {
             let before = list.borrow().allocated_bytes();
             let mut replacement = list.borrow().clone_preserving_capacity();
             replacement.extend_accounted(append_values);
@@ -1582,7 +1582,7 @@ impl RegVm {
                             }
                             // Recursive native fast paths run Cranelift code that polls
                             // neither `step_budget` nor `cancel` (and allocates off the
-                            // `mem_budget` meter), so they are gated on all three limits
+                            // `allocation_budget` meter), so they are gated on all three limits
                             // being unarmed — matching the native-tier gate in
                             // `try_native`. With any limit armed, recursion runs on the
                             // interpreter / tier-0 executor, which `tick()`s every step.
@@ -1989,7 +1989,7 @@ impl RegVm {
                             let list = expect_list_ref(self.reg(base + *set))?.clone();
                             let inserted = if sorted_contains_vm(&list.borrow(), &value)? {
                                 false
-                            } else if self.limits.mem_budget.is_some() {
+                            } else if self.limits.allocation_budget.is_some() {
                                 let before = list.borrow().allocated_bytes();
                                 let mut replacement = list.borrow().clone_preserving_capacity();
                                 let inserted = sorted_insert_vm(replacement.as_boxed_mut(), value)?;
@@ -2030,7 +2030,7 @@ impl RegVm {
                                 sorted_map_get_in_place(&list.borrow(), &key)?.is_some();
                             let before = list.borrow().allocated_bytes();
                             let pair_bytes = 2 * std::mem::size_of::<VmValue>();
-                            if self.limits.mem_budget.is_some() {
+                            if self.limits.allocation_budget.is_some() {
                                 let mut replacement = list.borrow().clone_preserving_capacity();
                                 if updates_existing {
                                     for entry in replacement.as_boxed_mut().iter_mut() {
@@ -2111,7 +2111,7 @@ impl RegVm {
                                 ));
                             };
                             let was_shared = Rc::strong_count(text) > 1;
-                            if self.limits.mem_budget.is_some() {
+                            if self.limits.allocation_budget.is_some() {
                                 let old_capacity = text.capacity();
                                 let mut replacement = String::with_capacity(
                                     old_capacity.max(text.len().saturating_add(value.len())),
@@ -2175,9 +2175,9 @@ impl RegVm {
                         } => {
                             let storage_roots = self
                                 .limits
-                                .mem_budget
+                                .allocation_budget
                                 .map(|_| self.storage_roots_from_regs(args, base));
-                            let live_bytes_before = self.live_bytes;
+                            let allocated_bytes_before = self.allocated_bytes;
                             let value =
                                 self.call_intrinsic(unit, *intrinsic, args, base, next_base)?;
                             // A blocking intrinsic (channel/sleep) parked the task and left
@@ -2190,7 +2190,7 @@ impl RegVm {
                                     self.account_result_storage_delta(
                                         &value,
                                         storage_roots,
-                                        live_bytes_before,
+                                        allocated_bytes_before,
                                     )?;
                                 }
                                 self.set_reg(base + *dst, value);
@@ -2204,16 +2204,16 @@ impl RegVm {
                         } => {
                             let storage_roots = self
                                 .limits
-                                .mem_budget
+                                .allocation_budget
                                 .map(|_| self.storage_roots_from_regs(args, base));
-                            let live_bytes_before = self.live_bytes;
+                            let allocated_bytes_before = self.allocated_bytes;
                             let value =
                                 self.call_typed_intrinsic(unit, *intrinsic, type_arg, args, base)?;
                             if let Some(storage_roots) = &storage_roots {
                                 self.account_result_storage_delta(
                                     &value,
                                     storage_roots,
-                                    live_bytes_before,
+                                    allocated_bytes_before,
                                 )?;
                             }
                             self.set_reg(base + *dst, value);

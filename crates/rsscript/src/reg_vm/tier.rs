@@ -516,11 +516,11 @@ impl RegVm {
         // containing an unbounded loop would run natively and bypass `step_budget`
         // / `cancel`. When either preemption limit is armed we refuse to dispatch
         // natively and fall back to the tier-0 executor (and interpreter), which
-        // `tick()` on every instruction. `mem_budget` is ALSO in this gate now that
+        // `tick()` on every instruction. `allocation_budget` is ALSO in this gate now that
         // the native subset can mutate/allocate heap (§7.1 rule 9 write helpers): an
         // allocating native attempt runs off the meter and would not trip
-        // `mem_budget`, so a function could grow the accounted live-set past the
-        // limit without erroring. Refusing native while `mem_budget` is armed keeps
+        // `allocation_budget`, so a function could grow the accounted cumulative allocation total past the
+        // limit without erroring. Refusing native while `allocation_budget` is armed keeps
         // the limit exact (Model A; matches the tier-0 self-recursive gate).
         if !self.native_limits_unarmed() {
             return NativeAttempt::Fallback;
@@ -1411,7 +1411,7 @@ impl RegVm {
         // that path even though vm-jit's raw cancel load is now atomic.
         if self.limits.step_budget.is_some()
             || self.limits.cancel.is_some()
-            || self.limits.mem_budget.is_some()
+            || self.limits.allocation_budget.is_some()
             || self.limits.intrinsic_call_budget.is_some()
             || self.limits.provider_call_budget.is_some()
         {
@@ -1422,7 +1422,7 @@ impl RegVm {
         // proven limit-aware OSR without changing the cache shape again.
         let emit_step = self.limits.step_budget.is_some();
         let emit_cancel = self.limits.cancel.is_some();
-        let mem_armed = self.limits.mem_budget.is_some();
+        let allocation_armed = self.limits.allocation_budget.is_some();
         if let Some(native) = self.native.as_mut() {
             native.osr_dynamic_bail = false;
         }
@@ -1610,7 +1610,7 @@ impl RegVm {
                             )| {
                                 let n_jit_regs = jit_fn.n_regs as usize;
                                 // J0.5 mem: a `ListPush*` flat-capacity growth now charges
-                                // `mem_budget` in its host helper (the only native-subset op
+                                // `allocation_budget` in its host helper (the only native-subset op
                                 // the interpreter bills), so an allocating loop runs natively
                                 // under an armed budget and bails to the interpreter at the
                                 // exact over-budget push — no blanket decline needed.
@@ -2022,7 +2022,7 @@ impl RegVm {
                             )
                                 .and_then(|(jit_fn, params, derived_liveins, scalar_fields, reg_types, written_regs, string_literals)| {
                                     let n_jit_regs = jit_fn.n_regs as usize;
-                                    // J0.5 mem: `ListPush*` now charges `mem_budget` in its
+                                    // J0.5 mem: `ListPush*` now charges `allocation_budget` in its
                                     // helper (the only native-subset billed op), so an
                                     // allocating loop runs natively and bails at the exact
                                     // over-budget push — no blanket decline needed.
@@ -2612,11 +2612,11 @@ impl RegVm {
         }
         // J0.5 mem: seed the mem cell before EVERY OSR call (armed budget or `-1` to
         // disarm). The `ListPush*` helper charges flat-capacity growth against it; on a
-        // clean exit we read `live_bytes` back to commit, on a bail the rollback+rerun
+        // clean exit we read `allocated_bytes` back to commit, on a bail the rollback+rerun
         // discards it. Independent of the step `limits_ptr` (helper-side).
         {
-            let mem_budget = self.limits.mem_budget.map_or(-1, |b| b as i64);
-            jit_set_mem_cell(self.live_bytes as i64, mem_budget);
+            let allocation_budget = self.limits.allocation_budget.map_or(-1, |b| b as i64);
+            jit_set_mem_cell(self.allocated_bytes as i64, allocation_budget);
         }
         let Some(native_ref) = self.native.as_ref() else {
             heap_tx.abort();
@@ -2765,10 +2765,10 @@ impl RegVm {
                 }
                 // J0.5 mem: this is the CLEAN OSR exit (heap writes committed above), so
                 // commit the `ListPush*` byte charges the native loop accumulated into the
-                // interpreter's live-set. (A bail takes the `_` arm below, which aborts the
+                // interpreter's cumulative allocation total. (A bail takes the `_` arm below, which aborts the
                 // heap tx and reruns on the interpreter — discarding the native charges.)
-                if mem_armed {
-                    self.live_bytes = jit_mem_cell_live_bytes().max(0) as usize;
+                if allocation_armed {
+                    self.allocated_bytes = jit_allocation_cell_allocated_bytes().max(0) as usize;
                 }
                 let mut scalar_writebacks: Vec<(usize, Vec<(usize, i64)>)> = Vec::new();
                 for field in scalar_fields.iter().filter(|field| field.writeback) {

@@ -1249,7 +1249,7 @@ impl RegVmExecutable {
     }
 
     /// Like [`Self::eval_main_with_args_native_with_stats`] but runs under explicit
-    /// [`VmLimits`]. With native enabled, an armed `step_budget`/`cancel`/`mem_budget`
+    /// [`VmLimits`]. With native enabled, an armed `step_budget`/`cancel`/`allocation_budget`
     /// must prevent native dispatch (Cranelift polls/accounts none of them) — used to
     /// regression-test the recursive native fast-path limit gate.
     #[cfg(feature = "native-jit")]
@@ -1732,14 +1732,14 @@ pub struct VmLimits {
     /// Best-effort cumulative quota for VM-owned allocation and container
     /// capacity growth. `None` disables accounting (near-zero overhead).
     /// This is not a live-memory measurement or an operating-system sandbox.
-    pub mem_budget: Option<usize>,
+    pub allocation_budget: Option<usize>,
     /// Host-level preemption hook. `None` means no polling (the off path is
     /// near-free: `tick()` never touches the atomic). When `Some`, the host can
     /// set the flag to `true` from anywhere (e.g. a watchdog thread on timeout or
     /// an abort signal) and the running evaluation is preempted at the next
     /// throttled step check — even inside a tight `while true {}` loop that never
     /// awaits or checks the cooperative RSS `CancellationToken`. The eval then
-    /// returns `EvalError::Runtime("evaluation cancelled")`. This stops the *whole*
+    /// returns a structured `ExecutionFailureKind::Cancelled`. This stops the *whole*
     /// eval; see the note in `tick()` on per-task preemption.
     pub cancel: Option<rsscript_operation::CancellationToken>,
     /// Monotonic execution deadline shared with Provider calls.
@@ -1792,7 +1792,7 @@ impl Default for VmLimits {
         Self {
             max_depth: 4_096,
             step_budget: Some(50_000_000),
-            mem_budget: Some(256 * 1024 * 1024),
+            allocation_budget: Some(256 * 1024 * 1024),
             cancel: None,
             deadline: None,
             stdout_budget: Some(4 * 1024 * 1024),
@@ -1818,7 +1818,7 @@ impl VmLimits {
         Self {
             max_depth: DEFAULT_MAX_DEPTH,
             step_budget: None,
-            mem_budget: None,
+            allocation_budget: None,
             cancel: None,
             deadline: None,
             stdout_budget: None,
@@ -1877,11 +1877,11 @@ struct RegVm {
     /// Best-effort cumulative count of VM-owned allocation and capacity growth.
     /// We add estimated growth and do not subtract frees, so this is an
     /// allocation quota rather than a precise live set. It
-    /// exists only to trip `limits.mem_budget`; when that is `None` we skip all
+    /// exists only to trip `limits.allocation_budget`; when that is `None` we skip all
     /// accounting so the overhead is zero. Accounted sites include register-stack
     /// growth, collection construction and capacity growth, and bounded intrinsic
     /// outputs such as SHAKE digests.
-    live_bytes: usize,
+    allocated_bytes: usize,
     /// Number of stdlib/runtime intrinsic calls dispatched so far (the
     /// `intrinsic_call_budget` fuel gauge). Only consulted when that budget is `Some`;
     /// the unconditional increment is the entire overhead when it is off.
@@ -3000,11 +3000,11 @@ thread_local! {
     /// host `AtomicBool` otherwise. The host seeds it before the call and reads `steps`
     /// back after, so one tick stream spans native and interpreter.
     static JIT_LIMITS_CELL: std::cell::Cell<[i64; 3]> = const { std::cell::Cell::new([0, -1, 0]) };
-    /// J0.5 mem cell: `[live_bytes, mem_budget]`. Unlike the step cell this is charged by
+    /// J0.5 mem cell: `[allocated_bytes, allocation_budget]`. Unlike the step cell this is charged by
     /// the `ListPush*` HOST HELPER (the only native-subset op the interpreter bills to
-    /// `mem_budget`), not by generated code. `mem_budget` is `-1` when unarmed (the helper
+    /// `allocation_budget`), not by generated code. `allocation_budget` is `-1` when unarmed (the helper
     /// then charges nothing). The host seeds it before a native call and, on a CLEAN OSR
-    /// exit, reads `live_bytes` back to commit the charges; on a bail the OSR rolls back
+    /// exit, reads `allocated_bytes` back to commit the charges; on a bail the OSR rolls back
     /// the list writes and reruns on the interpreter, which recharges authoritatively, so
     /// the native charges are simply discarded (exact `account_bytes` parity).
     static JIT_MEM_CELL: std::cell::Cell<[i64; 2]> = const { std::cell::Cell::new([0, -1]) };
@@ -3025,26 +3025,26 @@ fn jit_limits_cell_steps() -> i64 {
     JIT_LIMITS_CELL.with(|cell| cell.get()[0])
 }
 
-/// Seed the J0.5 mem cell before a native call. `live_bytes` is the interpreter's current
-/// accounted live-set; `mem_budget` is the budget (or `-1` to disarm — every non-mem-armed
+/// Seed the J0.5 mem cell before a native call. `allocated_bytes` is the interpreter's current
+/// accounted cumulative allocation total; `allocation_budget` is the budget (or `-1` to disarm — every non-mem-armed
 /// native call MUST seed `-1` so a stale armed budget never leaks into the `ListPush*`
 /// helper).
 #[cfg(feature = "native-jit")]
-fn jit_set_mem_cell(live_bytes: i64, mem_budget: i64) {
-    JIT_MEM_CELL.with(|cell| cell.set([live_bytes, mem_budget]));
+fn jit_set_mem_cell(allocated_bytes: i64, allocation_budget: i64) {
+    JIT_MEM_CELL.with(|cell| cell.set([allocated_bytes, allocation_budget]));
 }
 
 /// Read the accumulated live-byte count back out of the mem cell after a CLEAN OSR exit
-/// (to commit the native `ListPush*` charges into the interpreter's `live_bytes`).
+/// (to commit the native `ListPush*` charges into the interpreter's `allocated_bytes`).
 #[cfg(feature = "native-jit")]
-fn jit_mem_cell_live_bytes() -> i64 {
+fn jit_allocation_cell_allocated_bytes() -> i64 {
     JIT_MEM_CELL.with(|cell| cell.get()[0])
 }
 
 /// Charge `grew` bytes (a `ListPush*` flat-capacity growth) against the armed mem cell,
 /// mirroring the interpreter's `account_bytes`. Returns `false` if the budget is now
 /// exceeded — the caller signals a bail, the OSR rolls back + reruns on the interpreter,
-/// which recharges and errors at the exact push. Unarmed (`mem_budget < 0`) ⇒ no charge.
+/// which recharges and errors at the exact push. Unarmed (`allocation_budget < 0`) ⇒ no charge.
 #[cfg(feature = "native-jit")]
 fn jit_mem_charge(grew: i64) -> bool {
     JIT_MEM_CELL.with(|cell| {
@@ -4814,7 +4814,7 @@ extern "C" fn rss_jit_list_push_int(_ctx: vm_jit::HostCtx, handle: i64, value: i
 fn rss_jit_list_push_int_with_ctx(ctx: JitHostCallCtx, handle: i64, value: i64) -> i64 {
     match ctx.with_journaled_list_write(handle, |list| {
         // `checked_push_accounted` returns the flat-capacity growth in bytes — exactly
-        // what the interpreter's `List.push` bills to `mem_budget` (`account_bytes`).
+        // what the interpreter's `List.push` bills to `allocation_budget` (`account_bytes`).
         list.checked_push_accounted(VmValue::Int(value)).ok()
     }) {
         Some(grew) => {

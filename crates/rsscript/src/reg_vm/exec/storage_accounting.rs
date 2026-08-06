@@ -2,25 +2,25 @@ use super::super::*;
 
 impl RegVm {
     /// Account `bytes` of container growth against the memory ceiling. A no-op
-    /// (no add, no check) when `limits.mem_budget` is `None`, so the off path is
+    /// (no add, no check) when `limits.allocation_budget` is `None`, so the off path is
     /// near-free. When a budget is set and the cumulative estimate exceeds it,
-    /// returns the memory-limit error. Best-effort: see [`RegVm::live_bytes`].
+    /// returns the memory-limit error. Best-effort: see [`RegVm::allocated_bytes`].
     #[inline]
     pub(in crate::reg_vm) fn account_bytes(&mut self, bytes: usize) -> Result<(), EvalError> {
-        if self.limits.mem_budget.is_some() {
+        if self.limits.allocation_budget.is_some() {
             self.ensure_memory_available(bytes)?;
-            self.live_bytes = self.live_bytes.saturating_add(bytes);
+            self.allocated_bytes = self.allocated_bytes.saturating_add(bytes);
         }
         Ok(())
     }
 
     pub(in crate::reg_vm) fn ensure_memory_available(&self, bytes: usize) -> Result<(), EvalError> {
-        if let Some(limit) = self.limits.mem_budget
-            && self.live_bytes.saturating_add(bytes) > limit
+        if let Some(limit) = self.limits.allocation_budget
+            && self.allocated_bytes.saturating_add(bytes) > limit
         {
             return Err(EvalError::execution(
-                crate::ExecutionFailureKind::MemoryLimitExceeded,
-                format!("memory limit exceeded ({limit} bytes)"),
+                crate::ExecutionFailureKind::AllocationBudgetExceeded,
+                format!("allocation budget exceeded ({limit} bytes)"),
             ));
         }
         Ok(())
@@ -54,7 +54,7 @@ impl RegVm {
         }
 
         // HashMap growth is implementation-defined. Pre-charge a conservative
-        // doubling before reserve so the host allocation cannot cross mem_budget.
+        // doubling before reserve so the host allocation cannot cross allocation_budget.
         let old_capacity = map.capacity();
         let projected_capacity = old_capacity.saturating_mul(2).saturating_add(3).max(3);
         let projected_bytes = projected_capacity
@@ -63,7 +63,7 @@ impl RegVm {
         self.account_bytes(projected_bytes)?;
 
         if let Err(error) = map.try_reserve(1) {
-            self.live_bytes = self.live_bytes.saturating_sub(projected_bytes);
+            self.allocated_bytes = self.allocated_bytes.saturating_sub(projected_bytes);
             return Err(EvalError::Runtime(format!(
                 "Map/Set insertion allocation failed: {error}"
             )));
@@ -74,8 +74,8 @@ impl RegVm {
             .saturating_sub(old_capacity)
             .saturating_mul(MAP_ENTRY_BYTES);
         debug_assert!(actual_bytes <= projected_bytes);
-        self.live_bytes = self
-            .live_bytes
+        self.allocated_bytes = self
+            .allocated_bytes
             .saturating_sub(projected_bytes.saturating_sub(actual_bytes));
         Ok(())
     }
@@ -88,7 +88,7 @@ impl RegVm {
             return Ok(());
         }
         let old_capacity = deque.capacity();
-        if self.limits.mem_budget.is_some() {
+        if self.limits.allocation_budget.is_some() {
             let mut replacement = VecDeque::with_capacity(old_capacity);
             replacement.extend(deque.iter().cloned());
             replacement.try_reserve(1).map_err(|error| {
@@ -113,7 +113,7 @@ impl RegVm {
             .capacity()
             .saturating_sub(old_capacity)
             .saturating_mul(std::mem::size_of::<VmValue>());
-        debug_assert!(actual_bytes <= projected_bytes || self.limits.mem_budget.is_none());
+        debug_assert!(actual_bytes <= projected_bytes || self.limits.allocation_budget.is_none());
         Ok(())
     }
 
@@ -360,13 +360,13 @@ impl RegVm {
         &mut self,
         value: &VmValue,
         excluded: &HashSet<usize>,
-        live_bytes_before: usize,
+        allocated_bytes_before: usize,
     ) -> Result<(), EvalError> {
-        if self.limits.mem_budget.is_none() {
+        if self.limits.allocation_budget.is_none() {
             return Ok(());
         }
         let retained = Self::retained_storage_bytes_inner(value, excluded, &mut HashSet::new());
-        let already_charged = self.live_bytes.saturating_sub(live_bytes_before);
+        let already_charged = self.allocated_bytes.saturating_sub(allocated_bytes_before);
         self.account_bytes(retained.saturating_sub(already_charged))
     }
 }

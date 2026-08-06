@@ -176,7 +176,7 @@ impl ProviderRegistry {
 pub struct RunLimits {
     pub max_depth: usize,
     pub step_budget: Option<u64>,
-    pub memory_budget: Option<usize>,
+    pub allocation_budget: Option<usize>,
     pub cancellation: Option<CancellationToken>,
     pub deadline: Option<MonotonicDeadline>,
     pub output_budget: Option<usize>,
@@ -214,7 +214,7 @@ impl From<VmLimits> for RunLimits {
         Self {
             max_depth: limits.max_depth,
             step_budget: limits.step_budget,
-            memory_budget: limits.mem_budget,
+            allocation_budget: limits.allocation_budget,
             cancellation: limits.cancel,
             deadline: limits.deadline,
             output_budget: limits.stdout_budget,
@@ -231,7 +231,7 @@ impl From<RunLimits> for VmLimits {
         Self {
             max_depth: limits.max_depth,
             step_budget: limits.step_budget,
-            mem_budget: limits.memory_budget,
+            allocation_budget: limits.allocation_budget,
             cancel: limits.cancellation,
             deadline: limits.deadline,
             stdout_budget: limits.output_budget,
@@ -389,7 +389,7 @@ pub enum TerminationReason {
     Cancelled,
     DeadlineExceeded,
     StepBudgetExceeded,
-    MemoryLimitExceeded,
+    AllocationBudgetExceeded,
     OutputLimitExceeded,
     ProviderError,
     ProviderBudgetExceeded,
@@ -428,8 +428,8 @@ impl From<EvalError> for RuntimeError {
                     ExecutionFailureKind::StepBudgetExceeded => {
                         TerminationReason::StepBudgetExceeded
                     }
-                    ExecutionFailureKind::MemoryLimitExceeded => {
-                        TerminationReason::MemoryLimitExceeded
+                    ExecutionFailureKind::AllocationBudgetExceeded => {
+                        TerminationReason::AllocationBudgetExceeded
                     }
                     ExecutionFailureKind::OutputLimitExceeded => {
                         TerminationReason::OutputLimitExceeded

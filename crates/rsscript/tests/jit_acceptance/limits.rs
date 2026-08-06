@@ -1,7 +1,7 @@
 // ---------------------------------------------------------------------------
 // Recursive native fast paths must honor the same limit gate as `try_native`:
 // Cranelift code polls neither `step_budget` nor `cancel` and allocates off the
-// `mem_budget` meter, so with any of them armed the recursive paths must NOT
+// `allocation_budget` meter, so with any of them armed the recursive paths must NOT
 // dispatch natively (they run on the interpreter / tier-0, which `tick()`s).
 // ---------------------------------------------------------------------------
 
@@ -479,33 +479,33 @@ fn main() -> Unit {
     );
 }
 
-/// Even a non-allocating hot loop stays interpreted while `mem_budget` is armed. This
+/// Even a non-allocating hot loop stays interpreted while `allocation_budget` is armed. This
 /// conservative gate avoids depending on incomplete per-transform allocation effects.
 #[cfg(feature = "native-jit")]
 #[test]
-fn native_osr_nonallocating_loop_runs_under_mem_budget() {
+fn native_osr_nonallocating_loop_runs_under_allocation_budget() {
     let exe = common::compile_vm_source("j05-mem-ok.rss", J05_OSR_KERNEL).expect("compile");
     let limits = rsscript::VmLimits {
-        mem_budget: Some(1 << 20),
+        allocation_budget: Some(1 << 20),
         ..rsscript::VmLimits::default()
     };
     let (output, stats) = exe
         .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), limits)
-        .expect("a non-allocating loop must run under mem_budget");
+        .expect("a non-allocating loop must run under allocation_budget");
     // sum(0..5000) = 12497500 (same kernel as the step-budget tests).
     assert_eq!(output.stdout.trim_end(), "begin\n12497500");
     assert_eq!(
         stats.osr_entries, 0,
-        "armed memory budgets must stay interpreted"
+        "armed allocation budgets must stay interpreted"
     );
 }
 
-/// A map-insert loop also stays interpreted under `mem_budget`; helper-specific zero
+/// A map-insert loop also stays interpreted under `allocation_budget`; helper-specific zero
 /// charges are not enough to prove the surrounding transformed region preserves all
 /// allocation accounting.
 #[cfg(feature = "native-jit")]
 #[test]
-fn native_osr_map_insert_loop_runs_under_mem_budget() {
+fn native_osr_map_insert_loop_runs_under_allocation_budget() {
     let source = "\
 fn build_map(k: read String, n: Int) -> Int {
     Log.write(message: read \"begin\")
@@ -527,20 +527,20 @@ fn main() -> Unit {
     let interp = common::run_vm_source(file, source, &[]).expect("interp run");
     let exe = common::compile_vm_source(file, source).expect("compile");
     let limits = rsscript::VmLimits {
-        mem_budget: Some(1 << 20),
+        allocation_budget: Some(1 << 20),
         ..rsscript::VmLimits::default()
     };
     let (output, stats) = exe
         .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), limits)
-        .expect("map-insert loop must run under mem_budget without transformed OSR");
+        .expect("map-insert loop must run under allocation_budget without transformed OSR");
     assert_eq!(
         interp.stdout, output.stdout,
-        "the map-insert loop must stay interpreter-identical under mem_budget"
+        "the map-insert loop must stay interpreter-identical under allocation_budget"
     );
     assert_eq!(output.stdout.trim_end(), "begin\n1");
     assert_eq!(
         stats.osr_entries, 0,
-        "armed memory budgets must stay interpreted"
+        "armed allocation budgets must stay interpreted"
     );
 }
 
@@ -1323,7 +1323,7 @@ fn main() -> Unit {
 }
 
 /// J0.5 mem (PARITY, #6): a flat `List<Int>` build loop now RUNS natively under an armed
-/// `mem_budget` — `ListPush*` charges the flat-capacity growth in its host helper,
+/// `allocation_budget` — `ListPush*` charges the flat-capacity growth in its host helper,
 /// mirroring the interpreter's `account_bytes`. DISCRIMINATING: under a generous budget it
 /// OSRs and completes; under a tight budget it must ERROR exactly like the interpreter (if
 /// native failed to charge the pushes, it would complete and DIVERGE — returning a value
@@ -1331,7 +1331,7 @@ fn main() -> Unit {
 /// and reruns on the interpreter, which recharges and errors at the precise push.
 #[cfg(feature = "native-jit")]
 #[test]
-fn native_osr_list_push_int_charges_mem_budget() {
+fn native_osr_list_push_int_charges_allocation_budget() {
     let source = "\
 fn build(n: Int) -> Int {
     let mut xs = List<Int>.new()
@@ -1351,16 +1351,16 @@ fn main() -> Unit {
     // (A) Generous budget: the loop OSRs, charges per push, stays within budget, completes.
     let exe = common::compile_vm_source(file, source).expect("compile");
     let ok = rsscript::VmLimits {
-        mem_budget: Some(1 << 24),
+        allocation_budget: Some(1 << 24),
         ..rsscript::VmLimits::default()
     };
     let (out, stats) = exe
         .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), ok)
-        .expect("flat list-push loop must run under a generous mem_budget");
+        .expect("flat list-push loop must run under a generous allocation_budget");
     assert_eq!(out.stdout.trim_end(), "20000");
     assert_eq!(
         stats.osr_entries, 0,
-        "armed memory budgets must stay interpreted"
+        "armed allocation budgets must stay interpreted"
     );
 
     // (B) Tight budget the build exceeds: native must ERROR identically to the interpreter.
@@ -1369,17 +1369,17 @@ fn main() -> Unit {
         source,
         std::iter::empty::<String>(),
         rsscript::VmLimits {
-            mem_budget: Some(16384),
+            allocation_budget: Some(16384),
             ..rsscript::VmLimits::default()
         },
     )
-    .expect_err("interpreter must exceed the tight mem_budget");
+    .expect_err("interpreter must exceed the tight allocation_budget");
     let exe2 = common::compile_vm_source(file, source).expect("compile");
     let nat_err = exe2
         .eval_main_with_args_native_osr_with_limits(
             std::iter::empty::<String>(),
             rsscript::VmLimits {
-                mem_budget: Some(16384),
+                allocation_budget: Some(16384),
                 ..rsscript::VmLimits::default()
             },
         )

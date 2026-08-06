@@ -97,7 +97,7 @@ pub enum ExecutionFailureKind {
     Cancelled,
     DeadlineExceeded,
     StepBudgetExceeded,
-    MemoryLimitExceeded,
+    AllocationBudgetExceeded,
     OutputLimitExceeded,
     IntrinsicBudgetExceeded,
     ProviderBudgetExceeded,

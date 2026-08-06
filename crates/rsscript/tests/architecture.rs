@@ -789,6 +789,21 @@ fn execution_termination_does_not_classify_message_text() {
 }
 
 #[test]
+fn allocation_budget_is_not_mislabeled_as_live_memory() {
+    let root = workspace_root();
+    let vm = read(&root.join("crates/rsscript/src/reg_vm/mod.rs"));
+    assert!(vm.contains("pub allocation_budget: Option<usize>"));
+    assert!(vm.contains("allocated_bytes: usize"));
+    assert!(vm.contains("This is not a live-memory measurement"));
+    assert!(!vm.contains("pub mem_budget"));
+    assert!(!vm.contains("live_bytes:"));
+
+    let facade = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
+    assert!(facade.contains("pub allocation_budget: Option<usize>"));
+    assert!(!facade.contains("pub memory_budget"));
+}
+
+#[test]
 fn structural_semantics_are_owned_by_the_semantics_crate() {
     let root = workspace_root();
     let types = root.join("crates/rsscript-semantics/src/types.rs");

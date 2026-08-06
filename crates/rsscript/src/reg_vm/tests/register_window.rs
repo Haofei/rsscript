@@ -41,21 +41,21 @@ mod register_window_tests {
     }
 
     #[test]
-    fn tcp_read_preflights_vm_memory_budget() {
+    fn tcp_read_preflights_vm_allocation_budget() {
         let mut vm = empty_vm();
         let (client, _server) = connected_tcp_pair();
         vm.tcp_streams.insert(5, client);
         vm.set_limits(VmLimits {
-            mem_budget: Some(8),
+            allocation_budget: Some(8),
             ..VmLimits::default()
         });
 
         let error = vm
             .tcp_stream_read(5, 9)
-            .expect_err("read allocation must respect the VM memory budget");
+            .expect_err("read allocation must respect the VM allocation budget");
 
-        assert!(error.display().contains("memory limit exceeded"));
-        assert_eq!(vm.live_bytes, 0);
+        assert!(error.display().contains("allocation budget exceeded"));
+        assert_eq!(vm.allocated_bytes, 0);
     }
 
     #[test]
@@ -150,7 +150,7 @@ mod register_window_tests {
             vm.set_reg(index, value);
         }
         vm.set_limits(VmLimits {
-            mem_budget: Some(0),
+            allocation_budget: Some(0),
             ..VmLimits::default()
         });
         vm.run_frame(&unit, function, 0)
@@ -359,7 +359,7 @@ mod register_window_tests {
     }
 
     #[test]
-    fn native_binding_return_respects_memory_budget() {
+    fn native_binding_return_respects_allocation_budget() {
         let unit = Rc::new(RegUnit {
             functions: Vec::new(),
             function_ids: HashMap::new(),
@@ -375,7 +375,7 @@ mod register_window_tests {
             [("test.big".to_string(), binding)].into_iter().collect(),
         );
         vm.set_limits(VmLimits {
-            mem_budget: Some(64),
+            allocation_budget: Some(64),
             ..VmLimits::default()
         });
         let error = vm
@@ -385,7 +385,7 @@ mod register_window_tests {
     }
 
     #[test]
-    fn native_binding_spare_capacity_respects_memory_budget() {
+    fn native_binding_spare_capacity_respects_allocation_budget() {
         let unit = Rc::new(RegUnit {
             functions: Vec::new(),
             function_ids: HashMap::new(),
@@ -414,7 +414,7 @@ mod register_window_tests {
             .collect(),
         );
         vm.set_limits(VmLimits {
-            mem_budget: Some(64),
+            allocation_budget: Some(64),
             ..VmLimits::default()
         });
         for key in ["test.string-capacity", "test.json-capacity"] {
@@ -450,7 +450,7 @@ mod register_window_tests {
             [("test.mutate".to_string(), binding)].into_iter().collect(),
         );
         vm.set_limits(VmLimits {
-            mem_budget: Some(64),
+            allocation_budget: Some(64),
             ..VmLimits::default()
         });
         vm.prepare_frame(0, 1).expect("register window");

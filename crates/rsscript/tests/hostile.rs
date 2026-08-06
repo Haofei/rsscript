@@ -87,7 +87,7 @@ fn runaway_allocation_with_memory_ceiling_returns_clean_error() {
     // also set so the test fails loudly if memory accounting ever regresses
     // (otherwise an unbounded loop would just hang).
     let limits = VmLimits {
-        mem_budget: Some(1 << 20),
+        allocation_budget: Some(1 << 20),
         step_budget: Some(50_000_000),
         ..VmLimits::default()
     };
@@ -102,7 +102,7 @@ fn runaway_allocation_with_memory_ceiling_returns_clean_error() {
 }
 
 #[test]
-fn map_capacity_growth_is_charged_to_memory_budget() {
+fn map_capacity_growth_is_charged_to_allocation_budget() {
     let source = r#"
 fn main() -> Int {
     let map = Map.new<Int, Int>()
@@ -117,17 +117,17 @@ fn main() -> Int {
     let error = eval_limited(
         source,
         VmLimits {
-            mem_budget: Some(16 * 1024),
+            allocation_budget: Some(16 * 1024),
             step_budget: Some(10_000_000),
             ..VmLimits::default()
         },
     )
-    .expect_err("map growth must hit memory budget");
+    .expect_err("map growth must hit allocation budget");
     assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
 }
 
 #[test]
-fn fresh_collection_intrinsics_are_charged_to_memory_budget() {
+fn fresh_collection_intrinsics_are_charged_to_allocation_budget() {
     let cases = [
         (
             "list-reverse",
@@ -174,11 +174,11 @@ fn fresh_collection_intrinsics_are_charged_to_memory_budget() {
         ),
     ];
 
-    for (name, source, mem_budget) in cases {
+    for (name, source, allocation_budget) in cases {
         let error = eval_limited(
             source,
             VmLimits {
-                mem_budget: Some(mem_budget),
+                allocation_budget: Some(allocation_budget),
                 step_budget: Some(1_000_000),
                 ..VmLimits::default()
             },
@@ -221,16 +221,16 @@ fn intrinsic_and_constructor_results_are_charged_before_publication() {
         ),
     ];
 
-    for (name, source, mem_budget) in cases {
+    for (name, source, allocation_budget) in cases {
         let error = eval_limited(
             &source,
             VmLimits {
-                mem_budget: Some(mem_budget),
+                allocation_budget: Some(allocation_budget),
                 step_budget: Some(1_000_000),
                 ..VmLimits::default()
             },
         )
-        .expect_err("fresh intrinsic result must exceed the tight memory budget");
+        .expect_err("fresh intrinsic result must exceed the tight allocation budget");
         assert!(
             matches!(error, EvalError::Runtime(ref message) if message.contains("memory limit")),
             "{name}: expected memory-limit error, got {error:?}"
@@ -239,7 +239,7 @@ fn intrinsic_and_constructor_results_are_charged_before_publication() {
 }
 
 #[test]
-fn ordinary_vm_growth_paths_respect_memory_budget() {
+fn ordinary_vm_growth_paths_respect_allocation_budget() {
     let cases = [
         (
             "string-concat",
@@ -310,16 +310,16 @@ fn ordinary_vm_growth_paths_respect_memory_budget() {
         ),
     ];
 
-    for (name, source, mem_budget) in cases {
+    for (name, source, allocation_budget) in cases {
         let error = eval_limited(
             source,
             VmLimits {
-                mem_budget: Some(mem_budget),
+                allocation_budget: Some(allocation_budget),
                 step_budget: Some(1_000_000),
                 ..VmLimits::default()
             },
         )
-        .expect_err("allocation path must exceed its tight memory budget");
+        .expect_err("allocation path must exceed its tight allocation budget");
         assert!(
             matches!(error, EvalError::Runtime(ref message) if message.contains("memory limit")),
             "{name}: expected memory-limit error, got {error:?}"
@@ -328,7 +328,7 @@ fn ordinary_vm_growth_paths_respect_memory_budget() {
 }
 
 #[test]
-fn shake_output_respects_memory_budget_and_hard_cap() {
+fn shake_output_respects_allocation_budget_and_hard_cap() {
     let source = r#"
 fn main() -> Int {
     let bytes = Bytes.from_string(value: "input")
@@ -339,11 +339,11 @@ fn main() -> Int {
     let error = eval_limited(
         source,
         VmLimits {
-            mem_budget: Some(64 * 1024),
+            allocation_budget: Some(64 * 1024),
             ..VmLimits::default()
         },
     )
-    .expect_err("SHAKE output must hit memory budget");
+    .expect_err("SHAKE output must hit allocation budget");
     assert!(matches!(error, EvalError::Runtime(message) if message.contains("memory limit")));
 
     let too_large = source.replace("1048576", "67108865");
@@ -373,7 +373,7 @@ fn integer_math_invalid_domains_return_language_errors() {
 }
 
 /// Default limits must NOT trip on ordinary code: a trusted run leaves the
-/// step/memory budgets off and the depth cap generous, so a normal program
+/// step/allocation budgets off and the depth cap generous, so a normal program
 /// (modest recursion + a real loop + a list build) completes cleanly.
 #[test]
 fn default_limits_do_not_trip_on_normal_code() {
@@ -458,7 +458,7 @@ fn main() -> Int {
 /// C6 (leak policy, positive): transient scalar work in a loop does not leak.
 /// A long arithmetic loop reuses a fixed set of registers each iteration, so the
 /// VM's best-effort byte accounting stays bounded and the program completes under
-/// a tight `mem_budget` rather than tripping a false OOM. (No threads/timing.)
+/// a tight `allocation_budget` rather than tripping a false OOM. (No threads/timing.)
 #[test]
 fn transient_scalar_work_completes_under_memory_ceiling() {
     let source = r#"
@@ -475,7 +475,7 @@ fn main() -> Int {
     // A tight 1 MiB ceiling: register-stack growth is bounded per frame and does
     // not grow per iteration, so a non-allocating loop never approaches it.
     let limits = VmLimits {
-        mem_budget: Some(1 << 20),
+        allocation_budget: Some(1 << 20),
         step_budget: Some(50_000_000),
         ..VmLimits::default()
     };
@@ -487,7 +487,7 @@ fn main() -> Int {
 /// C6 (leak policy, bounded): the value model uses `Rc`, so unbounded retained
 /// growth — including the only way to form a cycle, a self-referential mutable
 /// container — is the leak class of concern. rsscript does NOT run a cycle
-/// collector; instead the B4 `mem_budget` backstops it: the run trips a clean
+/// collector; instead the B4 `allocation_budget` backstops it: the run trips a clean
 /// "memory limit" error (bounded), never an unbounded grow-until-host-OOM crash.
 ///
 /// Note (a soundness bonus surfaced writing this test): the `local`/effect
@@ -495,7 +495,7 @@ fn main() -> Int {
 /// (RS0501 "retaining API cannot retain local value"), so a true `Rc` cycle
 /// cannot even be expressed from safe source — cycles are rarer than the policy
 /// assumes. This test therefore exercises the general retained-growth leak (a
-/// list accumulating fresh values without bound), which is what `mem_budget`
+/// list accumulating fresh values without bound), which is what `allocation_budget`
 /// must bound regardless of whether the retained graph is acyclic or cyclic.
 #[test]
 fn self_referential_container_is_bounded_by_memory_ceiling() {
@@ -510,7 +510,7 @@ fn self_referential_container_is_bounded_by_memory_ceiling() {
 }
 "#;
     let limits = VmLimits {
-        mem_budget: Some(1 << 20),
+        allocation_budget: Some(1 << 20),
         step_budget: Some(50_000_000),
         ..VmLimits::default()
     };
