@@ -75,6 +75,8 @@ pub struct PackageAnalysisExport {
     pub function_kind: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub retained_params: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub semantic_facts: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -127,6 +129,19 @@ impl From<&PackageReview> for PackageAnalysis {
                     kind: export.kind.clone(),
                     function_kind: export.function_kind.clone(),
                     retained_params: export.retained_params.clone(),
+                    semantic_facts: export
+                        .reasons
+                        .iter()
+                        .filter(|reason| {
+                            reason.starts_with("mut parameter")
+                                || reason.starts_with("take parameter")
+                                || reason.starts_with("resource ")
+                                || reason.starts_with("retains(")
+                                || reason.as_str() == "returns fresh value"
+                                || reason.as_str() == "async boundary"
+                        })
+                        .cloned()
+                        .collect(),
                 })
                 .collect(),
             external_imports: review

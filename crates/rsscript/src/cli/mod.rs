@@ -11,6 +11,7 @@ use rsscript::{
 };
 use sha2::{Digest, Sha256};
 
+mod artifact;
 mod check;
 mod fix;
 mod fmt;
@@ -26,9 +27,11 @@ pub fn run() -> ExitCode {
     };
 
     match command {
+        "build" => artifact::run_build(&args[2..]),
         "check" => check::run_check(&args[2..]),
         "fix" => fix::run_fix(&args[2..]),
         "fmt" => fmt::run_fmt(&args[2..]),
+        "inspect" => artifact::run_inspect(&args[2..]),
         "new" => package::run_new_package(&args[2..]),
         "pkg" => package::run_package(&args[2..]),
         "run" => run_cmd::run_generated_rust(&args[2..]),
@@ -394,6 +397,7 @@ pub(crate) fn is_package_directory(path: &str) -> bool {
 }
 pub(crate) fn print_usage() {
     eprintln!("usage:");
+    eprintln!("  rss build [--out <artifact.rssbc>] <file-or-package-directory>");
     eprintln!(
         "  rss check [--json] [--lint] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>"
     );
@@ -403,6 +407,8 @@ pub(crate) fn print_usage() {
         "  rss fix [--write] [--json] [--interface <file.rssi> ...] <file.rss>  # apply machine-applicable fixes"
     );
     eprintln!("  rss fmt <file.rss>  # writes formatted source to stdout");
+    eprintln!("  rss inspect <imports|bytecode> [--json] <file-or-artifact-or-package>");
+    eprintln!("  rss inspect <analysis|resources|async|call-graph> [--json] <package-directory>");
     eprintln!("  rss new <package-name>");
     eprintln!("  rss run [--json] [--vm] <file-or-package-directory> [-- <args>...]");
     eprintln!(
