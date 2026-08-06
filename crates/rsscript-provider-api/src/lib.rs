@@ -5,7 +5,10 @@ use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
 
-use rsscript_abi_model::{ExternalImport, ExternalSymbol, FunctionSignature};
+pub use rsscript_abi_model::{
+    DataEffect, ExternalImport, ExternalSymbol, FunctionSignature, InvalidExternalSymbol,
+    ParameterSignature, RUNTIME_ABI_VERSION, SignatureHash,
+};
 use serde::{Deserialize, Serialize};
 
 /// Runtime value exchanged with trusted provider implementations. This safe

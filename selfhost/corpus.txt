@@ -473,6 +473,7 @@ examples/scripts/core/interpreter_pure_parity.rss
 examples/scripts/core/json_nested.rss
 examples/scripts/core/uop_interning.rss
 examples/scripts/core/yaml_config.rss
+examples/embedded-report-pipeline/script/main.rss
 packages/async-runtime/src/lib.rss
 packages/core/telemetry/src/lib.rss
 packages/native-abi-fixture/src/main.rss

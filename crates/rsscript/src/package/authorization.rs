@@ -1246,6 +1246,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[cfg(feature = "host-tools")]
     #[test]
     fn successful_native_authorization_captures_checked_build_inputs() {
         let root = pure_package_fixture();
@@ -1271,6 +1272,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[cfg(feature = "host-tools")]
     #[test]
     fn authorized_native_snapshot_is_stable_after_source_mutation() {
         let root = pure_package_fixture();
@@ -1298,6 +1300,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[cfg(feature = "host-tools")]
     #[test]
     fn cloned_aot_lowering_input_keeps_stable_snapshotted_native_paths() {
         let root = pure_package_fixture();
@@ -1328,6 +1331,7 @@ mod tests {
     }
 
     #[cfg(unix)]
+    #[cfg(feature = "host-tools")]
     #[test]
     fn identical_authorizations_reuse_content_addressed_snapshot_paths() {
         let root = pure_package_fixture();

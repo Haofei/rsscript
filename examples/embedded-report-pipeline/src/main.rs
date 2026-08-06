@@ -1,0 +1,139 @@
+#![forbid(unsafe_code)]
+
+use std::collections::BTreeMap;
+use std::fs;
+use std::sync::{Arc, Mutex};
+
+use rsscript_compiler::provider::{
+    ExternalSymbol, NativeInterpreterFn, NativeValue, ProviderFunction,
+};
+use rsscript_compiler::{Compiler, ProviderRegistry, RunLimits, Runtime};
+use sha2::{Digest, Sha256};
+
+const SOURCE: &str = include_str!("../script/main.rss");
+const FS_INTERFACE: &str = include_str!("../interfaces/fs.rssi");
+const LOG_INTERFACE: &str = include_str!("../interfaces/log.rssi");
+
+type ProviderFunctions = BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>>;
+
+fn memory_fs(files: Arc<Mutex<BTreeMap<String, String>>>) -> ProviderFunctions {
+    let descriptor = rsscript_provider_fs::descriptor();
+    descriptor
+        .functions
+        .iter()
+        .map(|function| {
+            let symbol = function.symbol.clone();
+            let signature = function.signature.clone();
+            let files = Arc::clone(&files);
+            let callable = match symbol.as_str() {
+                "host.fs.read_text" => NativeInterpreterFn::new(move |mut args| {
+                    let NativeValue::String(path) = args.remove(0) else {
+                        return Err("path must be String".into());
+                    };
+                    files
+                        .lock()
+                        .map_err(|_| "memory filesystem lock poisoned".to_string())?
+                        .get(&path)
+                        .cloned()
+                        .map(NativeValue::String)
+                        .ok_or_else(|| format!("missing memory file: {path}"))
+                }),
+                "host.fs.write_text" => NativeInterpreterFn::new(move |mut args| {
+                    let NativeValue::String(path) = args.remove(0) else {
+                        return Err("path must be String".into());
+                    };
+                    let NativeValue::String(text) = args.remove(0) else {
+                        return Err("text must be String".into());
+                    };
+                    files
+                        .lock()
+                        .map_err(|_| "memory filesystem lock poisoned".to_string())?
+                        .insert(path, text);
+                    Ok(NativeValue::Unit)
+                }),
+                unexpected => panic!("unexpected filesystem symbol: {unexpected}"),
+            };
+            (
+                symbol,
+                ProviderFunction {
+                    signature,
+                    callable,
+                },
+            )
+        })
+        .collect()
+}
+
+fn registry(fs_functions: ProviderFunctions, log_functions: ProviderFunctions) -> ProviderRegistry {
+    let mut providers = ProviderRegistry::default();
+    providers
+        .register(&rsscript_provider_fs::descriptor(), fs_functions)
+        .expect("filesystem provider should link");
+    providers
+        .register(&rsscript_provider_log::descriptor(), log_functions)
+        .expect("log provider should link");
+    providers
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let compiler = Compiler;
+    let package = compiler.compile_with_interfaces(
+        &[("main.rss", SOURCE)],
+        &[("fs.rssi", FS_INTERFACE), ("log.rssi", LOG_INTERFACE)],
+    )?;
+    let bytecode_before_providers = package.bytecode()?;
+    let artifact_hash = format!("{:x}", Sha256::digest(&bytecode_before_providers));
+
+    let memory_files = Arc::new(Mutex::new(BTreeMap::from([(
+        "input.csv".to_string(),
+        "name,total\nalice,42\n".to_string(),
+    )])));
+    let memory_log = Arc::new(Mutex::new(Vec::<String>::new()));
+    let captured_log = Arc::clone(&memory_log);
+    Runtime::new(
+        registry(
+            memory_fs(Arc::clone(&memory_files)),
+            rsscript_provider_log::functions(move |message| {
+                captured_log
+                    .lock()
+                    .map_err(|_| "memory log lock poisoned".to_string())?
+                    .push(message.to_string());
+                Ok(())
+            }),
+        ),
+        RunLimits::bounded(),
+    )
+    .run(&package, Vec::<String>::new())?;
+
+    let memory_report = memory_files
+        .lock()
+        .map_err(|_| "memory filesystem lock poisoned")?
+        .get("report.txt")
+        .cloned()
+        .ok_or("memory provider did not create report.txt")?;
+
+    let demo_dir = std::env::temp_dir().join(format!("rsscript-report-{}", std::process::id()));
+    fs::create_dir_all(&demo_dir)?;
+    fs::write(demo_dir.join("input.csv"), "name,total\nbob,7\n")?;
+    let original_dir = std::env::current_dir()?;
+    std::env::set_current_dir(&demo_dir)?;
+    let production_result = Runtime::new(
+        registry(
+            rsscript_provider_fs::functions(),
+            rsscript_provider_log::stderr_functions(),
+        ),
+        RunLimits::bounded(),
+    )
+    .run(&package, Vec::<String>::new());
+    std::env::set_current_dir(original_dir)?;
+    production_result?;
+    let disk_report = fs::read_to_string(demo_dir.join("report.txt"))?;
+    fs::remove_dir_all(&demo_dir)?;
+
+    assert_eq!(package.bytecode()?, bytecode_before_providers);
+    println!("artifact sha256: {artifact_hash}");
+    println!("imports: {}", package.external_imports().len());
+    println!("memory provider report:\n{memory_report}");
+    println!("filesystem provider report:\n{disk_report}");
+    Ok(())
+}

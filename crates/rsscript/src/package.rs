@@ -1223,7 +1223,7 @@ mod preparation_limit_tests {
         fs::remove_dir_all(root).expect("fixture cleanup");
     }
 
-    #[cfg(unix)]
+    #[cfg(all(unix, feature = "host-tools"))]
     #[test]
     fn bounded_command_enforces_deadline_and_output_cap() {
         let mut timeout_command = Command::new("sh");

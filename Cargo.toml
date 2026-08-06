@@ -20,6 +20,7 @@ members = [
     "providers/entropy",
     "providers/log",
     "providers/cli",
+    "examples/embedded-report-pipeline",
     "crates/rsscript",
     "crates/lsp",
     "crates/runtime",

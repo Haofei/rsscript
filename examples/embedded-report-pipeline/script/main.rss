@@ -1,0 +1,12 @@
+module report.pipeline
+
+use host.fs.*
+use host.log.*
+
+fn main() -> Unit {
+    let input = read_text(path: read "input.csv")
+    let report = String.to_uppercase(value: read input)
+    write_text(path: read "report.txt", text: read report)
+    emit(message: read report)
+    return Unit
+}

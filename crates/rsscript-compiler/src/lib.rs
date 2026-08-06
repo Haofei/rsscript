@@ -14,6 +14,7 @@ use provider::{NativeInterpreterFn, ProviderDescriptor, ProviderFunction, Provid
 use rsscript::{
     EvalError, ExternalFunctionRegistry, NativeValue, PackageAnalysis, RegVmExecutable, VmLimits,
     analyze_package_dir, analyze_source, reg_vm_compile_package, reg_vm_compile_source,
+    reg_vm_compile_validated, validate_sources_with_interfaces,
 };
 
 #[derive(Default)]
@@ -26,6 +27,23 @@ impl Compiler {
 
     pub fn compile(&self, file: &str, source: &str) -> Result<CompiledPackage, CompileError> {
         let executable = reg_vm_compile_source(file, source).map_err(CompileError::from)?;
+        Ok(CompiledPackage {
+            executable,
+            analysis: None,
+        })
+    }
+
+    /// Compile a source snapshot against explicit host interfaces. The
+    /// interfaces contribute semantic signatures only; provider selection is
+    /// intentionally deferred until execution.
+    pub fn compile_with_interfaces(
+        &self,
+        sources: &[(&str, &str)],
+        interfaces: &[(&str, &str)],
+    ) -> Result<CompiledPackage, CompileError> {
+        let validated = validate_sources_with_interfaces(sources, interfaces)
+            .map_err(CompileError::Diagnostics)?;
+        let executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
         Ok(CompiledPackage {
             executable,
             analysis: None,
@@ -81,7 +99,7 @@ impl ProviderRegistry {
     pub fn register(
         &mut self,
         descriptor: &ProviderDescriptor,
-        functions: BTreeMap<rsscript::ExternalSymbol, ProviderFunction<NativeInterpreterFn>>,
+        functions: BTreeMap<provider::ExternalSymbol, ProviderFunction<NativeInterpreterFn>>,
     ) -> Result<(), ProviderLoadError> {
         self.inner.register_provider(descriptor, functions)
     }
@@ -150,6 +168,12 @@ impl Runtime {
         package: &CompiledPackage,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<ExecutionReport, RuntimeError> {
+        for import in package.external_imports() {
+            self.providers
+                .inner
+                .resolve(import)
+                .map_err(|error| RuntimeError(error.to_string()))?;
+        }
         let output = package
             .executable
             .eval_main_with_args_and_external_bindings_and_limits(
@@ -245,6 +269,11 @@ impl Error for RuntimeError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use provider::{
+        BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol, FunctionSignature,
+        ParameterSignature, ProviderCallMode, ProviderFunctionDescriptor, RUNTIME_ABI_VERSION,
+    };
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn stable_facade_compiles_serializes_loads_and_runs() {
@@ -258,5 +287,80 @@ mod tests {
             .run(&loaded, Vec::<String>::new())
             .expect("run");
         assert_eq!(report.value, "Unit");
+    }
+
+    #[test]
+    fn module_interface_keeps_stable_external_symbol_and_preflights_signature() {
+        let compiler = Compiler;
+        let package = compiler
+            .compile_with_interfaces(
+                &[(
+                    "main.rss",
+                    "module app\nuse host.log.*\nfn main() -> Unit { emit(message: read \"ok\"); return Unit }",
+                )],
+                &[(
+                    "log.rssi",
+                    "module host.log\npub fn emit(message: read String) -> Unit\n",
+                )],
+            )
+            .expect("compile external call");
+        assert_eq!(package.external_imports().len(), 1);
+        assert_eq!(
+            package.external_imports()[0].symbol.as_str(),
+            "host.log.emit"
+        );
+
+        let incompatible = FunctionSignature {
+            parameters: vec![ParameterSignature {
+                name: "message".into(),
+                effect: DataEffect::Take,
+                type_name: "String".into(),
+                retained: false,
+            }],
+            return_type: "Unit".into(),
+            asynchronous: false,
+        };
+        let symbol = ExternalSymbol::new("host.log.emit").expect("symbol");
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.log".into(),
+            provider_version: "1".into(),
+            supported_abi: vec![RUNTIME_ABI_VERSION],
+            functions: vec![ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: incompatible.clone(),
+                entry: "emit".into(),
+                call_mode: ProviderCallMode::Sync,
+                blocking: BlockingBehavior::NonBlocking,
+                cancellation: CancellationBehavior::NotApplicable,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup_contract: "none".into(),
+                error_mapping: "string".into(),
+            }],
+        };
+        let called = Arc::new(AtomicBool::new(false));
+        let called_by_provider = Arc::clone(&called);
+        let mut providers = ProviderRegistry::default();
+        providers
+            .register(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    ProviderFunction {
+                        signature: incompatible,
+                        callable: NativeInterpreterFn::new(move |_| {
+                            called_by_provider.store(true, Ordering::SeqCst);
+                            Ok(NativeValue::Unit)
+                        }),
+                    },
+                )]),
+            )
+            .expect("provider descriptor and implementation should match");
+
+        let error = Runtime::new(providers, RunLimits::bounded())
+            .run(&package, Vec::<String>::new())
+            .expect_err("import signature must fail before execution");
+        assert!(error.0.contains("ImportSignatureMismatch"));
+        assert!(!called.load(Ordering::SeqCst));
     }
 }

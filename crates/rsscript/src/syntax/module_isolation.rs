@@ -93,6 +93,11 @@ struct Resolver {
     /// (resolved through their sum type), so qualification rewrites to the bare
     /// variant.
     module_variants: HashMap<String, HashSet<String>>,
+    /// Module prefix -> source-level dotted path. External interface functions
+    /// retain this stable identity instead of leaking the compiler's mangling.
+    module_display: HashMap<String, String>,
+    /// Bodyless interface functions keyed by module prefix.
+    external_functions: HashMap<String, HashSet<String>>,
     /// file -> (local import name -> (module prefix, real symbol name)). The
     /// local name is the `as` alias when present, otherwise the path's last
     /// segment; the real name is always the path's last segment.
@@ -105,6 +110,8 @@ impl Resolver {
         let mut module_types: HashMap<String, HashSet<String>> = HashMap::new();
         let mut module_consts: HashMap<String, HashSet<String>> = HashMap::new();
         let mut module_variants: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut module_display: HashMap<String, String> = HashMap::new();
+        let mut external_functions: HashMap<String, HashSet<String>> = HashMap::new();
         let mut file_imports: HashMap<String, HashMap<String, (String, String)>> = HashMap::new();
         // (file, module prefix) for each `use module.*`, expanded after the loop.
         let mut glob_imports: Vec<(String, String)> = Vec::new();
@@ -126,6 +133,12 @@ impl Resolver {
                             .entry(prefix.clone())
                             .or_default()
                             .insert(function.name.clone());
+                        if !function.has_body {
+                            external_functions
+                                .entry(prefix.clone())
+                                .or_default()
+                                .insert(function.name.clone());
+                        }
                     }
                 }
                 Item::Const(decl) => {
@@ -196,7 +209,11 @@ impl Resolver {
                             .insert(local, (import_prefix, real_name));
                     }
                 }
-                Item::Module(_) => {}
+                Item::Module(module) => {
+                    module_display
+                        .entry(prefix.clone())
+                        .or_insert_with(|| module.path.join("."));
+                }
             }
         }
 
@@ -223,6 +240,8 @@ impl Resolver {
             module_types,
             module_consts,
             module_variants,
+            module_display,
+            external_functions,
             file_imports,
         }
     }
@@ -231,6 +250,14 @@ impl Resolver {
     /// upper-casing constants so the symbol matches the Rust backend's
     /// `SCREAMING_SNAKE_CASE` const lowering at both declaration and reference.
     fn mangle_value(&self, prefix: &str, name: &str) -> String {
+        if self
+            .external_functions
+            .get(prefix)
+            .is_some_and(|functions| functions.contains(name))
+            && let Some(module) = self.module_display.get(prefix)
+        {
+            return format!("{module}.{name}");
+        }
         let mangled = format!("{prefix}{MODULE_SEP}{name}");
         if self
             .module_consts
@@ -330,7 +357,14 @@ impl Resolver {
     fn rewrite_function(&self, function: &mut FunctionDecl, file: &str, in_module: bool) {
         // The executable entry point keeps its global `main` symbol.
         if in_module && function.name != "main" {
-            function.name = self.mangle_decl_name(file, &function.name);
+            function.name = if function.has_body {
+                self.mangle_decl_name(file, &function.name)
+            } else {
+                self.file_module.get(file).map_or_else(
+                    || function.name.clone(),
+                    |prefix| self.mangle_value(prefix, &function.name),
+                )
+            };
         }
         // Parameters bind names that shadow module symbols inside the body.
         let mut scope: HashSet<String> = function
@@ -625,7 +659,7 @@ impl Resolver {
                         .is_some_and(|names| names.contains(method))
                 {
                     let effect = *effect;
-                    let mangled = format!("{prefix}{MODULE_SEP}{method}");
+                    let mangled = self.mangle_value(&prefix, method);
                     for arg in args.iter_mut() {
                         self.rewrite_expr(&mut arg.value, file, scope);
                     }
@@ -774,7 +808,7 @@ impl Resolver {
                 {
                     *callee = Callee::Name(self.rewrite_callee_segment_with_root(
                         name,
-                        &format!("{prefix}{MODULE_SEP}{method_root}"),
+                        &self.mangle_value(&prefix, &method_root),
                         file,
                     ));
                 }
@@ -797,7 +831,7 @@ impl Resolver {
                 {
                     *callee = Callee::Name(self.rewrite_callee_segment_with_root(
                         method,
-                        &format!("{prefix}{MODULE_SEP}{method_root}"),
+                        &self.mangle_value(&prefix, &method_root),
                         file,
                     ));
                     return;

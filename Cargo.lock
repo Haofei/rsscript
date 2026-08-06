@@ -433,6 +433,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "embedded-report-pipeline"
+version = "0.1.0"
+dependencies = [
+ "rsscript-compiler",
+ "rsscript-provider-fs",
+ "rsscript-provider-log",
+ "sha2",
+]
+
+[[package]]
 name = "equivalent"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
