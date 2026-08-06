@@ -42,7 +42,7 @@ provider-neutral `ExecutableIr` gate; the VM and Rust AOT path both receive this
 checked representation, and JIT remains downstream of the VM unit. Runtime-core
 now compiles without filesystem, environment, process, network, entropy, or
 temporary-directory modules and its default feature set is network-free. The
-existing VM/AOT compatibility surface still opts into those modules through the
-explicit `legacy-host` composition feature while external calls move to provider
-packages. The current roadmap prioritizes those boundaries over new language,
-JIT, self-hosting, or package-system scope.
+concrete filesystem, environment, process, HTTP, time, entropy, logging, and CLI
+implementations now live in independent `providers/` composition packages. The
+current roadmap prioritizes bytecode verification and stable embedding over new
+language, JIT, self-hosting, or package-system scope.

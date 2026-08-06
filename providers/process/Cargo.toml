@@ -1,0 +1,9 @@
+[package]
+name = "rsscript-provider-process"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+[dependencies]
+rss-process-guard = { path = "../../crates/process-guard" }
+rsscript-abi-model = { path = "../../crates/rsscript-abi-model" }
+rsscript-provider-api = { path = "../../crates/rsscript-provider-api" }

@@ -656,6 +656,63 @@ fn native_plugin_loader_is_opt_in() {
 }
 
 #[test]
+fn compiler_default_dependency_closure_is_host_neutral() {
+    let root = workspace_root();
+    let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript/Cargo.toml")))
+        .expect("compiler manifest should parse");
+    assert_eq!(
+        manifest["dependencies"]["rsscript-runtime"]["features"]
+            .as_array()
+            .expect("runtime features should be explicit")
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>(),
+        vec!["core"]
+    );
+    for dependency in ["rss-native-abi", "rss-process-guard", "vm-jit"] {
+        assert_eq!(
+            manifest["dependencies"][dependency]["optional"].as_bool(),
+            Some(true),
+            "host dependency `{dependency}` must be opt-in"
+        );
+    }
+}
+
+#[test]
+fn concrete_host_providers_are_leaf_composition_packages() {
+    let root = workspace_root();
+    let compiler_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript/Cargo.toml"))).unwrap();
+    let compiler_dependencies = normal_dependency_packages(&compiler_manifest);
+    let providers = [
+        "fs", "env", "process", "http", "time", "entropy", "log", "cli",
+    ];
+    for provider in providers {
+        let manifest_path = root.join("providers").join(provider).join("Cargo.toml");
+        let manifest: toml::Value = toml::from_str(&read(&manifest_path)).unwrap();
+        let package = package_name(&manifest);
+        let dependencies = normal_dependency_packages(&manifest);
+        assert!(dependencies.contains("rsscript-provider-api"));
+        for forbidden in [
+            "rsscript",
+            "rsscript-runtime",
+            "rsscript-semantics",
+            "reir",
+            "vm-jit",
+        ] {
+            assert!(
+                !dependencies.contains(forbidden),
+                "provider `{package}` must not depend on `{forbidden}`"
+            );
+        }
+        assert!(
+            !compiler_dependencies.contains(package),
+            "compiler must not select concrete provider `{package}`"
+        );
+    }
+}
+
+#[test]
 fn interface_catalog_is_platform_neutral() {
     let root = workspace_root();
     let manifest: toml::Value = toml::from_str(&read(

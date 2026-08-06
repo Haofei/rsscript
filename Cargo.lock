@@ -1435,7 +1435,9 @@ checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
 dependencies = [
  "base64",
  "bytes",
+ "futures-channel",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",
@@ -1598,6 +1600,73 @@ dependencies = [
  "rsscript-abi-model",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "rsscript-provider-cli"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "rsscript-provider-api",
+]
+
+[[package]]
+name = "rsscript-provider-entropy"
+version = "0.1.0"
+dependencies = [
+ "rand 0.8.7",
+ "rsscript-abi-model",
+ "rsscript-provider-api",
+]
+
+[[package]]
+name = "rsscript-provider-env"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "rsscript-provider-api",
+]
+
+[[package]]
+name = "rsscript-provider-fs"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "rsscript-provider-api",
+]
+
+[[package]]
+name = "rsscript-provider-http"
+version = "0.1.0"
+dependencies = [
+ "reqwest",
+ "rsscript-abi-model",
+ "rsscript-provider-api",
+]
+
+[[package]]
+name = "rsscript-provider-log"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "rsscript-provider-api",
+]
+
+[[package]]
+name = "rsscript-provider-process"
+version = "0.1.0"
+dependencies = [
+ "rss-process-guard",
+ "rsscript-abi-model",
+ "rsscript-provider-api",
+]
+
+[[package]]
+name = "rsscript-provider-time"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "rsscript-provider-api",
 ]
 
 [[package]]
