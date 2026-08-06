@@ -1069,6 +1069,11 @@ fn verify_wire_instruction(
             "function {function_id} instruction {ip} fields are not an object"
         ))
     })?;
+    require_object_fields(
+        fields,
+        instruction_fields(opcode),
+        &format!("function {function_id} instruction {ip} `{opcode}`"),
+    )?;
     for target_field in [
         "target", "some_ip", "none_ip", "ok_ip", "err_ip", "match_ip", "else_ip",
     ] {
@@ -1121,6 +1126,78 @@ fn verify_wire_instruction(
         verify_register_field(function_id, ip, register_count, opcode, field, value)?;
     }
     Ok(())
+}
+
+fn instruction_fields(opcode: &str) -> &'static [&'static str] {
+    match opcode {
+        "LoadUnit" | "LoadNone" => &["dst"],
+        "LoadInt" | "LoadFloat" | "LoadBool" | "LoadString" | "LoadChar" => &["dst", "value"],
+        "Move" | "Manage" | "UnwrapSome" | "AwaitJoin" => &["dst", "src"],
+        "DeepCopy" | "DeepCopyElided" => &["reg"],
+        "GetField" => &["dst", "base", "name"],
+        "GetFieldSlot" => &["dst", "base", "slot"],
+        "SetFieldSlot" => &["dst", "base", "slot", "value"],
+        "SetField" => &["dst", "base", "name", "value"],
+        "MakeStruct" | "MakeVariant" => &["dst", "layout", "fields"],
+        "ResourceDrop" => &["resource"],
+        "MakeList" => &["dst", "items"],
+        "MakeObject" => &["dst", "fields"],
+        "MakeMap" => &["dst", "entries"],
+        "AddInt" | "SubInt" | "MulInt" | "DivInt" | "ModInt" | "BitAndInt" | "BitOrInt"
+        | "BitXorInt" | "ShiftLeftInt" | "ShiftRightInt" | "LessInt" | "LessEqualInt"
+        | "GreaterInt" | "GreaterEqualInt" | "Equal" | "NotEqual" => &["dst", "lhs", "rhs"],
+        "Jump" => &["target"],
+        "JumpIfBool" => &["cond", "expected", "target"],
+        "JumpIfIntCompare" => &["lhs", "rhs", "op", "expected", "target"],
+        "MatchOption" => &["src", "some_ip", "none_ip"],
+        "MatchResult" => &["src", "ok_ip", "err_ip"],
+        "MatchVariant" => &["src", "expected", "match_ip", "else_ip"],
+        "RuntimeError" => &["message"],
+        "MatchMapGet" | "MatchSortedMapGet" => &["map", "key", "value_dst", "some_ip", "none_ip"],
+        "UnwrapVariantValue" => &["dst", "src", "expected"],
+        "MakeClosure" => &["dst", "function", "captures"],
+        "MakeSome" => &["dst", "value"],
+        "CallKnown" => &["dst", "function", "args", "mut_args"],
+        "CallDynamic" => &["dst", "dispatch", "args", "mut_args"],
+        "SpawnTask" => &["dst", "function", "args"],
+        "SelectWait" => &["handles", "winner", "value"],
+        "CallExternal" => &["dst", "key", "args", "mut_args"],
+        "CallClosure" => &["dst", "closure", "args", "mut_args"],
+        "NativeGuardClosureId" => &["closure", "expected"],
+        "NativeClosureId" => &["dst", "closure"],
+        "NativeClosureCapture" => &["dst", "closure", "index"],
+        "NativeFieldClosureId" => &["dst", "base", "slot"],
+        "NativeFieldClosureCapture" => &["dst", "base", "slot", "index"],
+        "ListFilter" => &["dst", "list", "predicate"],
+        "ListFold" => &["dst", "list", "state", "folder"],
+        "ListGet" | "ListRemoveAt" => &["dst", "list", "index"],
+        "ListLen" | "ListClear" | "ListPop" | "ListSort" => &["dst", "list"],
+        "ListMap" => &["dst", "list", "mapper"],
+        "ListAppend" => &["dst", "list", "values"],
+        "ListPush" => &["dst", "list", "value"],
+        "ListSet" => &["dst", "list", "index", "value"],
+        "ListSortBy" => &["dst", "list", "key", "compare"],
+        "ListSortWith" => &["dst", "list", "compare"],
+        "DequeClear" | "DequePopBack" | "DequePopFront" => &["dst", "deque"],
+        "DequePushBack" | "DequePushFront" => &["dst", "deque", "value"],
+        "SetClear" | "SortedSetClear" => &["dst", "set"],
+        "SetForEach" => &["dst", "set", "callback"],
+        "SetInsert" | "SetRemove" | "SortedSetInsert" | "SortedSetRemove" => {
+            &["dst", "set", "value"]
+        }
+        "SortedMapClear" | "MapClear" => &["dst", "map"],
+        "SortedMapInsert" | "MapInsertOld" | "MapInsert" => &["dst", "map", "key", "value"],
+        "SortedMapRemove" | "MapGet" | "MapRemove" => &["dst", "map", "key"],
+        "BufferClear" => &["dst", "buffer"],
+        "StringBuilderPush" => &["dst", "builder", "value"],
+        "StringBuilderFinish" => &["dst", "builder"],
+        "StringConcat" => &["dst", "left", "right"],
+        "CallIntrinsic" => &["dst", "intrinsic", "args"],
+        "CallTypedIntrinsic" => &["dst", "intrinsic", "type_arg", "args"],
+        "TryResult" => &["dst", "src", "cleanup"],
+        "Return" => &["src"],
+        _ => &[],
+    }
 }
 
 fn verify_register_field(
@@ -1800,6 +1877,48 @@ mod tests {
             BytecodeVerifier::default().verify(&artifact.to_bytes().expect("bytes")),
             Err(BytecodeError::InvalidPayload(message)) if message.contains("unknown opcode")
         ));
+    }
+
+    #[test]
+    fn verifier_rejects_missing_or_unknown_instruction_fields() {
+        for instruction in [
+            serde_json::json!({"LoadUnit": {}}),
+            serde_json::json!({"LoadUnit": {"dst": 0, "future": true}}),
+        ] {
+            let payload = encode_executable_payload(&serde_json::json!({
+                "functions": [{
+                    "name": "main", "params": 0, "captures": 0, "regs": 1,
+                    "local_regs": {}, "code": [instruction.clone()]
+                }],
+                "function_ids": {"main": 0}, "resource_drop_functions": {},
+                "types": {}, "native_signatures": {}, "closure_identity_observable": false
+            }))
+            .unwrap();
+            let artifact = BytecodeArtifact::new(
+                "0.1.0",
+                "0.1.0",
+                TEST_CATALOG_DIGEST,
+                RUNTIME_ABI_VERSION,
+                TEST_SOURCE_DIGEST,
+                vec![],
+                payload,
+            )
+            .unwrap();
+            assert!(matches!(
+                BytecodeVerifier::default().verify(&artifact.to_bytes().unwrap()),
+                Err(BytecodeError::InvalidPayload(message)) if message.contains("fields differ")
+            ));
+        }
+    }
+
+    #[test]
+    fn every_known_opcode_has_an_exact_field_contract() {
+        for opcode in KNOWN_OPCODES {
+            assert!(
+                !instruction_fields(opcode).is_empty(),
+                "missing verifier field contract for {opcode}"
+            );
+        }
     }
 
     #[test]
