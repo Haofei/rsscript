@@ -31,7 +31,7 @@ fn memory_fs(files: Arc<Mutex<BTreeMap<String, String>>>) -> ProviderFunctions {
                     let NativeValue::String(path) = args.remove(0) else {
                         return Err(ProviderError::invalid_argument("path must be String"));
                     };
-                    Ok(files
+                    files
                         .lock()
                         .map_err(|_| ProviderError::internal("memory filesystem lock poisoned"))?
                         .get(&path)
@@ -42,7 +42,7 @@ fn memory_fs(files: Arc<Mutex<BTreeMap<String, String>>>) -> ProviderFunctions {
                                 ProviderErrorCode::NotFound,
                                 format!("missing memory file: {path}"),
                             )
-                        })?)
+                        })
                 }),
                 "host.fs.write_text" => NativeInterpreterFn::new(move |mut args| {
                     let NativeValue::String(path) = args.remove(0) else {
