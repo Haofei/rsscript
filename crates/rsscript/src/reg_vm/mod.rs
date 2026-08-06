@@ -52,6 +52,7 @@ use crate::analyzer::validate_sources_with_interfaces;
 use crate::analyzer::{validate_source, validate_sources_with_interfaces_without_core};
 use crate::eval_types::{
     EvalError, EvalOutput, ExternalFunction, NativeValue, ProviderCallContext,
+    ProviderResourceTable,
 };
 use crate::hir::{
     Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirMatchArm, HirStmt, HirTypeKind,
@@ -1350,6 +1351,7 @@ impl RegVmExecutable {
             .as_ref()
             .map(|native| native.stats.clone())
             .unwrap_or_default();
+        vm.cleanup_provider_resources()?;
         let display_value = value.display();
         let native_value = value.native_value();
         Ok((
@@ -1392,6 +1394,7 @@ impl RegVmExecutable {
             &plan,
         )?;
         let value = vm.run_program("main")?;
+        vm.cleanup_provider_resources()?;
         let display_value = value.display();
         let native_value = value.native_value();
         Ok(EvalOutput {
@@ -1451,6 +1454,7 @@ impl RegVmExecutable {
         };
         let value = result?;
         flush_result?;
+        vm.cleanup_provider_resources()?;
         let display_value = value.display();
         let native_value = value.native_value();
         Ok(EvalOutput {
@@ -1479,6 +1483,7 @@ impl RegVmExecutable {
             &plan,
         )?;
         let value = vm.run_program("main")?;
+        vm.cleanup_provider_resources()?;
         let display_value = value.display();
         let native_value = value.native_value();
         Ok(EvalOutput {
@@ -1519,6 +1524,7 @@ impl RegVmExecutable {
             &plan,
         )?;
         let value = vm.run_program("main")?;
+        vm.cleanup_provider_resources()?;
         let display_value = value.display();
         let native_value = value.native_value();
         Ok(EvalOutput {
@@ -1761,6 +1767,8 @@ pub struct VmLimits {
     /// Maximum number of calls through an explicitly linked external Provider
     /// symbol. This counter does not include VM/runtime intrinsics.
     pub provider_call_budget: Option<u64>,
+    /// Maximum simultaneously live Provider-owned resources.
+    pub resource_limit: Option<usize>,
 }
 
 /// Default recursion-depth cap: generous enough never to trip real code (deep
@@ -1792,6 +1800,7 @@ impl Default for VmLimits {
             stdout_budget: Some(4 * 1024 * 1024),
             intrinsic_call_budget: Some(1_000_000),
             provider_call_budget: Some(100_000),
+            resource_limit: Some(4_096),
         }
     }
 }
@@ -1817,6 +1826,7 @@ impl VmLimits {
             stdout_budget: None,
             intrinsic_call_budget: None,
             provider_call_budget: None,
+            resource_limit: None,
         }
     }
 }
@@ -1880,6 +1890,8 @@ struct RegVm {
     intrinsic_calls: u64,
     /// Number of calls dispatched through explicitly linked Provider symbols.
     provider_calls: u64,
+    /// VM-owned, generation-checked Provider resource slots.
+    provider_resources: ProviderResourceTable,
     /// Native (Cranelift) JIT state, `Some` when the native tier is enabled. The
     /// native tier compiles the integer/control core to machine code and is tried
     /// before the tier-0 executor; anything it can't compile (or bails on) falls

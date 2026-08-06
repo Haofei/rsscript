@@ -30,8 +30,9 @@ source + interfaces
 
 Successful reports identify the artifact, use a structured termination reason,
 and record steps, cumulative allocation bytes, output bytes, intrinsic calls,
-and Provider calls. Failed executions return a machine-readable termination
-reason plus a diagnostic message instead of a bare string error.
+and Provider calls, including resources created and cleaned. Failed executions
+return a machine-readable termination reason plus a diagnostic message instead
+of a bare string error.
 
 The bytecode VM is the reference execution model. Rust AOT, Cranelift JIT,
 native plugins, REIR, and self-hosting remain optional Experimental, Integration,

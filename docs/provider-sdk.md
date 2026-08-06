@@ -60,6 +60,11 @@ flag, call id, and remaining byte/output budgets from the VM. Providers should
 check cancellation around potentially blocking work; the runtime checks it once
 before entering every callable.
 
+Providers that create retained host resources register a `ProviderResource`
+through the context and expose the returned generation-safe `ResourceHandle`.
+The VM owns the table, rejects stale/reused handles, enforces `resource_limit`,
+and invokes cleanup exactly once on explicit close or execution exit.
+
 Use `rsscript-provider-api` for the safe value and descriptor types. Dynamic
 library or native-plugin ABI concerns belong in a separate adapter and must not
 leak into the provider contract.

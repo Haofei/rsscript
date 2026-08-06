@@ -15,6 +15,21 @@ impl RegVm {
             output_bytes: self.stdout.len().saturating_add(self.stderr.len()),
             intrinsic_calls: self.intrinsic_calls,
             provider_calls: self.provider_calls,
+            resources_created: self.provider_resources.created(),
+            resources_cleaned: self.provider_resources.cleaned(),
+            resources_live_at_return: self.provider_resources.live(),
+        }
+    }
+
+    pub(super) fn cleanup_provider_resources(&mut self) -> Result<(), EvalError> {
+        let errors = self.provider_resources.cleanup_all();
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(EvalError::Runtime(format!(
+                "provider resource cleanup failed: {}",
+                errors[0]
+            )))
         }
     }
 
@@ -54,6 +69,7 @@ impl RegVm {
             live_bytes: 0,
             intrinsic_calls: 0,
             provider_calls: 0,
+            provider_resources: ProviderResourceTable::new(VmLimits::default().resource_limit),
             #[cfg(feature = "native-jit")]
             native: None,
             noncapturing_closure_cache: Vec::new(),
@@ -82,8 +98,8 @@ impl RegVm {
     }
 
     /// Apply resource limits to this VM before it runs, replacing the bounded
-    /// defaults wholesale.
     pub(super) fn set_limits(&mut self, limits: VmLimits) {
+        self.provider_resources.set_limit(limits.resource_limit);
         self.limits = limits;
     }
 

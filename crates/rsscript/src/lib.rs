@@ -67,7 +67,8 @@ pub use eval_types::{
     ExternalFunction, ExternalFunctionRegistry, ExternalImport, ExternalSymbol, FunctionSignature,
     NativeValue, ProviderCallContext, ProviderCallMode, ProviderDescriptor, ProviderError,
     ProviderErrorCode, ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor,
-    ProviderLoadError, ResourceCleanupContract, SignatureHash,
+    ProviderLoadError, ProviderResource, ProviderResourceTable, ResourceCleanupContract,
+    ResourceHandle, SignatureHash,
 };
 pub use formatter::{format_program, format_source};
 pub use generate::{

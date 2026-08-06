@@ -5,7 +5,8 @@ pub use rsscript_abi_model::{ExternalImport, ExternalSymbol, FunctionSignature, 
 pub use rsscript_provider_api::{
     BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderCallContext,
     ProviderCallMode, ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderErrorMapping,
-    ProviderFunction, ProviderFunctionDescriptor, ProviderLoadError, ResourceCleanupContract,
+    ProviderFunction, ProviderFunctionDescriptor, ProviderLoadError, ProviderResource,
+    ProviderResourceTable, ResourceCleanupContract, ResourceHandle,
 };
 pub type ExternalFunction = NativeInterpreterFn;
 
@@ -75,6 +76,9 @@ pub struct ExecutionUsage {
     pub output_bytes: usize,
     pub intrinsic_calls: u64,
     pub provider_calls: u64,
+    pub resources_created: u64,
+    pub resources_cleaned: u64,
+    pub resources_live_at_return: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

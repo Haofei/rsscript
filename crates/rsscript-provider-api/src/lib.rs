@@ -99,13 +99,13 @@ impl From<&str> for ProviderError {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
 pub struct ProviderCallContext<'a> {
     pub cancellation: Option<&'a AtomicBool>,
     pub deadline: Option<Instant>,
     pub remaining_byte_budget: Option<usize>,
     pub remaining_output_budget: Option<usize>,
     pub call_id: u64,
+    pub resources: Option<&'a mut ProviderResourceTable>,
 }
 
 impl ProviderCallContext<'_> {
@@ -140,7 +140,177 @@ impl Default for ProviderCallContext<'static> {
             remaining_byte_budget: None,
             remaining_output_budget: None,
             call_id: 0,
+            resources: None,
         }
+    }
+}
+
+impl ProviderCallContext<'_> {
+    pub fn register_resource(
+        &mut self,
+        resource: impl ProviderResource + 'static,
+    ) -> Result<ResourceHandle, ProviderError> {
+        self.resources
+            .as_deref_mut()
+            .ok_or_else(|| ProviderError::internal("runtime resource table is unavailable"))?
+            .register(Box::new(resource))
+    }
+
+    pub fn cleanup_resource(&mut self, handle: ResourceHandle) -> Result<(), ProviderError> {
+        self.resources
+            .as_deref_mut()
+            .ok_or_else(|| ProviderError::internal("runtime resource table is unavailable"))?
+            .cleanup(handle)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ResourceHandle {
+    pub slot: u32,
+    pub generation: u32,
+}
+
+impl ResourceHandle {
+    pub fn to_native_id(self) -> i64 {
+        i64::from_ne_bytes(
+            ((u64::from(self.generation) << 32) | u64::from(self.slot)).to_ne_bytes(),
+        )
+    }
+
+    pub fn from_native_id(id: i64) -> Self {
+        let bits = u64::from_ne_bytes(id.to_ne_bytes());
+        Self {
+            slot: bits as u32,
+            generation: (bits >> 32) as u32,
+        }
+    }
+}
+
+pub trait ProviderResource: Send {
+    fn cleanup(&mut self) -> Result<(), ProviderError>;
+}
+
+struct ResourceSlot {
+    generation: u32,
+    resource: Option<Box<dyn ProviderResource>>,
+}
+
+pub struct ProviderResourceTable {
+    slots: Vec<ResourceSlot>,
+    limit: Option<usize>,
+    live: usize,
+    created: u64,
+    cleaned: u64,
+}
+
+impl ProviderResourceTable {
+    pub fn new(limit: Option<usize>) -> Self {
+        Self {
+            slots: Vec::new(),
+            limit,
+            live: 0,
+            created: 0,
+            cleaned: 0,
+        }
+    }
+
+    pub fn set_limit(&mut self, limit: Option<usize>) {
+        self.limit = limit;
+    }
+
+    pub fn register(
+        &mut self,
+        resource: Box<dyn ProviderResource>,
+    ) -> Result<ResourceHandle, ProviderError> {
+        if self.limit.is_some_and(|limit| self.live >= limit) {
+            return Err(ProviderError::new(
+                ProviderErrorCode::ResourceExhausted,
+                "provider resource limit exceeded",
+            ));
+        }
+        let slot = self
+            .slots
+            .iter()
+            .position(|slot| slot.resource.is_none())
+            .unwrap_or(self.slots.len());
+        if slot == self.slots.len() {
+            self.slots.push(ResourceSlot {
+                generation: 0,
+                resource: None,
+            });
+        }
+        let entry = &mut self.slots[slot];
+        entry.resource = Some(resource);
+        self.live += 1;
+        self.created += 1;
+        Ok(ResourceHandle {
+            slot: u32::try_from(slot).map_err(|_| {
+                ProviderError::new(
+                    ProviderErrorCode::ResourceExhausted,
+                    "provider resource slot exceeds handle range",
+                )
+            })?,
+            generation: entry.generation,
+        })
+    }
+
+    pub fn cleanup(&mut self, handle: ResourceHandle) -> Result<(), ProviderError> {
+        let slot = self
+            .slots
+            .get_mut(handle.slot as usize)
+            .filter(|slot| slot.generation == handle.generation)
+            .ok_or_else(|| {
+                ProviderError::new(
+                    ProviderErrorCode::InvalidArgument,
+                    "stale or invalid provider resource handle",
+                )
+            })?;
+        let mut resource = slot.resource.take().ok_or_else(|| {
+            ProviderError::new(
+                ProviderErrorCode::InvalidArgument,
+                "provider resource is already closed",
+            )
+        })?;
+        let result = resource.cleanup();
+        slot.generation = slot.generation.wrapping_add(1);
+        self.live = self.live.saturating_sub(1);
+        self.cleaned += 1;
+        result
+    }
+
+    pub fn cleanup_all(&mut self) -> Vec<ProviderError> {
+        let handles = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.resource.is_some())
+            .map(|(index, slot)| ResourceHandle {
+                slot: index as u32,
+                generation: slot.generation,
+            })
+            .collect::<Vec<_>>();
+        handles
+            .into_iter()
+            .filter_map(|handle| self.cleanup(handle).err())
+            .collect()
+    }
+
+    pub fn live(&self) -> usize {
+        self.live
+    }
+
+    pub fn created(&self) -> u64 {
+        self.created
+    }
+
+    pub fn cleaned(&self) -> u64 {
+        self.cleaned
+    }
+}
+
+impl Drop for ProviderResourceTable {
+    fn drop(&mut self) {
+        drop(self.cleanup_all());
     }
 }
 
@@ -533,5 +703,44 @@ mod tests {
             .expect_err("cancelled call must not enter Provider code");
         assert_eq!(error.code, ProviderErrorCode::Cancelled);
         assert!(!called.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn resource_handles_are_generation_safe_and_cleanup_is_exactly_once() {
+        struct CountedResource(Arc<std::sync::atomic::AtomicU64>);
+        impl ProviderResource for CountedResource {
+            fn cleanup(&mut self) -> Result<(), ProviderError> {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                Ok(())
+            }
+        }
+
+        let cleanups = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let mut table = ProviderResourceTable::new(Some(1));
+        let first = table
+            .register(Box::new(CountedResource(Arc::clone(&cleanups))))
+            .unwrap();
+        assert!(matches!(
+            table.register(Box::new(CountedResource(Arc::clone(&cleanups)))),
+            Err(ProviderError {
+                code: ProviderErrorCode::ResourceExhausted,
+                ..
+            })
+        ));
+        table.cleanup(first).unwrap();
+        let second = table
+            .register(Box::new(CountedResource(Arc::clone(&cleanups))))
+            .unwrap();
+        assert_eq!(first.slot, second.slot);
+        assert_ne!(first.generation, second.generation);
+        assert!(
+            table.cleanup(first).is_err(),
+            "stale handle must fail closed"
+        );
+        assert!(table.cleanup_all().is_empty());
+        assert_eq!(cleanups.load(Ordering::Relaxed), 2);
+        assert_eq!(table.live(), 0);
+        assert_eq!(table.created(), 2);
+        assert_eq!(table.cleaned(), 2);
     }
 }

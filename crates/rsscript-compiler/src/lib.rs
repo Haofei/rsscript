@@ -185,6 +185,7 @@ pub struct RunLimits {
     pub output_budget: Option<usize>,
     pub intrinsic_call_budget: Option<u64>,
     pub provider_call_budget: Option<u64>,
+    pub resource_limit: Option<usize>,
 }
 
 #[cfg(feature = "execution")]
@@ -222,6 +223,7 @@ impl From<VmLimits> for RunLimits {
             output_budget: limits.stdout_budget,
             intrinsic_call_budget: limits.intrinsic_call_budget,
             provider_call_budget: limits.provider_call_budget,
+            resource_limit: limits.resource_limit,
         }
     }
 }
@@ -238,6 +240,7 @@ impl From<RunLimits> for VmLimits {
             stdout_budget: limits.output_budget,
             intrinsic_call_budget: limits.intrinsic_call_budget,
             provider_call_budget: limits.provider_call_budget,
+            resource_limit: limits.resource_limit,
         }
     }
 }
