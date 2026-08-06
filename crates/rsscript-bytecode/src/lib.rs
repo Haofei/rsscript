@@ -491,6 +491,7 @@ fn verify_executable_payload(
 
     let mut total_instructions = 0usize;
     let mut called_imports = BTreeSet::new();
+    let mut function_names = BTreeSet::new();
     for (function_id, value) in functions.iter().enumerate() {
         context.check()?;
         let function = value
@@ -504,6 +505,11 @@ fn verify_executable_payload(
         let name = function["name"].as_str().ok_or_else(|| {
             invalid_payload(format!("function {function_id} name is not a string"))
         })?;
+        if name.is_empty() || !function_names.insert(name) {
+            return Err(invalid_payload(format!(
+                "function {function_id} has an empty or duplicate name `{name}`"
+            )));
+        }
         let registers = json_usize(&function["regs"], "register count")?;
         let params = json_usize(&function["params"], "parameter count")?;
         let captures = json_usize(&function["captures"], "capture count")?;
@@ -555,6 +561,8 @@ fn verify_executable_payload(
     verify_function_map(unit, "function_ids", functions, true)?;
     context.check()?;
     verify_function_map(unit, "resource_drop_functions", functions, false)?;
+    verify_type_metadata(unit, limits)?;
+    verify_native_signatures(unit, functions, limits)?;
     let declared_imports = imports
         .iter()
         .map(|import| import.symbol.as_str().to_string())
@@ -563,6 +571,122 @@ fn verify_executable_payload(
         return Err(invalid_payload(format!(
             "external call table mismatch: instructions={called_imports:?}, imports={declared_imports:?}"
         )));
+    }
+    Ok(())
+}
+
+fn verify_type_metadata(
+    unit: &serde_json::Map<String, serde_json::Value>,
+    limits: BytecodeLimits,
+) -> Result<(), BytecodeError> {
+    let types = unit["types"]
+        .as_object()
+        .ok_or_else(|| invalid_payload("types is not an object"))?;
+    if types.len() > limits.max_functions {
+        return Err(BytecodeError::LimitExceeded("type count"));
+    }
+    for (key, value) in types {
+        let ty = value
+            .as_object()
+            .ok_or_else(|| invalid_payload(format!("type `{key}` is not an object")))?;
+        require_object_fields(ty, &["name", "fields"], &format!("type `{key}`"))?;
+        let name = ty["name"]
+            .as_str()
+            .ok_or_else(|| invalid_payload(format!("type `{key}` name is not a string")))?;
+        if name != key {
+            return Err(invalid_payload(format!(
+                "type table key `{key}` does not match metadata name `{name}`"
+            )));
+        }
+        let fields = ty["fields"]
+            .as_array()
+            .ok_or_else(|| invalid_payload(format!("type `{key}` fields is not an array")))?;
+        if fields.len() > limits.max_registers_per_function {
+            return Err(BytecodeError::LimitExceeded("fields per type"));
+        }
+        let mut field_names = BTreeSet::new();
+        for field in fields {
+            let field = field
+                .as_object()
+                .ok_or_else(|| invalid_payload(format!("type `{key}` field is not an object")))?;
+            require_object_fields(
+                field,
+                &["name", "type_name"],
+                &format!("type `{key}` field"),
+            )?;
+            let field_name = field["name"].as_str().ok_or_else(|| {
+                invalid_payload(format!("type `{key}` field name is not a string"))
+            })?;
+            let type_name = field["type_name"].as_str().ok_or_else(|| {
+                invalid_payload(format!("type `{key}` field type is not a string"))
+            })?;
+            if field_name.is_empty() || type_name.is_empty() || !field_names.insert(field_name) {
+                return Err(invalid_payload(format!(
+                    "type `{key}` has an empty or duplicate field `{field_name}`"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn verify_native_signatures(
+    unit: &serde_json::Map<String, serde_json::Value>,
+    functions: &[serde_json::Value],
+    limits: BytecodeLimits,
+) -> Result<(), BytecodeError> {
+    let signatures = unit["native_signatures"]
+        .as_object()
+        .ok_or_else(|| invalid_payload("native_signatures is not an object"))?;
+    if signatures.len() > limits.max_functions {
+        return Err(BytecodeError::LimitExceeded("native signature count"));
+    }
+    let function_ids = unit["function_ids"]
+        .as_object()
+        .ok_or_else(|| invalid_payload("function_ids is not an object"))?;
+    if signatures.keys().collect::<BTreeSet<_>>() != function_ids.keys().collect::<BTreeSet<_>>() {
+        return Err(invalid_payload(
+            "native signature names differ from the public function map",
+        ));
+    }
+    for (name, value) in signatures {
+        let signature = value.as_object().ok_or_else(|| {
+            invalid_payload(format!("native signature `{name}` is not an object"))
+        })?;
+        require_object_fields(
+            signature,
+            &["params", "return_type"],
+            &format!("native signature `{name}`"),
+        )?;
+        let params = signature["params"].as_array().ok_or_else(|| {
+            invalid_payload(format!("native signature `{name}` params is not an array"))
+        })?;
+        if params
+            .iter()
+            .any(|parameter| parameter.as_str().is_none_or(str::is_empty))
+        {
+            return Err(invalid_payload(format!(
+                "native signature `{name}` has an invalid parameter type"
+            )));
+        }
+        if !signature["return_type"].is_null()
+            && signature["return_type"].as_str().is_none_or(str::is_empty)
+        {
+            return Err(invalid_payload(format!(
+                "native signature `{name}` has an invalid return type"
+            )));
+        }
+        let function_id = json_usize(&function_ids[name], "function id")?;
+        let expected = functions[function_id]
+            .get("params")
+            .ok_or_else(|| invalid_payload(format!("function `{name}` is missing params")))?;
+        require_arity(
+            function_id,
+            0,
+            "native signature",
+            json_usize(expected, "params")?,
+            params.len(),
+        )?;
     }
     Ok(())
 }
@@ -1919,6 +2043,50 @@ mod tests {
                 "missing verifier field contract for {opcode}"
             );
         }
+    }
+
+    #[test]
+    fn verifier_rejects_inconsistent_type_and_function_metadata() {
+        let artifact_for = |types: serde_json::Value, signatures: serde_json::Value| {
+            BytecodeArtifact::new(
+                "0.1.0",
+                "0.1.0",
+                TEST_CATALOG_DIGEST,
+                RUNTIME_ABI_VERSION,
+                TEST_SOURCE_DIGEST,
+                vec![],
+                encode_executable_payload(&serde_json::json!({
+                    "functions": [{
+                        "name": "main", "params": 0, "captures": 0, "regs": 1,
+                        "local_regs": {},
+                        "code": [{"LoadUnit": {"dst": 0}}, {"Return": {"src": 0}}]
+                    }],
+                    "function_ids": {"main": 0}, "resource_drop_functions": {},
+                    "types": types, "native_signatures": signatures,
+                    "closure_identity_observable": false
+                }))
+                .unwrap(),
+            )
+            .unwrap()
+        };
+
+        let bad_type = artifact_for(
+            serde_json::json!({"Expected": {"name": "Different", "fields": []}}),
+            serde_json::json!({"main": {"params": [], "return_type": "Unit"}}),
+        );
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&bad_type.to_bytes().unwrap()),
+            Err(BytecodeError::InvalidPayload(message)) if message.contains("does not match metadata name")
+        ));
+
+        let bad_signature = artifact_for(
+            serde_json::json!({}),
+            serde_json::json!({"main": {"params": ["Int"], "return_type": "Unit"}}),
+        );
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&bad_signature.to_bytes().unwrap()),
+            Err(BytecodeError::InvalidPayload(message)) if message.contains("expected 0")
+        ));
     }
 
     #[test]
