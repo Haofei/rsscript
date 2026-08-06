@@ -156,9 +156,10 @@ pub fn reg_vm_eval_source_main(file: &str, source: &str) -> Result<EvalOutput, E
     reg_vm_eval_source_main_with_args(file, source, args)
 }
 
-/// Compile `source` and run `main` under explicit sandbox resource limits.
-/// Convenience wrapper around [`RegVmExecutable::eval_main_with_limits`] for the
-/// untrusted/agent-facing path (and for the hostile-input tests).
+/// Compile `source` and run `main` under explicit resilience limits.
+///
+/// Limits bound selected resources but do not isolate untrusted code. Deploy
+/// externally supplied scripts inside an operating-system isolation boundary.
 pub fn reg_vm_eval_source_main_with_limits(
     file: &str,
     source: &str,
@@ -1448,11 +1449,10 @@ impl RegVmExecutable {
         })
     }
 
-    /// Run `main` under explicit sandbox resource limits ([`VmLimits`]). This is
-    /// the agent-facing entry point: untrusted callers tighten the depth cap and
-    /// turn on the step/memory budgets so a hostile program returns a clean
-    /// `EvalError::Runtime` instead of crashing or hanging the host. Output is
-    /// otherwise identical to [`Self::eval_main_with_args`].
+    /// Run `main` under explicit resource limits ([`VmLimits`]). Limits convert
+    /// selected runaway behavior into `EvalError::Runtime`; they are not an
+    /// isolation boundary. Output is otherwise identical to
+    /// [`Self::eval_main_with_args`].
     pub fn eval_main_with_limits(
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,

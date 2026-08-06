@@ -236,7 +236,7 @@ impl TypedVec {
 
     /// Per-element heap cost for `mem_budget` accounting (plan §4.6). A typed
     /// `Ints`/`Floats` element is a flat 8-byte scalar; a `Boxed` element is a full
-    /// `VmValue`. The sandbox memory ceiling charges this per element of growth so
+    /// `VmValue`. The allocation budget charges this per element of growth so
     /// the accounting tracks the *actual* flat buffer cost, not a misleading
     /// `VmValue`-sized charge for a list that is really an `i64[]`.
     pub(crate) fn elem_bytes(&self) -> usize {
@@ -426,7 +426,7 @@ impl TypedVec {
     /// build loop instead of one `account_bytes` per element).
     ///
     /// Charging on capacity (which is always `>= len`) is conservative for the
-    /// sandbox ceiling: it over-counts the unused tail of a grown buffer, never
+    /// allocation budget: it over-counts the unused tail of a grown buffer, never
     /// under-counts, so an adversarial `while true { list.push(x) }` still trips the
     /// limit (in fact slightly sooner). Returns `Err(value)` on kind mismatch with
     /// no bytes charged.

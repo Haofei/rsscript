@@ -1,7 +1,6 @@
-//! Hostile-input suite: the front end is the first supply-chain boundary for
-//! AI-generated and untrusted source, so it must never panic and must fail
-//! closed (produce diagnostics) on malformed input rather than silently
-//! yielding a "clean" partial result.
+//! Hostile-input robustness suite. Parsing and checking externally supplied
+//! source must never panic and must fail closed on malformed input. Passing
+//! these tests does not make the in-process VM an isolation boundary.
 
 use proptest::prelude::*;
 use rsscript::{EvalError, VmLimits};
@@ -11,12 +10,9 @@ use common::reg_vm_eval_source_main_with_limits;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Invariant 1 (runtime hardening): no agent program may crash or hang the host.
-/// These cases prove that the reg-VM's sandbox limits turn the three classic
-/// resource-exhaustion attacks — unbounded recursion (native stack overflow =
-/// SIGSEGV), an infinite loop (hang), and runaway allocation (OOM-kill) — into
-/// clean, recoverable `EvalError::Runtime` values instead. They run in the dev
-/// profile via the public limit-aware eval entry point.
+/// Invariant 1 (runtime resilience): configured VM limits turn selected
+/// resource-exhaustion cases into recoverable `EvalError::Runtime` values. They
+/// do not replace process isolation for untrusted execution.
 ///
 /// Helper: eval `source`'s `main` under `limits`, returning the result.
 fn eval_limited(source: &str, limits: VmLimits) -> Result<rsscript::EvalOutput, EvalError> {
@@ -27,8 +23,7 @@ fn eval_limited(source: &str, limits: VmLimits) -> Result<rsscript::EvalOutput, 
 /// clean "recursion depth" error rather than overflowing the native stack.
 #[test]
 fn deep_recursion_returns_clean_error_not_crash() {
-    // Default limits: depth cap on, step/memory budgets off — this is exactly
-    // what a trusted run would use, and it still catches `f(){f()}`.
+    // Bounded defaults catch self-recursion before the native stack overflows.
     let source = r#"
 fn f(n: Int) -> Int {
     return f(n: n + 1)

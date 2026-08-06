@@ -71,10 +71,8 @@ impl RegVm {
         closure
     }
 
-    /// Apply sandbox resource limits to this VM before it runs. Replaces the
-    /// defaults wholesale (default construction already uses [`VmLimits::default`]
-    /// — depth cap on, step/memory budgets off — so existing callers are
-    /// unaffected and only agent-facing entry points need call this).
+    /// Apply resource limits to this VM before it runs, replacing the bounded
+    /// defaults wholesale.
     pub(super) fn set_limits(&mut self, limits: VmLimits) {
         self.limits = limits;
     }
