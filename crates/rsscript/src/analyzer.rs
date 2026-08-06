@@ -1954,7 +1954,7 @@ pub(crate) fn is_valid_rust_identifier(name: &str) -> bool {
     };
     (first.is_ascii_alphabetic() || first == '_')
         && chars.all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
-        && !crate::rust_lower::is_rust_keyword(name)
+        && !crate::text_util::is_rust_keyword(name)
 }
 
 pub(crate) fn type_ref_is_noescape(ty: &TypeRef) -> bool {

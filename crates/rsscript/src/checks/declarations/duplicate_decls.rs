@@ -17,7 +17,6 @@ pub(super) fn check(analyzer: &mut Analyzer<'_>) {
 /// at least one pin are reported here (plain default collisions, if any, are a
 /// separate concern from this escape hatch).
 fn check_lowered_name_conflicts(analyzer: &mut Analyzer<'_>) {
-    use crate::rust_lower::lowered_symbol_name;
     let mut seen: HashMap<String, (String, bool)> = HashMap::new();
     let mut conflicts: Vec<(crate::diagnostic::Span, String, String)> = Vec::new();
     let mut invalid: Vec<(crate::diagnostic::Span, String)> = Vec::new();
@@ -34,7 +33,7 @@ fn check_lowered_name_conflicts(analyzer: &mut Analyzer<'_>) {
         }
         let lowered = pinned
             .map(str::to_string)
-            .unwrap_or_else(|| lowered_symbol_name(&function.name));
+            .unwrap_or_else(|| crate::text_util::default_lowered_symbol_name(&function.name));
         let is_pinned = pinned.is_some();
         if let Some((first_name, first_pinned)) = seen.get(&lowered) {
             if is_pinned || *first_pinned {

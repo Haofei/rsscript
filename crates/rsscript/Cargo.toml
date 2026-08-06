@@ -22,12 +22,12 @@ test = false
 rss-native-abi = { path = "../native-abi", features = ["host"], optional = true }
 rss-process-guard = { path = "../process-guard", optional = true }
 rsscript-abi-model = { path = "../rsscript-abi-model" }
-rsscript-bytecode = { path = "../rsscript-bytecode" }
+rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
-rsscript-lowering = { path = "../rsscript-lowering" }
-rsscript-provider-api = { path = "../rsscript-provider-api" }
+rsscript-lowering = { path = "../rsscript-lowering", optional = true }
+rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
 rsscript-semantics = { path = "../rsscript-semantics" }
-rsscript-runtime = { path = "../runtime", default-features = false, features = ["core"] }
+rsscript-runtime = { path = "../runtime", default-features = false, features = ["core"], optional = true }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-work-budget = { path = "../rsscript-work-budget" }
 serde = { version = "1", features = ["derive", "rc"] }
@@ -54,12 +54,15 @@ tempfile = "3"
 vm-jit = { path = "../vm-jit", optional = true }
 
 [features]
-host-tools = ["dep:rss-process-guard"]
-native-plugin = ["dep:rss-native-abi", "host-tools"]
+default = ["execution"]
+execution = ["dep:rsscript-bytecode", "dep:rsscript-lowering", "dep:rsscript-provider-api", "dep:rsscript-runtime"]
+language-service = []
+host-tools = ["execution", "dep:rss-process-guard"]
+native-plugin = ["execution", "dep:rss-native-abi", "host-tools"]
 # Native (Cranelift) baseline JIT for the integer/control core. Off by default so
 # normal builds/tests don't pull in the codegen dependency; enable for the Rust
 # differential/benchmark harnesses and force-JIT CI.
-native-jit = ["dep:vm-jit"]
+native-jit = ["execution", "dep:vm-jit"]
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }

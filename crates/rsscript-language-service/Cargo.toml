@@ -6,4 +6,5 @@ description = "Incremental editor-facing language service for RSScript"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-rsscript = { path = "../rsscript" }
+rsscript = { path = "../rsscript", default-features = false, features = ["language-service"] }
+toml = "0.8"

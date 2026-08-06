@@ -5,6 +5,7 @@
 
 /// Decode a source string token's escape sequences (`\n`, `\t`, `\\`, `\"`, …).
 /// Unknown escapes are preserved verbatim (backslash + char).
+#[cfg(feature = "execution")]
 pub(crate) fn decode_string_token(value: &str) -> String {
     let mut decoded = String::new();
     let mut chars = value.chars();
@@ -74,6 +75,7 @@ pub(crate) fn char_literal_scalar_count(value: &str) -> usize {
 /// malformed literal that somehow reaches here yields the first scalar (or the
 /// Unicode replacement character for the empty case) rather than panicking, so a
 /// missed frontend check can never crash the compiler in release builds.
+#[cfg(feature = "execution")]
 pub(crate) fn decode_char_token(value: &str) -> char {
     let decoded = decode_char_escapes(value);
     let mut iter = decoded.chars();
@@ -86,6 +88,7 @@ pub(crate) fn decode_char_token(value: &str) -> char {
 }
 
 /// `value[start .. start+len]` clamped to char boundaries and the string bounds.
+#[cfg(feature = "execution")]
 pub(crate) fn string_slice_range(value: &str, start: i64, len: i64) -> &str {
     let byte_start = clamp_to_char_boundary(value, start.max(0) as usize);
     let requested_end = byte_start.saturating_add(len.max(0) as usize);
@@ -97,6 +100,7 @@ pub(crate) fn string_slice_range(value: &str, start: i64, len: i64) -> &str {
 ///
 /// A multibyte fill may make the result wider than requested; UTF-8 is never
 /// split and padding never silently underfills the requested byte width.
+#[cfg(feature = "execution")]
 pub(crate) fn string_pad(value: &str, width: i64, fill: &str, left: bool) -> String {
     let target = width.max(0) as usize;
     if value.len() >= target || fill.is_empty() {
@@ -115,6 +119,7 @@ pub(crate) fn string_pad(value: &str, width: i64, fill: &str, left: bool) -> Str
 }
 
 /// Byte length of [`string_pad`] without materializing the padded string.
+#[cfg(feature = "execution")]
 pub(crate) fn string_pad_len(value: &str, width: i64, fill: &str) -> Option<i64> {
     let target = width.max(0) as usize;
     if value.len() >= target || fill.is_empty() {
@@ -132,6 +137,7 @@ pub(crate) fn string_pad_len(value: &str, width: i64, fill: &str) -> Option<i64>
 
 /// Substitute `{}` placeholders in `template` with successive `args` (`{{`/`}}`
 /// are literal braces; a `{}` with no remaining argument is left as-is).
+#[cfg(feature = "execution")]
 pub(crate) fn string_format(template: &str, args: &[String]) -> String {
     let mut output = String::new();
     let mut chars = template.chars().peekable();
@@ -162,6 +168,7 @@ pub(crate) fn string_format(template: &str, args: &[String]) -> String {
 }
 
 /// Round `index` down to the nearest char boundary within `value`.
+#[cfg(feature = "execution")]
 pub(crate) fn clamp_to_char_boundary(value: &str, mut index: usize) -> usize {
     index = index.min(value.len());
     while index > 0 && !value.is_char_boundary(index) {
@@ -263,7 +270,29 @@ pub(crate) fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str
     }
 }
 
-#[cfg(test)]
+/// Whether `name` is a Rust strict or reserved keyword. This is a source-name
+/// validation fact shared by the frontend and optional Rust backend.
+pub(crate) fn is_rust_keyword(name: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "abstract", "as", "async", "await", "become", "box", "break", "const", "continue", "crate",
+        "do", "dyn", "else", "enum", "extern", "false", "final", "fn", "for", "gen", "if", "impl",
+        "in", "let", "loop", "macro", "match", "mod", "move", "mut", "override", "priv", "pub",
+        "ref", "return", "self", "Self", "static", "struct", "super", "trait", "true", "try",
+        "type", "typeof", "unsafe", "unsized", "use", "virtual", "where", "while", "yield",
+    ];
+    KEYWORDS.contains(&name)
+}
+
+pub(crate) fn default_lowered_symbol_name(qualified_name: &str) -> String {
+    let flattened = qualified_name.split('.').collect::<Vec<_>>().join("_");
+    if is_rust_keyword(&flattened) {
+        format!("r#{flattened}")
+    } else {
+        flattened
+    }
+}
+
+#[cfg(all(test, feature = "execution"))]
 mod tests {
     use super::*;
 

@@ -25,17 +25,20 @@
 )]
 
 mod analyzer;
+#[cfg(feature = "execution")]
 mod call_binding;
 mod checks;
 mod core_index;
 mod diagnostic;
 mod editor_grammar;
+#[cfg(feature = "execution")]
 mod eval_types;
+#[cfg(feature = "execution")]
 mod fnv;
 mod formatter;
 mod generate;
 mod hir;
-#[cfg(test)]
+#[cfg(all(test, feature = "execution"))]
 mod interface_metadata;
 mod interfaces;
 mod lexer {
@@ -44,19 +47,25 @@ mod lexer {
 mod lint;
 #[cfg(feature = "native-plugin")]
 mod native_plugin;
+#[cfg(feature = "execution")]
 mod package;
+#[cfg(feature = "execution")]
 mod reg_vm;
+#[cfg(feature = "execution")]
 mod review;
+#[cfg(feature = "execution")]
 mod runtime_abi;
+#[cfg(feature = "execution")]
 mod rust_lower;
-#[cfg(test)]
+#[cfg(all(test, feature = "execution"))]
 mod selfhost_parity;
 mod semantic;
 mod symbols;
 pub mod syntax;
-#[cfg(test)]
+#[cfg(all(test, feature = "execution"))]
 mod test_interfaces;
 mod text_util;
+#[cfg(feature = "execution")]
 mod vm_value;
 
 pub use analyzer::{
@@ -76,6 +85,7 @@ pub use diagnostic::{
     format_diagnostics_json_with_source,
 };
 pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
+#[cfg(feature = "execution")]
 pub use eval_types::{
     BlockingBehavior, CancellationBehavior, CoverageBucket, EvalError, EvalOutput,
     ExternalFunction, ExternalFunctionRegistry, ExternalImport, ExternalSymbol, FunctionSignature,
@@ -91,7 +101,7 @@ pub use generate::{
 pub use lint::lint_source;
 #[cfg(feature = "native-plugin")]
 pub use native_plugin::{load_package_bindings, load_package_bindings_from_snapshot};
-#[cfg(not(feature = "native-plugin"))]
+#[cfg(all(feature = "execution", not(feature = "native-plugin")))]
 pub fn load_package_bindings(
     package_dir: &std::path::Path,
 ) -> Result<Vec<(String, ExternalFunction)>, String> {
@@ -102,7 +112,7 @@ pub fn load_package_bindings(
         Ok(Vec::new())
     }
 }
-#[cfg(not(feature = "native-plugin"))]
+#[cfg(all(feature = "execution", not(feature = "native-plugin")))]
 pub fn load_package_bindings_from_snapshot(
     package: &ExecutablePackageSnapshot,
 ) -> Result<Vec<(String, ExternalFunction)>, String> {
@@ -112,6 +122,7 @@ pub fn load_package_bindings_from_snapshot(
         Err("native plugin loading is disabled; rebuild the host with `native-plugin`".to_string())
     }
 }
+#[cfg(feature = "execution")]
 pub use package::{
     ArtifactStore, ExecutablePackageSnapshot, PackageAnalysis, PackageAnalysisAwaitSite,
     PackageAnalysisExport, PackageAnalysisExternalImport, PackageAnalysisProducer,
@@ -135,6 +146,7 @@ pub use package::{
     package_tree, prepare_executable_package, prepare_package_for_execution, review_package_dir,
     write_package_artifact_atomic,
 };
+#[cfg(feature = "execution")]
 pub use reg_vm::{
     JitPlan, RegVmExecutable, VmLimits, reg_vm_compile_package, reg_vm_compile_package_input,
     reg_vm_compile_source, reg_vm_compile_validated, reg_vm_eval_package_main_with_args,
@@ -154,17 +166,21 @@ pub use reg_vm::{
     reg_vm_eval_source_main_native_osr, reg_vm_eval_source_main_native_osr_report,
     reg_vm_eval_source_main_native_precise, with_native_cost_model_disabled,
 };
+#[cfg(feature = "execution")]
 pub use review::{
     ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
     ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary, ReviewRisk,
     format_review_human, format_review_json, format_review_map_human, format_review_map_json,
     review_map_sources, review_sources,
 };
+#[cfg(feature = "execution")]
 pub use rsscript_bytecode::{
     BYTECODE_MAGIC, BYTECODE_SCHEMA, BytecodeArtifact, BytecodeError, BytecodeHeader,
     BytecodeLimits, BytecodeVerifier, VerifiedBytecode,
 };
+#[cfg(feature = "execution")]
 pub use rust_lower::lowered_symbol_name;
+#[cfg(feature = "execution")]
 pub use rust_lower::{
     GeneratedRustPackage, LowerCoverageReport, LoweredRust, NativeRustDependency,
     RemappedRustcDiagnostic, RustBackendCheckResult, RustSourceMapEntry,
@@ -180,6 +196,8 @@ pub use semantic::{
     SourceSnapshot, ValidatedProgram,
 };
 pub use symbols::{
-    Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolInventoryEntry,
-    SymbolKind, SymbolLookup, document_symbols, symbol_index, symbol_inventory,
+    Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
+    document_symbols, symbol_index,
 };
+#[cfg(feature = "execution")]
+pub use symbols::{SymbolInventoryEntry, symbol_inventory};

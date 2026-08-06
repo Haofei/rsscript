@@ -26,7 +26,7 @@ mod source_map;
 mod types;
 
 pub use backend_check::check_generated_rust_package;
-pub(crate) use helpers::{is_rust_keyword, set_lower_name_overrides};
+pub(crate) use helpers::set_lower_name_overrides;
 pub use runtime_diagnostics::parse_runtime_diagnostics;
 pub use rustc_remap::{remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines};
 pub use source_map::parse_source_map_json;

@@ -103,6 +103,7 @@ pub fn symbol_index(file: &str, source: &str) -> SymbolIndex {
 /// the "stable source-qualified symbol identity" the port tooling (portman)
 /// needs to map `helpers.rss::count` to its backend symbol without guessing.
 #[derive(Debug, Clone)]
+#[cfg(feature = "execution")]
 pub struct SymbolInventoryEntry {
     pub module: String,
     pub qualname: String,
@@ -114,6 +115,7 @@ pub struct SymbolInventoryEntry {
 /// Build the source-qualified symbol inventory for `file`: every item-level
 /// declaration (functions incl. `Type.method`, types, consts, sum variants) with
 /// its module path and lowered Rust name.
+#[cfg(feature = "execution")]
 pub fn symbol_inventory(file: &str, source: &str) -> Vec<SymbolInventoryEntry> {
     let module = std::path::Path::new(file)
         .file_stem()

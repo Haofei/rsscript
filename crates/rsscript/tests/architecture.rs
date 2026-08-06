@@ -647,12 +647,53 @@ fn native_plugin_loader_is_opt_in() {
         manifest["dependencies"]["rss-native-abi"]["optional"].as_bool(),
         Some(true)
     );
-    assert_eq!(
-        manifest["features"]["native-plugin"][0].as_str(),
-        Some("dep:rss-native-abi")
+    assert!(
+        manifest["features"]["native-plugin"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|feature| feature.as_str() == Some("dep:rss-native-abi"))
     );
     let library = read(&root.join("crates/rsscript/src/lib.rs"));
     assert!(library.contains("#[cfg(feature = \"native-plugin\")]\nmod native_plugin;"));
+}
+
+#[test]
+fn lsp_dependency_closure_selects_frontend_only() {
+    let root = workspace_root();
+    let language_service: toml::Value = toml::from_str(&read(
+        &root.join("crates/rsscript-language-service/Cargo.toml"),
+    ))
+    .unwrap();
+    let compiler = &language_service["dependencies"]["rsscript"];
+    assert_eq!(compiler["default-features"].as_bool(), Some(false));
+    assert_eq!(
+        compiler["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(toml::Value::as_str)
+            .collect::<Vec<_>>(),
+        vec!["language-service"]
+    );
+
+    let compiler_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript/Cargo.toml"))).unwrap();
+    for dependency in [
+        "rsscript-bytecode",
+        "rsscript-lowering",
+        "rsscript-provider-api",
+        "rsscript-runtime",
+        "rss-native-abi",
+        "rss-process-guard",
+        "vm-jit",
+    ] {
+        assert_eq!(
+            compiler_manifest["dependencies"][dependency]["optional"].as_bool(),
+            Some(true),
+            "LSP-excluded dependency `{dependency}` must remain optional"
+        );
+    }
 }
 
 #[test]
