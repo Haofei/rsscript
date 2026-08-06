@@ -2,7 +2,7 @@
 use rsscript_abi_model::{ExternalSymbol, FunctionSignature, RUNTIME_ABI_VERSION};
 use rsscript_provider_api::{
     BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderCallMode,
-    ProviderDescriptor, ProviderFunction, ProviderFunctionDescriptor,
+    ProviderDescriptor, ProviderError, ProviderFunction, ProviderFunctionDescriptor,
 };
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -42,15 +42,19 @@ pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterprete
             signature: signature(),
             callable: NativeInterpreterFn::new(|args| {
                 if !args.is_empty() {
-                    return Err("unix_ms takes no arguments".into());
+                    return Err(ProviderError::invalid_argument(
+                        "unix_ms takes no arguments",
+                    ));
                 }
                 let millis = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
-                    .map_err(|e| e.to_string())?
+                    .map_err(|error| {
+                        ProviderError::unavailable(format!("system clock before epoch: {error}"))
+                    })?
                     .as_millis();
                 i64::try_from(millis)
                     .map(NativeValue::Int)
-                    .map_err(|_| "clock value exceeds Int".into())
+                    .map_err(|_| ProviderError::resource_exhausted("clock value exceeds Int"))
             }),
         },
     )])

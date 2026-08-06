@@ -5,7 +5,8 @@ use std::fs;
 use std::sync::{Arc, Mutex};
 
 use rsscript_compiler::provider::{
-    ExternalSymbol, NativeInterpreterFn, NativeValue, ProviderFunction,
+    ExternalSymbol, NativeInterpreterFn, NativeValue, ProviderError, ProviderErrorCode,
+    ProviderFunction,
 };
 use rsscript_compiler::{Compiler, ProviderRegistry, RunLimits, Runtime};
 use sha2::{Digest, Sha256};
@@ -28,26 +29,31 @@ fn memory_fs(files: Arc<Mutex<BTreeMap<String, String>>>) -> ProviderFunctions {
             let callable = match symbol.as_str() {
                 "host.fs.read_text" => NativeInterpreterFn::new(move |mut args| {
                     let NativeValue::String(path) = args.remove(0) else {
-                        return Err("path must be String".into());
+                        return Err(ProviderError::invalid_argument("path must be String"));
                     };
                     Ok(files
                         .lock()
-                        .map_err(|_| "memory filesystem lock poisoned".to_string())?
+                        .map_err(|_| ProviderError::internal("memory filesystem lock poisoned"))?
                         .get(&path)
                         .cloned()
                         .map(NativeValue::String)
-                        .ok_or_else(|| format!("missing memory file: {path}"))?)
+                        .ok_or_else(|| {
+                            ProviderError::new(
+                                ProviderErrorCode::NotFound,
+                                format!("missing memory file: {path}"),
+                            )
+                        })?)
                 }),
                 "host.fs.write_text" => NativeInterpreterFn::new(move |mut args| {
                     let NativeValue::String(path) = args.remove(0) else {
-                        return Err("path must be String".into());
+                        return Err(ProviderError::invalid_argument("path must be String"));
                     };
                     let NativeValue::String(text) = args.remove(0) else {
-                        return Err("text must be String".into());
+                        return Err(ProviderError::invalid_argument("text must be String"));
                     };
                     files
                         .lock()
-                        .map_err(|_| "memory filesystem lock poisoned".to_string())?
+                        .map_err(|_| ProviderError::internal("memory filesystem lock poisoned"))?
                         .insert(path, text);
                     Ok(NativeValue::Unit)
                 }),
@@ -96,7 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             rsscript_provider_log::functions(move |message| {
                 captured_log
                     .lock()
-                    .map_err(|_| "memory log lock poisoned".to_string())?
+                    .map_err(|_| ProviderError::internal("memory log lock poisoned"))?
                     .push(message.to_string());
                 Ok(())
             }),

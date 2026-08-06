@@ -78,25 +78,25 @@ impl RootedFsProvider {
         BTreeMap::from([
             binding("host.fs.read_text", read, move |mut args| {
                 let NativeValue::String(path) = args.remove(0) else {
-                    return Err("path must be String".into());
+                    return Err(ProviderError::invalid_argument("path must be String"));
                 };
                 let path = read_provider
                     .resolve_existing(&path)
-                    .map_err(|error| error.to_string())?;
+                    .map_err(|error| ProviderError::from_io("resolve read path", error))?;
                 std::fs::read_to_string(path)
                     .map(NativeValue::String)
                     .map_err(|error| ProviderError::internal(error.to_string()))
             }),
             binding("host.fs.write_text", write, move |mut args| {
                 let NativeValue::String(path) = args.remove(0) else {
-                    return Err("path must be String".into());
+                    return Err(ProviderError::invalid_argument("path must be String"));
                 };
                 let NativeValue::String(text) = args.remove(0) else {
-                    return Err("text must be String".into());
+                    return Err(ProviderError::invalid_argument("text must be String"));
                 };
                 let path = write_provider
                     .resolve_for_write(&path)
-                    .map_err(|error| error.to_string())?;
+                    .map_err(|error| ProviderError::from_io("resolve write path", error))?;
                 std::fs::write(path, text)
                     .map(|_| NativeValue::Unit)
                     .map_err(|error| ProviderError::internal(error.to_string()))

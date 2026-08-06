@@ -4,7 +4,7 @@ use rsscript_abi_model::{
 };
 use rsscript_provider_api::{
     BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderCallMode,
-    ProviderDescriptor, ProviderFunction, ProviderFunctionDescriptor,
+    ProviderDescriptor, ProviderError, ProviderFunction, ProviderFunctionDescriptor,
 };
 use std::collections::BTreeMap;
 pub fn descriptor() -> ProviderDescriptor {
@@ -34,7 +34,7 @@ pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterprete
             signature: signature(),
             callable: NativeInterpreterFn::new(|mut args| {
                 let NativeValue::String(name) = args.remove(0) else {
-                    return Err("name must be String".into());
+                    return Err(ProviderError::invalid_argument("name must be String"));
                 };
                 Ok(match std::env::var(name) {
                     Ok(value) => NativeValue::Variant {
@@ -45,7 +45,11 @@ pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterprete
                         name: "None".into(),
                         fields: BTreeMap::new(),
                     },
-                    Err(error) => return Err(error.to_string().into()),
+                    Err(error) => {
+                        return Err(ProviderError::invalid_argument(format!(
+                            "environment value is not valid Unicode: {error}"
+                        )));
+                    }
                 })
             }),
         },

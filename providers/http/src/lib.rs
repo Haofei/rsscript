@@ -7,7 +7,7 @@ use rsscript_abi_model::{
 };
 use rsscript_provider_api::{
     BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderCallMode,
-    ProviderDescriptor, ProviderFunction, ProviderFunctionDescriptor,
+    ProviderDescriptor, ProviderError, ProviderFunction, ProviderFunctionDescriptor,
 };
 
 fn symbol() -> ExternalSymbol {
@@ -54,11 +54,14 @@ pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterprete
             signature: signature(),
             callable: NativeInterpreterFn::new(|mut values| {
                 let NativeValue::String(url) = values.remove(0) else {
-                    return Err("url must be String".into());
+                    return Err(ProviderError::invalid_argument("url must be String"));
                 };
-                let response = reqwest::blocking::get(url).map_err(|error| error.to_string())?;
+                let response = reqwest::blocking::get(url)
+                    .map_err(|error| ProviderError::unavailable(format!("HTTP GET: {error}")))?;
                 let status = i64::from(response.status().as_u16());
-                let body = response.text().map_err(|error| error.to_string())?;
+                let body = response
+                    .text()
+                    .map_err(|error| ProviderError::unavailable(format!("HTTP body: {error}")))?;
                 Ok(NativeValue::Struct {
                     name: "HttpResponse".into(),
                     fields: BTreeMap::from([

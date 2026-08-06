@@ -744,6 +744,37 @@ fn cancellation_and_deadlines_share_one_operation_contract() {
 }
 
 #[test]
+fn provider_and_workspace_boundaries_use_structured_errors() {
+    let root = workspace_root();
+    let provider = read(&root.join("crates/rsscript-provider-api/src/lib.rs"));
+    assert!(!provider.contains("impl From<String> for ProviderError"));
+    assert!(!provider.contains("impl From<&str> for ProviderError"));
+    assert!(provider.contains("pub enum ProviderErrorCode"));
+    assert!(provider.contains("pub fn from_io"));
+
+    for provider_name in [
+        "fs", "env", "process", "http", "time", "entropy", "log", "cli",
+    ] {
+        let implementation = read(
+            &root
+                .join("providers")
+                .join(provider_name)
+                .join("src/lib.rs"),
+        );
+        assert!(
+            !implementation.contains("return Err(\"")
+                && !implementation.contains("Result<(), String>"),
+            "provider `{provider_name}` must return ProviderError with a stable code"
+        );
+    }
+
+    let language_service = read(&root.join("crates/rsscript-language-service/src/lib.rs"));
+    assert!(language_service.contains("pub enum WorkspaceLoadErrorCode"));
+    assert!(language_service.contains("pub struct WorkspaceLoadError"));
+    assert!(!language_service.contains("Result<Vec<PackageSourceFile>, String>"));
+}
+
+#[test]
 fn structural_semantics_are_owned_by_the_semantics_crate() {
     let root = workspace_root();
     let types = root.join("crates/rsscript-semantics/src/types.rs");

@@ -76,6 +76,44 @@ impl ProviderError {
     pub fn internal(message: impl Into<String>) -> Self {
         Self::new(ProviderErrorCode::Internal, message)
     }
+
+    pub fn invalid_argument(message: impl Into<String>) -> Self {
+        Self::new(ProviderErrorCode::InvalidArgument, message)
+    }
+
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self::new(ProviderErrorCode::Unavailable, message)
+    }
+
+    pub fn resource_exhausted(message: impl Into<String>) -> Self {
+        Self::new(ProviderErrorCode::ResourceExhausted, message)
+    }
+
+    pub fn from_io(operation: &str, error: std::io::Error) -> Self {
+        let code = match error.kind() {
+            std::io::ErrorKind::NotFound => ProviderErrorCode::NotFound,
+            std::io::ErrorKind::PermissionDenied => ProviderErrorCode::PermissionDenied,
+            std::io::ErrorKind::InvalidInput | std::io::ErrorKind::InvalidData => {
+                ProviderErrorCode::InvalidArgument
+            }
+            std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::WouldBlock
+            | std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::NotConnected => ProviderErrorCode::Unavailable,
+            _ => ProviderErrorCode::Internal,
+        };
+        Self {
+            code,
+            message: format!("{operation}: {error}"),
+            retryable: matches!(
+                error.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ),
+            details: Some(serde_json::json!({ "io_kind": format!("{:?}", error.kind()) })),
+        }
+    }
 }
 
 impl fmt::Display for ProviderError {
@@ -85,18 +123,6 @@ impl fmt::Display for ProviderError {
 }
 
 impl Error for ProviderError {}
-
-impl From<String> for ProviderError {
-    fn from(message: String) -> Self {
-        Self::internal(message)
-    }
-}
-
-impl From<&str> for ProviderError {
-    fn from(message: &str) -> Self {
-        Self::internal(message)
-    }
-}
 
 pub struct ProviderCallContext<'a> {
     pub cancellation: Option<&'a CancellationToken>,
@@ -326,11 +352,8 @@ pub struct NativeInterpreterFn {
 }
 
 impl NativeInterpreterFn {
-    pub fn from_fn<E>(function: fn(Vec<NativeValue>) -> Result<NativeValue, E>) -> Self
-    where
-        E: Into<ProviderError> + 'static,
-    {
-        Self::new(move |args| function(args).map_err(Into::into))
+    pub fn from_fn(function: NativeHostFn) -> Self {
+        Self::new(function)
     }
 
     pub fn new(

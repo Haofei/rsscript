@@ -2,7 +2,7 @@
 use rsscript_abi_model::{ExternalSymbol, FunctionSignature, RUNTIME_ABI_VERSION};
 use rsscript_provider_api::{
     BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderCallMode,
-    ProviderDescriptor, ProviderFunction, ProviderFunctionDescriptor,
+    ProviderDescriptor, ProviderError, ProviderFunction, ProviderFunctionDescriptor,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -45,7 +45,7 @@ pub fn functions(
             signature: signature(),
             callable: NativeInterpreterFn::new(move |values| {
                 if !values.is_empty() {
-                    return Err("args takes no arguments".into());
+                    return Err(ProviderError::invalid_argument("args takes no arguments"));
                 }
                 Ok(NativeValue::List(
                     args.iter().cloned().map(NativeValue::String).collect(),

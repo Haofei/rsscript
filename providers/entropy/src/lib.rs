@@ -5,7 +5,7 @@ use rsscript_abi_model::{
 };
 use rsscript_provider_api::{
     BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderCallMode,
-    ProviderDescriptor, ProviderFunction, ProviderFunctionDescriptor,
+    ProviderDescriptor, ProviderError, ProviderFunction, ProviderFunctionDescriptor,
 };
 use std::collections::BTreeMap;
 fn symbol() -> ExternalSymbol {
@@ -49,11 +49,14 @@ pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterprete
             signature: signature(),
             callable: NativeInterpreterFn::new(|mut args| {
                 let NativeValue::Int(length) = args.remove(0) else {
-                    return Err("length must be Int".into());
+                    return Err(ProviderError::invalid_argument("length must be Int"));
                 };
-                let length = usize::try_from(length).map_err(|_| "length must be non-negative")?;
+                let length = usize::try_from(length)
+                    .map_err(|_| ProviderError::invalid_argument("length must be non-negative"))?;
                 if length > 16 * 1024 * 1024 {
-                    return Err("entropy request exceeds 16 MiB".into());
+                    return Err(ProviderError::resource_exhausted(
+                        "entropy request exceeds 16 MiB",
+                    ));
                 }
                 let mut bytes = vec![0; length];
                 rand::thread_rng().fill_bytes(&mut bytes);

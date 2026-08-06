@@ -4,7 +4,7 @@ use rsscript_abi_model::{
 };
 use rsscript_provider_api::{
     BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderCallMode,
-    ProviderDescriptor, ProviderFunction, ProviderFunctionDescriptor,
+    ProviderDescriptor, ProviderError, ProviderFunction, ProviderFunctionDescriptor,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -43,7 +43,7 @@ pub fn descriptor() -> ProviderDescriptor {
     }
 }
 pub fn functions(
-    sink: impl Fn(&str) -> Result<(), String> + Send + Sync + 'static,
+    sink: impl Fn(&str) -> Result<(), ProviderError> + Send + Sync + 'static,
 ) -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>> {
     let sink = Arc::new(sink);
     BTreeMap::from([(
@@ -52,7 +52,7 @@ pub fn functions(
             signature: signature(),
             callable: NativeInterpreterFn::new(move |mut args| {
                 let NativeValue::String(message) = args.remove(0) else {
-                    return Err("message must be String".into());
+                    return Err(ProviderError::invalid_argument("message must be String"));
                 };
                 sink(&message)?;
                 Ok(NativeValue::Unit)
