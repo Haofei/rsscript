@@ -16,6 +16,7 @@
         "interface_catalog_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
         "runtime_abi_version": { "type": "integer", "minimum": 1 },
         "source_content_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "snapshot_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
         "executable_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
       },
       "additionalProperties": false

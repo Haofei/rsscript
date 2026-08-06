@@ -66,6 +66,7 @@ sha2 = "0.10"
 toml = "0.8"
 
 [dev-dependencies]
+jsonschema = { version = "0.49", default-features = false }
 reir = { path = "../reir" }
 rsscript-review-reir = { path = "../../integrations/rsscript-review-reir" }
 sha1 = "0.10"
@@ -83,6 +84,11 @@ path = "tests/architecture.rs"
 [[test]]
 name = "runtime"
 path = "tests/runtime.rs"
+
+[[test]]
+name = "schema_contracts"
+path = "tests/schema_contracts.rs"
+required-features = ["execution"]
 
 [[test]]
 name = "differential"
