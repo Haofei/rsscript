@@ -243,12 +243,12 @@ impl SymbolIndex {
         if let Some(definition) = cursor.definition {
             return self.definitions.get(definition);
         }
-        if cursor.is_type {
-            if let Some(definition) = self.definitions.iter().find(|definition| {
+        if cursor.is_type
+            && let Some(definition) = self.definitions.iter().find(|definition| {
                 definition.name == cursor.name && definition.kind == SymbolKind::Type
-            }) {
-                return Some(definition);
-            }
+            })
+        {
+            return Some(definition);
         }
         self.definitions
             .iter()

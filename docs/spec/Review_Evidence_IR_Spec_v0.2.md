@@ -1,5 +1,10 @@
 # Review Evidence IR (REIR) Specification v0.2
 
+> Integration status: this document specifies the optional, language-neutral
+> REIR integration. Its capability and deployment vocabulary is not RSScript
+> language semantics, does not authorize compilation or execution, and is not a
+> dependency of syntax, semantics, lowering, bytecode, or runtime-core.
+
 Status: Implementation-aligned / cross-layer review evidence core
 Version: 0.2
 Audience: REIR implementers, adapter authors, RSScript compiler/package-tooling authors, infrastructure/IaC tool authors, CI/review-platform authors, IDE authors, AI review-agent authors, security and platform engineering teams

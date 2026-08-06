@@ -1,28 +1,4 @@
 #![forbid(unsafe_code)]
-#![allow(
-    clippy::collapsible_if,
-    clippy::collapsible_match,
-    clippy::derivable_impls,
-    clippy::doc_lazy_continuation,
-    clippy::if_same_then_else,
-    clippy::items_after_test_module,
-    clippy::let_and_return,
-    clippy::manual_contains,
-    clippy::manual_slice_fill,
-    clippy::mutable_key_type,
-    clippy::needless_borrow,
-    clippy::needless_lifetimes,
-    clippy::needless_range_loop,
-    clippy::nonminimal_bool,
-    clippy::op_ref,
-    clippy::ptr_arg,
-    clippy::question_mark,
-    clippy::redundant_closure,
-    clippy::too_many_arguments,
-    clippy::type_complexity,
-    clippy::unnecessary_lazy_evaluations,
-    clippy::useless_conversion
-)]
 
 mod analyzer;
 #[cfg(feature = "execution")]

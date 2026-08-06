@@ -492,9 +492,10 @@ pub(super) fn check_match_pattern_matches_type(
     match pattern {
         MatchPattern::Binding { .. } | MatchPattern::Wildcard(_) => {}
         MatchPattern::Literal { value, span } => {
-            if let MatchLiteral::Char(raw) = value {
-                if crate::text_util::char_literal_scalar_count(raw) != 1 {
-                    analyzer.diagnostics.push(error_cause_manual_fix(
+            if let MatchLiteral::Char(raw) = value
+                && crate::text_util::char_literal_scalar_count(raw) != 1
+            {
+                analyzer.diagnostics.push(error_cause_manual_fix(
                         code::CHAR_LITERAL_NOT_SINGLE_SCALAR,
                         format!(
                             "character literal must contain exactly one character, found {}.",
@@ -505,8 +506,7 @@ pub(super) fn check_match_pattern_matches_type(
                         "A `Char` is a single Unicode scalar value; `''` is empty and `'ab'` holds more than one.",
                         "use_single_char_literal",
                         "Put exactly one character between the single quotes.",
-                    ));
-                }
+                ));
             }
             let literal_type = match value {
                 MatchLiteral::Int(_) => "Int",

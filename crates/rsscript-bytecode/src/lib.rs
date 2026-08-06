@@ -237,6 +237,7 @@ impl Error for BytecodeError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn round_trip_requires_intact_artifact() {
@@ -255,5 +256,23 @@ mod tests {
                 .verify(&corrupt, |_, _| Ok::<_, String>(()))
                 .is_err()
         );
+    }
+
+    proptest! {
+        #[test]
+        fn arbitrary_bounded_input_is_rejected_without_panicking(bytes in prop::collection::vec(any::<u8>(), 0..4096)) {
+            let verifier = BytecodeVerifier::new(BytecodeLimits {
+                max_artifact_bytes: 2048,
+                max_payload_bytes: 1024,
+                max_imports: 32,
+            });
+            let _ = verifier.verify(&bytes, |payload, _| {
+                if payload.len() > 1024 {
+                    Err("payload exceeded test limit")
+                } else {
+                    Ok(payload.len())
+                }
+            });
+        }
     }
 }

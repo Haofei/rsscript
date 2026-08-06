@@ -1590,6 +1590,7 @@ dependencies = [
 name = "rsscript-bytecode"
 version = "0.1.0"
 dependencies = [
+ "proptest",
  "rsscript-abi-model",
  "serde",
  "serde_json",

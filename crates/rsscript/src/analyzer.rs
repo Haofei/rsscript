@@ -260,7 +260,7 @@ fn isolate_sources_with_interfaces(sources: &mut Program, interfaces: &mut [Prog
 }
 
 fn program_files(program: &Program) -> HashSet<String> {
-    program
+    let mut files = program
         .items
         .iter()
         .map(|item| match item {
@@ -273,7 +273,22 @@ fn program_files(program: &Program) -> HashSet<String> {
             Item::Function(value) => &value.span.file,
         })
         .cloned()
-        .collect()
+        .collect::<HashSet<_>>();
+    files.extend(
+        program
+            .unknown_top_level_spans
+            .iter()
+            .chain(&program.malformed_declaration_spans)
+            .map(|span| span.file.clone()),
+    );
+    files.extend(program.protocols.iter().map(|decl| decl.span.file.clone()));
+    files.extend(
+        program
+            .protocol_impls
+            .iter()
+            .map(|implementation| implementation.span.file.clone()),
+    );
+    files
 }
 
 fn program_for_files(program: &Program, files: &HashSet<String>) -> Program {

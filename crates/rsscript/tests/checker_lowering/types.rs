@@ -557,11 +557,14 @@ fn main() -> Unit {
     let x = 1
 "#;
     let diagnostics = analyze_source("unclosed-function-body.rss", unclosed_body);
-    assert!(diagnostics.iter().any(|diagnostic| {
-        diagnostic.code == "RS0015"
-            && diagnostic.label == "malformed declaration"
-            && diagnostic.span.line == 2
-    }));
+    assert!(
+        diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "RS0015"
+                && diagnostic.label == "malformed declaration"
+                && diagnostic.span.line == 2
+        }),
+        "{diagnostics:?}"
+    );
 
     let unclosed_call = r#"
 fn main() -> Unit {

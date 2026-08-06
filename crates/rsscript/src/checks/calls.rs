@@ -1144,7 +1144,7 @@ fn check_call_args(
             ..
         }
     );
-    check_receiver_call_self_effect(analyzer, callee, &signature, call_span);
+    check_receiver_call_self_effect(analyzer, callee, signature, call_span);
     // For receiver-call shorthand, the receiver slot is provided implicitly.
     // Protocol methods conventionally name it `self`; core namespace functions
     // may keep their canonical parameter name, e.g. `List.push(list: mut List<T>, ...)`.
@@ -1237,7 +1237,7 @@ fn check_call_args(
         function,
         callee,
         &call_name,
-        &signature,
+        signature,
         &type_param_substitutions,
         call_span,
     );
@@ -1245,7 +1245,7 @@ fn check_call_args(
         analyzer,
         function,
         &call_name,
-        &signature,
+        signature,
         &type_param_substitutions,
         call_span,
     );
@@ -1580,11 +1580,11 @@ fn constructor_field_shorthand_name<'a>(
     param_names.contains(name).then_some(name.as_str())
 }
 
-fn positional_param_name<'a>(
+fn positional_param_name(
     allow_positional_args: bool,
-    signature_params: &'a [ParamSig],
+    signature_params: &[ParamSig],
     index: usize,
-) -> Option<&'a str> {
+) -> Option<&str> {
     if !allow_positional_args {
         return None;
     }

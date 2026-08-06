@@ -746,11 +746,11 @@ impl Formatter {
     }
 
     fn call_expr(&mut self, callee: &Callee, args: &[CallArg], indent: usize) {
-        if let Some(inline) = inline_call_expr(callee, args) {
-            if inline.len() <= MAX_INLINE_SIGNATURE_LEN {
-                self.out.push_str(&inline);
-                return;
-            }
+        if let Some(inline) = inline_call_expr(callee, args)
+            && inline.len() <= MAX_INLINE_SIGNATURE_LEN
+        {
+            self.out.push_str(&inline);
+            return;
         }
 
         if args.len() <= 1 {

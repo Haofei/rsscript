@@ -3,35 +3,29 @@
 This roadmap implements the product boundary in [product.md](product.md). The
 language specification and tests remain authoritative for existing behavior.
 
-## Priority 0: make current claims true
+## Completed product-boundary milestones
 
-1. Remove active policy/capability examples and obsolete product descriptions.
-2. Replace catalog-size assertions with uniqueness, completeness, signature,
+1. Removed active policy/capability examples and obsolete product descriptions.
+2. Replaced catalog-size assertions with uniqueness, completeness, signature,
    determinism, and orphan-entry checks.
 3. Split neutral package analysis from review, provider, native, and build
    metadata, with checked-in schemas.
-4. Enforce dependency direction using Cargo metadata.
+4. Enforced dependency direction using Cargo metadata.
+5. Established syntax, structural semantics, Typed HIR, executable IR, provider
+   ABI, host-neutral runtime defaults, and concrete leaf providers.
+6. Added bounded `rsscript.bytecode.v1`, structural verification, verified-only
+   VM construction, a stable embedding façade, build/inspect commands, and the
+   provider-replacement demonstration.
 
-## Priority 1: establish Core contracts
+## Current priority: conformance and boundary hardening
 
-1. Move the real syntax and semantic models into dependency-boundary crates.
-2. Make one validated typed HIR the source for VM, AOT, LSP, package analysis,
-   and optional review.
-3. Define a provider ABI with versioned semantic signature hashes, load-time
-   validation, cancellation behavior, and resource cleanup contracts.
-4. Define one provider-independent executable IR.
-5. Split runtime-core from concrete filesystem, environment, process, network,
-   time, entropy, logging, CLI, and OS-handle providers.
-
-## Priority 2: verified execution and embedding
-
-1. Add deterministic experimental bytecode and a bounded decoder.
-2. Add structural verification and require `VerifiedBytecode` at VM entry.
-3. Stabilize the embedding façade around compiler, compiled package, runtime,
-   provider registry, run limits, diagnostics, and execution reports.
-4. Add build and inspect commands for imports, call graphs, resources, async
-   structure, analysis, and bytecode.
-5. Ship one provider-replacement demo and end-to-end conformance workload.
+1. Expand bytecode decoder/verifier fuzzing and schema compatibility fixtures.
+2. Deepen resource/cancellation state-machine and provider conformance tests.
+3. Continue reducing compatibility-crate API and crate-wide lint exceptions.
+4. Measure check latency, cold load/verify, memory, cancellation latency,
+   provider overhead, VM throughput, and artifact size on product workloads.
+5. Promote a feature only through the maturity matrix; do not add syntax while a
+   Core row remains partial.
 
 ## Frozen scope
 

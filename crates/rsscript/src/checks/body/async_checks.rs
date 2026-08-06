@@ -230,10 +230,7 @@ pub(super) fn check_await_live_values(
         if !live_after.contains(local) {
             continue;
         }
-        if state
-            .value_type(local)
-            .is_some_and(|type_name| is_copy_type_name(type_name))
-        {
+        if state.value_type(local).is_some_and(is_copy_type_name) {
             continue;
         }
         await_live_value_diagnostic(analyzer, "local value", local, &span);

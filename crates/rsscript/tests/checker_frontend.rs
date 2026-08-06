@@ -83,6 +83,8 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("package provider declaration violation", "PKG0901"),
 ];
 
+#[path = "checker_frontend/async_resources.rs"]
+mod async_resources;
 #[path = "checker_frontend/conflicts.rs"]
 mod conflicts;
 #[path = "checker_frontend/lint.rs"]

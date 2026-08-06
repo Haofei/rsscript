@@ -272,14 +272,10 @@ impl Analyzer<'_> {
                 }
                 Item::Function(function) => {
                     let bounds = generic_bounds(&function.type_params);
-                    if let Some(return_ty) = &function.return_ty {
-                        if function.returns_fresh {
-                            self.check_fresh_generic_return_bound(
-                                &function.name,
-                                return_ty,
-                                &bounds,
-                            );
-                        }
+                    if let Some(return_ty) = &function.return_ty
+                        && function.returns_fresh
+                    {
+                        self.check_fresh_generic_return_bound(&function.name, return_ty, &bounds);
                     }
                 }
                 Item::Module(_)

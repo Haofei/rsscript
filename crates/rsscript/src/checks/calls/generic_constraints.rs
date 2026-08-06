@@ -76,21 +76,21 @@ pub(super) fn type_satisfies_protocol_bound(
     // element types are, so a key like `List<Coord>` is satisfiable structurally.
     if (protocol == "Hashable" || protocol == "Eq")
         && matches!(actual_root, "List" | "Option" | "Result")
+        && let Some(args) = type_arg_names(strip_fresh_type(actual))
     {
-        if let Some(args) = type_arg_names(strip_fresh_type(actual)) {
-            return args
-                .iter()
-                .all(|arg| type_satisfies_protocol_bound(analyzer, function, arg, protocol));
-        }
+        return args
+            .iter()
+            .all(|arg| type_satisfies_protocol_bound(analyzer, function, arg, protocol));
     }
     // `List<T>`/`Option<T>`/`Result<A, B>` are `Clone` exactly when their element
     // types are, mirroring the structural derive support for value containers.
-    if protocol == "Clone" && matches!(actual_root, "List" | "Option" | "Result") {
-        if let Some(args) = type_arg_names(strip_fresh_type(actual)) {
-            return args
-                .iter()
-                .all(|arg| type_satisfies_protocol_bound(analyzer, function, arg, protocol));
-        }
+    if protocol == "Clone"
+        && matches!(actual_root, "List" | "Option" | "Result")
+        && let Some(args) = type_arg_names(strip_fresh_type(actual))
+    {
+        return args
+            .iter()
+            .all(|arg| type_satisfies_protocol_bound(analyzer, function, arg, protocol));
     }
     if function.type_params.iter().any(|param| {
         param.name == actual_root
@@ -834,17 +834,16 @@ pub(super) fn collect_type_param_substitutions_bounded(
         }
         if let (Some(pattern_return), Some(actual_return)) =
             (fn_return_type(pattern), fn_return_type(actual))
-        {
-            if !collect_type_param_substitutions_bounded(
+            && !collect_type_param_substitutions_bounded(
                 budget,
                 pattern_return,
                 actual_return,
                 generic_params,
                 substitutions,
                 depth + 1,
-            ) {
-                return false;
-            }
+            )
+        {
+            return false;
         }
         return true;
     }

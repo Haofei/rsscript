@@ -15,22 +15,23 @@ The platform-neutral language cut is active:
 - neutral package analysis uses `rsscript.package_analysis.v1`; optional review
   output uses the distinct `rsscript.package_review.v1` schema.
 
-The physical dependency cut is not complete: the main crate still contains the
-analyzer orchestration, package tooling, VM, AOT lowering, and native loading.
+The main compatibility crate still contains analyzer orchestration, package
+tooling, VM, AOT lowering, and opt-in native loading. Stable embedders use the
+small `rsscript-compiler` façade instead of those implementation modules.
 Native plugin loading and guarded child-process tooling are explicit
 `native-plugin` / `host-tools` features and are absent from the compiler's
 default dependency closure. The compiler now consumes runtime `core` only; VM
 compatibility intrinsics for filesystem and process access fail with an explicit
 provider-required error instead of reaching the OS. Disabled hosts fail before
 build, spawn, or dynamic loading when those integrations are requested.
-REIR conversion now lives in the one-way `integrations/rsscript-review-reir`
+REIR conversion lives in the one-way `integrations/rsscript-review-reir`
 adapter and is absent from normal compiler dependencies, public compiler APIs,
 CLI package output, and package metadata writes. The retired policy-oriented
 examples and action have been removed. The LSP now consumes the document-oriented
-`rsscript-language-service` API rather than importing the product façade directly;
-the remaining transitive compiler dependency will disappear as diagnostics and
-package snapshots finish moving into their owning crates. The lexer, parser,
-source AST, syntax desugarings, spans, and
+`rsscript-language-service` API with the frontend-only feature set. Its dependency
+closure contains no runtime, provider, bytecode, JIT, native ABI, process guard,
+HTTP, WebSocket, or REIR package. The lexer, parser, source AST, syntax
+desugarings, spans, and
 bounded parse budget are now owned by the independent `rsscript-syntax` and
 `rsscript-work-budget` crates. Structural types, type interning, substitution,
 parameter effects, package-wide semantic type facts, Typed HIR, call binding, and
@@ -43,6 +44,11 @@ checked representation, and JIT remains downstream of the VM unit. Runtime-core
 now compiles without filesystem, environment, process, network, entropy, or
 temporary-directory modules and its default feature set is network-free. The
 concrete filesystem, environment, process, HTTP, time, entropy, logging, and CLI
-implementations now live in independent `providers/` composition packages. The
-current roadmap prioritizes bytecode verification and stable embedding over new
-language, JIT, self-hosting, or package-system scope.
+implementations now live in independent `providers/` composition packages.
+`rsscript.bytecode.v1` is bounded and checked in; the VM is constructed only
+after artifact, checksum, import, control-flow, function, and register
+verification. `rss run` uses that verified VM by default. `rss build` and
+`rss inspect` expose bytecode and neutral analysis. The primary
+`embedded-report-pipeline` demo runs identical artifact bytes with memory and
+filesystem providers. The roadmap now prioritizes conformance and boundary
+hardening over new language, JIT, self-hosting, or package-system scope.
