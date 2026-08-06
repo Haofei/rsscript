@@ -26,7 +26,7 @@ const CLI_AOT_OUTPUT_MAX_BYTES: usize = 16 * 1024 * 1024;
 #[derive(Debug)]
 struct RunOptions<'a> {
     json: bool,
-    vm: bool,
+    aot: bool,
     release: bool,
     dry_run: bool,
     path: Option<&'a str>,
@@ -36,7 +36,7 @@ struct RunOptions<'a> {
 
 fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
     let mut json = false;
-    let mut vm = false;
+    let mut aot = false;
     let mut release = false;
     let mut dry_run = false;
     let mut path = None;
@@ -50,8 +50,8 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
             break;
         } else if arg == "--json" {
             json = true;
-        } else if arg == "--vm" {
-            vm = true;
+        } else if arg == "--aot" {
+            aot = true;
         } else if arg == "--release" {
             release = true;
         } else if arg == "--dry-run" {
@@ -71,7 +71,7 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
 
     let options = RunOptions {
         json,
-        vm,
+        aot,
         release,
         dry_run,
         path,
@@ -83,18 +83,18 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
 }
 
 fn validate_run_options(options: &RunOptions<'_>) -> Result<(), String> {
-    if options.vm && options.release {
-        return Err("`rss run --vm` cannot be combined with `--release`.".to_string());
+    if !options.aot && options.release {
+        return Err("`rss run --release` requires the experimental `--aot` backend.".to_string());
     }
-    if options.vm && options.dry_run {
-        return Err("`rss run --vm` cannot be combined with `--dry-run`.".to_string());
+    if !options.aot && options.dry_run {
+        return Err("`rss run --dry-run` requires the experimental `--aot` backend.".to_string());
     }
-    if options.vm && options.out_dir.is_some() {
-        return Err("`rss run --vm` cannot be combined with `--out-dir`.".to_string());
+    if !options.aot && options.out_dir.is_some() {
+        return Err("`rss run --out-dir` requires the experimental `--aot` backend.".to_string());
     }
     Ok(())
 }
-pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
+pub(crate) fn run_input(args: &[String]) -> ExitCode {
     let options = match parse_run_args(args) {
         Ok(options) => options,
         Err(error) => {
@@ -106,7 +106,7 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
         print_usage();
         return ExitCode::from(2);
     };
-    if options.vm {
+    if !options.aot {
         return run_via_vm(path, &options.program_args, options.json);
     }
     let runtime_path = match default_runtime_path() {
@@ -202,9 +202,7 @@ pub(crate) fn run_generated_rust(args: &[String]) -> ExitCode {
     )
 }
 
-/// Execute through the register VM instead of the Rust-lowering AOT backend.
-/// This is the fast edit-run path folded into `rss run` so VM execution remains
-/// available without growing the top-level command set.
+/// Execute through the verified register VM, the sole Core execution path.
 fn run_via_vm(path: &str, program_args: &[&str], json: bool) -> ExitCode {
     let limits = cli_vm_limits();
     let result = if is_package_directory(path) {
@@ -528,6 +526,7 @@ mod tests {
     fn parse_run_args_accepts_release_before_path() {
         let values = args(&[
             "--json",
+            "--aot",
             "--release",
             "--dry-run",
             "packages/native-abi-fixture",
@@ -537,7 +536,7 @@ mod tests {
         let options = super::parse_run_args(&values).expect("arguments should parse");
 
         assert!(options.json);
-        assert!(!options.vm);
+        assert!(options.aot);
         assert!(options.release);
         assert!(options.dry_run);
         assert_eq!(options.path, Some("packages/native-abi-fixture"));
@@ -545,12 +544,12 @@ mod tests {
     }
 
     #[test]
-    fn parse_run_args_accepts_vm_before_path() {
-        let values = args(&["--json", "--vm", "demo.rss", "--", "input"]);
+    fn parse_run_args_accepts_default_vm_path() {
+        let values = args(&["--json", "demo.rss", "--", "input"]);
         let options = super::parse_run_args(&values).expect("arguments should parse");
 
         assert!(options.json);
-        assert!(options.vm);
+        assert!(!options.aot);
         assert!(!options.release);
         assert!(!options.dry_run);
         assert_eq!(options.path, Some("demo.rss"));
@@ -558,13 +557,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_run_args_treats_vm_after_separator_as_program_arg() {
-        let values = args(&["demo.rss", "--", "--vm"]);
+    fn parse_run_args_treats_aot_after_separator_as_program_arg() {
+        let values = args(&["demo.rss", "--", "--aot"]);
         let options = super::parse_run_args(&values).expect("arguments should parse");
 
-        assert!(!options.vm);
+        assert!(!options.aot);
         assert_eq!(options.path, Some("demo.rss"));
-        assert_eq!(options.program_args, vec!["--vm"]);
+        assert_eq!(options.program_args, vec!["--aot"]);
     }
 
     #[test]
@@ -628,26 +627,41 @@ mod tests {
     }
 
     #[test]
-    fn parse_run_args_rejects_vm_release_combo() {
-        let values = args(&["--vm", "--release", "demo.rss"]);
-        let error = super::parse_run_args(&values).expect_err("vm release combo should fail");
+    fn parse_run_args_requires_aot_for_release() {
+        let values = args(&["--release", "demo.rss"]);
+        let error = super::parse_run_args(&values).expect_err("release requires aot");
 
-        assert_eq!(error, "`rss run --vm` cannot be combined with `--release`.");
+        assert_eq!(
+            error,
+            "`rss run --release` requires the experimental `--aot` backend."
+        );
     }
 
     #[test]
-    fn parse_run_args_rejects_vm_dry_run_combo() {
-        let values = args(&["--vm", "--dry-run", "demo.rss"]);
-        let error = super::parse_run_args(&values).expect_err("vm dry-run combo should fail");
+    fn parse_run_args_requires_aot_for_dry_run() {
+        let values = args(&["--dry-run", "demo.rss"]);
+        let error = super::parse_run_args(&values).expect_err("dry-run requires aot");
 
-        assert_eq!(error, "`rss run --vm` cannot be combined with `--dry-run`.");
+        assert_eq!(
+            error,
+            "`rss run --dry-run` requires the experimental `--aot` backend."
+        );
     }
 
     #[test]
-    fn parse_run_args_rejects_vm_out_dir_combo() {
-        let values = args(&["--vm", "demo.rss", "--out-dir", "generated"]);
-        let error = super::parse_run_args(&values).expect_err("vm out-dir combo should fail");
+    fn parse_run_args_requires_aot_for_out_dir() {
+        let values = args(&["demo.rss", "--out-dir", "generated"]);
+        let error = super::parse_run_args(&values).expect_err("out-dir requires aot");
 
-        assert_eq!(error, "`rss run --vm` cannot be combined with `--out-dir`.");
+        assert_eq!(
+            error,
+            "`rss run --out-dir` requires the experimental `--aot` backend."
+        );
+    }
+
+    #[test]
+    fn removed_vm_alias_is_rejected() {
+        let values = args(&["--vm", "demo.rss"]);
+        assert!(super::parse_run_args(&values).is_err());
     }
 }

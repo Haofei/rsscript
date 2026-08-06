@@ -88,13 +88,13 @@ fn run_vm_cli_executes_through_register_vm() {
     .expect("fixture should write");
 
     let output = Command::new(bin)
-        .args(["run", "--vm", file.to_str().expect("path is utf-8")])
+        .args(["run", file.to_str().expect("path is utf-8")])
         .output()
-        .expect("rss run --vm should execute");
+        .expect("rss run should execute through the VM");
 
     assert!(
         output.status.success(),
-        "rss run --vm failed:\nstdout:\n{}\nstderr:\n{}",
+        "rss run failed:\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );

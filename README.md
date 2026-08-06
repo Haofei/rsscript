@@ -69,7 +69,8 @@ with the validated call graph; its conclusions never change language validity.
 rss check <file-or-package>
 rss fmt <file>
 rss build [--out <artifact.rssbc>] <file-or-package>
-rss run [--json] [--vm] <file-or-package> [-- <args>...]
+rss run [--json] <file-or-package> [-- <args>...]
+rss run --aot <file-or-package> [-- <args>...]  # Experimental
 rss inspect <imports|bytecode|analysis|resources|async|call-graph> <input>
 ```
 

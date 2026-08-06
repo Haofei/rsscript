@@ -1,7 +1,8 @@
 # RSScript Self-Hosting
 
-Self-hosting is Experimental. This document defines the current goal, coverage,
-validation protocol, and next milestones. It is not a chronological ledger.
+Self-hosting is frozen Research. The retained corpus and parity harness are
+regression assets; a standalone compiler, stage1/stage2 bootstrap, and further C
+backend expansion are not current product goals.
 
 ## Terms
 
@@ -14,7 +15,7 @@ validation protocol, and next milestones. It is not a chronological ledger.
 Shipping a prebuilt Rust compiler removes Rust from user installation. It does
 not make compiler development self-hosting.
 
-## Target
+## Historical target (not active roadmap)
 
 ```text
 RSS sources
@@ -77,17 +78,17 @@ results are authoritative when they differ. `selfhost/corpus.txt` is the
 checked-in corpus inventory and must change with intentional corpus additions
 or removals.
 
-## Current Work
+## Freeze policy
 
-Work proceeds in this order:
+Allowed work is limited to:
 
-1. Finish deterministic structured diagnostic and package-contract parity.
-2. Make one parser produce one reusable `Program`.
-3. Move AST dump and checker rules from token probes/reparsing to that model.
-4. Add shared symbol, type, effect, and diagnostic records.
-5. Expand canonical IR only after frontend facts are stable.
-6. Expand the C backend and portable runtime ABI.
-7. Establish stage1/stage2 reproducibility.
+1. preserving corpus, parity and already-derived regression coverage;
+2. correctness fixes when a retained test finds a Core defect;
+3. deterministic maintenance needed to keep the harness runnable.
+
+Do not expand the C emitter, portable bootstrap runtime, self-hosted frontend,
+canonical self-host IR, or stage1/stage2 pipeline without a future product
+decision that explicitly removes this freeze.
 
 Performance work is admitted only when measured self-host wall time blocks a
 parity gate. JIT coverage is not a bootstrap correctness requirement.

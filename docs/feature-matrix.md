@@ -24,3 +24,20 @@ A feature is not promoted by implementation count. Promotion requires a stable
 contract, conformance coverage, bounded failure behavior, supported-platform CI,
 and a threat model consistent with [threat-model.md](threat-model.md).
 
+## Language conformance
+
+`✓` is Core coverage; `Experimental` and `Partial` are not Core support claims.
+
+| Capability | Spec | Parser | Semantics | VM | Rust AOT | JIT | LSP | Tests |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Ownership effects | ✓ | ✓ | ✓ | ✓ | Experimental | Experimental | ✓ | ✓ |
+| Retention / escape | ✓ | ✓ | ✓ | ✓ | Experimental | Experimental | ✓ | ✓ |
+| Resource lifetime | ✓ | ✓ | ✓ | ✓ | Experimental | Partial | ✓ | ✓ |
+| Structured async | ✓ | ✓ | ✓ | ✓ | Partial | Partial | ✓ | ✓ |
+| Cancellation cleanup | ✓ | ✓ | ✓ | ✓ | Partial | Partial | ✓ | ✓ |
+| External symbols | ✓ | ✓ | ✓ | ✓ | Experimental | Experimental | ✓ | ✓ |
+| Dynamic protocols | ✓ | ✓ | ✓ | ✓ | Experimental | Partial | ✓ | ✓ |
+
+Parser acceptance alone never marks a capability supported. Core promotion
+requires semantic validation, verified-VM conformance, diagnostics, LSP behavior,
+and regression coverage together.

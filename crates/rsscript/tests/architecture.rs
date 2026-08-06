@@ -72,14 +72,19 @@ fn intrinsic_catalog_is_the_only_generated_registry_source() {
     );
 
     let mut intrinsic_ids = BTreeSet::new();
+    let mut derived_intrinsic_ids = BTreeSet::new();
     for entry in intrinsics {
         let id = entry["id"]
             .as_str()
             .expect("every intrinsic entry must have a string id");
         assert!(intrinsic_ids.insert(id), "duplicate intrinsic id `{id}`");
+        if entry.get("derived_from").is_some() {
+            derived_intrinsic_ids.insert(id);
+        }
     }
 
     let mut binding_names = BTreeSet::new();
+    let mut referenced_intrinsic_ids = BTreeSet::new();
     for entry in bindings {
         let namespace = entry["namespace"]
             .as_str()
@@ -100,8 +105,27 @@ fn intrinsic_catalog_is_the_only_generated_registry_source() {
                 intrinsic_ids.contains(vm_id),
                 "binding `{qualified_name}` references orphan intrinsic `{vm_id}`"
             );
+            referenced_intrinsic_ids.insert(vm_id);
         }
     }
+    referenced_intrinsic_ids.extend(derived_intrinsic_ids);
+    assert_eq!(
+        referenced_intrinsic_ids, intrinsic_ids,
+        "every VM intrinsic implementation must have at least one catalog binding"
+    );
+}
+
+#[test]
+fn cli_defaults_to_verified_vm_and_requires_explicit_aot() {
+    let root = workspace_root();
+    let run = read(&root.join("crates/rsscript/src/cli/run_cmd.rs"));
+    assert!(run.contains("if !options.aot {\n        return run_via_vm"));
+    assert!(run.contains("arg == \"--aot\""));
+    assert!(!run.contains("arg == \"--vm\""));
+
+    let selfhost = read(&root.join("docs/self-hosting.md"));
+    assert!(selfhost.contains("Self-hosting is frozen Research"));
+    assert!(selfhost.contains("Do not expand the C emitter"));
 }
 
 #[test]

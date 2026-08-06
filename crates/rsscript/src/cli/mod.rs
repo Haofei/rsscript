@@ -34,7 +34,7 @@ pub fn run() -> ExitCode {
         "inspect" => artifact::run_inspect(&args[2..]),
         "new" => package::run_new_package(&args[2..]),
         "pkg" => package::run_package(&args[2..]),
-        "run" => run_cmd::run_generated_rust(&args[2..]),
+        "run" => run_cmd::run_input(&args[2..]),
         _ => {
             print_usage();
             ExitCode::from(2)
@@ -410,9 +410,9 @@ pub(crate) fn print_usage() {
     eprintln!("  rss inspect <imports|bytecode> [--json] <file-or-artifact-or-package>");
     eprintln!("  rss inspect <analysis|resources|async|call-graph> [--json] <package-directory>");
     eprintln!("  rss new <package-name>");
-    eprintln!("  rss run [--json] [--vm] <file-or-package-directory> [-- <args>...]");
+    eprintln!("  rss run [--json] <file-or-package-directory> [-- <args>...]  # verified VM");
     eprintln!(
-        "  rss run [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]"
+        "  rss run --aot [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]"
     );
     eprintln!("  rss pkg [--json] [package-directory]");
     eprintln!("  rss pkg add <dependency|dependency@version|path-to-package>");

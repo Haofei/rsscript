@@ -110,6 +110,7 @@ struct IntrinsicCatalog {
 #[derive(Debug, Deserialize)]
 struct IntrinsicId {
     id: String,
+    derived_from: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -437,10 +438,20 @@ fn validate_intrinsic_catalog(catalog: &IntrinsicCatalog) -> Result<(), String> 
                     ));
                 }
             }
-            IntrinsicLowering::Special | IntrinsicLowering::RuntimeOnly => {
+            IntrinsicLowering::Special => {
+                if let Some(vm_id) = binding.vm_id.as_deref()
+                    && !ids.contains(vm_id)
+                {
+                    return Err(format!(
+                        "special intrinsic {}.{} refers to unknown VM id {vm_id}",
+                        binding.namespace, binding.name
+                    ));
+                }
+            }
+            IntrinsicLowering::RuntimeOnly => {
                 if binding.vm_id.is_some() {
                     return Err(format!(
-                        "non-direct intrinsic {}.{} must not declare a VM id",
+                        "runtime-only intrinsic {}.{} must not declare a VM id",
                         binding.namespace, binding.name
                     ));
                 }
@@ -450,6 +461,16 @@ fn validate_intrinsic_catalog(catalog: &IntrinsicCatalog) -> Result<(), String> 
             return Err(format!(
                 "runtime-only intrinsic {}.{} has no runtime target",
                 binding.namespace, binding.name
+            ));
+        }
+    }
+    for intrinsic in &catalog.intrinsic {
+        if let Some(parent) = intrinsic.derived_from.as_deref()
+            && (parent == intrinsic.id || !ids.contains(parent))
+        {
+            return Err(format!(
+                "derived intrinsic {} has invalid source {parent}",
+                intrinsic.id
             ));
         }
     }
