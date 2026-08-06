@@ -176,7 +176,7 @@ fn selfhost_checker_entry_is_orchestration_only() {
 #[test]
 fn hir_inference_uses_structural_type_queries() {
     let root = workspace_root();
-    let inference = read(&root.join("crates/rsscript/src/hir/infer.rs"));
+    let inference = read(&root.join("crates/rsscript-semantics/src/hir/infer.rs"));
     for parser in [
         "strip_prefix(\"Fn(\")",
         "strip_prefix(\"Result<\")",
@@ -196,13 +196,13 @@ fn hir_inference_uses_structural_type_queries() {
 #[test]
 fn hir_signatures_store_structural_types() {
     let root = workspace_root();
-    let hir = read(&root.join("crates/rsscript/src/hir.rs"));
+    let hir = read(&root.join("crates/rsscript-semantics/src/hir/mod.rs"));
     assert!(hir.contains("pub ty: ResolvedType"));
     assert!(hir.contains("pub return_ty: Option<ResolvedType>"));
     assert!(!hir.contains("pub type_name: String"));
     assert!(!hir.contains("pub return_type: Option<String>"));
 
-    let inference = read(&root.join("crates/rsscript/src/hir/infer.rs"));
+    let inference = read(&root.join("crates/rsscript-semantics/src/hir/infer.rs"));
     assert!(
         !inference.contains("field.type_name")
             && !inference.contains("param.type_name")
@@ -536,6 +536,16 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     let types = root.join("crates/rsscript-semantics/src/types.rs");
     assert!(types.is_file());
     assert!(!root.join("crates/rsscript/src/semantic_types.rs").exists());
+    assert!(
+        root.join("crates/rsscript-semantics/src/hir/mod.rs")
+            .is_file()
+    );
+    assert!(
+        rust_files_below(&root.join("crates/rsscript/src/hir"))
+            .iter()
+            .all(|path| path.ends_with("tests.rs")),
+        "the compiler façade must not retain HIR implementation files"
+    );
 
     let semantics = read(&root.join("crates/rsscript-semantics/src/lib.rs"));
     for exported in [
@@ -569,6 +579,28 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         assert!(
             !dependencies.contains(forbidden),
             "semantics must not depend on `{forbidden}`"
+        );
+    }
+}
+
+#[test]
+fn interface_catalog_is_platform_neutral() {
+    let root = workspace_root();
+    let manifest: toml::Value = toml::from_str(&read(
+        &root.join("crates/rsscript-interface-catalog/Cargo.toml"),
+    ))
+    .expect("interface catalog manifest should parse");
+    let dependencies = dependency_packages(&manifest);
+    assert!(
+        dependencies.is_empty(),
+        "the interface catalog must remain data-only"
+    );
+
+    let catalog = read(&root.join("crates/rsscript-interface-catalog/src/lib.rs"));
+    for forbidden in ["host/", "provider", "policy", "capability"] {
+        assert!(
+            !catalog.to_ascii_lowercase().contains(forbidden),
+            "interface catalog must not contain `{forbidden}`"
         );
     }
 }

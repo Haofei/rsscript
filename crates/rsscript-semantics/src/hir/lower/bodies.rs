@@ -877,7 +877,7 @@ pub(super) fn lower_hir_call_expr(
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            Some(crate::call_binding::CallBinding::bind(
+            Some(crate::CallBinding::bind(
                 &parameter_names,
                 &parameter_has_default,
                 &parameter_allows_shorthand,
@@ -907,7 +907,7 @@ pub(super) fn lower_hir_call_expr(
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            crate::call_binding::CallBinding::bind(
+            crate::CallBinding::bind(
                 &parameter_names,
                 &parameter_has_default,
                 &parameter_allows_shorthand,

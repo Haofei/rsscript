@@ -1,189 +1,24 @@
-// Standard package contracts that are prelude-visible only for single-file
-// checks/lowering. Package review and package lowering must receive these
-// through explicit package dependencies instead.
-pub(crate) const STANDARD_PACKAGE_INTERFACES: &[(&str, &str)] = &[
-    (
-        "packages/async/interface/cancellation.rssi",
-        include_str!("../../../packages/async/interface/cancellation.rssi"),
-    ),
-    (
-        "packages/async/interface/channel.rssi",
-        include_str!("../../../packages/async/interface/channel.rssi"),
-    ),
-    (
-        "packages/async/interface/csv.rssi",
-        include_str!("../../../packages/async/interface/csv.rssi"),
-    ),
-    (
-        "packages/async/interface/stream.rssi",
-        include_str!("../../../packages/async/interface/stream.rssi"),
-    ),
-    (
-        "packages/async/interface/task.rssi",
-        include_str!("../../../packages/async/interface/task.rssi"),
-    ),
-];
+//! Compatibility façade over the platform-neutral interface catalog.
 
-pub(crate) const CORE_INTERFACES: &[(&str, &str)] = &[
-    (
-        "stdlib/dyn/dyn.rssi",
-        include_str!("../../../stdlib/dyn/dyn.rssi"),
-    ),
-    (
-        "stdlib/clone/clone.rssi",
-        include_str!("../../../stdlib/clone/clone.rssi"),
-    ),
-    (
-        "stdlib/cmp/eq.rssi",
-        include_str!("../../../stdlib/cmp/eq.rssi"),
-    ),
-    (
-        "stdlib/cmp/ord.rssi",
-        include_str!("../../../stdlib/cmp/ord.rssi"),
-    ),
-    (
-        "stdlib/collections/buffer.rssi",
-        include_str!("../../../stdlib/collections/buffer.rssi"),
-    ),
-    (
-        "stdlib/collections/bytes.rssi",
-        include_str!("../../../stdlib/collections/bytes.rssi"),
-    ),
-    (
-        "stdlib/collections/deque.rssi",
-        include_str!("../../../stdlib/collections/deque.rssi"),
-    ),
-    (
-        "stdlib/collections/list.rssi",
-        include_str!("../../../stdlib/collections/list.rssi"),
-    ),
-    (
-        "stdlib/collections/map.rssi",
-        include_str!("../../../stdlib/collections/map.rssi"),
-    ),
-    (
-        "stdlib/collections/pipeline.rssi",
-        include_str!("../../../stdlib/collections/pipeline.rssi"),
-    ),
-    (
-        "stdlib/collections/persistent_map.rssi",
-        include_str!("../../../stdlib/collections/persistent_map.rssi"),
-    ),
-    (
-        "stdlib/collections/set.rssi",
-        include_str!("../../../stdlib/collections/set.rssi"),
-    ),
-    (
-        "stdlib/collections/sorted_map.rssi",
-        include_str!("../../../stdlib/collections/sorted_map.rssi"),
-    ),
-    (
-        "stdlib/collections/sorted_set.rssi",
-        include_str!("../../../stdlib/collections/sorted_set.rssi"),
-    ),
-    (
-        "stdlib/csv/csv.rssi",
-        include_str!("../../../stdlib/csv/csv.rssi"),
-    ),
-    (
-        "stdlib/date/date.rssi",
-        include_str!("../../../stdlib/date/date.rssi"),
-    ),
-    (
-        "stdlib/diff/diff.rssi",
-        include_str!("../../../stdlib/diff/diff.rssi"),
-    ),
-    (
-        "stdlib/encoding/encoding.rssi",
-        include_str!("../../../stdlib/encoding/encoding.rssi"),
-    ),
-    (
-        "stdlib/hash/hash.rssi",
-        include_str!("../../../stdlib/hash/hash.rssi"),
-    ),
-    (
-        "stdlib/hash/hashable.rssi",
-        include_str!("../../../stdlib/hash/hashable.rssi"),
-    ),
-    (
-        "stdlib/json/json.rssi",
-        include_str!("../../../stdlib/json/json.rssi"),
-    ),
-    (
-        "stdlib/math/math.rssi",
-        include_str!("../../../stdlib/math/math.rssi"),
-    ),
-    (
-        "stdlib/option/option.rssi",
-        include_str!("../../../stdlib/option/option.rssi"),
-    ),
-    (
-        "stdlib/patch/patch.rssi",
-        include_str!("../../../stdlib/patch/patch.rssi"),
-    ),
-    (
-        "stdlib/regex/regex.rssi",
-        include_str!("../../../stdlib/regex/regex.rssi"),
-    ),
-    (
-        "stdlib/result/result.rssi",
-        include_str!("../../../stdlib/result/result.rssi"),
-    ),
-    (
-        "stdlib/string/string.rssi",
-        include_str!("../../../stdlib/string/string.rssi"),
-    ),
-    (
-        "stdlib/test/assert.rssi",
-        include_str!("../../../stdlib/test/assert.rssi"),
-    ),
-    (
-        "stdlib/toml/toml.rssi",
-        include_str!("../../../stdlib/toml/toml.rssi"),
-    ),
-    (
-        "stdlib/url/url.rssi",
-        include_str!("../../../stdlib/url/url.rssi"),
-    ),
-    (
-        "stdlib/weak/weak.rssi",
-        include_str!("../../../stdlib/weak/weak.rssi"),
-    ),
-    (
-        "stdlib/yaml/yaml.rssi",
-        include_str!("../../../stdlib/yaml/yaml.rssi"),
-    ),
-];
-
-pub(crate) fn builtin_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
-    CORE_INTERFACES.iter().copied()
-}
+pub(crate) use rsscript_interface_catalog::{
+    CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES, builtin_interfaces,
+};
 
 #[cfg(not(test))]
-pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
-    CORE_INTERFACES
-        .iter()
-        .chain(STANDARD_PACKAGE_INTERFACES.iter())
-        .copied()
-}
+pub(crate) use rsscript_interface_catalog::{default_interfaces, standard_package_interfaces};
 
 #[cfg(test)]
 pub(crate) fn default_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
-    CORE_INTERFACES
+    rsscript_interface_catalog::CORE_INTERFACES
         .iter()
-        .chain(STANDARD_PACKAGE_INTERFACES.iter())
+        .chain(rsscript_interface_catalog::STANDARD_PACKAGE_INTERFACES.iter())
         .chain(crate::test_interfaces::TEST_INTERFACES.iter())
         .copied()
 }
 
-#[cfg(not(test))]
-pub(crate) fn standard_package_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
-    STANDARD_PACKAGE_INTERFACES.iter().copied()
-}
-
 #[cfg(test)]
 pub(crate) fn standard_package_interfaces() -> impl Iterator<Item = (&'static str, &'static str)> {
-    STANDARD_PACKAGE_INTERFACES
+    rsscript_interface_catalog::STANDARD_PACKAGE_INTERFACES
         .iter()
         .chain(crate::test_interfaces::TEST_INTERFACES.iter())
         .copied()

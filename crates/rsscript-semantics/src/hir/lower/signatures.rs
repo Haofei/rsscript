@@ -18,7 +18,7 @@ impl Hir {
         Self::from_syntax_with_interfaces_options(program, interfaces, false)
     }
 
-    pub(crate) fn from_syntax_with_prepared_interfaces(
+    pub fn from_syntax_with_prepared_interfaces(
         program: &SyntaxProgram,
         builtin_interfaces: &[SyntaxProgram],
         interfaces: &[SyntaxProgram],
@@ -48,7 +48,7 @@ impl Hir {
         hir
     }
 
-    pub(crate) fn semantic_types_arc(&self) -> Arc<SemanticTypeFacts> {
+    pub fn semantic_types_arc(&self) -> Arc<SemanticTypeFacts> {
         Arc::clone(&self.semantic_types)
     }
 
@@ -269,11 +269,7 @@ impl Hir {
     /// `method`. Used by the reg-VM to dynamically dispatch a `Protocol.method`
     /// call by the receiver's runtime type (dynamic protocol values + generic bounds),
     /// mirroring the compiled backend's closed-world enum dispatch.
-    pub(crate) fn protocol_method_targets(
-        &self,
-        protocol: &str,
-        method: &str,
-    ) -> Vec<(String, String)> {
+    pub fn protocol_method_targets(&self, protocol: &str, method: &str) -> Vec<(String, String)> {
         let protocol = type_root_name(protocol);
         let method = type_root_name(method);
         self.protocol_impls
@@ -326,19 +322,14 @@ impl Hir {
         self.sum_variant_fields.get(variant_name).map(Vec::as_slice)
     }
 
-    #[cfg(test)]
-    pub(in crate::hir) fn fields_named(
-        &self,
-        field_name: &str,
-    ) -> impl Iterator<Item = &FieldInfo> {
+    pub fn fields_named(&self, field_name: &str) -> impl Iterator<Item = &FieldInfo> {
         self.fields_by_name
             .get(field_name)
             .into_iter()
             .flat_map(|fields| fields.iter())
     }
 
-    #[cfg(test)]
-    pub(in crate::hir) fn is_handle_field_name(&self, field_name: &str) -> bool {
+    pub fn is_handle_field_name(&self, field_name: &str) -> bool {
         self.fields_named(field_name)
             .any(|field| field.is_handle || field.is_weak)
     }
@@ -365,6 +356,18 @@ impl Hir {
 
     pub fn call_sites(&self) -> &[HirCallSite] {
         &self.call_sites
+    }
+
+    pub fn field_accesses(&self) -> &[HirFieldAccess] {
+        &self.field_accesses
+    }
+
+    pub fn effect_events(&self) -> &[HirEffectEvent] {
+        &self.effect_events
+    }
+
+    pub fn returns(&self) -> &[HirReturn] {
+        &self.returns
     }
 
     pub fn resolve_call(&self, callee: &Callee) -> CallResolution {
@@ -477,7 +480,7 @@ impl Hir {
         )
     }
 
-    pub(crate) fn canonical_type_name(&self, type_name: &str) -> String {
+    pub fn canonical_type_name(&self, type_name: &str) -> String {
         self.expand_type_alias(type_name)
     }
 
@@ -520,10 +523,7 @@ impl Hir {
                             .cloned()
                             .zip(args.iter().cloned())
                             .collect::<HashMap<_, _>>();
-                        Some(crate::text_util::substitute_type_args(
-                            target,
-                            &substitutions,
-                        ))
+                        Some(crate::substitute_type_args(target, &substitutions))
                     })
                 };
                 if let Some(alias_target) = alias_target {
@@ -558,10 +558,10 @@ impl Hir {
         }
 
         let bound_key = format!("__protocol_bound__{receiver_root}");
-        if let Some(protocol) = value_types.get(&bound_key) {
-            if let Some(sig) = self.resolve_function(Some(protocol), method) {
-                candidates.push((protocol.clone(), sig.clone()));
-            }
+        if let Some(protocol) = value_types.get(&bound_key)
+            && let Some(sig) = self.resolve_function(Some(protocol), method)
+        {
+            candidates.push((protocol.clone(), sig.clone()));
         }
         if let Some(protocol) = dyn_protocol(&ResolvedType::from_display(receiver_type))
             && let Some(sig) = self.resolve_function(Some(&protocol), method)

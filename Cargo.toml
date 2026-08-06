@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/rsscript-abi-model",
+    "crates/rsscript-interface-catalog",
     "crates/rsscript-provider-api",
     "crates/rsscript-syntax",
     "crates/rsscript-work-budget",

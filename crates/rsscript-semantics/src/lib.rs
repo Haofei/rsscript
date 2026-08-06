@@ -10,10 +10,16 @@ pub use rsscript_abi_model::{
     ParameterSignature, SignatureHash,
 };
 
+mod call_binding;
+pub mod hir;
 mod types;
+pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
 pub use types::{
     ResolvedParamEffect, ResolvedType, ResolvedTypeKind, SemanticTypeFacts, TypeArena, TypeId,
     TypeQualifiers,
+};
+pub(crate) use types::{
+    builtin_generic_type_params, substitute_type_args, type_arg_names, type_root_name,
 };
 
 /// Structured retention facts attached to a callable signature.

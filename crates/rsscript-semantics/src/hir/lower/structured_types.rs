@@ -1,5 +1,7 @@
 //! Structured signature, field, parameter, and constructor facts.
 
+//! Structural HIR construction helpers.
+
 use super::*;
 
 pub(super) fn hir_binding_kind(kind: LetKind) -> HirBindingKind {

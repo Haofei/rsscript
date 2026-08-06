@@ -41,7 +41,7 @@ pub(super) fn effect_events_for_expr(function_name: &str, expr: &Expr) -> Vec<Hi
 pub(super) fn retain_events_for_call(
     function_name: &str,
     callee: &Callee,
-    args: &[crate::syntax::ast::CallArg],
+    args: &[rsscript_syntax::ast::CallArg],
     call_span: &Span,
     resolution: &CallResolution,
     hir: &Hir,

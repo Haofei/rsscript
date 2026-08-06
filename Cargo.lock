@@ -1540,6 +1540,7 @@ dependencies = [
  "rss-process-guard",
  "rss-testgen",
  "rsscript-abi-model",
+ "rsscript-interface-catalog",
  "rsscript-provider-api",
  "rsscript-runtime",
  "rsscript-semantics",
@@ -1567,6 +1568,10 @@ dependencies = [
  "serde",
  "sha2",
 ]
+
+[[package]]
+name = "rsscript-interface-catalog"
+version = "0.1.0"
 
 [[package]]
 name = "rsscript-lowering"
@@ -1617,6 +1622,7 @@ name = "rsscript-semantics"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
+ "rsscript-interface-catalog",
  "rsscript-syntax",
 ]
 

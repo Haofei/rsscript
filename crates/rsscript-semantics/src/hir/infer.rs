@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::semantic::ResolvedType;
+use crate::{ResolvedType, TypeQualifiers, builtin_generic_type_params};
 
 use super::*;
 
@@ -8,7 +8,7 @@ use super::*;
 /// structural representation used by HIR inference. Callee type arguments are
 /// the sole remaining textual input here; inferred local types never round-trip
 /// through a display string.
-pub(crate) fn resolved_type_from_source(source: &str) -> ResolvedType {
+pub fn resolved_type_from_source(source: &str) -> ResolvedType {
     ResolvedType::from_display(source)
 }
 
@@ -21,10 +21,10 @@ pub(crate) fn resolved_type_from_source(source: &str) -> ResolvedType {
 fn infer_enum_variant_type(
     hir: &Hir,
     variant: &str,
-    args: &[crate::syntax::ast::CallArg],
+    args: &[rsscript_syntax::ast::CallArg],
     value_types: &HirValueTypes,
 ) -> Option<ResolvedType> {
-    let payload_type = |args: &[crate::syntax::ast::CallArg]| {
+    let payload_type = |args: &[rsscript_syntax::ast::CallArg]| {
         args.first()
             .and_then(|arg| infer_hir_expr_type(hir, &arg.value, value_types))
     };
@@ -46,7 +46,7 @@ fn infer_enum_variant_type(
     }
 }
 
-pub(crate) fn infer_hir_expr_type(
+pub fn infer_hir_expr_type(
     hir: &Hir,
     expr: &Expr,
     value_types: &HirValueTypes,
@@ -342,9 +342,9 @@ fn infer_arg_expr_type(
                     (0..params.len()).map(|_| ResolvedType::named("?", [])),
                     (0..params.len()).map(|_| None),
                     Some(return_type),
-                    crate::semantic::TypeQualifiers {
+                    TypeQualifiers {
                         noescape: true,
-                        ..crate::semantic::TypeQualifiers::default()
+                        ..TypeQualifiers::default()
                     },
                 )
             }),
@@ -383,8 +383,6 @@ pub(super) fn substituted_field_type(
         .collect();
     field.ty.substitute(&substitutions)
 }
-
-use crate::text_util::builtin_generic_type_params;
 
 pub(super) fn dyn_protocol(type_name: &ResolvedType) -> Option<String> {
     type_name.named_argument("Dyn", 0).map(ToString::to_string)
@@ -431,9 +429,7 @@ fn match_pattern_binding_resolved_type(
         return None;
     };
     // Option/Result carry a single positional payload.
-    let Some(binding) = bindings.first() else {
-        return None;
-    };
+    let binding = bindings.first()?;
     let value_type = value_type?;
     if name == "Some" {
         return value_type
@@ -575,7 +571,7 @@ fn binding_substitutions(hir: &Hir, value_type: &ResolvedType) -> BTreeMap<Strin
 
 fn collect_struct_pattern_binding_types(
     hir: &Hir,
-    fields: &[crate::syntax::ast::MatchFieldPattern],
+    fields: &[rsscript_syntax::ast::MatchFieldPattern],
     field_types: &[FieldInfo],
     substitutions: &BTreeMap<String, ResolvedType>,
 ) -> Vec<(String, ResolvedType)> {

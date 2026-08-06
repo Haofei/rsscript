@@ -4,13 +4,13 @@ use std::fmt;
 use rsscript_syntax::Span;
 use rsscript_syntax::ast::{DataEffect, Item, Program, TypeRef};
 
-fn type_root_name(name: &str) -> &str {
+pub(crate) fn type_root_name(name: &str) -> &str {
     let trimmed = name.trim();
     let base = trimmed.strip_prefix("fresh ").unwrap_or(trimmed);
     base.split_once('<').map_or(base, |(root, _)| root)
 }
 
-fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
+pub(crate) fn type_arg_names(type_name: &str) -> Option<Vec<&str>> {
     let (_, rest) = type_name.split_once('<')?;
     let inner = rest.strip_suffix('>')?;
     Some(split_top_level_type_args(inner))
@@ -35,6 +35,39 @@ fn split_top_level_type_args(args: &str) -> Vec<&str> {
         parts.push(args[start..].trim());
     }
     parts
+}
+
+pub(crate) fn substitute_type_args(
+    type_name: &str,
+    substitutions: &HashMap<String, String>,
+) -> String {
+    let trimmed = type_name.trim();
+    if let Some(replacement) = substitutions.get(trimmed) {
+        return replacement.clone();
+    }
+    let Some(args) = type_arg_names(trimmed) else {
+        return trimmed.to_string();
+    };
+    let root = type_root_name(trimmed);
+    let args = args
+        .into_iter()
+        .map(|arg| substitute_type_args(arg, substitutions))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{root}<{args}>")
+}
+
+pub(crate) fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str>> {
+    match root {
+        "List" | "Set" | "Option" | "Channel" | "Sender" | "Receiver" | "Stream" | "Pipeline" => {
+            Some(vec!["T"])
+        }
+        "FalliblePipeline" => Some(vec!["T", "E"]),
+        "Dyn" => Some(vec!["P"]),
+        "Map" => Some(vec!["K", "V"]),
+        "Result" => Some(vec!["T", "E"]),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

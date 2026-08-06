@@ -458,7 +458,7 @@ fn render(body: read String) -> Result<fresh Rendered, HttpError> {
 
     let program = parse_source("test.rss", source);
     let hir = Hir::from_syntax(&program);
-    let sites = &hir.call_sites;
+    let sites = hir.call_sites();
 
     assert_eq!(sites.len(), 3);
     assert!(matches!(
@@ -493,7 +493,7 @@ fn render(body: read String) -> Result<fresh Rendered, HttpError> {
     );
     assert_eq!(bindings[1].type_name.as_deref(), Some("Rendered"));
 
-    let returns = &hir.returns;
+    let returns = hir.returns();
     assert_eq!(returns.len(), 1);
     assert_eq!(returns[0].function_name, "render");
     assert!(matches!(
@@ -615,7 +615,7 @@ fn take_rules(config: mut Config) -> Unit {
     let program = parse_source("test.rss", source);
     let hir = Hir::from_syntax(&program);
     let field = hir
-        .field_accesses
+        .field_accesses()
         .first()
         .expect("field access is recorded");
 
@@ -666,22 +666,22 @@ fn publish(cache: mut RetainedImageStore, path: read Path) -> Unit {
     let program = parse_source("test.rss", source);
     let hir = Hir::from_syntax(&program);
 
-    assert_eq!(hir.effect_events.len(), 3);
+    assert_eq!(hir.effect_events().len(), 3);
     assert!(matches!(
-        hir.effect_events[0].kind,
+        hir.effect_events()[0].kind,
         HirEffectEventKind::Manage
     ));
-    assert_eq!(hir.effect_events[0].binding_name, "image");
+    assert_eq!(hir.effect_events()[0].binding_name, "image");
     assert!(matches!(
-        hir.effect_events[1].kind,
+        hir.effect_events()[1].kind,
         HirEffectEventKind::Retain { .. }
     ));
-    assert_eq!(hir.effect_events[1].binding_name, "shared");
+    assert_eq!(hir.effect_events()[1].binding_name, "shared");
     assert!(matches!(
-        hir.effect_events[2].kind,
+        hir.effect_events()[2].kind,
         HirEffectEventKind::Take
     ));
-    assert_eq!(hir.effect_events[2].binding_name, "image");
+    assert_eq!(hir.effect_events()[2].binding_name, "image");
     assert_eq!(
         hir.function_body("publish")
             .expect("publish body exists")
@@ -793,7 +793,7 @@ fn make_response() -> fresh Response {
 
     let program = parse_source("test.rss", source);
     let hir = Hir::from_syntax(&program);
-    let return_fact = hir.returns.first().expect("return fact exists");
+    let return_fact = hir.returns().first().expect("return fact exists");
 
     assert_eq!(return_fact.function_name, "make_response");
     assert!(matches!(
