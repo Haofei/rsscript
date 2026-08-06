@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[path = "public_api_architecture.rs"]
 mod public_api_architecture;
@@ -38,6 +39,131 @@ fn workspace_root() -> PathBuf {
 
 fn read(path: &Path) -> String {
     fs::read_to_string(path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()))
+}
+
+fn cargo_metadata(root: &Path) -> serde_json::Value {
+    let output = Command::new(env!("CARGO"))
+        .args(["metadata", "--format-version", "1", "--no-deps"])
+        .current_dir(root)
+        .output()
+        .expect("cargo metadata should start");
+    assert!(
+        output.status.success(),
+        "cargo metadata failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("cargo metadata output should be JSON")
+}
+
+fn metadata_direct_dependencies(metadata: &serde_json::Value, package: &str) -> BTreeSet<String> {
+    metadata["packages"]
+        .as_array()
+        .expect("metadata packages")
+        .iter()
+        .find(|candidate| candidate["name"].as_str() == Some(package))
+        .unwrap_or_else(|| panic!("metadata package `{package}`"))["dependencies"]
+        .as_array()
+        .expect("metadata dependencies")
+        .iter()
+        .filter_map(|dependency| dependency["name"].as_str().map(str::to_string))
+        .collect()
+}
+
+fn metadata_workspace_dependencies(
+    metadata: &serde_json::Value,
+    package: &str,
+) -> BTreeSet<String> {
+    let workspace_packages = metadata["packages"]
+        .as_array()
+        .expect("metadata packages")
+        .iter()
+        .filter_map(|candidate| candidate["name"].as_str().map(str::to_string))
+        .collect::<BTreeSet<_>>();
+    metadata_direct_dependencies(metadata, package)
+        .intersection(&workspace_packages)
+        .cloned()
+        .collect()
+}
+
+#[test]
+fn cargo_metadata_enforces_composition_dependency_direction() {
+    let root = workspace_root();
+    let metadata = cargo_metadata(&root);
+
+    let compiler = metadata_direct_dependencies(&metadata, "rsscript-compiler");
+    for forbidden in [
+        "rsscript-cli",
+        "rsscript-review-reir",
+        "reir",
+        "rss-native-abi",
+        "rss-process-guard",
+        "vm-jit",
+        "rsscript-provider-fs",
+        "rsscript-provider-env",
+        "rsscript-provider-process",
+        "rsscript-provider-http",
+    ] {
+        assert!(
+            !compiler.contains(forbidden),
+            "compiler façade must not depend on composition package `{forbidden}`"
+        );
+    }
+
+    let language_service = metadata_workspace_dependencies(&metadata, "rsscript-language-service");
+    assert_eq!(
+        language_service,
+        BTreeSet::from(["rsscript-compiler".to_string()]),
+        "language service must depend only on the frontend compiler façade"
+    );
+
+    for package in metadata["packages"].as_array().expect("metadata packages") {
+        let name = package["name"].as_str().expect("package name");
+        if name != "rsscript-cli" {
+            assert!(
+                !metadata_direct_dependencies(&metadata, name).contains("rsscript-cli"),
+                "composition root must remain a dependency leaf; `{name}` depends on it"
+            );
+        }
+    }
+}
+
+#[test]
+fn rss_check_default_cargo_closure_is_frontend_only() {
+    let root = workspace_root();
+    let output = Command::new(env!("CARGO"))
+        .args([
+            "tree",
+            "-p",
+            "rsscript-cli",
+            "--edges",
+            "normal",
+            "--prefix",
+            "none",
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("cargo tree should start");
+    assert!(
+        output.status.success(),
+        "cargo tree failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let closure = String::from_utf8(output.stdout).expect("cargo tree should be UTF-8");
+    for forbidden in [
+        "rsscript-runtime ",
+        "rsscript-bytecode ",
+        "rsscript-provider-api ",
+        "rss-process-guard ",
+        "vm-jit ",
+        "reqwest ",
+        "tokio ",
+        "tungstenite ",
+    ] {
+        assert!(
+            !closure.contains(forbidden),
+            "frontend-only `rss check` dependency closure contains `{forbidden}`:\n{closure}"
+        );
+    }
 }
 
 #[test]
