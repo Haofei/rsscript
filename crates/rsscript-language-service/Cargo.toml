@@ -1,0 +1,9 @@
+[package]
+name = "rsscript-language-service"
+version = "0.1.0"
+edition = "2024"
+description = "Incremental editor-facing language service for RSScript"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rsscript = { path = "../rsscript" }

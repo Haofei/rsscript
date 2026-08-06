@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rsscript::{SymbolKind as RssSymbolKind, *};
+use rsscript_language_service::{SymbolKind as RssSymbolKind, *};
 use tower_lsp::lsp_types::{SymbolKind as LspSymbolKind, *};
 
 use crate::documents::*;
@@ -35,7 +35,7 @@ pub(crate) fn workspace_definition_location(
 pub(crate) fn hover_symbol_info(
     uri: &Url,
     open_documents: &HashMap<Url, Document>,
-    index: &rsscript::SymbolIndex,
+    index: &rsscript_language_service::SymbolIndex,
     line: usize,
     column: usize,
     package_inputs: &PackageInputCache,
@@ -333,7 +333,7 @@ pub(crate) fn find_function_definition_with_document<'a>(
 }
 
 pub(crate) fn enclosing_function_definition<'a>(
-    index: &'a rsscript::SymbolIndex,
+    index: &'a rsscript_language_service::SymbolIndex,
     reference: &Reference,
 ) -> Option<&'a Definition> {
     index
@@ -364,7 +364,7 @@ pub(crate) fn to_call_hierarchy_item(
 }
 
 pub(crate) fn next_function_line(
-    index: &rsscript::SymbolIndex,
+    index: &rsscript_language_service::SymbolIndex,
     function: &Definition,
 ) -> Option<usize> {
     index

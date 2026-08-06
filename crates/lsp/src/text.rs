@@ -1,6 +1,6 @@
 //! UTF-16 position, range, and incremental text-edit utilities.
 
-use rsscript::Span;
+use rsscript_language_service::Span;
 use tower_lsp::lsp_types::*;
 
 /// Map a checker [`Span`] (1-based line/column counted in `char`s) to an LSP

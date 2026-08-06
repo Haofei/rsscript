@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use rsscript::{Diagnostic as RsDiagnostic, *};
+use rsscript_language_service::{Diagnostic as RsDiagnostic, *};
 use serde_json::json;
 use tower_lsp::lsp_types::{Diagnostic as LspDiagnostic, *};
 

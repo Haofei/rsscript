@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use rsscript::SymbolIndex;
+use rsscript_language_service::SymbolIndex;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SourceIndexIdentity {
@@ -39,7 +39,7 @@ impl SourceIndexCache {
             return Arc::clone(&cached.index);
         }
 
-        let index = Arc::new(rsscript::symbol_index(path, source));
+        let index = Arc::new(rsscript_language_service::symbol_index(path, source));
         #[cfg(test)]
         self.builds
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);

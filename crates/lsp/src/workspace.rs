@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use rsscript::*;
+use rsscript_language_service::*;
 use tower_lsp::lsp_types::*;
 
 use crate::documents::*;

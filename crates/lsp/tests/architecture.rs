@@ -12,6 +12,24 @@ fn read(name: &str) -> String {
 }
 
 #[test]
+fn lsp_depends_on_the_language_service_boundary() {
+    let manifest = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml"))
+        .expect("LSP manifest should be readable");
+    assert!(manifest.contains("rsscript-language-service"));
+    assert!(
+        !manifest.lines().any(|line| line.starts_with("rsscript =")),
+        "the LSP must not depend directly on the product façade"
+    );
+
+    for forbidden in ["rsscript-runtime", "vm-jit", "reir", "rss-native-abi"] {
+        assert!(
+            !manifest.contains(forbidden),
+            "the LSP manifest must not depend on `{forbidden}`"
+        );
+    }
+}
+
+#[test]
 fn main_is_only_the_lsp_composition_root() {
     let main = read("main.rs");
     assert!(main.lines().count() <= 40, "LSP main.rs must stay small");

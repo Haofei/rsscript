@@ -8,6 +8,7 @@ members = [
     "crates/rsscript-work-budget",
     "crates/rsscript-semantics",
     "crates/rsscript-lowering",
+    "crates/rsscript-language-service",
     "integrations/rsscript-review-reir",
     "crates/rsscript",
     "crates/lsp",

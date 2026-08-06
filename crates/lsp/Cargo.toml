@@ -10,7 +10,7 @@ name = "rss-lsp"
 path = "src/main.rs"
 
 [dependencies]
-rsscript = { path = "../rsscript" }
+rsscript-language-service = { path = "../rsscript-language-service" }
 serde_json = "1"
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "time"] }

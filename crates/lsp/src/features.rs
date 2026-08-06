@@ -1,6 +1,6 @@
 //! Stateless LSP symbol and semantic-token conversion.
 
-use rsscript::{SymbolKind as RssSymbolKind, *};
+use rsscript_language_service::{SymbolKind as RssSymbolKind, *};
 use tower_lsp::lsp_types::{SymbolKind as LspSymbolKind, *};
 
 use crate::text::*;
@@ -121,7 +121,7 @@ pub(crate) fn semantic_tokens_for_source(path: &str, source: &str) -> SemanticTo
 
 pub(crate) fn semantic_tokens_for_index(
     source: &str,
-    index: &rsscript::SymbolIndex,
+    index: &rsscript_language_service::SymbolIndex,
 ) -> SemanticTokens {
     let mut raw = Vec::new();
     for definition in index.definitions() {

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use rsscript::Diagnostic as RsDiagnostic;
+use rsscript_language_service::Diagnostic as RsDiagnostic;
 use tower_lsp::lsp_types::*;
 
 use crate::scheduler::*;
@@ -23,7 +23,7 @@ pub(crate) struct Document {
 }
 
 impl Document {
-    pub(crate) fn symbol_index(&self, path: &str) -> Arc<rsscript::SymbolIndex> {
+    pub(crate) fn symbol_index(&self, path: &str) -> Arc<rsscript_language_service::SymbolIndex> {
         self.source_index.get(
             SourceIndexIdentity {
                 document_revision: self.revision,

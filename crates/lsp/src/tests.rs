@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering as AtomicOrdering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use rsscript::{Diagnostic as RsDiagnostic, PackageReviewFileKind, Span, symbol_index};
+use rsscript_language_service::{
+    Diagnostic as RsDiagnostic, PackageReviewFileKind, Span, symbol_index,
+};
 use tokio::sync::{Semaphore, oneshot};
 use tower_lsp::lsp_types::*;
 

@@ -1483,7 +1483,7 @@ dependencies = [
 name = "rss-lsp"
 version = "0.1.0"
 dependencies = [
- "rsscript",
+ "rsscript-language-service",
  "serde_json",
  "tokio",
  "tower-lsp",
@@ -1574,6 +1574,13 @@ dependencies = [
 [[package]]
 name = "rsscript-interface-catalog"
 version = "0.1.0"
+
+[[package]]
+name = "rsscript-language-service"
+version = "0.1.0"
+dependencies = [
+ "rsscript",
+]
 
 [[package]]
 name = "rsscript-lowering"

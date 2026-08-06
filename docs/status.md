@@ -18,7 +18,11 @@ analyzer orchestration, package tooling, VM, AOT lowering, and native loading.
 REIR conversion now lives in the one-way `integrations/rsscript-review-reir`
 adapter and is absent from normal compiler dependencies, public compiler APIs,
 CLI package output, and package metadata writes. The retired policy-oriented
-examples and action have been removed. The lexer, parser, source AST, syntax desugarings, spans, and
+examples and action have been removed. The LSP now consumes the document-oriented
+`rsscript-language-service` API rather than importing the product façade directly;
+the remaining transitive compiler dependency will disappear as diagnostics and
+package snapshots finish moving into their owning crates. The lexer, parser,
+source AST, syntax desugarings, spans, and
 bounded parse budget are now owned by the independent `rsscript-syntax` and
 `rsscript-work-budget` crates. Structural types, type interning, substitution,
 parameter effects, package-wide semantic type facts, Typed HIR, call binding, and

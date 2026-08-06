@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use rsscript::{document_symbols, explain_diagnostic_code, format_source};
+use rsscript_language_service::{document_symbols, explain_diagnostic_code, format_source};
 use serde_json::json;
 use tokio::sync::Semaphore;
 use tower_lsp::jsonrpc::Result;
