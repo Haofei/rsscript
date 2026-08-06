@@ -86,7 +86,7 @@ jobs:
         run: |
           cargo test --locked -p vm-jit
           RSS_DIFF_PROPTEST_CASES=16 RSS_DIFF_SHRINK_ITERS=0 \
-            cargo test --locked -p rsscript --test differential \
+            cargo test --locked -p rsscript-engine --test differential \
             backends_agree_on_seed_decoded_programs \
             --features native-jit -- --test-threads=1
 

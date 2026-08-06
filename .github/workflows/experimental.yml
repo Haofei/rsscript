@@ -61,4 +61,4 @@ jobs:
           tool: nextest@0.9.140
 
       - name: Test native JIT and deopt paths
-        run: cargo nextest run --locked -p rsscript --features native-jit --no-fail-fast
+        run: cargo nextest run --locked -p rsscript-engine --features native-jit --no-fail-fast

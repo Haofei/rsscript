@@ -20,7 +20,7 @@ harness, compares their median wall time to an existing baseline JSON, and fails
 on either a large regression or unexpected native bails:
 
 ```sh
-docker compose run --rm dev cargo test --release -p rsscript --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture
+docker compose run --rm dev cargo test --release -p rsscript-engine --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture
 ```
 
 Defaults are intentionally tolerant and fast: `jit-native`, 3 iterations, 1
@@ -70,7 +70,7 @@ The native-tier profitability cost model (`RSS_JIT_COST_MODEL`, default `off`) i
 proven by running the same gate under `enforce`:
 
 ```sh
-docker compose run --rm dev env RSS_JIT_COST_MODEL=enforce cargo test --release -p rsscript --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture
+docker compose run --rm dev env RSS_JIT_COST_MODEL=enforce cargo test --release -p rsscript-engine --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture
 ```
 
 In `enforce` the gate adapts its expectations for the cost-model-declined kernels
@@ -90,9 +90,9 @@ subcommand.
 For focused Docker smokes around the telemetry mechanisms themselves, use:
 
 ```sh
-docker compose run --rm dev cargo test -p rsscript --test runtime native_jit_precompiles_cold_scalar_call_chains --features native-jit -- --test-threads=1
-docker compose run --rm dev cargo test -p rsscript --test runtime report_profile_guided_pic_shows_hottest_first_order --features native-jit -- --test-threads=1
-docker compose run --rm dev cargo test --release -p rsscript --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture
+docker compose run --rm dev cargo test -p rsscript-engine --test runtime native_jit_precompiles_cold_scalar_call_chains --features native-jit -- --test-threads=1
+docker compose run --rm dev cargo test -p rsscript-engine --test runtime report_profile_guided_pic_shows_hottest_first_order --features native-jit -- --test-threads=1
+docker compose run --rm dev cargo test --release -p rsscript-engine --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture
 ```
 
 The first command exercises compiled native-to-native call edges and call-depth

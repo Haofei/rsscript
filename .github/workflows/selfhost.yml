@@ -28,33 +28,33 @@ jobs:
       - name: Lexer corpus parity
         run: |
           RSS_SELFHOST_TIER=2 \
-          cargo test -p rsscript --release --lib \
+          cargo test -p rsscript-engine --release --lib \
             selfhost_parity::lexer_parity_corpus \
             -- --ignored --exact --nocapture --test-threads=1
 
       - name: Parser corpus parity
         run: |
           RSS_SELFHOST_PARSE_TIER=1 \
-          cargo test -p rsscript --release --lib \
+          cargo test -p rsscript-engine --release --lib \
             selfhost_parity::parser_parity_corpus \
             -- --ignored --exact --nocapture --test-threads=1
 
       - name: AST curated parity
         run: |
           RSS_SELFHOST_AST_TIER=2 \
-          cargo test -p rsscript --release --lib \
+          cargo test -p rsscript-engine --release --lib \
             selfhost_parity::ast_parity_samples \
             -- --exact --nocapture --test-threads=1
 
       - name: Checker FAST corpus parity
         run: |
-          cargo test -p rsscript --release --lib \
+          cargo test -p rsscript-engine --release --lib \
             selfhost_parity::checker_parity_corpus \
             -- --ignored --exact --nocapture --test-threads=1
 
       - name: Package contract RS1301 parity
         run: |
-          cargo test -p rsscript --release --lib \
+          cargo test -p rsscript-engine --release --lib \
             selfhost_parity::package_contract_ \
             -- --nocapture --test-threads=1
 
@@ -74,7 +74,7 @@ jobs:
       - name: Checker exhaustive corpus parity
         run: |
           RSS_SELFHOST_FULL=1 \
-          cargo test -p rsscript --release --lib \
+          cargo test -p rsscript-engine --release --lib \
             selfhost_parity::checker_parity_corpus \
             -- --ignored --exact --nocapture --test-threads=1
 
@@ -94,6 +94,6 @@ jobs:
       - name: AST exhaustive corpus parity
         run: |
           RSS_SELFHOST_AST_TIER=2 \
-          cargo test -p rsscript --release --lib \
+          cargo test -p rsscript-engine --release --lib \
             selfhost_parity::ast_parity_corpus \
             -- --ignored --exact --nocapture --test-threads=1

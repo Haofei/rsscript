@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-pub use rsscript::Diagnostic;
+pub use rsscript_engine::Diagnostic;
 #[cfg(feature = "execution")]
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -8,10 +8,10 @@ use std::fmt;
 #[cfg(feature = "execution")]
 use std::path::Path;
 
-/// Frontend-only editor API consumed by `rsscript-language-service` during the
-/// monolith extraction. Runtime and Provider types are deliberately excluded.
+/// Frontend-only editor API consumed by `rsscript-language-service`.
+/// Runtime and Provider types are deliberately excluded.
 pub mod language {
-    pub use rsscript::{
+    pub use rsscript_engine::{
         Definition, Diagnostic, DiagnosticExplanation, Reference, RssDocumentSymbol, Severity,
         Span, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, analyze_source_with_core,
         analyze_source_with_interfaces, analyze_sources_with_interfaces, document_symbols,
@@ -19,9 +19,9 @@ pub mod language {
     };
 }
 #[cfg(feature = "execution")]
-pub use rsscript::ExecutionUsage;
+pub use rsscript_engine::ExecutionUsage;
 #[cfg(feature = "execution")]
-pub use rsscript::WorkspaceSnapshot;
+pub use rsscript_engine::WorkspaceSnapshot;
 #[cfg(feature = "execution")]
 pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
 #[cfg(feature = "execution")]
@@ -29,9 +29,9 @@ pub use rsscript_provider_api as provider;
 
 #[cfg(feature = "execution")]
 use provider::{NativeInterpreterFn, ProviderDescriptor, ProviderFunction, ProviderLoadError};
-use rsscript::analyze_source;
+use rsscript_engine::analyze_source;
 #[cfg(feature = "execution")]
-use rsscript::{
+use rsscript_engine::{
     EvalError, ExecutionFailureKind, ExternalFunctionRegistry, NativeValue, PackageAnalysis,
     RegVmExecutable, VmLimits, load_workspace_snapshot, reg_vm_compile_package_input,
     reg_vm_compile_source, reg_vm_compile_validated, validate_sources_with_interfaces,
@@ -149,7 +149,7 @@ impl CompiledPackage {
         &self.executable.bytecode_artifact().header.executable_hash
     }
 
-    pub fn external_imports(&self) -> &[rsscript::ExternalImport] {
+    pub fn external_imports(&self) -> &[rsscript_engine::ExternalImport] {
         &self.executable.bytecode_artifact().imports
     }
 }

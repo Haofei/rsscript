@@ -738,11 +738,30 @@ dependencies = [
 name = "rss-testgen"
 version = "0.1.0"
 dependencies = [
- "rsscript",
+ "rsscript-engine",
 ]
 
 [[package]]
-name = "rsscript"
+name = "rsscript-abi-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "rsscript-bytecode"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
+name = "rsscript-engine"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -779,31 +798,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "rsscript-abi-model"
-version = "0.1.0"
-dependencies = [
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
-name = "rsscript-bytecode"
-version = "0.1.0"
-dependencies = [
- "rsscript-abi-model",
- "serde",
- "serde_json",
- "sha2",
-]
-
-[[package]]
 name = "rsscript-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
  "rss-testgen",
- "rsscript",
+ "rsscript-engine",
 ]
 
 [[package]]

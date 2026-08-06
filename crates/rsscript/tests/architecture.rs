@@ -91,6 +91,10 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
     let metadata = cargo_metadata(&root);
 
     let compiler = metadata_direct_dependencies(&metadata, "rsscript-compiler");
+    assert!(
+        compiler.contains("rsscript-engine"),
+        "compiler façade must consume the internal engine package"
+    );
     for forbidden in [
         "rsscript-cli",
         "rsscript-aot-runtime",
@@ -882,7 +886,7 @@ fn reir_is_a_one_way_optional_integration() {
         integration_dependencies,
         BTreeSet::from([
             "reir".to_string(),
-            "rsscript".to_string(),
+            "rsscript-engine".to_string(),
             "serde_json".to_string(),
         ])
     );
@@ -1008,7 +1012,7 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         "the compiler facade must be frontend-only unless execution is explicitly enabled"
     );
     assert_eq!(
-        facade["dependencies"]["rsscript"]["default-features"].as_bool(),
+        facade["dependencies"]["rsscript_engine"]["default-features"].as_bool(),
         Some(false)
     );
     assert_eq!(
@@ -1018,6 +1022,11 @@ fn compiler_default_dependency_closure_is_host_neutral() {
 
     let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript/Cargo.toml")))
         .expect("compiler manifest should parse");
+    assert_eq!(
+        manifest["package"]["name"].as_str(),
+        Some("rsscript-engine")
+    );
+    assert_eq!(manifest["package"]["publish"].as_bool(), Some(false));
     for forbidden in ["rsscript-runtime", "rsscript-aot-runtime"] {
         assert!(
             manifest["dependencies"].get(forbidden).is_none(),

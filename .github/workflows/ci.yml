@@ -69,5 +69,5 @@ jobs:
 
       - name: Package authorization and native cache tests
         run: |
-          cargo test --locked -p rsscript --lib package::authorization
-          cargo test --locked -p rsscript --lib native_plugin
+          cargo test --locked -p rsscript-engine --lib package::authorization
+          cargo test --locked -p rsscript-engine --lib native_plugin

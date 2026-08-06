@@ -77,10 +77,10 @@ test target names are `static`, `runtime`, `differential`, `soak`,
 set process-wide JIT configuration.
 
 ```sh
-docker compose run --rm dev cargo test -p rsscript --no-run
-docker compose run --rm dev cargo test -p rsscript
-docker compose run --rm dev cargo clippy -p rsscript --tests -- -D warnings
-docker compose run --rm dev cargo test -p rsscript --features native-jit --no-run
+docker compose run --rm dev cargo test -p rsscript-engine --no-run
+docker compose run --rm dev cargo test -p rsscript-engine
+docker compose run --rm dev cargo clippy -p rsscript-engine --tests -- -D warnings
+docker compose run --rm dev cargo test -p rsscript-engine --features native-jit --no-run
 ```
 
 If a broad target fails, run the specific failing test while editing. After the
@@ -90,8 +90,8 @@ Focused integration tests should target one of the six public Cargo targets and
 filter by module path:
 
 ```sh
-docker compose run --rm dev cargo test -p rsscript --test static checker_frontend::misc::pass_fixtures_have_no_diagnostics -- --exact
-docker compose run --rm dev cargo test -p rsscript --test runtime vm_eval_parity::misc::parity_arithmetic_and_control_flow -- --exact
+docker compose run --rm dev cargo test -p rsscript-engine --test static checker_frontend::misc::pass_fixtures_have_no_diagnostics -- --exact
+docker compose run --rm dev cargo test -p rsscript-engine --test runtime vm_eval_parity::misc::parity_arithmetic_and_control_flow -- --exact
 ```
 
 Default RSScript runtime/differential tests run the broad VM/JIT matrix
@@ -100,35 +100,35 @@ or after touching Rust lowering/runtime semantics, run the full generated-Rust
 parity matrix explicitly:
 
 ```sh
-docker compose run --rm dev bash -lc 'RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test -p rsscript --test runtime'
-docker compose run --rm dev bash -lc 'RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test -p rsscript --test differential'
+docker compose run --rm dev bash -lc 'RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test -p rsscript-engine --test runtime'
+docker compose run --rm dev bash -lc 'RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test -p rsscript-engine --test differential'
 ```
 
 For a differential soak, raise the generated case counts explicitly:
 
 ```sh
-docker compose run --rm dev bash -lc 'RSS_DIFF_PROPTEST_CASES=200 RSS_GENERATIVE_CASES=64 RSS_GENERATIVE_MUTATION_CASES=200 cargo test -p rsscript --test differential'
+docker compose run --rm dev bash -lc 'RSS_DIFF_PROPTEST_CASES=200 RSS_GENERATIVE_CASES=64 RSS_GENERATIVE_MUTATION_CASES=200 cargo test -p rsscript-engine --test differential'
 ```
 
 Before committing a semantic change, run the full local gate:
 
 ```sh
-docker compose run --rm dev cargo clippy -p rsscript --tests -- -D warnings
-docker compose run --rm dev cargo test -p rsscript --features native-jit --no-run
-docker compose run --rm dev cargo test -p rsscript
+docker compose run --rm dev cargo clippy -p rsscript-engine --tests -- -D warnings
+docker compose run --rm dev cargo test -p rsscript-engine --features native-jit --no-run
+docker compose run --rm dev cargo test -p rsscript-engine
 git diff --check
 ```
 
 For release/demo parity and timing-sensitive checks, use:
 
 ```sh
-docker compose run --rm dev bash -lc 'RSSCRIPT_FULL_BACKEND_PARITY=1 RSS_DIFF_PROPTEST_CASES=200 RSS_GENERATIVE_CASES=64 RSS_GENERATIVE_MUTATION_CASES=200 cargo test -p rsscript --test differential'
-docker compose run --rm dev cargo test -p rsscript --test soak -- --ignored
+docker compose run --rm dev bash -lc 'RSSCRIPT_FULL_BACKEND_PARITY=1 RSS_DIFF_PROPTEST_CASES=200 RSS_GENERATIVE_CASES=64 RSS_GENERATIVE_MUTATION_CASES=200 cargo test -p rsscript-engine --test differential'
+docker compose run --rm dev cargo test -p rsscript-engine --test soak -- --ignored
 ```
 
 The default development loop must stay static/runtime/differential-first. Do not
 add executable examples, checked-in self-hosted tool runs, ignored static tests,
-or any other e2e test back into the normal `cargo test -p rsscript` loop. Slow
+or any other e2e test back into the normal `cargo test -p rsscript-engine` loop. Slow
 release-grade checks belong in the explicit soak commands above.
 
 For package-review work, use focused Rust integration targets first, then run
@@ -138,7 +138,7 @@ second package-manager or test-runner implementation in the language itself.
 Release/soak tests live in a separate opt-in manifest:
 
 ```sh
-docker compose run --rm dev cargo test -p rsscript --test soak -- --ignored
+docker compose run --rm dev cargo test -p rsscript-engine --test soak -- --ignored
 ```
 
 These tests may build native demo binaries, start local mock servers, generate

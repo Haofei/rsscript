@@ -14,7 +14,7 @@ name = "rss-testgen"
 path = "src/bin/repro.rs"
 
 [dependencies]
-rsscript = { path = "../rsscript", features = ["execution"] }
+rsscript = { package = "rsscript-engine", path = "../rsscript", features = ["execution"] }
 
 [features]
 # Pull the native (Cranelift) tier into the in-process backend set so the

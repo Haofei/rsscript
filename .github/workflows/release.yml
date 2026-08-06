@@ -70,24 +70,24 @@ jobs:
       # paths remain release blockers.
       - name: Validate native JIT
         run: |
-          cargo nextest run --locked -p rsscript --features native-jit --no-fail-fast
+          cargo nextest run --locked -p rsscript-engine --features native-jit --no-fail-fast
 
       - name: Validate generated backend parity
         run: |
-          RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test --locked -p rsscript --test runtime -- --test-threads=1
-          RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test --locked -p rsscript --test differential -- --test-threads=1
+          RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test --locked -p rsscript-engine --test runtime -- --test-threads=1
+          RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test --locked -p rsscript-engine --test differential -- --test-threads=1
 
       # Keep corpus cases in one process so the compiled self-host tools are
       # reused. Exhaustive scheduled variants remain in selfhost.yml.
       - name: Validate release self-host corpus
         run: |
-          RSS_SELFHOST_TIER=2 cargo test --locked -p rsscript --release --lib \
+          RSS_SELFHOST_TIER=2 cargo test --locked -p rsscript-engine --release --lib \
             selfhost_parity::lexer_parity_corpus \
             -- --ignored --exact --nocapture --test-threads=1
-          RSS_SELFHOST_PARSE_TIER=1 cargo test --locked -p rsscript --release --lib \
+          RSS_SELFHOST_PARSE_TIER=1 cargo test --locked -p rsscript-engine --release --lib \
             selfhost_parity::parser_parity_corpus \
             -- --ignored --exact --nocapture --test-threads=1
-          cargo test --locked -p rsscript --release --lib \
+          cargo test --locked -p rsscript-engine --release --lib \
             selfhost_parity::checker_parity_corpus \
             -- --ignored --exact --nocapture --test-threads=1
 

@@ -1527,56 +1527,12 @@ dependencies = [
 name = "rss-testgen"
 version = "0.1.0"
 dependencies = [
- "rsscript",
+ "rsscript-engine",
 ]
 
 [[package]]
 name = "rss_native_abi_fixture_bridge"
 version = "0.1.0"
-
-[[package]]
-name = "rsscript"
-version = "0.1.0"
-dependencies = [
- "base64",
- "chrono",
- "flate2",
- "fs2",
- "hex",
- "hmac",
- "libc",
- "percent-encoding",
- "proptest",
- "rand 0.8.7",
- "regex",
- "reir",
- "rss-native-abi",
- "rss-process-guard",
- "rss-testgen",
- "rsscript-abi-model",
- "rsscript-bytecode",
- "rsscript-interface-catalog",
- "rsscript-lowering",
- "rsscript-operation",
- "rsscript-provider-api",
- "rsscript-review-reir",
- "rsscript-semantics",
- "rsscript-syntax",
- "rsscript-work-budget",
- "rustix",
- "semver",
- "serde",
- "serde_json",
- "serde_yaml_ng",
- "sha1",
- "sha2",
- "sha3",
- "tempfile",
- "toml",
- "toml_edit",
- "uuid",
- "vm-jit",
-]
 
 [[package]]
 name = "rsscript-abi-model"
@@ -1633,7 +1589,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "rss-process-guard",
- "rsscript",
+ "rsscript-engine",
  "serde_json",
  "sha2",
  "tempfile",
@@ -1645,11 +1601,55 @@ dependencies = [
 name = "rsscript-compiler"
 version = "0.1.0"
 dependencies = [
- "rsscript",
  "rsscript-bytecode",
+ "rsscript-engine",
  "rsscript-operation",
  "rsscript-provider-api",
  "tempfile",
+]
+
+[[package]]
+name = "rsscript-engine"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "chrono",
+ "flate2",
+ "fs2",
+ "hex",
+ "hmac",
+ "libc",
+ "percent-encoding",
+ "proptest",
+ "rand 0.8.7",
+ "regex",
+ "reir",
+ "rss-native-abi",
+ "rss-process-guard",
+ "rss-testgen",
+ "rsscript-abi-model",
+ "rsscript-bytecode",
+ "rsscript-interface-catalog",
+ "rsscript-lowering",
+ "rsscript-operation",
+ "rsscript-provider-api",
+ "rsscript-review-reir",
+ "rsscript-semantics",
+ "rsscript-syntax",
+ "rsscript-work-budget",
+ "rustix",
+ "semver",
+ "serde",
+ "serde_json",
+ "serde_yaml_ng",
+ "sha1",
+ "sha2",
+ "sha3",
+ "tempfile",
+ "toml",
+ "toml_edit",
+ "uuid",
+ "vm-jit",
 ]
 
 [[package]]
@@ -1758,7 +1758,7 @@ name = "rsscript-review-reir"
 version = "0.1.0"
 dependencies = [
  "reir",
- "rsscript",
+ "rsscript-engine",
  "serde_json",
 ]
 
