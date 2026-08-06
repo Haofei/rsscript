@@ -803,7 +803,9 @@ pub fn reg_vm_compile_validated(
     validated: &ValidatedProgram,
 ) -> Result<RegVmExecutable, EvalError> {
     Ok(RegVmExecutable {
-        unit: Rc::new(RegUnit::lower(validated.database().hir())?),
+        unit: Rc::new(RegUnit::lower(
+            &rsscript_lowering::ExecutableIr::from_validated_hir(validated.database().hir()),
+        )?),
     })
 }
 

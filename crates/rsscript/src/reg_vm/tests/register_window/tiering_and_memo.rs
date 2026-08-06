@@ -790,7 +790,8 @@ fn main() -> Unit {
         let mut program = parse_source("test.rss", source);
         crate::syntax::isolate_module_namespaces(&mut program);
         let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
-        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let unit = RegUnit::lower(&rsscript_lowering::ExecutableIr::from_validated_hir(&hir))
+            .expect("lowering should succeed");
         let hot = unit.function_ids["hot"];
         let (jit, _, _, _, _) = translate_to_native_jit(&unit, unit.functions[hot].as_ref())
             .expect("variant string helper loop should still translate");
@@ -839,7 +840,8 @@ fn main() -> Unit {
         let mut program = parse_source("changing-field-root.rss", source);
         crate::syntax::isolate_module_namespaces(&mut program);
         let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
-        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let unit = RegUnit::lower(&rsscript_lowering::ExecutableIr::from_validated_hir(&hir))
+            .expect("lowering should succeed");
         let hot = unit.function_ids["hot"];
         let (jit, _, _, _, _) = translate_to_native_jit(&unit, unit.functions[hot].as_ref())
             .expect("changing-root field loop should still translate");
@@ -948,7 +950,8 @@ fn main() -> Unit {
         let mut program = parse_source("test.rss", source);
         crate::syntax::isolate_module_namespaces(&mut program);
         let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
-        let unit = RegUnit::lower(&hir).expect("lowering should succeed");
+        let unit = RegUnit::lower(&rsscript_lowering::ExecutableIr::from_validated_hir(&hir))
+            .expect("lowering should succeed");
         let hot = unit.function_ids["hot"];
         let (jit, _, _, _, _) = translate_to_native_jit(&unit, unit.functions[hot].as_ref())
             .expect("nested loop should translate");
@@ -973,4 +976,3 @@ fn main() -> Unit {
             jit.memo_scopes,
         );
     }
-

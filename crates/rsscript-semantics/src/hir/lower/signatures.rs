@@ -52,6 +52,10 @@ impl Hir {
         Arc::clone(&self.semantic_types)
     }
 
+    pub fn semantic_types(&self) -> &SemanticTypeFacts {
+        &self.semantic_types
+    }
+
     /// Record top-level `const` initializers so references can be inlined during
     /// lowering (the register VM has no const/global slots). Initializers are
     /// literals (the checker enforces this), so inlining is exact.

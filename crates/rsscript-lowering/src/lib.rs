@@ -1,15 +1,99 @@
-//! Provider-independent lowering records.
+//! Provider-independent executable IR.
 //!
-//! Provider selection happens after compilation, so the lowered instruction
-//! contains only a semantic symbol and value locations.
+//! The executable IR is the single checked input consumed by VM and optional
+//! backends. Provider selection happens after compilation, so imports contain
+//! only semantic symbols and signatures.
 
-use rsscript_semantics::ExternalSymbol;
+use std::collections::BTreeSet;
+
+use rsscript_semantics::hir::{CallResolution, Hir, HirFunctionBody};
+use rsscript_semantics::{ExternalSymbol, SemanticTypeFacts};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalCall {
     pub symbol: ExternalSymbol,
     pub arguments: Box<[u32]>,
     pub destination: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExecutableFunction {
+    pub name: String,
+    pub is_async: bool,
+}
+
+/// A validated, provider-neutral view over Typed HIR.
+///
+/// Keeping the checked HIR reference here makes ownership and resource facts
+/// available to every backend while the bytecode encoder progressively replaces
+/// compatibility projections. Backends must accept this type rather than raw AST
+/// or unchecked HIR.
+#[derive(Debug)]
+pub struct ExecutableIr<'hir> {
+    typed_hir: &'hir Hir,
+    functions: Box<[ExecutableFunction]>,
+    external_imports: Box<[ExternalSymbol]>,
+}
+
+impl<'hir> ExecutableIr<'hir> {
+    pub fn from_validated_hir(typed_hir: &'hir Hir) -> Self {
+        let functions = typed_hir
+            .function_bodies()
+            .filter_map(|(name, body)| {
+                body.block.as_ref().map(|_| ExecutableFunction {
+                    name: name.to_string(),
+                    is_async: typed_hir
+                        .resolve_function(None, name)
+                        .is_some_and(|signature| signature.is_async),
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
+        let external_imports = typed_hir
+            .call_sites()
+            .iter()
+            .filter_map(|call| match &call.resolution {
+                CallResolution::Resolved { signature, .. } if signature.is_external => {
+                    let symbol = signature.namespace.as_ref().map_or_else(
+                        || signature.name.clone(),
+                        |namespace| format!("{namespace}.{}", signature.name),
+                    );
+                    ExternalSymbol::new(symbol).ok()
+                }
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+
+        Self {
+            typed_hir,
+            functions,
+            external_imports,
+        }
+    }
+
+    pub fn typed_hir(&self) -> &'hir Hir {
+        self.typed_hir
+    }
+
+    pub fn semantic_types(&self) -> &SemanticTypeFacts {
+        self.typed_hir.semantic_types()
+    }
+
+    pub fn functions(&self) -> &[ExecutableFunction] {
+        &self.functions
+    }
+
+    pub fn function_body(&self, name: &str) -> Option<&HirFunctionBody> {
+        self.typed_hir.function_body(name)
+    }
+
+    pub fn external_imports(&self) -> &[ExternalSymbol] {
+        &self.external_imports
+    }
 }
 
 #[cfg(test)]

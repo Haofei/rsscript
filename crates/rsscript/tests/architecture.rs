@@ -728,8 +728,9 @@ fn executable_backends_consume_validated_frontend_results() {
     );
     let compile_validated = function_source(&reg_vm, "pub fn reg_vm_compile_validated");
     assert!(
-        compile_validated.contains("validated.database().hir()"),
-        "register VM lowering must consume the checked HIR"
+        compile_validated.contains("ExecutableIr::from_validated_hir")
+            && compile_validated.contains("RegUnit::lower"),
+        "register VM lowering must consume checked executable IR"
     );
 
     let rust_lower = read(&root.join("crates/rsscript/src/rust_lower/mod.rs"));
@@ -745,6 +746,31 @@ fn executable_backends_consume_validated_frontend_results() {
         !helpers.contains("parse_source"),
         "lowering declaration projections must reuse parsed semantic inputs"
     );
+    assert!(
+        rust_lower.contains("ExecutableIr::from_validated_hir")
+            && rust_lower.contains("RustLowerer::new_validated"),
+        "Rust AOT lowering must consume the same checked executable IR"
+    );
+
+    let lowering_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-lowering/Cargo.toml")))
+            .expect("lowering manifest should parse");
+    let dependencies = dependency_packages(&lowering_manifest);
+    assert!(dependencies.contains("rsscript-semantics"));
+    for forbidden in [
+        "rsscript",
+        "rsscript-runtime",
+        "rsscript-provider-api",
+        "rss-native-abi",
+        "rss-process-guard",
+        "reir",
+        "vm-jit",
+    ] {
+        assert!(
+            !dependencies.contains(forbidden),
+            "executable IR must not depend on `{forbidden}`"
+        );
+    }
 }
 
 #[test]

@@ -830,10 +830,14 @@ pub(crate) enum MatchFailurePatch {
 }
 
 impl RegUnit {
-    pub(crate) fn lower(hir: &Hir) -> Result<Self, EvalError> {
-        let names = hir
-            .function_bodies()
-            .filter_map(|(name, body)| body.block.as_ref().map(|_| name.to_string()))
+    pub(crate) fn lower(
+        executable: &rsscript_lowering::ExecutableIr<'_>,
+    ) -> Result<Self, EvalError> {
+        let hir = executable.typed_hir();
+        let names = executable
+            .functions()
+            .iter()
+            .map(|function| function.name.clone())
             .collect::<Vec<_>>();
         let function_ids = names
             .iter()

@@ -137,10 +137,6 @@ impl SemanticDatabase {
         &self.hir
     }
 
-    pub(crate) fn types(&self) -> &SemanticTypeFacts {
-        self.types.as_ref()
-    }
-
     pub fn interned_type_count(&self) -> usize {
         self.types.arena().len()
     }
@@ -271,7 +267,7 @@ fn main() -> Unit {
         let validated =
             crate::analyzer::validate_source("structural-types.rss", source).expect("valid source");
         let database = validated.database();
-        let types = database.types();
+        let types = database.hir().semantic_types();
         let first = types
             .functions()
             .find(|(name, _)| *name == "first")

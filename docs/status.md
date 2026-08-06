@@ -22,6 +22,8 @@ parameter effects, package-wide semantic type facts, Typed HIR, call binding, an
 HIR construction are now owned by `rsscript-semantics`. The platform-neutral core
 and standard-package interface sources are owned by the data-only
 `rsscript-interface-catalog`. These are re-exported through the compatibility
-façade while the remaining checks and executable lowering are migrated; the
-runtime still contains concrete host services. The current roadmap prioritizes
-those boundaries over new language, JIT, self-hosting, or package-system scope.
+façade while the remaining checks are migrated. `rsscript-lowering` now owns the
+provider-neutral `ExecutableIr` gate; the VM and Rust AOT path both receive this
+checked representation, and JIT remains downstream of the VM unit. The runtime
+still contains concrete host services. The current roadmap prioritizes those
+boundaries over new language, JIT, self-hosting, or package-system scope.

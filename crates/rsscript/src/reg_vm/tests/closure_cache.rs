@@ -8,7 +8,8 @@ mod closure_cache_tests {
         let mut program = parse_source("test.rss", source);
         crate::syntax::isolate_module_namespaces(&mut program);
         let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
-        RegUnit::lower(&hir).expect("lowering should succeed")
+        RegUnit::lower(&rsscript_lowering::ExecutableIr::from_validated_hir(&hir))
+            .expect("lowering should succeed")
     }
 
     /// A program that never compares closures must leave the gate OFF, so the
@@ -91,4 +92,3 @@ fn main() -> Unit {
         );
     }
 }
-

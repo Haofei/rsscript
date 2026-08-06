@@ -1541,6 +1541,7 @@ dependencies = [
  "rss-testgen",
  "rsscript-abi-model",
  "rsscript-interface-catalog",
+ "rsscript-lowering",
  "rsscript-provider-api",
  "rsscript-runtime",
  "rsscript-semantics",
