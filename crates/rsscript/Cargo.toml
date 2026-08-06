@@ -19,7 +19,6 @@ path = "src/bin/gen-grammar.rs"
 test = false
 
 [dependencies]
-reir = { path = "../reir" }
 rss-native-abi = { path = "../native-abi", features = ["host"] }
 rss-process-guard = { path = "../process-guard" }
 rsscript-abi-model = { path = "../rsscript-abi-model" }
@@ -68,6 +67,8 @@ sha2 = "0.10"
 toml = "0.8"
 
 [dev-dependencies]
+reir = { path = "../reir" }
+rsscript-review-reir = { path = "../../integrations/rsscript-review-reir" }
 sha1 = "0.10"
 proptest = "1"
 rss-testgen = { path = "../rss-testgen" }

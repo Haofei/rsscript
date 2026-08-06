@@ -6,5 +6,3 @@
 
 #[path = "file_upload_benchmark_e2e.rs"]
 mod file_upload_benchmark_e2e;
-#[path = "s3_iam_reir_demo_e2e.rs"]
-mod s3_iam_reir_demo_e2e;

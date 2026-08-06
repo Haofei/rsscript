@@ -301,6 +301,22 @@ fn dependency_packages(manifest: &toml::Value) -> BTreeSet<String> {
     dependencies
 }
 
+fn normal_dependency_packages(manifest: &toml::Value) -> BTreeSet<String> {
+    manifest["dependencies"]
+        .as_table()
+        .into_iter()
+        .flatten()
+        .map(|(name, specification)| {
+            specification
+                .as_table()
+                .and_then(|table| table.get("package"))
+                .and_then(toml::Value::as_str)
+                .unwrap_or(name)
+                .to_string()
+        })
+        .collect()
+}
+
 fn workspace_members(root: &Path) -> Vec<PathBuf> {
     let manifest: toml::Value =
         toml::from_str(&read(&root.join("Cargo.toml"))).expect("workspace Cargo.toml should parse");
@@ -581,6 +597,45 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
             "semantics must not depend on `{forbidden}`"
         );
     }
+}
+
+#[test]
+fn reir_is_a_one_way_optional_integration() {
+    let root = workspace_root();
+    let compiler_manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript/Cargo.toml")))
+            .expect("compiler manifest should parse");
+    let compiler_dependencies = normal_dependency_packages(&compiler_manifest);
+    assert!(
+        !compiler_dependencies.contains("reir")
+            && !compiler_dependencies.contains("rsscript-review-reir"),
+        "normal compiler builds must not depend on review integrations"
+    );
+
+    let integration_manifest: toml::Value = toml::from_str(&read(
+        &root.join("integrations/rsscript-review-reir/Cargo.toml"),
+    ))
+    .expect("REIR integration manifest should parse");
+    let integration_dependencies = normal_dependency_packages(&integration_manifest);
+    assert_eq!(
+        integration_dependencies,
+        BTreeSet::from([
+            "reir".to_string(),
+            "rsscript".to_string(),
+            "serde_json".to_string(),
+        ])
+    );
+
+    let compiler_library = read(&root.join("crates/rsscript/src/lib.rs"));
+    assert!(
+        !compiler_library.contains("reir"),
+        "the compiler façade must not expose REIR formatting APIs"
+    );
+    let package_cli = read(&root.join("crates/rsscript/src/cli/package.rs"));
+    assert!(
+        !package_cli.contains("--reir") && !package_cli.contains("_reir"),
+        "package commands must emit neutral artifacts only"
+    );
 }
 
 #[test]

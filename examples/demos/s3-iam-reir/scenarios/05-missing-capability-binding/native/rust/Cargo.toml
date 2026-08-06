@@ -1,9 +1,0 @@
-[package]
-name = "rss_s3_demo_native"
-version = "0.1.0"
-edition = "2021"
-
-[workspace]
-
-[lib]
-path = "src/lib.rs"

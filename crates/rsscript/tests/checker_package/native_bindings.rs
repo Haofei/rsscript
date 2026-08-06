@@ -207,7 +207,7 @@ fn S3.put_object(body: read String) -> Result<Unit, String>
     let review_json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
     let bundle: reir::Bundle =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR bundle should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -251,95 +251,6 @@ fn S3.put_object(body: read String) -> Result<Unit, String>
 }
 
 #[test]
-fn s3_iam_reir_demo_preserves_call_site_for_missing_permission() {
-    let demo_dir = common::workspace_root().join("examples/demos/s3-iam-reir");
-    let review = review_package_dir(&demo_dir).expect("demo package review should succeed");
-    let bundle: reir::Bundle =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
-            .expect("demo package REIR bundle should parse");
-
-    let required = bundle
-        .facts
-        .iter()
-        .find(|fact| {
-            fact.kind == reir::FactKind::Capability
-                && fact.role == Some(reir::FactRole::Required)
-                && fact.subject.id == "rss-s3-uploader::function::upload_report"
-                && fact.capability.as_ref().is_some_and(|external_binding| {
-                    external_binding.action.as_deref() == Some("s3:PutObject")
-                })
-        })
-        .expect("demo upload_report should require s3:PutObject");
-
-    assert!(bundle.facts.iter().any(|fact| {
-        fact.kind == reir::FactKind::NativeBoundary
-            && fact.subject.id == "rss-s3-uploader::S3.put_object"
-    }));
-    assert!(!bundle.facts.iter().any(|fact| {
-        fact.kind == reir::FactKind::NativeBoundary
-            && fact.subject.id == "rss-s3-uploader::upload_report"
-    }));
-    assert!(required.evidence.iter().any(|evidence| {
-        evidence.kind == reir::EvidenceKind::BindingManifest
-            && evidence.file.as_deref() == Some("src/upload.rss")
-            && evidence.line == Some(8)
-            && evidence
-                .reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("upload_report -> S3.put_object"))
-    }));
-    assert_eq!(review.summary.await_sites, 7);
-}
-
-#[test]
-fn s3_iam_reir_demo_lowers_native_s3_binding_to_runtime_tokio_pending() {
-    let demo_dir = common::workspace_root().join("examples/demos/s3-iam-reir");
-    let input = package_lowering_input(&demo_dir).expect("demo package should lower");
-    let package = lower_sources_to_rust_package_with_options(
-        &input.sources,
-        &input.package.name,
-        &common::runtime_path(),
-        &input.interfaces,
-        &input.native_dependencies,
-    )
-    .expect("demo package source should lower");
-
-    assert_eq!(input.native_dependencies.len(), 1);
-    assert_eq!(
-        input.native_dependencies[0].crate_name,
-        "rss_s3_demo_native"
-    );
-    assert!(
-        input.native_dependencies[0]
-            .bindings
-            .iter()
-            .any(|(symbol, target)| {
-                symbol == "S3.put_object" && target == "rss_s3_demo_native::put_object_start"
-            })
-    );
-    assert!(
-        package
-            .lib_rs
-            .contains("__rsscript_pending_audit = rss_s3_demo_native::put_object_start"),
-        "task_group async-let should construct (not run) the native S3 pending:\n{}",
-        package.lib_rs
-    );
-    assert!(
-        package
-            .lib_rs
-            .contains("rsscript_runtime::pending_try(rss_s3_demo_native::put_object_start(bucket, key, body), move |_rsscript_unit| { rsscript_runtime::pending_ready(Ok(())) })"),
-        "a leaf async fn awaiting the native S3 call should compose it via pending_try:\n{}",
-        package.lib_rs
-    );
-    assert!(
-        package
-            .cargo_toml
-            .contains("\"rss_s3_demo_native\" = { path = "),
-        "generated package should depend on native S3 wrapper"
-    );
-}
-
-#[test]
 fn package_review_reir_records_native_build_time_execution() {
     let temp_dir = common::unique_temp_dir("rsscript-package-review-native-build-time-reir");
     common::write_package_fixture(
@@ -373,7 +284,7 @@ fn Build.run() -> Unit
 
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -439,7 +350,7 @@ fn Feature.value() -> Int
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let lock = lock_package_dir(&temp_dir).expect("package lock should include native metadata");
     let _ = fs::remove_dir_all(&temp_dir);
@@ -1342,7 +1253,7 @@ fn Native.parse(text: read String) -> String
     let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
         .expect("package check JSON should parse");
     let native_path = temp_dir.join("native/rust").display().to_string();
-    let reir_json: Value = serde_json::from_str(&rsscript::format_package_check_reir_json(&check))
+    let reir_json: Value = serde_json::from_str(&format_package_check_reir_json(&check))
         .expect("package check REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 

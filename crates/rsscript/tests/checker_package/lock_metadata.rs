@@ -28,10 +28,10 @@ interface_features = ["posix"]
     let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
         .expect("package check JSON should parse");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let check_reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_check_reir_json(&check))
+        serde_json::from_str(&format_package_check_reir_json(&check))
             .expect("package check REIR JSON should parse");
     let manifest_path = temp_dir.join("rsspkg.toml").display().to_string();
     let _ = fs::remove_dir_all(&temp_dir);
@@ -104,7 +104,7 @@ fn Parallel.sort(values: mut List<Int>) -> Unit
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -144,332 +144,80 @@ fn Parallel.sort(values: mut List<Int>) -> Unit
 }
 
 #[test]
-fn package_review_reir_maps_env_http_time_hash_regex_and_tempdir_facades() {
-    let temp_dir = common::unique_temp_dir("rsscript-package-review-stdlib-facades-reir");
-    common::write_named_package_fixture(
-        &temp_dir,
-        "rss-stdlib-facades",
-        "0.1.0",
-        "",
-        r#"
-resource TempDir
-struct Instant
-struct Regex
-struct RegexError
-
-pub fn Env.get(name: read String) -> Option<fresh String>
-
-pub fn Env.set(name: read String, value: read String) -> Unit
-
-pub fn Http.post_json(url: read Url, body: read String) -> Result<fresh HttpResponse, HttpError>
-
-pub fn Clock.now() -> fresh Instant
-
-pub fn Hash.sha256_string(value: read String) -> fresh String
-
-pub fn Hash.sha256_file(path: read Path) -> Result<fresh String, FileError>
-
-pub fn Regex.compile(pattern: read String) -> Result<fresh Regex, RegexError>
-
-pub fn TempDir.new() -> Result<TempDir, FileError>
-
-pub fn TempDir.path(dir: read TempDir) -> fresh Path
-"#,
-    );
-
-    let review = review_package_dir(&temp_dir).expect("package review should succeed");
-    let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
-            .expect("package review REIR JSON should parse");
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    let facts = reir_json["facts"]
-        .as_array()
-        .expect("REIR facts should be an array");
-    for (name, category) in [
-        ("Env.get", "env.read"),
-        ("Env.set", "env.write"),
-        ("Http.post_json", "network.client"),
-        ("Clock.now", "time.read"),
-        ("Hash.sha256_string", "compute.hash"),
-        ("Hash.sha256_file", "compute.hash"),
-        ("Hash.sha256_file", "filesystem.read"),
-        ("Regex.compile", "compute.regex"),
-        ("TempDir.new", "filesystem.write"),
-        ("TempDir.path", "filesystem.read"),
-    ] {
-        assert!(
-            facts.iter().any(|fact| {
-                fact["kind"] == "external_binding"
-                    && fact["subject"]["id"].as_str().is_some_and(|id| {
-                        id == format!("rss-stdlib-facades::public::function::{name}")
-                    })
-                    && fact["external_binding"]["category"] == category
-                    && fact["external_binding"]["service"] == "stdlib"
-                    && fact["evidence"][0]["kind"] == "package_metadata"
-            }),
-            "missing stdlib external_binding fact for {name} -> {category}: {facts:?}"
-        );
-    }
-
-    let slices = reir_json["slices"]
-        .as_array()
-        .expect("REIR slices should be an array");
-    for kind in [
-        "env_slice",
-        "network_slice",
-        "time_slice",
-        "compute_slice",
-        "filesystem_slice",
-    ] {
-        assert!(
-            slices.iter().any(|slice| slice["kind"] == kind),
-            "missing REIR slice {kind}: {slices:?}"
-        );
-    }
-}
-
-#[test]
-fn package_metadata_dry_run_reports_review_metadata_without_writing() {
+fn package_metadata_dry_run_reports_neutral_review_without_writing() {
     let temp_dir = common::unique_temp_dir("rsscript-package-metadata-dry-run");
     common::write_named_package_fixture(
         &temp_dir,
         "rss-metadata",
         "0.1.0",
-        r#"[features]
-fast = []
-"#,
-        r#"pub fn add(left: Int, right: Int) -> Int
-"#,
+        "[features]\nfast = []\n",
+        "pub fn add(left: Int, right: Int) -> Int\n",
     );
 
     let metadata = package_metadata(&temp_dir, true).expect("metadata dry-run should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_metadata_json(&metadata))
         .expect("metadata JSON should parse");
     let metadata_path_exists = temp_dir.join("review").join("package-review.json").exists();
-    let reir_path_exists = temp_dir
-        .join("review")
-        .join("reir")
-        .join("rsscript.json")
-        .exists();
     let _ = fs::remove_dir_all(&temp_dir);
 
     assert!(metadata.ok);
     assert!(!metadata_path_exists);
-    assert!(!reir_path_exists);
     assert_eq!(json["dry_run"], true);
     assert_eq!(json["written"], false);
     assert_eq!(json["verified"], false);
-    assert_eq!(json["mismatches"], serde_json::json!([]));
-    assert!(
-        json["metadata_path"]
-            .as_str()
-            .is_some_and(|path| path.ends_with("review/package-review.json"))
-    );
-    assert!(
-        json["reir_path"]
-            .as_str()
-            .is_some_and(|path| path.ends_with("review/reir/rsscript.json"))
-    );
+    assert!(json.get("reir_path").is_none());
     assert_eq!(json["metadata"]["schema"], "rsscript.package_review.v1");
     assert_eq!(json["metadata"]["package"]["name"], "rss-metadata");
-    assert_eq!(json["metadata"]["features"], serde_json::json!(["fast"]));
 }
 
 #[test]
-fn package_metadata_writes_reir_review_artifact() {
-    let temp_dir = common::unique_temp_dir("rsscript-package-metadata-reir");
+fn package_metadata_writes_only_neutral_review_artifact() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-metadata-write");
     common::write_named_package_fixture(
         &temp_dir,
-        "rss-metadata-reir",
+        "rss-metadata",
         "0.1.0",
         "",
-        r#"
-pub fn NativeBridge.run(value: read Int) -> Int
-"#,
+        "pub fn add(left: Int, right: Int) -> Int\n",
     );
 
-    let metadata = package_metadata(&temp_dir, false).expect("metadata write should succeed");
-    let package_review_json =
-        fs::read_to_string(temp_dir.join("review").join("package-review.json"))
-            .expect("package review metadata should be written");
-    let reir_json = fs::read_to_string(temp_dir.join("review").join("reir").join("rsscript.json"))
-        .expect("REIR metadata should be written");
-    let package_review: Value =
-        serde_json::from_str(&package_review_json).expect("package review should parse");
-    let reir: Value = serde_json::from_str(&reir_json).expect("REIR bundle should parse");
+    let report = package_metadata(&temp_dir, false).expect("metadata generation should succeed");
+    let review_path = temp_dir.join("review").join("package-review.json");
+    let legacy_reir_path = temp_dir.join("review").join("reir").join("rsscript.json");
+    assert!(report.ok && report.written);
+    assert!(review_path.is_file());
+    assert!(!legacy_reir_path.exists());
+
+    let verified = package_metadata_verify(&temp_dir).expect("neutral metadata should verify");
+    assert!(verified.ok && verified.verified);
     let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(metadata.written);
-    assert!(!metadata.verified);
-    assert_eq!(package_review["package"]["name"], "rss-metadata-reir");
-    assert_eq!(reir["schema"], "reir.bundle.v0.2");
-    assert!(reir["facts"].as_array().is_some_and(|facts| {
-        facts.iter().any(|fact| fact["kind"] == "package_risk")
-            && facts.iter().any(|fact| fact["kind"] == "native_boundary")
-    }));
 }
 
 #[test]
-fn package_metadata_verify_accepts_current_review_artifacts() {
-    let temp_dir = common::unique_temp_dir("rsscript-package-metadata-verify-current");
+fn package_metadata_verify_reports_stale_neutral_review() {
+    let temp_dir = common::unique_temp_dir("rsscript-package-metadata-stale");
     common::write_named_package_fixture(
         &temp_dir,
-        "rss-metadata-verify-current",
+        "rss-metadata",
         "0.1.0",
         "",
-        r#"pub fn add(left: Int, right: Int) -> Int
-"#,
+        "pub fn add(left: Int, right: Int) -> Int\n",
     );
-
-    package_metadata(&temp_dir, false).expect("metadata write should succeed");
-    let verified =
-        package_metadata_verify(&temp_dir).expect("metadata verify should recompute package");
-    let json: Value = serde_json::from_str(&rsscript::format_package_metadata_json(&verified))
-        .expect("verified metadata JSON should parse");
-    let _ = fs::remove_dir_all(&temp_dir);
-
-    assert!(verified.ok);
-    assert!(verified.verified);
-    assert!(!verified.written);
-    assert_eq!(json["verified"], true);
-    assert_eq!(json["mismatches"], serde_json::json!([]));
-}
-
-#[test]
-fn package_metadata_verify_reports_missing_or_stale_artifacts() {
-    let temp_dir = common::unique_temp_dir("rsscript-package-metadata-verify-stale");
-    common::write_named_package_fixture(
-        &temp_dir,
-        "rss-metadata-verify-stale",
-        "0.1.0",
-        "",
-        r#"pub fn add(left: Int, right: Int) -> Int
-"#,
-    );
-
-    package_metadata(&temp_dir, false).expect("metadata write should succeed");
+    package_metadata(&temp_dir, false).expect("metadata generation should succeed");
     fs::write(
         temp_dir.join("review").join("package-review.json"),
-        "{\"schema\":\"rsscript.package_review.v1\",\"stale\":true}",
+        "{}\n",
     )
-    .expect("package review artifact should be made stale");
-    fs::remove_file(temp_dir.join("review").join("reir").join("rsscript.json"))
-        .expect("REIR artifact should be removed");
+    .expect("review artifact should be replaced");
 
-    let verified =
-        package_metadata_verify(&temp_dir).expect("metadata verify should report mismatches");
-    let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_metadata_reir_json(&verified))
-            .expect("metadata REIR JSON should parse");
-    let mismatch_kinds = verified
-        .mismatches
-        .iter()
-        .map(|mismatch| mismatch.kind.as_str())
-        .collect::<Vec<_>>();
-    let stale_mismatch = verified
-        .mismatches
-        .iter()
-        .find(|mismatch| mismatch.kind == "stale")
-        .expect("stale package review metadata mismatch should be reported");
-    let missing_mismatch = verified
-        .mismatches
-        .iter()
-        .find(|mismatch| mismatch.kind == "missing")
-        .expect("missing REIR metadata mismatch should be reported");
-    let _ = fs::remove_dir_all(&temp_dir);
-
+    let verified = package_metadata_verify(&temp_dir).expect("verification should complete");
     assert!(!verified.ok);
-    assert!(!verified.verified);
-    assert!(!verified.written);
-    assert!(mismatch_kinds.contains(&"stale"));
-    assert!(mismatch_kinds.contains(&"missing"));
-    assert_eq!(stale_mismatch.artifact, "package_review");
-    assert!(stale_mismatch.expected_sha256.starts_with("sha256:"));
-    assert!(
-        stale_mismatch
-            .actual_sha256
-            .as_deref()
-            .is_some_and(|hash| hash.starts_with("sha256:"))
-    );
-    assert_eq!(missing_mismatch.artifact, "reir_bundle");
-    assert!(missing_mismatch.expected_sha256.starts_with("sha256:"));
-    assert_eq!(missing_mismatch.actual_sha256, None);
-    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
-        facts.iter().any(|fact| {
-            fact["kind"] == "supply_chain"
-                && fact["id"]
-                    .as_str()
-                    .is_some_and(|id| id.ends_with(".reir_artifact"))
-                && fact["value"] == "unknown"
-                && fact["evidence"][0]["kind"] == "package_metadata"
-                && fact["evidence"][0]["json_pointer"] == "/reir_path"
-        }) && facts.iter().any(|fact| {
-            fact["kind"] == "policy_result"
-                && fact["id"]
-                    .as_str()
-                    .is_some_and(|id| id.contains(".mismatch."))
-                && fact["evidence"][0]["json_pointer"]
-                    .as_str()
-                    .is_some_and(|pointer| pointer.starts_with("/mismatches/"))
-        })
-    }));
-    assert!(reir_json["facts"].as_array().is_some_and(|facts| {
-        facts.iter().any(|fact| {
-            fact["kind"] == "policy_result"
-                && fact["id"].as_str().is_some_and(|id| {
-                    id.contains(".mismatch.") && id.contains("review_package_review_json")
-                })
-                && fact["evidence"][0]["value"].as_str().is_some_and(|value| {
-                    value.contains("expected=sha256:") && value.contains("actual=sha256:")
-                })
-                && fact["evidence"][0]["file"] == stale_mismatch.path
-                && fact["evidence"][0]["reason"]
-                    .as_str()
-                    .is_some_and(|reason| {
-                        reason.contains("metadata package_review stale")
-                            && reason.contains("expected sha256:")
-                            && reason.contains("actual sha256:")
-                    })
-                && fact["unknown_reason"].as_str().is_some_and(|reason| {
-                    reason.contains("metadata artifact")
-                        && reason.contains("stale")
-                        && reason.contains("expected sha256:")
-                        && reason.contains("actual sha256:")
-                })
-        }) && facts.iter().any(|fact| {
-            fact["kind"] == "policy_result"
-                && fact["id"]
-                    .as_str()
-                    .is_some_and(|id| id.contains(".mismatch.") && id.contains("rsscript_json"))
-                && fact["evidence"][0]["value"].as_str().is_some_and(|value| {
-                    value.contains("review/reir/rsscript.json")
-                        && value.contains("expected=sha256:")
-                        && !value.contains("actual=sha256:")
-                })
-                && fact["evidence"][0]["file"] == missing_mismatch.path
-                && fact["evidence"][0]["reason"]
-                    .as_str()
-                    .is_some_and(|reason| {
-                        reason.contains("metadata reir_bundle missing")
-                            && reason.contains("expected sha256:")
-                            && !reason.contains("actual sha256:")
-                    })
-        })
-    }));
-    assert!(reir_json["slices"].as_array().is_some_and(|slices| {
-        slices.iter().any(|slice| {
-            slice["kind"] == "package_risk_slice"
-                && slice["facts"].as_array().is_some_and(|facts| {
-                    facts.iter().any(|fact| {
-                        fact.as_str()
-                            .is_some_and(|id| id.ends_with(".reir_artifact"))
-                    })
-                })
-        })
-    }));
+    assert!(verified
+        .mismatches
+        .iter()
+        .any(|mismatch| mismatch.artifact == "package_review" && mismatch.kind == "stale"));
+    let _ = fs::remove_dir_all(&temp_dir);
 }
-
 #[test]
 fn package_metadata_reports_unknown_review_risk_not_ok() {
     let temp_dir = common::unique_temp_dir("rsscript-package-metadata-unknown-risk");
@@ -792,9 +540,8 @@ rss-dep = {{ path = "{}", features = ["fast"] }}
     );
 
     let lock_path = root_dir.join("rsspkg.lock");
-    let reir_json: Value = serde_json::from_str(
-        &rsscript::format_package_lock_reir_json_with_path(&lock, &lock_path),
-    )
+    let reir_json: Value =
+        serde_json::from_str(&format_package_lock_reir_json(&lock, Some(&lock_path)))
     .expect("package lock REIR JSON should parse");
     assert!(reir_json["facts"].as_array().is_some_and(|facts| {
         facts.iter().any(|fact| {
@@ -1008,8 +755,7 @@ fast = []
         diff_package_locks(&old_lock_path, &new_lock_path).expect("lock diff should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_lock_diff_json(&diff))
         .expect("lock diff JSON should parse");
-    let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_lock_diff_reir_json(&diff))
+    let reir_json: Value = serde_json::from_str(&format_package_lock_diff_reir_json(&diff))
             .expect("lock diff REIR JSON should parse");
     let _ = fs::remove_dir_all(&package_dir);
     let _ = fs::remove_dir_all(&lock_dir);
@@ -1111,7 +857,7 @@ pub fn add(left: Int, right: Int) -> Result<Int, MathError>
     let check = check_package_dir(&temp_dir).expect("package check should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_check_json(&check))
         .expect("package check JSON should parse");
-    let reir_json: Value = serde_json::from_str(&rsscript::format_package_check_reir_json(&check))
+    let reir_json: Value = serde_json::from_str(&format_package_check_reir_json(&check))
         .expect("package check REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -1629,7 +1375,7 @@ rss-missing = {{ path = "../missing" }}
     let tree = package_tree(&root_dir).expect("package tree should succeed");
     let json: Value = serde_json::from_str(&rsscript::format_package_tree_json(&tree))
         .expect("package tree JSON should parse");
-    let reir_json: Value = serde_json::from_str(&rsscript::format_package_tree_reir_json(&tree))
+    let reir_json: Value = serde_json::from_str(&format_package_tree_reir_json(&tree))
         .expect("package tree REIR JSON should parse");
     let human = rsscript::format_package_tree_human(&tree);
     let _ = fs::remove_dir_all(&root_dir);
@@ -2098,7 +1844,7 @@ platform-env = {{ package = "posix-env", version = "0.1.0" }}
 
 #[test]
 fn package_metadata_fails_closed_on_error_diagnostics() {
-    // A package with a parse error must not write authoritative review/REIR
+    // A package with a parse error must not write authoritative review
     // artifacts that downstream gates would consume as evidence.
     let dir = common::unique_temp_dir("rsscript-package-metadata-failclosed");
     fs::create_dir_all(dir.join("interface")).expect("interface dir");
@@ -2115,7 +1861,7 @@ fn package_metadata_fails_closed_on_error_diagnostics() {
     .expect("interface");
 
     let report = package_metadata(&dir, false).expect("metadata should produce a report");
-    let reir_written = dir.join("review/reir/rsscript.json").exists();
+    let review_written = dir.join("review/package-review.json").exists();
     let _ = fs::remove_dir_all(&dir);
 
     assert!(!report.ok, "metadata of an erroring package must not be ok");
@@ -2124,8 +1870,8 @@ fn package_metadata_fails_closed_on_error_diagnostics() {
         "authoritative artifacts must not be written"
     );
     assert!(
-        !reir_written,
-        "REIR bundle must not be written for an erroring package"
+        !review_written,
+        "review bundle must not be written for an erroring package"
     );
     assert!(
         report

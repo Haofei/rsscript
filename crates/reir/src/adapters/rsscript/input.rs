@@ -336,6 +336,7 @@ pub struct RsScriptPackageMetadataInput {
     #[serde(default)]
     pub package_dir: String,
     pub metadata_path: String,
+    #[serde(default)]
     pub reir_path: String,
     #[serde(default)]
     pub dry_run: bool,

@@ -1,6 +1,0 @@
-
-pub async fn S3.put_object(
-    bucket: String,
-    key: String,
-    body: String,
-) -> Result<Unit, String>

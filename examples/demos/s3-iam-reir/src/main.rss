@@ -1,8 +1,0 @@
-
-fn main() -> Result<Unit, String> {
-    Reports.upload_batch(
-        bucket: "reports-prod",
-        day: "2026-05-31",
-    )?
-    return Ok(Unit)
-}

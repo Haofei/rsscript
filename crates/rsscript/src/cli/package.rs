@@ -6,10 +6,9 @@ use rsscript::{
     ArtifactStore, analyze_package_dir, check_package_dir, diff_package_dirs,
     format_diagnostics_human, format_package_analysis_json, format_package_check_human,
     format_package_check_json, format_package_diff_human, format_package_diff_json,
-    format_package_lock_json, format_package_lock_reir_json, format_package_lock_toml,
-    format_package_metadata_human, format_package_metadata_json, format_package_metadata_reir_json,
-    format_package_review_human, format_package_review_json, format_package_review_markdown,
-    format_package_tree_human, format_package_tree_json, format_package_tree_reir_json,
+    format_package_lock_json, format_package_lock_toml, format_package_metadata_human,
+    format_package_metadata_json, format_package_review_human, format_package_review_json,
+    format_package_review_markdown, format_package_tree_human, format_package_tree_json,
     lock_package_dir, package_metadata, package_metadata_verify, package_tree, review_package_dir,
 };
 
@@ -38,15 +37,14 @@ pub(crate) fn run_package(args: &[String]) -> ExitCode {
             old_path,
             new_path,
         } => run_package_diff(json, old_path, new_path),
-        PackageCommand::Lock { json, reir, path } => run_package_lock(json, reir, path),
-        PackageCommand::Tree { json, reir, path } => run_package_tree(json, reir, path),
+        PackageCommand::Lock { json, path } => run_package_lock(json, path),
+        PackageCommand::Tree { json, path } => run_package_tree(json, path),
         PackageCommand::Metadata {
             json,
-            reir,
             verify,
             dry_run,
             path,
-        } => run_package_metadata(json, reir, verify, dry_run, path),
+        } => run_package_metadata(json, verify, dry_run, path),
         PackageCommand::Add { dependency } => run_package_add(dependency),
     }
 }
@@ -76,17 +74,14 @@ pub(crate) enum PackageCommand<'a> {
     },
     Lock {
         json: bool,
-        reir: bool,
         path: &'a str,
     },
     Tree {
         json: bool,
-        reir: bool,
         path: &'a str,
     },
     Metadata {
         json: bool,
-        reir: bool,
         verify: bool,
         dry_run: bool,
         path: &'a str,
@@ -99,7 +94,6 @@ pub(crate) enum PackageCommand<'a> {
 fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
     let mut json = false;
     let mut markdown = false;
-    let mut reir = false;
     let mut verify = false;
     let mut dry_run = false;
     let mut words = Vec::new();
@@ -111,8 +105,6 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
             json = true;
         } else if arg == "--markdown" {
             markdown = true;
-        } else if arg == "--reir" {
-            reir = true;
         } else if arg == "--verify" {
             verify = true;
         } else if arg == "--dry-run" {
@@ -130,9 +122,6 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
         index += 1;
     }
 
-    if json && reir {
-        return Err("`--json` and `--reir` cannot be combined.".to_owned());
-    }
     if json && matches!(words.as_slice(), ["add"]) {
         return Err("`--json` is not supported for `rss pkg add`.".to_owned());
     }
@@ -142,12 +131,6 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
     if verify && !matches!(words.as_slice(), ["metadata"]) {
         return Err("`--verify` is only supported for `rss pkg metadata`.".to_owned());
     }
-    if reir && !matches!(words.as_slice(), ["lock"] | ["tree"] | ["metadata"]) {
-        return Err(
-            "`--reir` is only supported for `rss pkg lock`, `tree`, or `metadata`.".to_owned(),
-        );
-    }
-
     match (words.as_slice(), paths.as_slice()) {
         ([], []) => Ok(PackageCommand::Check { json, path: "." }),
         ([], [path]) => Ok(PackageCommand::Check { json, path }),
@@ -170,28 +153,18 @@ fn parse_package_args(args: &[String]) -> Result<PackageCommand<'_>, String> {
         }),
         (["ci"], []) => Ok(PackageCommand::Ci { json, path: "." }),
         (["ci"], [path]) => Ok(PackageCommand::Ci { json, path }),
-        (["lock"], []) => Ok(PackageCommand::Lock {
-            json,
-            reir,
-            path: ".",
-        }),
-        (["lock"], [path]) => Ok(PackageCommand::Lock { json, reir, path }),
-        (["tree"], []) => Ok(PackageCommand::Tree {
-            json,
-            reir,
-            path: ".",
-        }),
-        (["tree"], [path]) => Ok(PackageCommand::Tree { json, reir, path }),
+        (["lock"], []) => Ok(PackageCommand::Lock { json, path: "." }),
+        (["lock"], [path]) => Ok(PackageCommand::Lock { json, path }),
+        (["tree"], []) => Ok(PackageCommand::Tree { json, path: "." }),
+        (["tree"], [path]) => Ok(PackageCommand::Tree { json, path }),
         (["metadata"], []) => Ok(PackageCommand::Metadata {
             json,
-            reir,
             verify,
             dry_run,
             path: ".",
         }),
         (["metadata"], [path]) => Ok(PackageCommand::Metadata {
             json,
-            reir,
             verify,
             dry_run,
             path,
@@ -383,7 +356,7 @@ fn run_package_diff(json: bool, old_path: &str, new_path: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_package_lock(json: bool, reir: bool, path: &str) -> ExitCode {
+fn run_package_lock(json: bool, path: &str) -> ExitCode {
     let store = match ArtifactStore::open(Path::new(path)) {
         Ok(store) => store,
         Err(error) => {
@@ -405,9 +378,7 @@ fn run_package_lock(json: bool, reir: bool, path: &str) -> ExitCode {
         return ExitCode::from(2);
     }
 
-    if reir {
-        println!("{}", format_package_lock_reir_json(&lock));
-    } else if json {
+    if json {
         println!("{}", format_package_lock_json(&lock));
     } else {
         print!("{toml}");
@@ -415,7 +386,7 @@ fn run_package_lock(json: bool, reir: bool, path: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_package_tree(json: bool, reir: bool, path: &str) -> ExitCode {
+fn run_package_tree(json: bool, path: &str) -> ExitCode {
     let tree = match package_tree(Path::new(path)) {
         Ok(tree) => tree,
         Err(error) => {
@@ -424,9 +395,7 @@ fn run_package_tree(json: bool, reir: bool, path: &str) -> ExitCode {
         }
     };
 
-    if reir {
-        println!("{}", format_package_tree_reir_json(&tree));
-    } else if json {
+    if json {
         println!("{}", format_package_tree_json(&tree));
     } else {
         print!("{}", format_package_tree_human(&tree));
@@ -434,13 +403,7 @@ fn run_package_tree(json: bool, reir: bool, path: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn run_package_metadata(
-    json: bool,
-    reir: bool,
-    verify: bool,
-    dry_run: bool,
-    path: &str,
-) -> ExitCode {
+fn run_package_metadata(json: bool, verify: bool, dry_run: bool, path: &str) -> ExitCode {
     let report = if verify {
         package_metadata_verify(Path::new(path))
     } else {
@@ -454,9 +417,7 @@ fn run_package_metadata(
         }
     };
 
-    if reir {
-        println!("{}", format_package_metadata_reir_json(&report));
-    } else if json {
+    if json {
         println!("{}", format_package_metadata_json(&report));
     } else {
         print!("{}", format_package_metadata_human(&report));
@@ -669,17 +630,17 @@ mod tests {
     fn parse_package_args_accepts_lock_tree_and_metadata() {
         let values = args(&["lock", "pkgdir"]);
         match super::parse_package_args(&values).expect("lock should parse") {
-            super::PackageCommand::Lock { json, reir, path } => {
-                assert!(!json && !reir);
+            super::PackageCommand::Lock { json, path } => {
+                assert!(!json);
                 assert_eq!(path, "pkgdir");
             }
             other => panic!("unexpected package command: {other:?}"),
         }
 
-        let values = args(&["tree", "--reir", "pkgdir"]);
-        match super::parse_package_args(&values).expect("tree --reir should parse") {
-            super::PackageCommand::Tree { reir, path, .. } => {
-                assert!(reir);
+        let values = args(&["tree", "--json", "pkgdir"]);
+        match super::parse_package_args(&values).expect("tree --json should parse") {
+            super::PackageCommand::Tree { json, path } => {
+                assert!(json);
                 assert_eq!(path, "pkgdir");
             }
             other => panic!("unexpected package command: {other:?}"),
@@ -712,21 +673,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_package_args_restricts_reir_and_verify_to_their_commands() {
-        assert_eq!(
-            super::parse_package_args(&args(&["review", "--reir", "p"]))
-                .expect_err("reir on review should fail"),
-            "`--reir` is only supported for `rss pkg lock`, `tree`, or `metadata`."
-        );
+    fn parse_package_args_restricts_verify_to_metadata() {
         assert_eq!(
             super::parse_package_args(&args(&["lock", "--verify", "p"]))
                 .expect_err("verify on lock should fail"),
             "`--verify` is only supported for `rss pkg metadata`."
-        );
-        assert_eq!(
-            super::parse_package_args(&args(&["tree", "--json", "--reir", "p"]))
-                .expect_err("json+reir should fail"),
-            "`--json` and `--reir` cannot be combined."
         );
     }
 

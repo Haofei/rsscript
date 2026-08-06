@@ -1,5 +1,0 @@
-
-fn Db.query(sql: String) -> String
-
-
-fn Net.fetch(url: String) -> String

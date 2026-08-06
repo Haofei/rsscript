@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-use super::format::format_package_review_reir_json;
 use super::native::{
     native_binding_interface_sources, package_external_bindings, package_native_rust_dependencies,
 };
@@ -39,19 +38,14 @@ fn package_metadata_inner(
     };
     let review = review_package_dir(package_dir)?;
     let metadata_path = package_dir.join("review").join("package-review.json");
-    let reir_path = package_dir
-        .join("review")
-        .join("reir")
-        .join("rsscript.json");
     let metadata = package_review_metadata_from_review(&review);
     let metadata_json = serde_json::to_string_pretty(&metadata)
         .expect("package metadata JSON serialization should not fail");
-    let reir_json = format_package_review_reir_json(&review);
     let mut mismatches = Vec::new();
 
     // Fail closed: a package with error diagnostics must not produce authoritative
-    // review/REIR artifacts on disk — downstream gates consume those facts and
-    // would treat invalid source as evidence.
+    // review artifacts on disk. Downstream tools must not treat invalid source as
+    // evidence.
     let error_count = review.summary.errors;
     let blocked_by_errors = error_count > 0;
 
@@ -62,21 +56,15 @@ fn package_metadata_inner(
             &metadata_json,
             &mut mismatches,
         );
-        verify_artifact("reir_bundle", &reir_path, &reir_json, &mut mismatches);
     } else if !dry_run && !blocked_by_errors {
         let store = store
             .as_ref()
             .expect("non-dry metadata generation has an artifact store");
-        store.create_directory_all("review/reir", "package review artifact directory")?;
+        store.create_directory_all("review", "package review artifact directory")?;
         store.write_atomic(
             "review/package-review.json",
             metadata_json.as_bytes(),
             "package review metadata",
-        )?;
-        store.write_atomic(
-            "review/reir/rsscript.json",
-            reir_json.as_bytes(),
-            "package review REIR",
         )?;
     }
 
@@ -84,7 +72,7 @@ fn package_metadata_inner(
     let mut reasons = review.reasons;
     if blocked_by_errors && !dry_run && !verify {
         reasons.push(format!(
-            "refused to write authoritative review/REIR artifacts: package has {error_count} \
+            "refused to write authoritative review artifacts: package has {error_count} \
              error diagnostic(s); fix them and re-run"
         ));
     }
@@ -94,7 +82,6 @@ fn package_metadata_inner(
         package: review.package,
         package_dir: package_dir.display().to_string(),
         metadata_path: metadata_path.display().to_string(),
-        reir_path: reir_path.display().to_string(),
         dry_run,
         written: wrote,
         verified: verify && mismatches.is_empty(),

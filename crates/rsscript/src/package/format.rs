@@ -1,5 +1,3 @@
-use std::path::Path;
-
 use crate::package::{
     PackageAnalysis, PackageCheck, PackageDependencyKind, PackageDiff, PackageLock,
     PackageLockDiff, PackageMetadataReport, PackageReview, PackageReviewAwaitBoundary,
@@ -16,40 +14,8 @@ pub fn format_package_analysis_json(analysis: &PackageAnalysis) -> String {
     serde_json::to_string(analysis).expect("package analysis JSON serialization should not fail")
 }
 
-pub fn format_package_review_reir_json(review: &PackageReview) -> String {
-    let package_review_json = format_package_review_json(review);
-    let bundle =
-        reir::adapters::rsscript::rsscript_json_to_bundle(None, Some(&package_review_json), None)
-            .expect("package review JSON should convert to REIR");
-    serde_json::to_string(&bundle).expect("REIR package review JSON serialization should not fail")
-}
-
-pub fn format_package_review_reir_diff_json(
-    baseline: &PackageReview,
-    current: &PackageReview,
-) -> String {
-    let baseline_json = format_package_review_json(baseline);
-    let current_json = format_package_review_json(current);
-    let baseline_bundle =
-        reir::adapters::rsscript::rsscript_json_to_bundle(None, Some(&baseline_json), None)
-            .expect("baseline package review JSON should convert to REIR");
-    let current_bundle =
-        reir::adapters::rsscript::rsscript_json_to_bundle(None, Some(&current_json), None)
-            .expect("current package review JSON should convert to REIR");
-    let diff = reir::compute_diff(&baseline_bundle, &current_bundle);
-    serde_json::to_string(&diff).expect("REIR package diff JSON serialization should not fail")
-}
-
 pub fn format_package_metadata_json(metadata: &PackageMetadataReport) -> String {
     serde_json::to_string(metadata).expect("package metadata JSON serialization should not fail")
-}
-
-pub fn format_package_metadata_reir_json(metadata: &PackageMetadataReport) -> String {
-    let metadata_json = format_package_metadata_json(metadata);
-    let bundle = reir::adapters::rsscript::rsscript_metadata_json_to_bundle(&metadata_json)
-        .expect("package metadata JSON should convert to REIR");
-    serde_json::to_string(&bundle)
-        .expect("REIR package metadata JSON serialization should not fail")
 }
 
 pub fn format_package_diff_json(diff: &PackageDiff) -> String {
@@ -60,49 +26,12 @@ pub fn format_package_check_json(check: &PackageCheck) -> String {
     serde_json::to_string(check).expect("package check JSON serialization should not fail")
 }
 
-pub fn format_package_check_reir_json(check: &PackageCheck) -> String {
-    let check_json = format_package_check_json(check);
-    let bundle = reir::adapters::rsscript::rsscript_check_json_to_bundle(&check_json)
-        .expect("package check JSON should convert to REIR");
-    serde_json::to_string(&bundle).expect("REIR package check JSON serialization should not fail")
-}
-
 pub fn format_package_tree_json(tree: &PackageTree) -> String {
     serde_json::to_string(tree).expect("package tree JSON serialization should not fail")
 }
 
-pub fn format_package_tree_reir_json(tree: &PackageTree) -> String {
-    let tree_json = format_package_tree_json(tree);
-    let bundle = reir::adapters::rsscript::rsscript_tree_json_to_bundle(&tree_json)
-        .expect("package tree JSON should convert to REIR");
-    serde_json::to_string(&bundle).expect("REIR package tree JSON serialization should not fail")
-}
-
 pub fn format_package_lock_json(lock: &PackageLock) -> String {
     serde_json::to_string(lock).expect("package lock JSON serialization should not fail")
-}
-
-pub fn format_package_lock_reir_json(lock: &PackageLock) -> String {
-    let lock_json = format_package_lock_json(lock);
-    let bundle = reir::adapters::rsscript::rsscript_lock_json_to_bundle(&lock_json)
-        .expect("package lock JSON should convert to REIR");
-    serde_json::to_string(&bundle).expect("REIR package lock JSON serialization should not fail")
-}
-
-pub fn format_package_lock_reir_json_with_path(lock: &PackageLock, lockfile_path: &Path) -> String {
-    let mut value =
-        serde_json::to_value(lock).expect("package lock JSON serialization should not fail");
-    if let Some(object) = value.as_object_mut() {
-        object.insert(
-            "lockfile_path".to_string(),
-            lockfile_path.display().to_string().into(),
-        );
-    }
-    let lock_json =
-        serde_json::to_string(&value).expect("package lock JSON serialization should not fail");
-    let bundle = reir::adapters::rsscript::rsscript_lock_json_to_bundle(&lock_json)
-        .expect("package lock JSON should convert to REIR");
-    serde_json::to_string(&bundle).expect("REIR package lock JSON serialization should not fail")
 }
 
 pub fn format_package_lock_toml(lock: &PackageLock) -> String {
@@ -111,14 +40,6 @@ pub fn format_package_lock_toml(lock: &PackageLock) -> String {
 
 pub fn format_package_lock_diff_json(diff: &PackageLockDiff) -> String {
     serde_json::to_string(diff).expect("package lock diff JSON serialization should not fail")
-}
-
-pub fn format_package_lock_diff_reir_json(diff: &PackageLockDiff) -> String {
-    let diff_json = format_package_lock_diff_json(diff);
-    let bundle = reir::adapters::rsscript::rsscript_lock_diff_json_to_bundle(&diff_json)
-        .expect("package lock diff JSON should convert to REIR");
-    serde_json::to_string(&bundle)
-        .expect("REIR package lock diff JSON serialization should not fail")
 }
 
 pub fn format_package_review_human(review: &PackageReview) -> String {
@@ -349,7 +270,6 @@ pub fn format_package_metadata_human(metadata: &PackageMetadataReport) -> String
         package_risk_label(metadata.risk)
     ));
     output.push_str(&format!("metadata path: {}\n", metadata.metadata_path));
-    output.push_str(&format!("reir path: {}\n", metadata.reir_path));
     if !metadata.mismatches.is_empty() {
         output.push_str("metadata mismatches:\n");
         for mismatch in &metadata.mismatches {

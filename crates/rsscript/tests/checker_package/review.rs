@@ -249,7 +249,7 @@ native-tls = ["native"]
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -340,7 +340,7 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let human = rsscript::format_package_review_human(&review);
     let _ = fs::remove_dir_all(&temp_dir);
@@ -436,7 +436,7 @@ pub async fn Api.run(client: read Client) -> Result<Unit, TimerError> {
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let human = rsscript::format_package_review_human(&review);
     let _ = fs::remove_dir_all(&temp_dir);
@@ -560,7 +560,7 @@ pub fn Process.run_stdout(
 
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -627,7 +627,7 @@ fn S3.put_object(body: read String) -> Result<Unit, String>
 
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let bundle: reir::Bundle =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR bundle should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -773,7 +773,7 @@ pub fn Args.get_or_default(
 
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -814,7 +814,7 @@ pub fn Random.bytes(len: Int) -> fresh Bytes
 
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -854,7 +854,7 @@ pub fn Log.write(message: read String) -> Unit
 
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -889,7 +889,7 @@ pub fn OS.close(fd: Fd) -> Unit
 
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -924,7 +924,7 @@ pub fn Csv.read_into(
 
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -976,7 +976,7 @@ pub fn Yaml.parse_file(path: read Path) -> Result<fresh JsonValue, JsonError>
 
     let review = review_package_dir(&temp_dir).expect("package review should succeed");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 

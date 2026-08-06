@@ -550,7 +550,7 @@ impl Writer for BufferWriter {
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let _ = fs::remove_dir_all(&temp_dir);
 
@@ -859,7 +859,7 @@ fn package_review_marks_broken_rssi_contract_diagnostics_unknown() {
     let json: Value = serde_json::from_str(&rsscript::format_package_review_json(&review))
         .expect("package review JSON should parse");
     let reir_json: Value =
-        serde_json::from_str(&rsscript::format_package_review_reir_json(&review))
+        serde_json::from_str(&rsscript_review_reir::review_bundle_json(&review))
             .expect("package review REIR JSON should parse");
     let human = rsscript::format_package_review_human(&review);
     let _ = fs::remove_dir_all(&temp_dir);

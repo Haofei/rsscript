@@ -1,5 +1,0 @@
-
-pub async fn DB.insert_event(
-    table: String,
-    payload: String,
-) -> Result<Unit, String>

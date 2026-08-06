@@ -236,7 +236,6 @@ pub struct PackageMetadataReport {
     pub package: PackageIdentity,
     pub package_dir: String,
     pub metadata_path: String,
-    pub reir_path: String,
     pub dry_run: bool,
     pub written: bool,
     pub verified: bool,

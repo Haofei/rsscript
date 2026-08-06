@@ -14,8 +14,11 @@ The platform-neutral language cut is active:
   output uses the distinct `rsscript.package_review.v1` schema.
 
 The physical dependency cut is not complete: the main crate still contains the
-analyzer orchestration, package tooling, VM, AOT lowering, native loading, and
-review adapters. The lexer, parser, source AST, syntax desugarings, spans, and
+analyzer orchestration, package tooling, VM, AOT lowering, and native loading.
+REIR conversion now lives in the one-way `integrations/rsscript-review-reir`
+adapter and is absent from normal compiler dependencies, public compiler APIs,
+CLI package output, and package metadata writes. The retired policy-oriented
+examples and action have been removed. The lexer, parser, source AST, syntax desugarings, spans, and
 bounded parse budget are now owned by the independent `rsscript-syntax` and
 `rsscript-work-budget` crates. Structural types, type interning, substitution,
 parameter effects, package-wide semantic type facts, Typed HIR, call binding, and

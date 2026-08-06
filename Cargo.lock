@@ -1543,6 +1543,7 @@ dependencies = [
  "rsscript-interface-catalog",
  "rsscript-lowering",
  "rsscript-provider-api",
+ "rsscript-review-reir",
  "rsscript-runtime",
  "rsscript-semantics",
  "rsscript-syntax",
@@ -1587,6 +1588,15 @@ version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
  "serde",
+]
+
+[[package]]
+name = "rsscript-review-reir"
+version = "0.1.0"
+dependencies = [
+ "reir",
+ "rsscript",
+ "serde_json",
 ]
 
 [[package]]

@@ -448,13 +448,6 @@ crates/rsscript/tests/hostile-malformed/unbalanced-parens.rss
 crates/rsscript/tests/hostile-malformed/unicode-bidi.rss
 crates/rsscript/tests/hostile-malformed/unterminated-multiline.rss
 crates/rsscript/tests/hostile-malformed/unterminated-string.rss
-examples/demos/s3-iam-reir/scenarios/00-fixed/src/upload.rss
-examples/demos/s3-iam-reir/scenarios/03-code-adds-delete/src/upload.rss
-examples/demos/s3-iam-reir/scenarios/04-native-risk/src/upload.rss
-examples/demos/s3-iam-reir/scenarios/05-missing-capability-binding/src/upload.rss
-examples/demos/s3-iam-reir/scenarios/06-postgres-write/src/audit.rss
-examples/demos/s3-iam-reir/src/main.rss
-examples/demos/s3-iam-reir/src/upload.rss
 examples/scripts/async/cancellable_sleep.rss
 examples/scripts/async/cancellation.rss
 examples/scripts/async/channel_pipeline.rss

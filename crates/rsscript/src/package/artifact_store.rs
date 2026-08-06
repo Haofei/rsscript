@@ -552,11 +552,11 @@ mod tests {
         let store = ArtifactStore::open(&root).expect("artifact store");
 
         let error = store
-            .create_directory_all("review/reir", "review artifact directory")
+            .create_directory_all("review/evidence", "review artifact directory")
             .expect_err("symlink directory must fail");
 
         assert!(error.contains("confined"), "{error}");
-        assert!(!outside.join("reir").exists());
+        assert!(!outside.join("evidence").exists());
         drop(store);
         fs::remove_dir_all(root).expect("fixture cleanup");
         fs::remove_dir_all(outside).expect("outside cleanup");
