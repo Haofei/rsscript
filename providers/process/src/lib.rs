@@ -4,8 +4,12 @@ use rsscript_provider_api::{NativeInterpreterFn, NativeValue, ProviderError, Pro
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 include!(concat!(env!("OUT_DIR"), "/provider_contract.rs"));
+
+const MAX_CAPTURE_BYTES: usize = 16 * 1024 * 1024;
 
 pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>> {
     let function = descriptor().functions.into_iter().next().unwrap();
@@ -45,9 +49,37 @@ pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterprete
                 let stderr = child.child_mut().stderr.take().ok_or_else(|| {
                     ProviderError::internal("guarded child stderr pipe is unavailable")
                 })?;
-                let stdout_reader = std::thread::spawn(move || read_pipe(stdout));
-                let stderr_reader = std::thread::spawn(move || read_pipe(stderr));
+                let capture_limit = context
+                    .remaining_byte_budget
+                    .into_iter()
+                    .chain(context.remaining_output_budget)
+                    .chain([MAX_CAPTURE_BYTES])
+                    .min()
+                    .unwrap_or(MAX_CAPTURE_BYTES);
+                let captured = Arc::new(AtomicUsize::new(0));
+                let capture_exceeded = Arc::new(AtomicBool::new(false));
+                let stdout_reader = spawn_pipe_reader(
+                    stdout,
+                    Arc::clone(&captured),
+                    Arc::clone(&capture_exceeded),
+                    capture_limit,
+                );
+                let stderr_reader = spawn_pipe_reader(
+                    stderr,
+                    Arc::clone(&captured),
+                    Arc::clone(&capture_exceeded),
+                    capture_limit,
+                );
                 loop {
+                    if capture_exceeded.load(Ordering::Acquire) {
+                        let _ = child.terminate();
+                        let _ = child.wait();
+                        let _ = stdout_reader.join();
+                        let _ = stderr_reader.join();
+                        return Err(ProviderError::resource_exhausted(format!(
+                            "process output exceeds {capture_limit} bytes"
+                        )));
+                    }
                     if let Err(cancelled) = context.check_cancelled() {
                         let _ = child.terminate();
                         let _ = child.wait();
@@ -91,20 +123,49 @@ pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterprete
     )])
 }
 
-fn read_pipe(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
+fn spawn_pipe_reader(
+    pipe: impl Read + Send + 'static,
+    captured: Arc<AtomicUsize>,
+    exceeded: Arc<AtomicBool>,
+    limit: usize,
+) -> std::thread::JoinHandle<Result<Vec<u8>, ProviderError>> {
+    std::thread::spawn(move || read_pipe_bounded(pipe, &captured, &exceeded, limit))
+}
+
+fn read_pipe_bounded(
+    mut pipe: impl Read,
+    captured: &AtomicUsize,
+    exceeded: &AtomicBool,
+    limit: usize,
+) -> Result<Vec<u8>, ProviderError> {
     let mut bytes = Vec::new();
-    pipe.read_to_end(&mut bytes)?;
+    let mut chunk = [0u8; 8192];
+    loop {
+        let read = pipe
+            .read(&mut chunk)
+            .map_err(|error| ProviderError::from_io("read process pipe", error))?;
+        if read == 0 {
+            break;
+        }
+        let previous = captured.fetch_add(read, Ordering::AcqRel);
+        if read > limit.saturating_sub(previous) {
+            exceeded.store(true, Ordering::Release);
+            return Err(ProviderError::resource_exhausted(format!(
+                "process output exceeds {limit} bytes"
+            )));
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
     Ok(bytes)
 }
 
 fn join_pipe(
-    reader: std::thread::JoinHandle<std::io::Result<Vec<u8>>>,
+    reader: std::thread::JoinHandle<Result<Vec<u8>, ProviderError>>,
     name: &str,
 ) -> Result<Vec<u8>, ProviderError> {
     reader
         .join()
         .map_err(|_| ProviderError::internal(format!("{name} reader panicked")))?
-        .map_err(|error| ProviderError::from_io(&format!("read process {name}"), error))
 }
 #[cfg(test)]
 mod tests {
@@ -151,5 +212,34 @@ mod tests {
             rsscript_provider_api::ProviderErrorCode::Cancelled
         );
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn combined_process_output_obeys_runtime_budget() {
+        let function = functions().into_values().next().unwrap();
+        let mut context = rsscript_provider_api::ProviderCallContext {
+            remaining_byte_budget: Some(32),
+            remaining_output_budget: Some(64),
+            blocking_allowed: true,
+            ..rsscript_provider_api::ProviderCallContext::default()
+        };
+        let error = function
+            .callable
+            .call_with_context(
+                &mut context,
+                vec![
+                    NativeValue::String("sh".into()),
+                    NativeValue::List(vec![
+                        NativeValue::String("-c".into()),
+                        NativeValue::String("printf '%0200d' 0".into()),
+                    ]),
+                ],
+            )
+            .unwrap_err();
+        assert_eq!(
+            error.code,
+            rsscript_provider_api::ProviderErrorCode::ResourceExhausted
+        );
     }
 }
