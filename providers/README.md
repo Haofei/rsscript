@@ -3,7 +3,7 @@
 These crates are composition-root packages. Each one implements explicit
 `rsscript-provider-api` symbols and may access only its named host service:
 
-- `fs`: filesystem text I/O;
+- `fs`: text I/O beneath a host-selected `RootedFsProvider` directory;
 - `env`: environment lookup;
 - `process`: guarded child-process execution;
 - `http`: synchronous HTTP GET;

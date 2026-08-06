@@ -18,5 +18,8 @@ Run from the repository root:
 cargo run -p embedded-report-pipeline
 ```
 
-The real-filesystem run is isolated in a temporary directory and cleans it up.
+The real-filesystem Provider is explicitly rooted at a temporary directory and
+rejects absolute, parent, and symlink escape paths. Rooting narrows filesystem
+authority but is not a process-isolation boundary. The example cleans the
+directory up after the run.
 The printed SHA-256 identifies the provider-neutral bytecode artifact.

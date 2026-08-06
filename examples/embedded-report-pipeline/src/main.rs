@@ -115,17 +115,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let demo_dir = std::env::temp_dir().join(format!("rsscript-report-{}", std::process::id()));
     fs::create_dir_all(&demo_dir)?;
     fs::write(demo_dir.join("input.csv"), "name,total\nbob,7\n")?;
-    let original_dir = std::env::current_dir()?;
-    std::env::set_current_dir(&demo_dir)?;
+    let disk_provider = rsscript_provider_fs::RootedFsProvider::new(&demo_dir)?;
     let production_result = Runtime::new(
         registry(
-            rsscript_provider_fs::functions(),
+            disk_provider.functions(),
             rsscript_provider_log::stderr_functions(),
         ),
         RunLimits::bounded(),
     )
     .run(&package, Vec::<String>::new());
-    std::env::set_current_dir(original_dir)?;
     production_result?;
     let disk_report = fs::read_to_string(demo_dir.join("report.txt"))?;
     fs::remove_dir_all(&demo_dir)?;

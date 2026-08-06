@@ -70,3 +70,8 @@ leak into the provider contract.
 See `providers/fs` for a minimal concrete implementation and
 `examples/embedded-report-pipeline` for memory and real-filesystem providers
 running the same compiled artifact.
+
+Host authority belongs to Provider instances. For example,
+`RootedFsProvider::new(root)` resolves every script path below `root` and
+rejects traversal and symlink escapes without changing the process current
+directory. This is authority narrowing, not a language permission system.
