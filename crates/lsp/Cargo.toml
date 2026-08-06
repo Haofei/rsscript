@@ -2,7 +2,7 @@
 name = "rss-lsp"
 version = "0.1.0"
 edition = "2024"
-description = "Language server for RsScript (.rss / .rssi)"
+description = "Language server for RSScript source and interface files"
 license = "MIT OR Apache-2.0"
 
 [[bin]]

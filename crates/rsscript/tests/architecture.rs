@@ -56,18 +56,52 @@ fn intrinsic_catalog_is_the_only_generated_registry_source() {
     let catalog = read(&root.join("crates/rsscript/intrinsics.toml"));
     let catalog: toml::Value = toml::from_str(&catalog).expect("intrinsic catalog should parse");
     assert_eq!(catalog["schema"].as_integer(), Some(1));
+    let intrinsics = catalog["intrinsic"]
+        .as_array()
+        .expect("intrinsic catalog must contain an intrinsic array");
+    let bindings = catalog["binding"]
+        .as_array()
+        .expect("intrinsic catalog must contain a binding array");
     assert!(
-        catalog["intrinsic"]
-            .as_array()
-            .is_some_and(|entries| entries.len() >= 500),
-        "the catalog must retain internal VM-only intrinsic identities"
+        !intrinsics.is_empty(),
+        "the intrinsic catalog must not be empty"
     );
     assert!(
-        catalog["binding"]
-            .as_array()
-            .is_some_and(|entries| entries.len() >= 500),
-        "the catalog must retain the public runtime and VM surface"
+        !bindings.is_empty(),
+        "the binding catalog must not be empty"
     );
+
+    let mut intrinsic_ids = BTreeSet::new();
+    for entry in intrinsics {
+        let id = entry["id"]
+            .as_str()
+            .expect("every intrinsic entry must have a string id");
+        assert!(intrinsic_ids.insert(id), "duplicate intrinsic id `{id}`");
+    }
+
+    let mut binding_names = BTreeSet::new();
+    for entry in bindings {
+        let namespace = entry["namespace"]
+            .as_str()
+            .expect("every binding entry must have a string namespace");
+        let name = entry["name"]
+            .as_str()
+            .expect("every binding entry must have a string name");
+        let qualified_name = format!("{namespace}.{name}");
+        assert!(
+            binding_names.insert(qualified_name.clone()),
+            "duplicate binding name `{qualified_name}`"
+        );
+        if let Some(vm_id) = entry.get("vm_id") {
+            let vm_id = vm_id
+                .as_str()
+                .expect("a binding vm_id must be a string when present");
+            assert!(
+                intrinsic_ids.contains(vm_id),
+                "binding `{qualified_name}` references orphan intrinsic `{vm_id}`"
+            );
+        }
+    }
 }
 
 #[test]

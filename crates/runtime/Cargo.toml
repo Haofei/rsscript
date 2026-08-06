@@ -2,7 +2,7 @@
 name = "rsscript-runtime"
 version = "0.1.0"
 edition = "2024"
-description = "Runtime hooks for Reviewable System Script Rust lowering"
+description = "Execution runtime and compatibility hooks for RSScript"
 license = "MIT OR Apache-2.0"
 
 [lib]

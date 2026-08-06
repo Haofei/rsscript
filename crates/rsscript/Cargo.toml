@@ -2,7 +2,7 @@
 name = "rsscript"
 version = "0.1.0"
 edition = "2024"
-description = "Reviewable System Script v0.7 review-first front-end checker and Rust lowering prototype"
+description = "Compiler and embedding facade for the RSScript constrained scripting language"
 license = "MIT OR Apache-2.0"
 autotests = false
 

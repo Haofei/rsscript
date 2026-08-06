@@ -12,5 +12,7 @@ The platform-neutral language cut is active:
 - execution/deployment policy types and legacy API facade are removed;
 - package analysis uses the breaking `rsscript.package_analysis.v1` schema.
 
-Runtime/JIT optimization work continues independently of these language and host
-boundaries.
+The physical dependency cut is not complete: the main crate still contains the
+frontend, package tooling, VM, AOT lowering, native loading, and review adapters;
+the runtime still contains concrete host services. The current roadmap prioritizes
+those boundaries over new language, JIT, self-hosting, or package-system scope.

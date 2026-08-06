@@ -17,7 +17,10 @@ When documents disagree, use this order:
 
 | Document | Purpose |
 | --- | --- |
-| [support.md](support.md) | Supported, Experimental, and unsupported-for-untrusted surfaces; deployment profiles and CI contract |
+| [product.md](product.md) | Product users, Core workflow, and invariants |
+| [threat-model.md](threat-model.md) | Trust, isolation, provider, and untrusted-input boundaries |
+| [feature-matrix.md](feature-matrix.md) | Core, Experimental, Integration, and Research maturity |
+| [support.md](support.md) | Supported and unsupported execution surfaces |
 | [status.md](status.md) | Current closure state, accepted limitations, and open engineering debt |
 | [roadmap.md](roadmap.md) | Prioritized future work and explicit freezes |
 | [package.md](package.md) | Implemented package artifacts, commands, review model, and trust boundary |
@@ -41,6 +44,7 @@ Do not rename them without updating those tests.
 
 - Do not add dated status reports, completion ledgers, or a second roadmap.
 - Update `status.md` when a boundary closes or a limitation changes.
+- Keep product claims consistent with `product.md` and `threat-model.md`.
 - Update `roadmap.md` only for work that remains relevant to the current support
   policy.
 - Put benchmark measurements beside the benchmark data, not in roadmap prose.
