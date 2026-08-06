@@ -326,6 +326,21 @@ impl Hir {
         self.sum_variant_fields.get(variant_name).map(Vec::as_slice)
     }
 
+    /// All sum variants and their owner types, for provider-neutral executable
+    /// projection. Backends must not infer this table from observed call sites.
+    pub fn sum_variants(&self) -> impl Iterator<Item = (&str, &str, &[FieldInfo])> {
+        self.sum_variant_types.iter().map(|(variant, owner)| {
+            (
+                variant.as_str(),
+                owner.as_str(),
+                self.sum_variant_fields
+                    .get(variant)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            )
+        })
+    }
+
     pub fn fields_named(&self, field_name: &str) -> impl Iterator<Item = &FieldInfo> {
         self.fields_by_name
             .get(field_name)

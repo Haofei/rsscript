@@ -724,7 +724,7 @@ impl RegLowerer<'_> {
                     self.patch_jump(jump, end);
                 }
             }
-            HirStmt::Break(_) => {
+            HirStmt::Break => {
                 if self.loop_stack.is_empty() {
                     return Err(EvalError::Runtime(
                         "reg VM break used outside of a loop.".to_string(),
@@ -743,7 +743,7 @@ impl RegLowerer<'_> {
                     .breaks
                     .push(jump);
             }
-            HirStmt::Continue(_) => {
+            HirStmt::Continue => {
                 if self.loop_stack.is_empty() {
                     return Err(EvalError::Runtime(
                         "reg VM continue used outside of a loop.".to_string(),
@@ -1137,7 +1137,6 @@ impl RegLowerer<'_> {
                 value: (*receiver.value).clone(),
                 parameter_index: Some(0),
                 evaluation_index: 0,
-                span: crate::diagnostic::Span::default(),
             });
             synthetic_args.extend(args.iter().cloned().map(|mut arg| {
                 arg.evaluation_index += 1;
@@ -2177,7 +2176,7 @@ impl RegLowerer<'_> {
                 self.emit(RegInstr::Move { dst, src });
                 Ok(Vec::new())
             }
-            MatchPattern::Wildcard(_) => Ok(Vec::new()),
+            MatchPattern::Wildcard => Ok(Vec::new()),
             MatchPattern::Variant { name, bindings, .. } if name == "Some" => {
                 // `Some(x)` on `Option<T>` unwraps the payload `T` (arg 0).
                 let payload_ty = nth_type_arg(scrutinee_ty, 0);
@@ -2228,7 +2227,7 @@ impl RegLowerer<'_> {
         match pattern {
             MatchPattern::Binding { .. }
             | MatchPattern::Literal { .. }
-            | MatchPattern::Wildcard(_) => true,
+            | MatchPattern::Wildcard => true,
             MatchPattern::Variant { name, bindings, .. }
                 if matches!(name.as_str(), "Some" | "None" | "Ok" | "Err") =>
             {
@@ -2285,7 +2284,7 @@ impl RegLowerer<'_> {
             }
             let field_ty = owner
                 .and_then(|info| info.fields.get(&field.name))
-                .map(|info| info.ty.to_string());
+                .map(|info| info.type_name.clone());
             let field_reg = self.temp();
             self.emit(RegInstr::GetField {
                 dst: field_reg,
@@ -2509,7 +2508,7 @@ impl RegLowerer<'_> {
                     // taint the scrutinee (the read-param `Option<Scalar>`).
                     self.note_scalar(dst, payload_ty);
                 }
-                MatchPattern::Wildcard(_) => {}
+                MatchPattern::Wildcard => {}
                 _ => {
                     let payload = self.temp();
                     self.emit(RegInstr::UnwrapSome { dst: payload, src });
@@ -2557,7 +2556,7 @@ impl RegLowerer<'_> {
                     // Scalar `Ok`/`Err` payload ⇒ bit-copy ⇒ don't taint scrutinee.
                     self.note_scalar(dst, payload_ty);
                 }
-                MatchPattern::Wildcard(_) => {}
+                MatchPattern::Wildcard => {}
                 _ => {
                     let payload = self.temp();
                     self.emit(RegInstr::UnwrapVariantValue {
@@ -2607,7 +2606,7 @@ impl RegLowerer<'_> {
             // native scalar-replacement pass can still dissolve the variant.
             [binding] => {
                 // Single-field variant: the payload type is the sole field's type.
-                let payload_ty = field_infos.first().map(|field| field.ty.to_string());
+                let payload_ty = field_infos.first().map(|field| field.type_name.clone());
                 match binding {
                     MatchPattern::Binding { name, .. } => {
                         let dst = self.local(name);
@@ -2618,7 +2617,7 @@ impl RegLowerer<'_> {
                         });
                         self.note_scalar(dst, payload_ty.as_deref());
                     }
-                    MatchPattern::Wildcard(_) => {}
+                    MatchPattern::Wildcard => {}
                     _ => {
                         let payload = self.temp();
                         self.emit(RegInstr::UnwrapVariantValue {
@@ -2642,10 +2641,10 @@ impl RegLowerer<'_> {
                 for (index, (binding, field_name)) in
                     bindings.iter().zip(field_names.iter()).enumerate()
                 {
-                    if matches!(binding, MatchPattern::Wildcard(_)) {
+                    if matches!(binding, MatchPattern::Wildcard) {
                         continue;
                     }
-                    let field_ty = field_infos.get(index).map(|field| field.ty.to_string());
+                    let field_ty = field_infos.get(index).map(|field| field.type_name.clone());
                     let field_reg = self.temp();
                     self.emit(RegInstr::GetField {
                         dst: field_reg,
@@ -2700,7 +2699,7 @@ impl RegLowerer<'_> {
             let field_ty = field_infos
                 .iter()
                 .find(|info| info.name == field.name)
-                .map(|info| info.ty.to_string());
+                .map(|info| info.type_name.clone());
             let field_reg = self.temp();
             self.emit(RegInstr::GetField {
                 dst: field_reg,
@@ -2744,11 +2743,7 @@ impl RegLowerer<'_> {
         }
     }
 
-    fn map_get_match(
-        &mut self,
-        value: &HirExpr,
-        arms: &[crate::hir::HirMatchArm],
-    ) -> Result<bool, EvalError> {
+    fn map_get_match(&mut self, value: &HirExpr, arms: &[HirMatchArm]) -> Result<bool, EvalError> {
         let HirExpr::Call {
             callee: Callee::Qualified { namespace, name },
             args,
@@ -2857,11 +2852,7 @@ impl RegLowerer<'_> {
         Ok(true)
     }
 
-    fn struct_match(
-        &mut self,
-        value: &HirExpr,
-        arms: &[crate::hir::HirMatchArm],
-    ) -> Result<bool, EvalError> {
+    fn struct_match(&mut self, value: &HirExpr, arms: &[HirMatchArm]) -> Result<bool, EvalError> {
         let [arm] = arms else {
             return Ok(false);
         };

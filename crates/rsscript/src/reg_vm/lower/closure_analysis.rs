@@ -2,7 +2,7 @@ use super::super::*;
 pub(super) fn closure_capture_names(
     body: &HirBlock,
     params: &[String],
-    explicit_captures: &[crate::hir::HirClosureCapture],
+    explicit_captures: &[rsscript_lowering::ExecutableClosureCapture],
     outer_locals: &HashMap<String, Reg>,
 ) -> Vec<String> {
     let mut names = explicit_captures
@@ -116,7 +116,7 @@ pub(super) fn collect_free_locals_stmt(
             collect_free_locals_expr(value, bound, free);
         }
         HirStmt::Expr(value) => collect_free_locals_expr(value, bound, free),
-        HirStmt::Break(_) | HirStmt::Continue(_) | HirStmt::Unknown(_) => {}
+        HirStmt::Break | HirStmt::Continue | HirStmt::Unknown => {}
     }
 }
 
@@ -202,6 +202,6 @@ pub(super) fn collect_free_locals_expr(
         HirExpr::Number { .. }
         | HirExpr::String { .. }
         | HirExpr::Char { .. }
-        | HirExpr::Unknown(_) => {}
+        | HirExpr::Unknown => {}
     }
 }

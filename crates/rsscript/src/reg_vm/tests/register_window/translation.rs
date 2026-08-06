@@ -1013,7 +1013,7 @@ fn main() -> Unit {
 "#;
         let mut program = parse_source("test.rss", source);
         crate::syntax::isolate_module_namespaces(&mut program);
-        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let hir = crate::hir::Hir::from_syntax_with_standard_package_interfaces(&program);
         let unit = RegUnit::lower(&rsscript_lowering::ExecutableIr::from_validated_hir(&hir))
             .expect("lowering should succeed");
         let hot = unit.function_ids["hot"];
@@ -1106,7 +1106,7 @@ fn main() -> Unit {
 "#;
         let mut program = parse_source("test.rss", source);
         crate::syntax::isolate_module_namespaces(&mut program);
-        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let hir = crate::hir::Hir::from_syntax_with_standard_package_interfaces(&program);
         let unit = RegUnit::lower(&rsscript_lowering::ExecutableIr::from_validated_hir(&hir))
             .expect("lowering should succeed");
         let hot = unit.function_ids["hot"];
@@ -1167,7 +1167,7 @@ fn main() -> Unit {
 "#;
         let mut program = parse_source("test.rss", source);
         crate::syntax::isolate_module_namespaces(&mut program);
-        let hir = Hir::from_syntax_with_standard_package_interfaces(&program);
+        let hir = crate::hir::Hir::from_syntax_with_standard_package_interfaces(&program);
         let unit = RegUnit::lower(&rsscript_lowering::ExecutableIr::from_validated_hir(&hir))
             .expect("lowering should succeed");
         let hot = unit.function_ids["hot"];

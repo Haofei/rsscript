@@ -52,14 +52,9 @@ use crate::eval_types::{
     EvalError, EvalOutput, ExternalFunction, NativeValue, ProviderCallContext,
     ProviderResourceTable,
 };
-use crate::hir::{
-    Hir, HirBlock, HirCallArg, HirCallReceiver, HirExpr, HirMatchArm, HirStmt, HirTypeKind,
-    ParamEffect,
-};
 use crate::interfaces::builtin_interfaces;
 use crate::package::prepare_package_for_execution;
 use crate::semantic::ValidatedProgram;
-use crate::syntax::ast::{BinaryOp, Callee, MatchFieldPattern, MatchLiteral, MatchPattern};
 #[cfg(test)]
 use crate::syntax::parse_source;
 #[cfg(feature = "native-jit")]
@@ -72,6 +67,12 @@ use crate::text_util::{
 use crate::vm_value::clone_value_map_preserving_capacity;
 use crate::vm_value::{
     TypeLayout, TypedVec, ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue, intern_layout,
+};
+use rsscript_lowering::{
+    BinaryOp, Callee, ExecutableBlock as HirBlock, ExecutableCallArg as HirCallArg,
+    ExecutableCallReceiver as HirCallReceiver, ExecutableExpr as HirExpr,
+    ExecutableMatchArm as HirMatchArm, ExecutableProgram as Hir, ExecutableStmt as HirStmt,
+    ExecutableTypeKind as HirTypeKind, MatchFieldPattern, MatchLiteral, MatchPattern, ParamEffect,
 };
 
 /// Intern the layout for a struct/variant whose canonical field order is given by
@@ -841,10 +842,10 @@ pub fn reg_vm_compile_source(file: &str, source: &str) -> Result<RegVmExecutable
 pub fn reg_vm_compile_validated(
     validated: &ValidatedProgram,
 ) -> Result<RegVmExecutable, EvalError> {
-    let lowered = RegUnit::lower(&rsscript_lowering::ExecutableIr::from_validated_hir(
-        validated.database().hir(),
-    ))?;
-    let verified = bytecode::encode_and_verify(&lowered, validated)?;
+    let executable =
+        rsscript_lowering::ExecutableIr::from_validated_hir(validated.database().hir());
+    let lowered = RegUnit::lower(&executable)?;
+    let verified = bytecode::encode_and_verify(&lowered, validated, &executable)?;
     let (artifact, unit) = verified.into_parts();
     Ok(RegVmExecutable {
         unit: Rc::new(unit),
@@ -1553,7 +1554,7 @@ fn reg_expr_type_name(expr: &HirExpr) -> Option<&str> {
         | HirExpr::Match { type_name, .. }
         | HirExpr::MapLiteral { type_name, .. } => type_name.as_deref(),
         HirExpr::Field { access, .. } => access.type_name.as_deref(),
-        HirExpr::Number { value, .. } => Some(crate::hir::number_literal_type_name(value)),
+        HirExpr::Number { value, .. } => Some(if value.contains('.') { "Float" } else { "Int" }),
         HirExpr::String { .. } => Some("String"),
         HirExpr::Char { .. } => Some("Char"),
         HirExpr::ObjectLiteral { type_name, .. } | HirExpr::ArrayLiteral { type_name, .. } => {
@@ -1562,7 +1563,7 @@ fn reg_expr_type_name(expr: &HirExpr) -> Option<&str> {
         HirExpr::Binary { .. }
         | HirExpr::Index { .. }
         | HirExpr::Closure { .. }
-        | HirExpr::Unknown(_) => None,
+        | HirExpr::Unknown => None,
     }
 }
 
@@ -1605,7 +1606,7 @@ fn type_name_may_contain_fn(type_name: &str, hir: &Hir) -> bool {
             let result = info
                 .fields_ordered
                 .iter()
-                .any(|field| go(&field.ty.to_string(), hir, visited));
+                .any(|field| go(&field.type_name, hir, visited));
             visited.pop();
             return result;
         }

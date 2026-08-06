@@ -846,10 +846,9 @@ pub(crate) enum MatchFailurePatch {
 
 impl RegUnit {
     pub(crate) fn lower(executable: &rsscript_lowering::ExecutableIr) -> Result<Self, EvalError> {
-        let hir = executable.typed_hir();
+        let hir = executable.program();
         let names = executable
             .functions()
-            .iter()
             .map(|function| function.name.clone())
             .collect::<Vec<_>>();
         let function_ids = names
@@ -867,27 +866,20 @@ impl RegUnit {
         // function (and drop-body) lowering below.
         let closure_identity_observable = std::cell::Cell::new(false);
         for (function_id, name) in names.into_iter().enumerate() {
-            let body = hir
-                .function_body(&name)
-                .and_then(|body| body.block.as_ref())
-                .ok_or_else(|| {
-                    EvalError::Runtime(format!("reg VM cannot find function `{name}`."))
-                })?;
-            let signature = hir.resolve_function(None, &name).ok_or_else(|| {
-                EvalError::Runtime(format!("reg VM cannot resolve function `{name}`."))
+            let function = hir.function(&name).ok_or_else(|| {
+                EvalError::Runtime(format!("reg VM cannot find function `{name}`."))
             })?;
+            let body = &function.body;
+            let signature = &function.signature;
             native_signatures.insert(
                 name.clone(),
                 RegNativeSignature {
                     params: signature
                         .params
                         .iter()
-                        .map(|param| hir.canonical_type_name(&param.ty.to_string()))
+                        .map(|param| param.type_name.clone())
                         .collect(),
-                    return_type: signature
-                        .return_ty
-                        .as_ref()
-                        .map(|ty| hir.canonical_type_name(&ty.to_string())),
+                    return_type: signature.return_type.clone(),
                 },
             );
             let mut lowerer = RegLowerer {
@@ -921,7 +913,7 @@ impl RegUnit {
                 // `&mut`), so mutations must propagate. Non-mut heap/value params
                 // keep copy isolation; primitive scalars are already independent.
                 if param.effect != Some(ParamEffect::Mut)
-                    && !scalar_param_type_needs_no_deep_copy(&param.ty.to_string())
+                    && !scalar_param_type_needs_no_deep_copy(&param.type_name)
                 {
                     lowerer.emit(RegInstr::DeepCopy { reg });
                 }
@@ -1036,7 +1028,7 @@ impl RegUnit {
                                 .iter()
                                 .map(|field| RegFieldInfo {
                                     name: field.name.clone(),
-                                    type_name: field.ty.to_string(),
+                                    type_name: field.type_name.clone(),
                                 })
                                 .collect(),
                         },

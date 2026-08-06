@@ -1669,7 +1669,9 @@ dependencies = [
 name = "rsscript-lowering"
 version = "0.1.0"
 dependencies = [
+ "rsscript-abi-model",
  "rsscript-semantics",
+ "rsscript-syntax",
 ]
 
 [[package]]

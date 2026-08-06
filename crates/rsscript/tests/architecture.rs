@@ -1395,6 +1395,22 @@ fn executable_backends_consume_validated_frontend_results() {
             && compile_validated.contains("RegUnit::lower"),
         "register VM lowering must consume checked executable IR"
     );
+    let vm_sources = [
+        read(&root.join("crates/rsscript/src/reg_vm/mod.rs")),
+        read(&root.join("crates/rsscript/src/reg_vm/lower.rs")),
+        read(&root.join("crates/rsscript/src/reg_vm/model.rs")),
+        read(&root.join("crates/rsscript/src/reg_vm/bytecode.rs")),
+    ]
+    .join("\n");
+    for forbidden in ["crate::hir", "crate::syntax::ast", "typed_hir()"] {
+        assert!(
+            !vm_sources.contains(forbidden),
+            "VM instruction lowering must not consume frontend representation `{forbidden}`"
+        );
+    }
+    let lowering = read(&root.join("crates/rsscript-lowering/src/lib.rs"));
+    assert!(lowering.contains("program: ExecutableProgram"));
+    assert!(!lowering.contains("pub fn typed_hir"));
 
     let rust_lower = read(&root.join("crates/rsscript/src/rust_lower/mod.rs"));
     let lower_source = function_source(&rust_lower, "pub fn lower_source_to_rust_with_map");

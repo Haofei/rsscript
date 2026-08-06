@@ -1,10 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
-use rsscript_abi_model::{
-    DataEffect, ExternalImport, ExternalSymbol, FunctionSignature, ParameterSignature,
-    RUNTIME_ABI_VERSION,
-};
+use rsscript_abi_model::{ExternalImport, RUNTIME_ABI_VERSION};
 use rsscript_bytecode::{BytecodeArtifact, BytecodeError, BytecodeVerifier};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -131,10 +128,11 @@ impl WireUnit {
 pub(super) fn encode_and_verify(
     unit: &RegUnit,
     validated: &ValidatedProgram,
+    executable: &rsscript_lowering::ExecutableIr,
 ) -> Result<VerifiedRegBytecode, EvalError> {
     let payload = serde_json::to_vec(&WireUnit::from(unit))
         .map_err(|error| EvalError::Runtime(format!("cannot encode VM bytecode: {error}")))?;
-    let imports = external_imports(unit, validated);
+    let imports = external_imports(unit, executable);
     let artifact = BytecodeArtifact::new(
         env!("CARGO_PKG_VERSION"),
         RUNTIME_ABI_VERSION,
@@ -431,7 +429,10 @@ fn verify_target(function: usize, ip: usize, code_len: usize, target: usize) -> 
     }
 }
 
-fn external_imports(unit: &RegUnit, validated: &ValidatedProgram) -> Vec<ExternalImport> {
+fn external_imports(
+    unit: &RegUnit,
+    executable: &rsscript_lowering::ExecutableIr,
+) -> Vec<ExternalImport> {
     let called = unit
         .functions
         .iter()
@@ -441,46 +442,13 @@ fn external_imports(unit: &RegUnit, validated: &ValidatedProgram) -> Vec<Externa
             _ => None,
         })
         .collect::<BTreeSet<_>>();
-    validated
-        .database()
-        .hir()
-        .call_sites()
+    executable
+        .external_imports()
         .iter()
-        .filter_map(|call| match &call.resolution {
-            crate::hir::CallResolution::Resolved { signature, .. } if signature.is_external => {
-                let symbol = signature.namespace.as_ref().map_or_else(
-                    || signature.name.clone(),
-                    |namespace| format!("{namespace}.{}", signature.name),
-                );
-                let symbol = ExternalSymbol::new(symbol).ok()?;
-                let function_signature = FunctionSignature {
-                    parameters: signature
-                        .params
-                        .iter()
-                        .map(|parameter| ParameterSignature {
-                            name: parameter.name.clone(),
-                            effect: match parameter.effect.unwrap_or(ParamEffect::Read) {
-                                ParamEffect::Read => DataEffect::Read,
-                                ParamEffect::Mut => DataEffect::Mut,
-                                ParamEffect::Take => DataEffect::Take,
-                            },
-                            ty: parameter.ty.to_string().into(),
-                            retained: signature.retained_params.contains(&parameter.name),
-                        })
-                        .collect(),
-                    result: signature
-                        .return_ty
-                        .as_ref()
-                        .map_or_else(|| "Unit".into(), |ty| ty.to_string().into()),
-                    asynchronous: signature.is_async,
-                };
-                Some(ExternalImport {
-                    symbol,
-                    signature_hash: function_signature.hash(),
-                    abi_version: RUNTIME_ABI_VERSION,
-                })
-            }
-            _ => None,
+        .map(|import| ExternalImport {
+            symbol: import.symbol.clone(),
+            signature_hash: import.signature.hash(),
+            abi_version: RUNTIME_ABI_VERSION,
         })
         .filter(|import| called.contains(import.symbol.as_str()))
         .fold(BTreeMap::new(), |mut imports, import| {
