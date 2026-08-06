@@ -488,6 +488,7 @@ fn verify_executable_payload(
     if functions.len() > limits.max_functions {
         return Err(BytecodeError::LimitExceeded("function count"));
     }
+    let resource_inputs = resource_drop_inputs(unit, functions)?;
 
     let mut total_instructions = 0usize;
     let mut called_imports = BTreeSet::new();
@@ -553,7 +554,11 @@ fn verify_executable_payload(
                 &mut called_imports,
             )?;
         }
-        verify_register_initialization(function_id, initialized_inputs, code)?;
+        let mut initialized_registers = (0..initialized_inputs).collect::<BTreeSet<_>>();
+        if let Some(resources) = resource_inputs.get(&function_id) {
+            initialized_registers.extend(resources);
+        }
+        verify_register_initialization(function_id, initialized_registers, code)?;
         verify_call_shapes(function_id, code, functions, imports)?;
         let _ = name;
     }
@@ -573,6 +578,67 @@ fn verify_executable_payload(
         )));
     }
     Ok(())
+}
+
+fn resource_drop_inputs(
+    unit: &serde_json::Map<String, serde_json::Value>,
+    functions: &[serde_json::Value],
+) -> Result<BTreeMap<usize, BTreeSet<usize>>, BytecodeError> {
+    let drops = unit["resource_drop_functions"]
+        .as_object()
+        .ok_or_else(|| invalid_payload("resource_drop_functions is not an object"))?;
+    let types = unit["types"]
+        .as_object()
+        .ok_or_else(|| invalid_payload("types is not an object"))?;
+    let mut inputs = BTreeMap::new();
+    for (type_name, function_id) in drops {
+        let function_id = json_usize(function_id, "resource drop function")?;
+        let function = functions
+            .get(function_id)
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| {
+                invalid_payload(format!(
+                    "resource `{type_name}` references missing drop function {function_id}"
+                ))
+            })?;
+        let ty = types
+            .get(type_name)
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| invalid_payload(format!("resource type `{type_name}` is missing")))?;
+        let fields = ty
+            .get("fields")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| invalid_payload(format!("resource type `{type_name}` has no fields")))?;
+        let locals = function
+            .get("local_regs")
+            .and_then(serde_json::Value::as_object)
+            .ok_or_else(|| {
+                invalid_payload(format!(
+                    "resource drop `{type_name}` has no local register map"
+                ))
+            })?;
+        let mut registers = BTreeSet::new();
+        for field in fields {
+            let name = field
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    invalid_payload(format!("resource type `{type_name}` has invalid field"))
+                })?;
+            let register = locals.get(name).ok_or_else(|| {
+                invalid_payload(format!(
+                    "resource drop `{type_name}` is missing field register `{name}`"
+                ))
+            })?;
+            registers.insert(json_usize(register, "resource field register")?);
+        }
+        if inputs.insert(function_id, registers).is_some() {
+            return Err(invalid_payload(format!(
+                "drop function {function_id} is shared by multiple resource types"
+            )));
+        }
+    }
+    Ok(inputs)
 }
 
 fn verify_type_metadata(
@@ -868,14 +934,14 @@ fn require_arity(
 /// only one branch cannot be consumed after the merge.
 fn verify_register_initialization(
     function_id: usize,
-    initialized_inputs: usize,
+    initialized_inputs: BTreeSet<usize>,
     code: &[serde_json::Value],
 ) -> Result<(), BytecodeError> {
     if code.is_empty() {
         return Ok(());
     }
     let mut incoming = vec![None::<BTreeSet<usize>>; code.len()];
-    incoming[0] = Some((0..initialized_inputs).collect());
+    incoming[0] = Some(initialized_inputs);
     let mut work = VecDeque::from([0usize]);
 
     while let Some(ip) = work.pop_front() {
@@ -2086,6 +2152,48 @@ mod tests {
         assert!(matches!(
             BytecodeVerifier::default().verify(&bad_signature.to_bytes().unwrap()),
             Err(BytecodeError::InvalidPayload(message)) if message.contains("expected 0")
+        ));
+    }
+
+    #[test]
+    fn resource_drop_fields_are_verified_implicit_inputs() {
+        let artifact_for = |locals: serde_json::Value| {
+            BytecodeArtifact::new(
+                "0.1.0",
+                "0.1.0",
+                TEST_CATALOG_DIGEST,
+                RUNTIME_ABI_VERSION,
+                TEST_SOURCE_DIGEST,
+                vec![],
+                encode_executable_payload(&serde_json::json!({
+                    "functions": [{
+                        "name": "<drop:File>", "params": 0, "captures": 0, "regs": 1,
+                        "local_regs": locals, "code": [{"Return": {"src": 0}}]
+                    }],
+                    "function_ids": {}, "resource_drop_functions": {"File": 0},
+                    "types": {"File": {"name": "File", "fields": [
+                        {"name": "path", "type_name": "String"}
+                    ]}},
+                    "native_signatures": {}, "closure_identity_observable": false
+                }))
+                .unwrap(),
+            )
+            .unwrap()
+        };
+
+        BytecodeVerifier::default()
+            .verify(
+                &artifact_for(serde_json::json!({"path": 0}))
+                    .to_bytes()
+                    .unwrap(),
+            )
+            .expect("resource fields initialize drop registers");
+        assert!(matches!(
+            BytecodeVerifier::default().verify(
+                &artifact_for(serde_json::json!({})).to_bytes().unwrap()
+            ),
+            Err(BytecodeError::InvalidPayload(message))
+                if message.contains("missing field register `path`")
         ));
     }
 
