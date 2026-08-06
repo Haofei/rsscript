@@ -74,7 +74,8 @@ pub(crate) const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 pub use artifact_store::ArtifactStore;
 pub use authorization::{
     ExecutablePackageSnapshot, PreparedPackage, WorkspaceSnapshot, load_workspace_snapshot,
-    prepare_executable_package, prepare_package_for_execution,
+    load_workspace_snapshot_with_operation, prepare_executable_package,
+    prepare_package_for_execution,
 };
 pub use check::check_package_dir;
 use dependency::{
@@ -189,6 +190,16 @@ fn copy_package_directory(source: &Path, destination: &Path) -> Result<(), Strin
     copy_package_directory_with_limits(source, destination, TreeLimits::default())
 }
 
+fn copy_package_directory_with_operation(
+    source: &Path,
+    destination: &Path,
+    operation: &rsscript_operation::OperationContext,
+) -> Result<(), String> {
+    let root = canonical_checked_root(source, "package copy")?;
+    let mut budget = TreeBudget::with_operation(TreeLimits::default(), operation);
+    copy_package_directory_inner(&root, source, destination, 0, &mut budget)
+}
+
 fn copy_package_directory_with_limits(
     source: &Path,
     destination: &Path,
@@ -262,6 +273,7 @@ struct TreeBudget {
     files: usize,
     entries: usize,
     bytes: u64,
+    operation: Option<rsscript_operation::OperationContext>,
 }
 
 impl TreeBudget {
@@ -271,10 +283,33 @@ impl TreeBudget {
             files: 0,
             entries: 0,
             bytes: 0,
+            operation: None,
         }
     }
 
+    fn with_operation(
+        limits: TreeLimits,
+        operation: &rsscript_operation::OperationContext,
+    ) -> Self {
+        Self {
+            limits,
+            files: 0,
+            entries: 0,
+            bytes: 0,
+            operation: Some(operation.clone()),
+        }
+    }
+
+    fn check_operation(&self) -> Result<(), String> {
+        self.operation.as_ref().map_or(Ok(()), |operation| {
+            operation
+                .check()
+                .map_err(|abort| format!("package operation stopped: {abort:?}"))
+        })
+    }
+
     fn check_depth(&self, depth: usize, operation: &str, path: &Path) -> Result<(), String> {
+        self.check_operation()?;
         if depth > self.limits.max_depth {
             return Err(format!(
                 "{operation} exceeded directory depth limit of {} at {}",
@@ -286,6 +321,7 @@ impl TreeBudget {
     }
 
     fn add_file(&mut self, bytes: u64, operation: &str, path: &Path) -> Result<(), String> {
+        self.check_operation()?;
         self.files = self.files.checked_add(1).ok_or_else(|| {
             format!(
                 "{operation} file count overflow while visiting {}",
@@ -316,6 +352,7 @@ impl TreeBudget {
     }
 
     fn add_entry(&mut self, operation: &str, path: &Path) -> Result<(), String> {
+        self.check_operation()?;
         self.entries = self.entries.checked_add(1).ok_or_else(|| {
             format!(
                 "{operation} directory entry count overflow while visiting {}",

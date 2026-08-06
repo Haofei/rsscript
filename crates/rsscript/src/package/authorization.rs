@@ -11,8 +11,8 @@ use super::dependency::{DependencyResolutionScope, resolve_dependency_graph};
 use super::{
     NativePluginBuildDependency, PackageAnalysis, PackageCheck, PackageLock, PackageLoweringInput,
     PackageReview, PackageTree, PackageTreeNode, TreeLimits, collect_bounded_regular_files,
-    copy_package_directory, format_package_lock_toml, package_lowering_input,
-    package_native_plugin_build_dependencies, package_path_source,
+    copy_package_directory, copy_package_directory_with_operation, format_package_lock_toml,
+    package_lowering_input, package_native_plugin_build_dependencies, package_path_source,
 };
 
 #[derive(Debug)]
@@ -227,18 +227,36 @@ impl WorkspaceSnapshot {
 /// Capture a package graph once and derive analysis and lowering inputs from
 /// that same immutable content.
 pub fn load_workspace_snapshot(package_dir: &Path) -> Result<WorkspaceSnapshot, String> {
+    load_workspace_snapshot_inner(package_dir, None)
+}
+
+pub fn load_workspace_snapshot_with_operation(
+    package_dir: &Path,
+    operation: &rsscript_operation::OperationContext,
+) -> Result<WorkspaceSnapshot, String> {
+    load_workspace_snapshot_inner(package_dir, Some(operation))
+}
+
+fn load_workspace_snapshot_inner(
+    package_dir: &Path,
+    operation: Option<&rsscript_operation::OperationContext>,
+) -> Result<WorkspaceSnapshot, String> {
+    check_operation(operation)?;
     let package_dir = package_dir.canonicalize().map_err(|error| {
         format!(
             "failed to canonicalize workspace before content snapshot {}: {error}",
             package_dir.display()
         )
     })?;
-    let package_snapshot = snapshot_package_graph_inputs(&package_dir)?;
+    let package_snapshot = snapshot_package_graph_inputs_inner(&package_dir, operation)?;
+    check_operation(operation)?;
     let lowering_input = package_lowering_input(package_snapshot.root())?;
+    check_operation(operation)?;
     let digest = lowering_input_digest(&lowering_input);
     let mut review =
         super::review::review_package_dir_captured_with_features(package_snapshot.root(), None)
             .map_err(|error| package_snapshot.remap_error(error))?;
+    check_operation(operation)?;
     package_snapshot.remap_review(&mut review);
     let mut analysis = PackageAnalysis::from(&review);
     analysis.snapshot_digest = digest.clone();
@@ -248,6 +266,14 @@ pub fn load_workspace_snapshot(package_dir: &Path) -> Result<WorkspaceSnapshot, 
         analysis,
         digest,
         _package_snapshot: package_snapshot,
+    })
+}
+
+fn check_operation(operation: Option<&rsscript_operation::OperationContext>) -> Result<(), String> {
+    operation.map_or(Ok(()), |operation| {
+        operation
+            .check()
+            .map_err(|abort| format!("workspace snapshot stopped: {abort:?}"))
     })
 }
 
@@ -415,7 +441,16 @@ fn authorize_package_snapshot(
 pub(super) fn snapshot_package_graph_inputs(
     package_dir: &Path,
 ) -> Result<PackageGraphSnapshot, String> {
+    snapshot_package_graph_inputs_inner(package_dir, None)
+}
+
+fn snapshot_package_graph_inputs_inner(
+    package_dir: &Path,
+    operation: Option<&rsscript_operation::OperationContext>,
+) -> Result<PackageGraphSnapshot, String> {
+    check_operation(operation)?;
     let graph = resolve_dependency_graph(package_dir, DependencyResolutionScope::Development)?;
+    check_operation(operation)?;
     let directory = tempfile::Builder::new()
         .prefix("rsscript-package-graph-")
         .tempdir()
@@ -433,6 +468,7 @@ pub(super) fn snapshot_package_graph_inputs(
 
     let mut destinations = BTreeMap::new();
     for (key, node) in &graph.nodes {
+        check_operation(operation)?;
         destinations.insert(
             key.clone(),
             mirrored_snapshot_path(&packages_root, &node.package_dir)?,
@@ -440,9 +476,14 @@ pub(super) fn snapshot_package_graph_inputs(
     }
 
     for (key, node) in &graph.nodes {
+        check_operation(operation)?;
         let destination = &destinations[key];
         if !destination.join("rsspkg.toml").is_file() {
-            copy_package_directory(&node.package_dir, destination)?;
+            if let Some(operation) = operation {
+                copy_package_directory_with_operation(&node.package_dir, destination, operation)?;
+            } else {
+                copy_package_directory(&node.package_dir, destination)?;
+            }
         }
         validate_captured_manifest(node, destination)?;
         fs::write(
@@ -457,7 +498,9 @@ pub(super) fn snapshot_package_graph_inputs(
         })?;
     }
     rewrite_snapshot_manifests(&graph, &destinations)?;
+    check_operation(operation)?;
     rewrite_snapshot_locks(&graph, &destinations)?;
+    check_operation(operation)?;
 
     let root = destinations
         .get(&graph.root)

@@ -35,9 +35,10 @@ use provider::{NativeInterpreterFn, ProviderDescriptor, ProviderFunction, Provid
 #[cfg(feature = "execution")]
 use rsscript_compiler_core::{
     EvalError, ExecutionFailureKind, ExternalFunctionRegistry, NativeValue, PackageAnalysis,
-    RegVmExecutable, VmLimits, load_workspace_snapshot, reg_vm_compile_package_input,
-    reg_vm_compile_source, reg_vm_compile_validated, validate_source_with_operation,
-    validate_sources_with_interfaces, validate_sources_with_interfaces_with_operation,
+    RegVmExecutable, VmLimits, load_workspace_snapshot, load_workspace_snapshot_with_operation,
+    reg_vm_compile_package_input, reg_vm_compile_source, reg_vm_compile_validated,
+    validate_source_with_operation, validate_sources_with_interfaces,
+    validate_sources_with_interfaces_with_operation,
 };
 use rsscript_compiler_core::{analyze_source, analyze_source_result_with_operation};
 
@@ -140,12 +141,40 @@ impl Compiler {
         self.build(&snapshot)
     }
 
+    #[cfg(feature = "execution")]
+    pub fn compile_package_with_operation(
+        &self,
+        path: &Path,
+        operation: &OperationContext,
+    ) -> Result<CompiledPackage, CompileError> {
+        let snapshot = self.snapshot_with_operation(path, operation)?;
+        self.build_with_operation(&snapshot, operation)
+    }
+
     /// Capture all package and dependency inputs exactly once.
     #[cfg(feature = "execution")]
     pub fn snapshot(&self, path: &Path) -> Result<WorkspaceSnapshot, CompileError> {
         load_workspace_snapshot(path).map_err(|message| CompileError::Package {
             code: CompileErrorCode::PackageSnapshot,
             message,
+        })
+    }
+
+    #[cfg(feature = "execution")]
+    pub fn snapshot_with_operation(
+        &self,
+        path: &Path,
+        operation: &OperationContext,
+    ) -> Result<WorkspaceSnapshot, CompileError> {
+        operation.check().map_err(CompileError::from)?;
+        load_workspace_snapshot_with_operation(path, operation).map_err(|message| {
+            match operation.check() {
+                Ok(()) => CompileError::Package {
+                    code: CompileErrorCode::PackageSnapshot,
+                    message,
+                },
+                Err(abort) => CompileError::from(abort),
+            }
         })
     }
 
@@ -676,6 +705,16 @@ mod tests {
         std::fs::write(&source_path, "fn main() -> Int { return 1 }").expect("source");
 
         let compiler = Compiler;
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = OperationContext {
+            cancellation: Some(cancellation),
+            ..OperationContext::default()
+        };
+        let error = compiler
+            .snapshot_with_operation(directory.path(), &cancelled)
+            .expect_err("cancelled snapshot");
+        assert_eq!(error.code(), CompileErrorCode::Cancelled);
         let snapshot = compiler.snapshot(directory.path()).expect("snapshot");
         std::fs::write(&source_path, "fn main() -> Int { return 2 }").expect("mutate checkout");
 
