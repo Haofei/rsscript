@@ -45,16 +45,10 @@ use sha3::{
 };
 
 use self::calls::PureClosurePlan;
-#[cfg(test)]
-use crate::analyzer::validate_sources_with_interfaces;
-use crate::analyzer::{validate_source, validate_sources_with_interfaces_without_core};
 use crate::eval_types::{
     EvalError, EvalExecutionReport, EvalOutput, ExternalFunction, NativeValue, ProviderCallContext,
     ProviderResourceTable,
 };
-use crate::interfaces::builtin_interfaces;
-use crate::package::prepare_package_for_execution;
-use crate::semantic::ValidatedProgram;
 #[cfg(test)]
 use crate::syntax::parse_source;
 #[cfg(feature = "native-jit")]
@@ -90,6 +84,7 @@ fn intern_struct_layout(name: &str, fields: &[(String, Reg)]) -> Rc<TypeLayout> 
 mod architecture;
 mod bytecode;
 mod calls;
+mod compile;
 mod exec;
 mod execution_plan;
 mod intrinsics;
@@ -107,6 +102,12 @@ mod tier;
 mod value_access;
 mod value_convert;
 mod value_ops;
+#[cfg(test)]
+pub(crate) use compile::reg_vm_compile_sources;
+pub use compile::{
+    reg_vm_compile_package, reg_vm_compile_package_input, reg_vm_compile_source,
+    reg_vm_compile_validated,
+};
 use execution_plan::*;
 pub(crate) use lower::*;
 pub(crate) use model::*;
@@ -784,41 +785,6 @@ pub fn reg_vm_eval_package_main_with_args_and_external_bindings_and_limits(
     )
 }
 
-/// Compile a multi-file package (its merged sources plus dependency and builtin
-/// interfaces) into a reusable VM executable. Native functions are resolved at
-/// run time via the `external_bindings` passed to the eval call, so this can be
-/// compiled once and executed repeatedly (e.g. for benchmarking).
-pub fn reg_vm_compile_package(package_dir: &Path) -> Result<RegVmExecutable, EvalError> {
-    let prepared = prepare_package_for_execution(package_dir).map_err(EvalError::Runtime)?;
-    let input = prepared.into_lowering_input().map_err(EvalError::Runtime)?;
-    reg_vm_compile_package_input(&input)
-}
-
-/// Compile the immutable source/interface snapshot captured by package
-/// authorization. Execution entry points use this form to avoid re-reading a
-/// mutable checkout after review.
-pub fn reg_vm_compile_package_input(
-    input: &crate::package::PackageLoweringInput,
-) -> Result<RegVmExecutable, EvalError> {
-    let mut interface_refs = builtin_interfaces()
-        .map(|(path, contents)| (path.to_string(), contents.to_string()))
-        .collect::<Vec<_>>();
-    interface_refs.extend(input.interfaces.iter().cloned());
-    let source_refs = input
-        .sources
-        .iter()
-        .map(|(path, contents)| (path.as_str(), contents.as_str()))
-        .collect::<Vec<_>>();
-    let interface_refs_borrowed = interface_refs
-        .iter()
-        .map(|(path, contents)| (path.as_str(), contents.as_str()))
-        .collect::<Vec<_>>();
-    let validated =
-        validate_sources_with_interfaces_without_core(&source_refs, &interface_refs_borrowed)
-            .map_err(EvalError::Diagnostics)?;
-    reg_vm_compile_validated(&validated)
-}
-
 #[derive(Debug, Clone)]
 pub struct RegVmExecutable {
     unit: Rc<RegUnit>,
@@ -832,35 +798,6 @@ impl RegVmExecutable {
             .bind_snapshot_digest(digest)
             .map_err(|error| EvalError::Runtime(error.to_string()))
     }
-}
-
-pub fn reg_vm_compile_source(file: &str, source: &str) -> Result<RegVmExecutable, EvalError> {
-    let validated = validate_source(file, source).map_err(EvalError::Diagnostics)?;
-    reg_vm_compile_validated(&validated)
-}
-
-pub fn reg_vm_compile_validated(
-    validated: &ValidatedProgram,
-) -> Result<RegVmExecutable, EvalError> {
-    let executable =
-        rsscript_lowering::ExecutableIr::from_validated_hir(validated.database().hir());
-    let lowered = RegUnit::lower(&executable)?;
-    let verified = bytecode::encode_and_verify(&lowered, validated, &executable)?;
-    let (artifact, unit) = verified.into_parts();
-    Ok(RegVmExecutable {
-        unit: Rc::new(unit),
-        artifact,
-    })
-}
-
-#[cfg(test)]
-pub(crate) fn reg_vm_compile_sources(
-    sources: &[(&str, &str)],
-) -> Result<RegVmExecutable, EvalError> {
-    let interfaces = crate::interfaces::standard_package_interfaces().collect::<Vec<_>>();
-    let validated =
-        validate_sources_with_interfaces(sources, &interfaces).map_err(EvalError::Diagnostics)?;
-    reg_vm_compile_validated(&validated)
 }
 
 impl RegVmExecutable {

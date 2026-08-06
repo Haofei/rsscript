@@ -1076,6 +1076,32 @@ fn embedding_facade_exposes_only_product_level_objects() {
 }
 
 #[test]
+fn vm_core_consumes_owned_ir_not_frontend_internals() {
+    let root = workspace_root().join("crates/rsscript/src/reg_vm");
+    for relative in [
+        "bytecode.rs",
+        "calls.rs",
+        "exec.rs",
+        "lower.rs",
+        "model.rs",
+        "scheduler.rs",
+    ] {
+        let source = read(&root.join(relative));
+        for forbidden in [
+            "crate::hir",
+            "crate::syntax",
+            "crate::semantic",
+            "ValidatedProgram",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "VM core `{relative}` must not consume frontend symbol `{forbidden}`; keep that dependency in compile.rs"
+            );
+        }
+    }
+}
+
+#[test]
 fn compiler_default_dependency_closure_is_host_neutral() {
     let root = workspace_root();
     let facade: toml::Value =
@@ -1400,14 +1426,14 @@ fn unsafe_boundary_crates_are_explicit_dependencies() {
 #[test]
 fn executable_backends_consume_validated_frontend_results() {
     let root = workspace_root();
-    let reg_vm = read(&root.join("crates/rsscript/src/reg_vm/mod.rs"));
-    let compile_source = function_source(&reg_vm, "pub fn reg_vm_compile_source");
+    let compile_adapter = read(&root.join("crates/rsscript/src/reg_vm/compile.rs"));
+    let compile_source = function_source(&compile_adapter, "pub fn reg_vm_compile_source");
     assert!(
         compile_source.contains("validate_source(file, source)")
             && compile_source.contains("reg_vm_compile_validated(&validated)"),
         "register VM source compilation must consume a ValidatedProgram"
     );
-    let compile_validated = function_source(&reg_vm, "pub fn reg_vm_compile_validated");
+    let compile_validated = function_source(&compile_adapter, "pub fn reg_vm_compile_validated");
     assert!(
         compile_validated.contains("ExecutableIr::from_validated_hir")
             && compile_validated.contains("RegUnit::lower"),

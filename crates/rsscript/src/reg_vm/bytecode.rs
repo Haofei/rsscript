@@ -4,7 +4,6 @@ use std::rc::Rc;
 use rsscript_abi_model::{ExternalImport, RUNTIME_ABI_VERSION};
 use rsscript_bytecode::{BytecodeArtifact, BytecodeError, BytecodeVerifier};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use super::*;
 
@@ -127,7 +126,7 @@ impl WireUnit {
 
 pub(super) fn encode_and_verify(
     unit: &RegUnit,
-    validated: &ValidatedProgram,
+    source_content_hash: &str,
     executable: &rsscript_lowering::ExecutableIr,
 ) -> Result<VerifiedRegBytecode, EvalError> {
     let payload = rsscript_bytecode::encode_executable_payload(&WireUnit::from(unit))
@@ -136,7 +135,7 @@ pub(super) fn encode_and_verify(
     let artifact = BytecodeArtifact::new(
         env!("CARGO_PKG_VERSION"),
         RUNTIME_ABI_VERSION,
-        source_hash(validated),
+        source_content_hash,
         imports,
         payload,
     )
@@ -466,22 +465,6 @@ fn external_imports(
         })
         .into_values()
         .collect()
-}
-
-fn source_hash(validated: &ValidatedProgram) -> String {
-    let mut input = Vec::new();
-    for snapshot in [
-        validated.database().sources(),
-        validated.database().interfaces(),
-    ] {
-        for file in snapshot.files() {
-            input.extend_from_slice(&(file.path().len() as u64).to_be_bytes());
-            input.extend_from_slice(file.path().as_bytes());
-            input.extend_from_slice(&(file.text().len() as u64).to_be_bytes());
-            input.extend_from_slice(file.text().as_bytes());
-        }
-    }
-    format!("sha256:{:x}", Sha256::digest(input))
 }
 
 fn bytecode_error(error: BytecodeError) -> EvalError {
