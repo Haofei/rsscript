@@ -1602,7 +1602,9 @@ name = "rsscript-compiler"
 version = "0.1.0"
 dependencies = [
  "rsscript",
+ "rsscript-bytecode",
  "rsscript-provider-api",
+ "tempfile",
 ]
 
 [[package]]

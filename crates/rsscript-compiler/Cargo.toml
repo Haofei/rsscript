@@ -12,3 +12,7 @@ execution = ["rsscript/execution", "dep:rsscript-provider-api"]
 [dependencies]
 rsscript = { path = "../rsscript", default-features = false, features = ["language-service"] }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
+
+[dev-dependencies]
+rsscript-bytecode = { path = "../rsscript-bytecode" }
+tempfile = "3"

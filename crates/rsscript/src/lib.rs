@@ -110,17 +110,17 @@ pub use package::{
     PackageNativeRustReview, PackageNativeRustSemanticReview, PackageNativeRustSourceScan,
     PackageReview, PackageReviewExport, PackageReviewFile, PackageReviewFileKind,
     PackageReviewMetadata, PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree,
-    PackageTreeNode, PackageTreeSummary, PreparedPackage, analyze_package_dir, check_package_dir,
-    configure_reduced_build_environment, diff_package_dirs, diff_package_locks,
+    PackageTreeNode, PackageTreeSummary, PreparedPackage, WorkspaceSnapshot, analyze_package_dir,
+    check_package_dir, configure_reduced_build_environment, diff_package_dirs, diff_package_locks,
     format_package_analysis_json, format_package_check_human, format_package_check_json,
     format_package_diff_human, format_package_diff_json, format_package_lock_diff_human,
     format_package_lock_diff_json, format_package_lock_json, format_package_lock_toml,
     format_package_metadata_human, format_package_metadata_json, format_package_review_human,
     format_package_review_json, format_package_review_markdown, format_package_tree_human,
-    format_package_tree_json, lock_package_dir, package_lowering_input, package_metadata,
-    package_metadata_verify, package_sources, package_sources_with_dependency_interfaces,
-    package_tree, prepare_executable_package, prepare_package_for_execution, review_package_dir,
-    write_package_artifact_atomic,
+    format_package_tree_json, load_workspace_snapshot, lock_package_dir, package_lowering_input,
+    package_metadata, package_metadata_verify, package_sources,
+    package_sources_with_dependency_interfaces, package_tree, prepare_executable_package,
+    prepare_package_for_execution, review_package_dir, write_package_artifact_atomic,
 };
 #[cfg(feature = "execution")]
 pub use reg_vm::{

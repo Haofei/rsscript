@@ -9,8 +9,8 @@ use sha2::{Digest, Sha256};
 use super::check::check_package_dir_captured;
 use super::dependency::{DependencyResolutionScope, resolve_dependency_graph};
 use super::{
-    NativePluginBuildDependency, PackageCheck, PackageLock, PackageLoweringInput, PackageReview,
-    PackageTree, PackageTreeNode, TreeLimits, collect_bounded_regular_files,
+    NativePluginBuildDependency, PackageAnalysis, PackageCheck, PackageLock, PackageLoweringInput,
+    PackageReview, PackageTree, PackageTreeNode, TreeLimits, collect_bounded_regular_files,
     copy_package_directory, format_package_lock_toml, package_lowering_input,
     package_native_plugin_build_dependencies, package_path_source,
 };
@@ -190,6 +190,87 @@ pub struct PreparedPackage {
     package_dir: PathBuf,
     lowering_input: PackageLoweringInput,
     package_snapshot: PackageGraphSnapshot,
+}
+
+/// One immutable package graph used by analysis and compilation.
+///
+/// The private temporary directory keeps every captured file alive for the
+/// lifetime of the value. Consumers receive semantic data and lowering input,
+/// never a mutable checkout path.
+#[derive(Debug)]
+pub struct WorkspaceSnapshot {
+    package_dir: PathBuf,
+    lowering_input: PackageLoweringInput,
+    analysis: PackageAnalysis,
+    digest: String,
+    _package_snapshot: PackageGraphSnapshot,
+}
+
+impl WorkspaceSnapshot {
+    pub fn package_dir(&self) -> &Path {
+        &self.package_dir
+    }
+
+    pub fn lowering_input(&self) -> &PackageLoweringInput {
+        &self.lowering_input
+    }
+
+    pub fn analysis(&self) -> &PackageAnalysis {
+        &self.analysis
+    }
+
+    pub fn digest(&self) -> &str {
+        &self.digest
+    }
+}
+
+/// Capture a package graph once and derive analysis and lowering inputs from
+/// that same immutable content.
+pub fn load_workspace_snapshot(package_dir: &Path) -> Result<WorkspaceSnapshot, String> {
+    let package_dir = package_dir.canonicalize().map_err(|error| {
+        format!(
+            "failed to canonicalize workspace before content snapshot {}: {error}",
+            package_dir.display()
+        )
+    })?;
+    let package_snapshot = snapshot_package_graph_inputs(&package_dir)?;
+    let lowering_input = package_lowering_input(package_snapshot.root())?;
+    let digest = lowering_input_digest(&lowering_input);
+    let mut review =
+        super::review::review_package_dir_captured_with_features(package_snapshot.root(), None)
+            .map_err(|error| package_snapshot.remap_error(error))?;
+    package_snapshot.remap_review(&mut review);
+    let mut analysis = PackageAnalysis::from(&review);
+    analysis.snapshot_digest = digest.clone();
+    Ok(WorkspaceSnapshot {
+        package_dir,
+        lowering_input,
+        analysis,
+        digest,
+        _package_snapshot: package_snapshot,
+    })
+}
+
+fn lowering_input_digest(input: &PackageLoweringInput) -> String {
+    let mut hasher = Sha256::new();
+    for value in [
+        input.package.name.as_str(),
+        input.package.version.as_str(),
+        input.package.edition.as_str(),
+    ] {
+        hasher.update((value.len() as u64).to_be_bytes());
+        hasher.update(value.as_bytes());
+    }
+    for (kind, files) in [(b'S', &input.sources), (b'I', &input.interfaces)] {
+        for (path, contents) in files {
+            hasher.update([kind]);
+            hasher.update((path.len() as u64).to_be_bytes());
+            hasher.update(path.as_bytes());
+            hasher.update((contents.len() as u64).to_be_bytes());
+            hasher.update(contents.as_bytes());
+        }
+    }
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 impl PreparedPackage {

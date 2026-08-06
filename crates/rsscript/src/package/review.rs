@@ -45,7 +45,8 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
 }
 
 pub fn analyze_package_dir(package_dir: &Path) -> Result<super::PackageAnalysis, String> {
-    review_package_dir(package_dir).map(|review| super::PackageAnalysis::from(&review))
+    super::authorization::load_workspace_snapshot(package_dir)
+        .map(|snapshot| snapshot.analysis().clone())
 }
 
 pub(super) fn review_package_dir_captured_with_features(

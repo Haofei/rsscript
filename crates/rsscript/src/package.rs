@@ -73,8 +73,8 @@ pub(crate) const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 pub use artifact_store::ArtifactStore;
 pub use authorization::{
-    ExecutablePackageSnapshot, PreparedPackage, prepare_executable_package,
-    prepare_package_for_execution,
+    ExecutablePackageSnapshot, PreparedPackage, WorkspaceSnapshot, load_workspace_snapshot,
+    prepare_executable_package, prepare_package_for_execution,
 };
 pub use check::check_package_dir;
 use dependency::{

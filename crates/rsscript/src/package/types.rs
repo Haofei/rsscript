@@ -39,6 +39,11 @@ pub struct PackageAnalysis {
     #[serde(rename = "$schema")]
     pub schema: String,
     pub producer: PackageAnalysisProducer,
+    /// Digest of the immutable source/interface snapshot analyzed here.
+    pub snapshot_digest: String,
+    /// Executable payload digest when analysis was emitted by a build.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub module_digest: Option<String>,
     pub package: PackageIdentity,
     pub files: Vec<PackageReviewFile>,
     pub summary: PackageAnalysisSummary,
@@ -102,6 +107,8 @@ impl From<&PackageReview> for PackageAnalysis {
         Self {
             schema: PACKAGE_ANALYSIS_SCHEMA.to_string(),
             producer: PackageAnalysisProducer::current(),
+            snapshot_digest: String::new(),
+            module_digest: None,
             package: review.package.clone(),
             files: review.files.clone(),
             summary: PackageAnalysisSummary {

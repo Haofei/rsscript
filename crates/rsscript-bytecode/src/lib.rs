@@ -16,6 +16,8 @@ pub struct BytecodeHeader {
     pub language_version: String,
     pub runtime_abi_version: u32,
     pub source_content_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snapshot_digest: Option<String>,
     pub executable_hash: String,
 }
 
@@ -43,6 +45,7 @@ impl BytecodeArtifact {
                 language_version: language_version.into(),
                 runtime_abi_version,
                 source_content_hash: source_content_hash.into(),
+                snapshot_digest: None,
                 executable_hash,
             },
             imports,
@@ -57,6 +60,14 @@ impl BytecodeArtifact {
         let mut bytes = BYTECODE_MAGIC.to_vec();
         bytes.extend(serde_json::to_vec(self).map_err(BytecodeError::Encode)?);
         Ok(bytes)
+    }
+
+    /// Bind the artifact to the immutable workspace snapshot that produced it.
+    /// Recomputes the envelope checksum; the executable payload is unchanged.
+    pub fn bind_snapshot_digest(&mut self, digest: impl Into<String>) -> Result<(), BytecodeError> {
+        self.header.snapshot_digest = Some(digest.into());
+        self.checksum = self.compute_checksum()?;
+        Ok(())
     }
 
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, BytecodeError> {

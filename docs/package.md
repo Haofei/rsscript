@@ -9,10 +9,12 @@ Host services are explicit package dependencies. Binding files use
 optional review metadata. Missing or duplicate bindings and ABI mismatches are
 link errors.
 
-The compiler emits `rsscript.package_analysis.v1`, containing diagnostics,
-exports, semantic summaries, and external symbols. It does not contain permission
-grants. Package build-selection features remain package metadata and are not
-language features.
+The compiler captures a `WorkspaceSnapshot` once, then derives analysis and
+bytecode from that immutable source/interface graph. It emits
+`rsscript.package_analysis.v1`, containing the shared `snapshot_digest`, the
+executable `module_digest` when built, diagnostics, exports, semantic summaries,
+and external symbols. It does not contain permission grants. Package
+build-selection features remain package metadata and are not language features.
 
 `rss pkg analysis [package-directory]` prints the neutral analysis artifact as
 JSON. `rss pkg review` derives optional review output separately.

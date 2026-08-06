@@ -13,6 +13,8 @@ use std::sync::atomic::AtomicBool;
 
 pub use rsscript::Diagnostic;
 #[cfg(feature = "execution")]
+pub use rsscript::WorkspaceSnapshot;
+#[cfg(feature = "execution")]
 pub use rsscript_provider_api as provider;
 
 #[cfg(feature = "execution")]
@@ -21,8 +23,8 @@ use rsscript::analyze_source;
 #[cfg(feature = "execution")]
 use rsscript::{
     EvalError, ExternalFunctionRegistry, NativeValue, PackageAnalysis, RegVmExecutable, VmLimits,
-    analyze_package_dir, reg_vm_compile_package, reg_vm_compile_source, reg_vm_compile_validated,
-    validate_sources_with_interfaces,
+    load_workspace_snapshot, reg_vm_compile_package_input, reg_vm_compile_source,
+    reg_vm_compile_validated, validate_sources_with_interfaces,
 };
 
 #[derive(Default)]
@@ -39,6 +41,7 @@ impl Compiler {
         Ok(CompiledPackage {
             executable,
             analysis: None,
+            snapshot_digest: None,
         })
     }
 
@@ -57,19 +60,43 @@ impl Compiler {
         Ok(CompiledPackage {
             executable,
             analysis: None,
+            snapshot_digest: None,
         })
     }
 
     #[cfg(feature = "execution")]
     pub fn compile_package(&self, path: &Path) -> Result<CompiledPackage, CompileError> {
-        let analysis = analyze_package_dir(path).map_err(CompileError::Package)?;
+        let snapshot = self.snapshot(path)?;
+        self.build(&snapshot)
+    }
+
+    /// Capture all package and dependency inputs exactly once.
+    #[cfg(feature = "execution")]
+    pub fn snapshot(&self, path: &Path) -> Result<WorkspaceSnapshot, CompileError> {
+        load_workspace_snapshot(path).map_err(CompileError::Package)
+    }
+
+    /// Build analysis and executable bytes from one immutable snapshot.
+    #[cfg(feature = "execution")]
+    pub fn build(&self, snapshot: &WorkspaceSnapshot) -> Result<CompiledPackage, CompileError> {
+        let mut analysis = snapshot.analysis().clone();
         if analysis.summary.errors != 0 {
             return Err(CompileError::Diagnostics(analysis.diagnostics.clone()));
         }
-        let executable = reg_vm_compile_package(path).map_err(CompileError::from)?;
+        let mut executable =
+            reg_vm_compile_package_input(snapshot.lowering_input()).map_err(CompileError::from)?;
+        executable.bind_snapshot_digest(snapshot.digest())?;
+        analysis.module_digest = Some(
+            executable
+                .bytecode_artifact()
+                .header
+                .executable_hash
+                .clone(),
+        );
         Ok(CompiledPackage {
             executable,
             analysis: Some(analysis),
+            snapshot_digest: Some(snapshot.digest().to_string()),
         })
     }
 
@@ -79,6 +106,7 @@ impl Compiler {
         Ok(CompiledPackage {
             executable,
             analysis: None,
+            snapshot_digest: None,
         })
     }
 }
@@ -87,6 +115,7 @@ impl Compiler {
 pub struct CompiledPackage {
     executable: RegVmExecutable,
     analysis: Option<PackageAnalysis>,
+    snapshot_digest: Option<String>,
 }
 
 #[cfg(feature = "execution")]
@@ -97,6 +126,14 @@ impl CompiledPackage {
 
     pub fn analysis(&self) -> Option<&PackageAnalysis> {
         self.analysis.as_ref()
+    }
+
+    pub fn snapshot_digest(&self) -> Option<&str> {
+        self.snapshot_digest.as_deref()
+    }
+
+    pub fn module_digest(&self) -> &str {
+        &self.executable.bytecode_artifact().header.executable_hash
     }
 
     pub fn external_imports(&self) -> &[rsscript::ExternalImport] {
@@ -316,6 +353,44 @@ mod tests {
         ParameterSignature, ProviderCallMode, ProviderFunctionDescriptor, RUNTIME_ABI_VERSION,
     };
     use std::sync::atomic::Ordering;
+
+    #[test]
+    fn package_build_uses_one_immutable_snapshot_and_binds_its_digest() {
+        let directory = tempfile::tempdir().expect("workspace");
+        std::fs::create_dir(directory.path().join("src")).expect("source directory");
+        std::fs::write(
+            directory.path().join("rsspkg.toml"),
+            "[package]\nname = \"snapshot-test\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n",
+        )
+        .expect("manifest");
+        let source_path = directory.path().join("src/main.rss");
+        std::fs::write(&source_path, "fn main() -> Int { return 1 }").expect("source");
+
+        let compiler = Compiler;
+        let snapshot = compiler.snapshot(directory.path()).expect("snapshot");
+        std::fs::write(&source_path, "fn main() -> Int { return 2 }").expect("mutate checkout");
+
+        let first = compiler.build(&snapshot).expect("first build");
+        let second = compiler.build(&snapshot).expect("repeat build");
+        assert_eq!(first.bytecode().unwrap(), second.bytecode().unwrap());
+        assert_eq!(first.snapshot_digest(), Some(snapshot.digest()));
+        let analysis = first.analysis().expect("package analysis");
+        assert_eq!(analysis.snapshot_digest, snapshot.digest());
+        assert_eq!(
+            analysis.module_digest.as_deref(),
+            Some(first.module_digest())
+        );
+        let artifact = rsscript_bytecode::BytecodeArtifact::from_bytes(&first.bytecode().unwrap())
+            .expect("artifact envelope");
+        assert_eq!(
+            artifact.header.snapshot_digest.as_deref(),
+            Some(snapshot.digest())
+        );
+        let output = Runtime::default()
+            .run(&first, Vec::<String>::new())
+            .expect("run captured source");
+        assert_eq!(output.value, "1");
+    }
 
     #[test]
     fn stable_facade_compiles_serializes_loads_and_runs() {

@@ -823,6 +823,15 @@ pub struct RegVmExecutable {
     artifact: rsscript_bytecode::BytecodeArtifact,
 }
 
+impl RegVmExecutable {
+    /// Bind this verified executable to its immutable workspace input.
+    pub fn bind_snapshot_digest(&mut self, digest: impl Into<String>) -> Result<(), EvalError> {
+        self.artifact
+            .bind_snapshot_digest(digest)
+            .map_err(|error| EvalError::Runtime(error.to_string()))
+    }
+}
+
 pub fn reg_vm_compile_source(file: &str, source: &str) -> Result<RegVmExecutable, EvalError> {
     let validated = validate_source(file, source).map_err(EvalError::Diagnostics)?;
     reg_vm_compile_validated(&validated)
