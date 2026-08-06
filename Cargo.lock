@@ -1557,6 +1557,7 @@ dependencies = [
  "rsscript-bytecode",
  "rsscript-interface-catalog",
  "rsscript-lowering",
+ "rsscript-operation",
  "rsscript-provider-api",
  "rsscript-review-reir",
  "rsscript-runtime",
@@ -1618,6 +1619,7 @@ version = "0.1.0"
 dependencies = [
  "rsscript",
  "rsscript-bytecode",
+ "rsscript-operation",
  "rsscript-provider-api",
  "tempfile",
 ]
@@ -1631,6 +1633,7 @@ name = "rsscript-language-service"
 version = "0.1.0"
 dependencies = [
  "rsscript-compiler",
+ "rsscript-operation",
  "toml",
 ]
 
@@ -1642,10 +1645,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-operation"
+version = "0.1.0"
+
+[[package]]
 name = "rsscript-provider-api"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
+ "rsscript-operation",
  "serde",
  "serde_json",
 ]

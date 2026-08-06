@@ -4,13 +4,12 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 
 pub use rsscript_abi_model::{
     DataEffect, ExternalImport, ExternalSymbol, FunctionSignature, InvalidExternalSymbol,
     ParameterSignature, RUNTIME_ABI_VERSION, SignatureHash,
 };
+pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
 use serde::{Deserialize, Serialize};
 
 /// Runtime value exchanged with trusted provider implementations. This safe
@@ -100,11 +99,11 @@ impl From<&str> for ProviderError {
 }
 
 pub struct ProviderCallContext<'a> {
-    pub cancellation: Option<&'a AtomicBool>,
-    pub deadline: Option<Instant>,
+    pub cancellation: Option<&'a CancellationToken>,
+    pub deadline: Option<MonotonicDeadline>,
     pub remaining_byte_budget: Option<usize>,
     pub remaining_output_budget: Option<usize>,
-    pub call_id: u64,
+    pub call_id: OperationId,
     pub resources: Option<&'a mut ProviderResourceTable>,
 }
 
@@ -112,17 +111,14 @@ impl ProviderCallContext<'_> {
     pub fn check_cancelled(&self) -> Result<(), ProviderError> {
         if self
             .cancellation
-            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+            .is_some_and(CancellationToken::is_cancelled)
         {
             return Err(ProviderError::new(
                 ProviderErrorCode::Cancelled,
                 "provider call cancelled",
             ));
         }
-        if self
-            .deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
+        if self.deadline.is_some_and(MonotonicDeadline::is_expired) {
             return Err(ProviderError::new(
                 ProviderErrorCode::DeadlineExceeded,
                 "provider call deadline exceeded",
@@ -139,7 +135,7 @@ impl Default for ProviderCallContext<'static> {
             deadline: None,
             remaining_byte_budget: None,
             remaining_output_budget: None,
-            call_id: 0,
+            call_id: OperationId(0),
             resources: None,
         }
     }
@@ -588,7 +584,7 @@ impl Error for ProviderLoadError {}
 mod tests {
     use super::*;
     use rsscript_abi_model::{DataEffect, ParameterSignature};
-    use std::sync::atomic::AtomicBool;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     fn signature(effect: DataEffect) -> FunctionSignature {
         FunctionSignature {
@@ -689,7 +685,8 @@ mod tests {
     fn contextual_callable_observes_cancellation_before_provider_code() {
         let called = Arc::new(AtomicBool::new(false));
         let called_by_provider = Arc::clone(&called);
-        let cancelled = AtomicBool::new(true);
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
         let callable = NativeInterpreterFn::new_contextual(move |_, _| {
             called_by_provider.store(true, Ordering::Relaxed);
             Ok(NativeValue::Unit)

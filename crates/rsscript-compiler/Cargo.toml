@@ -7,10 +7,11 @@ license = "MIT OR Apache-2.0"
 
 [features]
 default = []
-execution = ["rsscript/execution", "dep:rsscript-provider-api"]
+execution = ["rsscript/execution", "dep:rsscript-operation", "dep:rsscript-provider-api"]
 
 [dependencies]
 rsscript = { path = "../rsscript", default-features = false, features = ["language-service"] }
+rsscript-operation = { path = "../rsscript-operation", optional = true }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
 
 [dev-dependencies]

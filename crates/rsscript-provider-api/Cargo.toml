@@ -10,5 +10,6 @@ doctest = false
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
+rsscript-operation = { path = "../rsscript-operation" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }

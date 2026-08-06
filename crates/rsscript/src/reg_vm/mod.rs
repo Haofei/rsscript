@@ -31,8 +31,6 @@ use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use base64::Engine;
 use chrono::{DateTime, Datelike, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc};
@@ -1717,7 +1715,7 @@ struct TaskSlot {
 /// excessively allocating script fails with a recoverable error. Trusted hosts
 /// that intentionally need an unlimited run must opt in through
 /// [`VmLimits::unbounded_for_trusted_host`].
-/// Note: not `Copy` — it carries an optional `Arc<AtomicBool>` cancel flag. All
+/// Note: not `Copy` — it carries an optional shared cancellation token. All
 /// fields are public and `Clone`/struct-update (`..VmLimits::default()`) keep
 /// callers ergonomic; the scalar budget fields are read by value as before.
 #[derive(Debug, Clone)]
@@ -1743,9 +1741,9 @@ pub struct VmLimits {
     /// awaits or checks the cooperative RSS `CancellationToken`. The eval then
     /// returns `EvalError::Runtime("evaluation cancelled")`. This stops the *whole*
     /// eval; see the note in `tick()` on per-task preemption.
-    pub cancel: Option<Arc<AtomicBool>>,
+    pub cancel: Option<rsscript_operation::CancellationToken>,
     /// Monotonic execution deadline shared with Provider calls.
-    pub deadline: Option<std::time::Instant>,
+    pub deadline: Option<rsscript_operation::MonotonicDeadline>,
     /// Maximum total bytes a program may write to captured stdout (every
     /// `Log.write`/`Debug.print`/trace path funnels through `push_stdout`). `None`
     /// (default) = unlimited. When `Some(limit)`, the write that would push the

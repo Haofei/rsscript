@@ -118,7 +118,7 @@ fn native_mutual_recursion_refused_when_step_budget_armed() {
 #[test]
 fn native_recursion_refused_when_cancel_armed() {
     let exe = common::compile_vm_source("limit-cancel.rss", FIB_SELF_SRC).expect("compile");
-    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let cancel = rsscript::CancellationToken::new();
     let limits = rsscript::VmLimits {
         cancel: Some(cancel),
         ..rsscript::VmLimits::default()
@@ -393,8 +393,6 @@ fn main() -> Unit {
 #[cfg(feature = "native-jit")]
 #[test]
 fn native_osr_cancel_flag_preempts() {
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
     // A long loop so the interpreter, after native bails on the set flag, still reaches
     // its own (every-1024-step) cancel poll before finishing.
     let source = "\
@@ -415,9 +413,10 @@ fn main() -> Unit {
 }
 ";
     let exe = common::compile_vm_source("j05-cancel.rss", source).expect("compile");
-    let flag = Arc::new(AtomicBool::new(true));
+    let flag = rsscript::CancellationToken::new();
+    flag.cancel();
     let limits = rsscript::VmLimits {
-        cancel: Some(Arc::clone(&flag)),
+        cancel: Some(flag),
         ..rsscript::VmLimits::default()
     };
     let err = exe

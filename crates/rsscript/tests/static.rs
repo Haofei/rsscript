@@ -12,8 +12,6 @@ mod checker_frontend;
 mod checker_lowering;
 #[path = "checker_package.rs"]
 mod checker_package;
-#[path = "cli_fix.rs"]
-mod cli_fix;
 #[path = "generate.rs"]
 mod generate;
 #[path = "language_deletion.rs"]

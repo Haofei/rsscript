@@ -2607,7 +2607,7 @@ impl RegVm {
                 .limits
                 .cancel
                 .as_ref()
-                .map_or(0, |flag| std::sync::Arc::as_ptr(flag) as i64);
+                .map_or(0, |flag| flag.as_atomic() as *const _ as i64);
             jit_set_limits_cell(self.steps as i64, step_budget, cancel_addr);
         }
         // J0.5 mem: seed the mem cell before EVERY OSR call (armed budget or `-1` to

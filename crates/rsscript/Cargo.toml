@@ -16,6 +16,7 @@ rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-lowering = { path = "../rsscript-lowering", optional = true }
+rsscript-operation = { path = "../rsscript-operation", optional = true }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-runtime = { path = "../runtime", default-features = false, features = ["core"], optional = true }
@@ -48,7 +49,7 @@ vm-jit = { path = "../vm-jit", optional = true }
 # Frontend-only by default so `rss check`, formatting, and language tooling do
 # not compile the VM/runtime/provider closure. Hosts opt into execution.
 default = []
-execution = ["dep:rsscript-bytecode", "dep:rsscript-lowering", "dep:rsscript-provider-api", "dep:rsscript-runtime"]
+execution = ["dep:rsscript-bytecode", "dep:rsscript-lowering", "dep:rsscript-operation", "dep:rsscript-provider-api", "dep:rsscript-runtime"]
 language-service = []
 host-tools = ["execution", "dep:rss-process-guard"]
 native-plugin = ["execution", "dep:rss-native-abi", "host-tools"]

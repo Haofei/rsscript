@@ -1,11 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rsscript::{
-    EvalError, EvalOutput, NativeValue, VmLimits, check_generated_rust_package,
+    CancellationToken, EvalError, EvalOutput, NativeValue, VmLimits, check_generated_rust_package,
     configure_reduced_build_environment, format_diagnostics_human, format_diagnostics_json,
     load_package_bindings_from_snapshot, parse_runtime_diagnostics, prepare_package_for_execution,
     reg_vm_compile_package_input, write_generated_rust_package,
@@ -221,11 +219,11 @@ fn run_via_vm(path: &str, program_args: &[&str], json: bool) -> ExitCode {
 }
 
 fn cli_vm_limits() -> VmLimits {
-    let cancel = Arc::new(AtomicBool::new(false));
-    let watchdog = Arc::clone(&cancel);
+    let cancel = CancellationToken::new();
+    let watchdog = cancel.clone();
     std::thread::spawn(move || {
         std::thread::sleep(CLI_VM_WALL_TIME);
-        watchdog.store(true, Ordering::Release);
+        watchdog.cancel();
     });
     VmLimits {
         cancel: Some(cancel),

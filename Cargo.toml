@@ -8,6 +8,7 @@ members = [
     "crates/rsscript-provider-api",
     "crates/rsscript-syntax",
     "crates/rsscript-source-model",
+    "crates/rsscript-operation",
     "crates/rsscript-work-budget",
     "crates/rsscript-semantics",
     "crates/rsscript-lowering",

@@ -285,7 +285,7 @@
         let mut vm = empty_vm();
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         vm.limits = VmLimits {
-            cancel: Some(Arc::new(AtomicBool::new(false))),
+            cancel: Some(rsscript_operation::CancellationToken::new()),
             ..VmLimits::default()
         };
         let func = RegFunction::placeholder("hot".to_string());

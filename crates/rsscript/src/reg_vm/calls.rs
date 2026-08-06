@@ -316,7 +316,7 @@ impl RegVm {
             .collect::<Result<Vec<_>, _>>()?;
         let cancellation = self.limits.cancel.clone();
         let mut context = ProviderCallContext {
-            cancellation: cancellation.as_deref(),
+            cancellation: cancellation.as_ref(),
             deadline: self.limits.deadline,
             remaining_byte_budget: self
                 .limits
@@ -326,7 +326,7 @@ impl RegVm {
                 .limits
                 .stdout_budget
                 .map(|limit| limit.saturating_sub(self.stdout.len())),
-            call_id: self.provider_calls,
+            call_id: rsscript_operation::OperationId(self.provider_calls),
             resources: Some(&mut self.provider_resources),
         };
         let mut raw = function

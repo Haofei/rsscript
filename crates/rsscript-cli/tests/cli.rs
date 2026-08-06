@@ -1,15 +1,13 @@
 //! `rss fix` applies machine-applicable structured edits to source files.
 
-mod common;
-
 use std::fs;
 use std::process::Command;
 
 #[test]
 fn fix_write_resolves_missing_data_effects_to_a_clean_check() {
     let bin = env!("CARGO_BIN_EXE_rss");
-    let dir = common::unique_temp_dir("rss-fix");
-    fs::create_dir_all(&dir).expect("temp dir should be creatable");
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let dir = temp.path();
     let file = dir.join("fixme.rss");
     // Four missing exclusive effects across three lines (one line has two), so
     // the test also exercises multi-edit-per-line application order. Default
@@ -92,6 +90,35 @@ fn fix_write_resolves_missing_data_effects_to_a_clean_check() {
         "post-fix check not clean:\n{check_out}\n{}",
         String::from_utf8_lossy(&check.stderr)
     );
+}
 
-    let _ = fs::remove_dir_all(&dir);
+#[cfg(feature = "execution")]
+#[test]
+fn run_vm_cli_executes_through_register_vm() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir should be creatable");
+    let file = temp.path().join("hello.rss");
+    fs::write(
+        &file,
+        concat!(
+            "fn main() -> String {\n",
+            "    return \"hello VM\"\n",
+            "}\n",
+        ),
+    )
+    .expect("fixture should write");
+
+    let output = Command::new(bin)
+        .args(["run", file.to_str().expect("path is utf-8")])
+        .output()
+        .expect("rss run should execute through the VM");
+
+    assert!(
+        output.status.success(),
+        "rss run failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "hello VM\n");
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
 }

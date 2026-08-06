@@ -112,8 +112,11 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
     let language_service = metadata_workspace_dependencies(&metadata, "rsscript-language-service");
     assert_eq!(
         language_service,
-        BTreeSet::from(["rsscript-compiler".to_string()]),
-        "language service must depend only on the frontend compiler façade"
+        BTreeSet::from([
+            "rsscript-compiler".to_string(),
+            "rsscript-operation".to_string(),
+        ]),
+        "language service must depend only on frontend and shared operation contracts"
     );
 
     for package in metadata["packages"].as_array().expect("metadata packages") {
@@ -718,6 +721,26 @@ fn source_coordinates_are_not_owned_by_budget_accounting() {
 
     let syntax = read(&root.join("crates/rsscript-syntax/src/lib.rs"));
     assert!(syntax.contains("pub use rsscript_source_model"));
+}
+
+#[test]
+fn cancellation_and_deadlines_share_one_operation_contract() {
+    let root = workspace_root();
+    let operation = read(&root.join("crates/rsscript-operation/src/lib.rs"));
+    assert!(operation.contains("pub struct CancellationToken"));
+    assert!(operation.contains("pub struct MonotonicDeadline"));
+
+    let provider = read(&root.join("crates/rsscript-provider-api/src/lib.rs"));
+    assert!(provider.contains("Option<&'a CancellationToken>"));
+    assert!(provider.contains("Option<MonotonicDeadline>"));
+
+    let language_service = read(&root.join("crates/rsscript-language-service/src/lib.rs"));
+    assert!(language_service.contains("Option<&'a CancellationToken>"));
+    assert!(language_service.contains("Option<MonotonicDeadline>"));
+
+    let vm = read(&root.join("crates/rsscript/src/reg_vm/mod.rs"));
+    assert!(vm.contains("Option<rsscript_operation::CancellationToken>"));
+    assert!(vm.contains("Option<rsscript_operation::MonotonicDeadline>"));
 }
 
 #[test]

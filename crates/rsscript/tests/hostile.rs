@@ -3,12 +3,10 @@
 //! these tests does not make the in-process VM an isolation boundary.
 
 use proptest::prelude::*;
-use rsscript::{EvalError, VmLimits};
+use rsscript::{CancellationToken, EvalError, VmLimits};
 
 mod common;
 use common::reg_vm_eval_source_main_with_limits;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Invariant 1 (runtime resilience): configured VM limits turn selected
 /// resource-exhaustion cases into recoverable `EvalError::Runtime` values. They
@@ -416,9 +414,10 @@ fn main() -> Int {
     return x
 }
 "#;
-    let flag = Arc::new(AtomicBool::new(true));
+    let flag = CancellationToken::new();
+    flag.cancel();
     let limits = VmLimits {
-        cancel: Some(Arc::clone(&flag)),
+        cancel: Some(flag.clone()),
         ..VmLimits::default()
     };
     let err = eval_limited(source, limits).expect_err("must error, not hang");
@@ -445,15 +444,15 @@ fn main() -> Int {
     return x
 }
 "#;
-    let flag = Arc::new(AtomicBool::new(false));
+    let flag = CancellationToken::new();
     let limits = VmLimits {
-        cancel: Some(Arc::clone(&flag)),
+        cancel: Some(flag.clone()),
         ..VmLimits::default()
     };
     let output = eval_limited(source, limits).expect("flag false => normal completion");
     assert_eq!(output.value, "10");
     // Sanity: the host still holds the flag and can set it for a future run.
-    assert!(!flag.load(Ordering::Relaxed));
+    assert!(!flag.is_cancelled());
 }
 
 /// C6 (leak policy, positive): transient scalar work in a loop does not leak.

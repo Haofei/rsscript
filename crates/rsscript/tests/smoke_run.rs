@@ -18,9 +18,6 @@
 
 mod common;
 
-use std::fs;
-use std::process::Command;
-
 use common::reg_vm_eval_source_main;
 
 /// A representative program: arithmetic, a user function call, a `match` over the
@@ -69,37 +66,4 @@ fn smoke_program_runs_on_vm_and_aot() {
         "rsscript_smoke_run",
         SMOKE_PROGRAM,
     );
-}
-
-#[test]
-fn run_vm_cli_executes_through_register_vm() {
-    let bin = env!("CARGO_BIN_EXE_rss");
-    let dir = common::unique_temp_dir("rss-run-vm");
-    fs::create_dir_all(&dir).expect("temp dir should be creatable");
-    let file = dir.join("hello.rss");
-    fs::write(
-        &file,
-        concat!(
-            "fn main() -> String {\n",
-            "    return \"hello VM\"\n",
-            "}\n",
-        ),
-    )
-    .expect("fixture should write");
-
-    let output = Command::new(bin)
-        .args(["run", file.to_str().expect("path is utf-8")])
-        .output()
-        .expect("rss run should execute through the VM");
-
-    assert!(
-        output.status.success(),
-        "rss run failed:\nstdout:\n{}\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "hello VM\n");
-    assert_eq!(String::from_utf8_lossy(&output.stderr), "");
-
-    let _ = fs::remove_dir_all(&dir);
 }

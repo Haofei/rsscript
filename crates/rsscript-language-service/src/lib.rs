@@ -6,12 +6,11 @@
 //! deliberately document-oriented so editor clients do not couple themselves to
 //! analyzer databases, runtime values, VM registers, or optional backends.
 
+use rsscript_operation::{CancellationToken, MonotonicDeadline};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Instant;
 
 pub use rsscript_compiler::language::{
     Definition, Diagnostic, DiagnosticExplanation, Reference, RssDocumentSymbol, Severity, Span,
@@ -254,8 +253,8 @@ impl Default for LanguageService {
 
 #[derive(Debug, Clone, Copy)]
 pub struct LanguageRequest<'a> {
-    pub cancellation: Option<&'a AtomicBool>,
-    pub deadline: Option<Instant>,
+    pub cancellation: Option<&'a CancellationToken>,
+    pub deadline: Option<MonotonicDeadline>,
     pub max_diagnostics: usize,
 }
 
@@ -423,14 +422,11 @@ impl LanguageService {
 fn check_request(request: LanguageRequest<'_>) -> Result<(), LanguageServiceError> {
     if request
         .cancellation
-        .is_some_and(|flag| flag.load(Ordering::Relaxed))
+        .is_some_and(CancellationToken::is_cancelled)
     {
         return Err(LanguageServiceError::Cancelled);
     }
-    if request
-        .deadline
-        .is_some_and(|deadline| Instant::now() >= deadline)
-    {
+    if request.deadline.is_some_and(MonotonicDeadline::is_expired) {
         return Err(LanguageServiceError::DeadlineExceeded);
     }
     Ok(())
@@ -544,7 +540,8 @@ mod tests {
             DocumentKind::Source,
             "fn main() -> Unit { return Unit }\n",
         );
-        let cancelled = AtomicBool::new(true);
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
         assert_eq!(
             service.diagnostics_with(
                 "main.rss",
@@ -559,7 +556,9 @@ mod tests {
             service.diagnostics_with(
                 "main.rss",
                 LanguageRequest {
-                    deadline: Some(Instant::now() - Duration::from_millis(1)),
+                    deadline: Some(MonotonicDeadline::at(
+                        std::time::Instant::now() - Duration::from_millis(1),
+                    )),
                     ..LanguageRequest::default()
                 },
             ),

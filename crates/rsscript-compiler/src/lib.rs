@@ -1,17 +1,12 @@
 #![forbid(unsafe_code)]
 
+pub use rsscript::Diagnostic;
 #[cfg(feature = "execution")]
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 #[cfg(feature = "execution")]
 use std::path::Path;
-#[cfg(feature = "execution")]
-use std::sync::Arc;
-#[cfg(feature = "execution")]
-use std::sync::atomic::AtomicBool;
-
-pub use rsscript::Diagnostic;
 
 /// Frontend-only editor API consumed by `rsscript-language-service` during the
 /// monolith extraction. Runtime and Provider types are deliberately excluded.
@@ -27,6 +22,8 @@ pub mod language {
 pub use rsscript::ExecutionUsage;
 #[cfg(feature = "execution")]
 pub use rsscript::WorkspaceSnapshot;
+#[cfg(feature = "execution")]
+pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
 #[cfg(feature = "execution")]
 pub use rsscript_provider_api as provider;
 
@@ -180,8 +177,8 @@ pub struct RunLimits {
     pub max_depth: usize,
     pub step_budget: Option<u64>,
     pub memory_budget: Option<usize>,
-    pub cancellation: Option<Arc<AtomicBool>>,
-    pub deadline: Option<std::time::Instant>,
+    pub cancellation: Option<CancellationToken>,
+    pub deadline: Option<MonotonicDeadline>,
     pub output_budget: Option<usize>,
     pub intrinsic_call_budget: Option<u64>,
     pub provider_call_budget: Option<u64>,
@@ -456,6 +453,8 @@ mod tests {
         BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol, FunctionSignature,
         ParameterSignature, ProviderCallMode, ProviderFunctionDescriptor, RUNTIME_ABI_VERSION,
     };
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
 
     #[test]

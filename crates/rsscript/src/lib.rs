@@ -161,6 +161,8 @@ pub use rsscript_bytecode::{
     BytecodeLimits, BytecodeVerifier, VerifiedBytecode,
 };
 #[cfg(feature = "execution")]
+pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
+#[cfg(feature = "execution")]
 pub use rust_lower::lowered_symbol_name;
 #[cfg(feature = "execution")]
 pub use rust_lower::{

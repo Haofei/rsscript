@@ -171,14 +171,14 @@ impl RegVm {
         }
         if self.steps.is_multiple_of(CANCEL_POLL_INTERVAL)
             && let Some(flag) = self.limits.cancel.as_ref()
-            && flag.load(std::sync::atomic::Ordering::Relaxed)
+            && flag.is_cancelled()
         {
             return Err(EvalError::Runtime("evaluation cancelled".into()));
         }
         if self
             .limits
             .deadline
-            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+            .is_some_and(rsscript_operation::MonotonicDeadline::is_expired)
         {
             return Err(EvalError::Runtime("execution deadline exceeded".into()));
         }
@@ -208,14 +208,14 @@ impl RegVm {
             )));
         }
         if let Some(cancel) = &self.limits.cancel
-            && cancel.load(std::sync::atomic::Ordering::Relaxed)
+            && cancel.is_cancelled()
         {
             return Err(EvalError::Runtime("evaluation cancelled".into()));
         }
         if self
             .limits
             .deadline
-            .is_some_and(|deadline| std::time::Instant::now() >= deadline)
+            .is_some_and(rsscript_operation::MonotonicDeadline::is_expired)
         {
             return Err(EvalError::Runtime("execution deadline exceeded".into()));
         }
