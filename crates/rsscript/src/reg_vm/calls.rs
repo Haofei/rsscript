@@ -328,6 +328,8 @@ impl RegVm {
                 .map(|limit| limit.saturating_sub(self.stdout.len())),
             call_id: rsscript_operation::OperationId(self.provider_calls),
             resources: Some(&mut self.provider_resources),
+            blocking_allowed: true,
+            async_allowed: false,
         };
         let mut raw = function
             .call_with_context(&mut context, arg_values)

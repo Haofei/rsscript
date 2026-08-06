@@ -131,6 +131,12 @@ pub struct ProviderCallContext<'a> {
     pub remaining_output_budget: Option<usize>,
     pub call_id: OperationId,
     pub resources: Option<&'a mut ProviderResourceTable>,
+    /// Set only by a runtime lane that is prepared for a synchronous provider
+    /// call to block its worker. Inline callers remain fail-closed by default.
+    pub blocking_allowed: bool,
+    /// Set only by an async-aware dispatcher. A sync call path must not invoke
+    /// a descriptor that declares an async ABI.
+    pub async_allowed: bool,
 }
 
 impl ProviderCallContext<'_> {
@@ -163,6 +169,8 @@ impl Default for ProviderCallContext<'static> {
             remaining_output_budget: None,
             call_id: OperationId(0),
             resources: None,
+            blocking_allowed: false,
+            async_allowed: false,
         }
     }
 }
@@ -339,16 +347,13 @@ impl Drop for ProviderResourceTable {
 pub type NativeHostFn = fn(Vec<NativeValue>) -> Result<NativeValue, ProviderError>;
 
 /// Cloneable provider callable used by the runtime registry.
+type ContextualProviderFn = dyn for<'a> Fn(&mut ProviderCallContext<'a>, Vec<NativeValue>) -> Result<NativeValue, ProviderError>
+    + Send
+    + Sync;
+
 #[derive(Clone)]
 pub struct NativeInterpreterFn {
-    inner: Arc<
-        dyn for<'a> Fn(
-                &mut ProviderCallContext<'a>,
-                Vec<NativeValue>,
-            ) -> Result<NativeValue, ProviderError>
-            + Send
-            + Sync,
-    >,
+    inner: Arc<ContextualProviderFn>,
 }
 
 impl NativeInterpreterFn {
@@ -457,11 +462,19 @@ pub struct ProviderDescriptor {
     pub functions: Vec<ProviderFunctionDescriptor>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderInvocationContract {
+    pub provider_id: String,
+    pub provider_version: String,
+    pub descriptor: ProviderFunctionDescriptor,
+}
+
 pub struct ProviderFunction<T> {
     pub signature: FunctionSignature,
     pub callable: T,
 }
 
+#[derive(Clone)]
 pub struct ResolvedProviderFunction<T> {
     pub provider_id: String,
     pub provider_version: String,
@@ -566,10 +579,22 @@ impl<T> ProviderRegistry<T> {
             .map(|(symbol, function)| (symbol, function.callable))
     }
 
+    pub fn into_resolved_functions(
+        self,
+    ) -> impl Iterator<Item = (ExternalSymbol, ResolvedProviderFunction<T>)> {
+        self.functions.into_iter()
+    }
+
     pub fn functions(&self) -> impl Iterator<Item = (&ExternalSymbol, &T)> {
         self.functions
             .iter()
             .map(|(symbol, function)| (symbol, &function.callable))
+    }
+
+    pub fn resolved_functions(
+        &self,
+    ) -> impl Iterator<Item = (&ExternalSymbol, &ResolvedProviderFunction<T>)> {
+        self.functions.iter()
     }
 }
 

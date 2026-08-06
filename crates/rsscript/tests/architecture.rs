@@ -782,6 +782,33 @@ fn provider_and_workspace_boundaries_use_structured_errors() {
 }
 
 #[test]
+fn linked_provider_contracts_reach_the_invocation_path() {
+    let root = workspace_root();
+    let provider_api = read(&root.join("crates/rsscript-provider-api/src/lib.rs"));
+    for contract in [
+        "ProviderInvocationContract",
+        "ResolvedProviderFunction",
+        "blocking_allowed",
+        "async_allowed",
+        "into_resolved_functions",
+    ] {
+        assert!(
+            provider_api.contains(contract),
+            "provider API must retain `{contract}`"
+        );
+    }
+    let execution = read(&root.join("crates/rsscript/src/eval_types.rs"));
+    assert!(execution.contains("ExternalFunction::from_resolved"));
+    assert!(execution.contains("requires a blocking execution lane"));
+    assert!(execution.contains("requires an async execution lane"));
+    assert!(execution.contains("without registering a resource"));
+
+    let vm_calls = read(&root.join("crates/rsscript/src/reg_vm/calls.rs"));
+    assert!(vm_calls.contains("blocking_allowed: true"));
+    assert!(vm_calls.contains("async_allowed: false"));
+}
+
+#[test]
 fn execution_termination_does_not_classify_message_text() {
     let root = workspace_root();
     let facade = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
