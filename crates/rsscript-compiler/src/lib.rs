@@ -55,8 +55,12 @@ impl Compiler {
         file: &str,
         source: &str,
         operation: &OperationContext,
-    ) -> Vec<Diagnostic> {
-        analyze_source_result_with_operation(file, source, operation).into_diagnostics()
+    ) -> Result<Vec<Diagnostic>, CompileError> {
+        operation.check().map_err(CompileError::from)?;
+        let diagnostics =
+            analyze_source_result_with_operation(file, source, operation).into_diagnostics();
+        operation.check().map_err(CompileError::from)?;
+        Ok(diagnostics)
     }
 
     #[cfg(feature = "execution")]
@@ -810,6 +814,14 @@ mod tests {
             cancellation: Some(cancellation),
             ..OperationContext::default()
         };
+        let error = compiler
+            .check_with_operation(
+                "cancelled.rss",
+                "fn main() -> Unit { return Unit }",
+                &cancelled,
+            )
+            .expect_err("cancelled check");
+        assert_eq!(error.code(), CompileErrorCode::Cancelled);
         let error = compiler
             .compile_with_operation(
                 "cancelled.rss",
