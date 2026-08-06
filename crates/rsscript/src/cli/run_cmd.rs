@@ -17,7 +17,7 @@ use super::{
     read_cached_fingerprint, read_cli_source, required_flag_value, run_cache_dir,
     run_input_fingerprint, write_cached_fingerprint,
 };
-use crate::cli::process::{run_bounded, run_bounded_with_limits};
+use crate::cli::process::{BoundedProcessKind, run_bounded, run_bounded_with_limits};
 
 const CLI_VM_WALL_TIME: Duration = Duration::from_secs(60);
 const CLI_AOT_WALL_TIME: Duration = Duration::from_secs(10 * 60);
@@ -333,7 +333,7 @@ fn build_and_run_package(
         "generated Rust build",
         CLI_AOT_WALL_TIME,
         CLI_AOT_OUTPUT_MAX_BYTES,
-        rss_process_guard::ProcessLimits::compiler_worker(),
+        BoundedProcessKind::CompilerWorker,
     ) {
         Ok(output) => output,
         Err(error) => {

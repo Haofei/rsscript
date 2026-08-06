@@ -3,11 +3,18 @@ use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::process::{Command, ExitStatus, Stdio};
+#[cfg(feature = "host-tools")]
+use std::process::Stdio;
+use std::process::{Command, ExitStatus};
+#[cfg(feature = "host-tools")]
 use std::sync::Arc;
+#[cfg(feature = "host-tools")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "host-tools")]
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(feature = "host-tools")]
+use std::time::Instant;
 
 use crate::diagnostic::Diagnostic;
 
@@ -496,72 +503,84 @@ pub(crate) fn run_bounded_command(
     timeout: Duration,
     output_cap: usize,
 ) -> Result<BoundedCommandOutput, String> {
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let (mut child, guard) = rss_process_guard::spawn_guarded(
-        command,
-        rss_process_guard::ProcessLimits::compiler_worker(),
-    )
-    .map_err(|error| format!("failed to start guarded {operation}: {error}"))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| format!("failed to capture {operation} stdout"))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| format!("failed to capture {operation} stderr"))?;
-    let output_exceeded = Arc::new(AtomicBool::new(false));
-    let stdout_exceeded = Arc::clone(&output_exceeded);
-    let stderr_exceeded = Arc::clone(&output_exceeded);
-    let stdout_reader =
-        thread::spawn(move || read_bounded_output(stdout, output_cap, &stdout_exceeded));
-    let stderr_reader =
-        thread::spawn(move || read_bounded_output(stderr, output_cap, &stderr_exceeded));
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        if let Some(status) = child
-            .try_wait()
-            .map_err(|error| format!("failed while waiting for {operation}: {error}"))?
-        {
-            break status;
-        }
-        if output_exceeded.load(Ordering::Acquire) {
-            terminate_bounded_child(&mut child, &guard);
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
+    #[cfg(not(feature = "host-tools"))]
+    {
+        let _ = (command, operation, timeout, output_cap);
+        Err(
+            "host command execution is disabled; use a composition root with `host-tools`"
+                .to_string(),
+        )
+    }
+    #[cfg(feature = "host-tools")]
+    {
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let (mut child, guard) = rss_process_guard::spawn_guarded(
+            command,
+            rss_process_guard::ProcessLimits::compiler_worker(),
+        )
+        .map_err(|error| format!("failed to start guarded {operation}: {error}"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| format!("failed to capture {operation} stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| format!("failed to capture {operation} stderr"))?;
+        let output_exceeded = Arc::new(AtomicBool::new(false));
+        let stdout_exceeded = Arc::clone(&output_exceeded);
+        let stderr_exceeded = Arc::clone(&output_exceeded);
+        let stdout_reader =
+            thread::spawn(move || read_bounded_output(stdout, output_cap, &stdout_exceeded));
+        let stderr_reader =
+            thread::spawn(move || read_bounded_output(stderr, output_cap, &stderr_exceeded));
+        let deadline = Instant::now() + timeout;
+        let status = loop {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|error| format!("failed while waiting for {operation}: {error}"))?
+            {
+                break status;
+            }
+            if output_exceeded.load(Ordering::Acquire) {
+                terminate_bounded_child(&mut child, &guard);
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(format!(
+                    "{operation} exceeded output limit of {output_cap} bytes per stream"
+                ));
+            }
+            if Instant::now() >= deadline {
+                terminate_bounded_child(&mut child, &guard);
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(format!(
+                    "{operation} exceeded deadline of {} seconds",
+                    timeout.as_secs_f64()
+                ));
+            }
+            thread::sleep(Duration::from_millis(10));
+        };
+        let (stdout, stdout_exceeded) = stdout_reader
+            .join()
+            .map_err(|_| format!("{operation} stdout reader panicked"))??;
+        let (stderr, stderr_exceeded) = stderr_reader
+            .join()
+            .map_err(|_| format!("{operation} stderr reader panicked"))??;
+        if stdout_exceeded || stderr_exceeded {
             return Err(format!(
                 "{operation} exceeded output limit of {output_cap} bytes per stream"
             ));
         }
-        if Instant::now() >= deadline {
-            terminate_bounded_child(&mut child, &guard);
-            let _ = stdout_reader.join();
-            let _ = stderr_reader.join();
-            return Err(format!(
-                "{operation} exceeded deadline of {} seconds",
-                timeout.as_secs_f64()
-            ));
-        }
-        thread::sleep(Duration::from_millis(10));
-    };
-    let (stdout, stdout_exceeded) = stdout_reader
-        .join()
-        .map_err(|_| format!("{operation} stdout reader panicked"))??;
-    let (stderr, stderr_exceeded) = stderr_reader
-        .join()
-        .map_err(|_| format!("{operation} stderr reader panicked"))??;
-    if stdout_exceeded || stderr_exceeded {
-        return Err(format!(
-            "{operation} exceeded output limit of {output_cap} bytes per stream"
-        ));
+        Ok(BoundedCommandOutput {
+            status,
+            stdout,
+            stderr,
+        })
     }
-    Ok(BoundedCommandOutput {
-        status,
-        stdout,
-        stderr,
-    })
 }
 
+#[cfg(feature = "host-tools")]
 fn terminate_bounded_child(
     child: &mut std::process::Child,
     guard: &rss_process_guard::ProcessGuard,
@@ -571,6 +590,7 @@ fn terminate_bounded_child(
     let _ = child.wait();
 }
 
+#[cfg(feature = "host-tools")]
 fn read_bounded_output(
     mut input: impl Read,
     cap: usize,

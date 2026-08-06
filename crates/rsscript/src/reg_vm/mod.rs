@@ -6986,9 +6986,8 @@ fn websocket_read_frame_payload(
 }
 
 fn process_run_output(command: &str, args: &[String]) -> Result<VmProcessOutput, VmValue> {
-    rsscript_runtime::process_run(command, args)
-        .map(vm_process_output)
-        .map_err(VmValue::string)
+    let _ = (command, args);
+    Err(VmValue::string(external_provider_required("process")))
 }
 
 fn process_run_output_timeout(
@@ -6996,42 +6995,13 @@ fn process_run_output_timeout(
     args: &[String],
     timeout_ms: i64,
 ) -> Result<VmProcessOutput, VmValue> {
-    rsscript_runtime::process_run_timeout(command, args, timeout_ms)
-        .map(vm_process_output)
-        .map_err(VmValue::string)
+    let _ = (command, args, timeout_ms);
+    Err(VmValue::string(external_provider_required("process")))
 }
 
 fn process_run_request(request: &VmProcessRequest) -> Result<VmProcessOutput, VmValue> {
-    let request = rsscript_runtime::ProcessRequest {
-        command: request.command.clone(),
-        args: request.args.clone(),
-        cwd: request.cwd.clone(),
-        stdin: request.stdin.clone(),
-        env: request
-            .env
-            .iter()
-            .map(|(name, value)| rsscript_runtime::ProcessEnv {
-                name: name.clone(),
-                value: value.clone(),
-            })
-            .collect(),
-        timeout_ms: request.timeout_ms,
-        merge_stderr: request.merge_stderr,
-        output_cap_bytes: request.output_cap_bytes,
-    };
-    rsscript_runtime::process_run_request(&request)
-        .map(vm_process_output)
-        .map_err(VmValue::string)
-}
-
-fn vm_process_output(output: rsscript_runtime::ProcessOutput) -> VmProcessOutput {
-    VmProcessOutput {
-        status: output.status,
-        stdout: output.stdout,
-        stderr: output.stderr,
-        merged: output.merged,
-        truncated: output.truncated,
-    }
+    let _ = request;
+    Err(VmValue::string(external_provider_required("process")))
 }
 
 fn process_stdout_result(command: &str, output: VmProcessOutput) -> Result<String, VmValue> {
@@ -7081,10 +7051,9 @@ fn file_read_remaining(file: &mut VmFileState) -> std::io::Result<Vec<u8>> {
             "file is not open for reading",
         ));
     }
-    let bytes = rsscript_runtime::file_read_bytes_from_offset(&file.path, file.cursor)
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-    file.cursor = file.cursor.saturating_add(bytes.len() as u64);
-    Ok(bytes)
+    Err(std::io::Error::other(external_provider_required(
+        "filesystem",
+    )))
 }
 
 fn file_write_at_cursor(file: &mut VmFileState, data: &[u8]) -> std::io::Result<()> {
@@ -7159,13 +7128,21 @@ fn file_append(path: &str, data: &[u8]) -> std::io::Result<()> {
 }
 
 fn directory_list_files(root: &Path) -> std::io::Result<Vec<String>> {
-    rsscript_runtime::directory_list_files(root)
-        .map_err(|error| std::io::Error::other(error.to_string()))
+    let _ = root;
+    Err(std::io::Error::other(external_provider_required(
+        "filesystem",
+    )))
 }
 
 fn directory_list_paths(root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    rsscript_runtime::directory_list_paths(root)
-        .map_err(|error| std::io::Error::other(error.to_string()))
+    let _ = root;
+    Err(std::io::Error::other(external_provider_required(
+        "filesystem",
+    )))
+}
+
+fn external_provider_required(service: &str) -> String {
+    format!("legacy `{service}` intrinsic is unavailable; register an explicit external provider")
 }
 
 #[cfg(test)]

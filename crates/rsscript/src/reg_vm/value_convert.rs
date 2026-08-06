@@ -66,22 +66,8 @@ pub(super) fn csv_parse_row_value(bytes: &[u8]) -> Result<VmValue, VmValue> {
 }
 
 pub(super) fn csv_rows_stream_value(path: &str) -> Result<VmValue, String> {
-    let text = rsscript_runtime::file_read_string(path)
-        .map_err(|error| format!("CSV row stream open failed: {error}"))?;
-    let mut skipped_header = false;
-    let mut rows = Vec::new();
-    for line in text.lines().map(str::trim).filter(|line| !line.is_empty()) {
-        if !skipped_header {
-            skipped_header = true;
-            continue;
-        }
-        rows.push(row_value(
-            line.split(',')
-                .map(|field| field.trim().to_string())
-                .collect(),
-        ));
-    }
-    Ok(stream_value(rows))
+    let _ = path;
+    Err(external_provider_required("filesystem"))
 }
 
 pub(super) fn row_field_string_value(fields: Vec<String>, index: i64) -> Result<VmValue, VmValue> {
@@ -102,17 +88,8 @@ pub(super) fn yaml_parse_json_value(text: &str) -> Result<VmValue, VmValue> {
 }
 
 pub(super) fn toml_parse_file_value(path: &str) -> Result<VmValue, VmValue> {
-    rsscript_runtime::file_read_string(path)
-        .map_err(|error| json_error_value(error.to_string()))
-        .and_then(|text| {
-            text.parse::<toml::Value>()
-                .map_err(|error| json_error_value(error.to_string()))
-        })
-        .and_then(|value| {
-            serde_json::to_value(value)
-                .map(|value| VmValue::Json(Rc::new(value)))
-                .map_err(|error| json_error_value(error.to_string()))
-        })
+    let _ = path;
+    Err(json_error_value(external_provider_required("filesystem")))
 }
 
 pub(super) fn split_text_lines(value: &str) -> Vec<String> {

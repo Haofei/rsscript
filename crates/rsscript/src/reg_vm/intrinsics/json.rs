@@ -540,13 +540,8 @@ impl RegVm {
 }
 
 fn json_parse_file_value(path: &str) -> Result<VmValue, VmValue> {
-    rsscript_runtime::file_read_string(path)
-        .map_err(|error| json_error_value(error.to_string()))
-        .and_then(|text| {
-            serde_json::from_str::<serde_json::Value>(&text)
-                .map(|value| VmValue::Json(Rc::new(value)))
-                .map_err(|error| json_error_value(error.to_string()))
-        })
+    let _ = path;
+    Err(json_error_value(external_provider_required("filesystem")))
 }
 
 #[cfg(test)]
@@ -554,17 +549,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_file_rejects_oversized_input_before_json_parsing() {
-        let path = std::env::temp_dir().join(format!(
-            "rsscript-vm-json-parse-limit-{}",
-            std::process::id()
-        ));
-        let file = std::fs::File::create(&path).expect("test file should be created");
-        file.set_len(rsscript_runtime::RUNTIME_READ_CEILING_BYTES as u64 + 1)
-            .expect("sparse test file should be sized");
-
-        assert!(json_parse_file_value(&path.to_string_lossy()).is_err());
-
-        let _ = std::fs::remove_file(path);
+    fn parse_file_requires_an_external_filesystem_provider() {
+        let error = json_parse_file_value("data.json").unwrap_err();
+        assert!(error.display().contains("external provider"));
     }
 }

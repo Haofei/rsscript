@@ -156,9 +156,8 @@ impl RegVm {
 }
 
 fn path_read_string_value(path: &str) -> Result<VmValue, VmValue> {
-    rsscript_runtime::file_read_string(path)
-        .map(VmValue::string)
-        .map_err(|error| file_error_value(error.to_string()))
+    let _ = path;
+    Err(file_error_value(external_provider_required("filesystem")))
 }
 
 #[cfg(test)]
@@ -166,17 +165,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn read_string_rejects_oversized_file() {
-        let path = std::env::temp_dir().join(format!(
-            "rsscript-vm-path-read-limit-{}",
-            std::process::id()
-        ));
-        let file = std::fs::File::create(&path).expect("test file should be created");
-        file.set_len(rsscript_runtime::RUNTIME_READ_CEILING_BYTES as u64 + 1)
-            .expect("sparse test file should be sized");
-
-        assert!(path_read_string_value(&path.to_string_lossy()).is_err());
-
-        let _ = std::fs::remove_file(path);
+    fn read_string_requires_an_external_filesystem_provider() {
+        let error = path_read_string_value("data.txt").unwrap_err();
+        assert!(error.display().contains("external provider"));
     }
 }

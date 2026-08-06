@@ -20,15 +20,13 @@ test = false
 
 [dependencies]
 rss-native-abi = { path = "../native-abi", features = ["host"], optional = true }
-rss-process-guard = { path = "../process-guard" }
+rss-process-guard = { path = "../process-guard", optional = true }
 rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-lowering = { path = "../rsscript-lowering" }
 rsscript-provider-api = { path = "../rsscript-provider-api" }
 rsscript-semantics = { path = "../rsscript-semantics" }
-# Transitional VM/AOT compatibility intrinsics opt into the legacy host layer;
-# the runtime's own default and provider-neutral core stay host-free.
-rsscript-runtime = { path = "../runtime", default-features = false, features = ["core", "legacy-host"] }
+rsscript-runtime = { path = "../runtime", default-features = false, features = ["core"] }
 rsscript-syntax = { path = "../rsscript-syntax" }
 rsscript-work-budget = { path = "../rsscript-work-budget" }
 serde = { version = "1", features = ["derive"] }
@@ -55,7 +53,8 @@ tempfile = "3"
 vm-jit = { path = "../vm-jit", optional = true }
 
 [features]
-native-plugin = ["dep:rss-native-abi"]
+host-tools = ["dep:rss-process-guard"]
+native-plugin = ["dep:rss-native-abi", "host-tools"]
 # Native (Cranelift) baseline JIT for the integer/control core. Off by default so
 # normal builds/tests don't pull in the codegen dependency; enable for the Rust
 # differential/benchmark harnesses and force-JIT CI.

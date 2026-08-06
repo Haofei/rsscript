@@ -388,12 +388,10 @@ impl RegVm {
                 ))
             }
             RegIntrinsic::DirectoryReadString => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    rsscript_runtime::file_read_string(path)
-                        .map(VmValue::string)
-                        .map_err(|error| file_error_value(error.to_string())),
-                ))
+                let _path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(value_err(file_error_value(external_provider_required(
+                    "filesystem",
+                ))))
             }
             RegIntrinsic::DirectoryRemoveDirAll => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -517,12 +515,10 @@ impl RegVm {
                 ))
             }
             RegIntrinsic::FileReadAllAsync => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    rsscript_runtime::file_read_bytes(path)
-                        .map(|bytes| VmValue::Bytes(Rc::new(bytes)))
-                        .map_err(|error| file_error_value(error.to_string())),
-                ))
+                let _path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(value_err(file_error_value(external_provider_required(
+                    "filesystem",
+                ))))
             }
             RegIntrinsic::FileReadAll => {
                 let file_reg = *args.first().ok_or_else(|| {
@@ -552,20 +548,16 @@ impl RegVm {
                 Ok(json_result(result))
             }
             RegIntrinsic::FileReadAllStringAsync => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    rsscript_runtime::file_read_string(path)
-                        .map(VmValue::string)
-                        .map_err(|error| file_error_value(error.to_string())),
-                ))
+                let _path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(value_err(file_error_value(external_provider_required(
+                    "filesystem",
+                ))))
             }
             RegIntrinsic::FileReadBytes => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    rsscript_runtime::file_read_bytes(path)
-                        .map(|bytes| VmValue::Bytes(Rc::new(bytes)))
-                        .map_err(|error| file_error_value(error.to_string())),
-                ))
+                let _path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(value_err(file_error_value(external_provider_required(
+                    "filesystem",
+                ))))
             }
             RegIntrinsic::FileReadInto => {
                 let file_reg = *args.first().ok_or_else(|| {
@@ -591,12 +583,10 @@ impl RegVm {
                 })
             }
             RegIntrinsic::FileReadString => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    rsscript_runtime::file_read_string(path)
-                        .map(VmValue::string)
-                        .map_err(|error| file_error_value(error.to_string())),
-                ))
+                let _path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(value_err(file_error_value(external_provider_required(
+                    "filesystem",
+                ))))
             }
             RegIntrinsic::FileRemove => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -745,12 +735,10 @@ impl RegVm {
                 Ok(VmValue::string(sha256_digest(value)))
             }
             RegIntrinsic::HashSha256File => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    rsscript_runtime::file_read_bytes(path)
-                        .map(|bytes| VmValue::string(sha256_digest(&bytes)))
-                        .map_err(|error| file_error_value(error.to_string())),
-                ))
+                let _path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(value_err(file_error_value(external_provider_required(
+                    "filesystem",
+                ))))
             }
             RegIntrinsic::HashSha256String => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -1783,12 +1771,10 @@ impl RegVm {
                 Ok(json_result(yaml_parse_json_value(text)))
             }
             RegIntrinsic::YamlParseFile => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    rsscript_runtime::file_read_string(path)
-                        .map_err(|error| json_error_value(error.to_string()))
-                        .and_then(|text| yaml_parse_json_value(&text)),
-                ))
+                let _path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(value_err(json_error_value(external_provider_required(
+                    "filesystem",
+                ))))
             }
             RegIntrinsic::WeakDowngrade | RegIntrinsic::WeakFrom => {
                 Ok(intrinsic_arg(&self.stack, base, args, 0)?.clone())

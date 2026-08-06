@@ -99,6 +99,7 @@ pub(super) struct VmProcessOutput {
     pub(super) truncated: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub(super) struct VmProcessRequest {
     pub(super) command: String,
@@ -149,15 +150,8 @@ pub(super) fn file_value(path: impl Into<String>, mode: impl Into<String>, curso
 }
 
 pub(super) fn file_bytes_stream_value(path: &str, chunk_size: i64) -> Result<VmValue, String> {
-    let bytes = rsscript_runtime::file_read_bytes(path)
-        .map_err(|error| format!("file byte stream open failed: {error}"))?;
-    let chunk_size = chunk_size.max(1) as usize;
-    Ok(stream_value(
-        bytes
-            .chunks(chunk_size)
-            .map(|chunk| VmValue::Bytes(Rc::new(chunk.to_vec())))
-            .collect(),
-    ))
+    let _ = (path, chunk_size);
+    Err(external_provider_required("filesystem"))
 }
 
 pub(super) fn file_metadata_value(metadata: std::fs::Metadata) -> VmValue {
