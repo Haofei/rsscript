@@ -88,3 +88,9 @@ Host authority belongs to Provider instances. For example,
 `RootedFsProvider::new(root)` resolves every script path below `root` and
 rejects traversal and symlink escapes without changing the process current
 directory. This is authority narrowing, not a language permission system.
+
+Likewise, `HttpProvider::new(client_builder, allowed_origins)` requires the host
+to name every reachable HTTP origin. It installs the allowlist on redirect hops,
+applies the execution deadline with a 30-second hard ceiling, and bounds the
+combined response body by the remaining runtime budget and its 16 MiB provider
+ceiling.
