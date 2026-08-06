@@ -1,0 +1,9 @@
+[package]
+name = "rsscript-source-model"
+version = "0.1.0"
+edition = "2024"
+description = "Stable source coordinates and revisions for RSScript"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }

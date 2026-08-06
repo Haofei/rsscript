@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
-pub use rsscript_work_budget::{FrontendBudget, FrontendBudgetLimits, ParseRecursionGuard, Span};
+pub use rsscript_source_model::{FileId, SourceRevision, Span, TextRange};
+pub use rsscript_work_budget::{FrontendBudget, FrontendBudgetLimits, ParseRecursionGuard};
 
 pub mod ast;
 mod async_await_hoist;

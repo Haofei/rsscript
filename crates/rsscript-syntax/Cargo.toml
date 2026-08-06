@@ -9,4 +9,5 @@ license = "MIT OR Apache-2.0"
 doctest = false
 
 [dependencies]
+rsscript-source-model = { path = "../rsscript-source-model" }
 rsscript-work-budget = { path = "../rsscript-work-budget" }

@@ -5,15 +5,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use serde::{Deserialize, Serialize};
-
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Span {
-    pub file: String,
-    pub line: usize,
-    pub column: usize,
-    pub length: usize,
-}
+pub use rsscript_source_model::Span;
 
 #[derive(Debug, Clone, Copy)]
 pub struct FrontendBudgetLimits {

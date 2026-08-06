@@ -697,6 +697,30 @@ fn syntax_model_is_owned_by_the_boundary_crate() {
 }
 
 #[test]
+fn source_coordinates_are_not_owned_by_budget_accounting() {
+    let root = workspace_root();
+    let source_model = read(&root.join("crates/rsscript-source-model/src/lib.rs"));
+    for source_type in [
+        "pub struct FileId",
+        "pub struct SourceRevision",
+        "pub struct TextRange",
+        "pub struct Span",
+    ] {
+        assert!(
+            source_model.contains(source_type),
+            "source model must own `{source_type}`"
+        );
+    }
+
+    let budget = read(&root.join("crates/rsscript-work-budget/src/lib.rs"));
+    assert!(!budget.contains("pub struct Span"));
+    assert!(budget.contains("pub use rsscript_source_model::Span"));
+
+    let syntax = read(&root.join("crates/rsscript-syntax/src/lib.rs"));
+    assert!(syntax.contains("pub use rsscript_source_model"));
+}
+
+#[test]
 fn structural_semantics_are_owned_by_the_semantics_crate() {
     let root = workspace_root();
     let types = root.join("crates/rsscript-semantics/src/types.rs");

@@ -1765,9 +1765,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-source-model"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "rsscript-syntax"
 version = "0.1.0"
 dependencies = [
+ "rsscript-source-model",
  "rsscript-work-budget",
 ]
 
@@ -1775,7 +1783,7 @@ dependencies = [
 name = "rsscript-work-budget"
 version = "0.1.0"
 dependencies = [
- "serde",
+ "rsscript-source-model",
 ]
 
 [[package]]
