@@ -110,7 +110,10 @@ pub fn load_package_bindings_from_snapshot(
     bindings.sort_by(|left, right| left.symbol.cmp(&right.symbol));
 
     let library_path = build_shim_library(snapshot_root, abi_path, &native_deps, &bindings)?;
-    let loaded = rss_native_abi::load_registry(&library_path)?;
+    let loaded = rss_native_abi::load_registry(&library_path)?
+        .into_iter()
+        .map(|(symbol, callable)| (symbol, ExternalFunction::from(callable)))
+        .collect();
     validate_loaded_provider(package, &signatures, &bindings, loaded)
 }
 

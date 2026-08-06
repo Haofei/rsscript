@@ -6,5 +6,5 @@ description = "Incremental editor-facing language service for RSScript"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-rsscript-compiler = { path = "../rsscript-compiler" }
+rsscript_compiler = { package = "rsscript-sdk", path = "../rsscript-compiler" }
 rsscript-operation = { path = "../rsscript-operation" }

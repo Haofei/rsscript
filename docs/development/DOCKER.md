@@ -22,16 +22,16 @@ reproducible across platforms.
 docker compose build
 
 # Normal edit loop: runs the focused RSScript library suite.
-docker compose run --rm dev cargo test -p rsscript-engine --lib
+docker compose run --rm dev cargo test -p rsscript-compiler --lib
 
 # Full workspace gate: lint, generated packages, and every test target.
 docker compose run --rm dev cargo test --workspace --all-targets
 
 # Pre-commit compile gate with the native-JIT feature set.
-docker compose run --rm dev cargo test -p rsscript-engine --features native-jit --no-run
+docker compose run --rm dev cargo test -p rsscript-compiler --features native-jit --no-run
 
 # Slow release/demo parity checks.
-docker compose run --rm dev cargo test -p rsscript-engine --test soak -- --ignored
+docker compose run --rm dev cargo test -p rsscript-compiler --test soak -- --ignored
 
 # Open an interactive shell in the toolchain.
 docker compose run --rm dev bash
@@ -41,10 +41,10 @@ Inside the shell (or via `docker compose run --rm dev <cmd>`) every normal
 workflow is available:
 
 ```sh
-cargo test -p rsscript-engine --lib                            # focused edit loop
+cargo test -p rsscript-compiler --lib                            # focused edit loop
 cargo test --workspace --all-targets                    # exhaustive workspace gate
-cargo test -p rsscript-engine --no-run            # compile rsscript tests only
-cargo test -p rsscript-engine --features native-jit --no-run
+cargo test -p rsscript-compiler --no-run            # compile rsscript tests only
+cargo test -p rsscript-compiler --features native-jit --no-run
 cargo clippy --all-targets                 # lints
 cargo fmt --all                            # format
 cargo run -p rsscript-cli --bin rss --features host-tools -- <args> # drive the rss CLI

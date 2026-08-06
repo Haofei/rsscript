@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-pub use rsscript_engine::Diagnostic;
+pub use rsscript_compiler_core::Diagnostic;
 #[cfg(feature = "execution")]
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -11,7 +11,7 @@ use std::path::Path;
 /// Frontend-only editor API consumed by `rsscript-language-service`.
 /// Runtime and Provider types are deliberately excluded.
 pub mod language {
-    pub use rsscript_engine::{
+    pub use rsscript_compiler_core::{
         Definition, Diagnostic, DiagnosticExplanation, Reference, RssDocumentSymbol, Severity,
         Span, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, analyze_source_with_core,
         analyze_source_with_interfaces, analyze_sources_with_interfaces, document_symbols,
@@ -19,9 +19,9 @@ pub mod language {
     };
 }
 #[cfg(feature = "execution")]
-pub use rsscript_engine::ExecutionUsage;
+pub use rsscript_compiler_core::ExecutionUsage;
 #[cfg(feature = "execution")]
-pub use rsscript_engine::WorkspaceSnapshot;
+pub use rsscript_compiler_core::WorkspaceSnapshot;
 #[cfg(feature = "execution")]
 pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
 #[cfg(feature = "execution")]
@@ -29,9 +29,9 @@ pub use rsscript_provider_api as provider;
 
 #[cfg(feature = "execution")]
 use provider::{NativeInterpreterFn, ProviderDescriptor, ProviderFunction, ProviderLoadError};
-use rsscript_engine::analyze_source;
+use rsscript_compiler_core::analyze_source;
 #[cfg(feature = "execution")]
-use rsscript_engine::{
+use rsscript_compiler_core::{
     EvalError, ExecutionFailureKind, ExternalFunctionRegistry, NativeValue, PackageAnalysis,
     RegVmExecutable, VmLimits, load_workspace_snapshot, reg_vm_compile_package_input,
     reg_vm_compile_source, reg_vm_compile_validated, validate_sources_with_interfaces,
@@ -149,7 +149,7 @@ impl CompiledPackage {
         &self.executable.bytecode_artifact().header.executable_hash
     }
 
-    pub fn external_imports(&self) -> &[rsscript_engine::ExternalImport] {
+    pub fn external_imports(&self) -> &[rsscript_compiler_core::ExternalImport] {
         &self.executable.bytecode_artifact().imports
     }
 }

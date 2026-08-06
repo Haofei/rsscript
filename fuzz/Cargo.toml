@@ -31,7 +31,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 
 [dependencies.rsscript]
-package = "rsscript-engine"
+package = "rsscript-compiler"
 path = "../crates/rsscript"
 
 [dependencies.rss-testgen]

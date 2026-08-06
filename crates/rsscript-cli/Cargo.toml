@@ -22,7 +22,7 @@ native-plugin = ["rsscript/native-plugin", "host-tools"]
 native-jit = ["rsscript/native-jit", "execution"]
 
 [dependencies]
-rsscript = { package = "rsscript-engine", path = "../rsscript", default-features = false }
+rsscript = { package = "rsscript-compiler", path = "../rsscript", default-features = false }
 rss-process-guard = { path = "../process-guard", optional = true }
 hex = "0.4"
 serde_json = "1"

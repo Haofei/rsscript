@@ -42,7 +42,7 @@ tags     = ["arithmetic"]      # capability tags; feed the coverage gate (requir
    from a compiled binary). No statement semicolons, no parenthesized grouping
    (outside the parser surface today).
 2. Add the `.toml` sidecar with at least one `tags` entry.
-3. `cargo test -p rsscript-engine --test differential differential_corpus::corpus_fixtures_pass -- --exact`.
+3. `cargo test -p rsscript-compiler --test differential differential_corpus::corpus_fixtures_pass -- --exact`.
 
 ## Coverage gate
 

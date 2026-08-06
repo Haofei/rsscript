@@ -306,6 +306,14 @@ impl Hir {
             .flatten()
     }
 
+    /// All callable lookup keys and their checked signatures for executable
+    /// projection. This preserves imported aliases as well as qualified names.
+    pub fn signatures(&self) -> impl Iterator<Item = (&str, &FunctionSig)> {
+        self.signatures
+            .iter()
+            .map(|(key, signature)| (key.as_str(), signature))
+    }
+
     pub fn type_info(&self, name: &str) -> Option<&TypeInfo> {
         self.types.get(type_root_name(name))
     }

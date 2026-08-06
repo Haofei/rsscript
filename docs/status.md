@@ -15,9 +15,11 @@ The platform-neutral language cut is active:
 - neutral package analysis uses `rsscript.package_analysis.v1`; optional review
   output uses the distinct `rsscript.package_review.v1` schema.
 
-The main compatibility crate still contains analyzer orchestration, package
-tooling, VM, AOT lowering, and opt-in native loading. Stable embedders use the
-small `rsscript-compiler` façade instead of those implementation modules.
+The `rsscript-compiler` implementation still contains analyzer orchestration,
+package tooling, VM, AOT lowering, and opt-in native loading while those
+remaining boundaries are migrated. Stable embedders use the small
+`rsscript-sdk` façade instead of those implementation modules; the compiler
+does not depend back on that façade.
 Native plugin loading and guarded child-process tooling are explicit
 `native-plugin` / `host-tools` features and are absent from the compiler's
 default dependency closure. The compiler now consumes runtime `core` only; VM

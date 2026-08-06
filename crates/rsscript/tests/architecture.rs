@@ -69,6 +69,23 @@ fn metadata_direct_dependencies(metadata: &serde_json::Value, package: &str) -> 
         .collect()
 }
 
+fn metadata_normal_dependencies(metadata: &serde_json::Value, package: &str) -> BTreeSet<String> {
+    metadata["packages"]
+        .as_array()
+        .expect("metadata packages")
+        .iter()
+        .find(|candidate| candidate["name"].as_str() == Some(package))
+        .unwrap_or_else(|| panic!("metadata package `{package}`"))["dependencies"]
+        .as_array()
+        .expect("metadata dependencies")
+        .iter()
+        .filter(|dependency| {
+            dependency["kind"].is_null() && dependency["optional"].as_bool() != Some(true)
+        })
+        .filter_map(|dependency| dependency["name"].as_str().map(str::to_string))
+        .collect()
+}
+
 fn metadata_workspace_dependencies(
     metadata: &serde_json::Value,
     package: &str,
@@ -90,10 +107,14 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
     let root = workspace_root();
     let metadata = cargo_metadata(&root);
 
-    let compiler = metadata_direct_dependencies(&metadata, "rsscript-compiler");
+    let compiler = metadata_normal_dependencies(&metadata, "rsscript-compiler");
+    assert!(compiler.contains("rsscript-syntax"));
+    assert!(compiler.contains("rsscript-semantics"));
+    assert!(!compiler.contains("rsscript-sdk"));
+    let sdk = metadata_normal_dependencies(&metadata, "rsscript-sdk");
     assert!(
-        compiler.contains("rsscript-engine"),
-        "compiler façade must consume the internal engine package"
+        sdk.contains("rsscript-compiler"),
+        "embedding SDK must consume the compiler implementation"
     );
     for forbidden in [
         "rsscript-cli",
@@ -110,17 +131,14 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
     ] {
         assert!(
             !compiler.contains(forbidden),
-            "compiler façade must not depend on composition package `{forbidden}`"
+            "compiler implementation must not depend on composition package `{forbidden}`"
         );
     }
 
     let language_service = metadata_workspace_dependencies(&metadata, "rsscript-language-service");
     assert_eq!(
         language_service,
-        BTreeSet::from([
-            "rsscript-compiler".to_string(),
-            "rsscript-operation".to_string(),
-        ]),
+        BTreeSet::from(["rsscript-sdk".to_string(), "rsscript-operation".to_string(),]),
         "language service must depend only on frontend and shared operation contracts"
     );
 
@@ -944,7 +962,7 @@ fn reir_is_a_one_way_optional_integration() {
         integration_dependencies,
         BTreeSet::from([
             "reir".to_string(),
-            "rsscript-engine".to_string(),
+            "rsscript-compiler".to_string(),
             "serde_json".to_string(),
         ])
     );
@@ -997,9 +1015,9 @@ fn lsp_dependency_closure_selects_frontend_only() {
     assert!(language_service["dependencies"].get("rsscript").is_none());
     assert!(
         language_service["dependencies"]
-            .get("rsscript-compiler")
+            .get("rsscript_compiler")
             .is_some(),
-        "language service must consume the frontend compiler API, not the product monolith"
+        "language service must consume the frontend-only SDK API"
     );
 
     let compiler_manifest: toml::Value =
@@ -1070,7 +1088,7 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         "the compiler facade must be frontend-only unless execution is explicitly enabled"
     );
     assert_eq!(
-        facade["dependencies"]["rsscript_engine"]["default-features"].as_bool(),
+        facade["dependencies"]["rsscript_compiler_core"]["default-features"].as_bool(),
         Some(false)
     );
     assert_eq!(
@@ -1082,7 +1100,7 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         .expect("compiler manifest should parse");
     assert_eq!(
         manifest["package"]["name"].as_str(),
-        Some("rsscript-engine")
+        Some("rsscript-compiler")
     );
     assert_eq!(manifest["package"]["publish"].as_bool(), Some(false));
     for forbidden in ["rsscript-runtime", "rsscript-aot-runtime"] {
@@ -1146,8 +1164,8 @@ fn provider_contracts_can_be_generated_without_the_engine_or_runtime() {
     assert!(dependencies.contains("rsscript-abi-model"));
     assert!(dependencies.contains("rsscript-syntax"));
     for forbidden in [
-        "rsscript",
-        "rsscript-engine",
+        "rsscript-compiler",
+        "rsscript-sdk",
         "rsscript-runtime",
         "rsscript-aot-runtime",
         "rsscript-provider-api",
@@ -1299,7 +1317,7 @@ fn artifact_verifier_owns_instruction_validation() {
             .expect("bytecode manifest should parse");
     let dependencies = dependency_packages(&manifest);
     for forbidden in [
-        "rsscript-engine",
+        "rsscript-sdk",
         "rsscript-compiler",
         "rsscript-semantics",
         "rsscript-runtime",

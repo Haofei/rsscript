@@ -436,9 +436,9 @@ dependencies = [
 name = "embedded-report-pipeline"
 version = "0.1.0"
 dependencies = [
- "rsscript-compiler",
  "rsscript-provider-fs",
  "rsscript-provider-log",
+ "rsscript-sdk",
  "sha2",
 ]
 
@@ -1528,7 +1528,7 @@ dependencies = [
 name = "rss-testgen"
 version = "0.1.0"
 dependencies = [
- "rsscript-engine",
+ "rsscript-compiler",
 ]
 
 [[package]]
@@ -1590,7 +1590,7 @@ version = "0.1.0"
 dependencies = [
  "hex",
  "rss-process-guard",
- "rsscript-engine",
+ "rsscript-compiler",
  "serde_json",
  "sha2",
  "tempfile",
@@ -1600,17 +1600,6 @@ dependencies = [
 
 [[package]]
 name = "rsscript-compiler"
-version = "0.1.0"
-dependencies = [
- "rsscript-bytecode",
- "rsscript-engine",
- "rsscript-operation",
- "rsscript-provider-api",
- "tempfile",
-]
-
-[[package]]
-name = "rsscript-engine"
 version = "0.1.0"
 dependencies = [
  "base64",
@@ -1661,8 +1650,8 @@ version = "0.1.0"
 name = "rsscript-language-service"
 version = "0.1.0"
 dependencies = [
- "rsscript-compiler",
  "rsscript-operation",
+ "rsscript-sdk",
 ]
 
 [[package]]
@@ -1769,8 +1758,19 @@ name = "rsscript-review-reir"
 version = "0.1.0"
 dependencies = [
  "reir",
- "rsscript-engine",
+ "rsscript-compiler",
  "serde_json",
+]
+
+[[package]]
+name = "rsscript-sdk"
+version = "0.1.0"
+dependencies = [
+ "rsscript-bytecode",
+ "rsscript-compiler",
+ "rsscript-operation",
+ "rsscript-provider-api",
+ "tempfile",
 ]
 
 [[package]]

@@ -166,7 +166,7 @@ const AST_CORPUS_WORKERS: usize = 1;
 /// non-thread-safe Rc state) and reuses it over a size-descending share of the
 /// corpus. Giant inputs start first to avoid a long single-worker tail. A debug
 /// build is still slow; run the gate in release:
-/// `cargo test -p rsscript-engine --release --lib selfhost_parity::ast_parity_corpus -- --ignored --nocapture`.
+/// `cargo test -p rsscript-compiler --release --lib selfhost_parity::ast_parity_corpus -- --ignored --nocapture`.
 /// The fast inner-loop gate is `ast_parity_samples` (non-ignored, curated subset).
 #[test]
 #[ignore]

@@ -1,16 +1,16 @@
 [package]
-name = "rsscript-compiler"
+name = "rsscript-sdk"
 version = "0.1.0"
 edition = "2024"
-description = "Stable compiler and embedding facade for RSScript"
+description = "Stable compiler, VM, and Provider embedding facade for RSScript"
 license = "MIT OR Apache-2.0"
 
 [features]
 default = []
-execution = ["rsscript_engine/execution", "dep:rsscript-operation", "dep:rsscript-provider-api"]
+execution = ["rsscript_compiler_core/execution", "dep:rsscript-operation", "dep:rsscript-provider-api"]
 
 [dependencies]
-rsscript_engine = { package = "rsscript-engine", path = "../rsscript", default-features = false, features = ["language-service"] }
+rsscript_compiler_core = { package = "rsscript-compiler", path = "../rsscript", default-features = false, features = ["language-service"] }
 rsscript-operation = { path = "../rsscript-operation", optional = true }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
 

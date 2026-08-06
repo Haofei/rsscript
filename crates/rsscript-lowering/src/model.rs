@@ -366,7 +366,7 @@ pub struct ExecutableExternalImport {
 #[derive(Debug, Clone, Default)]
 pub struct ExecutableProgram {
     functions: BTreeMap<String, ExecutableFunction>,
-    signatures: BTreeMap<(Option<String>, String), ExecutableSignature>,
+    signatures: BTreeMap<String, ExecutableSignature>,
     types: BTreeMap<String, ExecutableTypeInfo>,
     resource_drop_bodies: BTreeMap<String, ExecutableBlock>,
     sum_variant_types: BTreeMap<String, String>,
@@ -388,9 +388,20 @@ impl ExecutableProgram {
         namespace: Option<&str>,
         name: &str,
     ) -> Option<&ExecutableSignature> {
-        self.signatures
-            .get(&(namespace.map(str::to_owned), name.to_owned()))
-            .or_else(|| self.signatures.get(&(None, name.to_owned())))
+        if let Some(namespace) = namespace {
+            let qualified = format!("{namespace}.{name}");
+            if let Some(signature) = self.signatures.get(&qualified) {
+                return Some(signature);
+            }
+            let qualified = format!("{}.{}", type_root_name(namespace), name);
+            if let Some(signature) = self.signatures.get(&qualified) {
+                return Some(signature);
+            }
+        }
+        namespace
+            .is_none()
+            .then(|| self.signatures.get(name))
+            .flatten()
     }
 
     pub fn type_info(&self, name: &str) -> Option<&ExecutableTypeInfo> {
@@ -449,10 +460,6 @@ pub(crate) fn project_hir(
             continue;
         };
         let signature = project_signature(hir, signature);
-        program.signatures.insert(
-            (signature.namespace.clone(), signature.name.clone()),
-            signature.clone(),
-        );
         program.functions.insert(
             name.to_owned(),
             ExecutableFunction {
@@ -463,15 +470,12 @@ pub(crate) fn project_hir(
             },
         );
     }
+    for (key, signature) in hir.signatures() {
+        program
+            .signatures
+            .insert(key.to_owned(), project_signature(hir, signature));
+    }
     for call in hir.call_sites() {
-        let checked::CallResolution::Resolved { signature, .. } = &call.resolution else {
-            continue;
-        };
-        let signature = project_signature(hir, signature);
-        program.signatures.insert(
-            (signature.namespace.clone(), signature.name.clone()),
-            signature,
-        );
         if let syntax::Callee::Qualified { namespace, name } = &call.callee {
             let key = (
                 type_root_name(namespace).to_owned(),

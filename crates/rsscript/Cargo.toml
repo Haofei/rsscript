@@ -1,8 +1,8 @@
 [package]
-name = "rsscript-engine"
+name = "rsscript-compiler"
 version = "0.1.0"
 edition = "2024"
-description = "Internal frontend and execution engine for the RSScript constrained scripting language"
+description = "RSScript frontend, semantic analysis, and provider-neutral lowering implementation"
 license = "MIT OR Apache-2.0"
 publish = false
 autotests = false
