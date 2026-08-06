@@ -2,14 +2,18 @@
 
 use std::collections::BTreeMap;
 use std::io;
+use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
 use rsscript_abi_model::ExternalSymbol;
 use rsscript_provider_api::{
-    NativeInterpreterFn, NativeValue, ProviderError, ProviderFunction, ProviderFunctionDescriptor,
+    NativeInterpreterFn, NativeValue, ProviderCallContext, ProviderError, ProviderFunction,
+    ProviderFunctionDescriptor,
 };
 
 include!(concat!(env!("OUT_DIR"), "/provider_contract.rs"));
+
+const MAX_READ_BYTES: usize = 16 * 1024 * 1024;
 
 /// Filesystem authority rooted at one host-selected directory.
 ///
@@ -48,18 +52,40 @@ impl RootedFsProvider {
         let read_provider = self.clone();
         let write_provider = self.clone();
         BTreeMap::from([
-            binding(read, move |mut args| {
+            binding(read, move |context, mut args| {
+                context.check_cancelled()?;
                 let NativeValue::String(path) = args.remove(0) else {
                     return Err(ProviderError::invalid_argument("path must be String"));
                 };
                 let path = read_provider
                     .resolve_existing(&path)
                     .map_err(|error| ProviderError::from_io("resolve read path", error))?;
-                std::fs::read_to_string(path)
-                    .map(NativeValue::String)
-                    .map_err(|error| ProviderError::internal(error.to_string()))
+                let limit = context
+                    .remaining_byte_budget
+                    .map_or(MAX_READ_BYTES, |budget| budget.min(MAX_READ_BYTES));
+                let metadata = std::fs::metadata(&path)
+                    .map_err(|error| ProviderError::from_io("inspect read path", error))?;
+                if metadata.len() > limit as u64 {
+                    return Err(ProviderError::resource_exhausted(format!(
+                        "filesystem read exceeds {limit} bytes"
+                    )));
+                }
+                let file = std::fs::File::open(path)
+                    .map_err(|error| ProviderError::from_io("open read path", error))?;
+                let mut text = String::with_capacity(metadata.len() as usize);
+                file.take(limit as u64 + 1)
+                    .read_to_string(&mut text)
+                    .map_err(|error| ProviderError::from_io("read text", error))?;
+                if text.len() > limit {
+                    return Err(ProviderError::resource_exhausted(format!(
+                        "filesystem read exceeds {limit} bytes"
+                    )));
+                }
+                context.check_cancelled()?;
+                Ok(NativeValue::String(text))
             }),
-            binding(write, move |mut args| {
+            binding(write, move |context, mut args| {
+                context.check_cancelled()?;
                 let NativeValue::String(path) = args.remove(0) else {
                     return Err(ProviderError::invalid_argument("path must be String"));
                 };
@@ -70,8 +96,9 @@ impl RootedFsProvider {
                     .resolve_for_write(&path)
                     .map_err(|error| ProviderError::from_io("resolve write path", error))?;
                 std::fs::write(path, text)
-                    .map(|_| NativeValue::Unit)
-                    .map_err(|error| ProviderError::internal(error.to_string()))
+                    .map_err(|error| ProviderError::from_io("write text", error))?;
+                context.check_cancelled()?;
+                Ok(NativeValue::Unit)
             }),
         ])
     }
@@ -129,13 +156,19 @@ impl RootedFsProvider {
 
 fn binding(
     descriptor: ProviderFunctionDescriptor,
-    call: impl Fn(Vec<NativeValue>) -> Result<NativeValue, ProviderError> + Send + Sync + 'static,
+    call: impl for<'a> Fn(
+        &mut ProviderCallContext<'a>,
+        Vec<NativeValue>,
+    ) -> Result<NativeValue, ProviderError>
+    + Send
+    + Sync
+    + 'static,
 ) -> (ExternalSymbol, ProviderFunction<NativeInterpreterFn>) {
     (
         descriptor.symbol,
         ProviderFunction {
             signature: descriptor.signature,
-            callable: NativeInterpreterFn::new(call),
+            callable: NativeInterpreterFn::new_contextual(call),
         },
     )
 }
@@ -170,6 +203,37 @@ mod tests {
         let provider = RootedFsProvider::new(&root).unwrap();
         let error = provider.resolve_for_write("../outside.txt").unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn read_obeys_runtime_byte_budget() {
+        let root = std::env::temp_dir().join(format!(
+            "rsscript-provider-fs-budget-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("large.txt"), "0123456789abcdef").unwrap();
+        let provider = RootedFsProvider::new(&root).unwrap();
+        let read = provider
+            .functions()
+            .into_iter()
+            .find(|(symbol, _)| symbol.as_str() == "host.fs.read_text")
+            .unwrap()
+            .1;
+        let mut context = ProviderCallContext {
+            remaining_byte_budget: Some(8),
+            blocking_allowed: true,
+            ..ProviderCallContext::default()
+        };
+        let error = read
+            .callable
+            .call_with_context(&mut context, vec![NativeValue::String("large.txt".into())])
+            .unwrap_err();
+        assert_eq!(
+            error.code,
+            rsscript_provider_api::ProviderErrorCode::ResourceExhausted
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }
