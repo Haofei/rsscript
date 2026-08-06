@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
@@ -200,6 +201,9 @@ pub struct BytecodeLimits {
     pub max_artifact_bytes: usize,
     pub max_payload_bytes: usize,
     pub max_imports: usize,
+    pub max_functions: usize,
+    pub max_registers_per_function: usize,
+    pub max_instructions: usize,
 }
 
 impl Default for BytecodeLimits {
@@ -208,6 +212,9 @@ impl Default for BytecodeLimits {
             max_artifact_bytes: 64 * 1024 * 1024,
             max_payload_bytes: 48 * 1024 * 1024,
             max_imports: 16_384,
+            max_functions: 65_536,
+            max_registers_per_function: 1_048_576,
+            max_instructions: 10_000_000,
         }
     }
 }
@@ -270,6 +277,7 @@ impl BytecodeVerifier {
         {
             return Err(BytecodeError::ImportAbiMismatch);
         }
+        verify_executable_payload(&artifact.payload, &artifact.imports, self.limits)?;
         Ok(VerifiedBytecode { artifact })
     }
 }
@@ -279,6 +287,469 @@ impl Default for BytecodeVerifier {
         Self::new(BytecodeLimits::default())
     }
 }
+
+/// Validate the executable instruction payload without linking the compiler or
+/// VM implementation. The wire format is intentionally inspected as data so a
+/// verifier-only process can reject malformed control-flow, register, function,
+/// and import references before any engine-specific deserialization occurs.
+fn verify_executable_payload(
+    payload: &[u8],
+    imports: &[ExternalImport],
+    limits: BytecodeLimits,
+) -> Result<(), BytecodeError> {
+    let value: serde_json::Value = serde_json::from_slice(payload)
+        .map_err(|error| BytecodeError::InvalidPayload(error.to_string()))?;
+    let unit = value
+        .as_object()
+        .ok_or_else(|| invalid_payload("unit is not an object"))?;
+    require_object_fields(
+        unit,
+        &[
+            "functions",
+            "function_ids",
+            "resource_drop_functions",
+            "types",
+            "native_signatures",
+            "closure_identity_observable",
+        ],
+        "unit",
+    )?;
+    let functions = unit["functions"]
+        .as_array()
+        .ok_or_else(|| invalid_payload("functions is not an array"))?;
+    if functions.len() > limits.max_functions {
+        return Err(BytecodeError::LimitExceeded("function count"));
+    }
+
+    let mut total_instructions = 0usize;
+    let mut called_imports = BTreeSet::new();
+    for (function_id, value) in functions.iter().enumerate() {
+        let function = value
+            .as_object()
+            .ok_or_else(|| invalid_payload(format!("function {function_id} is not an object")))?;
+        require_object_fields(
+            function,
+            &["name", "params", "captures", "regs", "local_regs", "code"],
+            &format!("function {function_id}"),
+        )?;
+        let name = function["name"].as_str().ok_or_else(|| {
+            invalid_payload(format!("function {function_id} name is not a string"))
+        })?;
+        let registers = json_usize(&function["regs"], "register count")?;
+        let params = json_usize(&function["params"], "parameter count")?;
+        let captures = json_usize(&function["captures"], "capture count")?;
+        if registers > limits.max_registers_per_function {
+            return Err(BytecodeError::LimitExceeded("register count"));
+        }
+        if params > registers || captures > registers {
+            return Err(invalid_payload(format!(
+                "function {function_id} has more parameters/captures than registers"
+            )));
+        }
+        let locals = function["local_regs"].as_object().ok_or_else(|| {
+            invalid_payload(format!("function {function_id} locals is not an object"))
+        })?;
+        for (local, register) in locals {
+            verify_register(function_id, registers, json_usize(register, local)?, local)?;
+        }
+        let code = function["code"].as_array().ok_or_else(|| {
+            invalid_payload(format!("function {function_id} code is not an array"))
+        })?;
+        total_instructions = total_instructions
+            .checked_add(code.len())
+            .ok_or(BytecodeError::LimitExceeded("instruction count"))?;
+        if total_instructions > limits.max_instructions {
+            return Err(BytecodeError::LimitExceeded("instruction count"));
+        }
+        for (ip, instruction) in code.iter().enumerate() {
+            verify_wire_instruction(
+                function_id,
+                ip,
+                registers,
+                code.len(),
+                functions.len(),
+                instruction,
+                &mut called_imports,
+            )?;
+        }
+        let _ = name;
+    }
+
+    verify_function_map(unit, "function_ids", functions, true)?;
+    verify_function_map(unit, "resource_drop_functions", functions, false)?;
+    let declared_imports = imports
+        .iter()
+        .map(|import| import.symbol.as_str().to_string())
+        .collect::<BTreeSet<_>>();
+    if called_imports != declared_imports {
+        return Err(invalid_payload(format!(
+            "external call table mismatch: instructions={called_imports:?}, imports={declared_imports:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn verify_function_map(
+    unit: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+    functions: &[serde_json::Value],
+    names_must_match: bool,
+) -> Result<(), BytecodeError> {
+    let entries = unit[field]
+        .as_object()
+        .ok_or_else(|| invalid_payload(format!("{field} is not an object")))?;
+    for (name, value) in entries {
+        let function_id = json_usize(value, field)?;
+        let function = functions.get(function_id).ok_or_else(|| {
+            invalid_payload(format!(
+                "{field} `{name}` references missing function {function_id}"
+            ))
+        })?;
+        if names_must_match
+            && function.get("name").and_then(serde_json::Value::as_str) != Some(name)
+        {
+            return Err(invalid_payload(format!(
+                "function map `{name}` does not match function metadata"
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_wire_instruction(
+    function_id: usize,
+    ip: usize,
+    register_count: usize,
+    code_len: usize,
+    function_count: usize,
+    instruction: &serde_json::Value,
+    called_imports: &mut BTreeSet<String>,
+) -> Result<(), BytecodeError> {
+    if let Some(opcode) = instruction.as_str() {
+        if opcode == "TailCallGuard" {
+            return Ok(());
+        }
+        return Err(invalid_payload(format!(
+            "function {function_id} instruction {ip} has unknown unit opcode `{opcode}`"
+        )));
+    }
+    let (opcode, fields) = instruction
+        .as_object()
+        .filter(|outer| outer.len() == 1)
+        .and_then(|outer| outer.iter().next())
+        .ok_or_else(|| {
+            invalid_payload(format!(
+                "function {function_id} instruction {ip} has invalid encoding"
+            ))
+        })?;
+    if !KNOWN_OPCODES.contains(&opcode.as_str()) {
+        return Err(invalid_payload(format!(
+            "function {function_id} instruction {ip} has unknown opcode `{opcode}`"
+        )));
+    }
+    let fields = fields.as_object().ok_or_else(|| {
+        invalid_payload(format!(
+            "function {function_id} instruction {ip} fields are not an object"
+        ))
+    })?;
+    for target_field in [
+        "target", "some_ip", "none_ip", "ok_ip", "err_ip", "match_ip", "else_ip",
+    ] {
+        if let Some(target) = fields.get(target_field) {
+            let target = json_usize(target, target_field)?;
+            if target >= code_len {
+                return Err(invalid_payload(format!(
+                    "function {function_id} instruction {ip} jumps outside its body to {target}"
+                )));
+            }
+        }
+    }
+    if matches!(opcode.as_str(), "MakeClosure" | "CallKnown" | "SpawnTask") {
+        let target = fields
+            .get("function")
+            .ok_or_else(|| invalid_payload(format!("{opcode} is missing function")))?;
+        let target = json_usize(target, "function")?;
+        if target >= function_count {
+            return Err(invalid_payload(format!(
+                "function {function_id} instruction {ip} references missing function {target}"
+            )));
+        }
+    }
+    if opcode == "CallDynamic" {
+        for entry in fields
+            .get("dispatch")
+            .and_then(serde_json::Value::as_array)
+            .ok_or_else(|| invalid_payload("CallDynamic dispatch is not an array"))?
+        {
+            let tuple = entry
+                .as_array()
+                .filter(|tuple| tuple.len() == 2)
+                .ok_or_else(|| invalid_payload("CallDynamic dispatch entry is invalid"))?;
+            let target = json_usize(&tuple[1], "dispatch target")?;
+            if target >= function_count {
+                return Err(invalid_payload(format!(
+                    "missing dispatch function {target}"
+                )));
+            }
+        }
+    }
+    if opcode == "CallExternal" {
+        let symbol = fields
+            .get("key")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| invalid_payload("CallExternal key is not a string"))?;
+        called_imports.insert(symbol.to_string());
+    }
+    for (field, value) in fields {
+        verify_register_field(function_id, ip, register_count, opcode, field, value)?;
+    }
+    Ok(())
+}
+
+fn verify_register_field(
+    function_id: usize,
+    ip: usize,
+    register_count: usize,
+    opcode: &str,
+    field: &str,
+    value: &serde_json::Value,
+) -> Result<(), BytecodeError> {
+    let scalar_register = matches!(
+        field,
+        "dst"
+            | "src"
+            | "reg"
+            | "base"
+            | "lhs"
+            | "rhs"
+            | "cond"
+            | "resource"
+            | "map"
+            | "list"
+            | "closure"
+            | "winner"
+            | "buffer"
+            | "builder"
+            | "left"
+            | "right"
+            | "state"
+            | "folder"
+            | "predicate"
+            | "mapper"
+            | "values"
+            | "deque"
+            | "set"
+            | "callback"
+            | "compare"
+    ) || (field == "key" && opcode != "CallExternal")
+        || (field == "value" && !opcode.starts_with("Load"))
+        || (field == "index" && matches!(opcode, "ListGet" | "ListRemoveAt" | "ListSet"));
+    if scalar_register {
+        return verify_register(
+            function_id,
+            register_count,
+            json_usize(value, field)?,
+            field,
+        );
+    }
+    if matches!(field, "args" | "captures" | "cleanup" | "handles" | "items") {
+        let values = value.as_array().ok_or_else(|| {
+            invalid_payload(format!(
+                "function {function_id} instruction {ip} field `{field}` is not an array"
+            ))
+        })?;
+        for register in values {
+            verify_register(
+                function_id,
+                register_count,
+                json_usize(register, field)?,
+                field,
+            )?;
+        }
+    } else if field == "fields" {
+        verify_tuple_registers(function_id, register_count, value, &[1])?;
+    } else if field == "entries" {
+        verify_tuple_registers(function_id, register_count, value, &[0, 1])?;
+    }
+    Ok(())
+}
+
+fn verify_tuple_registers(
+    function_id: usize,
+    register_count: usize,
+    value: &serde_json::Value,
+    positions: &[usize],
+) -> Result<(), BytecodeError> {
+    for entry in value
+        .as_array()
+        .ok_or_else(|| invalid_payload("register tuple list is not an array"))?
+    {
+        let tuple = entry
+            .as_array()
+            .ok_or_else(|| invalid_payload("register tuple entry is not an array"))?;
+        for position in positions {
+            let register = tuple
+                .get(*position)
+                .ok_or_else(|| invalid_payload("register tuple is incomplete"))?;
+            verify_register(
+                function_id,
+                register_count,
+                json_usize(register, "tuple")?,
+                "tuple",
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn verify_register(
+    function_id: usize,
+    register_count: usize,
+    register: usize,
+    field: &str,
+) -> Result<(), BytecodeError> {
+    if register >= register_count {
+        Err(invalid_payload(format!(
+            "function {function_id} field `{field}` references register {register}, limit is {register_count}"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+fn json_usize(value: &serde_json::Value, field: &str) -> Result<usize, BytecodeError> {
+    value
+        .as_u64()
+        .and_then(|value| usize::try_from(value).ok())
+        .ok_or_else(|| invalid_payload(format!("{field} is not a valid index")))
+}
+
+fn require_object_fields(
+    object: &serde_json::Map<String, serde_json::Value>,
+    expected: &[&str],
+    context: &str,
+) -> Result<(), BytecodeError> {
+    let actual = object.keys().map(String::as_str).collect::<BTreeSet<_>>();
+    let expected = expected.iter().copied().collect::<BTreeSet<_>>();
+    if actual != expected {
+        return Err(invalid_payload(format!(
+            "{context} fields differ: actual={actual:?}, expected={expected:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn invalid_payload(message: impl Into<String>) -> BytecodeError {
+    BytecodeError::InvalidPayload(message.into())
+}
+
+const KNOWN_OPCODES: &[&str] = &[
+    "LoadUnit",
+    "LoadInt",
+    "LoadFloat",
+    "LoadBool",
+    "LoadString",
+    "LoadChar",
+    "Move",
+    "DeepCopy",
+    "DeepCopyElided",
+    "Manage",
+    "GetField",
+    "GetFieldSlot",
+    "SetFieldSlot",
+    "SetField",
+    "MakeStruct",
+    "ResourceDrop",
+    "MakeVariant",
+    "MakeList",
+    "MakeObject",
+    "MakeMap",
+    "AddInt",
+    "SubInt",
+    "MulInt",
+    "DivInt",
+    "ModInt",
+    "BitAndInt",
+    "BitOrInt",
+    "BitXorInt",
+    "ShiftLeftInt",
+    "ShiftRightInt",
+    "LessInt",
+    "LessEqualInt",
+    "GreaterInt",
+    "GreaterEqualInt",
+    "Equal",
+    "NotEqual",
+    "Jump",
+    "JumpIfBool",
+    "JumpIfIntCompare",
+    "MatchOption",
+    "MatchResult",
+    "MatchVariant",
+    "RuntimeError",
+    "MatchMapGet",
+    "MatchSortedMapGet",
+    "UnwrapSome",
+    "UnwrapVariantValue",
+    "MakeClosure",
+    "MakeSome",
+    "LoadNone",
+    "CallKnown",
+    "CallDynamic",
+    "SpawnTask",
+    "AwaitJoin",
+    "SelectWait",
+    "CallExternal",
+    "CallClosure",
+    "NativeGuardClosureId",
+    "NativeClosureId",
+    "NativeClosureCapture",
+    "NativeFieldClosureId",
+    "NativeFieldClosureCapture",
+    "ListFilter",
+    "ListFold",
+    "ListGet",
+    "ListLen",
+    "ListMap",
+    "ListAppend",
+    "ListClear",
+    "ListPop",
+    "ListPush",
+    "ListRemoveAt",
+    "ListSet",
+    "ListSort",
+    "ListSortBy",
+    "ListSortWith",
+    "DequeClear",
+    "DequePopBack",
+    "DequePopFront",
+    "DequePushBack",
+    "DequePushFront",
+    "SetClear",
+    "SetForEach",
+    "SetInsert",
+    "SetRemove",
+    "SortedSetClear",
+    "SortedSetInsert",
+    "SortedSetRemove",
+    "SortedMapClear",
+    "SortedMapInsert",
+    "SortedMapRemove",
+    "MapGet",
+    "MapClear",
+    "MapInsertOld",
+    "MapRemove",
+    "BufferClear",
+    "MapInsert",
+    "StringBuilderPush",
+    "StringBuilderFinish",
+    "StringConcat",
+    "CallIntrinsic",
+    "CallTypedIntrinsic",
+    "TryResult",
+    "Return",
+];
 
 fn digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
@@ -406,13 +877,14 @@ mod tests {
 
     #[test]
     fn round_trip_requires_intact_artifact() {
-        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], vec![1, 2, 3])
+        let payload = minimal_payload();
+        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], payload.clone())
             .expect("artifact");
         let bytes = artifact.to_bytes().expect("bytes");
         let verified = BytecodeVerifier::default()
             .verify(&bytes)
             .expect("verified");
-        assert_eq!(verified.artifact().payload, [1, 2, 3]);
+        assert_eq!(verified.artifact().payload, payload);
 
         let mut corrupt = bytes;
         *corrupt.last_mut().expect("non-empty") ^= 1;
@@ -421,7 +893,7 @@ mod tests {
 
     #[test]
     fn unknown_optional_sections_are_forward_compatible() {
-        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], vec![1, 2, 3])
+        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], minimal_payload())
             .expect("artifact");
         let mut bytes = artifact.to_bytes().expect("bytes");
         bytes[BYTECODE_MAGIC.len()..BYTECODE_MAGIC.len() + 2].copy_from_slice(&5u16.to_be_bytes());
@@ -434,7 +906,7 @@ mod tests {
 
     #[test]
     fn unknown_required_sections_fail_closed() {
-        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], vec![1, 2, 3])
+        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], minimal_payload())
             .expect("artifact");
         let mut bytes = artifact.to_bytes().expect("bytes");
         bytes[BYTECODE_MAGIC.len()..BYTECODE_MAGIC.len() + 2].copy_from_slice(&5u16.to_be_bytes());
@@ -448,7 +920,7 @@ mod tests {
 
     #[test]
     fn noncanonical_json_section_is_rejected() {
-        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], vec![1, 2, 3])
+        let artifact = BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], minimal_payload())
             .expect("artifact");
         let bytes = artifact.to_bytes().expect("bytes");
         let header_offset = BYTECODE_MAGIC.len() + 2;
@@ -472,12 +944,78 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn verifier_rejects_unknown_instruction_with_a_valid_envelope() {
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "functions": [{
+                "name": "main",
+                "params": 0,
+                "captures": 0,
+                "regs": 1,
+                "local_regs": {},
+                "code": [{"FutureOpcode": {"dst": 0}}]
+            }],
+            "function_ids": {"main": 0},
+            "resource_drop_functions": {},
+            "types": {},
+            "native_signatures": {},
+            "closure_identity_observable": false
+        }))
+        .expect("payload");
+        let artifact =
+            BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], payload).expect("artifact");
+
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact.to_bytes().expect("bytes")),
+            Err(BytecodeError::InvalidPayload(message)) if message.contains("unknown opcode")
+        ));
+    }
+
+    #[test]
+    fn verifier_rejects_out_of_range_register_with_a_valid_envelope() {
+        let payload = serde_json::to_vec(&serde_json::json!({
+            "functions": [{
+                "name": "main",
+                "params": 0,
+                "captures": 0,
+                "regs": 1,
+                "local_regs": {},
+                "code": [{"LoadUnit": {"dst": 1}}]
+            }],
+            "function_ids": {"main": 0},
+            "resource_drop_functions": {},
+            "types": {},
+            "native_signatures": {},
+            "closure_identity_observable": false
+        }))
+        .expect("payload");
+        let artifact =
+            BytecodeArtifact::new("0.1", 1, "sha256:source", vec![], payload).expect("artifact");
+
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact.to_bytes().expect("bytes")),
+            Err(BytecodeError::InvalidPayload(message)) if message.contains("register 1")
+        ));
+    }
+
     fn append_test_section(bytes: &mut Vec<u8>, kind: u8, flags: u8, data: &[u8]) {
         bytes.push(kind);
         bytes.push(flags);
         bytes.extend_from_slice(&(data.len() as u64).to_be_bytes());
         bytes.extend_from_slice(&Sha256::digest(data));
         bytes.extend_from_slice(data);
+    }
+
+    fn minimal_payload() -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "functions": [],
+            "function_ids": {},
+            "resource_drop_functions": {},
+            "types": {},
+            "native_signatures": {},
+            "closure_identity_observable": false
+        }))
+        .expect("minimal payload")
     }
 
     proptest! {
@@ -487,6 +1025,9 @@ mod tests {
                 max_artifact_bytes: 2048,
                 max_payload_bytes: 1024,
                 max_imports: 32,
+                max_functions: 32,
+                max_registers_per_function: 256,
+                max_instructions: 1024,
             });
             let _ = verifier.verify(&bytes);
         }

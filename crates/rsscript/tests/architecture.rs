@@ -1202,6 +1202,42 @@ fn abi_and_provider_crates_keep_one_way_dependencies() {
 }
 
 #[test]
+fn artifact_verifier_owns_instruction_validation() {
+    let root = workspace_root();
+    let manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-bytecode/Cargo.toml")))
+            .expect("bytecode manifest should parse");
+    let dependencies = dependency_packages(&manifest);
+    for forbidden in [
+        "rsscript-engine",
+        "rsscript-compiler",
+        "rsscript-semantics",
+        "rsscript-runtime",
+        "rsscript-aot-runtime",
+        "vm-jit",
+    ] {
+        assert!(
+            !dependencies.contains(forbidden),
+            "artifact verifier must not depend on `{forbidden}`"
+        );
+    }
+    let verifier = read(&root.join("crates/rsscript-bytecode/src/lib.rs"));
+    for invariant in [
+        "verify_executable_payload",
+        "max_functions",
+        "max_registers_per_function",
+        "max_instructions",
+        "unknown opcode",
+        "external call table mismatch",
+    ] {
+        assert!(
+            verifier.contains(invariant),
+            "artifact verifier must enforce `{invariant}`"
+        );
+    }
+}
+
+#[test]
 fn unsafe_boundary_crates_are_explicit_dependencies() {
     let root = workspace_root();
     let mut violations = Vec::new();
