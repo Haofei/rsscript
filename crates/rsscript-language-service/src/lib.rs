@@ -13,6 +13,7 @@ use std::sync::Arc;
 pub use rsscript_compiler::language::{
     Definition, Diagnostic, DiagnosticExplanation, Reference, RssDocumentSymbol, Severity, Span,
     SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, analyze_source_result_with_operation,
+    analyze_source_with_core, analyze_source_with_interfaces,
     analyze_source_with_interfaces_result_with_operation, analyze_sources_with_interfaces,
     document_symbols, explain_diagnostic_code, format_source, lint_source, symbol_index,
 };
