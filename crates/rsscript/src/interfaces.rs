@@ -2,6 +2,7 @@
 
 pub(crate) use rsscript_interface_catalog::{CORE_INTERFACES, STANDARD_PACKAGE_INTERFACES};
 
+#[cfg(feature = "execution")]
 pub(crate) fn interface_catalog_digest() -> String {
     use sha2::{Digest, Sha256};
 
