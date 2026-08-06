@@ -127,6 +127,7 @@ impl WireUnit {
 pub(super) fn encode_and_verify(
     unit: &RegUnit,
     source_content_hash: &str,
+    interface_catalog_digest: &str,
     executable: &rsscript_lowering::ExecutableIr,
 ) -> Result<VerifiedRegBytecode, EvalError> {
     let payload = rsscript_bytecode::encode_executable_payload(&WireUnit::from(unit))
@@ -134,6 +135,8 @@ pub(super) fn encode_and_verify(
     let imports = external_imports(unit, executable);
     let artifact = BytecodeArtifact::new(
         env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_VERSION"),
+        interface_catalog_digest,
         RUNTIME_ABI_VERSION,
         source_content_hash,
         imports,
@@ -505,6 +508,8 @@ mod tests {
         };
         artifact = BytecodeArtifact::new(
             artifact.header.language_version,
+            artifact.header.compiler_version,
+            artifact.header.interface_catalog_digest,
             artifact.header.runtime_abi_version,
             artifact.header.source_content_hash,
             artifact.imports,

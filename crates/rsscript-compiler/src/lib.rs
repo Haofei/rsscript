@@ -734,6 +734,12 @@ mod tests {
             artifact.header.snapshot_digest.as_deref(),
             Some(snapshot.digest())
         );
+        assert_eq!(analysis.language_version, artifact.header.language_version);
+        assert_eq!(analysis.producer.version, artifact.header.compiler_version);
+        assert_eq!(
+            analysis.interface_catalog_digest,
+            artifact.header.interface_catalog_digest
+        );
         let output = Runtime::default()
             .run(&first, Vec::<String>::new())
             .expect("run captured source");

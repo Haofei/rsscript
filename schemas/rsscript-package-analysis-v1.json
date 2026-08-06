@@ -4,10 +4,12 @@
   "title": "RSScript package analysis v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["$schema", "producer", "snapshot_digest", "package", "files", "summary", "exports", "external_imports", "await_sites", "diagnostics"],
+  "required": ["$schema", "producer", "language_version", "interface_catalog_digest", "snapshot_digest", "package", "files", "summary", "exports", "external_imports", "await_sites", "diagnostics"],
   "properties": {
     "$schema": { "const": "rsscript.package_analysis.v1" },
     "producer": { "$ref": "#/$defs/producer" },
+    "language_version": { "type": "string", "minLength": 1 },
+    "interface_catalog_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "snapshot_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "module_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "package": { "$ref": "#/$defs/package" },

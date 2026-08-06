@@ -39,6 +39,8 @@ pub struct PackageAnalysis {
     #[serde(rename = "$schema")]
     pub schema: String,
     pub producer: PackageAnalysisProducer,
+    pub language_version: String,
+    pub interface_catalog_digest: String,
     /// Digest of the immutable source/interface snapshot analyzed here.
     pub snapshot_digest: String,
     /// Executable payload digest when analysis was emitted by a build.
@@ -107,6 +109,8 @@ impl From<&PackageReview> for PackageAnalysis {
         Self {
             schema: PACKAGE_ANALYSIS_SCHEMA.to_string(),
             producer: PackageAnalysisProducer::current(),
+            language_version: env!("CARGO_PKG_VERSION").to_string(),
+            interface_catalog_digest: crate::interfaces::interface_catalog_digest(),
             snapshot_digest: String::new(),
             module_digest: None,
             package: review.package.clone(),

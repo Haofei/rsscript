@@ -56,7 +56,12 @@ pub fn reg_vm_compile_validated(
     let executable =
         rsscript_lowering::ExecutableIr::from_validated_hir(validated.database().hir());
     let lowered = RegUnit::lower(&executable)?;
-    let verified = bytecode::encode_and_verify(&lowered, &source_hash(validated), &executable)?;
+    let verified = bytecode::encode_and_verify(
+        &lowered,
+        &source_hash(validated),
+        &crate::interfaces::interface_catalog_digest(),
+        &executable,
+    )?;
     let (artifact, unit) = verified.into_parts();
     Ok(RegVmExecutable {
         unit: Rc::new(unit),

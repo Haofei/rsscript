@@ -1,16 +1,19 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rsscript.dev/schemas/rsscript.bytecode.v1.schema.json",
-  "title": "RSScript bytecode v1 envelope",
+  "title": "RSScript bytecode v1 logical envelope (binary sections)",
+  "description": "Logical decoded view of the canonical binary RSSBC container; the on-disk artifact is not JSON.",
   "type": "object",
   "required": ["header", "imports", "payload", "checksum"],
   "properties": {
     "header": {
       "type": "object",
-      "required": ["schema", "language_version", "runtime_abi_version", "source_content_hash", "executable_hash"],
+      "required": ["schema", "language_version", "compiler_version", "interface_catalog_digest", "runtime_abi_version", "source_content_hash", "executable_hash"],
       "properties": {
         "schema": { "const": "rsscript.bytecode.v1" },
         "language_version": { "type": "string", "minLength": 1 },
+        "compiler_version": { "type": "string", "minLength": 1 },
+        "interface_catalog_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
         "runtime_abi_version": { "type": "integer", "minimum": 1 },
         "source_content_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
         "executable_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" }
@@ -21,9 +24,10 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["symbol", "signature_hash", "abi_version"],
+        "required": ["symbol", "signature", "signature_hash", "abi_version"],
         "properties": {
           "symbol": { "type": "string", "minLength": 1 },
+          "signature": { "type": "object" },
           "signature_hash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
           "abi_version": { "type": "integer", "minimum": 1 }
         },
@@ -31,7 +35,7 @@
       }
     },
     "payload": {
-      "description": "JSON byte array containing the deterministic register instruction stream.",
+      "description": "Decoded byte array of the deterministic CBOR register instruction section.",
       "type": "array",
       "items": { "type": "integer", "minimum": 0, "maximum": 255 }
     },

@@ -26,6 +26,8 @@ const MAX_SECTIONS: usize = 64;
 pub struct BytecodeHeader {
     pub schema: String,
     pub language_version: String,
+    pub compiler_version: String,
+    pub interface_catalog_digest: String,
     pub runtime_abi_version: u32,
     pub source_content_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,6 +47,8 @@ pub struct BytecodeArtifact {
 impl BytecodeArtifact {
     pub fn new(
         language_version: impl Into<String>,
+        compiler_version: impl Into<String>,
+        interface_catalog_digest: impl Into<String>,
         runtime_abi_version: u32,
         source_content_hash: impl Into<String>,
         mut imports: Vec<ExternalImport>,
@@ -56,6 +60,8 @@ impl BytecodeArtifact {
             header: BytecodeHeader {
                 schema: BYTECODE_SCHEMA.to_string(),
                 language_version: language_version.into(),
+                compiler_version: compiler_version.into(),
+                interface_catalog_digest: interface_catalog_digest.into(),
                 runtime_abi_version,
                 source_content_hash: source_content_hash.into(),
                 snapshot_digest: None,
@@ -323,6 +329,30 @@ impl BytecodeVerifier {
         context.check()?;
         if artifact.header.schema != BYTECODE_SCHEMA {
             return Err(BytecodeError::UnsupportedSchema(artifact.header.schema));
+        }
+        Version::parse(&artifact.header.compiler_version)
+            .map_err(|_| BytecodeError::InvalidProvenance("compiler version"))?;
+        for (name, digest) in [
+            (
+                "source content hash",
+                artifact.header.source_content_hash.as_str(),
+            ),
+            (
+                "interface catalog digest",
+                artifact.header.interface_catalog_digest.as_str(),
+            ),
+        ] {
+            if !is_sha256_digest(digest) {
+                return Err(BytecodeError::InvalidProvenance(name));
+            }
+        }
+        if artifact
+            .header
+            .snapshot_digest
+            .as_deref()
+            .is_some_and(|digest| !is_sha256_digest(digest))
+        {
+            return Err(BytecodeError::InvalidProvenance("snapshot digest"));
         }
         let language = Version::parse(&artifact.header.language_version).map_err(|_| {
             BytecodeError::UnsupportedLanguageVersion(artifact.header.language_version.clone())
@@ -898,6 +928,12 @@ fn digest(bytes: &[u8]) -> String {
     format!("sha256:{:x}", Sha256::digest(bytes))
 }
 
+fn is_sha256_digest(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(|hex| hex.len() == 64 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+}
+
 fn take_array<const N: usize>(input: &mut &[u8]) -> Result<[u8; N], BytecodeError> {
     let bytes = take_bytes(input, N)?;
     bytes
@@ -939,6 +975,7 @@ pub enum BytecodeError {
     UnsupportedSchema(String),
     UnsupportedLanguageVersion(String),
     UnsupportedRuntimeAbi { artifact: u32, runtime: u32 },
+    InvalidProvenance(&'static str),
     LimitExceeded(&'static str),
     ExecutableHashMismatch,
     ChecksumMismatch,
@@ -980,6 +1017,9 @@ impl fmt::Display for BytecodeError {
                 formatter,
                 "bytecode runtime ABI {artifact} is incompatible with runtime ABI {runtime}"
             ),
+            Self::InvalidProvenance(field) => {
+                write!(formatter, "bytecode {field} is malformed")
+            }
             Self::LimitExceeded(limit) => {
                 write!(formatter, "bytecode {limit} exceeds verifier limit")
             }
@@ -1043,13 +1083,20 @@ mod tests {
     use proptest::prelude::*;
     use rsscript_abi_model::{DataEffect, ExternalSymbol, FunctionSignature, ParameterSignature};
 
+    const TEST_CATALOG_DIGEST: &str =
+        "sha256:0000000000000000000000000000000000000000000000000000000000000000";
+    const TEST_SOURCE_DIGEST: &str =
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+
     #[test]
     fn round_trip_requires_intact_artifact() {
         let payload = minimal_payload();
         let artifact = BytecodeArtifact::new(
             "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
             RUNTIME_ABI_VERSION,
-            "sha256:source",
+            TEST_SOURCE_DIGEST,
             vec![],
             payload.clone(),
         )
@@ -1097,8 +1144,10 @@ mod tests {
     fn verifier_rejects_incompatible_language_and_runtime_versions() {
         let future_language = BytecodeArtifact::new(
             "9.0.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
             RUNTIME_ABI_VERSION,
-            "sha256:source",
+            TEST_SOURCE_DIGEST,
             vec![],
             minimal_payload(),
         )
@@ -1110,8 +1159,10 @@ mod tests {
 
         let future_abi = BytecodeArtifact::new(
             "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
             RUNTIME_ABI_VERSION + 1,
-            "sha256:source",
+            TEST_SOURCE_DIGEST,
             vec![],
             minimal_payload(),
         )
@@ -1129,8 +1180,10 @@ mod tests {
         assert_ne!(payload.first(), Some(&b'{'));
         let artifact = BytecodeArtifact::new(
             "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
             RUNTIME_ABI_VERSION,
-            "sha256:source",
+            TEST_SOURCE_DIGEST,
             vec![],
             payload,
         )
@@ -1145,8 +1198,10 @@ mod tests {
     fn unknown_optional_sections_are_forward_compatible() {
         let artifact = BytecodeArtifact::new(
             "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
             RUNTIME_ABI_VERSION,
-            "sha256:source",
+            TEST_SOURCE_DIGEST,
             vec![],
             minimal_payload(),
         )
@@ -1164,8 +1219,10 @@ mod tests {
     fn unknown_required_sections_fail_closed() {
         let artifact = BytecodeArtifact::new(
             "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
             RUNTIME_ABI_VERSION,
-            "sha256:source",
+            TEST_SOURCE_DIGEST,
             vec![],
             minimal_payload(),
         )
@@ -1184,8 +1241,10 @@ mod tests {
     fn malformed_binary_metadata_section_is_rejected() {
         let artifact = BytecodeArtifact::new(
             "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
             RUNTIME_ABI_VERSION,
-            "sha256:source",
+            TEST_SOURCE_DIGEST,
             vec![],
             minimal_payload(),
         )
@@ -1229,8 +1288,10 @@ mod tests {
         .expect("payload");
         let artifact = BytecodeArtifact::new(
             "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
             RUNTIME_ABI_VERSION,
-            "sha256:source",
+            TEST_SOURCE_DIGEST,
             vec![],
             payload,
         )
@@ -1262,8 +1323,10 @@ mod tests {
         .expect("payload");
         let artifact = BytecodeArtifact::new(
             "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
             RUNTIME_ABI_VERSION,
-            "sha256:source",
+            TEST_SOURCE_DIGEST,
             vec![],
             payload,
         )
@@ -1295,8 +1358,10 @@ mod tests {
         .hash();
         let artifact = BytecodeArtifact::new(
             "0.1.0",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
             RUNTIME_ABI_VERSION,
-            "sha256:source",
+            TEST_SOURCE_DIGEST,
             vec![ExternalImport {
                 symbol: ExternalSymbol::new("host.log.emit").unwrap(),
                 signature,
