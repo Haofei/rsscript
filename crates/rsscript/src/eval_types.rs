@@ -3,15 +3,10 @@ use std::collections::BTreeMap;
 
 pub use rsscript_abi_model::{ExternalImport, ExternalSymbol, FunctionSignature, SignatureHash};
 pub use rsscript_provider_api::{
-    BlockingBehavior, CancellationBehavior, ProviderCallMode, ProviderDescriptor, ProviderFunction,
-    ProviderFunctionDescriptor, ProviderLoadError,
+    BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderCallMode,
+    ProviderDescriptor, ProviderFunction, ProviderFunctionDescriptor, ProviderLoadError,
 };
-
-// The native bridge value type and host-function signature live in the shared
-// `rss-native-abi` crate so dynamically loaded plugin cdylibs agree on their
-// layout. Re-exported so existing `eval_types::NativeValue` paths stay stable.
-pub use rss_native_abi::NativeValue;
-pub type ExternalFunction = rss_native_abi::NativeInterpreterFn;
+pub type ExternalFunction = NativeInterpreterFn;
 
 /// Runtime-owned symbol table for functions supplied by package providers.
 /// Compilation and lowering only record the symbol name; provider selection is
@@ -23,7 +18,9 @@ pub struct ExternalFunctionRegistry {
 impl ExternalFunctionRegistry {
     pub fn new() -> Self {
         Self {
-            registry: rsscript_provider_api::ProviderRegistry::new(rss_native_abi::ABI_VERSION),
+            registry: rsscript_provider_api::ProviderRegistry::new(
+                rsscript_abi_model::RUNTIME_ABI_VERSION,
+            ),
         }
     }
 

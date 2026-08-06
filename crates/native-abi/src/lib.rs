@@ -14,7 +14,7 @@
 //! native pointers requires process isolation and IPC, not additional checks in
 //! this ABI.
 
-use std::collections::BTreeMap;
+#[cfg(feature = "host")]
 use std::sync::Arc;
 
 #[cfg(feature = "host")]
@@ -22,10 +22,12 @@ use std::collections::HashMap;
 #[cfg(feature = "host")]
 use std::sync::{Mutex, OnceLock, Weak};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+
+pub use rsscript_provider_api::{NativeHostFn, NativeInterpreterFn, NativeValue};
 
 pub const ABI_MAGIC: u64 = 0x5253_534E_4154_4956;
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = rsscript_abi_model::RUNTIME_ABI_VERSION;
 pub const MAX_NATIVE_REQUEST_BYTES: usize = 16 * 1024 * 1024;
 pub const MAX_NATIVE_RESULT_BYTES: usize = 16 * 1024 * 1024;
 #[cfg(feature = "host")]
@@ -74,65 +76,6 @@ fn to_json_bounded<T: Serialize>(value: &T, max_bytes: usize) -> Result<Vec<u8>,
         Ok(()) => Ok(writer.bytes),
         Err(_) if writer.limit_exceeded => Err(BoundedJsonError::LimitExceeded),
         Err(error) => Err(BoundedJsonError::Serialize(error)),
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum NativeValue {
-    Unit,
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    String(String),
-    Char(char),
-    Bytes(Vec<u8>),
-    List(Vec<NativeValue>),
-    Map(Vec<(NativeValue, NativeValue)>),
-    Json(serde_json::Value),
-    Struct {
-        name: String,
-        fields: BTreeMap<String, NativeValue>,
-    },
-    Variant {
-        name: String,
-        fields: BTreeMap<String, NativeValue>,
-    },
-    Native {
-        type_name: String,
-        id: i64,
-    },
-}
-
-pub type NativeHostFn = fn(Vec<NativeValue>) -> Result<NativeValue, String>;
-
-/// Cloneable host callable. Dynamic bindings retain their owning library in the
-/// closure, while in-process tests can wrap an ordinary Rust function.
-#[derive(Clone)]
-pub struct NativeInterpreterFn {
-    inner: Arc<dyn Fn(Vec<NativeValue>) -> Result<NativeValue, String> + Send + Sync>,
-}
-
-impl NativeInterpreterFn {
-    pub fn from_fn(function: NativeHostFn) -> Self {
-        Self::new(function)
-    }
-
-    pub fn new(
-        function: impl Fn(Vec<NativeValue>) -> Result<NativeValue, String> + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            inner: Arc::new(function),
-        }
-    }
-
-    pub fn call(&self, args: Vec<NativeValue>) -> Result<NativeValue, String> {
-        (self.inner)(args)
-    }
-}
-
-impl From<NativeHostFn> for NativeInterpreterFn {
-    fn from(function: NativeHostFn) -> Self {
-        Self::from_fn(function)
     }
 }
 

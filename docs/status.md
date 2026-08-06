@@ -9,6 +9,8 @@ The platform-neutral language cut is active:
 - default core interfaces contain no host service modules;
 - external package functions lower through `CallExternal` and are resolved by an
   execution-time registry;
+- provider runtime values and callables are owned by the safe provider API; the
+  native ABI adapts that model instead of defining it;
 - execution/deployment policy types and legacy API facade are removed;
 - neutral package analysis uses `rsscript.package_analysis.v1`; optional review
   output uses the distinct `rsscript.package_review.v1` schema.

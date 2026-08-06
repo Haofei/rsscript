@@ -5,6 +5,9 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+/// Version of the provider/runtime semantic call ABI.
+pub const RUNTIME_ABI_VERSION: u32 = 1;
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ExternalSymbol(String);

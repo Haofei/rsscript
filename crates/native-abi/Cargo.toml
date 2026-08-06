@@ -9,6 +9,8 @@ license = "MIT OR Apache-2.0"
 name = "rss_native_abi"
 
 [dependencies]
+rsscript-abi-model = { path = "../rsscript-abi-model" }
+rsscript-provider-api = { path = "../rsscript-provider-api" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 sha2 = "0.10"

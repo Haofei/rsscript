@@ -746,6 +746,14 @@ fn abi_and_provider_crates_keep_one_way_dependencies() {
         provider_dependencies.contains("rsscript-abi-model"),
         "provider API must consume the shared ABI model"
     );
+    let provider_source = read(&root.join("crates/rsscript-provider-api/src/lib.rs"));
+    assert!(provider_source.contains("pub enum NativeValue"));
+    assert!(provider_source.contains("pub struct NativeInterpreterFn"));
+    let native_source = read(&root.join("crates/native-abi/src/lib.rs"));
+    assert!(
+        native_source.contains("pub use rsscript_provider_api"),
+        "the native adapter must reuse provider runtime values rather than own them"
+    );
 }
 
 #[test]

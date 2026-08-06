@@ -1494,6 +1494,8 @@ name = "rss-native-abi"
 version = "0.1.0"
 dependencies = [
  "libloading",
+ "rsscript-abi-model",
+ "rsscript-provider-api",
  "serde",
  "serde_json",
  "sha2",
@@ -1595,6 +1597,7 @@ version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

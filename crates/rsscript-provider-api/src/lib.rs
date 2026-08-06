@@ -3,9 +3,71 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
+use std::sync::Arc;
 
 use rsscript_abi_model::{ExternalImport, ExternalSymbol, FunctionSignature};
 use serde::{Deserialize, Serialize};
+
+/// Runtime value exchanged with trusted provider implementations. This safe
+/// model is independent of any dynamic-library ABI; native adapters serialize it
+/// at their own boundary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum NativeValue {
+    Unit,
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    String(String),
+    Char(char),
+    Bytes(Vec<u8>),
+    List(Vec<NativeValue>),
+    Map(Vec<(NativeValue, NativeValue)>),
+    Json(serde_json::Value),
+    Struct {
+        name: String,
+        fields: BTreeMap<String, NativeValue>,
+    },
+    Variant {
+        name: String,
+        fields: BTreeMap<String, NativeValue>,
+    },
+    Native {
+        type_name: String,
+        id: i64,
+    },
+}
+
+pub type NativeHostFn = fn(Vec<NativeValue>) -> Result<NativeValue, String>;
+
+/// Cloneable provider callable used by the runtime registry.
+#[derive(Clone)]
+pub struct NativeInterpreterFn {
+    inner: Arc<dyn Fn(Vec<NativeValue>) -> Result<NativeValue, String> + Send + Sync>,
+}
+
+impl NativeInterpreterFn {
+    pub fn from_fn(function: NativeHostFn) -> Self {
+        Self::new(function)
+    }
+
+    pub fn new(
+        function: impl Fn(Vec<NativeValue>) -> Result<NativeValue, String> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            inner: Arc::new(function),
+        }
+    }
+
+    pub fn call(&self, args: Vec<NativeValue>) -> Result<NativeValue, String> {
+        (self.inner)(args)
+    }
+}
+
+impl From<NativeHostFn> for NativeInterpreterFn {
+    fn from(function: NativeHostFn) -> Self {
+        Self::from_fn(function)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
