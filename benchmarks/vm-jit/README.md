@@ -180,7 +180,7 @@ parsing doesn't taint per-function eligibility.
 | Json | `json_parse_access` | parse + field access |
 | Async call/await | `async_call_loop` | park/resume frame state |
 | Structured concurrency | ★ `task_group_spawn` | `task_group` spawn + async-let join |
-| Realistic mixed | `selfhost_manifest_inspector`, `selfhost_mailbox_bench` | end-to-end blends |
+| Realistic mixed | `selfhost_mailbox_bench` | provider-neutral end-to-end blend |
 
 ### Known not covered (intentionally)
 - **Bitwise ops** — the language has no `& | ^ << >>` operators, so there is no

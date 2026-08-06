@@ -112,11 +112,6 @@ const TIMING_NOISE_EXEMPT_CASES: &[&str] = &["profile_closure_pic.rss"];
 const COST_MODEL_DECLINED_CASES: &[&str] = &["profile_closure_pic.rss"];
 
 const TELEMETRY_ONLY_CASES: &[&str] = &[
-    // Real-project workload: `selfhost_manifest_inspector` is a one-shot tool with no
-    // hot loop — it compiles NO native code (~0.05ms) and its wall time is pure noise,
-    // so it stays telemetry-only. (`selfhost_mailbox_bench` and `selfhost_stdlib_reporter`
-    // are now WALL-TIME gated — stable enough with committed baselines.)
-    "selfhost_manifest_inspector.rss",
     "profile_branch_cold_blocks.rss",
     "profile_branch_side_exits.rss",
     "native_call_nested_chain.rss",

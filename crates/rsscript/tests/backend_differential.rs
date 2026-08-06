@@ -936,26 +936,6 @@ fn main() -> Unit {
     common::differential::assert_backends_all_fail("tv2-oob-direct-read.rss", source, &[]);
 }
 
-/// Real self-hosted tool, cross-backend: the RSS package manifest inspector
-/// (`benchmarks/micro/selfhost_manifest_inspector.rss`) parses a fixture `rsspkg.toml`
-/// and emits a JSON report. This is a hardening check on a realistic
-/// intrinsic/IO/error-handling workload (not a numeric microbenchmark). An
-/// absolute fixture path keeps every enabled backend, including the AOT
-/// subprocess in full mode, reading the same file.
-#[test]
-fn backends_agree_on_manifest_inspector() {
-    let source = include_str!("../../../benchmarks/micro/selfhost_manifest_inspector.rss");
-    let fixture = common::workspace_root()
-        .join("benchmarks/micro/fixtures/package-medium/rsspkg.toml")
-        .display()
-        .to_string();
-    common::differential::assert_backends_agree(
-        "selfhost-manifest-inspector.rss",
-        source,
-        &[fixture.as_str()],
-    );
-}
-
 /// Scalar field assignment through a `mut` parameter must propagate to the caller
 /// on every enabled backend (VM write-back == AOT `&mut` in full mode).
 /// Regression for ledger SH-013.
@@ -1003,34 +983,6 @@ fn backends_agree_on_selfhost_mailbox() {
 fn backends_agree_on_stdlib_reporter() {
     let source = include_str!("../../../benchmarks/micro/selfhost_stdlib_reporter.rss");
     common::differential::assert_backends_agree("selfhost-stdlib-reporter.rss", source, &[]);
-}
-
-/// Failure-path differential for a real tool (gates ledger SH-005): the manifest
-/// inspector must fail on every backend when the manifest is malformed (missing
-/// `[package]`) or absent — a `main` returning `Err` is now a failed run on the
-/// VM, JIT, native, and AOT alike.
-#[test]
-fn backends_all_fail_on_bad_manifest() {
-    let source = include_str!("../../../benchmarks/micro/selfhost_manifest_inspector.rss");
-    let missing_field = common::workspace_root()
-        .join("benchmarks/micro/fixtures/package-bad/rsspkg.toml")
-        .display()
-        .to_string();
-    common::differential::assert_backends_all_fail(
-        "bad-manifest.rss",
-        source,
-        &[missing_field.as_str()],
-    );
-
-    let absent = common::workspace_root()
-        .join("benchmarks/micro/fixtures/does-not-exist/rsspkg.toml")
-        .display()
-        .to_string();
-    common::differential::assert_backends_all_fail(
-        "absent-manifest.rss",
-        source,
-        &[absent.as_str()],
-    );
 }
 
 /// Failure-path differential (the case that matters most for semantic hardening):

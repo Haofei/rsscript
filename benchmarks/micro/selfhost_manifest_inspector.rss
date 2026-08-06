@@ -1,7 +1,8 @@
 
-// Self-hosted RSS tool: inspect an `rsspkg.toml` package manifest and emit a JSON
-// report. Used both as a real tool and as a cross-backend (VM/JIT/AOT) benchmark
-// and hardening pressure-test (see docs/self-hosting.md).
+// Frozen self-hosting research artifact. This program predates the provider-only
+// host boundary and intentionally is not part of Core VM/JIT/AOT conformance.
+// A host may migrate it by exposing file reads through an explicit `.rssi`
+// interface and provider.
 
 fn edition_of(package: JsonValue) -> Result<fresh String, JsonError> {
     // SH-002: the optional-field-or-default shape collapses to one line via the

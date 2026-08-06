@@ -80,7 +80,6 @@ json-parse          benchmarks/vm-jit/kernels/json_parse_only.rss               
 json-field          benchmarks/vm-jit/kernels/json_field_access_only.rss         500000    diagnostic: Json.field_int on parsed object
 async               benchmarks/micro/async_call_loop.rss                         200000    async call/await park/resume
 async-taskgroup     benchmarks/vm-jit/kernels/task_group_spawn.rss               20000     structured concurrency spawn+join
-selfhost-manifest   benchmarks/micro/selfhost_manifest_inspector.rss             benchmarks/micro/fixtures/package-medium/rsspkg.toml   realistic mixed (parse+collections)
 selfhost-mailbox    benchmarks/micro/selfhost_mailbox_bench.rss                  60000     realistic async actor loop
 mailbox-ring        benchmarks/vm-jit/kernels/mailbox_ring_only.rss              60000     diagnostic: mailbox O(1) send/take ring
 #
