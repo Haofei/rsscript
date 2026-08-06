@@ -277,6 +277,13 @@ impl BytecodeVerifier {
         {
             return Err(BytecodeError::ImportAbiMismatch);
         }
+        if artifact
+            .imports
+            .iter()
+            .any(|import| import.signature.hash() != import.signature_hash)
+        {
+            return Err(BytecodeError::ImportSignatureHashMismatch);
+        }
         verify_executable_payload(&artifact.payload, &artifact.imports, self.limits)?;
         Ok(VerifiedBytecode { artifact })
     }
@@ -795,6 +802,7 @@ pub enum BytecodeError {
     ChecksumMismatch,
     ImportsNotCanonical,
     ImportAbiMismatch,
+    ImportSignatureHashMismatch,
     InvalidPayload(String),
     MalformedSectionTable,
     SectionsNotCanonical,
@@ -828,6 +836,9 @@ impl fmt::Display for BytecodeError {
             }
             Self::ImportAbiMismatch => {
                 formatter.write_str("bytecode import ABI does not match its header")
+            }
+            Self::ImportSignatureHashMismatch => {
+                formatter.write_str("bytecode import signature does not match its hash")
             }
             Self::InvalidPayload(message) => {
                 write!(formatter, "invalid bytecode payload: {message}")
@@ -874,6 +885,7 @@ impl Error for BytecodeError {}
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use rsscript_abi_model::{DataEffect, ExternalSymbol, FunctionSignature, ParameterSignature};
 
     #[test]
     fn round_trip_requires_intact_artifact() {
@@ -995,6 +1007,53 @@ mod tests {
         assert!(matches!(
             BytecodeVerifier::default().verify(&artifact.to_bytes().expect("bytes")),
             Err(BytecodeError::InvalidPayload(message)) if message.contains("register 1")
+        ));
+    }
+
+    #[test]
+    fn verifier_rejects_import_whose_structural_signature_disagrees_with_hash() {
+        let signature = FunctionSignature {
+            parameters: vec![ParameterSignature {
+                name: "message".into(),
+                effect: DataEffect::Read,
+                ty: "String".into(),
+                retained: false,
+            }],
+            result: "Unit".into(),
+            asynchronous: false,
+        };
+        let wrong_hash = FunctionSignature {
+            parameters: vec![],
+            result: "Unit".into(),
+            asynchronous: false,
+        }
+        .hash();
+        let artifact = BytecodeArtifact::new(
+            "0.1",
+            1,
+            "sha256:source",
+            vec![ExternalImport {
+                symbol: ExternalSymbol::new("host.log.emit").unwrap(),
+                signature,
+                signature_hash: wrong_hash,
+                abi_version: 1,
+            }],
+            serde_json::to_vec(&serde_json::json!({
+                "functions": [{
+                    "name": "main", "params": 0, "captures": 0, "regs": 1,
+                    "local_regs": {},
+                    "code": [{"CallExternal": {"dst": 0, "key": "host.log.emit", "args": [], "mut_args": []}}]
+                }],
+                "function_ids": {"main": 0},
+                "resource_drop_functions": {}, "types": {}, "native_signatures": {},
+                "closure_identity_observable": false
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&artifact.to_bytes().unwrap()),
+            Err(BytecodeError::ImportSignatureHashMismatch)
         ));
     }
 

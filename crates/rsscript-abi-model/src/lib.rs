@@ -292,6 +292,9 @@ impl SignatureHash {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExternalImport {
     pub symbol: ExternalSymbol,
+    /// Canonical structural ABI retained in the artifact so verification and
+    /// inspection do not need compiler-owned type strings or Provider metadata.
+    pub signature: FunctionSignature,
     pub signature_hash: SignatureHash,
     pub abi_version: u32,
 }

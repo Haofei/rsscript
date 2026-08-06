@@ -447,6 +447,7 @@ fn external_imports(
         .iter()
         .map(|import| ExternalImport {
             symbol: import.symbol.clone(),
+            signature: import.signature.clone(),
             signature_hash: import.signature.hash(),
             abi_version: RUNTIME_ABI_VERSION,
         })

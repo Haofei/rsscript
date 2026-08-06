@@ -565,7 +565,9 @@ impl<T> ProviderRegistry<T> {
             .functions
             .get(&import.symbol)
             .ok_or_else(|| ProviderLoadError::UnresolvedImport(import.symbol.clone()))?;
-        if function.descriptor.signature.hash() != import.signature_hash {
+        if function.descriptor.signature != import.signature
+            || function.descriptor.signature.hash() != import.signature_hash
+        {
             return Err(ProviderLoadError::ImportSignatureMismatch(
                 import.symbol.clone(),
             ));
@@ -687,6 +689,7 @@ mod tests {
 
         let import = ExternalImport {
             symbol,
+            signature: signature(DataEffect::Take),
             signature_hash: signature(DataEffect::Take).hash(),
             abi_version: 1,
         };
@@ -716,6 +719,7 @@ mod tests {
         let resolved = registry
             .resolve(&ExternalImport {
                 symbol,
+                signature: declared.clone(),
                 signature_hash: declared.hash(),
                 abi_version: 1,
             })
