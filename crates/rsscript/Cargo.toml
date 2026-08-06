@@ -19,7 +19,7 @@ path = "src/bin/gen-grammar.rs"
 test = false
 
 [dependencies]
-rss-native-abi = { path = "../native-abi", features = ["host"] }
+rss-native-abi = { path = "../native-abi", features = ["host"], optional = true }
 rss-process-guard = { path = "../process-guard" }
 rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
@@ -55,6 +55,7 @@ tempfile = "3"
 vm-jit = { path = "../vm-jit", optional = true }
 
 [features]
+native-plugin = ["dep:rss-native-abi"]
 # Native (Cranelift) baseline JIT for the integer/control core. Off by default so
 # normal builds/tests don't pull in the codegen dependency; enable for the Rust
 # differential/benchmark harnesses and force-JIT CI.

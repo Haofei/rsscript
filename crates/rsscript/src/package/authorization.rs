@@ -150,12 +150,14 @@ impl PackageGraphSnapshot {
     }
 }
 
+#[cfg_attr(not(feature = "native-plugin"), allow(dead_code))]
 #[derive(Debug)]
 struct PrivateContentSnapshot {
     root: PathBuf,
     native_abi_path: PathBuf,
 }
 
+#[cfg_attr(not(feature = "native-plugin"), allow(dead_code))]
 impl PrivateContentSnapshot {
     fn root(&self) -> &Path {
         &self.root
@@ -172,8 +174,10 @@ impl PrivateContentSnapshot {
 pub struct ExecutablePackageSnapshot {
     package_dir: PathBuf,
     lowering_input: PackageLoweringInput,
+    #[cfg_attr(not(feature = "native-plugin"), allow(dead_code))]
     native_build_dependencies: Vec<NativePluginBuildDependency>,
     _package_snapshot: PackageGraphSnapshot,
+    #[cfg_attr(not(feature = "native-plugin"), allow(dead_code))]
     content_snapshot: Option<PrivateContentSnapshot>,
 }
 
@@ -223,16 +227,19 @@ impl ExecutablePackageSnapshot {
         &self.lowering_input
     }
 
+    #[cfg_attr(not(feature = "native-plugin"), allow(dead_code))]
     pub(crate) fn native_build_dependencies(&self) -> &[NativePluginBuildDependency] {
         &self.native_build_dependencies
     }
 
+    #[cfg_attr(not(feature = "native-plugin"), allow(dead_code))]
     pub(crate) fn native_snapshot_root(&self) -> Option<&Path> {
         self.content_snapshot
             .as_ref()
             .map(PrivateContentSnapshot::root)
     }
 
+    #[cfg_attr(not(feature = "native-plugin"), allow(dead_code))]
     pub(crate) fn native_abi_path(&self) -> Option<&Path> {
         self.content_snapshot
             .as_ref()
@@ -903,7 +910,7 @@ mod tests {
     use std::fs;
 
     use super::*;
-    use crate::native_plugin::load_package_bindings_from_snapshot;
+    use crate::load_package_bindings_from_snapshot;
     use crate::package::{
         check_package_dir, format_package_lock_toml, lock_package_dir, package_tree,
         review_package_dir,

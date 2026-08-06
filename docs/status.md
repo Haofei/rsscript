@@ -17,6 +17,9 @@ The platform-neutral language cut is active:
 
 The physical dependency cut is not complete: the main crate still contains the
 analyzer orchestration, package tooling, VM, AOT lowering, and native loading.
+Native plugin loading is now an explicit `native-plugin` feature and is absent
+from the compiler's default dependency closure; disabled hosts fail before build
+or dynamic loading when a package requests that integration.
 REIR conversion now lives in the one-way `integrations/rsscript-review-reir`
 adapter and is absent from normal compiler dependencies, public compiler APIs,
 CLI package output, and package metadata writes. The retired policy-oriented

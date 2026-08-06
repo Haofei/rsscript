@@ -639,6 +639,23 @@ fn reir_is_a_one_way_optional_integration() {
 }
 
 #[test]
+fn native_plugin_loader_is_opt_in() {
+    let root = workspace_root();
+    let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript/Cargo.toml")))
+        .expect("compiler manifest should parse");
+    assert_eq!(
+        manifest["dependencies"]["rss-native-abi"]["optional"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        manifest["features"]["native-plugin"][0].as_str(),
+        Some("dep:rss-native-abi")
+    );
+    let library = read(&root.join("crates/rsscript/src/lib.rs"));
+    assert!(library.contains("#[cfg(feature = \"native-plugin\")]\nmod native_plugin;"));
+}
+
+#[test]
 fn interface_catalog_is_platform_neutral() {
     let root = workspace_root();
     let manifest: toml::Value = toml::from_str(&read(
