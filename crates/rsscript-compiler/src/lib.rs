@@ -134,8 +134,17 @@ pub struct RunLimits {
 
 #[cfg(feature = "execution")]
 impl RunLimits {
+    /// Return the bounded public execution defaults.
     pub fn bounded() -> Self {
-        VmLimits::safe_default().into()
+        Self::default()
+    }
+
+    /// Disable budgets for a host-controlled, trusted workload.
+    ///
+    /// This does not create an isolation boundary. The embedding host remains
+    /// responsible for process isolation and provider authority.
+    pub fn unbounded_for_trusted_host() -> Self {
+        VmLimits::unbounded_for_trusted_host().into()
     }
 }
 

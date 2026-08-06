@@ -1688,15 +1688,13 @@ struct TaskSlot {
     resume_dst: usize,
 }
 
-/// Sandbox resource limits for the reg-VM. rsscript runs untrusted,
-/// agent-generated code, so the VM must never crash or hang the host: deep
-/// recursion, infinite loops, and runaway allocation all become recoverable
-/// `EvalError::Runtime` errors instead of a SIGSEGV / hang / OOM-kill.
+/// Resource limits for one reg-VM execution.
 ///
-/// Defaults are tuned so trusted long-running ML training loops are unaffected:
-/// the depth cap is generous (never trips real code, always catches
-/// `fn f(){f()}`), and the step/memory budgets are off unless a caller opts in
-/// (typically only the untrusted/agent-facing entry points).
+/// These limits are resilience controls, not an isolation boundary. Public
+/// defaults are deliberately finite so an accidentally non-terminating or
+/// excessively allocating script fails with a recoverable error. Trusted hosts
+/// that intentionally need an unlimited run must opt in through
+/// [`VmLimits::unbounded_for_trusted_host`].
 /// Note: not `Copy` — it carries an optional `Arc<AtomicBool>` cancel flag. All
 /// fields are public and `Clone`/struct-update (`..VmLimits::default()`) keep
 /// callers ergonomic; the scalar budget fields are read by value as before.
@@ -1706,16 +1704,16 @@ pub struct VmLimits {
     /// generous; checked before every frame push. `usize::MAX` effectively
     /// disables the cap.
     pub max_depth: usize,
-    /// Maximum number of executed instructions over the whole run. `None`
-    /// (default) = unlimited. When `Some(limit)`, a run that executes more than
+    /// Maximum number of executed instructions over the whole run. `None` means
+    /// unlimited. When `Some(limit)`, a run that executes more than
     /// `limit` instructions fails with a "step budget exceeded" error — this is
     /// what stops `while true {}`.
     pub step_budget: Option<u64>,
     /// Best-effort cumulative quota for VM-owned allocation and container
-    /// capacity growth. `None` (default) = no accounting (near-zero overhead).
+    /// capacity growth. `None` disables accounting (near-zero overhead).
     /// This is not a live-memory measurement or an operating-system sandbox.
     pub mem_budget: Option<usize>,
-    /// Host-level preemption hook. `None` (default) = no polling (the off path is
+    /// Host-level preemption hook. `None` means no polling (the off path is
     /// near-free: `tick()` never touches the atomic). When `Some`, the host can
     /// set the flag to `true` from anywhere (e.g. a watchdog thread on timeout or
     /// an abort signal) and the running evaluation is preempted at the next
@@ -1735,7 +1733,7 @@ pub struct VmLimits {
     /// dispatch out of pure VM bytecode into host-provided library code (the
     /// `call_intrinsic`/`call_typed_intrinsic` boundary), which is where all file /
     /// process / network / clock / logging effects (and the pure stdlib) enter.
-    /// `None` (default) = uncounted. When `Some(limit)`, the call that would exceed
+    /// `None` means uncounted. When `Some(limit)`, the call that would exceed
     /// `limit` fails with a "host call budget exceeded" error. This caps the volume
     /// of host-library calls independently of raw instruction count (a single
     /// intrinsic can do unbounded I/O), so an agent program can be limited to N
@@ -1765,28 +1763,35 @@ const MAX_NETWORK_IO_BYTES: usize = 16 * 1024 * 1024;
 impl Default for VmLimits {
     fn default() -> Self {
         Self {
-            max_depth: DEFAULT_MAX_DEPTH,
-            step_budget: None,
-            mem_budget: None,
-            cancel: None,
-            stdout_budget: None,
-            host_call_budget: None,
-        }
-    }
-}
-
-impl VmLimits {
-    /// Conservative defaults for CLI execution of untrusted or accidental
-    /// runaway programs. Library callers retain [`Default`] for compatibility
-    /// and can opt into these limits explicitly.
-    pub fn safe_default() -> Self {
-        Self {
             max_depth: 4_096,
             step_budget: Some(50_000_000),
             mem_budget: Some(256 * 1024 * 1024),
             cancel: None,
             stdout_budget: Some(4 * 1024 * 1024),
             host_call_budget: Some(1_000_000),
+        }
+    }
+}
+
+impl VmLimits {
+    /// Compatibility spelling for the bounded public default.
+    pub fn safe_default() -> Self {
+        Self::default()
+    }
+
+    /// Disable accounting limits for a host-controlled, trusted workload.
+    ///
+    /// This is intentionally verbose: process isolation and provider authority
+    /// remain the host's responsibility, and ordinary callers should use
+    /// [`Default`] instead.
+    pub fn unbounded_for_trusted_host() -> Self {
+        Self {
+            max_depth: DEFAULT_MAX_DEPTH,
+            step_budget: None,
+            mem_budget: None,
+            cancel: None,
+            stdout_budget: None,
+            host_call_budget: None,
         }
     }
 }
@@ -1830,8 +1835,7 @@ struct RegVm {
     /// JIT every supported function, ignoring the has-loop heuristic (used by the
     /// differential tests so the whole covered instruction subset is verified).
     jit_force_all: bool,
-    /// Sandbox resource limits (recursion depth / step budget / memory ceiling).
-    /// Defaults leave trusted runs unaffected; agent-facing callers tighten them.
+    /// Resource limits (recursion depth / step budget / memory ceiling).
     limits: VmLimits,
     /// Instructions executed so far in this run (the step budget's fuel gauge).
     /// Only consulted when `limits.step_budget` is `Some`; the unconditional

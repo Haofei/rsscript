@@ -806,12 +806,18 @@ fn main() -> Unit {{
     }
 
     #[test]
-    fn safe_default_arms_cli_resource_budgets() {
-        let limits = VmLimits::safe_default();
-        assert!(limits.max_depth < VmLimits::default().max_depth);
+    fn public_default_arms_resource_budgets() {
+        let limits = VmLimits::default();
         assert!(limits.step_budget.is_some());
         assert!(limits.mem_budget.is_some());
         assert!(limits.stdout_budget.is_some());
         assert!(limits.host_call_budget.is_some());
+
+        let trusted = VmLimits::unbounded_for_trusted_host();
+        assert!(trusted.max_depth > limits.max_depth);
+        assert!(trusted.step_budget.is_none());
+        assert!(trusted.mem_budget.is_none());
+        assert!(trusted.stdout_budget.is_none());
+        assert!(trusted.host_call_budget.is_none());
     }
 }
