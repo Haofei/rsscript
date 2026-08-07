@@ -1,0 +1,12 @@
+{
+  "schema": "rsscript.core_slo.v1",
+  "max_p95_ms": {
+    "check": 100.0,
+    "compile": 250.0,
+    "artifact_verify": 100.0,
+    "vm_execute": 100.0,
+    "pre_cancel_rejection": 25.0
+  },
+  "max_artifact_bytes": 1048576,
+  "max_execution_steps": 100000
+}

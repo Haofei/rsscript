@@ -27,6 +27,7 @@ members = [
     "providers/log",
     "providers/cli",
     "examples/embedded-report-pipeline",
+    "tools/rsscript-xtask",
     "crates/rsscript",
     "crates/lsp",
     "crates/runtime",

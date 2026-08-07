@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsscript.dev/schemas/rsscript.core_metrics.v1.schema.json",
+  "title": "RSScript Core Metrics v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "iterations",
+    "environment",
+    "check",
+    "compile",
+    "artifact_verify",
+    "vm_execute",
+    "pre_cancel_rejection",
+    "artifact_bytes",
+    "execution_steps",
+    "execution_allocated_bytes"
+  ],
+  "properties": {
+    "schema": { "const": "rsscript.core_metrics.v1" },
+    "iterations": { "type": "integer", "minimum": 2 },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "arch", "profile", "git_revision"],
+      "properties": {
+        "os": { "type": "string", "minLength": 1 },
+        "arch": { "type": "string", "minLength": 1 },
+        "profile": { "enum": ["debug", "release"] },
+        "git_revision": { "type": ["string", "null"] }
+      }
+    },
+    "check": { "$ref": "#/$defs/distribution" },
+    "compile": { "$ref": "#/$defs/distribution" },
+    "artifact_verify": { "$ref": "#/$defs/distribution" },
+    "vm_execute": { "$ref": "#/$defs/distribution" },
+    "pre_cancel_rejection": { "$ref": "#/$defs/distribution" },
+    "artifact_bytes": { "type": "integer", "minimum": 1 },
+    "execution_steps": { "type": "integer", "minimum": 1 },
+    "execution_allocated_bytes": { "type": "integer", "minimum": 0 }
+  },
+  "$defs": {
+    "distribution": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["p50_ms", "p95_ms", "max_ms"],
+      "properties": {
+        "p50_ms": { "type": "number", "minimum": 0 },
+        "p95_ms": { "type": "number", "minimum": 0 },
+        "max_ms": { "type": "number", "minimum": 0 }
+      }
+    }
+  }
+}
