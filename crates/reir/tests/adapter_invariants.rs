@@ -1,7 +1,7 @@
 use reir::{
     FactKind, FactValue,
     adapters::{
-        rsscript::rsscript_lock_json_to_bundle,
+        rsscript::rsscript_analysis_json_to_bundle,
         terraform::{TerraformPlanLimits, terraform_plan_json_to_bundle_with_limits},
     },
 };
@@ -56,22 +56,24 @@ fn terraform_fact_budget_fails_before_returning_partial_evidence() {
 
 #[test]
 fn adapter_bundles_include_complete_producer_provenance() {
-    let rsscript = rsscript_lock_json_to_bundle(
+    let rsscript = rsscript_analysis_json_to_bundle(
         r#"{
-            "version": 1,
-            "lockfile_path": "rsspkg.lock",
-            "package": [{
-                "name": "demo",
-                "version": "1.0.0",
-                "source": "path+demo",
-                "checksum": "sha256:package",
-                "interface_hash": "sha256:interface",
-                "review_hash": "sha256:review",
-                "features": []
-            }]
+            "$schema": "rsscript.package_analysis.v1",
+            "producer": {},
+            "language_version": "2026",
+            "interface_catalog_digest": "sha256:interface",
+            "snapshot_digest": "sha256:snapshot",
+            "module_digest": "sha256:module",
+            "package": { "name": "demo", "version": "1.0.0" },
+            "files": [],
+            "summary": {},
+            "exports": [],
+            "external_imports": [],
+            "await_sites": [],
+            "diagnostics": []
         }"#,
     )
-    .expect("RSScript lock should convert");
+    .expect("RSScript analysis should convert");
     let terraform =
         terraform_plan_json_to_bundle_with_limits(UNSUPPORTED_PLAN, TerraformPlanLimits::default())
             .expect("Terraform plan should convert");
@@ -148,5 +150,50 @@ fn adapter_fact_stages_cannot_construct_bundles_directly() {
                 path.display()
             );
         }
+    }
+}
+
+#[test]
+fn rsscript_adapter_accepts_only_neutral_package_analysis() {
+    let crate_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let adapter = crate_root.join("src/adapters/rsscript");
+    let cli = std::fs::read_to_string(crate_root.join("src/cli/commands.rs"))
+        .expect("CLI source should be readable");
+    let source = [
+        "mod.rs",
+        "input.rs",
+        "normalization.rs",
+        "facts.rs",
+        "pipeline.rs",
+    ]
+    .into_iter()
+    .map(|file| std::fs::read_to_string(adapter.join(file)).expect("adapter source"))
+    .collect::<String>();
+
+    for removed in [
+        "RsScriptPackageReview",
+        "RsScriptReviewMap",
+        "rsscript_json_to_bundle",
+        "rsscript_lock_json_to_bundle",
+        "rsscript_check_json_to_bundle",
+        "standard_library_export_capabilities",
+    ] {
+        assert!(
+            !source.contains(removed),
+            "legacy adapter API `{removed}` returned"
+        );
+    }
+    for removed_flag in [
+        "--review-map",
+        "--package-review",
+        "--package-check",
+        "--package-lock",
+        "--package-tree",
+        "--package-metadata",
+    ] {
+        assert!(
+            !cli.contains(removed_flag),
+            "legacy RSScript collect flag `{removed_flag}` returned"
+        );
     }
 }

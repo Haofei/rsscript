@@ -1,6 +1,5 @@
 const USAGE: &str = "Usage:
   reir collect --producer rsscript --package-analysis analysis.json [--out bundle.json] [--json]
-  reir collect --producer rsscript [legacy RSScript evidence flags] [--out bundle.json] [--json]
   reir collect --producer terraform --from infra/terraform [--out bundle.json] [--json]
   reir collect --producer terraform-plan --from plan.json [--out bundle.json] [--json]
   reir reconcile --required required.json --granted granted.json [--target name] [--json]

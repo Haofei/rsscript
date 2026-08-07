@@ -228,114 +228,24 @@ fn merge_bundle_values_dedupes_and_rebuilds_subject_index_and_slices() {
 }
 
 #[test]
-fn collect_rsscript_bundle_merges_package_manager_inputs() {
-    let package_review = r#"{
-            "package": { "name": "demo", "version": "0.1.0" },
-            "risk": "low",
-            "summary": {
-                "public_apis": 1,
-                "mutating_apis": 0,
-                "retaining_apis": 0,
-                "resource_apis": 0,
-                "native_apis": 0,
-                "unsafe_apis": 0,
-                "unknown_apis": 0
-            },
-            "exports": [
-                { "name": "Api.run", "kind": "function", "classification": "low_semantic_risk" }
-            ]
-        }"#;
-    let package_check = r#"{
-            "package": { "name": "demo", "version": "0.1.0", "edition": "2026" },
-            "package_dir": "/tmp/demo",
-            "ok": false,
-            "risk": "elevated",
-            "reasons": ["rsspkg.lock missing"],
-            "summary": { "diagnostics": 0, "errors": 0, "dependencies": 0 },
-            "graph": { "ok": true, "risk": "low", "reasons": [] },
-            "lock": {
-                "path": "/tmp/demo/rsspkg.lock",
-                "present": false,
-                "matches": false,
-                "risk": "elevated",
-                "reasons": ["rsspkg.lock missing"],
-                "package_changes": []
-            },
-            "diagnostics": []
-        }"#;
-    let package_lock = r#"{
-            "version": 1,
-            "package": [
-                {
-                    "name": "demo",
-                    "version": "0.1.0",
-                    "source": "path+/tmp/demo",
-                    "checksum": "sha256:pkg",
-                    "interface_hash": "sha256:interface",
-                    "review_hash": "sha256:review",
-                    "features": []
-                }
-            ]
-        }"#;
-
-    let bundle = collect_rsscript_bundle(RsscriptCollectInputs {
-        package_analysis_json: None,
-        review_map_json: None,
-        package_review_json: Some(package_review),
-        package_check_json: Some(package_check),
-        package_lock_json: Some(package_lock),
-        package_lock_path: None,
-        lock_update_json: None,
-        package_tree_json: None,
-        package_metadata_json: None,
-        package_name: None,
-    })
-    .expect("RSScript package-manager JSON should collect");
-
-    assert_eq!(bundle.producers.len(), 3);
-    assert!(bundle.facts.iter().any(|fact| {
-        fact.id == "fact.package.demo_0_1_0.risk" && fact.kind == FactKind::PackageRisk
-    }));
-    assert!(bundle.facts.iter().any(|fact| {
-        fact.id == "fact.package_check.demo_0_1_0.status" && fact.kind == FactKind::PolicyResult
-    }));
-    assert!(bundle.facts.iter().any(|fact| {
-        fact.id == "fact.lockfile.demo_0_1_0.effective_interface_hash"
-            && fact.kind == FactKind::SupplyChain
-    }));
-    assert!(bundle.slices.iter().any(|slice| {
-        slice.kind == SliceKind::PackageRiskSlice
-            && slice
-                .facts
-                .contains(&"fact.lockfile.demo_0_1_0.effective_interface_hash".to_owned())
-    }));
-}
-
-#[test]
 fn collect_rsscript_bundle_accepts_neutral_package_analysis() {
     let analysis = r#"{
         "$schema": "rsscript.package_analysis.v1",
+        "producer": {},
         "language_version": "2026",
         "interface_catalog_digest": "sha256:interfaces",
         "snapshot_digest": "sha256:snapshot",
         "module_digest": "sha256:module",
         "package": { "name": "demo", "version": "0.1.0", "edition": "2026" },
+        "files": [],
+        "summary": {},
         "exports": [],
         "external_imports": [],
         "await_sites": [],
         "diagnostics": []
     }"#;
     let bundle = collect_rsscript_bundle(RsscriptCollectInputs {
-        package_analysis_json: Some(analysis),
-        review_map_json: None,
-        package_review_json: None,
-        package_check_json: None,
-        package_lock_json: None,
-        package_lock_path: None,
-        lock_update_json: None,
-        package_tree_json: None,
-        package_metadata_json: None,
-        package_name: None,
+        package_analysis_json: analysis,
     })
     .expect("neutral package analysis should collect");
 
@@ -349,110 +259,57 @@ fn collect_rsscript_bundle_accepts_neutral_package_analysis() {
 }
 
 #[test]
-fn collect_rsscript_cli_reads_package_manager_inputs_and_writes_bundle() {
-    let temp_dir = unique_temp_dir("collect-rsscript-cli");
-    let review_path = temp_dir.join("package-review.json");
-    let check_path = temp_dir.join("package-check.json");
-    let lock_path = temp_dir.join("rsspkg.lock.json");
+fn collect_rsscript_cli_accepts_only_package_analysis() {
+    let temp_dir = unique_temp_dir("collect-rsscript-analysis");
+    let analysis_path = temp_dir.join("package-analysis.json");
     let out_path = temp_dir.join("bundle.json");
     std::fs::write(
-        &review_path,
+        &analysis_path,
         r#"{
-                "package": { "name": "demo", "version": "0.1.0" },
-                "risk": "low",
-                "summary": {
-                    "public_apis": 1,
-                    "mutating_apis": 0,
-                    "retaining_apis": 0,
-                    "resource_apis": 0,
-                    "native_apis": 0,
-                    "unsafe_apis": 0,
-                    "unknown_apis": 0
-                },
-                "exports": [
-                    {
-                        "name": "Api.run",
-                        "kind": "function",
-                        "classification": "low_semantic_risk"
-                    }
-                ]
-            }"#,
+            "$schema": "rsscript.package_analysis.v1",
+            "producer": {},
+            "language_version": "2026",
+            "interface_catalog_digest": "sha256:interfaces",
+            "snapshot_digest": "sha256:snapshot",
+            "module_digest": "sha256:module",
+            "package": { "name": "demo", "version": "0.1.0", "edition": "2026" },
+            "files": [],
+            "summary": {},
+            "exports": [],
+            "external_imports": [],
+            "await_sites": [],
+            "diagnostics": []
+        }"#,
     )
-    .expect("package review fixture should be written");
-    std::fs::write(
-        &check_path,
-        r#"{
-                "package": { "name": "demo", "version": "0.1.0", "edition": "2026" },
-                "package_dir": "/tmp/demo",
-                "ok": false,
-                "risk": "elevated",
-                "reasons": ["rsspkg.lock missing"],
-                "summary": { "diagnostics": 0, "errors": 0, "dependencies": 0 },
-                "graph": { "ok": true, "risk": "low", "reasons": [] },
-                "lock": {
-                    "path": "/tmp/demo/rsspkg.lock",
-                    "present": false,
-                    "matches": false,
-                    "risk": "elevated",
-                    "reasons": ["rsspkg.lock missing"],
-                    "package_changes": []
-                },
-                "diagnostics": []
-            }"#,
-    )
-    .expect("package check fixture should be written");
-    std::fs::write(
-        &lock_path,
-        r#"{
-                "version": 1,
-                "package": [
-                    {
-                        "name": "demo",
-                        "version": "0.1.0",
-                        "source": "path+/tmp/demo",
-                        "checksum": "sha256:pkg",
-                        "interface_hash": "sha256:interface",
-                        "review_hash": "sha256:review",
-                        "features": []
-                    }
-                ]
-            }"#,
-    )
-    .expect("package lock fixture should be written");
-
+    .expect("analysis fixture should be written");
     let args = vec![
         "--producer".to_owned(),
         "rsscript".to_owned(),
-        "--package-review".to_owned(),
-        review_path.to_string_lossy().into_owned(),
-        "--package-check".to_owned(),
-        check_path.to_string_lossy().into_owned(),
-        "--package-lock".to_owned(),
-        lock_path.to_string_lossy().into_owned(),
+        "--package-analysis".to_owned(),
+        analysis_path.to_string_lossy().into_owned(),
         "--out".to_owned(),
         out_path.to_string_lossy().into_owned(),
-        "--json".to_owned(),
     ];
+    assert_eq!(
+        try_run_collect(&args).expect("neutral analysis should collect"),
+        ExitCode::SUCCESS
+    );
+    let bundle =
+        Bundle::from_json(&std::fs::read_to_string(&out_path).expect("bundle should be written"))
+            .expect("bundle should parse");
+    assert_eq!(bundle.producers.len(), 1);
 
-    let code = try_run_collect(&args).expect("collect command should succeed");
-    assert_eq!(code, ExitCode::SUCCESS);
-
-    let bundle_json =
-        std::fs::read_to_string(&out_path).expect("collect command should write bundle");
-    let bundle = Bundle::from_json(&bundle_json).expect("written bundle should parse");
-    assert_eq!(bundle.producers.len(), 3);
-    assert!(bundle.facts.iter().any(|fact| {
-        fact.id == "fact.package.demo_0_1_0.risk" && fact.kind == FactKind::PackageRisk
-    }));
-    assert!(bundle.facts.iter().any(|fact| {
-        fact.id == "fact.package_check.demo_0_1_0.status" && fact.kind == FactKind::PolicyResult
-    }));
-    assert!(bundle.facts.iter().any(|fact| {
-        fact.id == "fact.lockfile.demo_0_1_0.effective_interface_hash"
-            && fact.kind == FactKind::SupplyChain
-            && fact.evidence[0].file.as_deref() == Some(lock_path.to_string_lossy().as_ref())
-    }));
-    let _ = std::fs::remove_dir_all(&temp_dir);
+    let legacy = vec![
+        "--producer".to_owned(),
+        "rsscript".to_owned(),
+        "--package-review".to_owned(),
+        analysis_path.to_string_lossy().into_owned(),
+    ];
+    let error = try_run_collect(&legacy).expect_err("legacy input flag must be rejected");
+    assert!(
+        matches!(error, CliError::Usage(message) if message.contains("unknown collect argument"))
+    );
+    let _ = std::fs::remove_dir_all(temp_dir);
 }
 
 #[test]

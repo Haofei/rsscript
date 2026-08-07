@@ -1,10 +1,6 @@
 use super::CliError;
 use super::safe_io::{MAX_CLI_INPUT_BYTES, read_bounded_text_accounted};
-use reir::adapters::rsscript::{
-    rsscript_analysis_json_to_bundle, rsscript_check_json_to_bundle, rsscript_json_to_bundle,
-    rsscript_lock_diff_json_to_bundle, rsscript_lock_json_to_bundle,
-    rsscript_metadata_json_to_bundle, rsscript_tree_json_to_bundle,
-};
+use reir::adapters::rsscript::rsscript_analysis_json_to_bundle;
 use reir::api::v1::{
     model::{Bundle, FactRole},
     reconciliation::{
@@ -18,106 +14,15 @@ use std::process::ExitCode;
 pub(super) const MAX_MERGE_INPUT_FILES: usize = 1024;
 
 pub(super) struct RsscriptCollectInputs<'a> {
-    pub(super) package_analysis_json: Option<&'a str>,
-    pub(super) review_map_json: Option<&'a str>,
-    pub(super) package_review_json: Option<&'a str>,
-    pub(super) package_check_json: Option<&'a str>,
-    pub(super) package_lock_json: Option<&'a str>,
-    pub(super) package_lock_path: Option<&'a str>,
-    pub(super) lock_update_json: Option<&'a str>,
-    pub(super) package_tree_json: Option<&'a str>,
-    pub(super) package_metadata_json: Option<&'a str>,
-    pub(super) package_name: Option<&'a str>,
+    pub(super) package_analysis_json: &'a str,
 }
 
 pub(super) fn collect_rsscript_bundle(
     inputs: RsscriptCollectInputs<'_>,
 ) -> Result<Bundle, CliError> {
-    let mut bundles = Vec::new();
-    if let Some(json) = inputs.package_analysis_json {
-        bundles.push(rsscript_analysis_json_to_bundle(json).map_err(|error| {
-            CliError::runtime(format!(
-                "failed to collect RSScript package analysis: {error}"
-            ))
-        })?);
-    }
-    if inputs.review_map_json.is_some() || inputs.package_review_json.is_some() {
-        bundles.push(
-            rsscript_json_to_bundle(
-                inputs.review_map_json,
-                inputs.package_review_json,
-                inputs.package_name,
-            )
-            .map_err(|error| {
-                CliError::runtime(format!(
-                    "failed to collect RSScript review evidence: {error}"
-                ))
-            })?,
-        );
-    }
-    if let Some(json) = inputs.package_check_json {
-        bundles.push(rsscript_check_json_to_bundle(json).map_err(|error| {
-            CliError::runtime(format!(
-                "failed to collect RSScript check evidence: {error}"
-            ))
-        })?);
-    }
-    if let Some(json) = inputs.package_lock_json {
-        let lock_json = package_lock_json_with_path(json, inputs.package_lock_path)?;
-        bundles.push(rsscript_lock_json_to_bundle(&lock_json).map_err(|error| {
-            CliError::runtime(format!("failed to collect RSScript lock evidence: {error}"))
-        })?);
-    }
-    if let Some(json) = inputs.lock_update_json {
-        bundles.push(rsscript_lock_diff_json_to_bundle(json).map_err(|error| {
-            CliError::runtime(format!(
-                "failed to collect RSScript lock-update evidence: {error}"
-            ))
-        })?);
-    }
-    if let Some(json) = inputs.package_tree_json {
-        bundles.push(rsscript_tree_json_to_bundle(json).map_err(|error| {
-            CliError::runtime(format!("failed to collect RSScript tree evidence: {error}"))
-        })?);
-    }
-    if let Some(json) = inputs.package_metadata_json {
-        bundles.push(rsscript_metadata_json_to_bundle(json).map_err(|error| {
-            CliError::runtime(format!(
-                "failed to collect RSScript metadata evidence: {error}"
-            ))
-        })?);
-    }
-    if bundles.is_empty() {
-        return Err(CliError::usage(
-            "collect requires at least one RSScript JSON input",
-        ));
-    }
-    merge_bundle_values(bundles)
-}
-
-pub(super) fn package_lock_json_with_path(
-    json: &str,
-    path: Option<&str>,
-) -> Result<String, CliError> {
-    let Some(path) = path else {
-        return Ok(json.to_owned());
-    };
-    let mut value: serde_json::Value = serde_json::from_str(json).map_err(|error| {
-        CliError::runtime(format!("failed to parse RSScript lock evidence: {error}"))
-    })?;
-    if value
-        .get("lockfile_path")
-        .and_then(serde_json::Value::as_str)
-        .is_none()
-    {
-        value
-            .as_object_mut()
-            .ok_or_else(|| CliError::runtime("RSScript lock evidence must be a JSON object"))?
-            .insert("lockfile_path".to_owned(), path.to_owned().into());
-    }
-    serde_json::to_string(&value).map_err(|error| {
+    rsscript_analysis_json_to_bundle(inputs.package_analysis_json).map_err(|error| {
         CliError::runtime(format!(
-            "failed to prepare RSScript lock evidence with path: {error}"
+            "failed to collect RSScript package analysis: {error}"
         ))
     })
 }

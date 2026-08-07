@@ -14,15 +14,15 @@ Non-scope: RSScript language semantics, RSScript package dependency resolution, 
 ### Changes from v0.1
 
 ```text
-- RSScript adapter implemented and integrated into package review pipeline.
-- Capability-binding call-graph propagation now produces REIR required-capability
-  facts for each reachable API path.
-- S3 IAM scenario demonstrates end-to-end: code requires → IAM grants →
-  reconciliation result → review summary.
+- RSScript adapter consumes only neutral `rsscript.package_analysis.v1`.
+- External imports remain structural facts until matching binding or Provider
+  metadata supplies a capability classification.
+- RSScript compilation and artifacts are independent of REIR and deployment
+  evidence.
 - Evidence bundle format includes reconciliation result (pass/fail/partial)
   with per-capability detail.
-- Adapter profile for RSScript package metadata now emits structured
-  capability-binding facts rather than heuristic text annotations.
+- Binding and Provider adapter profiles may emit structured capability facts
+  independently of RSScript package analysis.
 - Unknown-reason field added to capability facts for incomplete analysis paths.
 ```
 
@@ -1587,227 +1587,23 @@ unknown package-analysis schema versions and records both snapshot and module
 digests, allowing consumers to prove that inspected semantics and the executable
 module came from the same immutable build input.
 
-The remaining package-check, lock, review-map, native, and package-review input
-decoders in the prototype are legacy compatibility readers for previously
-emitted external evidence. Current RSScript CLI commands do not produce those
-artifacts, and they are not part of the RSScript compiler or SDK contract.
-
-The RSScript package producer should emit direct manifest dependencies even when
-the dependency has not been resolved. A resolved local path dependency may carry
-scanned confidence; unresolved registry or git dependencies must remain unknown
-or lower-confidence facts rather than being treated as reviewed. The dependency
-edge records package-shape evidence (`rsspkg.toml` / package review metadata);
-transitive graph risk and effective interface hashes come from graph, lockfile,
-or registry producers when those artifacts are available. The legacy
-package-check compatibility decoder accepts the former `rss pkg ci --json`
-shape and emits CI gate
-`policy_result` facts for overall status, graph, lock, and native checks; stale
-lock package-change facts and changed lock-field facts; provider implementation
-declarations from `[implements]`; native unsafe/build-time facts; and
-diagnostics with package-check evidence. This producer describes the package
-manager gate result and does not replace lower-level package review or lockfile
-producers. Overall status and graph policy facts use the package directory as
-their evidence file. The lock policy fact uses `lockfile_entry` evidence at the
-reported semantic lock path so CI can link directly to `rsspkg.lock`. The native
-policy fact and native unsafe/build-time facts derived from `native_rust` use the
-native wrapper path as their evidence file so CI can link directly to the native
-review boundary instead of only the package root. Provider implementation facts
-derived from `[implements]` use the package manifest (`rsspkg.toml`) as their
-evidence file.
-Package-check diagnostic facts preserve source-span evidence, and relative
-diagnostic paths are resolved under the checked package directory so CI can open
-the exact manifest, interface, source, native metadata, or policy file that
-caused the diagnostic.
-The legacy lockfile compatibility decoder for former `rss pkg lock --reir`
-output emits package checksum,
-effective interface hash, review metadata hash, and native wrapper hash as
-`supply_chain` facts with `lockfile_entry` evidence and `lockfile` acquisition.
-When the lockfile path is known, lockfile-entry evidence uses the concrete
-semantic lock path (`<package-directory>/rsspkg.lock`); legacy or externally
-collected lock JSON without a path may fall back to `rsspkg.lock`. If a lock
-entry lacks an expected checksum, effective interface hash, review hash, or
-native hash value, the corresponding `supply_chain` fact is `unknown` rather than
-`true`; missing lock hashes must not be represented as verified lockfile
-evidence.
-Future lock-update REIR producers may emit update-risk, per-package risk, and
-changed-field facts with `lockfile_entry` evidence so dependency update review
-can be merged with package and graph evidence. The top-level
-update-risk fact uses `/risk` evidence. Added or changed package/field evidence
-points at the new lockfile; removed package or field evidence points at the old
-lockfile because the reviewed entry no longer exists in the new artifact.
-The legacy dependency-tree compatibility decoder for former `rss pkg tree
---reir` output emits
-transitive dependency-risk facts, effective-interface hash `supply_chain` facts,
-and `depends_on` edges with `dependency_path` evidence for each resolved or
-unresolved graph node. These facts and edges identify `rsscript_tree` as their
-evidence source so merged bundles can distinguish graph observations from
-package-review evidence. For resolved `path+` graph nodes, `dependency_path`
-evidence uses the resolved package directory as its evidence file; unresolved
-registry, git, or missing path nodes leave `evidence.file` empty rather than
-inventing a local artifact path.
-The legacy metadata compatibility decoder for former `rss pkg metadata --reir`
-output emits metadata status, generated-artifact `supply_chain` facts, and
-stale/missing/unreadable mismatch `policy_result` facts with `package_metadata`
-evidence. The top-level metadata status fact uses the package directory as its
-evidence file and `/ok` as its JSON pointer. Metadata mismatch inputs include
-the artifact kind, expected SHA-256, and actual SHA-256 when the stale artifact
-was readable; REIR evidence preserves those digests in the mismatch value/reason
-so CI can gate stale review artifacts without scraping human text. Mismatch
-evidence files remain the artifact paths themselves; hash details must not be
-appended to `evidence.file`. This producer describes whether review artifacts are
-current; it does not replace the review bundle stored at `review/reir/rsscript.json`.
-Generated REIR artifacts under `review/reir/` are review evidence, not package
-payload.
-
-Await-site metadata from package review should be preserved as `async_boundary`
-facts. The fact subject is the enclosing RSScript function, evidence points at
-the `await` span, and evidence detail records the classified boundary
-(`runtime_pending`, `native_pending`, `rss_call`, or `unknown`), awaited callee,
-and values live across the suspension point. These facts are compiler-contract
-evidence about RSScript source, not runtime scheduling observations. Structured
-`task_group` awaits should resolve lexical async-let handles back to their
-initializer callee before emission, so a fact for `await user` records the
-underlying `fetch_user(...)` boundary instead of losing the call target.
-
-Package review diagnostics should be preserved as `diagnostic` facts. Diagnostic
-facts carry the compiler/package diagnostic code, severity, summary, and primary
-source span when available. Error diagnostics may use an `unknown` fact value so
-policy and registry views can distinguish packages whose public contract could
-not be fully classified from packages with only warning-level diagnostics.
-
-Package feature selections should be preserved as `package_feature` facts with
-`package.feature` subjects. Provider package declarations from `[implements]`
-should be preserved as `provider_implementation` facts that record the
-interface package name, interface version requirement, selected interface
-features, and `interface_effective_hash` when present. Missing provider
-interface hashes should remain visible as unknown provider implementation facts
-instead of being collapsed into package risk text.
-
-Native Rust Cargo feature selections should be preserved separately as
-`native_cargo_feature` facts. These facts are package implementation metadata
-about the selected Rust build shape, not RSScript public API feature contracts
-and not proof that a native behavior is present or absent.
-
-Native boundary groups should also produce `native_module_declaration` facts and
-`normalizes_to_native_fn` edges from the native module subject to each normalized
-native function subject. Package review may infer this grouping from explicit
-`native module` syntax or from grouped native function namespaces, but the facts
-remain source/interface-backed review boundaries rather than Rust module claims.
+Await-site metadata is preserved as `async_boundary` facts. Diagnostic facts
+carry the compiler code, severity, summary, and primary source span. Error
+diagnostics use an `unknown` fact value so downstream review cannot mistake an
+invalid contract for authoritative evidence.
 
 ### 14.2 Boundary
 
-Package tooling does not infer RSScript effects from Rust implementation. It
-consumes compiler-normalized `.rssi` contracts and native/package metadata.
-Native semantic behavior beyond declared contracts remains review-only unless
-adapter/audit evidence exists.
+The RSScript adapter consumes only `rsscript.package_analysis.v1`. It does not
+consume native implementation scans, package policy, deployment evidence, or
+Provider selection, and it never infers capabilities from external-symbol
+spelling.
 
-When RSScript package review includes native Rust `source_scan_best_effort`
-metadata, the package producer should preserve it as scanned REIR evidence, not
-as a static RSScript safety guarantee. Detected Rust `unsafe` produces an
-`unsafe_boundary` fact and a `runtime.unsafe` capability with scanned
-confidence; detected `extern "C"` / `extern "system"` FFI produces a scanned
-`native_boundary` fact and `runtime.native` capability; detected filesystem,
-network, worker-thread parallelism, or build-script behavior produces scanned
-capability facts such as `filesystem.read`, `network.client`, `process.spawn`,
-or `build.execute`. Detected native build scripts should also produce
-`build_time_execution` facts over a `build.step` subject so package and registry
-views can distinguish build-time behavior from runtime capability requirements.
-Absence of a detected pattern is not proof of absence unless a stronger audit
-producer states coverage.
-
-Native Rust `author_declaration` metadata is a different evidence channel from
-`source_scan_best_effort` metadata and must not be collapsed into it. Author
-declarations are manual/declared evidence about intended native behavior; for
-example, `worker_thread_parallelism = true` produces a declared
-`process.spawn` capability fact with acquisition mode `manual_declaration`.
-The separate source scan may also detect worker-thread parallelism and emit a
-scanned `process.spawn` capability fact. Keeping both facts lets reviewers see
-where an author declaration and a best-effort implementation scan agree or
-diverge.
-
-### 14.3 Package capability metadata
-
-Packages may declare capability mapping for public APIs. The mapping is evidence
-for code-required capability when a call to that API is resolved.
-
-Example:
-
-```toml
-[capabilities]
-"S3.put_object" = ["aws.s3.PutObject"]
-"File.open" = ["filesystem.read", "filesystem.write"]
-"File.read_all_string" = ["filesystem.read"]
-"File.open_write" = ["filesystem.write"]
-"File.write_buffer" = ["filesystem.write"]
-"Json.parse_file" = ["filesystem.read"]
-"Toml.parse_file" = ["filesystem.read"]
-"Env.get" = ["env.read"]
-"Env.get_or_default" = ["env.read"]
-"Env.current_dir" = ["env.read"]
-"Env.home_dir" = ["env.read"]
-"Env.temp_dir" = ["env.read"]
-"Env.set" = ["env.write"]
-"Env.set_current_dir" = ["env.write"]
-"Http.get" = ["network.client"]
-"Http.post_json" = ["network.client"]
-"Http.post_form" = ["network.client"]
-"Process.run_stdout" = ["process.spawn"]
-"Clock.now" = ["time.read"]
-"Clock.system_unix_ms" = ["time.read"]
-"Instant.elapsed" = ["time.read"]
-"Random.bytes" = ["random.read"]
-"Uuid.new_v4" = ["random.read"]
-"Csv.open_read" = ["filesystem.read"]
-"Hash.sha256_string" = ["compute.hash"]
-"Hash.sha256_bytes" = ["compute.hash"]
-"Hash.sha256_file" = ["compute.hash", "filesystem.read"]
-"Regex.compile" = ["compute.regex"]
-"Regex.is_match" = ["compute.regex"]
-"Regex.find" = ["compute.regex"]
-"Regex.captures" = ["compute.regex"]
-"Regex.replace_all" = ["compute.regex"]
-"Regex.split" = ["compute.regex"]
-"Log.write" = ["telemetry.emit"]
-"TempDir.new" = ["filesystem.write"]
-"TempDir.new_in" = ["filesystem.write"]
-"TempDir.path" = ["filesystem.read"]
-"TempDir.keep" = ["filesystem.write"]
-```
-
-Package metadata may be authoritative only for its declared public contract, not
-for arbitrary implementation behavior.
-
-The RSScript package producer also maps known bundled stdlib façade exports to
-REIR capability facts when they appear in package review metadata. Examples:
-`Env.get` requires `env.read`, `Directory.write_string` and
-`File.write_buffer` require `filesystem.write`, `File.read_all_string`,
-`Json.parse_file`, and `Toml.parse_file` require `filesystem.read`,
-`File.open` conservatively requires both `filesystem.read` and
-`filesystem.write`, `Http.get`, `Http.post_json`, and `Http.post_form` require
-`network.client`, `Clock.now`, `Clock.system_unix_ms`, and `Instant.elapsed`
-require `time.read`, `Random.bytes` and `Uuid.new_v4` require `random.read`,
-and `Csv.open_read` requires `filesystem.read`. Database evidence uses the generic
-`database.read` and `database.write` categories emitted by database-aware
-adapters. `Hash.sha256_string` and `Hash.sha256_bytes` require `compute.hash`,
-`Hash.sha256_file` requires both `compute.hash` and `filesystem.read`,
-`Regex.compile`, `Regex.is_match`, `Regex.find`, `Regex.captures`,
-`Regex.replace_all`, and `Regex.split` require `compute.regex`, `Log.write`
-requires `telemetry.emit`, `TempDir.new`, `TempDir.new_in`, and `TempDir.keep`
-require `filesystem.write`,
-`TempDir.path` requires `filesystem.read`, while `Process.run_stdout` requires
-`process.spawn`. These facts are still
-compiler-contract evidence about the public façade surface; they are not a scan
-of arbitrary Rust implementation behavior.
-Deterministic encoding helpers such as `Base64.encode`, `Hex.decode`, and
-`Url.encode_component` remain public/native contract evidence but do not emit a
-separate external capability fact unless a future profile introduces a
-compute-encoding capability category.
-Purely in-memory user-domain helpers do not emit external capability facts
-beyond their public contract, retention, and native-boundary evidence.
-Descriptor-cleanup helpers such as `OS.close` are trusted native/resource
-internals over `Fd`; they may still appear as native/public contract evidence,
-but they do not imply `filesystem.read`, `filesystem.write`, or
-`runtime.native` external capability facts by themselves.
+Binding descriptors and Provider metadata are independent REIR producers. They
+may classify an external import only when their versioned signature and symbol
+identity match the neutral analysis. Infrastructure and runtime producers
+separately state what an environment grants or observes. None of those inputs
+can change RSScript parsing, validation, lowering, or artifact bytes.
 
 ---
 
@@ -2092,12 +1888,9 @@ security and runtime drift detection.
 
 REIR v0.2 does not require a specific CLI. The current prototype CLI supports
 `collect --producer rsscript`, `reconcile`, `diff`, `slice`, `merge`, and `show`
-over existing REIR bundle JSON. The current RSScript path accepts the neutral
-`rsscript.package_analysis.v1` artifact through `--package-analysis`. Former
-review-map, package-review, package-check, lock, tree, and metadata flags remain
-legacy readers for externally retained evidence; the RSScript product CLI no
-longer produces them. Non-RSScript `collect` producers in the examples below
-remain design targets.
+over existing REIR bundle JSON. The RSScript path accepts only the neutral
+`rsscript.package_analysis.v1` artifact through `--package-analysis`.
+Non-RSScript `collect` producers in the examples below remain design targets.
 
 ```sh
 rss build --out build/module.rssbc --analysis-out build/package-analysis.json .

@@ -30,11 +30,14 @@ mod tests {
         format!(
             r#"{{
                 "$schema": "rsscript.package_analysis.v1",
+                "producer": {{}},
                 "language_version": "2026",
                 "interface_catalog_digest": "sha256:interfaces",
                 "snapshot_digest": "sha256:snapshot",
                 "module_digest": "{module_digest}",
                 "package": {{ "name": "demo", "version": "0.1.0" }},
+                "files": [],
+                "summary": {{}},
                 "exports": [],
                 "external_imports": [],
                 "await_sites": [],

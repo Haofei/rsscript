@@ -58,14 +58,6 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
 
     let mut producer = None;
     let mut package_analysis = None;
-    let mut review_map = None;
-    let mut package_review = None;
-    let mut package_check = None;
-    let mut package_lock = None;
-    let mut lock_update = None;
-    let mut package_tree = None;
-    let mut package_metadata = None;
-    let mut package_name = None;
     let mut from = None;
     let mut out = None;
     let mut json = false;
@@ -78,26 +70,6 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
             "--producer" => producer = Some(take_value(args, &mut index, "--producer")?),
             "--package-analysis" => {
                 package_analysis = Some(take_value(args, &mut index, "--package-analysis")?)
-            }
-            "--review-map" => review_map = Some(take_value(args, &mut index, "--review-map")?),
-            "--package-review" => {
-                package_review = Some(take_value(args, &mut index, "--package-review")?)
-            }
-            "--package-check" => {
-                package_check = Some(take_value(args, &mut index, "--package-check")?)
-            }
-            "--package-lock" => {
-                package_lock = Some(take_value(args, &mut index, "--package-lock")?)
-            }
-            "--lock-update" => lock_update = Some(take_value(args, &mut index, "--lock-update")?),
-            "--package-tree" => {
-                package_tree = Some(take_value(args, &mut index, "--package-tree")?)
-            }
-            "--package-metadata" => {
-                package_metadata = Some(take_value(args, &mut index, "--package-metadata")?)
-            }
-            "--package-name" => {
-                package_name = Some(take_value(args, &mut index, "--package-name")?)
             }
             "--from" => from = Some(take_value(args, &mut index, "--from")?),
             "--out" => out = Some(take_value(args, &mut index, "--out")?),
@@ -115,16 +87,7 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
     if producer == "terraform" {
         let from_path =
             from.ok_or_else(|| CliError::usage("terraform collect requires --from <path>"))?;
-        if review_map.is_some()
-            || package_analysis.is_some()
-            || package_review.is_some()
-            || package_check.is_some()
-            || package_lock.is_some()
-            || lock_update.is_some()
-            || package_tree.is_some()
-            || package_metadata.is_some()
-            || package_name.is_some()
-        {
+        if package_analysis.is_some() {
             return Err(CliError::usage(
                 "terraform collect only accepts --from, --out, and --json",
             ));
@@ -178,48 +141,16 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
             "`--from` is only supported by Terraform/OpenTofu collection; use RSScript JSON input flags with `--producer rsscript`.",
         ));
     }
-    if review_map.is_none()
-        && package_analysis.is_none()
-        && package_review.is_none()
-        && package_check.is_none()
-        && package_lock.is_none()
-        && lock_update.is_none()
-        && package_tree.is_none()
-        && package_metadata.is_none()
-    {
-        return Err(CliError::usage(
-            "collect requires at least one RSScript JSON input",
-        ));
-    }
+    let package_analysis = package_analysis.ok_or_else(|| {
+        CliError::usage("RSScript collect requires --package-analysis <analysis.json>")
+    })?;
 
     let mut aggregate_input_bytes = 0;
     let package_analysis_json =
-        read_optional_text_accounted(package_analysis.as_deref(), &mut aggregate_input_bytes)?;
-    let review_map_json =
-        read_optional_text_accounted(review_map.as_deref(), &mut aggregate_input_bytes)?;
-    let package_review_json =
-        read_optional_text_accounted(package_review.as_deref(), &mut aggregate_input_bytes)?;
-    let package_check_json =
-        read_optional_text_accounted(package_check.as_deref(), &mut aggregate_input_bytes)?;
-    let package_lock_json =
-        read_optional_text_accounted(package_lock.as_deref(), &mut aggregate_input_bytes)?;
-    let lock_update_json =
-        read_optional_text_accounted(lock_update.as_deref(), &mut aggregate_input_bytes)?;
-    let package_tree_json =
-        read_optional_text_accounted(package_tree.as_deref(), &mut aggregate_input_bytes)?;
-    let package_metadata_json =
-        read_optional_text_accounted(package_metadata.as_deref(), &mut aggregate_input_bytes)?;
+        read_optional_text_accounted(Some(package_analysis.as_str()), &mut aggregate_input_bytes)?
+            .expect("required package analysis path must produce input");
     let bundle = collect_rsscript_bundle(RsscriptCollectInputs {
-        package_analysis_json: package_analysis_json.as_deref(),
-        review_map_json: review_map_json.as_deref(),
-        package_review_json: package_review_json.as_deref(),
-        package_check_json: package_check_json.as_deref(),
-        package_lock_json: package_lock_json.as_deref(),
-        package_lock_path: package_lock.as_deref(),
-        lock_update_json: lock_update_json.as_deref(),
-        package_tree_json: package_tree_json.as_deref(),
-        package_metadata_json: package_metadata_json.as_deref(),
-        package_name: package_name.as_deref(),
+        package_analysis_json: &package_analysis_json,
     })?;
 
     if strict {

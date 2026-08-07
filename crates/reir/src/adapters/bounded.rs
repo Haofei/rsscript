@@ -165,25 +165,6 @@ impl BoundedEvidenceBuilder {
         Ok(())
     }
 
-    pub fn extend_edges(
-        &mut self,
-        edges: impl IntoIterator<Item = Edge>,
-    ) -> Result<(), AdapterBuildError> {
-        for edge in edges {
-            self.record_operation()?;
-            self.charge_strings(&edge)?;
-            self.edges.push(edge);
-        }
-        Ok(())
-    }
-
-    pub fn push_unknown_coverage(
-        &mut self,
-        coverage: UnknownCoverage<'_>,
-    ) -> Result<(), AdapterBuildError> {
-        self.push_fact(coverage.into_fact())
-    }
-
     pub fn finish(self, producer: ProducerProvenance) -> Result<Bundle, AdapterBuildError> {
         self.finish_with_subjects(producer, SubjectIndex::Canonical)
     }
@@ -389,13 +370,13 @@ mod tests {
 
         let mut facts = BoundedEvidenceBuilder::new(AdapterLimits::new(10, 0, 1_000));
         assert!(matches!(
-            facts.push_unknown_coverage(unknown_coverage("unsupported")),
+            facts.push_fact(unknown_coverage("unsupported").into_fact()),
             Err(AdapterBuildError::FactBudgetExceeded { .. })
         ));
 
         let mut strings = BoundedEvidenceBuilder::new(AdapterLimits::new(10, 1, 8));
         assert!(matches!(
-            strings.push_unknown_coverage(unknown_coverage("unsupported")),
+            strings.push_fact(unknown_coverage("unsupported").into_fact()),
             Err(AdapterBuildError::StringBudgetExceeded { .. })
         ));
     }
@@ -404,7 +385,7 @@ mod tests {
     fn unknown_coverage_is_explicit_and_provenance_is_complete() {
         let mut builder = BoundedEvidenceBuilder::new(AdapterLimits::new(10, 1, 10_000));
         builder
-            .push_unknown_coverage(unknown_coverage("unsupported type"))
+            .push_fact(unknown_coverage("unsupported type").into_fact())
             .expect("coverage fact");
         let bundle = builder.finish(provenance()).expect("bundle");
 
