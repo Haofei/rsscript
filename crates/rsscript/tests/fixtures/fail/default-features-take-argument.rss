@@ -1,9 +1,0 @@
-// expect: RS0101
-
-struct Buffer {
-    bytes: Bytes
-}
-
-fn bad_take(buffer: take Buffer) -> Unit {
-    Buffer.consume(buffer: take buffer)
-}

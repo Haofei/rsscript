@@ -255,12 +255,6 @@ fn caller() -> Unit {
 "#;
 
     let diagnostics = analyze_source("default-read-calls.rss", source);
-    assert!(
-        !diagnostics
-            .iter()
-            .any(|diagnostic| diagnostic.code == code::MISSING_PARAMETER_EFFECT),
-        "omitted ordinary parameter effects default to read"
-    );
     assert_eq!(
         diagnostics
             .iter()

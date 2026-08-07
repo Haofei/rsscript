@@ -341,7 +341,7 @@ pub(super) fn retained_local_diagnostic(analyzer: &mut Analyzer<'_>, retained: R
         retained.span,
         "local value retained",
         format!(
-            "`{}` declares `effects(retains({}))`.",
+            "`{}` declares `retains({})`.",
             retained.callee, retained.param
         ),
         "manage_local",
@@ -367,7 +367,7 @@ pub(super) fn retained_closure_capture_diagnostic(
             "local captured here",
         )
         .with_cause(format!(
-            "`{}` declares `effects(retains({}))`; the closure may outlive local values.",
+            "`{}` declares `retains({})`; the closure may outlive local values.",
             capture.callee, capture.param
         ))
         .with_cause(format!(

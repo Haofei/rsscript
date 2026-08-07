@@ -10,23 +10,10 @@ pub mod code {
     pub const RESERVED_DIAGNOSTIC_RS0001: &str = "RS0001";
     pub const MISSING_RETURN_TYPE: &str = "RS0002";
     pub const MISSING_PARAMETER_TYPE: &str = "RS0003";
-    pub const UNKNOWN_EFFECT: &str = "RS0004";
     pub const DUPLICATE_DECLARATION: &str = "RS0005";
-    pub const DUPLICATE_FEATURE_DECLARATION: &str = "RS0006";
     pub const UNKNOWN_RETAINED_PARAMETER: &str = "RS0007";
-    pub const MISSING_PARAMETER_EFFECT: &str = "RS0008";
-    pub const INVALID_PURE_EFFECT: &str = "RS0009";
-    pub const REMOVED_PROFILE_DECLARATION: &str = "RS0010";
-    pub const REMOVED_SHARE_EFFECT: &str = "RS0011";
-    pub const REMOVED_RUNTIME_EFFECT: &str = "RS0012";
     pub const INVALID_TRY_OPERATOR: &str = "RS0013";
-    pub const INVALID_NOALLOC_ALLOCATION: &str = "RS0014";
     pub const UNSUPPORTED_SYNTAX: &str = "RS0015";
-    pub const UNKNOWN_FILE_FEATURE: &str = "RS0016";
-    pub const DUPLICATE_FILE_FEATURE: &str = "RS0017";
-    pub const INVALID_NO_BLOCK_CALL: &str = "RS0018";
-    pub const INVALID_NO_PANIC_CALL: &str = "RS0019";
-    pub const INVALID_NOALLOC_CALL: &str = "RS0020";
     pub const NON_EXHAUSTIVE_MATCH: &str = "RS0021";
     pub const ASYNC_CALL_NOT_CONSUMED: &str = "RS0022";
     pub const FD_OUTSIDE_INTERNAL_BOUNDARY: &str = "RS0023";
@@ -47,7 +34,6 @@ pub mod code {
     pub const CHAR_LITERAL_NOT_SINGLE_SCALAR: &str = "RS0038";
     pub const CYCLIC_TYPE_ALIAS: &str = "RS0039";
     pub const ANALYSIS_INCOMPLETE: &str = "RS0040";
-    pub const FEATURE_VIOLATION: &str = "RS0101";
     pub const UNNAMED_ARGUMENT: &str = "RS0201";
     pub const MISSING_DATA_EFFECT: &str = "RS0202";
     pub const UNKNOWN_ARGUMENT: &str = "RS0203";
@@ -133,17 +119,9 @@ pub mod code {
 pub(crate) const SELFHOST_CHECKER_TARGET_CODES: &[&str] = &[
     code::MISSING_RETURN_TYPE,
     code::MISSING_PARAMETER_TYPE,
-    code::UNKNOWN_EFFECT,
     code::DUPLICATE_DECLARATION,
-    code::DUPLICATE_FEATURE_DECLARATION,
     code::UNKNOWN_RETAINED_PARAMETER,
-    code::INVALID_PURE_EFFECT,
-    code::REMOVED_PROFILE_DECLARATION,
-    code::REMOVED_SHARE_EFFECT,
-    code::REMOVED_RUNTIME_EFFECT,
     code::UNSUPPORTED_SYNTAX,
-    code::UNKNOWN_FILE_FEATURE,
-    code::DUPLICATE_FILE_FEATURE,
     code::NON_EXHAUSTIVE_MATCH,
     code::UNKNOWN_TYPE,
     code::INVALID_SELF_PARAMETER,
@@ -154,11 +132,7 @@ pub(crate) const SELFHOST_CHECKER_TARGET_CODES: &[&str] = &[
     code::LOWER_NAME_CONFLICT,
     code::MESSAGE_PAYLOAD_NOT_TRANSFERABLE,
     code::UNKNOWN_PROTOCOL,
-    code::INVALID_NOALLOC_ALLOCATION,
-    code::INVALID_NO_BLOCK_CALL,
-    code::INVALID_NO_PANIC_CALL,
     code::ASYNC_CALL_NOT_CONSUMED,
-    code::FEATURE_VIOLATION,
     code::INVALID_TRY_OPERATOR,
     code::UNNAMED_ARGUMENT,
     code::MISSING_DATA_EFFECT,
@@ -167,7 +141,6 @@ pub(crate) const SELFHOST_CHECKER_TARGET_CODES: &[&str] = &[
     code::UNINFERABLE_BINDING_TYPE,
     code::INVALID_ASSIGNMENT,
     code::DUPLICATE_ARGUMENT,
-    code::INVALID_NOALLOC_CALL,
     code::INVALID_WEAK_FIELD,
     code::OWN_STRUCT_ATTEMPT,
     code::LOCAL_CLASS_BINDING,
@@ -467,7 +440,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::RESERVED_DIAGNOSTIC_RS0001,
         title: "reserved diagnostic",
-        explanation: "RS0001 is reserved after RSScript migrated to `features:` declarations.",
+        explanation: "RS0001 is reserved and is not emitted by the current language frontend.",
     },
     DiagnosticExplanation {
         code: code::MISSING_RETURN_TYPE,
@@ -490,49 +463,14 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         explanation: "The analyzer stopped after exhausting a shared work budget for visited nodes, generic substitutions, emitted diagnostics, or recursion depth. Other diagnostics from this run may be incomplete; reduce generated breadth or type nesting before relying on the result.",
     },
     DiagnosticExplanation {
-        code: code::UNKNOWN_EFFECT,
-        title: "unknown effect",
-        explanation: "The effect list contains an effect name outside the currently recognized RSScript v0.7 surface. Effects are review-visible semantic contracts, so unknown effect names are errors.",
-    },
-    DiagnosticExplanation {
         code: code::DUPLICATE_DECLARATION,
         title: "duplicate declaration",
         explanation: "Top-level type, constructor, and function names must be unique so symbol resolution cannot silently overwrite an earlier declaration.",
     },
     DiagnosticExplanation {
-        code: code::DUPLICATE_FEATURE_DECLARATION,
-        title: "duplicate features declaration",
-        explanation: "RSScript files may declare at most one `features:` header. Multiple declarations make review external_binding boundaries ambiguous.",
-    },
-    DiagnosticExplanation {
         code: code::UNKNOWN_RETAINED_PARAMETER,
         title: "invalid retained parameter",
-        explanation: "`effects(retains(param))` must name a non-Copy parameter declared by the function signature. Copy values have no managed retention boundary.",
-    },
-    DiagnosticExplanation {
-        code: code::MISSING_PARAMETER_EFFECT,
-        title: "retired parameter data-effect diagnostic",
-        explanation: "RSScript v0.7 defaults an omitted ordinary parameter effect to `read`; `mut` and `take` remain explicit. RS0008 is retained as a reserved diagnostic code for compatibility and is no longer emitted.",
-    },
-    DiagnosticExplanation {
-        code: code::INVALID_PURE_EFFECT,
-        title: "invalid pure effect",
-        explanation: "`effects(pure)` is call-time observational purity: the function may read current inputs, including non-Copy managed values, but must not mutate, retain, consume local values, use `manage`, or call non-pure functions.",
-    },
-    DiagnosticExplanation {
-        code: code::REMOVED_PROFILE_DECLARATION,
-        title: "removed profile declaration",
-        explanation: "RSScript v0.7 does not include `profile:` declarations. Use `features:` only for advanced file-level external_bindings; omitted features means managed-only.",
-    },
-    DiagnosticExplanation {
-        code: code::REMOVED_SHARE_EFFECT,
-        title: "removed share data effect",
-        explanation: "RSScript v0.7 does not include `share` as a data effect. Retention must be declared with `effects(retains(param))`.",
-    },
-    DiagnosticExplanation {
-        code: code::REMOVED_RUNTIME_EFFECT,
-        title: "removed runtime effect",
-        explanation: "RSScript v0.7 uses reductive guarantees. Additive runtime effects such as `io`, `allocates`, `may_panic`, and `may_fail` are not valid effects.",
+        explanation: "`retains(param)` must name a non-Copy parameter declared by the function signature. Copy values have no managed retention boundary.",
     },
     DiagnosticExplanation {
         code: code::INVALID_TRY_OPERATOR,
@@ -543,36 +481,6 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::UNSUPPORTED_SYNTAX,
         title: "unsupported syntax",
         explanation: "The frontend parser could not lower this source construct into the supported RSScript AST. The checker reports this before Rust lowering so unsupported source does not become generated Rust `todo!()` code.",
-    },
-    DiagnosticExplanation {
-        code: code::INVALID_NOALLOC_ALLOCATION,
-        title: "invalid noalloc allocation",
-        explanation: "`effects(noalloc)` forbids obvious allocation sites such as value construction and `manage` migration.",
-    },
-    DiagnosticExplanation {
-        code: code::UNKNOWN_FILE_FEATURE,
-        title: "unknown file feature",
-        explanation: "A `features:` header may only list review-relevant external_bindings known to this compiler version. Some known names are reserved review markers that do not unlock executable syntax. Unknown feature names are rejected so typos do not silently change review risk.",
-    },
-    DiagnosticExplanation {
-        code: code::DUPLICATE_FILE_FEATURE,
-        title: "duplicate file feature",
-        explanation: "Each review-relevant external_binding may appear at most once in a `features:` header. Duplicate entries are rejected instead of silently folded away.",
-    },
-    DiagnosticExplanation {
-        code: code::INVALID_NO_BLOCK_CALL,
-        title: "invalid no_block call",
-        explanation: "`effects(no_block)` is a guarantee that the function does not block the current isolate. Calls inside it must target constructors, enum variants, or functions also declared `effects(no_block)`.",
-    },
-    DiagnosticExplanation {
-        code: code::INVALID_NO_PANIC_CALL,
-        title: "invalid no_panic call",
-        explanation: "`effects(no_panic)` is a guarantee that the function does not intentionally panic. Calls inside it must target constructors, enum variants, or functions also declared `effects(no_panic)`.",
-    },
-    DiagnosticExplanation {
-        code: code::INVALID_NOALLOC_CALL,
-        title: "invalid noalloc call",
-        explanation: "`effects(noalloc)` is a guarantee that the function performs no heap allocation. Calls inside it must target enum variants or functions also declared `effects(noalloc)`, while direct constructors and `manage` are allocation diagnostics.",
     },
     DiagnosticExplanation {
         code: code::LOWER_NAME_CONFLICT,
@@ -648,11 +556,6 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
         code: code::INTEGER_LITERAL_OUT_OF_RANGE,
         title: "integer literal out of range",
         explanation: "RSScript `Int` is a 64-bit signed integer. An integer literal that does not fit in i64 is rejected at the frontend so it never reaches the VM (runtime error) or the compiled backend (rustc error) — review-critical failures surface as checker diagnostics, not backend surprises.",
-    },
-    DiagnosticExplanation {
-        code: code::FEATURE_VIOLATION,
-        title: "feature violation",
-        explanation: "Files must declare review-relevant external_bindings before using them. `local`, `manage`, `take`, `native`, `unsafe`, and `async` boundaries require matching `features:` entries, and `native fn` declarations must also spell the boundary as `effects(native)`.",
     },
     DiagnosticExplanation {
         code: code::UNNAMED_ARGUMENT,
@@ -792,7 +695,7 @@ static DIAGNOSTIC_EXPLANATIONS: &[DiagnosticExplanation] = &[
     DiagnosticExplanation {
         code: code::LOCAL_VALUE_RETAINED,
         title: "local value retained",
-        explanation: "APIs marked `effects(retains(param))` may store the argument beyond the call. Passing a clean local value directly would let local ownership escape.",
+        explanation: "APIs marked `retains(param)` may store the argument beyond the call. Passing a clean local value directly would let local ownership escape.",
     },
     DiagnosticExplanation {
         code: code::FRESH_RETURN_NOT_CLEAN,

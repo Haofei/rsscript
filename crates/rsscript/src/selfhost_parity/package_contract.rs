@@ -250,12 +250,12 @@ fn package_contract_declaration_rs1301_parity() {
         ),
         (
             "matching protocol",
-            "protocol Writer {\n    fn write(self: mut Self, message: read String) -> Unit\n        effects(retains(message))\n}\n",
-            "protocol Writer {\n    fn write(self: mut Self, message: read String) -> Unit\n        effects(retains(message))\n}\n",
+            "protocol Writer {\n    fn write(self: mut Self, message: read String) -> Unit\n        retains(message)\n}\n",
+            "protocol Writer {\n    fn write(self: mut Self, message: read String) -> Unit\n        retains(message)\n}\n",
         ),
         (
             "protocol mismatch",
-            "protocol Writer {\n    fn write(self: mut Self, message: read String) -> Unit\n        effects(retains(message))\n}\n",
+            "protocol Writer {\n    fn write(self: mut Self, message: read String) -> Unit\n        retains(message)\n}\n",
             "protocol Writer {\n    fn write(self: mut Self, message: read String) -> Unit\n}\n",
         ),
         (

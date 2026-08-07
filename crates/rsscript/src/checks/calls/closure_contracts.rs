@@ -1209,7 +1209,7 @@ pub(super) fn callback_retained_local_diagnostic(
         format!("retaining API `{callee}` cannot retain local value `{local_name}`."),
         span,
         "local value retained",
-        format!("`{callee}` declares `effects(retains({param}))`."),
+        format!("`{callee}` declares `retains({param})`."),
         "manage_local",
         format!("Pass `{param}` through `manage {local_name}` before retaining it."),
     ));

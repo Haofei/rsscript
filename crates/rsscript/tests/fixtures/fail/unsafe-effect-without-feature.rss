@@ -1,6 +1,0 @@
-// expect: RS0101
-fn checksum(data: Bytes) -> UInt64
-
-{
-    return 0
-}

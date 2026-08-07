@@ -1,5 +1,0 @@
-// expect: RS0016
-
-fn main() -> Unit {
-    return Unit
-}

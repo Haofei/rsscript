@@ -67,7 +67,6 @@ const REQUIRED_SPEC_DIAGNOSTICS: &[(&str, &str)] = &[
     ("weak field used without explicit upgrade", "RS0903"),
     ("implicit conversion attempt", "RS1002"),
     ("operator overload attempt", "RS1001"),
-    ("feature violation", "RS0101"),
     ("unsupported syntax", "RS0015"),
     (
         "unstructured spawn used before source-level task support",

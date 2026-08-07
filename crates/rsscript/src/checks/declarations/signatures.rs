@@ -51,8 +51,7 @@ impl Analyzer<'_> {
         }
     }
 
-    /// Per-parameter checks: misplaced `self`, explicit parameter type, removed
-    /// `share` effect, and required data-effect declarations.
+    /// Per-parameter checks: misplaced `self` and explicit parameter types.
     pub(super) fn check_params(&mut self, function: &FunctionDecl, is_qualified_method: bool) {
         for (index, param) in function.params.iter().enumerate() {
             if param.name == "self" && (!is_qualified_method || index != 0) {
@@ -76,28 +75,6 @@ impl Analyzer<'_> {
                     .with_fix(
                         "add_parameter_type",
                         "Add an explicit parameter type.",
-                        "manual",
-                    ),
-                );
-            }
-            if param.effect.is_none() && param.ty.name == "share" {
-                self.diagnostics.push(
-                    Diagnostic::error(
-                        code::REMOVED_SHARE_EFFECT,
-                        format!(
-                            "parameter `{}` in `{}` uses removed `share` data effect.",
-                            param.name, function.name
-                        ),
-                        param.ty.span.clone(),
-                        "removed share data effect",
-                    )
-                    .with_cause("RSScript v0.7 has exactly three data effects: `read`, `mut`, and `take`.")
-                    .with_fix(
-                        "replace_share_effect",
-                        format!(
-                            "Use `{}: read T` and add `effects(retains({}))` if the function retains it.",
-                            param.name, param.name
-                        ),
                         "manual",
                     ),
                 );
@@ -144,7 +121,7 @@ impl Analyzer<'_> {
         }
     }
 
-    /// `effects(retains(p))` items: `p` must be a parameter, non-Copy, and not a
+    /// `retains(p)` items: `p` must be a parameter, non-Copy, and not a
     /// noescape callback.
     pub(super) fn check_retains_parameters(&mut self, function: &FunctionDecl) {
         let param_names: HashSet<&str> = function
@@ -158,13 +135,15 @@ impl Analyzer<'_> {
                     Diagnostic::error(
                         code::UNKNOWN_RETAINED_PARAMETER,
                         format!(
-                            "`{}` declares `effects(retains({param}))`, but `{param}` is not a parameter.",
+                            "`{}` declares `retains({param})`, but `{param}` is not a parameter.",
                             function.name
                         ),
                         function.span.clone(),
                         "unknown retained parameter",
                     )
-                    .with_cause("Retention effects must name a parameter from the same function signature.")
+                    .with_cause(
+                        "Retention effects must name a parameter from the same function signature.",
+                    )
                     .with_fix(
                         "fix_retains_parameter",
                         "Rename the retained parameter or remove this retention effect.",
@@ -183,7 +162,7 @@ impl Analyzer<'_> {
                     Diagnostic::error(
                         code::UNKNOWN_RETAINED_PARAMETER,
                         format!(
-                            "`{}` declares `effects(retains({param}))`, but `{param}` is Copy.",
+                            "`{}` declares `retains({param})`, but `{param}` is Copy.",
                             function.name
                         ),
                         function_param.span.clone(),
@@ -194,7 +173,7 @@ impl Analyzer<'_> {
                     )
                     .with_fix(
                         "remove_copy_retains",
-                        format!("Remove `effects(retains({param}))`."),
+                        format!("Remove `retains({param})`."),
                         "manual",
                     ),
                 );
@@ -218,7 +197,7 @@ impl Analyzer<'_> {
                     )
                     .with_fix(
                         "remove_noescape_retention",
-                        format!("Remove `effects(retains({param}))`, or use an ordinary managed callback type."),
+                        format!("Remove `retains({param})`, or use an ordinary managed callback type."),
                         "manual",
                     ),
                 );
