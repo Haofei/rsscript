@@ -1916,6 +1916,8 @@ fn workspace_analysis_does_not_flow_through_optional_review() {
 fn selfhost_frontend_does_not_restore_retired_language_contracts() {
     let root = workspace_root();
     let checker = read(&root.join("selfhost/check.rss"));
+    let syntax_declarations =
+        read(&root.join("selfhost/checker/diagnostics/syntax_declarations.rss"));
     for retired_code in [
         "RS0004", "RS0006", "RS0009", "RS0010", "RS0011", "RS0012", "RS0014", "RS0016", "RS0017",
         "RS0018", "RS0019", "RS0020", "RS0101",
@@ -1937,6 +1939,19 @@ fn selfhost_frontend_does_not_restore_retired_language_contracts() {
         assert!(
             !scanner.contains(retired_mapping),
             "self-hosted scanner must not restore retired keyword mapping `{retired_mapping}`"
+        );
+    }
+
+    for retired_feature_check in [
+        "RS0101 FEATURE_VIOLATION",
+        "collect_feature_use_tokens",
+        "file_local_use",
+        "file_async_use",
+        "file_unsafe_use",
+    ] {
+        assert!(
+            !syntax_declarations.contains(retired_feature_check),
+            "self-hosted diagnostics must not retain retired feature check `{retired_feature_check}`"
         );
     }
 }
