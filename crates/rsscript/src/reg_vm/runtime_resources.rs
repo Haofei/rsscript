@@ -37,16 +37,3 @@ impl VmHttpRequest {
         )
     }
 }
-
-#[derive(Debug, Clone)]
-pub(super) struct VmFileState {
-    pub(super) path: String,
-    pub(super) mode: String,
-    pub(super) cursor: u64,
-}
-
-impl VmFileState {
-    pub(super) fn to_value(&self) -> VmValue {
-        file_value(&self.path, &self.mode, self.cursor)
-    }
-}

@@ -326,46 +326,6 @@ pub(super) fn expect_row_fields_ref(value: &VmValue) -> Result<Vec<String>, Eval
     }
 }
 
-pub(super) fn expect_file_ref(value: &VmValue) -> Result<VmFileState, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name().as_ref() == "File" => {
-            let string_field = |name: &str| {
-                data.get(name)
-                    .ok_or_else(|| EvalError::Runtime(format!("File {name} is missing.")))
-                    .and_then(expect_string_ref)
-                    .map(str::to_string)
-            };
-            let cursor = data
-                .get("cursor")
-                .ok_or_else(|| EvalError::Runtime("File cursor is missing.".to_string()))
-                .and_then(expect_int_ref)?;
-            Ok(VmFileState {
-                path: string_field("path")?,
-                mode: string_field("mode")?,
-                cursor: cursor.max(0) as u64,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected File, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-pub(super) fn expect_tempdir_path_ref(value: &VmValue) -> Result<String, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name().as_ref() == "TempDir" => data
-            .get("path")
-            .ok_or_else(|| EvalError::Runtime("TempDir path is missing.".to_string()))
-            .and_then(expect_string_ref)
-            .map(str::to_string),
-        other => Err(EvalError::Runtime(format!(
-            "expected TempDir, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
 pub(super) fn expect_http_request_ref(value: &VmValue) -> Result<VmHttpRequest, EvalError> {
     match value {
         VmValue::Struct(data) if data.name().as_ref() == "HttpRequest" => {

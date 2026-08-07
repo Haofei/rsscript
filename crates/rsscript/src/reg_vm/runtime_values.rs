@@ -372,12 +372,6 @@ pub(super) fn decode_error_value(message: impl Into<String>) -> VmValue {
     )))
 }
 
-pub(super) fn file_error_value(message: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> =
-        vec![("message".to_string(), VmValue::string(message.into()))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("FileError"), fields)))
-}
-
 pub(super) fn channel_error_value(message: impl Into<String>) -> VmValue {
     let fields: Vec<(String, VmValue)> =
         vec![("message".to_string(), VmValue::string(message.into()))];

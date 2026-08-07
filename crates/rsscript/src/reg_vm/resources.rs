@@ -135,52 +135,6 @@ pub(super) fn process_event_value(kind: &str, data: &str, status: i64) -> VmValu
     )))
 }
 
-pub(super) fn file_value(path: impl Into<String>, mode: impl Into<String>, cursor: u64) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("path".to_string(), VmValue::string(path.into())),
-        ("mode".to_string(), VmValue::string(mode.into())),
-        ("cursor".to_string(), VmValue::Int(cursor as i64)),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("File"), fields)))
-}
-
-pub(super) fn file_bytes_stream_value(path: &str, chunk_size: i64) -> Result<VmValue, String> {
-    let _ = (path, chunk_size);
-    Err(external_provider_required("filesystem"))
-}
-
-pub(super) fn file_metadata_value(metadata: std::fs::Metadata) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("is_file".to_string(), VmValue::Bool(metadata.is_file())),
-        ("is_dir".to_string(), VmValue::Bool(metadata.is_dir())),
-        ("len".to_string(), VmValue::Int(metadata.len() as i64)),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::from("FileMetadata"),
-        fields,
-    )))
-}
-
-fn tempdir_value(path: impl Into<String>) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![("path".to_string(), VmValue::string(path.into()))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("TempDir"), fields)))
-}
-
-pub(super) fn tempdir_new_value(parent: PathBuf) -> Result<VmValue, VmValue> {
-    let seed = clock_system_unix_ms();
-    for attempt in 0..100 {
-        let path = parent.join(format!("rsscript-{}-{seed}-{attempt}", std::process::id()));
-        match std::fs::create_dir_all(&path) {
-            Ok(()) => return Ok(tempdir_value(path.to_string_lossy())),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(file_error_value(error.to_string())),
-        }
-    }
-    Err(file_error_value(
-        "could not allocate unique TempDir path".to_string(),
-    ))
-}
-
 pub(super) fn cancellation_source_value(id: i64) -> VmValue {
     cancellation_handle_value("CancellationSource", id)
 }

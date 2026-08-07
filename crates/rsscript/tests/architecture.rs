@@ -1554,6 +1554,44 @@ fn compiler_and_vm_do_not_embed_execution_authority() {
 }
 
 #[test]
+fn vm_core_does_not_embed_filesystem_intrinsics() {
+    let root = workspace_root();
+    let catalog = read(&root.join("crates/rsscript/intrinsics.toml"));
+    for forbidden in [
+        "Directory",
+        "FileError",
+        "HashSha256File",
+        "JsonParseFile",
+        "PathReadString",
+        "PathWriteString",
+        "TempDir",
+        "TomlParseFile",
+        "YamlParseFile",
+    ] {
+        assert!(
+            !catalog.contains(forbidden),
+            "filesystem operation `{forbidden}` must be supplied by an external provider"
+        );
+    }
+
+    let vm_root = root.join("crates/rsscript/src/reg_vm");
+    for path in rust_files_below(&vm_root) {
+        if path
+            .components()
+            .any(|component| component.as_os_str() == "tests")
+        {
+            continue;
+        }
+        let source = read(&path);
+        assert!(
+            !source.contains("std::fs"),
+            "VM core must not access the filesystem directly: {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
 fn high_risk_state_machines_keep_dedicated_module_owners() {
     let root = workspace_root();
     let required = [

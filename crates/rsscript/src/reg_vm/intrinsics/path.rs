@@ -1,5 +1,4 @@
 use super::super::*;
-use crate::reg_vm::runtime_values::*;
 use crate::reg_vm::value_access::*;
 use crate::reg_vm::value_convert::*;
 use crate::reg_vm::value_ops::*;
@@ -17,10 +16,6 @@ impl RegVm {
         let _ = next_base;
         let _ = unit;
         match intrinsic {
-            RegIntrinsic::PathExists => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(Path::new(path).exists()))
-            }
             RegIntrinsic::PathExtension => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let result = Path::new(path)
@@ -47,49 +42,10 @@ impl RegVm {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Bool(Path::new(path).is_absolute()))
             }
-            RegIntrinsic::PathIsDir => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(Path::new(path).is_dir()))
-            }
-            RegIntrinsic::PathIsFile => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(Path::new(path).is_file()))
-            }
             RegIntrinsic::PathJoin => {
                 let base_path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let child = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 self.fresh_string(path_join_string(base_path, child))
-            }
-            RegIntrinsic::PathListFiles => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let result = json_result(
-                    directory_list_files(Path::new(path))
-                        .map(|files| {
-                            VmValue::List(Rc::new(RefCell::new(
-                                files.into_iter().map(VmValue::string).collect(),
-                            )))
-                        })
-                        .map_err(|error| file_error_value(error.to_string())),
-                );
-                self.account_fresh_value_storage(&result)?;
-                Ok(result)
-            }
-            RegIntrinsic::PathListPaths => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let result = json_result(
-                    directory_list_paths(Path::new(path))
-                        .map(|paths| {
-                            VmValue::List(Rc::new(RefCell::new(
-                                paths
-                                    .into_iter()
-                                    .map(|path| VmValue::string(path.to_string_lossy()))
-                                    .collect(),
-                            )))
-                        })
-                        .map_err(|error| file_error_value(error.to_string())),
-                );
-                self.account_fresh_value_storage(&result)?;
-                Ok(result)
             }
             RegIntrinsic::PathNormalize => {
                 let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -101,12 +57,6 @@ impl RegVm {
                     .parent()
                     .map(|parent| VmValue::some(VmValue::string(parent.to_string_lossy())))
                     .unwrap_or(VmValue::OptionNone);
-                self.account_fresh_value_storage(&result)?;
-                Ok(result)
-            }
-            RegIntrinsic::PathReadString => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let result = json_result(path_read_string_value(path));
                 self.account_fresh_value_storage(&result)?;
                 Ok(result)
             }
@@ -145,28 +95,7 @@ impl RegVm {
                 path.set_extension(extension);
                 self.fresh_string(path.to_string_lossy().into_owned())
             }
-            RegIntrinsic::PathWriteString => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(file_result_unit(std::fs::write(path, text)))
-            }
             other => unreachable!("exec_path_intrinsics called with non-path intrinsic: {other:?}"),
         }
-    }
-}
-
-fn path_read_string_value(path: &str) -> Result<VmValue, VmValue> {
-    let _ = path;
-    Err(file_error_value(external_provider_required("filesystem")))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn read_string_requires_an_external_filesystem_provider() {
-        let error = path_read_string_value("data.txt").unwrap_err();
-        assert!(error.display().contains("external provider"));
     }
 }

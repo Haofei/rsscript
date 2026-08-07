@@ -221,7 +221,6 @@ impl RegVm {
             }
             RegIntrinsic::ChannelErrorMessage
             | RegIntrinsic::DecodeErrorMessage
-            | RegIntrinsic::FileErrorMessage
             | RegIntrinsic::HttpErrorMessage
             | RegIntrinsic::TcpErrorMessage
             | RegIntrinsic::WebSocketErrorMessage => {
@@ -260,45 +259,11 @@ impl RegVm {
             | RegIntrinsic::DateYear => {
                 self.exec_date_intrinsics(unit, intrinsic, args, base, next_base)
             }
-            RegIntrinsic::CsvOpenRead => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    std::fs::File::open(path)
-                        .map(|_| file_value(path, "read", 0))
-                        .map_err(|error| csv_error_value(error.to_string())),
-                ))
-            }
             RegIntrinsic::CsvParseRow => {
                 let buffer = intrinsic_arg(&self.stack, base, args, 0)?;
                 Ok(json_result(csv_parse_row_value(
                     &expect_row_buffer_bytes_ref(buffer)?,
                 )))
-            }
-            RegIntrinsic::CsvReadInto => {
-                let file_reg = *args.first().ok_or_else(|| {
-                    EvalError::Runtime("reg VM Csv.read_into missing file.".to_string())
-                })?;
-                let buffer_reg = *args.get(1).ok_or_else(|| {
-                    EvalError::Runtime("reg VM Csv.read_into missing buffer.".to_string())
-                })?;
-                let mut file = expect_file_ref(self.reg(base + file_reg))?;
-                let result = file_read_remaining(&mut file)
-                    .map_err(|error| csv_error_value(error.to_string()));
-                self.set_reg(base + file_reg, file.to_value());
-                Ok(match result {
-                    Ok(bytes) => {
-                        self.set_reg(base + buffer_reg, row_buffer_value(bytes));
-                        value_ok(VmValue::Unit)
-                    }
-                    Err(error) => value_err(error),
-                })
-            }
-            RegIntrinsic::CsvRows => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let _buffer_size = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(json_result(
-                    csv_rows_stream_value(path).map_err(csv_error_value),
-                ))
             }
             RegIntrinsic::DeadlineAfter | RegIntrinsic::DeadlineAfterMs => {
                 let ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -325,90 +290,6 @@ impl RegVm {
                 let new = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 Ok(VmValue::string(diff_unified_string(old, new)))
             }
-            RegIntrinsic::DirectoryCopyFile => {
-                let from = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let to = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(file_result_unit(std::fs::copy(from, to).map(|_| ())))
-            }
-            RegIntrinsic::DirectoryCreate => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(file_result_unit(std::fs::create_dir(path)))
-            }
-            RegIntrinsic::DirectoryCreateAll | RegIntrinsic::DirectoryCreateDirAll => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(file_result_unit(std::fs::create_dir_all(path)))
-            }
-            RegIntrinsic::DirectoryExists => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(Path::new(path).exists()))
-            }
-            RegIntrinsic::DirectoryIsDir => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(Path::new(path).is_dir()))
-            }
-            RegIntrinsic::DirectoryIsFile => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(Path::new(path).is_file()))
-            }
-            RegIntrinsic::DirectoryListFiles => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    directory_list_files(Path::new(path))
-                        .map(|files| {
-                            VmValue::List(Rc::new(RefCell::new(
-                                files.into_iter().map(VmValue::string).collect(),
-                            )))
-                        })
-                        .map_err(|error| file_error_value(error.to_string())),
-                ))
-            }
-            RegIntrinsic::DirectoryListPaths => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    directory_list_paths(Path::new(path))
-                        .map(|paths| {
-                            VmValue::List(Rc::new(RefCell::new(
-                                paths
-                                    .into_iter()
-                                    .map(|path| VmValue::string(path.to_string_lossy()))
-                                    .collect(),
-                            )))
-                        })
-                        .map_err(|error| file_error_value(error.to_string())),
-                ))
-            }
-            RegIntrinsic::DirectoryMetadata => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    std::fs::metadata(path)
-                        .map(file_metadata_value)
-                        .map_err(|error| file_error_value(error.to_string())),
-                ))
-            }
-            RegIntrinsic::DirectoryReadString => {
-                let _path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(value_err(file_error_value(external_provider_required(
-                    "filesystem",
-                ))))
-            }
-            RegIntrinsic::DirectoryRemoveDirAll => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(file_result_unit(std::fs::remove_dir_all(path)))
-            }
-            RegIntrinsic::DirectoryRemoveFile => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(file_result_unit(std::fs::remove_file(path)))
-            }
-            RegIntrinsic::DirectoryRename => {
-                let from = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let to = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(file_result_unit(std::fs::rename(from, to)))
-            }
-            RegIntrinsic::DirectoryWriteString => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let content = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(file_result_unit(std::fs::write(path, content)))
-            }
             RegIntrinsic::DurationAdd => {
                 let left = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 let right = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
@@ -424,177 +305,6 @@ impl RegVm {
             RegIntrinsic::DurationSeconds => {
                 let value = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::Int(value * 1000))
-            }
-            RegIntrinsic::FileAppendBytes => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let data = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_vec();
-                Ok(file_result_unit(file_append(path, &data)))
-            }
-            RegIntrinsic::FileAppendString => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?
-                    .as_bytes()
-                    .to_vec();
-                Ok(file_result_unit(file_append(path, &text)))
-            }
-            RegIntrinsic::FileBytesStream => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let chunk_size = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(json_result(
-                    file_bytes_stream_value(path, chunk_size).map_err(channel_error_value),
-                ))
-            }
-            RegIntrinsic::FileExists => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(Path::new(path).exists()))
-            }
-            RegIntrinsic::FileOpen | RegIntrinsic::FileOpenRead => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    std::fs::File::open(path)
-                        .map(|_| file_value(path, "read", 0))
-                        .map_err(|error| file_error_value(error.to_string())),
-                ))
-            }
-            RegIntrinsic::FileOpenWrite => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    std::fs::File::create(path)
-                        .map(|_| file_value(path, "write", 0))
-                        .map_err(|error| file_error_value(error.to_string())),
-                ))
-            }
-            RegIntrinsic::FileReadAllAsync => {
-                let _path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(value_err(file_error_value(external_provider_required(
-                    "filesystem",
-                ))))
-            }
-            RegIntrinsic::FileReadAll => {
-                let file_reg = *args.first().ok_or_else(|| {
-                    EvalError::Runtime("reg VM File.read_all missing file.".to_string())
-                })?;
-                let mut file = expect_file_ref(self.reg(base + file_reg))?;
-                let result = file_read_remaining(&mut file)
-                    .map(|bytes| VmValue::Bytes(Rc::new(bytes)))
-                    .map_err(|error| file_error_value(error.to_string()));
-                self.set_reg(base + file_reg, file.to_value());
-                Ok(json_result(result))
-            }
-            RegIntrinsic::FileReadAllString => {
-                let file_reg = *args.first().ok_or_else(|| {
-                    EvalError::Runtime("reg VM File.read_all_string missing file.".to_string())
-                })?;
-                let mut file = expect_file_ref(self.reg(base + file_reg))?;
-                let result = file_read_remaining(&mut file)
-                    .and_then(|bytes| {
-                        String::from_utf8(bytes).map_err(|error| {
-                            std::io::Error::new(std::io::ErrorKind::InvalidData, error)
-                        })
-                    })
-                    .map(VmValue::string)
-                    .map_err(|error| file_error_value(error.to_string()));
-                self.set_reg(base + file_reg, file.to_value());
-                Ok(json_result(result))
-            }
-            RegIntrinsic::FileReadAllStringAsync => {
-                let _path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(value_err(file_error_value(external_provider_required(
-                    "filesystem",
-                ))))
-            }
-            RegIntrinsic::FileReadBytes => {
-                let _path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(value_err(file_error_value(external_provider_required(
-                    "filesystem",
-                ))))
-            }
-            RegIntrinsic::FileReadInto => {
-                let file_reg = *args.first().ok_or_else(|| {
-                    EvalError::Runtime("reg VM File.read_into missing file.".to_string())
-                })?;
-                let buffer_reg = *args.get(1).ok_or_else(|| {
-                    EvalError::Runtime("reg VM File.read_into missing buffer.".to_string())
-                })?;
-                let mut file = expect_file_ref(self.reg(base + file_reg))?;
-                let result = file_read_remaining(&mut file)
-                    .map(|bytes| {
-                        let did_read = !bytes.is_empty();
-                        (VmValue::Bytes(Rc::new(bytes)), VmValue::Bool(did_read))
-                    })
-                    .map_err(|error| file_error_value(error.to_string()));
-                self.set_reg(base + file_reg, file.to_value());
-                Ok(match result {
-                    Ok((buffer, did_read)) => {
-                        self.set_reg(base + buffer_reg, buffer);
-                        value_ok(did_read)
-                    }
-                    Err(error) => value_err(error),
-                })
-            }
-            RegIntrinsic::FileReadString => {
-                let _path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(value_err(file_error_value(external_provider_required(
-                    "filesystem",
-                ))))
-            }
-            RegIntrinsic::FileRemove => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(file_result_unit(std::fs::remove_file(path)))
-            }
-            RegIntrinsic::FileWrite => {
-                let file_reg = *args.first().ok_or_else(|| {
-                    EvalError::Runtime("reg VM File.write missing file.".to_string())
-                })?;
-                let data = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_vec();
-                let mut file = expect_file_ref(self.reg(base + file_reg))?;
-                let result = file_write_at_cursor(&mut file, &data);
-                self.set_reg(base + file_reg, file.to_value());
-                Ok(file_result_unit(result))
-            }
-            RegIntrinsic::FileWriteAsync | RegIntrinsic::FileWriteBytes => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let data = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_vec();
-                Ok(file_result_unit(std::fs::write(path, data)))
-            }
-            RegIntrinsic::FileWriteAtomic => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(file_atomic_write_result(PathBuf::from(path), text))
-            }
-            RegIntrinsic::FileWriteBytesView
-            | RegIntrinsic::FileWriteBuffer
-            | RegIntrinsic::FileWriteBufferView => {
-                let file_reg = *args.first().ok_or_else(|| {
-                    EvalError::Runtime("reg VM file write missing file.".to_string())
-                })?;
-                let data = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_vec();
-                let mut file = expect_file_ref(self.reg(base + file_reg))?;
-                let result = file_write_at_cursor(&mut file, &data);
-                self.set_reg(base + file_reg, file.to_value());
-                Ok(file_result_unit(result))
-            }
-            RegIntrinsic::FileWriteString => {
-                let file_reg = *args.first().ok_or_else(|| {
-                    EvalError::Runtime("reg VM File.write_string missing file.".to_string())
-                })?;
-                let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?
-                    .as_bytes()
-                    .to_vec();
-                let mut file = expect_file_ref(self.reg(base + file_reg))?;
-                let result = file_write_at_cursor(&mut file, &text);
-                self.set_reg(base + file_reg, file.to_value());
-                Ok(file_result_unit(result))
-            }
-            RegIntrinsic::FileWriteStringAsync => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(file_result_unit(std::fs::write(path, text)))
-            }
-            RegIntrinsic::FileWriteStringToPath => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(file_result_unit(std::fs::write(path, text)))
             }
             RegIntrinsic::FalliblePipelineCollect => {
                 Ok(intrinsic_arg(&self.stack, base, args, 0)?.clone())
@@ -683,12 +393,6 @@ impl RegVm {
             RegIntrinsic::HashSha256Bytes => {
                 let value = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::string(sha256_digest(value)))
-            }
-            RegIntrinsic::HashSha256File => {
-                let _path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(value_err(file_error_value(external_provider_required(
-                    "filesystem",
-                ))))
             }
             RegIntrinsic::HashSha256String => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -997,7 +701,6 @@ impl RegVm {
             | RegIntrinsic::JsonObjectKeys
             | RegIntrinsic::JsonObjectLen
             | RegIntrinsic::JsonParse
-            | RegIntrinsic::JsonParseFile
             | RegIntrinsic::JsonQuoteString
             | RegIntrinsic::JsonRawField
             | RegIntrinsic::JsonStringAt
@@ -1274,25 +977,18 @@ impl RegVm {
             | RegIntrinsic::SortedMapValues => {
                 self.exec_set_intrinsics(unit, intrinsic, args, base, next_base)
             }
-            RegIntrinsic::PathExists
-            | RegIntrinsic::PathExtension
+            RegIntrinsic::PathExtension
             | RegIntrinsic::PathFileName
             | RegIntrinsic::PathFromString
             | RegIntrinsic::PathToString
             | RegIntrinsic::PathIsAbsolute
-            | RegIntrinsic::PathIsDir
-            | RegIntrinsic::PathIsFile
             | RegIntrinsic::PathJoin
-            | RegIntrinsic::PathListFiles
-            | RegIntrinsic::PathListPaths
             | RegIntrinsic::PathNormalize
             | RegIntrinsic::PathParent
-            | RegIntrinsic::PathReadString
             | RegIntrinsic::PathResolveRelative
             | RegIntrinsic::PathSafeRelative
             | RegIntrinsic::PathStartsWith
-            | RegIntrinsic::PathWithExtension
-            | RegIntrinsic::PathWriteString => {
+            | RegIntrinsic::PathWithExtension => {
                 self.exec_path_intrinsics(unit, intrinsic, args, base, next_base)
             }
             RegIntrinsic::PersistentMapClear => Ok(sorted_map_value(Vec::new())),
@@ -1587,15 +1283,6 @@ impl RegVm {
                     self.tcp_stream_write_all(id, &data).map(|()| VmValue::Unit),
                 ))
             }
-            RegIntrinsic::TempDirKeep | RegIntrinsic::TempDirPath => {
-                let dir = intrinsic_arg(&self.stack, base, args, 0)?;
-                Ok(VmValue::string(expect_tempdir_path_ref(dir)?))
-            }
-            RegIntrinsic::TempDirNew => Ok(json_result(tempdir_new_value(std::env::temp_dir()))),
-            RegIntrinsic::TempDirNewIn => {
-                let parent = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(tempdir_new_value(PathBuf::from(parent))))
-            }
             RegIntrinsic::TimerSleep => {
                 let ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 self.park_sleep_ms(ms);
@@ -1619,10 +1306,6 @@ impl RegVm {
                     .unwrap_or(0);
                 self.park_sleep_ms(target_unix_ms - now_unix_ms);
                 Ok(VmValue::Unit)
-            }
-            RegIntrinsic::TomlParseFile => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(toml_parse_file_value(path)))
             }
             RegIntrinsic::UrlDecodeComponent
             | RegIntrinsic::UrlEncodeComponent
@@ -1684,12 +1367,6 @@ impl RegVm {
             RegIntrinsic::YamlParse => {
                 let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(json_result(yaml_parse_json_value(text)))
-            }
-            RegIntrinsic::YamlParseFile => {
-                let _path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(value_err(json_error_value(external_provider_required(
-                    "filesystem",
-                ))))
             }
             RegIntrinsic::WeakDowngrade | RegIntrinsic::WeakFrom => {
                 Ok(intrinsic_arg(&self.stack, base, args, 0)?.clone())

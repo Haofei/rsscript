@@ -439,10 +439,6 @@ impl RegVm {
                         .map_err(|error| json_error_value(error.to_string())),
                 ))
             }
-            RegIntrinsic::JsonParseFile => {
-                let path = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(json_parse_file_value(path)))
-            }
             RegIntrinsic::JsonQuoteString => {
                 let value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 Ok(VmValue::string(json_quote_string(value)?))
@@ -536,21 +532,5 @@ impl RegVm {
             }
             other => unreachable!("exec_json_intrinsics called with non-json intrinsic: {other:?}"),
         }
-    }
-}
-
-fn json_parse_file_value(path: &str) -> Result<VmValue, VmValue> {
-    let _ = path;
-    Err(json_error_value(external_provider_required("filesystem")))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_file_requires_an_external_filesystem_provider() {
-        let error = json_parse_file_value("data.json").unwrap_err();
-        assert!(error.display().contains("external provider"));
     }
 }
