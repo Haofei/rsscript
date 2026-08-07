@@ -591,9 +591,6 @@ pub struct PackageNativeRustReview {
     pub crate_name: Option<String>,
     pub build_scripts: Option<String>,
     pub proc_macros: Option<String>,
-    /// Legacy aggregate retained for report compatibility. Enforcement uses
-    /// `unsafe_policies`, which preserves all three independent boundaries.
-    pub unsafe_policy: Option<String>,
     pub unsafe_policies: PackageNativeRustUnsafePolicies,
     pub native_links_policy: Option<String>,
     pub ffi_policy: Option<String>,

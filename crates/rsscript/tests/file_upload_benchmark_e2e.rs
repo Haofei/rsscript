@@ -300,9 +300,13 @@ paths = ["interface"]
 enabled = true
 path = "{}"
 crate = "rss_file_upload_benchmark_native"
+
+[native.rust.policy]
 build_scripts = "forbid"
 proc_macros = "forbid"
-unsafe = "forbid"
+rss_unsafe_apis = "forbid"
+wrapper_unsafe_blocks = "forbid"
+transitive_unsafe_blocks = "forbid"
 native_links = "forbid"
 ffi = "forbid"
 

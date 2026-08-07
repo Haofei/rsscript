@@ -581,9 +581,13 @@ mod tests {
 enabled = true
 path = "native/rust"
 crate = "aot_native_fixture"
+
+[native.rust.policy]
 build_scripts = "forbid"
 proc_macros = "forbid"
-unsafe = "forbid"
+rss_unsafe_apis = "forbid"
+wrapper_unsafe_blocks = "forbid"
+transitive_unsafe_blocks = "forbid"
 "#;
         let root = package_fixture("aot-native-package", native);
         fs::create_dir_all(root.join("native/rust/src")).expect("native source directory");

@@ -571,7 +571,29 @@ fn package_review_hash(review: &PackageReview) -> String {
         input.push('\n');
         input.push_str(native.proc_macros.as_deref().unwrap_or(""));
         input.push('\n');
-        input.push_str(native.unsafe_policy.as_deref().unwrap_or(""));
+        input.push_str(
+            native
+                .unsafe_policies
+                .rss_unsafe_apis
+                .as_deref()
+                .unwrap_or(""),
+        );
+        input.push('\n');
+        input.push_str(
+            native
+                .unsafe_policies
+                .wrapper_unsafe_blocks
+                .as_deref()
+                .unwrap_or(""),
+        );
+        input.push('\n');
+        input.push_str(
+            native
+                .unsafe_policies
+                .transitive_unsafe_blocks
+                .as_deref()
+                .unwrap_or(""),
+        );
         input.push('\n');
         for link in &native.links {
             input.push_str(link);
@@ -641,15 +663,9 @@ pub(super) fn package_native_hash(
             input.push('\n');
         }
     }
-    input.push_str(native.build_scripts.as_deref().unwrap_or(""));
-    input.push('\n');
     input.push_str(native.policy.build_scripts.as_deref().unwrap_or(""));
     input.push('\n');
-    input.push_str(native.proc_macros.as_deref().unwrap_or(""));
-    input.push('\n');
     input.push_str(native.policy.proc_macros.as_deref().unwrap_or(""));
-    input.push('\n');
-    input.push_str(native.unsafe_policy.as_deref().unwrap_or(""));
     input.push('\n');
     input.push_str(native.policy.rss_unsafe_apis.as_deref().unwrap_or(""));
     input.push('\n');

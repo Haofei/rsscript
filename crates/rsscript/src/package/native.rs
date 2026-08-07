@@ -408,13 +408,6 @@ pub(super) fn package_native_rust_review(
         crate_name: native.crate_name.clone(),
         build_scripts: native_effective_build_policy(manifest, native.effective_build_scripts()),
         proc_macros: native_effective_build_policy(manifest, native.effective_proc_macros()),
-        unsafe_policy: native
-            .unsafe_policy
-            .as_deref()
-            .or(unsafe_policies.wrapper_unsafe_blocks)
-            .or(unsafe_policies.rss_unsafe_apis)
-            .or(unsafe_policies.transitive_unsafe_blocks)
-            .map(str::to_string),
         unsafe_policies: PackageNativeRustUnsafePolicies {
             rss_unsafe_apis: unsafe_policies.rss_unsafe_apis.map(str::to_string),
             wrapper_unsafe_blocks: unsafe_policies.wrapper_unsafe_blocks.map(str::to_string),

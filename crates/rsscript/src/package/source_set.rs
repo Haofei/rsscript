@@ -166,12 +166,6 @@ pub(super) struct ManifestNativeRust {
     pub(super) feature_map: BTreeMap<String, ManifestNativeRustFeature>,
     #[serde(default)]
     pub(super) policy: ManifestNativeRustPolicy,
-    pub(super) build_scripts: Option<String>,
-    pub(super) proc_macros: Option<String>,
-    #[serde(rename = "unsafe")]
-    pub(super) unsafe_policy: Option<String>,
-    pub(super) native_links: Option<String>,
-    pub(super) ffi: Option<String>,
     #[serde(default)]
     pub(super) links: Vec<String>,
 }
@@ -256,46 +250,27 @@ impl<'de> Deserialize<'de> for ManifestProviderChoice {
 
 impl ManifestNativeRust {
     pub(super) fn effective_build_scripts(&self) -> Option<&str> {
-        self.build_scripts
-            .as_deref()
-            .or(self.policy.build_scripts.as_deref())
+        self.policy.build_scripts.as_deref()
     }
 
     pub(super) fn effective_proc_macros(&self) -> Option<&str> {
-        self.proc_macros
-            .as_deref()
-            .or(self.policy.proc_macros.as_deref())
+        self.policy.proc_macros.as_deref()
     }
 
     pub(super) fn effective_unsafe_policies(&self) -> EffectiveNativeUnsafePolicies<'_> {
-        let has_granular = self.policy.rss_unsafe_apis.is_some()
-            || self.policy.wrapper_unsafe_blocks.is_some()
-            || self.policy.transitive_unsafe_blocks.is_some();
-        let legacy = (!has_granular)
-            .then_some(self.unsafe_policy.as_deref())
-            .flatten();
         EffectiveNativeUnsafePolicies {
-            rss_unsafe_apis: self.policy.rss_unsafe_apis.as_deref().or(legacy),
-            wrapper_unsafe_blocks: self.policy.wrapper_unsafe_blocks.as_deref().or(legacy),
-            transitive_unsafe_blocks: self.policy.transitive_unsafe_blocks.as_deref().or(legacy),
+            rss_unsafe_apis: self.policy.rss_unsafe_apis.as_deref(),
+            wrapper_unsafe_blocks: self.policy.wrapper_unsafe_blocks.as_deref(),
+            transitive_unsafe_blocks: self.policy.transitive_unsafe_blocks.as_deref(),
         }
     }
 
-    pub(super) fn has_mixed_legacy_and_granular_unsafe_policy(&self) -> bool {
-        self.unsafe_policy.is_some()
-            && (self.policy.rss_unsafe_apis.is_some()
-                || self.policy.wrapper_unsafe_blocks.is_some()
-                || self.policy.transitive_unsafe_blocks.is_some())
-    }
-
     pub(super) fn effective_native_links(&self) -> Option<&str> {
-        self.native_links
-            .as_deref()
-            .or(self.policy.native_links.as_deref())
+        self.policy.native_links.as_deref()
     }
 
     pub(super) fn effective_ffi(&self) -> Option<&str> {
-        self.ffi.as_deref().or(self.policy.ffi.as_deref())
+        self.policy.ffi.as_deref()
     }
 }
 

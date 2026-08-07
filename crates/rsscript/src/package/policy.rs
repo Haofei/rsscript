@@ -160,9 +160,6 @@ fn native_rust_policy_value_diagnostics(
     };
 
     for (key, value) in [
-        ("build_scripts", native.build_scripts.as_deref()),
-        ("proc_macros", native.proc_macros.as_deref()),
-        ("unsafe", native.unsafe_policy.as_deref()),
         ("build_scripts", native.policy.build_scripts.as_deref()),
         ("proc_macros", native.policy.proc_macros.as_deref()),
         ("native_links", native.policy.native_links.as_deref()),
@@ -190,16 +187,6 @@ fn native_rust_policy_value_diagnostics(
             ));
         }
     }
-    if native.has_mixed_legacy_and_granular_unsafe_policy() {
-        diagnostics.push(package_review_policy_diagnostic(
-            package_dir,
-            "unsafe",
-            "legacy and granular native unsafe policies cannot be mixed.",
-            "unsafe",
-            "Remove `[native.rust].unsafe` or remove all three granular unsafe policy fields.",
-        ));
-    }
-
     diagnostics
 }
 
