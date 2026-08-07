@@ -1028,6 +1028,7 @@ fn make_tree_read_only(root: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(unix)]
 fn collect_directories(path: &Path, output: &mut Vec<PathBuf>) -> Result<(), String> {
     output.push(path.to_path_buf());
     for entry in

@@ -235,6 +235,56 @@ impl ArtifactStore {
     }
 
     #[cfg(not(unix))]
+    fn checked_portable_path(
+        &self,
+        relative: &Path,
+        label: &str,
+        allow_missing_leaf: bool,
+    ) -> Result<PathBuf, String> {
+        let mut current = self.root.clone();
+        let mut components = relative.components().peekable();
+        while let Some(component) = components.next() {
+            let Component::Normal(component) = component else {
+                return Err(format!("{label} path is not confined"));
+            };
+            current.push(component);
+            let leaf = components.peek().is_none();
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) if is_package_link_like(&metadata) => {
+                    return Err(format!(
+                        "{label} rejects symlinks or reparse points: {}",
+                        current.display()
+                    ));
+                }
+                Ok(metadata) if !leaf && !metadata.is_dir() => {
+                    return Err(format!(
+                        "{label} parent must be a real directory: {}",
+                        current.display()
+                    ));
+                }
+                Ok(metadata) if leaf && !metadata.is_file() => {
+                    return Err(format!(
+                        "{label} destination must be a regular file: {}",
+                        current.display()
+                    ));
+                }
+                Ok(_) => {}
+                Err(error)
+                    if leaf
+                        && allow_missing_leaf
+                        && error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!(
+                        "failed to inspect confined {label} path {}: {error}",
+                        current.display()
+                    ));
+                }
+            }
+        }
+        Ok(current)
+    }
+
+    #[cfg(not(unix))]
     fn write_atomic_portable(
         &self,
         relative: &Path,
@@ -264,8 +314,7 @@ impl ArtifactStore {
                 .map_err(|error| format!("failed to write {label}: {error}"))?;
             file.sync_all()
                 .map_err(|error| format!("failed to sync {label}: {error}"))?;
-            fs::rename(&temporary, &destination)
-                .map_err(|error| format!("failed to atomically publish {label}: {error}"))?;
+            replace_portable_file(&temporary, &destination, label)?;
             sync_directory(parent)
         })();
         if result.is_err() {
@@ -273,6 +322,50 @@ impl ArtifactStore {
         }
         result
     }
+}
+
+/// Publish a staged regular file on platforms without descriptor-relative
+/// rename support in the standard library.
+///
+/// Windows `std::fs::rename` cannot replace an existing file. The fallback
+/// therefore revalidates and removes an existing regular, non-reparse-point
+/// destination immediately before rename. The store lock serializes RSScript
+/// writers, but—as documented on `ArtifactStore`—a hostile external process can
+/// still race this portable path and requires OS-level workspace isolation.
+#[cfg(not(unix))]
+fn replace_portable_file(source: &Path, destination: &Path, label: &str) -> Result<(), String> {
+    match fs::symlink_metadata(destination) {
+        Ok(metadata) if !metadata.is_file() || is_package_link_like(&metadata) => {
+            return Err(format!(
+                "{label} destination must be a regular file, not a symlink or reparse point"
+            ));
+        }
+        Ok(_) => {
+            #[cfg(windows)]
+            fs::remove_file(destination).map_err(|error| {
+                format!("failed to replace existing {label} destination: {error}")
+            })?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(format!("failed to inspect {label} destination: {error}")),
+    }
+    fs::rename(source, destination)
+        .map_err(|error| format!("failed to publish staged {label}: {error}"))
+}
+
+#[cfg(windows)]
+fn sync_directory(_path: &Path) -> Result<(), String> {
+    // `std::fs::File::open` cannot open a directory for `sync_all` on Windows.
+    // The staged file itself is synced before publication; directory durability
+    // across power loss requires a platform adapter outside this safe Core.
+    Ok(())
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn sync_directory(path: &Path) -> Result<(), String> {
+    File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| format!("failed to sync directory {}: {error}", path.display()))
 }
 
 fn checked_relative<'a>(relative: &'a Path, label: &str) -> Result<&'a Path, String> {
