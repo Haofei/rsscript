@@ -1,4 +1,15 @@
 // ---------------------------------------------------------------------------
+
+#[cfg(feature = "native-jit")]
+fn assert_execution_failure(
+    error: &rsscript::EvalError,
+    expected: rsscript::ExecutionFailureKind,
+) {
+    match error {
+        rsscript::EvalError::Execution { kind, .. } => assert_eq!(*kind, expected),
+        other => panic!("expected structured execution failure {expected:?}, got {other:?}"),
+    }
+}
 // Recursive native fast paths must honor the same limit gate as `try_native`:
 // Cranelift code polls neither `step_budget` nor `cancel` and allocates off the
 // `allocation_budget` meter, so with any of them armed the recursive paths must NOT
@@ -147,13 +158,7 @@ fn native_self_recursion_step_budget_preempts() {
     let err = exe
         .eval_main_with_args_native_with_limits(std::iter::empty::<String>(), limits)
         .expect_err("small step budget must preempt, not be bypassed by native");
-    match err {
-        rsscript::EvalError::Runtime(msg) => assert!(
-            msg.contains("step budget"),
-            "expected step-budget error, got: {msg}"
-        ),
-        other => panic!("expected Runtime(step budget), got {other:?}"),
-    }
+    assert_execution_failure(&err, rsscript::ExecutionFailureKind::StepBudgetExceeded);
 }
 
 /// Shared OSR-shaped kernel for the J0.5 limit tests: the loop is wrapped by
@@ -214,18 +219,12 @@ fn native_osr_trips_tight_step_budget() {
     let err = exe
         .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), limits)
         .expect_err("a tight step budget must preempt the native loop, not be bypassed");
-    match err {
-        rsscript::EvalError::Runtime(msg) => assert!(
-            msg.contains("step budget"),
-            "expected step-budget error, got: {msg}"
-        ),
-        other => panic!("expected Runtime(step budget), got {other:?}"),
-    }
+    assert_execution_failure(&err, rsscript::ExecutionFailureKind::StepBudgetExceeded);
 }
 
 #[cfg(feature = "native-jit")]
 #[test]
-fn native_osr_host_call_budget_stays_interpreted_and_enforced() {
+fn native_osr_intrinsic_call_budget_stays_interpreted_and_enforced() {
     let source = "\
 fn measure(s: String, n: Int) -> Int {
     Output.write(message: \"begin\")
@@ -252,11 +251,11 @@ fn main() -> Unit {
                 ..rsscript::VmLimits::default()
             },
         )
-        .expect("generous host-call budget");
+        .expect("generous intrinsic-call budget");
     assert_eq!(out.stdout.trim_end(), "begin\n600");
     assert_eq!(
         stats.osr_entries, 0,
-        "armed host-call budget must decline OSR"
+        "armed intrinsic-call budget must decline OSR"
     );
 
     let err = exe
@@ -267,10 +266,10 @@ fn main() -> Unit {
                 ..rsscript::VmLimits::default()
             },
         )
-        .expect_err("tight host-call budget must be enforced by the interpreter");
-    assert!(
-        matches!(err, rsscript::EvalError::Runtime(ref message) if message.contains("host call budget")),
-        "expected host-call-budget error, got {err:?}"
+        .expect_err("tight intrinsic-call budget must be enforced by the interpreter");
+    assert_execution_failure(
+        &err,
+        rsscript::ExecutionFailureKind::IntrinsicBudgetExceeded,
     );
 }
 
@@ -422,13 +421,7 @@ fn main() -> Unit {
     let err = exe
         .eval_main_with_args_native_osr_with_limits(std::iter::empty::<String>(), limits)
         .expect_err("a set cancel flag must preempt the native loop");
-    match err {
-        rsscript::EvalError::Runtime(msg) => assert!(
-            msg.contains("cancelled"),
-            "expected cancellation error, got: {msg}"
-        ),
-        other => panic!("expected Runtime(cancelled), got {other:?}"),
-    }
+    assert_execution_failure(&err, rsscript::ExecutionFailureKind::Cancelled);
 }
 
 /// J0.4 #1 (heap-key collection write): a hot loop inserting into a `Map<String, Int>`
