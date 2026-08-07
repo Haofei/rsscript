@@ -1,0 +1,344 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsscript.dev/schemas/rsscript.execution_report.v1.schema.json",
+  "title": "RSScript execution report v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "artifact_digest",
+    "termination_reason",
+    "usage",
+    "value",
+    "display_value",
+    "native_value",
+    "stdout",
+    "stderr",
+    "provider_call_traces",
+    "diagnostics",
+    "failure"
+  ],
+  "properties": {
+    "schema": { "const": "rsscript.execution_report.v1" },
+    "artifact_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "termination_reason": { "$ref": "#/$defs/termination_reason" },
+    "usage": { "$ref": "#/$defs/usage" },
+    "value": { "type": "string" },
+    "display_value": { "type": "string" },
+    "native_value": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/native_value" }
+      ]
+    },
+    "stdout": { "type": "string" },
+    "stderr": { "type": "string" },
+    "provider_call_traces": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/provider_call_trace" }
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/diagnostic" }
+    },
+    "failure": {
+      "oneOf": [
+        { "type": "null" },
+        { "$ref": "#/$defs/runtime_error" }
+      ]
+    }
+  },
+  "$defs": {
+    "termination_reason": {
+      "enum": [
+        "completed",
+        "script_error",
+        "cancelled",
+        "deadline_exceeded",
+        "step_budget_exceeded",
+        "allocation_budget_exceeded",
+        "output_limit_exceeded",
+        "provider_error",
+        "provider_budget_exceeded",
+        "intrinsic_budget_exceeded",
+        "resource_limit_exceeded",
+        "verification_failure",
+        "internal_error"
+      ]
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "steps_consumed",
+        "allocation_bytes_consumed",
+        "output_bytes",
+        "intrinsic_calls",
+        "provider_calls",
+        "resources_created",
+        "resources_cleaned",
+        "resource_cleanup_failures",
+        "resources_live_at_return"
+      ],
+      "properties": {
+        "steps_consumed": { "type": "integer", "minimum": 0 },
+        "allocation_bytes_consumed": { "type": "integer", "minimum": 0 },
+        "output_bytes": { "type": "integer", "minimum": 0 },
+        "intrinsic_calls": { "type": "integer", "minimum": 0 },
+        "provider_calls": { "type": "integer", "minimum": 0 },
+        "resources_created": { "type": "integer", "minimum": 0 },
+        "resources_cleaned": { "type": "integer", "minimum": 0 },
+        "resource_cleanup_failures": { "type": "integer", "minimum": 0 },
+        "resources_live_at_return": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "native_value": {
+      "oneOf": [
+        { "const": "Unit" },
+        { "$ref": "#/$defs/native_int" },
+        { "$ref": "#/$defs/native_float" },
+        { "$ref": "#/$defs/native_bool" },
+        { "$ref": "#/$defs/native_string" },
+        { "$ref": "#/$defs/native_char" },
+        { "$ref": "#/$defs/native_bytes" },
+        { "$ref": "#/$defs/native_list" },
+        { "$ref": "#/$defs/native_map" },
+        { "$ref": "#/$defs/native_json" },
+        { "$ref": "#/$defs/native_struct" },
+        { "$ref": "#/$defs/native_variant" },
+        { "$ref": "#/$defs/native_handle" }
+      ]
+    },
+    "native_int": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["Int"],
+      "properties": { "Int": { "type": "integer" } }
+    },
+    "native_float": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["Float"],
+      "properties": { "Float": { "type": "number" } }
+    },
+    "native_bool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["Bool"],
+      "properties": { "Bool": { "type": "boolean" } }
+    },
+    "native_string": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["String"],
+      "properties": { "String": { "type": "string" } }
+    },
+    "native_char": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["Char"],
+      "properties": { "Char": { "type": "string", "minLength": 1 } }
+    },
+    "native_bytes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["Bytes"],
+      "properties": {
+        "Bytes": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 0, "maximum": 255 }
+        }
+      }
+    },
+    "native_list": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["List"],
+      "properties": {
+        "List": { "type": "array", "items": { "$ref": "#/$defs/native_value" } }
+      }
+    },
+    "native_map": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["Map"],
+      "properties": {
+        "Map": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              { "$ref": "#/$defs/native_value" },
+              { "$ref": "#/$defs/native_value" }
+            ],
+            "items": false,
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      }
+    },
+    "native_json": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["Json"],
+      "properties": { "Json": true }
+    },
+    "native_struct": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["Struct"],
+      "properties": {
+        "Struct": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "fields"],
+          "properties": {
+            "name": { "type": "string" },
+            "fields": {
+              "type": "object",
+              "additionalProperties": { "$ref": "#/$defs/native_value" }
+            }
+          }
+        }
+      }
+    },
+    "native_variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["Variant"],
+      "properties": {
+        "Variant": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "fields"],
+          "properties": {
+            "name": { "type": "string" },
+            "fields": {
+              "type": "object",
+              "additionalProperties": { "$ref": "#/$defs/native_value" }
+            }
+          }
+        }
+      }
+    },
+    "native_handle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["Native"],
+      "properties": {
+        "Native": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type_name", "id"],
+          "properties": {
+            "type_name": { "type": "string" },
+            "id": { "type": "integer" }
+          }
+        }
+      }
+    },
+    "provider_call_trace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["call_id", "provider_id", "provider_version", "symbol", "elapsed", "result"],
+      "properties": {
+        "call_id": { "type": "integer", "minimum": 0 },
+        "provider_id": { "type": "string" },
+        "provider_version": { "type": "string" },
+        "symbol": { "type": "string" },
+        "elapsed": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["secs", "nanos"],
+          "properties": {
+            "secs": { "type": "integer", "minimum": 0 },
+            "nanos": { "type": "integer", "minimum": 0, "maximum": 999999999 }
+          }
+        },
+        "result": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["Ok"],
+              "properties": { "Ok": { "type": "null" } }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["Err"],
+              "properties": {
+                "Err": {
+                  "enum": [
+                    "invalid_argument",
+                    "not_found",
+                    "permission_denied",
+                    "cancelled",
+                    "deadline_exceeded",
+                    "resource_exhausted",
+                    "unavailable",
+                    "internal"
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "severity", "summary", "span", "label", "causes", "fixes"],
+      "properties": {
+        "code": { "type": "string" },
+        "severity": { "enum": ["error", "warning"] },
+        "summary": { "type": "string" },
+        "span": { "$ref": "#/$defs/span" },
+        "label": { "type": "string" },
+        "causes": { "type": "array", "items": { "type": "string" } },
+        "fixes": { "type": "array", "items": { "$ref": "#/$defs/fix" } }
+      }
+    },
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file", "line", "column", "length"],
+      "properties": {
+        "file": { "type": "string" },
+        "line": { "type": "integer", "minimum": 0 },
+        "column": { "type": "integer", "minimum": 0 },
+        "length": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "fix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "title", "applicability"],
+      "properties": {
+        "kind": { "type": "string" },
+        "title": { "type": "string" },
+        "applicability": { "type": "string" },
+        "edit": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["span", "replacement"],
+          "properties": {
+            "span": { "$ref": "#/$defs/span" },
+            "replacement": { "type": "string" }
+          }
+        }
+      }
+    },
+    "runtime_error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["reason", "message"],
+      "properties": {
+        "reason": { "$ref": "#/$defs/termination_reason" },
+        "message": { "type": "string" }
+      }
+    }
+  }
+}

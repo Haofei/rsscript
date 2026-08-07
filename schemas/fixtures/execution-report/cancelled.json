@@ -1,0 +1,27 @@
+{
+  "schema": "rsscript.execution_report.v1",
+  "artifact_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "termination_reason": "cancelled",
+  "usage": {
+    "steps_consumed": 0,
+    "allocation_bytes_consumed": 0,
+    "output_bytes": 0,
+    "intrinsic_calls": 0,
+    "provider_calls": 0,
+    "resources_created": 0,
+    "resources_cleaned": 0,
+    "resource_cleanup_failures": 0,
+    "resources_live_at_return": 0
+  },
+  "value": "",
+  "display_value": "",
+  "native_value": null,
+  "stdout": "",
+  "stderr": "",
+  "provider_call_traces": [],
+  "diagnostics": [],
+  "failure": {
+    "reason": "cancelled",
+    "message": "evaluation cancelled"
+  }
+}

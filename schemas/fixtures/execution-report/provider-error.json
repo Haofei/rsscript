@@ -1,0 +1,36 @@
+{
+  "schema": "rsscript.execution_report.v1",
+  "artifact_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+  "termination_reason": "provider_error",
+  "usage": {
+    "steps_consumed": 8,
+    "allocation_bytes_consumed": 0,
+    "output_bytes": 0,
+    "intrinsic_calls": 0,
+    "provider_calls": 1,
+    "resources_created": 0,
+    "resources_cleaned": 0,
+    "resource_cleanup_failures": 0,
+    "resources_live_at_return": 0
+  },
+  "value": "",
+  "display_value": "",
+  "native_value": null,
+  "stdout": "",
+  "stderr": "",
+  "provider_call_traces": [
+    {
+      "call_id": 7,
+      "provider_id": "fixture.provider",
+      "provider_version": "1.0.0",
+      "symbol": "host.fixture.call",
+      "elapsed": { "secs": 0, "nanos": 1000 },
+      "result": { "Err": "invalid_argument" }
+    }
+  ],
+  "diagnostics": [],
+  "failure": {
+    "reason": "provider_error",
+    "message": "InvalidArgument: rejected by provider"
+  }
+}
