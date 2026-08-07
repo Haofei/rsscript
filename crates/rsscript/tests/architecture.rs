@@ -988,7 +988,7 @@ fn reir_is_a_one_way_optional_integration() {
 }
 
 #[test]
-fn native_plugin_loader_is_opt_in() {
+fn compiler_does_not_embed_a_native_plugin_loader() {
     let root = workspace_root();
     let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript/Cargo.toml")))
         .expect("compiler manifest should parse");
@@ -998,19 +998,18 @@ fn native_plugin_loader_is_opt_in() {
             .is_some_and(Vec::is_empty),
         "frontend CLI commands must not select execution dependencies by default"
     );
-    assert_eq!(
-        manifest["dependencies"]["rss-native-abi"]["optional"].as_bool(),
-        Some(true)
-    );
     assert!(
-        manifest["features"]["native-plugin"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|feature| feature.as_str() == Some("dep:rss-native-abi"))
+        manifest["dependencies"].get("rss-native-abi").is_none(),
+        "compiler must not depend on the native plugin ABI"
     );
+    assert!(manifest["features"].get("native-plugin").is_none());
     let library = read(&root.join("crates/rsscript/src/lib.rs"));
-    assert!(library.contains("#[cfg(feature = \"native-plugin\")]\nmod native_plugin;"));
+    assert!(!library.contains("native_plugin"));
+    assert!(
+        !root
+            .join("crates/rsscript/src/native_plugin/mod.rs")
+            .exists()
+    );
 }
 
 #[test]
@@ -1040,7 +1039,6 @@ fn lsp_dependency_closure_selects_frontend_only() {
         "rsscript-bytecode",
         "rsscript-lowering",
         "rsscript-provider-api",
-        "rss-native-abi",
         "rss-process-guard",
         "vm-jit",
     ] {
@@ -1143,7 +1141,11 @@ fn compiler_default_dependency_closure_is_host_neutral() {
             "compiler/VM core must not depend on generated-Rust runtime `{forbidden}`"
         );
     }
-    for dependency in ["rss-native-abi", "rss-process-guard", "vm-jit"] {
+    assert!(
+        manifest["dependencies"].get("rss-native-abi").is_none(),
+        "compiler must not depend on the native plugin ABI"
+    );
+    for dependency in ["rss-process-guard", "vm-jit"] {
         assert_eq!(
             manifest["dependencies"][dependency]["optional"].as_bool(),
             Some(true),
@@ -1767,8 +1769,6 @@ fn high_risk_state_machines_keep_dedicated_module_owners() {
     let root = workspace_root();
     let required = [
         "crates/rsscript/src/analyzer/task_group.rs",
-        "crates/rsscript/src/native_plugin/loader/cache.rs",
-        "crates/rsscript/src/native_plugin/loader/shim.rs",
         "crates/rsscript/src/package/native/bindings.rs",
         "crates/rsscript/src/reg_vm/tier/admission.rs",
         "crates/rsscript/src/reg_vm/tier/call_scratch.rs",
@@ -1776,8 +1776,6 @@ fn high_risk_state_machines_keep_dedicated_module_owners() {
         "crates/rsscript/src/rust_lower/helpers/executable_declarations.rs",
         "crates/rsscript/src/rust_lower/helpers/semantic_projection.rs",
         "crates/runtime/src/json.rs",
-        "crates/runtime/src/network/mod.rs",
-        "crates/runtime/src/process/supervisor.rs",
         "crates/vm-jit/src/analysis.rs",
         "crates/vm-jit/src/executable_memory.rs",
         "crates/reir/src/reconciliation/engine.rs",

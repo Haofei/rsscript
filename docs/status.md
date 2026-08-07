@@ -16,13 +16,13 @@ The platform-neutral language cut is active:
   output uses the distinct `rsscript.package_review.v1` schema.
 
 The `rsscript-compiler` implementation still contains analyzer orchestration,
-package tooling, VM, AOT lowering, and opt-in native loading while those
+package tooling, VM, and AOT lowering while those
 remaining boundaries are migrated. Stable embedders use the small
 `rsscript-sdk` façade instead of those implementation modules; the compiler
 does not depend back on that façade.
-Native plugin loading and guarded child-process tooling are explicit
-`native-plugin` / `host-tools` features and are absent from the compiler's
-default dependency closure. The compiler now consumes runtime `core` only; VM
+Native plugin loading has been removed from the compiler. Guarded child-process
+tooling remains opt-in and is absent from the compiler's default dependency
+closure. The compiler now consumes runtime `core` only; VM
 compatibility intrinsics for filesystem and process access fail with an explicit
 provider-required error instead of reaching the OS. Disabled hosts fail before
 build, spawn, or dynamic loading when those integrations are requested.

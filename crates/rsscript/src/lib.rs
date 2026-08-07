@@ -25,8 +25,6 @@ mod lexer {
     pub(crate) use rsscript_syntax::lexer::*;
 }
 mod lint;
-#[cfg(feature = "native-plugin")]
-mod native_plugin;
 #[cfg(feature = "execution")]
 mod package;
 #[cfg(feature = "execution")]
@@ -83,29 +81,6 @@ pub use generate::{
     TypeRef, prefix_status, valid_continuations,
 };
 pub use lint::lint_source;
-#[cfg(feature = "native-plugin")]
-pub use native_plugin::{load_package_bindings, load_package_bindings_from_snapshot};
-#[cfg(all(feature = "execution", not(feature = "native-plugin")))]
-pub fn load_package_bindings(
-    package_dir: &std::path::Path,
-) -> Result<Vec<(String, ExternalFunction)>, String> {
-    let prepared = prepare_package_for_execution(package_dir)?;
-    if prepared.requires_external_provider() {
-        Err("native plugin loading is disabled; rebuild the host with `native-plugin`".to_string())
-    } else {
-        Ok(Vec::new())
-    }
-}
-#[cfg(all(feature = "execution", not(feature = "native-plugin")))]
-pub fn load_package_bindings_from_snapshot(
-    package: &ExecutablePackageSnapshot,
-) -> Result<Vec<(String, ExternalFunction)>, String> {
-    if package.lowering_input().native_dependencies.is_empty() {
-        Ok(Vec::new())
-    } else {
-        Err("native plugin loading is disabled; rebuild the host with `native-plugin`".to_string())
-    }
-}
 #[cfg(feature = "execution")]
 pub use package::{
     ArtifactStore, ExecutablePackageSnapshot, PackageAnalysis, PackageAnalysisAwaitSite,

@@ -5,8 +5,8 @@ use std::time::Duration;
 use rsscript::{
     CancellationToken, EvalError, EvalOutput, NativeValue, VmLimits, check_generated_rust_package,
     configure_reduced_build_environment, format_diagnostics_human, format_diagnostics_json,
-    load_package_bindings_from_snapshot, parse_runtime_diagnostics, prepare_package_for_execution,
-    reg_vm_compile_package_input, write_generated_rust_package,
+    parse_runtime_diagnostics, prepare_package_for_execution, reg_vm_compile_package_input,
+    write_generated_rust_package,
 };
 
 use super::{
@@ -248,20 +248,11 @@ fn run_package_via_vm(
 ) -> Result<EvalOutput, EvalError> {
     let package_dir = Path::new(path);
     let prepared = prepare_package_for_execution(package_dir).map_err(EvalError::Runtime)?;
-    let (executable, bindings) = if !prepared.requires_external_provider() {
-        let input = prepared.into_lowering_input().map_err(EvalError::Runtime)?;
-        (reg_vm_compile_package_input(&input)?, Vec::new())
-    } else {
-        let package = prepared.verify().map_err(EvalError::Runtime)?;
-        let bindings = load_package_bindings_from_snapshot(&package).map_err(EvalError::Runtime)?;
-        (
-            reg_vm_compile_package_input(package.lowering_input())?,
-            bindings,
-        )
-    };
+    let input = prepared.into_lowering_input().map_err(EvalError::Runtime)?;
+    let executable = reg_vm_compile_package_input(&input)?;
     executable.eval_main_with_args_and_external_bindings_and_limits(
         program_args.iter().copied(),
-        bindings,
+        std::iter::empty::<(String, rsscript::ExternalFunction)>(),
         limits,
     )
 }
