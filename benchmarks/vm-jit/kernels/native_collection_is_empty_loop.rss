@@ -74,7 +74,7 @@ fn main() -> Unit {
     SortedMap.insert<Int, Int>(map: mut sorted_table, key: 5, value: 6)
     Deque.push_back<Int>(deque: mut queue, value: 7)
 
-    Log.write(message: String.from_int(value: is_empty_loop(
+    Output.write(message: String.from_int(value: is_empty_loop(
         values,
         table,
         set,

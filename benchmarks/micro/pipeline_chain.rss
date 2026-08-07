@@ -46,6 +46,6 @@ fn main() -> Unit {
         },
     )
 
-    Log.write(message: String.from_int(value: acc.total))
+    Output.write(message: String.from_int(value: acc.total))
     return Unit
 }

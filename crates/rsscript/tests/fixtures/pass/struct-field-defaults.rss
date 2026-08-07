@@ -11,8 +11,8 @@ struct MyOpts {
 fn main() -> Unit {
     let a = MyOpts(retries: 5)
     let b = MyOpts(name: "custom", retries: 1, verbose: true)
-    Log.write(message: a.name)
-    Log.write(message: String.from_int(value: a.retries))
-    Log.write(message: b.name)
+    Output.write(message: a.name)
+    Output.write(message: String.from_int(value: a.retries))
+    Output.write(message: b.name)
     return Unit
 }

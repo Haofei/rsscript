@@ -35,7 +35,7 @@ fn main() -> Unit {
         i = i + 1
     }
     // (3 + 100) + (3 * 100) = 103 + 300 = 403
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -211,27 +211,27 @@ fn main() -> Unit {
 
     // (x*1)*0 simplifies to Const 0. Assert the op and arg, and the fire count.
     let is_zero = is_const(u: read result, v: 0)
-    Log.write(message: read "result_is_const_0:")
+    Output.write(message: read "result_is_const_0:")
     if is_zero {
-        Log.write(message: read "yes")
+        Output.write(message: read "yes")
     } else {
-        Log.write(message: read "no")
+        Output.write(message: read "no")
     }
-    Log.write(message: read "result_op_const:")
+    Output.write(message: read "result_op_const:")
     if result.op == Const {
-        Log.write(message: read "yes")
+        Output.write(message: read "yes")
     } else {
-        Log.write(message: read "no")
+        Output.write(message: read "no")
     }
-    Log.write(message: read "fired:")
-    Log.write(message: read String.from_int(value: ctx.fired))
+    Output.write(message: read "fired:")
+    Output.write(message: read String.from_int(value: ctx.fired))
     // Concrete correctness: Rule 1 fires once on the inner (x*1)->x, Rule 2 once
     // on the rebuilt (x*1-simplified)*0 -> Const 0, so exactly two firings.
-    Log.write(message: read "fired_is_2:")
+    Output.write(message: read "fired_is_2:")
     if ctx.fired == 2 {
-        Log.write(message: read "yes")
+        Output.write(message: read "yes")
     } else {
-        Log.write(message: read "no")
+        Output.write(message: read "no")
     }
     return Unit
 }
@@ -404,28 +404,28 @@ fn main() -> Unit {
     let result = rewrite_fixed(node: read outer, rules: read rules, ctx: mut ctx)
 
     let is_zero = is_const(u: read result, v: 0)
-    Log.write(message: read "result_is_const_0:")
+    Output.write(message: read "result_is_const_0:")
     if is_zero {
-        Log.write(message: read "yes")
+        Output.write(message: read "yes")
     } else {
-        Log.write(message: read "no")
+        Output.write(message: read "no")
     }
-    Log.write(message: read "result_op_const:")
+    Output.write(message: read "result_op_const:")
     if result.op == Const {
-        Log.write(message: read "yes")
+        Output.write(message: read "yes")
     } else {
-        Log.write(message: read "no")
+        Output.write(message: read "no")
     }
     // The firing count was produced BY THE RULES mutating `mut Ctx`, not the
     // driver. Rule 1 fires once on the inner (x*1)->x, Rule 2 once on the rebuilt
     // (x*1-simplified)*0 -> Const 0, so exactly two firings.
-    Log.write(message: read "fired:")
-    Log.write(message: read String.from_int(value: ctx.fired))
-    Log.write(message: read "fired_is_2:")
+    Output.write(message: read "fired:")
+    Output.write(message: read String.from_int(value: ctx.fired))
+    Output.write(message: read "fired_is_2:")
     if ctx.fired == 2 {
-        Log.write(message: read "yes")
+        Output.write(message: read "yes")
     } else {
-        Log.write(message: read "no")
+        Output.write(message: read "no")
     }
     return Unit
 }

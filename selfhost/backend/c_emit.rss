@@ -388,12 +388,12 @@ fn emit_pure_function_body(lines: List<String>, start: Int, bodyEnd: Int, names:
         if String.starts_with(value: line, prefix: "  return ") {
             let source = String.slice(value: line, start: 9, len: (String.len(value: line) - 9))
             let value = pure_function_expression(value: source, names: names, parameters: parameters, declared: declared, currentFunction: functionName)
-            Log.write(message: String.concat(left: indentation(depth: cDepth), right: String.concat(left: "return ", right: String.concat(left: value, right: ";"))))
+            Output.write(message: String.concat(left: indentation(depth: cDepth), right: String.concat(left: "return ", right: String.concat(left: value, right: ";"))))
         } else {
             let local = local_name(line: line)
             let source = pure_function_local_value(line: line)
             let value = pure_function_expression(value: source, names: names, parameters: parameters, declared: declared, currentFunction: functionName)
-            Log.write(message: String.concat(left: indentation(depth: cDepth), right: String.concat(left: "long long ", right: String.concat(left: local, right: String.concat(left: " = ", right: String.concat(left: value, right: ";"))))))
+            Output.write(message: String.concat(left: indentation(depth: cDepth), right: String.concat(left: "long long ", right: String.concat(left: local, right: String.concat(left: " = ", right: String.concat(left: value, right: ";"))))))
             Set.insert<String>(set: mut declared, value: local)
         }
         i = i + 1
@@ -430,7 +430,7 @@ fn emit_pure_function_program(lines: List<String>, end: Int) -> Bool {
         i = i + 1
     }
 
-    Log.write(message: "#include \"rssrt.h\"")
+    Output.write(message: "#include \"rssrt.h\"")
     i = 0
     while i < List.len(list: names) {
         let name = List.get<String>(list: names, index: i)
@@ -438,7 +438,7 @@ fn emit_pure_function_program(lines: List<String>, end: Int) -> Bool {
         if name != "main" {
             let mut cParameter = "void"
             if String.len(value: parameter) > 0 { cParameter = String.concat(left: "long long ", right: parameter) }
-            Log.write(message: String.concat(left: "static long long rss_fn_", right: String.concat(left: name, right: String.concat(left: "(", right: String.concat(left: cParameter, right: ");")))))
+            Output.write(message: String.concat(left: "static long long rss_fn_", right: String.concat(left: name, right: String.concat(left: "(", right: String.concat(left: cParameter, right: ");")))))
         }
         i = i + 1
     }
@@ -449,7 +449,7 @@ fn emit_pure_function_program(lines: List<String>, end: Int) -> Bool {
         let parameter = List.get<String>(list: parameters, index: i)
         let bodyEnd = pure_function_body_end(lines: lines, start: functionStart, end: end)
         if name == "main" {
-            Log.write(message: "int main(void) {")
+            Output.write(message: "int main(void) {")
             // Main has no C return value. Its final RSS return is routed through
             // the runtime output ABI instead of a C return statement.
             local declared = Set<String>.new()
@@ -459,24 +459,24 @@ fn emit_pure_function_program(lines: List<String>, end: Int) -> Bool {
                 if String.starts_with(value: line, prefix: "  return ") {
                     let source = String.slice(value: line, start: 9, len: (String.len(value: line) - 9))
                     let value = pure_function_expression(value: source, names: names, parameters: parameters, declared: declared, currentFunction: name)
-                    Log.write(message: String.concat(left: "  rssrt_print_int((long long)", right: String.concat(left: value, right: ");")))
+                    Output.write(message: String.concat(left: "  rssrt_print_int((long long)", right: String.concat(left: value, right: ");")))
                 } else {
                     let local = local_name(line: line)
                     let source = pure_function_local_value(line: line)
                     let value = pure_function_expression(value: source, names: names, parameters: parameters, declared: declared, currentFunction: name)
-                    Log.write(message: String.concat(left: "  long long ", right: String.concat(left: local, right: String.concat(left: " = ", right: String.concat(left: value, right: ";")))))
+                    Output.write(message: String.concat(left: "  long long ", right: String.concat(left: local, right: String.concat(left: " = ", right: String.concat(left: value, right: ";")))))
                     Set.insert<String>(set: mut declared, value: local)
                 }
                 body = body + 1
             }
-            Log.write(message: "  return 0;")
-            Log.write(message: "}")
+            Output.write(message: "  return 0;")
+            Output.write(message: "}")
         } else {
             let mut cParameter = "void"
             if String.len(value: parameter) > 0 { cParameter = String.concat(left: "long long ", right: parameter) }
-            Log.write(message: String.concat(left: "static long long rss_fn_", right: String.concat(left: name, right: String.concat(left: "(", right: String.concat(left: cParameter, right: ") {")))))
+            Output.write(message: String.concat(left: "static long long rss_fn_", right: String.concat(left: name, right: String.concat(left: "(", right: String.concat(left: cParameter, right: ") {")))))
             emit_pure_function_body(lines: lines, start: functionStart, bodyEnd: bodyEnd, names: names, parameters: parameters, parameter: parameter, functionName: name, cDepth: 1)
-            Log.write(message: "}")
+            Output.write(message: "}")
         }
         functionStart = bodyEnd
         i = i + 1
@@ -571,15 +571,15 @@ fn main() -> Unit {
     let source = List.get<String>(list: returnParts, index: 1)
     let value = scalar_expression(value: source)
     if irDepth != 1 || cDepth != 1 || leading_spaces(line: line) != 2 || String.len(value: value) == 0 || expression_uses_declared_names(value: source, declared: declared) == false { return Unit }
-    Log.write(message: "#include \"rssrt.h\"")
-    Log.write(message: "int main(void) {")
+    Output.write(message: "#include \"rssrt.h\"")
+    Output.write(message: "int main(void) {")
     i = 0
     while i < List.len(list: cStatements) {
-        Log.write(message: List.get<String>(list: cStatements, index: i))
+        Output.write(message: List.get<String>(list: cStatements, index: i))
         i = i + 1
     }
-    Log.write(message: String.concat(left: "  rssrt_print_int((long long)", right: String.concat(left: value, right: ");")))
-    Log.write(message: "  return 0;")
-    Log.write(message: "}")
+    Output.write(message: String.concat(left: "  rssrt_print_int((long long)", right: String.concat(left: value, right: ");")))
+    Output.write(message: "  return 0;")
+    Output.write(message: "}")
     return Unit
 }

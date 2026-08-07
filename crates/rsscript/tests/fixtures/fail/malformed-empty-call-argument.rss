@@ -1,7 +1,7 @@
 // expect: RS0015
 
 fn main() -> Unit {
-    Log.write(, message: "hello")
-    Log.write(message: "hello",, tag: "demo")
+    Output.write(, message: "hello")
+    Output.write(message: "hello",, tag: "demo")
     return Unit
 }

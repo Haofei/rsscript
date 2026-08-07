@@ -42,7 +42,7 @@ fn add(a: Int, b: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: add(a: read 9223372036854775807, b: read 1)))
+    Output.write(message: read String.from_int(value: add(a: read 9223372036854775807, b: read 1)))
     return Unit
 }
 ";
@@ -57,7 +57,7 @@ fn mul(a: Int, b: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: mul(a: read 3037000500, b: read 3037000500)))
+    Output.write(message: read String.from_int(value: mul(a: read 3037000500, b: read 3037000500)))
     return Unit
 }
 ";
@@ -75,7 +75,7 @@ fn sub(a: Int, b: Int) -> Int {{
 }}
 
 fn main() -> Unit {{
-{MIN_PRELUDE}    Log.write(message: read String.from_int(value: sub(a: read min, b: read 1)))
+{MIN_PRELUDE}    Output.write(message: read String.from_int(value: sub(a: read min, b: read 1)))
     return Unit
 }}
 "
@@ -94,7 +94,7 @@ fn negate(a: Int) -> Int {{
 }}
 
 fn main() -> Unit {{
-{MIN_PRELUDE}    Log.write(message: read String.from_int(value: negate(a: read min)))
+{MIN_PRELUDE}    Output.write(message: read String.from_int(value: negate(a: read min)))
     return Unit
 }}
 "
@@ -110,7 +110,7 @@ fn div(a: Int, b: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: div(a: read 10, b: read 0)))
+    Output.write(message: read String.from_int(value: div(a: read 10, b: read 0)))
     return Unit
 }
 ";
@@ -125,7 +125,7 @@ fn rem(a: Int, b: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: rem(a: read 10, b: read 0)))
+    Output.write(message: read String.from_int(value: rem(a: read 10, b: read 0)))
     return Unit
 }
 ";
@@ -141,7 +141,7 @@ fn div(a: Int, b: Int) -> Int {{
 }}
 
 fn main() -> Unit {{
-{MIN_PRELUDE}    Log.write(message: read String.from_int(value: div(a: read min, b: read neg_one)))
+{MIN_PRELUDE}    Output.write(message: read String.from_int(value: div(a: read min, b: read neg_one)))
     return Unit
 }}
 "
@@ -158,7 +158,7 @@ fn rem(a: Int, b: Int) -> Int {{
 }}
 
 fn main() -> Unit {{
-{MIN_PRELUDE}    Log.write(message: read String.from_int(value: rem(a: read min, b: read neg_one)))
+{MIN_PRELUDE}    Output.write(message: read String.from_int(value: rem(a: read min, b: read neg_one)))
     return Unit
 }}
 "
@@ -172,7 +172,7 @@ fn main() -> Unit {{
 fn jit_edge_invalid_shift_amounts_trap_consistently() {
     for (name, bits) in [("negative", -1), ("width", 64), ("large", 65)] {
         let source = format!(
-            "fn main() -> Unit {{\n    Log.write(message: String.from_int(value: 1 << {bits}))\n    return Unit\n}}\n"
+            "fn main() -> Unit {{\n    Output.write(message: String.from_int(value: 1 << {bits}))\n    return Unit\n}}\n"
         );
         assert_backends_all_fail(&format!("jit-edge-shift-{name}.rss"), &source, &[]);
     }
@@ -183,7 +183,7 @@ fn list_sum_overflow_traps_consistently() {
     let source = "\
 fn main() -> Unit {
     let values = [9223372036854775807, 1]
-    Log.write(message: String.from_int(value: List.sum(list: values)))
+    Output.write(message: String.from_int(value: List.sum(list: values)))
     return Unit
 }
 ";
@@ -198,7 +198,7 @@ fn clamp_float_nan_bounds_trap_consistently() {
         ("nan-both", "0.0 / 0.0", "0.0 / 0.0"),
     ] {
         let source = format!(
-            "fn main() -> Unit {{\n    Log.write(message: String.from_float(value: Math.clamp_float(value: 0.0, min: {min}, max: {max})))\n    return Unit\n}}\n"
+            "fn main() -> Unit {{\n    Output.write(message: String.from_float(value: Math.clamp_float(value: 0.0, min: {min}, max: {max})))\n    return Unit\n}}\n"
         );
         assert_backends_all_fail(&format!("clamp-float-{name}.rss"), &source, &[]);
     }
@@ -209,7 +209,7 @@ fn clamp_float_accepts_nan_value_with_finite_bounds() {
     let source = "\
 fn main() -> Unit {
     let value = 0.0 / 0.0
-    Log.write(message: String.from_float(value: Math.clamp_float(value: value, min: 0.0, max: 1.0)))
+    Output.write(message: String.from_float(value: Math.clamp_float(value: value, min: 0.0, max: 1.0)))
     return Unit
 }
 ";
@@ -227,7 +227,7 @@ fn nan(a: Float, b: Float) -> Float {
 
 fn main() -> Unit {
     let value = nan(a: read 0.0, b: read 0.0)
-    Log.write(message: read String.from_bool(value: value == value))
+    Output.write(message: read String.from_bool(value: value == value))
     return Unit
 }
 ";
@@ -244,7 +244,7 @@ fn neg(value: Float) -> Float {
 
 fn main() -> Unit {
     let negative_zero = neg(value: read 0.0)
-    Log.write(message: read String.from_bool(value: negative_zero == 0.0))
+    Output.write(message: read String.from_bool(value: negative_zero == 0.0))
     return Unit
 }
 ";
@@ -262,7 +262,7 @@ fn div(a: Float, b: Float) -> Float {
 
 fn main() -> Unit {
     let infinity = div(a: read 1.0, b: read 0.0)
-    Log.write(message: read String.from_bool(value: infinity > 1000000.0))
+    Output.write(message: read String.from_bool(value: infinity > 1000000.0))
     return Unit
 }
 ";
@@ -284,9 +284,9 @@ fn main() -> Unit {
     let max = 9223372036854775807
     let near = max - 10
     let exact = near + 10
-    Log.write(message: read String.from_int(value: exact))
+    Output.write(message: read String.from_int(value: exact))
     let small = 5 + 3
-    Log.write(message: read String.from_int(value: small))
+    Output.write(message: read String.from_int(value: small))
     return Unit
 }
 ";
@@ -305,7 +305,7 @@ fn add(a: Int, b: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: add(a: read 9223372036854775807, b: read 1)))
+    Output.write(message: read String.from_int(value: add(a: read 9223372036854775807, b: read 1)))
     return Unit
 }
 ";

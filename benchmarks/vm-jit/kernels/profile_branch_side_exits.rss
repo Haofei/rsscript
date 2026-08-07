@@ -94,7 +94,7 @@ fn warm(total: Int) -> Int {
     out = out + branchy(value: 78)
     out = out + branchy(value: 79)
     out = out + branchy(value: 80)
-    Log.write(message: String.from_int(value: out))
+    Output.write(message: String.from_int(value: out))
     return out
 }
 

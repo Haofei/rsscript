@@ -32,7 +32,7 @@ fn main() -> Unit {
         index = index + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -84,7 +84,7 @@ fn main() -> Unit {
         index = index + 1
     }
 
-    Log.write(message: read String.from_int(value: List.len<Int>(list: read values)))
+    Output.write(message: read String.from_int(value: List.len<Int>(list: read values)))
     return Unit
 }
 "#;
@@ -120,7 +120,7 @@ fn main() -> Unit {
         index = index + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -175,7 +175,7 @@ fn main() -> Unit {
         second = second + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -224,7 +224,7 @@ fn main() -> Unit {
         total = total + adjust(outer)
         outer = outer + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -289,7 +289,7 @@ async fn main() -> Result<Unit, String> {
         total = await step(value: total)?
         index = index + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Ok(Unit)
 }
 "#;
@@ -329,7 +329,7 @@ async fn main() -> Option<Unit> {
         total = await step(value: total)?
         index = index + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Some(Unit)
 }
 "#;
@@ -407,7 +407,7 @@ fn main() -> Unit {
         index = index + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -482,7 +482,7 @@ fn main() -> Unit {
         i = i + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -514,7 +514,7 @@ fn main() -> Unit {
     List.push<Int>(list: mut values, value: read 3)
 
     let total = hot(values: mut values, slot: 1, replacement: 7) + List.get<Int>(list: read values, index: 1)
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -566,7 +566,7 @@ fn main() -> Unit {
     }
 
     let total = hot(values: mut values, limit: 32) + List.get<Int>(list: read values, index: 7)
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -636,7 +636,7 @@ fn main() -> Unit {
         outer = outer + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -698,7 +698,7 @@ fn main() -> Unit {
         i = i + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -748,7 +748,7 @@ fn main() -> Unit {
         i = i + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -798,7 +798,7 @@ fn main() -> Unit {
         i = i + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -849,7 +849,7 @@ fn main() -> Unit {
     }
 
     let total = sum_len(seen: read seen)
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -960,7 +960,7 @@ fn main() -> Unit {
         queue: read queue
     )
 
-    Log.write(message: read String.from_int(value: empty_score + non_empty_score))
+    Output.write(message: read String.from_int(value: empty_score + non_empty_score))
     return Unit
 }
 "#;
@@ -1016,7 +1016,7 @@ fn main() -> Unit {
     Set.insert(set: mut set, value: read 3)
     let non_empty_score = map_set_len_score(table: read table, set: read set)
 
-    Log.write(message: read String.from_int(value: empty_score + non_empty_score))
+    Output.write(message: read String.from_int(value: empty_score + non_empty_score))
     return Unit
 }
 "#;
@@ -1066,7 +1066,7 @@ fn bytes_slice_score(data: read Bytes, reps: Int) -> Int {
 fn main() -> Unit {
     let data = Bytes.from_string(value: read "abcdef")
     let total = bytes_slice_score(data: read data, reps: 3)
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -1136,7 +1136,7 @@ fn edge_score(data: read Bytes) -> Int {
 
 fn main() -> Unit {
     let data = Bytes.from_string(value: read "abcdef")
-    Log.write(message: read String.from_int(value: edge_score(data: read data)))
+    Output.write(message: read String.from_int(value: edge_score(data: read data)))
     return Unit
 }
 "#;
@@ -1180,7 +1180,7 @@ fn retained_slice(data: read Bytes) -> Bytes {
 fn main() -> Unit {
     let data = Bytes.from_string(value: read "abcdef")
     let head = retained_slice(data: read data)
-    Log.write(message: read String.from_int(value: Bytes.len(value: read head)))
+    Output.write(message: read String.from_int(value: Bytes.len(value: read head)))
     return Unit
 }
 "#;
@@ -1223,7 +1223,7 @@ fn byte_count(data: read Bytes) -> Int {
 
 fn main() -> Unit {
     let data = Bytes.from_string(value: read "abcdef")
-    Log.write(message: read String.from_int(value: byte_count(data: read data)))
+    Output.write(message: read String.from_int(value: byte_count(data: read data)))
     return Unit
 }
 "#;
@@ -1270,7 +1270,7 @@ fn string_slice_score(value: read String, reps: Int) -> Int {
 
 fn main() -> Unit {
     let total = string_slice_score(value: read "abcdef", reps: 3)
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -1320,7 +1320,7 @@ fn main() -> Unit {
         i = i + 1
     }
 
-    Log.write(message: read String.from_int(value: SortedMap.len<Int, Int>(map: read table)))
+    Output.write(message: read String.from_int(value: SortedMap.len<Int, Int>(map: read table)))
     return Unit
 }
 "#;
@@ -1375,7 +1375,7 @@ fn main() -> Unit {
         i = i + 1
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -1755,7 +1755,7 @@ fn main() -> Unit {
         }
     }
 
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -1823,7 +1823,7 @@ fn main() -> Unit {
         total = total + box.value
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -1853,7 +1853,7 @@ fn main() -> Unit {
         box.value = i
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: box.value))
+    Output.write(message: read String.from_int(value: box.value))
     return Unit
 }
 "#;
@@ -1885,7 +1885,7 @@ fn bump(box: mut Box) -> Int {
 fn main() -> Unit {
     let mut box = Box(value: 0)
     let _value = bump(box: mut box)
-    Log.write(message: read String.from_int(value: box.value))
+    Output.write(message: read String.from_int(value: box.value))
     return Unit
 }
 "#;
@@ -1928,7 +1928,7 @@ fn bump_loop(box: mut Box, limit: Int) -> Unit {
 fn main() -> Unit {
     let mut box = Box(value: 0)
     bump_loop(box: mut box, limit: 32)
-    Log.write(message: read String.from_int(value: box.value))
+    Output.write(message: read String.from_int(value: box.value))
     return Unit
 }
 "#;
@@ -2001,7 +2001,7 @@ fn hot(x: Int) -> Int {
 
 fn main() -> Unit {
     let value = hot(x: 1)
-    Log.write(message: read String.from_int(value: value))
+    Output.write(message: read String.from_int(value: value))
     return Unit
 }
 "#;

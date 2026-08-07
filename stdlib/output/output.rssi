@@ -1,0 +1,9 @@
+pub fn Output.write(message: String) -> Unit
+
+pub fn Output.write_json(value: JsonValue) -> Unit
+
+pub fn Output.error(message: String) -> Unit
+
+pub fn Output.error_json(value: JsonValue) -> Unit
+
+pub fn Output.trace(event: String, message: String) -> Unit

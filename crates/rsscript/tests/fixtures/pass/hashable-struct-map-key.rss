@@ -23,7 +23,7 @@ fn main() -> Unit {
     let n = Map.len(map: m)
 
     if here {
-        Log.write(message: "found")
+        Output.write(message: "found")
     }
     return Unit
 }

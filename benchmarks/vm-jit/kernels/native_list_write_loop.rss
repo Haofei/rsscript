@@ -33,7 +33,7 @@ fn main() -> Unit {
     List.push<Int>(list: mut values, value: 0)
 
     let total = hot(limit, values: mut values)
-    Log.write(message: String.from_int(value: total))
+    Output.write(message: String.from_int(value: total))
     return Unit
 }
 

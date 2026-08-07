@@ -210,7 +210,7 @@ fn last_top_binary_operator(toks: List<Tok>, start: Int, end: Int) -> Int {
 
 // The rightmost depth-zero `.` gives left-associative field chains a stable
 // tree: `a.b.c` becomes field(field(a, b), c). Calls are recognized first, so
-// qualified call names such as `Log.write(...)` keep their call representation.
+// qualified call names such as `Output.write(...)` keep their call representation.
 fn last_top_field_dot(toks: List<Tok>, start: Int, end: Int) -> Int {
     let mut i = start
     let mut depth = 0

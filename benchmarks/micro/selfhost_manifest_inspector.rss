@@ -66,7 +66,7 @@ fn main() -> Result<Unit, String> {
     let path = Args.get_or_default(index: 0, default: "benchmarks/micro/fixtures/package-medium/rsspkg.toml")
     match inspect(path: Path.from_string(value: path)) {
         Ok(report) => {
-            Log.write(message: report)
+            Output.write(message: report)
             return Ok(Unit)
         }
         Err(error) => {

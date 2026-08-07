@@ -16,6 +16,6 @@ fn count(xs: IntList) -> Int {
 fn main() -> Unit {
     let p: Pair<Int> = first_ok()
     let n: IntList = List.new<Int>()
-    Log.write(message: String.from_int(value: count(xs: n)))
+    Output.write(message: String.from_int(value: count(xs: n)))
     return Unit
 }

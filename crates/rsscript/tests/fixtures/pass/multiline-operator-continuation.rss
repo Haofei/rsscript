@@ -18,7 +18,7 @@ fn sum_trailing(a: Int, b: Int, c: Int) -> Int {
 fn main() -> Unit {
     let ok = is_kw_leading(word: "fn")
     let total = sum_trailing(a: 1, b: 2, c: 3)
-    Log.write(message: String.from_bool(value: ok))
-    Log.write(message: String.from_int(value: total))
+    Output.write(message: String.from_bool(value: ok))
+    Output.write(message: String.from_int(value: total))
     return Unit
 }

@@ -50,7 +50,7 @@ fn main() -> Unit {
         let b = String.concat(left: a, right: kn)
         let c = String.concat(left: b, right: "\t")
         let line = String.concat(left: c, right: esc)
-        Log.write(message: line)
+        Output.write(message: line)
         i = i + 1
     }
     return Unit

@@ -318,7 +318,7 @@ pub fn main() -> Result<Unit, JsonError> {
     )?
     let summary = lock_diff_summary_line(facts, decision)
 
-    Log.write(message: summary)
+    Output.write(message: summary)
 
     Assert.equal_int(left: decision.risk, right: facts.declared_risk)
     Assert.equal_int(left: decision.mismatches, right: 0)

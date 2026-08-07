@@ -13,18 +13,18 @@ fn describe(c: Char) -> String {
 
 fn main() -> Unit {
     let c = 'a'
-    Log.write(message: Char.to_string(value: c))
-    Log.write(message: String.from_int(value: Char.to_code(value: c)))
-    Log.write(message: describe(c))
-    Log.write(message: describe(c: '\n'))
-    Log.write(message: describe(c: '\t'))
-    Log.write(message: describe(c: '\\'))
-    Log.write(message: describe(c: '\''))
-    Log.write(message: describe(c: '"'))
-    Log.write(message: describe(c: '\0'))
-    Log.write(message: describe(c: 'z'))
+    Output.write(message: Char.to_string(value: c))
+    Output.write(message: String.from_int(value: Char.to_code(value: c)))
+    Output.write(message: describe(c))
+    Output.write(message: describe(c: '\n'))
+    Output.write(message: describe(c: '\t'))
+    Output.write(message: describe(c: '\\'))
+    Output.write(message: describe(c: '\''))
+    Output.write(message: describe(c: '"'))
+    Output.write(message: describe(c: '\0'))
+    Output.write(message: describe(c: 'z'))
     if 'x' == 'x' {
-        Log.write(message: "eq")
+        Output.write(message: "eq")
     }
     return Unit
 }

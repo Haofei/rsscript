@@ -112,7 +112,7 @@ fn build_session(owner: User, trace_id: String) -> fresh Session {
 fn inspect_session(session: Session) -> Unit {
     let maybe_owner = Weak.upgrade(value: session.owner)
     audit_step(callback: || {
-        Log.write(message: session.trace_id)
+        Output.write(message: session.trace_id)
     })
 
     return Unit
@@ -198,7 +198,7 @@ fn process_image_http(plan: UploadPlan, cache: mut RetainedImageStore) -> Result
 }
 
 fn record_audit(trace_id: String) -> Result<Unit, HttpError> {
-    Log.write(message: trace_id)
+    Output.write(message: trace_id)
     return Ok(Unit)
 }
 
@@ -226,7 +226,7 @@ fn handle_request(
     let status = SettingsStore.name(store: config_store)
     persist_trace(cache: mut status_cache, trace_id: item.plan.trace_id, status)
     Tally.add(counter: mut counter, amount: 1)
-    Log.write(message: item.plan.trace_id)
+    Output.write(message: item.plan.trace_id)
 
     return OutboundMessage.ok(body: status)?
 }

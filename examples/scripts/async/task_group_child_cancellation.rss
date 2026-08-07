@@ -24,6 +24,6 @@ fn run_workers() -> Result<Unit, TimerError> {
 
 fn main() -> Result<Unit, TimerError> {
     run_workers()?
-    Log.write(message: "task group children done")
+    Output.write(message: "task group children done")
     return Ok(Unit)
 }

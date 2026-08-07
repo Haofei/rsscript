@@ -12,8 +12,8 @@ fn main() -> Unit {
     match read expr {
         Expr { left, right } => {
             let total = left + right
-            Log.write(message: render(value: total))
-            Log.trace(event: "eval.parity", message: "done")
+            Output.write(message: render(value: total))
+            Output.trace(event: "eval.parity", message: "done")
         }
     }
 }

@@ -1,7 +1,7 @@
 fn main() -> Unit {
     let _ = true != false
     if true {
-        Log.write(message: "bool literals ran")
+        Output.write(message: "bool literals ran")
     }
     return Unit
 }

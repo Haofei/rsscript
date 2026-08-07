@@ -223,7 +223,7 @@ provider = "test"
         format!(
             "{}\n{}",
             include_str!("../../../stdlib/os/os.rssi"),
-            include_str!("../../../stdlib/log/log.rssi")
+            include_str!("../../../stdlib/output/output.rssi")
         ),
     )
     .expect("host interface should write");
@@ -242,7 +242,7 @@ fn decorate(value: read String) -> String {
 fn main() -> Unit {
     let args = Args.all()
     let joined = List.join<String>(list: read args, separator: read "|")
-    Log.write(message: read decorate(value: read joined))
+    Output.write(message: read decorate(value: read joined))
     return Unit
 }
 "#,
@@ -315,7 +315,7 @@ async fn add_after_sleep(value: Int) -> Result<Int, TimerError> {
 
 async fn main() -> Result<Unit, TimerError> {
     let value = await add_after_sleep(value: 4)?
-    Log.write(message: read String.from_int(value: value))
+    Output.write(message: read String.from_int(value: value))
 
     let deadline = Deadline.after_ms(ms: 1)
     await Timer.sleep_until(deadline: read deadline)?
@@ -323,7 +323,7 @@ async fn main() -> Result<Unit, TimerError> {
     let source = CancellationSource.new()
     let token = CancellationSource.token(source: read source)
     await Timer.sleep_cancellable(ms: 1, token: read token)?
-    Log.write(message: read "async-done")
+    Output.write(message: read "async-done")
     return Ok(Unit)
 }
 "#;
@@ -346,10 +346,10 @@ async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
 fn main() -> Result<Unit, TimerError> {
     select {
         value = await after(value: 7, ms: 1)? => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         other = await after(value: 9, ms: 100)? => {
-            Log.write(message: read String.from_int(value: other))
+            Output.write(message: read String.from_int(value: other))
         }
     }
     return Ok(Unit)
@@ -377,8 +377,8 @@ fn main() -> Result<Unit, String> {
 
         let u = await user?
         let p = await profile?
-        Log.write(message: read u)
-        Log.write(message: read p)
+        Output.write(message: read u)
+        Output.write(message: read p)
     }
     return Ok(Unit)
 }
@@ -402,11 +402,11 @@ async fn main() -> Result<Unit, FileError> {
     let path = Path.from_string(value: read "ASYNC_FILE_PATH")
     await File.write_string_async(path: read path, text: read "hello async")?
     let text = await File.read_all_string_async(path: read path)?
-    Log.write(message: read text)
+    Output.write(message: read text)
 
     await File.write_async(path: read path, data: read Bytes.from_string(value: read "bytes"))?
     let bytes = await File.read_all_async(path: read path)?
-    Log.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
+    Output.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
     return Ok(Unit)
 }
 "#;
@@ -425,22 +425,22 @@ fn parity_async_process_intrinsics() {
 
 async fn main() -> Result<Unit, String> {
     let output = await Process.run_async(command: read "printf", args: read ["ok"])?
-    Log.write(message: read String.from_int(value: output.status))
+    Output.write(message: read String.from_int(value: output.status))
 
     let stdout = await Process.run_stdout_async(command: read "printf", args: read ["stdout"])?
-    Log.write(message: read stdout)
+    Output.write(message: read stdout)
 
     let timeout_output = await Process.run_timeout_async(command: read "printf", args: read ["timeout"], timeout_ms: 1000)?
-    Log.write(message: read String.from_int(value: timeout_output.status))
+    Output.write(message: read String.from_int(value: timeout_output.status))
 
     let timeout_stdout = await Process.run_stdout_timeout_async(command: read "printf", args: read ["timeout-stdout"], timeout_ms: 1000)?
-    Log.write(message: read timeout_stdout)
+    Output.write(message: read timeout_stdout)
 
     let many = await Process.run_many_stdout_async(command: read "printf", args: read [], appended_args: read ["a", "b"], jobs: 2)?
-    Log.write(message: read List.join<String>(list: read many, separator: read "|"))
+    Output.write(message: read List.join<String>(list: read many, separator: read "|"))
 
     let many_timeout = await Process.run_many_stdout_timeout_async(command: read "printf", args: read [], appended_args: read ["c", "d"], jobs: 2, timeout_ms: 1000)?
-    Log.write(message: read List.join<String>(list: read many_timeout, separator: read "|"))
+    Output.write(message: read List.join<String>(list: read many_timeout, separator: read "|"))
 
     let request = ProcessRequest(
         command: "cat",
@@ -453,7 +453,7 @@ async fn main() -> Result<Unit, String> {
         output_cap_bytes: 0,
     )
     let request_output = await Process.run_request_async(request: read request)?
-    Log.write(message: read request_output.stdout)
+    Output.write(message: read request_output.stdout)
 
     let cancellable_request = ProcessRequest(
         command: "printf",
@@ -468,7 +468,7 @@ async fn main() -> Result<Unit, String> {
     let source = CancellationSource.new()
     let token = CancellationSource.token(source: read source)
     let cancellable_output = await Process.run_request_cancellable_async(request: read cancellable_request, token: read token)?
-    Log.write(message: read cancellable_output.stdout)
+    Output.write(message: read cancellable_output.stdout)
     return Ok(Unit)
 }
 "#;
@@ -521,7 +521,7 @@ fn eval_string_len_matches_lowered_rust_for_utf8_bytes() {
     let source = r#"
 fn main() -> Unit {
     let len = String.len(value: read "é")
-    Log.write(message: read String.from_int(value: len))
+    Output.write(message: read String.from_int(value: len))
 }
 "#;
     let eval =
@@ -633,8 +633,8 @@ pub fn Host.tag(value: Int) -> String
 "#;
     let source = r#"
 fn main() -> Unit {
-    Log.write(message: read Host.echo(message: read "hello"))
-    Log.write(message: read Host.tag(value: 7))
+    Output.write(message: read Host.echo(message: read "hello"))
+    Output.write(message: read Host.tag(value: 7))
     return Unit
 }
 "#;
@@ -660,7 +660,7 @@ fn eval_reports_unbound_external_declarations() {
     let interface = "pub fn Host.echo(message: read String) -> String\n";
     let source = r#"
 fn main() -> Unit {
-    Log.write(message: read Host.echo(message: read "hello"))
+    Output.write(message: read Host.echo(message: read "hello"))
     return Unit
 }
 "#;
@@ -736,8 +736,8 @@ pub fn Beta.describe(self: read Beta) -> String
 fn main() -> Unit {
     let alpha = Alpha.open()
     let beta = Beta.open()
-    Log.write(message: read alpha.describe())
-    Log.write(message: read beta.describe())
+    Output.write(message: read alpha.describe())
+    Output.write(message: read beta.describe())
     return Unit
 }
 "#;
@@ -774,13 +774,13 @@ fn is_even(value: Int) -> Bool {
 fn main() -> Unit {
     let numbers: List<Int> = [1, 2, 3, 4, 5]
 
-    Log.write(message: read String.from_bool(value: List.all<Int>(list: read numbers, predicate: |item| {
+    Output.write(message: read String.from_bool(value: List.all<Int>(list: read numbers, predicate: |item| {
         return item > 0
     })))
-    Log.write(message: read String.from_bool(value: List.any<Int>(list: read numbers, predicate: |item| {
+    Output.write(message: read String.from_bool(value: List.any<Int>(list: read numbers, predicate: |item| {
         return item == 2
     })))
-    Log.write(message: read String.from_int(value: List.count_where<Int>(list: read numbers, predicate: |item| {
+    Output.write(message: read String.from_int(value: List.count_where<Int>(list: read numbers, predicate: |item| {
         return item > 3
     })))
 
@@ -788,25 +788,25 @@ fn main() -> Unit {
         return item > 3
     }) {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "find-none")
+            Output.write(message: read "find-none")
         }
     }
 
     let parts = List.partition<Int>(list: read numbers, predicate: |item| {
         return is_even(value: item)
     })
-    Log.write(message: read String.from_int(value: List.len<Int>(list: read parts[0])))
-    Log.write(message: read String.from_int(value: List.len<Int>(list: read parts[1])))
+    Output.write(message: read String.from_int(value: List.len<Int>(list: read parts[0])))
+    Output.write(message: read String.from_int(value: List.len<Int>(list: read parts[1])))
 
     let flattened = List.flat_map<Int, Int>(list: read numbers, mapper: |item| {
         let values: List<Int> = [item, item + 10]
         return values
     })
-    Log.write(message: read String.from_int(value: List.len<Int>(list: read flattened)))
-    Log.write(message: read String.from_int(value: flattened[1]))
+    Output.write(message: read String.from_int(value: List.len<Int>(list: read flattened)))
+    Output.write(message: read String.from_int(value: flattened[1]))
 
     let grouped = List.group_by<Int, String>(list: read numbers, key: |item| {
         if is_even(value: item) {
@@ -816,10 +816,10 @@ fn main() -> Unit {
     })
     match Map.get(map: read grouped, key: read "even") {
         Some(items) => {
-            Log.write(message: read String.from_int(value: List.len(list: read items)))
+            Output.write(message: read String.from_int(value: List.len(list: read items)))
         }
         None => {
-            Log.write(message: read "even-missing")
+            Output.write(message: read "even-missing")
         }
     }
 
@@ -827,10 +827,10 @@ fn main() -> Unit {
         return Ok(state + item)
     }) {
         Ok(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
     match List.try_fold<Int, Int, String>(list: read numbers, initial: read 0, folder: |state, item| {
@@ -840,10 +840,10 @@ fn main() -> Unit {
         return Ok(state + item)
     }) {
         Ok(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
 
@@ -856,30 +856,30 @@ fn main() -> Unit {
     })
     match Map.get<String, Int>(map: read mapped, key: read "a") {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "mapped-missing")
+            Output.write(message: read "mapped-missing")
         }
     }
 
     let filtered = Map.filter<String, Int>(map: read mapped, predicate: |key, value| {
         return key == "b" && value > 10
     })
-    Log.write(message: read String.from_int(value: Map.len<String, Int>(map: read filtered)))
+    Output.write(message: read String.from_int(value: Map.len<String, Int>(map: read filtered)))
 
     let mut single = Map<String, Int>.new()
     Map.insert<String, Int>(map: mut single, key: read "only", value: read 8)
     Map.for_each<String, Int>(map: read single, callback: |key, value| {
-        Log.write(message: read key)
-        Log.write(message: read String.from_int(value: value))
+        Output.write(message: read key)
+        Output.write(message: read String.from_int(value: value))
         return Unit
     })
 
     let folded = Map.fold<String, Int, Int>(map: read left, initial: read 0, folder: |state, key, value| {
         return state + value
     })
-    Log.write(message: read String.from_int(value: folded))
+    Output.write(message: read String.from_int(value: folded))
 
     match Map.try_fold<String, Int, Int, String>(map: read left, initial: read 0, folder: |state, key, value| {
         if key == "b" {
@@ -888,10 +888,10 @@ fn main() -> Unit {
         return Ok(state + value)
     }) {
         Ok(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
 
@@ -903,18 +903,18 @@ fn main() -> Unit {
     })
     match Map.get<String, Int>(map: read merged, key: read "b") {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "merge-b-missing")
+            Output.write(message: read "merge-b-missing")
         }
     }
     match Map.get<String, Int>(map: read merged, key: read "c") {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "merge-c-missing")
+            Output.write(message: read "merge-c-missing")
         }
     }
     return Unit
@@ -987,8 +987,8 @@ pub fn Host.echo(message: read String) -> String
     let source = r#"
 fn main() -> Unit {
     let handle = Host.open()
-    Log.write(message: read Host.describe(handle: read handle))
-    Log.write(message: read Host.echo(message: read "native"))
+    Output.write(message: read Host.describe(handle: read handle))
+    Output.write(message: read Host.echo(message: read "native"))
     return Unit
 }
 "#;
@@ -1051,7 +1051,7 @@ pub fn echo(message: &String) -> String {
             ("host-bindings.rssi".to_string(), interface.to_string()),
             (
                 "host-log.rssi".to_string(),
-                include_str!("../../../stdlib/log/log.rssi").to_string(),
+                include_str!("../../../stdlib/output/output.rssi").to_string(),
             ),
         ],
         &[NativeRustDependency {
@@ -1208,8 +1208,8 @@ pub fn echo(message: &String) -> String {
 // parity: runtime:List.skip runtime:List.slice runtime:List.sort runtime:List.sort_by
 // parity: runtime:List.sort_with runtime:List.sum runtime:List.take
 // parity: runtime:List.to_json_strings runtime:List.to_json_values runtime:List.try_fold runtime:List.zip
-// parity: runtime:Log.error runtime:Log.error_json runtime:Log.trace runtime:Log.write
-// parity: runtime:Log.write_json
+// parity: runtime:Output.error runtime:Output.error_json runtime:Output.trace runtime:Output.write
+// parity: runtime:Output.write_json
 // parity: runtime:Env.current_dir runtime:Env.get runtime:Env.get_or_default
 // parity: runtime:Env.home_dir runtime:Env.run_workspace_root runtime:Env.set
 // parity: runtime:Env.set_current_dir runtime:Env.temp_dir

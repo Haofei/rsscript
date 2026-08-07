@@ -83,12 +83,6 @@ impl RegVm {
     ) -> Result<VmValue, EvalError> {
         loop {
             let Some(tid) = self.ready_queue.pop_front() else {
-                // Nothing runnable: advance the clock to the earliest sleep
-                // deadline and wake those timers. If there are no sleepers either,
-                // every remaining task is blocked forever — a deadlock.
-                if self.wake_due_sleepers()? {
-                    continue;
-                }
                 return Err(EvalError::Runtime(
                     "reg VM async scheduler stalled: every task is blocked (deadlock).".to_string(),
                 ));
@@ -126,41 +120,6 @@ impl RegVm {
         }
     }
 
-    /// Idle step: with no ready task, find the earliest `Sleep` deadline, sleep
-    /// the host thread until then, and wake every timer that is now due. Returns
-    /// `false` when there are no sleeping tasks (so the caller can report a stall).
-    pub(super) fn wake_due_sleepers(&mut self) -> Result<bool, EvalError> {
-        let earliest = self
-            .tasks
-            .values()
-            .filter_map(|slot| match &slot.wait {
-                Some(Wait::Sleep { deadline, .. }) => Some(*deadline),
-                _ => None,
-            })
-            .min();
-        let Some(deadline) = earliest else {
-            return Ok(false);
-        };
-        let now = std::time::Instant::now();
-        if deadline > now {
-            std::thread::sleep(deadline - now);
-        }
-        let now = std::time::Instant::now();
-        let due: Vec<TaskId> = self
-            .tasks
-            .iter()
-            .filter(|(_, slot)| {
-                matches!(&slot.wait, Some(Wait::Sleep { deadline, .. }) if *deadline <= now)
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        for tid in due {
-            self.resolve_wait(tid)?;
-        }
-        self.satisfy_waiters()?;
-        Ok(true)
-    }
-
     /// Repeatedly wake any parked task whose wait is now satisfiable, until no
     /// further progress (a fixpoint), so a single send can cascade-wake a chain.
     pub(super) fn satisfy_waiters(&mut self) -> Result<(), EvalError> {
@@ -175,8 +134,6 @@ impl RegVm {
                     Some(Wait::Join { task }) => {
                         self.tasks.get(task).is_some_and(|s| s.done.is_some())
                     }
-                    // Sleeps are woken by the scheduler's clock step, not here.
-                    Some(Wait::Sleep { .. }) => false,
                     Some(Wait::Select { handles, .. }) => handles
                         .iter()
                         .any(|h| self.tasks.get(h).is_some_and(|s| s.done.is_some())),
@@ -239,9 +196,6 @@ impl RegVm {
                 // `AwaitJoin` immediate-path note).
                 self.tasks.remove(&task);
                 self.complete_wait(tid, result);
-            }
-            Wait::Sleep { .. } => {
-                self.complete_wait(tid, value_ok(VmValue::Unit));
             }
             Wait::Select {
                 handles,
@@ -309,17 +263,6 @@ impl RegVm {
         self.channels
             .get(&channel)
             .is_none_or(|state| state.receiver_closed || state.queue.len() < state.capacity)
-    }
-
-    /// Park the running task for `ms` milliseconds (clamped at 0). The scheduler's
-    /// clock step wakes it when the deadline passes; the `await` result is `Ok`.
-    pub(super) fn park_sleep_ms(&mut self, ms: i64) {
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_millis(ms.max(0) as u64);
-        self.suspension = Some(Suspension {
-            wait: Wait::Sleep { deadline },
-            resume_dst: usize::MAX,
-        });
     }
 
     /// True when `Sender.send` on an open channel would block (buffer full).

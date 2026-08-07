@@ -14,12 +14,12 @@ fn checked_double(n: Int) -> Option<Int> {
 
 fn main() -> Unit {
     match checked_double(n: 21) {
-        Some(x) => { Log.write(message: String.from_int(value: x)) }
-        None => { Log.write(message: "none") }
+        Some(x) => { Output.write(message: String.from_int(value: x)) }
+        None => { Output.write(message: "none") }
     }
     match checked_double(n: 0) {
-        Some(x) => { Log.write(message: String.from_int(value: x)) }
-        None => { Log.write(message: "none") }
+        Some(x) => { Output.write(message: String.from_int(value: x)) }
+        None => { Output.write(message: "none") }
     }
     return Unit
 }

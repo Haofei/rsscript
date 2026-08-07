@@ -725,7 +725,7 @@ fn selfhost_ast_control_type_rule_matches_rs0209_conditions() {
         return Unit
     }
     for item in name {
-        Log.write(message: read "item")
+        Output.write(message: read "item")
     }
     if true {
         if count {

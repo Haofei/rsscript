@@ -210,12 +210,12 @@ fn main() -> Unit {
         }
     }
     if errLine < 0 {
-        Log.write(message: "OK")
+        Output.write(message: "OK")
     } else {
         let a = String.concat(left: "ERR ", right: String.from_int(value: errLine))
         let b = String.concat(left: a, right: " ")
         let c = String.concat(left: b, right: String.from_int(value: errCol))
-        Log.write(message: c)
+        Output.write(message: c)
     }
     return Unit
 }

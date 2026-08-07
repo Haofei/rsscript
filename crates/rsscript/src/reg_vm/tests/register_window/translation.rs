@@ -1007,7 +1007,7 @@ fn hot(line: read String, delimiter: read String, limit: Int) -> Int {
 
 fn main() -> Unit {
     let total = hot(line: read "a,b,c", delimiter: read ",", limit: 10)
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -1100,7 +1100,7 @@ fn hot(line: read String, fill: read String, limit: Int) -> Int {
 
 fn main() -> Unit {
     let total = hot(line: read "a", fill: read "é", limit: 10)
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -1161,7 +1161,7 @@ fn hot(line: read String, delimiter: read String, fill: read String, prefix: rea
 
 fn main() -> Unit {
     let total = hot(line: read "alpha,beta,gamma", delimiter: read ",", fill: read "0", prefix: read "alpha", limit: 10)
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;

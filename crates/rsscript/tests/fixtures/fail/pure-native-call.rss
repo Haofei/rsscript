@@ -3,6 +3,6 @@
 fn noisy(message: String) -> Unit
 
 {
-    Log.write(message)
+    Output.write(message)
     return Unit
 }

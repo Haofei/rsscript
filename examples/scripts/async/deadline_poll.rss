@@ -4,12 +4,12 @@ fn main() -> Unit {
     let mut steps = 0
     while steps < 3 {
         if Deadline.is_expired(deadline) {
-            Log.write(message: "deadline expired early")
+            Output.write(message: "deadline expired early")
             return Unit
         }
         steps = steps + 1
     }
     Assert.equal_int(left: steps, right: 3)
-    Log.write(message: "deadline poll ok")
+    Output.write(message: "deadline poll ok")
     return Unit
 }

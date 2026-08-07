@@ -23,7 +23,7 @@ fn main() -> Unit {
     while i < List.len(list: diagnostics.items) {
         let diagnostic = List.get<Diagnostic>(list: diagnostics.items, index: i)
         if diagnostic.code == "RS0209" {
-            Log.write(message: String.concat(left: String.concat(left: String.concat(left: String.concat(left: String.concat(left: diagnostic.code, right: "\t"), right: String.from_int(value: diagnostic.line)), right: "\t"), right: String.from_int(value: diagnostic.column)), right: String.concat(left: "\t", right: String.from_int(value: diagnostic.length))))
+            Output.write(message: String.concat(left: String.concat(left: String.concat(left: String.concat(left: String.concat(left: diagnostic.code, right: "\t"), right: String.from_int(value: diagnostic.line)), right: "\t"), right: String.from_int(value: diagnostic.column)), right: String.concat(left: "\t", right: String.from_int(value: diagnostic.length))))
         }
         i = i + 1
     }

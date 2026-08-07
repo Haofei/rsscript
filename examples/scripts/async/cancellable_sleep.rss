@@ -9,7 +9,7 @@ async fn main() -> Result<Unit, TimerError> {
     await Timer.sleep_cancellable(ms: 100000, token)?
 
     if CancellationToken.is_cancelled(token) {
-        Log.write(message: "woke on cancel")
+        Output.write(message: "woke on cancel")
     }
     return Ok(Unit)
 }

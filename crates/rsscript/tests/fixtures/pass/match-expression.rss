@@ -32,5 +32,5 @@ fn area(s: Shape) -> Int {
 fn main() -> Unit {
     let d = North
     let name = direction_name(d)
-    Log.write(message: name)
+    Output.write(message: name)
 }

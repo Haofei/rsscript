@@ -17,6 +17,6 @@ fn bin(a: Node, b: Node) -> fresh Node {
 
 fn main() -> Unit {
     let p = bin(a: leaf(tag: 1), b: leaf(tag: 2))
-    Log.write(message: Int.to_string(value: List.len(list: p.src)))
+    Output.write(message: Int.to_string(value: List.len(list: p.src)))
     return Unit
 }

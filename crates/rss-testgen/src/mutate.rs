@@ -33,7 +33,7 @@ pub const MUTATIONS: &[Mutation] = &[
     Mutation {
         name: "unknown-binding",
         expected_code: "RS0026",
-        body: "    Log.write(message: read mm_undefined_binding)",
+        body: "    Output.write(message: read mm_undefined_binding)",
     },
     Mutation {
         name: "reassign-immutable",
@@ -44,7 +44,7 @@ pub const MUTATIONS: &[Mutation] = &[
         name: "unhashable-map-key",
         expected_code: "RS0032",
         body: "    let mm = Set.new<Float>()\n    \
-               Log.write(message: read String.from_int(value: Set.len(set: read mm)))",
+               Output.write(message: read String.from_int(value: Set.len(set: read mm)))",
     },
     Mutation {
         name: "try-in-non-result-fn",

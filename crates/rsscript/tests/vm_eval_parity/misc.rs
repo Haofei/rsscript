@@ -17,16 +17,16 @@ fn sign(value: Int) -> fresh String {
 
 fn main() -> Unit {
     let total = 6 * 7 / 3 - 2 + 1
-    Log.write(message: read String.from_int(value: total))
-    Log.write(message: read sign(value: total))
-    Log.write(message: read sign(value: 0 - 5))
+    Output.write(message: read String.from_int(value: total))
+    Output.write(message: read sign(value: total))
+    Output.write(message: read sign(value: 0 - 5))
     if 1 < 2 && 3 >= 3 {
-        Log.write(message: read "and-true")
+        Output.write(message: read "and-true")
     }
     if 5 < 1 || 2 != 2 {
-        Log.write(message: read "or-true")
+        Output.write(message: read "or-true")
     } else {
-        Log.write(message: read "or-false")
+        Output.write(message: read "or-false")
     }
     return Unit
 }
@@ -55,7 +55,7 @@ fn main() -> Unit {
     List.push(list: mut xs, value: read 3)
     List.push(list: mut xs, value: read 4)
     let evens = List.filter(list: read xs, predicate: is_even)
-    Log.write(message: read String.from_int(value: List.len(list: read evens)))
+    Output.write(message: read String.from_int(value: List.len(list: read evens)))
     return Unit
 }
 "#;
@@ -80,11 +80,11 @@ fn main() -> Unit {
         Point { x, y } => {
             let mut sum = x + y
             sum = sum + 100
-            Log.write(message: read String.from_int(value: sum))
+            Output.write(message: read String.from_int(value: sum))
         }
     }
-    Log.write(message: read String.from_int(value: point.x))
-    Log.write(message: read String.from_int(value: point.y))
+    Output.write(message: read String.from_int(value: point.x))
+    Output.write(message: read String.from_int(value: point.y))
     return Unit
 }
 "#;
@@ -104,7 +104,7 @@ struct Tally {
 
 fn main() -> Unit {
     let shared = manage Tally(value: 7)
-    Log.write(message: read String.from_int(value: shared.value))
+    Output.write(message: read String.from_int(value: shared.value))
     return Unit
 }
 "#;
@@ -135,34 +135,34 @@ fn check(ok: Bool) -> Result<Int, String> {
 fn main() -> Unit {
     match lookup(found: true) {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "none")
+            Output.write(message: read "none")
         }
     }
     match lookup(found: false) {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "none")
+            Output.write(message: read "none")
         }
     }
     match check(ok: true) {
         Ok(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         Err(message) => {
-            Log.write(message: read message)
+            Output.write(message: read message)
         }
     }
     match check(ok: false) {
         Ok(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         Err(message) => {
-            Log.write(message: read message)
+            Output.write(message: read message)
         }
     }
     return Unit
@@ -194,142 +194,142 @@ fn checked(ok: Bool) -> Result<Int, String> {
 
 fn main() -> Unit {
     if Option.is_some<Int>(value: read maybe(found: true)) {
-        Log.write(message: read "some")
+        Output.write(message: read "some")
     }
     if Option.is_none<Int>(value: read maybe(found: false)) {
-        Log.write(message: read "none")
+        Output.write(message: read "none")
     }
-    Log.write(message: read String.from_int(value: Option.unwrap_or<Int>(value: read maybe(found: false), default: read 9)))
-    Log.write(message: read String.from_int(value: Option.unwrap_or_else<Int>(value: read maybe(found: true), default: || {
+    Output.write(message: read String.from_int(value: Option.unwrap_or<Int>(value: read maybe(found: false), default: read 9)))
+    Output.write(message: read String.from_int(value: Option.unwrap_or_else<Int>(value: read maybe(found: true), default: || {
         return 14
     })))
-    Log.write(message: read String.from_int(value: Option.unwrap_or_else<Int>(value: read maybe(found: false), default: || {
+    Output.write(message: read String.from_int(value: Option.unwrap_or_else<Int>(value: read maybe(found: false), default: || {
         return 15
     })))
     match Option.ok_or<Int, String>(value: read maybe(found: true), error: read "missing") {
         Ok(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
     match Option.ok_or<Int, String>(value: read maybe(found: false), error: read "missing") {
         Ok(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
-    Log.write(message: read String.from_int(value: Option.unwrap_or<Int>(value: read Option.or<Int>(value: read maybe(found: false), fallback: read Some(11)), default: read 0)))
+    Output.write(message: read String.from_int(value: Option.unwrap_or<Int>(value: read Option.or<Int>(value: read maybe(found: false), fallback: read Some(11)), default: read 0)))
     let offset = 2
     match Option.map<Int, Int>(value: read maybe(found: true), mapper: |item| {
         return item + offset
     }) {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "map-none")
+            Output.write(message: read "map-none")
         }
     }
     match Option.and_then<Int, Int>(value: read maybe(found: true), mapper: |item| {
         return Some(item + 5)
     }) {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "and-then-none")
+            Output.write(message: read "and-then-none")
         }
     }
     match Option.filter<Int>(value: read maybe(found: true), predicate: |item| {
         return item > 3
     }) {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "filter-none")
+            Output.write(message: read "filter-none")
         }
     }
     match Option.filter<Int>(value: read maybe(found: true), predicate: |item| {
         return item > 10
     }) {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "filter-none")
+            Output.write(message: read "filter-none")
         }
     }
 
     if Result.is_ok<Int, String>(value: read checked(ok: true)) {
-        Log.write(message: read "ok")
+        Output.write(message: read "ok")
     }
     if Result.is_err<Int, String>(value: read checked(ok: false)) {
-        Log.write(message: read "err")
+        Output.write(message: read "err")
     }
-    Log.write(message: read String.from_int(value: Result.unwrap_or<Int, String>(value: read checked(ok: false), default: read 12)))
-    Log.write(message: read String.from_int(value: Result.unwrap_or_else<Int, String>(result: read checked(ok: true), fallback: |error| {
+    Output.write(message: read String.from_int(value: Result.unwrap_or<Int, String>(value: read checked(ok: false), default: read 12)))
+    Output.write(message: read String.from_int(value: Result.unwrap_or_else<Int, String>(result: read checked(ok: true), fallback: |error| {
         return String.len(value: read error)
     })))
-    Log.write(message: read String.from_int(value: Result.unwrap_or_else<Int, String>(result: read checked(ok: false), fallback: |error| {
+    Output.write(message: read String.from_int(value: Result.unwrap_or_else<Int, String>(result: read checked(ok: false), fallback: |error| {
         return String.len(value: read error)
     })))
     match Result.ok<Int, String>(value: read checked(ok: true)) {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "ok-none")
+            Output.write(message: read "ok-none")
         }
     }
     match Result.err<Int, String>(value: read checked(ok: false)) {
         Some(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
         None => {
-            Log.write(message: read "err-none")
+            Output.write(message: read "err-none")
         }
     }
     match Result.err_message<Int, String>(value: read checked(ok: false)) {
         Some(message) => {
-            Log.write(message: read message)
+            Output.write(message: read message)
         }
         None => {
-            Log.write(message: read "message-none")
+            Output.write(message: read "message-none")
         }
     }
     match Result.map<Int, String, Int>(result: read checked(ok: true), mapper: |item| {
         return item + 4
     }) {
         Ok(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
     match Result.and_then<Int, String, Int>(result: read checked(ok: true), mapper: |item| {
         return Ok(item + 6)
     }) {
         Ok(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
     match Result.map_error<Int, String, String>(result: read checked(ok: false), mapper: |error| {
         return String.concat(left: read error, right: read "!")
     }) {
         Ok(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
     return Unit
@@ -358,8 +358,8 @@ fn main() -> Unit {
         }
         total = total + i
     }
-    Log.write(message: read String.from_int(value: total))
-    Log.write(message: read String.from_int(value: i))
+    Output.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: i))
     return Unit
 }
 "#;
@@ -396,8 +396,8 @@ fn direction_name(d: read Direction) -> fresh String {
 fn main() -> Unit {
     let south = South
     let west = West
-    Log.write(message: read direction_name(d: read south))
-    Log.write(message: read direction_name(d: read west))
+    Output.write(message: read direction_name(d: read south))
+    Output.write(message: read direction_name(d: read west))
     return Unit
 }
 "#;
@@ -408,11 +408,11 @@ fn main() -> Unit {
 fn parity_logging_stdout_and_stderr() {
     let source = r#"
 fn main() -> Unit {
-    Log.write(message: read "stdout line")
-    Log.write_json(value: read Json.value(value: read {"stream": "stdout", "count": 1}))
-    Log.error(message: read "stderr line")
-    Log.error_json(value: read Json.value(value: read {"stream": "stderr", "count": 2}))
-    Log.trace(event: read "parity.event", message: read "traced")
+    Output.write(message: read "stdout line")
+    Output.write_json(value: read Json.value(value: read {"stream": "stdout", "count": 1}))
+    Output.error(message: read "stderr line")
+    Output.error_json(value: read Json.value(value: read {"stream": "stderr", "count": 2}))
+    Output.trace(event: read "parity.event", message: read "traced")
     return Unit
 }
 "#;
@@ -424,9 +424,9 @@ fn parity_url_intrinsics() {
     let source = r#"
 fn main() -> Unit {
     let direct = Url.from_string(value: read "https://example.test/a?b=1")
-    Log.write(message: read Url.to_string(url: read direct))
+    Output.write(message: read Url.to_string(url: read direct))
     let from_method: Url = "https://example.test/from-method".to_url()
-    Log.write(message: read Url.to_string(url: read from_method))
+    Output.write(message: read Url.to_string(url: read from_method))
     return Unit
 }
 "#;
@@ -439,65 +439,65 @@ fn parity_encoding_intrinsics() {
 
 fn main() -> Unit {
     let encoded = Base64.encode(value: read "rsscript")
-    Log.write(message: read encoded)
+    Output.write(message: read encoded)
 
     match Base64.decode_string(text: read encoded) {
-        Ok(value) => Log.write(message: read value)
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Ok(value) => Output.write(message: read value)
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     let bytes = String.to_bytes(value: read "hex")
-    Log.write(message: read Base64.encode_bytes(value: read bytes))
+    Output.write(message: read Base64.encode_bytes(value: read bytes))
 
     match Base64.decode(text: read "%%%") {
-        Ok(value) => Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Ok(value) => Output.write(message: read String.from_int(value: Bytes.len(value: read value)))
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     let hexed = Hex.encode_string(value: read "Az")
-    Log.write(message: read hexed)
-    Log.write(message: read Hex.encode(value: read bytes))
+    Output.write(message: read hexed)
+    Output.write(message: read Hex.encode(value: read bytes))
 
     match Hex.decode(text: read hexed) {
-        Ok(value) => Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Ok(value) => Output.write(message: read String.from_int(value: Bytes.len(value: read value)))
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     match Hex.decode(text: read "not-hex") {
-        Ok(value) => Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Ok(value) => Output.write(message: read String.from_int(value: Bytes.len(value: read value)))
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     match Hex.decode(text: read "1f8b08000000000002ff4b4c4a0600c241243503000000") {
         Ok(gzipped) => {
             match Gzip.decompress_bytes(value: read gzipped) {
                 Ok(value) => {
-                    Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
-                    Log.write(message: read Hex.encode(value: read value))
+                    Output.write(message: read String.from_int(value: Bytes.len(value: read value)))
+                    Output.write(message: read Hex.encode(value: read value))
                 }
-                Err(error) => Log.write(message: read DecodeError.message(error: read error))
+                Err(error) => Output.write(message: read DecodeError.message(error: read error))
             }
         }
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     let bad_gzip = String.to_bytes(value: read "not gzip")
     match Gzip.decompress_bytes(value: read bad_gzip) {
-        Ok(value) => Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Ok(value) => Output.write(message: read String.from_int(value: Bytes.len(value: read value)))
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     let component = Url.encode_component(value: read "a b/é?x=1")
-    Log.write(message: read component)
+    Output.write(message: read component)
 
     match Url.decode_component(value: read component) {
-        Ok(value) => Log.write(message: read value)
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Ok(value) => Output.write(message: read value)
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     match Url.decode_component(value: read "%FF") {
-        Ok(value) => Log.write(message: read value)
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Ok(value) => Output.write(message: read value)
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     return Unit
@@ -552,12 +552,12 @@ fn ok_or(r: read Result<Int, String>) -> fresh String {
 }
 
 fn main() -> Unit {
-    Log.write(message: read Int.to_string(value: read int_or(o: read Some(7), fallback: 0)))
-    Log.write(message: read Int.to_string(value: read int_or(o: read None, fallback: 9)))
-    Log.write(message: read string_or(o: read Some("hi"), fallback: read "x"))
-    Log.write(message: read string_or(o: read None, fallback: read "fallback"))
-    Log.write(message: read ok_or(r: read Ok(3)))
-    Log.write(message: read ok_or(r: read Err("boom")))
+    Output.write(message: read Int.to_string(value: read int_or(o: read Some(7), fallback: 0)))
+    Output.write(message: read Int.to_string(value: read int_or(o: read None, fallback: 9)))
+    Output.write(message: read string_or(o: read Some("hi"), fallback: read "x"))
+    Output.write(message: read string_or(o: read None, fallback: read "fallback"))
+    Output.write(message: read ok_or(r: read Ok(3)))
+    Output.write(message: read ok_or(r: read Err("boom")))
     return Unit
 }
 "#;
@@ -577,28 +577,28 @@ fn main() -> Unit {
     let patch = Diff.unified(old: read original, new: read changed)
     match Patch.apply_text(original: read original, patch: read patch) {
         Ok(applied) => {
-            Log.write(message: read applied)
+            Output.write(message: read applied)
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
     let empty_patch = Diff.unified(old: read original, new: read original)
     match Patch.apply_text(original: read original, patch: read empty_patch) {
         Ok(applied) => {
             Assert.equal(left: read applied, right: read original)
-            Log.write(message: read "empty-ok")
+            Output.write(message: read "empty-ok")
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
     match Patch.apply_text(original: read "old\n", patch: read "--- old\n+++ new\n@@ -1,1 +1,1 @@\n-bad\n+new\n") {
         Ok(applied) => {
-            Log.write(message: read applied)
+            Output.write(message: read applied)
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
     return Unit
@@ -631,13 +631,13 @@ fn main() -> Unit {
         },
     )
     let echoed = Pipeline.each<Int>(pipeline: read shifted, action: |item| {
-        Log.write(message: read String.from_int(value: item))
+        Output.write(message: read String.from_int(value: item))
         return Unit
     })
     let collected = Pipeline.collect<Int>(pipeline: read echoed)
-    Log.write(message: read String.from_int(value: List.len<Int>(list: read collected)))
-    Log.write(message: read String.from_int(value: collected[0]))
-    Log.write(message: read String.from_int(value: collected[1]))
+    Output.write(message: read String.from_int(value: List.len<Int>(list: read collected)))
+    Output.write(message: read String.from_int(value: collected[0]))
+    Output.write(message: read String.from_int(value: collected[1]))
 
     let ok_pipeline = Pipeline.try_map<Int, Int, String>(pipeline: read shifted, mapper: |item| {
         if item < 0 {
@@ -647,11 +647,11 @@ fn main() -> Unit {
     })
     match FalliblePipeline.collect<Int, String>(pipeline: read ok_pipeline) {
         Ok(items) => {
-            Log.write(message: read String.from_int(value: items[0]))
-            Log.write(message: read String.from_int(value: items[1]))
+            Output.write(message: read String.from_int(value: items[0]))
+            Output.write(message: read String.from_int(value: items[1]))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
 
@@ -662,7 +662,7 @@ fn main() -> Unit {
         return item > 113
     })
     let touched = FalliblePipeline.each<Int, String>(pipeline: read filtered, action: |item| {
-        Log.write(message: read String.from_int(value: item))
+        Output.write(message: read String.from_int(value: item))
         return Unit
     })
     let final_pipeline = FalliblePipeline.try_map<Int, Int, String>(pipeline: read touched, mapper: |item| {
@@ -673,11 +673,11 @@ fn main() -> Unit {
     })
     match FalliblePipeline.collect<Int, String>(pipeline: read final_pipeline) {
         Ok(items) => {
-            Log.write(message: read String.from_int(value: List.len<Int>(list: read items)))
-            Log.write(message: read String.from_int(value: items[0]))
+            Output.write(message: read String.from_int(value: List.len<Int>(list: read items)))
+            Output.write(message: read String.from_int(value: items[0]))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
 
@@ -689,22 +689,22 @@ fn main() -> Unit {
     })
     match FalliblePipeline.collect<Int, String>(pipeline: read failed) {
         Ok(items) => {
-            Log.write(message: read String.from_int(value: List.len<Int>(list: read items)))
+            Output.write(message: read String.from_int(value: List.len<Int>(list: read items)))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
     let still_failed = FalliblePipeline.map<Int, Int, String>(pipeline: read failed, mapper: |item| {
-        Log.write(message: read "should-not-run")
+        Output.write(message: read "should-not-run")
         return item + 1
     })
     match FalliblePipeline.collect<Int, String>(pipeline: read still_failed) {
         Ok(items) => {
-            Log.write(message: read String.from_int(value: List.len<Int>(list: read items)))
+            Output.write(message: read String.from_int(value: List.len<Int>(list: read items)))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
     return Unit
@@ -725,52 +725,52 @@ fn parity_deque_intrinsics() {
 fn main() -> Unit {
     local deque = Deque<Int>.new()
     if Deque.is_empty<Int>(deque: read deque) {
-        Log.write(message: read "empty")
+        Output.write(message: read "empty")
     }
     Deque.push_back<Int>(deque: mut deque, value: read 2)
     Deque.push_front<Int>(deque: mut deque, value: read 1)
     Deque.push_back<Int>(deque: mut deque, value: read 3)
-    Log.write(message: read String.from_int(value: Deque.len<Int>(deque: read deque)))
+    Output.write(message: read String.from_int(value: Deque.len<Int>(deque: read deque)))
     let values = Deque.to_list<Int>(deque: read deque)
-    Log.write(message: read String.from_int(value: values[0]))
-    Log.write(message: read String.from_int(value: values[1]))
-    Log.write(message: read String.from_int(value: values[2]))
+    Output.write(message: read String.from_int(value: values[0]))
+    Output.write(message: read String.from_int(value: values[1]))
+    Output.write(message: read String.from_int(value: values[2]))
     match Deque.pop_front<Int>(deque: mut deque) {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "front-none")
+            Output.write(message: read "front-none")
         }
     }
     match Deque.pop_back<Int>(deque: mut deque) {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "back-none")
+            Output.write(message: read "back-none")
         }
     }
     match Deque.pop_front<Int>(deque: mut deque) {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "front-none")
+            Output.write(message: read "front-none")
         }
     }
     match Deque.pop_front<Int>(deque: mut deque) {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "front-none")
+            Output.write(message: read "front-none")
         }
     }
     Deque.push_back<Int>(deque: mut deque, value: read 4)
     Deque.clear<Int>(deque: mut deque)
     if Deque.is_empty<Int>(deque: read deque) {
-        Log.write(message: read "cleared")
+        Output.write(message: read "cleared")
     }
     return Unit
 }
@@ -785,8 +785,8 @@ fn main() -> Unit {
     let short = Duration.ms(value: 750)
     let long = Duration.seconds(value: 2)
     let total = Duration.add(left: read short, right: read long)
-    Log.write(message: read String.from_int(value: Duration.as_ms(value: read total)))
-    Log.write(message: read String.from_int(value: Duration.as_seconds(value: read total)))
+    Output.write(message: read String.from_int(value: Duration.as_ms(value: read total)))
+    Output.write(message: read String.from_int(value: Duration.as_seconds(value: read total)))
     return Unit
 }
 "#;
@@ -801,9 +801,9 @@ fn main() -> Unit {
 fn parity_ord_compare_intrinsic() {
     let source = r#"
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: Ord.compare<Int>(self: read 1, other: read 2)))
-    Log.write(message: read String.from_int(value: Ord.compare<Int>(self: read 2, other: read 2)))
-    Log.write(message: read String.from_int(value: Ord.compare<String>(self: read "z", other: read "a")))
+    Output.write(message: read String.from_int(value: Ord.compare<Int>(self: read 1, other: read 2)))
+    Output.write(message: read String.from_int(value: Ord.compare<Int>(self: read 2, other: read 2)))
+    Output.write(message: read String.from_int(value: Ord.compare<String>(self: read "z", other: read "a")))
     return Unit
 }
 "#;
@@ -818,7 +818,7 @@ resource Box {
 }
 
 fn touch(item: mut Box) -> Unit {
-    Log.write(message: read String.from_int(value: item.value))
+    Output.write(message: read String.from_int(value: item.value))
     return Unit
 }
 
@@ -831,7 +831,7 @@ fn checked(value: Int) -> Result<Int, String> {
 
 fn print_checked(value: Int) -> Result<Unit, String> {
     let next = checked(value: value)?
-    Log.write(message: read String.from_int(value: next))
+    Output.write(message: read String.from_int(value: next))
     return Ok(Unit)
 }
 
@@ -841,18 +841,18 @@ fn main() -> Unit {
     }
     match print_checked(value: 10) {
         Ok(_) => {
-            Log.write(message: read "ok")
+            Output.write(message: read "ok")
         }
         Err(message) => {
-            Log.write(message: read message)
+            Output.write(message: read message)
         }
     }
     match print_checked(value: 0 - 1) {
         Ok(_) => {
-            Log.write(message: read "unexpected")
+            Output.write(message: read "unexpected")
         }
         Err(message) => {
-            Log.write(message: read message)
+            Output.write(message: read message)
         }
     }
     return Unit
@@ -873,7 +873,7 @@ fn fail() -> Result<Int, String> {
 }
 
 fn side_effect() -> Int {
-    Log.write(message: read "should-not-run")
+    Output.write(message: read "should-not-run")
     return 1
 }
 
@@ -897,11 +897,11 @@ fn list_case() -> Result<Unit, String> {
 fn print_result(label: read String, value: read Result<Unit, String>) -> Unit {
     match value {
         Ok(_) => {
-            Log.write(message: read "unexpected-ok")
+            Output.write(message: read "unexpected-ok")
         }
         Err(message) => {
-            Log.write(message: read label)
-            Log.write(message: read message)
+            Output.write(message: read label)
+            Output.write(message: read message)
         }
     }
     return Unit
@@ -910,20 +910,20 @@ fn print_result(label: read String, value: read Result<Unit, String>) -> Unit {
 fn main() -> Unit {
     match binary_case() {
         Ok(_) => {
-            Log.write(message: read "unexpected-binary")
+            Output.write(message: read "unexpected-binary")
         }
         Err(message) => {
-            Log.write(message: read "binary")
-            Log.write(message: read message)
+            Output.write(message: read "binary")
+            Output.write(message: read message)
         }
     }
     match call_case() {
         Ok(_) => {
-            Log.write(message: read "unexpected-call")
+            Output.write(message: read "unexpected-call")
         }
         Err(message) => {
-            Log.write(message: read "call")
-            Log.write(message: read message)
+            Output.write(message: read "call")
+            Output.write(message: read message)
         }
     }
     print_result(label: read "list", value: read list_case())
@@ -957,10 +957,10 @@ fn doubled(n: Int) -> Option<Int> {
 fn show(label: read String, value: read Option<Int>) -> Unit {
     match value {
         Some(x) => {
-            Log.write(message: read String.concat(left: read label, right: read String.from_int(value: read x)))
+            Output.write(message: read String.concat(left: read label, right: read String.from_int(value: read x)))
         }
         None => {
-            Log.write(message: read String.concat(left: read label, right: read "none"))
+            Output.write(message: read String.concat(left: read label, right: read "none"))
         }
     }
     return Unit
@@ -990,9 +990,9 @@ fn box_volume(width: Int, height: Int = 2, depth: Int = 3) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: box_volume(width: 5)))
-    Log.write(message: read String.from_int(value: box_volume(width: 5, height: 4)))
-    Log.write(message: read String.from_int(value: box_volume(width: 5, height: 4, depth: 6)))
+    Output.write(message: read String.from_int(value: box_volume(width: 5)))
+    Output.write(message: read String.from_int(value: box_volume(width: 5, height: 4)))
+    Output.write(message: read String.from_int(value: box_volume(width: 5, height: 4, depth: 6)))
     return Unit
 }
 "#;
@@ -1013,7 +1013,7 @@ const LIMIT: Int = 42
 const LABEL: String = "n="
 
 fn main() -> Unit {
-    Log.write(message: read String.concat(left: read LABEL, right: read String.from_int(value: LIMIT)))
+    Output.write(message: read String.concat(left: read LABEL, right: read String.from_int(value: LIMIT)))
     return Unit
 }
 "#;
@@ -1033,8 +1033,8 @@ const Device.DEFAULT: String = "cpu"
 const Device.COUNT: Int = 4
 
 fn main() -> Unit {
-    Log.write(message: read Device.DEFAULT)
-    Log.write(message: read String.from_int(value: Device.COUNT))
+    Output.write(message: read Device.DEFAULT)
+    Output.write(message: read String.from_int(value: Device.COUNT))
     return Unit
 }
 "#;
@@ -1049,16 +1049,16 @@ fn main() -> Unit {
 fn parity_boolean_operators_short_circuit() {
     let source = r#"
 fn side_effect() -> Bool {
-    Log.write(message: read "should-not-run")
+    Output.write(message: read "should-not-run")
     return true
 }
 
 fn main() -> Unit {
     if false && side_effect() {
-        Log.write(message: read "unexpected-and")
+        Output.write(message: read "unexpected-and")
     }
     if true || side_effect() {
-        Log.write(message: read "or-ok")
+        Output.write(message: read "or-ok")
     }
     return Unit
 }
@@ -1081,10 +1081,10 @@ fn pair() -> (Int, String) {
 
 fn main() -> Unit {
     let p: (Int, String) = pair()
-    Log.write(message: read String.from_int(value: p.item0))
-    Log.write(message: read p.item1)
+    Output.write(message: read String.from_int(value: p.item0))
+    Output.write(message: read p.item1)
     let inline = (true, 7, "z")
-    Log.write(message: read String.from_int(value: inline.item1))
+    Output.write(message: read String.from_int(value: inline.item1))
     return Unit
 }
 "#;
@@ -1106,8 +1106,8 @@ fn classify(p: read (Int, String)) -> fresh String {
 fn main() -> Unit {
     let a: (Int, String) = (0, "a")
     let b: (Int, String) = (7, "b")
-    Log.write(message: read classify(p: read a))
-    Log.write(message: read classify(p: read b))
+    Output.write(message: read classify(p: read a))
+    Output.write(message: read classify(p: read b))
     return Unit
 }
 "#;
@@ -1125,10 +1125,10 @@ fn parity_tuple_let_destructuring() {
     let source = r#"
 fn main() -> Unit {
     let (a, b) = (5, "x")
-    Log.write(message: read String.from_int(value: a))
-    Log.write(message: read b)
+    Output.write(message: read String.from_int(value: a))
+    Output.write(message: read b)
     let (first, _, third) = (1, 2, 3)
-    Log.write(message: read String.from_int(value: first + third))
+    Output.write(message: read String.from_int(value: first + third))
     return Unit
 }
 "#;
@@ -1152,13 +1152,13 @@ struct Pair<A, B> derives(Clone) {
 fn main() -> Unit {
     let p = Pair(item0: 3, item1: 4)
     let sum = p.item0 + p.item1
-    Log.write(message: read String.from_int(value: sum))
+    Output.write(message: read String.from_int(value: sum))
     match read p {
         Pair { item0: 3, item1: other } => {
-            Log.write(message: read String.from_int(value: other))
+            Output.write(message: read String.from_int(value: other))
         }
         Pair { item0: first, item1: other } => {
-            Log.write(message: read String.from_int(value: first + other))
+            Output.write(message: read String.from_int(value: first + other))
         }
     }
     return Unit
@@ -1197,15 +1197,15 @@ fn ends(xs: read List<Int>) -> Int {
 
 fn main() -> Unit {
     let mut a: List<Int> = List.new<Int>()
-    Log.write(message: read head_tail(xs: read a))
-    Log.write(message: read String.from_int(value: ends(xs: read a)))
+    Output.write(message: read head_tail(xs: read a))
+    Output.write(message: read String.from_int(value: ends(xs: read a)))
     List.push(list: mut a, value: read 10)
-    Log.write(message: read head_tail(xs: read a))
-    Log.write(message: read String.from_int(value: ends(xs: read a)))
+    Output.write(message: read head_tail(xs: read a))
+    Output.write(message: read String.from_int(value: ends(xs: read a)))
     List.push(list: mut a, value: read 20)
     List.push(list: mut a, value: read 30)
-    Log.write(message: read head_tail(xs: read a))
-    Log.write(message: read String.from_int(value: ends(xs: read a)))
+    Output.write(message: read head_tail(xs: read a))
+    Output.write(message: read String.from_int(value: ends(xs: read a)))
     return Unit
 }
 "#;
@@ -1253,8 +1253,8 @@ fn main() -> Unit {
     local f = French(x: 2)
     local a: Dyn<Greeter> = Dyn<Greeter>.from(value: take e)
     local b: Dyn<Greeter> = Dyn<Greeter>.from(value: take f)
-    Log.write(message: read say(who: read a))
-    Log.write(message: read say(who: read b))
+    Output.write(message: read say(who: read a))
+    Output.write(message: read say(who: read b))
     return Unit
 }
 "#;

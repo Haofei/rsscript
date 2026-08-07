@@ -439,7 +439,7 @@ pub fn main() -> Result<Unit, String> {
     let facts = selfhost_source_set_facts()?
     let summary = source_set_summary_line(facts)
 
-    Log.write(message: summary)
+    Output.write(message: summary)
 
     Assert.equal_int(left: facts.total_files, right: 5)
     Assert.equal_int(left: facts.manifest_files, right: 1)

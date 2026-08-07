@@ -1226,7 +1226,7 @@ fn selfhost_bootstrap_ir_lowers_for_blocks() {
 
 #[test]
 fn selfhost_bootstrap_ir_lowers_with_blocks() {
-    let source = "fn read_file(file: File) -> Unit {\n    with file as handle {\n        Log.write(message: read \"open\")\n    }\n}\n";
+    let source = "fn read_file(file: File) -> Unit {\n    with file as handle {\n        Output.write(message: read \"open\")\n    }\n}\n";
     let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
         .expect("rss bootstrap IR should compile");
     let actual = executable
@@ -1238,7 +1238,7 @@ fn selfhost_bootstrap_ir_lowers_with_blocks() {
             "rss-ir-v1\n",
             "fn read_file(file:read File)->Unit\n",
             "  with name file as handle\n",
-            "    expr call Log.write(message=effect read literal open)\n",
+            "    expr call Output.write(message=effect read literal open)\n",
             "  end\n",
         ),
         actual
@@ -1348,7 +1348,7 @@ fn selfhost_bootstrap_ir_lowers_task_group_blocks() {
 #[test]
 fn selfhost_bootstrap_ir_lowers_expression_statements() {
     let source =
-        "fn trace(value: Int) -> Unit {\n    Log.write(message: \"value\")\n    return Unit\n}\n";
+        "fn trace(value: Int) -> Unit {\n    Output.write(message: \"value\")\n    return Unit\n}\n";
     let executable = compile_selfhost_tool("ir/canonical.rss", "canonical bootstrap IR")
         .expect("rss bootstrap IR should compile");
     let actual = executable
@@ -1359,7 +1359,7 @@ fn selfhost_bootstrap_ir_lowers_expression_statements() {
         concat!(
             "rss-ir-v1\n",
             "fn trace(value:read Int)->Unit\n",
-            "  expr call Log.write(message=literal value)\n",
+            "  expr call Output.write(message=literal value)\n",
             "  return literal Unit\n",
         ),
         actual

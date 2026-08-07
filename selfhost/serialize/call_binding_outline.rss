@@ -20,14 +20,14 @@ fn source_name(argument: BoundArgument) -> String {
 fn emit_bound_slot(callee: String, parameter: String, argument: BoundArgument) -> Unit {
     let head = String.concat(left: String.concat(left: callee, right: "\t"), right: parameter)
     let source = String.concat(left: String.concat(left: "\t", right: source_name(argument: argument)), right: String.concat(left: "\teval=", right: String.from_int(value: argument.evaluationIndex)))
-    Log.write(message: String.concat(left: head, right: source))
+    Output.write(message: String.concat(left: head, right: source))
     return Unit
 }
 
 fn emit_binding_status(callee: String, binding: CallBinding) -> Unit {
     let mut status = "invalid"
     if CallBinding.is_complete(self: binding) { status = "complete" }
-    Log.write(message: String.concat(left: String.concat(left: callee, right: "\tstatus\t"), right: status))
+    Output.write(message: String.concat(left: String.concat(left: callee, right: "\tstatus\t"), right: status))
     return Unit
 }
 

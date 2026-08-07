@@ -118,6 +118,10 @@ pub const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../../../stdlib/option/option.rssi"),
     ),
     (
+        "stdlib/output/output.rssi",
+        include_str!("../../../stdlib/output/output.rssi"),
+    ),
+    (
         "stdlib/patch/patch.rssi",
         include_str!("../../../stdlib/patch/patch.rssi"),
     ),

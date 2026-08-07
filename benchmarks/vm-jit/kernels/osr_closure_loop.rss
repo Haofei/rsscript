@@ -2,7 +2,7 @@
 // function `apply_loop` takes a closure PARAMETER `g: read Fn(Int) -> Int` and
 // calls it in a hot loop. The closure CAPTURES a scalar (`base`), so the inline
 // must materialize that capture into the loop body. `apply_loop` is also I/O-
-// tangled (`Log.write` around the loop in the same, once-called function), so the
+// tangled (`Output.write` around the loop in the same, once-called function), so the
 // whole function is native-INELIGIBLE — only OSR can run the loop natively, and
 // only by inlining the capturing closure into it (otherwise the per-iteration
 // `CallClosure` keeps the loop off the native subset).
@@ -24,14 +24,14 @@ fn bench_size(default: Int) -> Int {
 }
 
 fn apply_loop(g: Fn(Int) -> Int, limit: Int, seed: Int) -> Int {
-    Log.write(message: "osr-begin")
+    Output.write(message: "osr-begin")
     let mut i = 0
     let mut total = seed
     while i < limit {
         total = total + g(i)
         i = i + 1
     }
-    Log.write(message: String.from_int(value: total))
+    Output.write(message: String.from_int(value: total))
     return total
 }
 
@@ -42,6 +42,6 @@ fn main() -> Unit {
         return value * 2 + base
     }
     let result = apply_loop(g, limit, seed: 0)
-    Log.write(message: String.from_int(value: result))
+    Output.write(message: String.from_int(value: result))
     return Unit
 }

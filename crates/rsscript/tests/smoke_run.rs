@@ -3,7 +3,7 @@
 //! Backlog #7: `rss check` / the review oracle were green while the package had
 //! never actually *executed*. Type-checking and lowering passing is not proof a
 //! program runs. These tests take small-but-non-trivial representative programs
-//! (arithmetic + a function call + a `match` + `Log.write`) and confirm they
+//! (arithmetic + a function call + a `match` + `Output.write`) and confirm they
 //! genuinely EXECUTE — on BOTH tiers:
 //!
 //!   1. the register VM (`reg_vm_eval_source_main`), with an explicit expected
@@ -21,7 +21,7 @@ mod common;
 use common::reg_vm_eval_source_main;
 
 /// A representative program: arithmetic, a user function call, a `match` over the
-/// result, and `Log.write` for stdout. Exercises the value path AND the I/O path.
+/// result, and `Output.write` for stdout. Exercises the value path AND the I/O path.
 const SMOKE_PROGRAM: &str = "\
 fn classify(n: Int) -> String {
     match n {
@@ -39,8 +39,8 @@ fn main() -> Unit {
     let a = 2
     let b = 3
     let total = a + b * 4
-    Log.write(message: read classify(n: read total))
-    Log.write(message: read String.from_int(value: read total))
+    Output.write(message: read classify(n: read total))
+    Output.write(message: read String.from_int(value: read total))
     return Unit
 }
 ";

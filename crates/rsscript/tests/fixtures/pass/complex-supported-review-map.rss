@@ -138,7 +138,7 @@ fn transform_image_http(plan: UploadPlan, cache: mut RetainedImageStore) -> Resu
 }
 
 fn record_audit(message: String) -> Result<Unit, HttpError> {
-    Log.write(message)
+    Output.write(message)
     return Ok(Unit)
 }
 

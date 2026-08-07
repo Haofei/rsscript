@@ -35,6 +35,6 @@ fn main() -> Unit {
         pass = pass + 1
     }
 
-    Log.write(message: String.from_int(value: total))
+    Output.write(message: String.from_int(value: total))
     return Unit
 }

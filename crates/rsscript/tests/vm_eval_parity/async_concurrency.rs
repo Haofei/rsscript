@@ -10,17 +10,17 @@ fn main() -> Unit {
     local source = CancellationSource.new()
     let token = CancellationSource.token(source: read source)
     if !CancellationToken.is_cancelled(token: read token) {
-        Log.write(message: read "not-cancelled")
+        Output.write(message: read "not-cancelled")
     }
 
     CancellationSource.cancel(source: mut source)
     if CancellationToken.is_cancelled(token: read token) {
-        Log.write(message: read "cancelled")
+        Output.write(message: read "cancelled")
     }
 
     let second = CancellationSource.token(source: read source)
     if CancellationToken.is_cancelled(token: read second) {
-        Log.write(message: read "second-cancelled")
+        Output.write(message: read "second-cancelled")
     }
     return Unit
 }
@@ -39,15 +39,15 @@ fn parity_deadline_intrinsics() {
 fn main() -> Unit {
     let immediate = Deadline.after_ms(ms: 0)
     if Deadline.is_expired(deadline: read immediate) {
-        Log.write(message: read "expired-now")
+        Output.write(message: read "expired-now")
     }
-    Log.write(message: read String.from_int(value: Deadline.remaining_ms(deadline: read immediate)))
+    Output.write(message: read String.from_int(value: Deadline.remaining_ms(deadline: read immediate)))
 
     let negative = Deadline.after(duration: read Duration.ms(value: 0 - 1))
     if Deadline.is_expired(deadline: read negative) {
-        Log.write(message: read "expired-negative")
+        Output.write(message: read "expired-negative")
     }
-    Log.write(message: read String.from_int(value: Deadline.remaining_ms(deadline: read negative)))
+    Output.write(message: read String.from_int(value: Deadline.remaining_ms(deadline: read negative)))
     return Unit
 }
 "#;
@@ -67,27 +67,27 @@ async fn main() -> Result<Unit, ChannelError> {
         Ok(channel) => {
             let sender: Sender<Int> = Channel.sender<Int>(channel: read channel)
             let _ = sender
-            Log.write(message: read "unexpected-channel")
+            Output.write(message: read "unexpected-channel")
         }
         Err(error) => {
-            Log.write(message: read ChannelError.message(error: read error))
+            Output.write(message: read ChannelError.message(error: read error))
         }
     }
 
     let mut channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
     let mut sender: Sender<Int> = Channel.sender<Int>(channel: read channel)
     Sender.close<Int>(sender: mut sender)
-    Log.write(message: read "sender-closed")
+    Output.write(message: read "sender-closed")
     let mut receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut channel)?
     Receiver.close<Int>(receiver: mut receiver)
-    Log.write(message: read "receiver-closed")
+    Output.write(message: read "receiver-closed")
     match Channel.receiver<Int>(channel: mut channel) {
         Ok(receiver) => {
             let _ = receiver
-            Log.write(message: read "unexpected-receiver")
+            Output.write(message: read "unexpected-receiver")
         }
         Err(error) => {
-            Log.write(message: read ChannelError.message(error: read error))
+            Output.write(message: read ChannelError.message(error: read error))
         }
     }
 
@@ -96,7 +96,7 @@ async fn main() -> Result<Unit, ChannelError> {
     List.push<String>(list: mut items, value: read "two")
     let stream: Stream<String> = Stream.from_list<String>(items: take items)
     let collected = Stream.collect_list<String>(stream: read stream)?
-    Log.write(message: read List.join<String>(list: read collected, separator: read ","))
+    Output.write(message: read List.join<String>(list: read collected, separator: read ","))
 
     let mut empty_channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
     let mut empty_sender: Sender<Int> = Channel.sender<Int>(channel: read empty_channel)
@@ -104,7 +104,7 @@ async fn main() -> Result<Unit, ChannelError> {
     local empty_receiver: Receiver<Int> = Channel.receiver<Int>(channel: mut empty_channel)?
     let empty_stream: Stream<Int> = Receiver.into_stream<Int>(receiver: take empty_receiver)
     let empty_items = Stream.collect_list<Int>(stream: read empty_stream)?
-    Log.write(message: read String.from_int(value: List.len<Int>(list: read empty_items)))
+    Output.write(message: read String.from_int(value: List.len<Int>(list: read empty_items)))
 
     let mut data_channel: Channel<Int> = Channel.bounded<Int>(capacity: 1)?
     let mut data_sender: Sender<Int> = Channel.sender<Int>(channel: read data_channel)
@@ -140,51 +140,51 @@ async fn main() -> Result<Unit, ChannelError> {
     Sender.close<Int>(sender: mut data_sender)
     match await Receiver.recv<Int>(receiver: read data_receiver)? {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "recv-none")
+            Output.write(message: read "recv-none")
         }
     }
     match await Receiver.recv<Int>(receiver: read none_receiver)? {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "recv-none")
+            Output.write(message: read "recv-none")
         }
     }
 
     match await Sender.send_cancellable<Int>(sender: read cancelled_send_sender, value: take cancelled_value, token: read cancelled_send_token) {
         Ok(_) => {
-            Log.write(message: read "unexpected-send")
+            Output.write(message: read "unexpected-send")
         }
         Err(error) => {
-            Log.write(message: read ChannelError.message(error: read error))
+            Output.write(message: read ChannelError.message(error: read error))
         }
     }
     match await Receiver.recv_cancellable<Int>(receiver: read cancelled_recv_receiver, token: read cancelled_recv_token) {
         Ok(_) => {
-            Log.write(message: read "unexpected-recv")
+            Output.write(message: read "unexpected-recv")
         }
         Err(error) => {
-            Log.write(message: read ChannelError.message(error: read error))
+            Output.write(message: read ChannelError.message(error: read error))
         }
     }
     match await Stream.next<Int>(stream: read next_stream)? {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "stream-none")
+            Output.write(message: read "stream-none")
         }
     }
     match await Stream.next<Int>(stream: read empty_next_stream)? {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "stream-none")
+            Output.write(message: read "stream-none")
         }
     }
     return Ok(Unit)
@@ -207,7 +207,7 @@ fn parity_await_in_expression() {
     let source = r#"
 
 async fn step(n: Int) -> Result<Int, String> {
-    Log.write(message: read String.from_int(value: n))
+    Output.write(message: read String.from_int(value: n))
     return Ok(n)
 }
 
@@ -218,7 +218,7 @@ async fn main() -> Result<Unit, String> {
     let nested = await step(n: await step(n: 3)?)?
     let mut xs = [0, 0, 0]
     xs[await step(n: 0)?] = total + nested
-    Log.write(message: read String.from_int(value: xs[0]))
+    Output.write(message: read String.from_int(value: xs[0]))
     return Ok(Unit)
 }
 "#;
@@ -245,10 +245,10 @@ async fn main() -> Result<Unit, ChannelError> {
     Sender.close<Int>(sender: mut sender)
     match await Receiver.recv<Int>(receiver: read receiver)? {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "recv-none")
+            Output.write(message: read "recv-none")
         }
     }
     return Ok(Unit)

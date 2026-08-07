@@ -18,7 +18,7 @@ fn BufferWriter.write(self: mut BufferWriter, message: String) -> Unit
 
 fn BufferWriter.flush(self: mut BufferWriter) -> Unit {
     let count = List.len<String>(list: self.buffer)
-    Log.write(message: "flushed")
+    Output.write(message: "flushed")
 }
 
 impl Writer for BufferWriter {

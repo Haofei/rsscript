@@ -1,4 +1,4 @@
 fn main() -> Unit {
-    Log.write(message: "hello RSScript")
+    Output.write(message: "hello RSScript")
     return Unit
 }

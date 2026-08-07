@@ -11,68 +11,68 @@ fn float_mix(value: Float, salt: Float) -> Float {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: 17 % 5))
-    Log.write(message: read String.from_int(value: Math.abs(value: -9)))
-    Log.write(message: read String.from_int(value: Math.min(left: 4, right: 7)))
-    Log.write(message: read String.from_int(value: Math.max(left: 4, right: 7)))
-    Log.write(message: read String.from_int(value: Math.clamp(value: 12, min: 0, max: 10)))
-    Log.write(message: read String.from_float(value: Math.abs_float(value: -2.5)))
-    Log.write(message: read String.from_float(value: Math.min_float(left: 4.5, right: 7.25)))
-    Log.write(message: read String.from_float(value: Math.max_float(left: 4.5, right: 7.25)))
-    Log.write(message: read String.from_float(value: Math.clamp_float(value: 12.5, min: 0.5, max: 10.5)))
-    Log.write(message: read String.from_float(value: Math.pow_float(base: 2.0, exponent: 3.0)))
-    Log.write(message: read String.from_float(value: Math.sqrt(value: 9.0)))
-    Log.write(message: read Float.to_string(value: read Math.sqrt(value: 16.0)))
-    Log.write(message: read String.from_float(value: Math.cos(value: 0.0)))
-    Log.write(message: read String.from_float(value: Math.exp(value: 0.0)))
-    Log.write(message: read String.from_float(value: Math.log(value: 1.0)))
-    Log.write(message: read String.from_float(value: Math.tanh(value: 0.0)))
+    Output.write(message: read String.from_int(value: 17 % 5))
+    Output.write(message: read String.from_int(value: Math.abs(value: -9)))
+    Output.write(message: read String.from_int(value: Math.min(left: 4, right: 7)))
+    Output.write(message: read String.from_int(value: Math.max(left: 4, right: 7)))
+    Output.write(message: read String.from_int(value: Math.clamp(value: 12, min: 0, max: 10)))
+    Output.write(message: read String.from_float(value: Math.abs_float(value: -2.5)))
+    Output.write(message: read String.from_float(value: Math.min_float(left: 4.5, right: 7.25)))
+    Output.write(message: read String.from_float(value: Math.max_float(left: 4.5, right: 7.25)))
+    Output.write(message: read String.from_float(value: Math.clamp_float(value: 12.5, min: 0.5, max: 10.5)))
+    Output.write(message: read String.from_float(value: Math.pow_float(base: 2.0, exponent: 3.0)))
+    Output.write(message: read String.from_float(value: Math.sqrt(value: 9.0)))
+    Output.write(message: read Float.to_string(value: read Math.sqrt(value: 16.0)))
+    Output.write(message: read String.from_float(value: Math.cos(value: 0.0)))
+    Output.write(message: read String.from_float(value: Math.exp(value: 0.0)))
+    Output.write(message: read String.from_float(value: Math.log(value: 1.0)))
+    Output.write(message: read String.from_float(value: Math.tanh(value: 0.0)))
     let finite = 1.5
     let infinite = 1.0 / 0.0
     let nan = 0.0 / 0.0
-    Log.write(message: read String.from_bool(value: Float.is_finite(value: read finite)))
-    Log.write(message: read String.from_bool(value: Float.is_infinite(value: read infinite)))
-    Log.write(message: read String.from_bool(value: Float.is_nan(value: read nan)))
+    Output.write(message: read String.from_bool(value: Float.is_finite(value: read finite)))
+    Output.write(message: read String.from_bool(value: Float.is_infinite(value: read infinite)))
+    Output.write(message: read String.from_bool(value: Float.is_nan(value: read nan)))
     match String.parse_float(value: read "12.5") {
-        Some(value) => Log.write(message: read String.from_float(value: value))
-        None => Log.write(message: read "float-none")
+        Some(value) => Output.write(message: read String.from_float(value: value))
+        None => Output.write(message: read "float-none")
     }
     match String.parse_float(value: read "not-float") {
-        Some(value) => Log.write(message: read String.from_float(value: value))
-        None => Log.write(message: read "invalid-float")
+        Some(value) => Output.write(message: read String.from_float(value: value))
+        None => Output.write(message: read "invalid-float")
     }
-    Log.write(message: read String.from_int(value: Math.floor(value: 3.9)))
-    Log.write(message: read String.from_int(value: Math.ceil(value: 3.1)))
-    Log.write(message: read String.from_int(value: Math.round(value: 3.5)))
-    Log.write(message: read String.from_float(value: 1.5 + 2.25))
-    Log.write(message: read String.from_float(value: 9.0 - 2.5))
-    Log.write(message: read String.from_float(value: 3.0 * 2.5))
-    Log.write(message: read String.from_float(value: 7.5 / 2.5))
-    Log.write(message: read String.from_float(value: float_mix(value: 1.5, salt: 0.5)))
+    Output.write(message: read String.from_int(value: Math.floor(value: 3.9)))
+    Output.write(message: read String.from_int(value: Math.ceil(value: 3.1)))
+    Output.write(message: read String.from_int(value: Math.round(value: 3.5)))
+    Output.write(message: read String.from_float(value: 1.5 + 2.25))
+    Output.write(message: read String.from_float(value: 9.0 - 2.5))
+    Output.write(message: read String.from_float(value: 3.0 * 2.5))
+    Output.write(message: read String.from_float(value: 7.5 / 2.5))
+    Output.write(message: read String.from_float(value: float_mix(value: 1.5, salt: 0.5)))
     if 1.0 < 2.0 {
-        Log.write(message: read "float-condition")
+        Output.write(message: read "float-condition")
     }
     if 5.5 > 5.0 && 5.0 <= 5.0 {
-        Log.write(message: read "float-compare")
+        Output.write(message: read "float-compare")
     }
 
     let fixed = Random.int(min: 7, max: 7)
-    Log.write(message: read String.from_int(value: fixed))
-    Log.write(message: read String.from_int(value: Math.floor(value: Random.float())))
+    Output.write(message: read String.from_int(value: fixed))
+    Output.write(message: read String.from_int(value: Math.floor(value: Random.float())))
     let bytes = Random.bytes(len: 4)
-    Log.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
+    Output.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
     let token = Random.string(len: 8)
-    Log.write(message: read String.from_int(value: String.len(value: read token)))
+    Output.write(message: read String.from_int(value: String.len(value: read token)))
     let maybe = Random.bool()
     if maybe {
-        Log.write(message: read "bool")
+        Output.write(message: read "bool")
     } else {
-        Log.write(message: read "bool")
+        Output.write(message: read "bool")
     }
     let id = Uuid.new_v4()
-    Log.write(message: read String.from_int(value: String.len(value: read id)))
+    Output.write(message: read String.from_int(value: String.len(value: read id)))
     if String.contains(value: read id, needle: read "-") {
-        Log.write(message: read "uuid")
+        Output.write(message: read "uuid")
     }
     return Unit
 }
@@ -86,64 +86,64 @@ fn reg_vm_runs_format_date_and_int_bit_helpers_like_backend() {
     let source = r#"
 
 fn main() -> Unit {
-    Log.write(message: read String.format(template: read "hello {}, {{}} {}", args: read ["rss", "vm"]))
-    Log.write(message: read String.format(template: read "missing {}", args: read List<String>.new()))
+    Output.write(message: read String.format(template: read "hello {}, {{}} {}", args: read ["rss", "vm"]))
+    Output.write(message: read String.format(template: read "missing {}", args: read List<String>.new()))
 
-    Log.write(message: read String.from_int(value: Int.bit_and(left: 6, right: 3)))
-    Log.write(message: read String.from_int(value: Int.bit_or(left: 4, right: 1)))
-    Log.write(message: read String.from_int(value: Int.bit_xor(left: 6, right: 3)))
-    Log.write(message: read String.from_int(value: Int.bit_not(value: 0)))
-    Log.write(message: read String.from_int(value: Int.shift_left(value: 3, bits: 2)))
-    Log.write(message: read String.from_int(value: Int.shift_right(value: 16, bits: 2)))
-    Log.write(message: read String.from_int(value: 6 & 3))
-    Log.write(message: read String.from_int(value: 4 | 1))
-    Log.write(message: read String.from_int(value: 6 ^ 3))
-    Log.write(message: read String.from_int(value: 3 << 2))
-    Log.write(message: read String.from_int(value: 16 >> 2))
-    Log.write(message: read String.from_int(value: 1 | 2 & 3))
-    Log.write(message: read String.from_bool(value: !false))
-    Log.write(message: read String.from_bool(value: !(1 > 2)))
-    Log.write(message: read String.from_int(value: ~0))
-    Log.write(message: read String.from_int(value: ~5))
+    Output.write(message: read String.from_int(value: Int.bit_and(left: 6, right: 3)))
+    Output.write(message: read String.from_int(value: Int.bit_or(left: 4, right: 1)))
+    Output.write(message: read String.from_int(value: Int.bit_xor(left: 6, right: 3)))
+    Output.write(message: read String.from_int(value: Int.bit_not(value: 0)))
+    Output.write(message: read String.from_int(value: Int.shift_left(value: 3, bits: 2)))
+    Output.write(message: read String.from_int(value: Int.shift_right(value: 16, bits: 2)))
+    Output.write(message: read String.from_int(value: 6 & 3))
+    Output.write(message: read String.from_int(value: 4 | 1))
+    Output.write(message: read String.from_int(value: 6 ^ 3))
+    Output.write(message: read String.from_int(value: 3 << 2))
+    Output.write(message: read String.from_int(value: 16 >> 2))
+    Output.write(message: read String.from_int(value: 1 | 2 & 3))
+    Output.write(message: read String.from_bool(value: !false))
+    Output.write(message: read String.from_bool(value: !(1 > 2)))
+    Output.write(message: read String.from_int(value: ~0))
+    Output.write(message: read String.from_int(value: ~5))
 
     match Date.parse_ymd(value: read "2024-02-29") {
         Some(value) => {
-            Log.write(message: read Date.format_ymd(unix_ms: value))
-            Log.write(message: read Date.format_iso(unix_ms: value))
-            Log.write(message: read String.from_int(value: Date.year(unix_ms: value)))
-            Log.write(message: read String.from_int(value: Date.month(unix_ms: value)))
-            Log.write(message: read String.from_int(value: Date.day(unix_ms: value)))
-            Log.write(message: read String.from_int(value: Date.hour(unix_ms: value)))
-            Log.write(message: read String.from_int(value: Date.minute(unix_ms: value)))
-            Log.write(message: read String.from_int(value: Date.second(unix_ms: value)))
-            Log.write(message: read Date.format_ymd(unix_ms: Date.add_days(unix_ms: value, days: 1)))
-            Log.write(message: read String.from_int(value: Date.days_between(start_unix_ms: value, end_unix_ms: Date.add_days(unix_ms: value, days: 3))))
-            Log.write(message: read String.from_int(value: Date.add_ms(unix_ms: value, ms: 250) - value))
-            Log.write(message: read Date.format_iso(unix_ms: Date.start_of_day(unix_ms: Date.add_ms(unix_ms: value, ms: 45678))))
-            Log.write(message: read String.from_int(value: Date.weekday(unix_ms: value)))
-            Log.write(message: read String.from_bool(value: Date.is_leap_year(year: 2024)))
-            Log.write(message: read String.from_int(value: Date.days_in_month(year: 2024, month: 2)))
-            Log.write(message: read String.from_bool(value: Date.is_leap_year(year: 2023)))
-            Log.write(message: read String.from_int(value: Date.days_in_month(year: 2023, month: 13)))
+            Output.write(message: read Date.format_ymd(unix_ms: value))
+            Output.write(message: read Date.format_iso(unix_ms: value))
+            Output.write(message: read String.from_int(value: Date.year(unix_ms: value)))
+            Output.write(message: read String.from_int(value: Date.month(unix_ms: value)))
+            Output.write(message: read String.from_int(value: Date.day(unix_ms: value)))
+            Output.write(message: read String.from_int(value: Date.hour(unix_ms: value)))
+            Output.write(message: read String.from_int(value: Date.minute(unix_ms: value)))
+            Output.write(message: read String.from_int(value: Date.second(unix_ms: value)))
+            Output.write(message: read Date.format_ymd(unix_ms: Date.add_days(unix_ms: value, days: 1)))
+            Output.write(message: read String.from_int(value: Date.days_between(start_unix_ms: value, end_unix_ms: Date.add_days(unix_ms: value, days: 3))))
+            Output.write(message: read String.from_int(value: Date.add_ms(unix_ms: value, ms: 250) - value))
+            Output.write(message: read Date.format_iso(unix_ms: Date.start_of_day(unix_ms: Date.add_ms(unix_ms: value, ms: 45678))))
+            Output.write(message: read String.from_int(value: Date.weekday(unix_ms: value)))
+            Output.write(message: read String.from_bool(value: Date.is_leap_year(year: 2024)))
+            Output.write(message: read String.from_int(value: Date.days_in_month(year: 2024, month: 2)))
+            Output.write(message: read String.from_bool(value: Date.is_leap_year(year: 2023)))
+            Output.write(message: read String.from_int(value: Date.days_in_month(year: 2023, month: 13)))
         }
-        None => Log.write(message: read "date-none")
+        None => Output.write(message: read "date-none")
     }
     match Date.parse_iso(value: read "2024-02-29T12:34:56.789+02:00") {
         Some(value) => {
-            Log.write(message: read Date.format_iso(unix_ms: value))
-            Log.write(message: read String.from_int(value: Date.hour(unix_ms: value)))
-            Log.write(message: read String.from_int(value: Date.minute(unix_ms: value)))
-            Log.write(message: read String.from_int(value: Date.second(unix_ms: value)))
+            Output.write(message: read Date.format_iso(unix_ms: value))
+            Output.write(message: read String.from_int(value: Date.hour(unix_ms: value)))
+            Output.write(message: read String.from_int(value: Date.minute(unix_ms: value)))
+            Output.write(message: read String.from_int(value: Date.second(unix_ms: value)))
         }
-        None => Log.write(message: read "iso-none")
+        None => Output.write(message: read "iso-none")
     }
     match Date.parse_iso(value: read "not-an-iso-date") {
-        Some(value) => Log.write(message: read Date.format_iso(unix_ms: value))
-        None => Log.write(message: read "invalid-iso-date")
+        Some(value) => Output.write(message: read Date.format_iso(unix_ms: value))
+        None => Output.write(message: read "invalid-iso-date")
     }
     match Date.parse_ymd(value: read "not-a-date") {
-        Some(value) => Log.write(message: read Date.format_ymd(unix_ms: value))
-        None => Log.write(message: read "invalid-date")
+        Some(value) => Output.write(message: read Date.format_ymd(unix_ms: value))
+        None => Output.write(message: read "invalid-date")
     }
     return Unit
 }
@@ -164,26 +164,26 @@ fn main() -> Unit {
     Assert.equal_bool(left: true, right: true)
     match Args.get(index: 0) {
         Some(value) => {
-            Log.write(message: read value)
+            Output.write(message: read value)
         }
         None => {
-            Log.write(message: read "missing-first")
+            Output.write(message: read "missing-first")
         }
     }
     match Args.get(index: 99) {
         Some(value) => {
-            Log.write(message: read value)
+            Output.write(message: read value)
         }
         None => {
-            Log.write(message: read "missing-none")
+            Output.write(message: read "missing-none")
         }
     }
     match Args.get(index: 0 - 1) {
         Some(value) => {
-            Log.write(message: read value)
+            Output.write(message: read value)
         }
         None => {
-            Log.write(message: read "negative-none")
+            Output.write(message: read "negative-none")
         }
     }
     return Unit
@@ -205,13 +205,13 @@ fn main() -> Unit {
     let short = Duration.ms(value: 750)
     let long = Duration.seconds(value: 2)
     let total = Duration.add(left: read short, right: read long)
-    Log.write(message: read String.from_int(value: Duration.as_ms(value: read short)))
-    Log.write(message: read String.from_int(value: Duration.as_ms(value: read long)))
-    Log.write(message: read String.from_int(value: Duration.as_ms(value: read total)))
-    Log.write(message: read String.from_int(value: Duration.as_seconds(value: read total)))
+    Output.write(message: read String.from_int(value: Duration.as_ms(value: read short)))
+    Output.write(message: read String.from_int(value: Duration.as_ms(value: read long)))
+    Output.write(message: read String.from_int(value: Duration.as_ms(value: read total)))
+    Output.write(message: read String.from_int(value: Duration.as_seconds(value: read total)))
 
     let url = Url.from_string(value: read "https://example.test/path")
-    Log.write(message: read Url.to_string(url: read url))
+    Output.write(message: read Url.to_string(url: read url))
     return Unit
 }
 "#;
@@ -225,9 +225,9 @@ fn reg_vm_runs_hash_intrinsics_like_interpreter() {
 
 fn main() -> Unit {
     let digest = Hash.sha256_string(value: read "abc")
-    Log.write(message: read digest)
+    Output.write(message: read digest)
     let bytes = Bytes.from_string(value: read "abc")
-    Log.write(message: read Hash.sha256_bytes(value: read bytes))
+    Output.write(message: read Hash.sha256_bytes(value: read bytes))
     Assert.equal(left: read digest, right: read Hash.sha256_bytes(value: read bytes))
     Assert.equal(
         left: read Hash.sha256_string(value: read "é"),
@@ -255,7 +255,7 @@ fn main() -> Unit {
     Assert.equal_int(left: List.get<Int>(list: read shake, index: 0), right: 88)
     Assert.equal_int(left: List.get<Int>(list: read shake, index: 1), right: 129)
     let hmac = Hmac.sha256_string(key: read "key", value: read "abc")
-    Log.write(message: read String.from_int(value: String.len(value: read hmac)))
+    Output.write(message: read String.from_int(value: String.len(value: read hmac)))
     Assert.equal(
         left: read hmac,
         right: read Hmac.sha256_bytes(
@@ -276,65 +276,65 @@ fn reg_vm_runs_encoding_intrinsics_like_interpreter() {
 
 fn main() -> Unit {
     let encoded = Base64.encode(value: read "rsscript")
-    Log.write(message: read encoded)
+    Output.write(message: read encoded)
 
     match Base64.decode_string(text: read encoded) {
-        Ok(value) => Log.write(message: read value)
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Ok(value) => Output.write(message: read value)
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     let bytes = String.to_bytes(value: read "hex")
-    Log.write(message: read Base64.encode_bytes(value: read bytes))
+    Output.write(message: read Base64.encode_bytes(value: read bytes))
 
     match Base64.decode(text: read "%%%") {
-        Ok(value) => Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Ok(value) => Output.write(message: read String.from_int(value: Bytes.len(value: read value)))
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     let hexed = Hex.encode_string(value: read "Az")
-    Log.write(message: read hexed)
-    Log.write(message: read Hex.encode(value: read bytes))
+    Output.write(message: read hexed)
+    Output.write(message: read Hex.encode(value: read bytes))
 
     match Hex.decode(text: read hexed) {
-        Ok(value) => Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Ok(value) => Output.write(message: read String.from_int(value: Bytes.len(value: read value)))
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     match Hex.decode(text: read "not-hex") {
-        Ok(value) => Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Ok(value) => Output.write(message: read String.from_int(value: Bytes.len(value: read value)))
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     match Hex.decode(text: read "1f8b08000000000002ff4b4c4a0600c241243503000000") {
         Ok(gzipped) => {
             match Gzip.decompress_bytes(value: read gzipped) {
                 Ok(value) => {
-                    Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
-                    Log.write(message: read Hex.encode(value: read value))
+                    Output.write(message: read String.from_int(value: Bytes.len(value: read value)))
+                    Output.write(message: read Hex.encode(value: read value))
                 }
-                Err(error) => Log.write(message: read DecodeError.message(error: read error))
+                Err(error) => Output.write(message: read DecodeError.message(error: read error))
             }
         }
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     let bad_gzip = String.to_bytes(value: read "not gzip")
     match Gzip.decompress_bytes(value: read bad_gzip) {
-        Ok(value) => Log.write(message: read String.from_int(value: Bytes.len(value: read value)))
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Ok(value) => Output.write(message: read String.from_int(value: Bytes.len(value: read value)))
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     let component = Url.encode_component(value: read "a b/é?x=1")
-    Log.write(message: read component)
+    Output.write(message: read component)
 
     match Url.decode_component(value: read component) {
-        Ok(value) => Log.write(message: read value)
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Ok(value) => Output.write(message: read value)
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     match Url.decode_component(value: read "%FF") {
-        Ok(value) => Log.write(message: read value)
-        Err(error) => Log.write(message: read DecodeError.message(error: read error))
+        Ok(value) => Output.write(message: read value)
+        Err(error) => Output.write(message: read DecodeError.message(error: read error))
     }
 
     return Unit
@@ -352,70 +352,70 @@ fn main() -> Unit {
     let root = Path.from_string(value: read "fixtures")
     let path = Path.join(base: read root, child: read "rsscript-path.txt")
 
-    Log.write(message: read Path.to_string(path: read path))
-    Log.write(message: read Path.to_string(path: read String.to_path(value: read "fixtures/rsscript-path.txt")))
-    Log.write(message: read Path.to_string(path: read Path.normalize(path: read Path.join(base: read path, child: read ".."))))
+    Output.write(message: read Path.to_string(path: read path))
+    Output.write(message: read Path.to_string(path: read String.to_path(value: read "fixtures/rsscript-path.txt")))
+    Output.write(message: read Path.to_string(path: read Path.normalize(path: read Path.join(base: read path, child: read ".."))))
 
     match Path.file_name(path: read path) {
         Some(name) => {
-            Log.write(message: read name)
+            Output.write(message: read name)
         }
         None => {
-            Log.write(message: read "no-name")
+            Output.write(message: read "no-name")
         }
     }
     match Path.extension(path: read path) {
         Some(extension) => {
-            Log.write(message: read extension)
+            Output.write(message: read extension)
         }
         None => {
-            Log.write(message: read "no-extension")
+            Output.write(message: read "no-extension")
         }
     }
     match Path.parent(path: read path) {
         Some(parent) => {
-            Log.write(message: read Path.to_string(path: read parent))
+            Output.write(message: read Path.to_string(path: read parent))
         }
         None => {
-            Log.write(message: read "no-parent")
+            Output.write(message: read "no-parent")
         }
     }
 
     if Path.is_absolute(path: read Path.from_string(value: read "/tmp/rsscript")) {
-        Log.write(message: read "absolute")
+        Output.write(message: read "absolute")
     }
     if Path.starts_with(path: read path, base: read root) {
-        Log.write(message: read "starts")
+        Output.write(message: read "starts")
     }
-    Log.write(message: read Path.to_string(path: read Path.with_extension(path: read path, extension: read "json")))
+    Output.write(message: read Path.to_string(path: read Path.with_extension(path: read path, extension: read "json")))
 
     match Path.safe_relative(value: read "fixtures/./rsscript-path.txt") {
         Ok(safe) => {
-            Log.write(message: read Path.to_string(path: read safe))
+            Output.write(message: read Path.to_string(path: read safe))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
     match String.safe_relative(value: read "../escape") {
         Ok(safe) => {
-            Log.write(message: read Path.to_string(path: read safe))
+            Output.write(message: read Path.to_string(path: read safe))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
     match Path.resolve_relative(root: read root, relative: read "rsscript-path.txt") {
         Ok(resolved) => {
-            Log.write(message: read Path.to_string(path: read resolved))
+            Output.write(message: read Path.to_string(path: read resolved))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
 
     let from_method: Url = String.to_url(value: read "https://example.test/from-method")
-    Log.write(message: read Url.to_string(url: read from_method))
+    Output.write(message: read Url.to_string(url: read from_method))
     return Unit
 }
 "#;
@@ -438,10 +438,10 @@ fn main() -> Unit {
     let left = false && explode()
     let right = true || explode()
     if left == false && right == true {
-        Log.write(message: read "ok")
+        Output.write(message: read "ok")
         return Unit
     }
-    Log.write(message: read "bad")
+    Output.write(message: read "bad")
     return Unit
 }
 "#;
@@ -454,21 +454,21 @@ fn reg_vm_runs_log_and_workspace_intrinsics_like_interpreter() {
     let source = r#"
 
 fn main() -> Unit {
-    Log.write(message: read "stdout line")
-    Log.write_json(value: read Json.value(value: read {"stream": "stdout", "count": 1}))
-    Log.error(message: read "stderr line")
-    Log.error_json(value: read Json.value(value: read {"stream": "stderr", "count": 2}))
-    Log.trace(event: read "parity.event", message: read "traced")
+    Output.write(message: read "stdout line")
+    Output.write_json(value: read Json.value(value: read {"stream": "stdout", "count": 1}))
+    Output.error(message: read "stderr line")
+    Output.error_json(value: read Json.value(value: read {"stream": "stderr", "count": 2}))
+    Output.trace(event: read "parity.event", message: read "traced")
 
     let root = Env.run_workspace_root()
     match Workspace.resolve(root: read root, relative: read "Cargo.toml") {
         Ok(path) => {
             if Path.exists(path: read path) {
-                Log.write(message: read "workspace-resolved")
+                Output.write(message: read "workspace-resolved")
             }
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
 
@@ -504,7 +504,7 @@ fn checked(value: Int) -> Result<Int, String> {
 
 fn main() -> Result<Unit, String> {
     let value = checked(value: 4)?
-    Log.write(message: read String.from_int(value: value))
+    Output.write(message: read String.from_int(value: value))
     return Ok(Unit)
 }
 "#;
@@ -545,7 +545,7 @@ fn main() -> Unit {
         },
     )
 
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -590,7 +590,7 @@ fn main() -> Unit {
         },
     )
 
-    Log.write(message: read String.from_int(value: acc.total))
+    Output.write(message: read String.from_int(value: acc.total))
     return Unit
 }
 "#;
@@ -607,10 +607,10 @@ fn main() -> Unit {
     let patch = Diff.unified(old: read original, new: read changed)
     match Patch.apply_text(original: read original, patch: read patch) {
         Ok(applied) => {
-            Log.write(message: read applied)
+            Output.write(message: read applied)
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
 
@@ -618,24 +618,24 @@ fn main() -> Unit {
     match Patch.apply_text(original: read original, patch: read empty_patch) {
         Ok(applied) => {
             Assert.equal(left: read applied, right: read original)
-            Log.write(message: read "empty-ok")
+            Output.write(message: read "empty-ok")
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
 
     match Patch.apply_text(original: read "old\n", patch: read "--- old\n+++ new\n@@ -1,1 +1,1 @@\n-bad\n+new\n") {
         Ok(applied) => {
-            Log.write(message: read applied)
+            Output.write(message: read applied)
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
 
-    Log.write(message: read String.from_int(value: Ord.compare<Int>(self: read 1, other: read 2)))
-    Log.write(message: read String.from_int(value: Ord.compare<String>(self: read "b", other: read "a")))
+    Output.write(message: read String.from_int(value: Ord.compare<Int>(self: read 1, other: read 2)))
+    Output.write(message: read String.from_int(value: Ord.compare<String>(self: read "b", other: read "a")))
     return Unit
 }
 "#;
@@ -681,31 +681,31 @@ fn main() -> Result<Unit, JsonError> {
     let json_count = Json.field(value: read json, name: read "count")?
     let json_name_text = Json.as_string(value: read json_name)?
     let json_count_int = Json.as_int(value: read json_count)?
-    Log.write(message: read json_name_text)
-    Log.write(message: read String.from_int(value: json_count_int))
+    Output.write(message: read json_name_text)
+    Output.write(message: read String.from_int(value: json_count_int))
 
     let toml = Toml.parse_file(path: read toml_path)?
     let toml_name = Json.field(value: read toml, name: read "name")?
     let toml_count = Json.field(value: read toml, name: read "count")?
     let toml_name_text = Json.as_string(value: read toml_name)?
     let toml_count_int = Json.as_int(value: read toml_count)?
-    Log.write(message: read toml_name_text)
-    Log.write(message: read String.from_int(value: toml_count_int))
+    Output.write(message: read toml_name_text)
+    Output.write(message: read String.from_int(value: toml_count_int))
 
     let yaml = Yaml.parse_file(path: read yaml_path)?
     let yaml_name = Json.field(value: read yaml, name: read "name")?
     let yaml_count = Json.field(value: read yaml, name: read "count")?
     let yaml_name_text = Json.as_string(value: read yaml_name)?
     let yaml_count_int = Json.as_int(value: read yaml_count)?
-    Log.write(message: read yaml_name_text)
-    Log.write(message: read String.from_int(value: yaml_count_int))
+    Output.write(message: read yaml_name_text)
+    Output.write(message: read String.from_int(value: yaml_count_int))
 
     match Json.parse_file(path: read Path.from_string(value: read "missing-json-file")) {
         Ok(value) => {
-            Log.write(message: read Json.to_string(value: read value))
+            Output.write(message: read Json.to_string(value: read value))
         }
         Err(error) => {
-            Log.write(message: read JsonError.message(error: read error))
+            Output.write(message: read JsonError.message(error: read error))
         }
     }
     return Ok(Unit)
@@ -724,15 +724,15 @@ async fn main() -> Result<Unit, ChannelError> {
     local source = CancellationSource.new()
     let token = CancellationSource.token(source: read source)
     if !CancellationToken.is_cancelled(token: read token) {
-        Log.write(message: read "not-cancelled")
+        Output.write(message: read "not-cancelled")
     }
     CancellationSource.cancel(source: mut source)
     if CancellationToken.is_cancelled(token: read token) {
-        Log.write(message: read "cancelled")
+        Output.write(message: read "cancelled")
     }
     let second = CancellationSource.token(source: read source)
     if CancellationToken.is_cancelled(token: read second) {
-        Log.write(message: read "second-cancelled")
+        Output.write(message: read "second-cancelled")
     }
 
     local items = List<Int>.new()
@@ -742,25 +742,25 @@ async fn main() -> Result<Unit, ChannelError> {
     let stream: Stream<Int> = Stream.from_list<Int>(items: take items)
     match await Stream.next<Int>(stream: read stream)? {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "first-none")
+            Output.write(message: read "first-none")
         }
     }
     let remaining = Stream.collect_list<Int>(stream: read stream)?
-    Log.write(message: read String.from_int(value: List.len<Int>(list: read remaining)))
-    Log.write(message: read String.from_int(value: remaining[0]))
-    Log.write(message: read String.from_int(value: remaining[1]))
+    Output.write(message: read String.from_int(value: List.len<Int>(list: read remaining)))
+    Output.write(message: read String.from_int(value: remaining[0]))
+    Output.write(message: read String.from_int(value: remaining[1]))
 
     local empty_items = List<Int>.new()
     let empty_stream: Stream<Int> = Stream.from_list<Int>(items: take empty_items)
     match await Stream.next<Int>(stream: read empty_stream)? {
         Some(value) => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         None => {
-            Log.write(message: read "empty-none")
+            Output.write(message: read "empty-none")
         }
     }
     return Ok(Unit)
@@ -814,53 +814,53 @@ async fn main() -> Result<Unit, String> {
                     local value = 41 + 1
                     match await Sender.send<Int>(sender: read sender, value: take value) {
                         Ok(_) => {
-                            Log.write(message: read "sent")
+                            Output.write(message: read "sent")
                         }
                         Err(error) => {
-                            Log.write(message: read ChannelError.message(error: read error))
+                            Output.write(message: read ChannelError.message(error: read error))
                         }
                     }
                     match await Receiver.recv<Int>(receiver: read receiver) {
                         Ok(maybe_item) => {
                             match maybe_item {
                                 Some(item) => {
-                                    Log.write(message: read String.from_int(value: item))
+                                    Output.write(message: read String.from_int(value: item))
                                 }
                                 None => {
-                                    Log.write(message: read "none")
+                                    Output.write(message: read "none")
                                 }
                             }
                         }
                         Err(error) => {
-                            Log.write(message: read ChannelError.message(error: read error))
+                            Output.write(message: read ChannelError.message(error: read error))
                         }
                     }
                 }
                 Err(error) => {
-                    Log.write(message: read ChannelError.message(error: read error))
+                    Output.write(message: read ChannelError.message(error: read error))
                 }
             }
         }
         Err(error) => {
-            Log.write(message: read ChannelError.message(error: read error))
+            Output.write(message: read ChannelError.message(error: read error))
         }
     }
 
     let url = Url.from_string(value: read "https://example.test/api")
     match Http.get(url: read url) {
         Ok(response) => {
-            Log.write(message: read HttpResponse.text(response: read response))
-            Log.write(message: read String.from_int(value: Bytes.len(value: read HttpResponse.bytes(response: read response))))
+            Output.write(message: read HttpResponse.text(response: read response))
+            Output.write(message: read String.from_int(value: Bytes.len(value: read HttpResponse.bytes(response: read response))))
         }
         Err(error) => {
-            Log.write(message: read HttpError.message(error: read error))
+            Output.write(message: read HttpError.message(error: read error))
         }
     }
 
     let stdout = Process.run_stdout(command: read "printf", args: read ["vm"])?
-    Log.write(message: read stdout)
+    Output.write(message: read stdout)
     let output = Process.run(command: read "printf", args: read ["ok"])?
-    Log.write(message: read output.stdout)
+    Output.write(message: read output.stdout)
     return Ok(Unit)
 }
 "#;
@@ -888,36 +888,36 @@ fn main() -> Result<Unit, FileError> {
     let marker = Path.from_string(value: read Args.get_or_default(index: 1, default: read "target/rss-vm-tempdir/marker.txt"))
 
     if Path.exists(path: read root) {
-        Log.write(message: read "root-exists")
+        Output.write(message: read "root-exists")
     }
     if Path.is_dir(path: read root) {
-        Log.write(message: read "root-dir")
+        Output.write(message: read "root-dir")
     }
     if Path.exists(path: read marker) {
-        Log.write(message: read "marker-exists")
+        Output.write(message: read "marker-exists")
     }
     if Path.is_file(path: read marker) {
-        Log.write(message: read "marker-file")
+        Output.write(message: read "marker-file")
     }
 
     with TempDir.new_in(parent: read root)? as child {
         let path = TempDir.path(dir: read child)
         if Path.is_dir(path: read path) {
-            Log.write(message: read "child-dir")
+            Output.write(message: read "child-dir")
         }
     }
 
     with TempDir.new()? as created {
         let path = TempDir.path(dir: read created)
         if Path.is_dir(path: read path) {
-            Log.write(message: read "created-dir")
+            Output.write(message: read "created-dir")
         }
     }
 
     with TempDir.new_in(parent: read root)? as kept {
         let path = TempDir.keep(dir: take kept)
         if Path.is_dir(path: read path) {
-            Log.write(message: read "kept-dir")
+            Output.write(message: read "kept-dir")
         }
     }
 
@@ -950,15 +950,15 @@ fn main() -> Result<Unit, FileError> {
     let path_file = Path.join(base: read root, child: read "path.txt")
     File.write_string_to_path(path: read path_file, text: read "file text")?
     if File.exists(path: read path_file) {
-        Log.write(message: read "path-exists")
+        Output.write(message: read "path-exists")
     }
     let file_text = File.read_string(path: read path_file)?
-    Log.write(message: read file_text)
+    Output.write(message: read file_text)
 
     let bytes_file = Path.join(base: read root, child: read "bytes.bin")
     File.write_bytes(path: read bytes_file, data: read Bytes.from_string(value: read "abc"))?
     let bytes = File.read_bytes(path: read bytes_file)?
-    Log.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
+    Output.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
 
     let handle_file = Path.join(base: read root, child: read "handle.txt")
     with File.open_write(path: read handle_file)? as writer {
@@ -967,27 +967,27 @@ fn main() -> Result<Unit, FileError> {
     }
     with File.open(path: read handle_file)? as reader {
         let all = File.read_all(file: mut reader)?
-        Log.write(message: read String.from_int(value: Bytes.len(value: read all)))
+        Output.write(message: read String.from_int(value: Bytes.len(value: read all)))
         let empty = File.read_all(file: mut reader)?
-        Log.write(message: read String.from_int(value: Bytes.len(value: read empty)))
+        Output.write(message: read String.from_int(value: Bytes.len(value: read empty)))
     }
     with File.open_read(path: read handle_file)? as reader_text {
         let text_all = File.read_all_string(file: mut reader_text)?
-        Log.write(message: read text_all)
+        Output.write(message: read text_all)
     }
     with File.open_read(path: read handle_file)? as reader_into {
         local into_buffer = Buffer.new(size: 0)
         if File.read_into(file: mut reader_into, buffer: mut into_buffer)? {
-            Log.write(message: read String.from_int(value: Buffer.len(buffer: read into_buffer)))
+            Output.write(message: read String.from_int(value: Buffer.len(buffer: read into_buffer)))
         }
         if !File.read_into(file: mut reader_into, buffer: mut into_buffer)? {
-            Log.write(message: read "read-into-empty")
+            Output.write(message: read "read-into-empty")
         }
     }
 
     File.remove(path: read path_file)?
     if !File.exists(path: read path_file) {
-        Log.write(message: read "removed")
+        Output.write(message: read "removed")
     }
     return Ok(Unit)
 }
@@ -1019,79 +1019,79 @@ fn main() -> Result<Unit, FileError> {
     Directory.create_dir_all(path: read deep)?
     Directory.create(path: read single)?
     if Directory.exists(path: read root) {
-        Log.write(message: read "root-exists")
+        Output.write(message: read "root-exists")
     }
     if Directory.is_dir(path: read deep) {
-        Log.write(message: read "deep-dir")
+        Output.write(message: read "deep-dir")
     }
 
     let path_file = Path.join(base: read nested, child: read "path.txt")
     Directory.write_string(path: read path_file, content: read "path text")?
     if Directory.is_file(path: read path_file) {
-        Log.write(message: read "directory-file")
+        Output.write(message: read "directory-file")
     }
     let path_text = Directory.read_string(path: read path_file)?
-    Log.write(message: read path_text)
+    Output.write(message: read path_text)
     let path_digest = Hash.sha256_file(path: read path_file)?
     Assert.equal(left: read path_digest, right: read "c6465e0abd2e3c2f5ccfe7f639ddc0f72282904663b09ddd8dffbe060be35f97")
 
     let metadata = Directory.metadata(path: read path_file)?
     if metadata.is_file {
-        Log.write(message: read "metadata-file")
+        Output.write(message: read "metadata-file")
     }
-    Log.write(message: read String.from_int(value: metadata.len))
+    Output.write(message: read String.from_int(value: metadata.len))
 
     let bytes_file = Path.join(base: read nested, child: read "bytes.bin")
     File.write_bytes(path: read bytes_file, data: read Bytes.from_string(value: read "abc"))?
     File.append_bytes(path: read bytes_file, data: read Bytes.from_string(value: read "de"))?
     File.append_string(path: read bytes_file, text: read "f")?
     let bytes = File.read_bytes(path: read bytes_file)?
-    Log.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
+    Output.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
     match File.bytes_stream(path: read bytes_file, chunk_size: 2) {
         Ok(stream) => {
             match Stream.collect_list<Bytes>(stream: read stream) {
                 Ok(chunks) => {
-                    Log.write(message: read String.from_int(value: List.len<Bytes>(list: read chunks)))
-                    Log.write(message: read String.from_int(value: Bytes.len(value: read chunks[0])))
-                    Log.write(message: read String.from_int(value: Bytes.len(value: read chunks[1])))
-                    Log.write(message: read String.from_int(value: Bytes.len(value: read chunks[2])))
+                    Output.write(message: read String.from_int(value: List.len<Bytes>(list: read chunks)))
+                    Output.write(message: read String.from_int(value: Bytes.len(value: read chunks[0])))
+                    Output.write(message: read String.from_int(value: Bytes.len(value: read chunks[1])))
+                    Output.write(message: read String.from_int(value: Bytes.len(value: read chunks[2])))
                 }
                 Err(error) => {
-                    Log.write(message: read ChannelError.message(error: read error))
+                    Output.write(message: read ChannelError.message(error: read error))
                 }
             }
         }
         Err(error) => {
-            Log.write(message: read ChannelError.message(error: read error))
+            Output.write(message: read ChannelError.message(error: read error))
         }
     }
 
     let files = Directory.list_files(path: read root)?
     if List.contains_value<String>(list: read files, value: read "nested/path.txt") {
-        Log.write(message: read "listed-path")
+        Output.write(message: read "listed-path")
     }
     if List.contains_value<String>(list: read files, value: read "nested/bytes.bin") {
-        Log.write(message: read "listed-bytes")
+        Output.write(message: read "listed-bytes")
     }
     let paths = Directory.list_paths(path: read nested)?
-    Log.write(message: read String.from_int(value: List.len<Path>(list: read paths)))
+    Output.write(message: read String.from_int(value: List.len<Path>(list: read paths)))
 
     let copied = Path.join(base: read nested, child: read "copied.txt")
     Directory.copy_file(from: read path_file, to: read copied)?
     let copied_text = File.read_string(path: read copied)?
-    Log.write(message: read copied_text)
+    Output.write(message: read copied_text)
     let renamed = Path.join(base: read nested, child: read "renamed.txt")
     Directory.rename(from: read copied, to: read renamed)?
     if File.exists(path: read renamed) {
-        Log.write(message: read "renamed-exists")
+        Output.write(message: read "renamed-exists")
     }
     Directory.remove_file(path: read renamed)?
     if !File.exists(path: read renamed) {
-        Log.write(message: read "renamed-removed")
+        Output.write(message: read "renamed-removed")
     }
     Directory.remove_dir_all(path: read single)?
     if !Path.exists(path: read single) {
-        Log.write(message: read "single-removed")
+        Output.write(message: read "single-removed")
     }
     return Ok(Unit)
 }
@@ -1125,19 +1125,19 @@ async fn main() -> Result<Unit, FileError> {
     Env.set_current_dir(path: read current)?
     Env.set(name: read "RSSCRIPT_VM_IGNORED", value: read "ignored")
     if String.len(value: read Path.to_string(path: read Env.run_workspace_root())) > 0 {
-        Log.write(message: read "workspace-root")
+        Output.write(message: read "workspace-root")
     }
     if String.len(value: read Path.to_string(path: read Env.temp_dir())) > 0 {
-        Log.write(message: read "temp-dir")
+        Output.write(message: read "temp-dir")
     }
     match Env.home_dir() {
         Some(path) => {
             if String.len(value: read Path.to_string(path: read path)) > 0 {
-                Log.write(message: read "home-dir")
+                Output.write(message: read "home-dir")
             }
         }
         None => {
-            Log.write(message: read "home-none")
+            Output.write(message: read "home-none")
         }
     }
 
@@ -1148,22 +1148,22 @@ async fn main() -> Result<Unit, FileError> {
     let path_file = Path.join(base: read nested, child: read "path.txt")
     Path.write_string(path: read path_file, text: read "path text")?
     let path_text = Path.read_string(path: read path_file)?
-    Log.write(message: read path_text)
+    Output.write(message: read path_text)
 
     let async_bytes = Path.join(base: read nested, child: read "async-bytes.bin")
     await File.write_async(path: read async_bytes, data: read Bytes.from_string(value: read "abc"))?
     let async_read = await File.read_all_async(path: read async_bytes)?
-    Log.write(message: read String.from_int(value: Bytes.len(value: read async_read)))
+    Output.write(message: read String.from_int(value: Bytes.len(value: read async_read)))
 
     let async_text = Path.join(base: read nested, child: read "async-text.txt")
     await File.write_string_async(path: read async_text, text: read "async text")?
     let async_text_read = await File.read_all_string_async(path: read async_text)?
-    Log.write(message: read async_text_read)
+    Output.write(message: read async_text_read)
 
     let atomic = Path.join(base: read nested, child: read "atomic.txt")
     File.write_atomic(path: read atomic, text: read "atomic text")?
     let atomic_text = File.read_string(path: read atomic)?
-    Log.write(message: read atomic_text)
+    Output.write(message: read atomic_text)
 
     let handle_file = Path.join(base: read nested, child: read "handle-extra.txt")
     with File.open_write(path: read handle_file)? as writer {
@@ -1175,14 +1175,14 @@ async fn main() -> Result<Unit, FileError> {
     }
     let handle_read_path = Path.join(base: read nested, child: read "handle-extra.txt")
     let handle_read = File.read_string(path: read handle_read_path)?
-    Log.write(message: read handle_read)
+    Output.write(message: read handle_read)
 
     let files = Path.list_files(path: read root)?
     if List.contains_value<String>(list: read files, value: read "nested/path.txt") {
-        Log.write(message: read "path-list-file")
+        Output.write(message: read "path-list-file")
     }
     let paths = Path.list_paths(path: read nested)?
-    Log.write(message: read String.from_int(value: List.len<Path>(list: read paths)))
+    Output.write(message: read String.from_int(value: List.len<Path>(list: read paths)))
     return Ok(Unit)
 }
 "#;
@@ -1203,28 +1203,28 @@ fn main() -> Result<Unit, String> {
     let start = Clock.now()
     let unix_ms = Clock.system_unix_ms()
     if unix_ms > 0 {
-        Log.write(message: read "clock")
+        Output.write(message: read "clock")
     }
     let elapsed = Instant.elapsed(start: read start)
     if Duration.as_ms(value: read elapsed) >= 0 {
-        Log.write(message: read "elapsed")
+        Output.write(message: read "elapsed")
     }
 
     let immediate = Deadline.after_ms(ms: 0)
     if Deadline.is_expired(deadline: read immediate) {
-        Log.write(message: read "expired-now")
+        Output.write(message: read "expired-now")
     }
     if Deadline.remaining_ms(deadline: read immediate) >= 0 {
-        Log.write(message: read "remaining-nonnegative")
+        Output.write(message: read "remaining-nonnegative")
     }
     let negative = Deadline.after(duration: read Duration.ms(value: 0 - 1))
     if Deadline.is_expired(deadline: read negative) {
-        Log.write(message: read "expired-negative")
+        Output.write(message: read "expired-negative")
     }
 
     let numbers = [1, 2, 3]
     let touched_numbers = Pipeline.each<Int>(pipeline: read List.pipeline<Int>(list: read numbers), action: |item| {
-        Log.write(message: read String.from_int(value: item))
+        Output.write(message: read String.from_int(value: item))
         return Unit
     })
     let ok_pipeline = Pipeline.try_map<Int, Int, String>(pipeline: read touched_numbers, mapper: |item| {
@@ -1240,7 +1240,7 @@ fn main() -> Result<Unit, String> {
         return item > 11
     })
     let touched = FalliblePipeline.each<Int, String>(pipeline: read filtered, action: |item| {
-        Log.write(message: read String.from_int(value: item))
+        Output.write(message: read String.from_int(value: item))
         return Unit
     })
     let final_pipeline = FalliblePipeline.try_map<Int, Int, String>(pipeline: read touched, mapper: |item| {
@@ -1251,11 +1251,11 @@ fn main() -> Result<Unit, String> {
     })
     match FalliblePipeline.collect<Int, String>(pipeline: read final_pipeline) {
         Ok(items) => {
-            Log.write(message: read String.from_int(value: List.len<Int>(list: read items)))
-            Log.write(message: read String.from_int(value: items[0]))
+            Output.write(message: read String.from_int(value: List.len<Int>(list: read items)))
+            Output.write(message: read String.from_int(value: items[0]))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
 
@@ -1266,15 +1266,15 @@ fn main() -> Result<Unit, String> {
         return Ok(item + 0)
     })
     let still_failed = FalliblePipeline.map<Int, Int, String>(pipeline: read failed, mapper: |item| {
-        Log.write(message: read "should-not-run")
+        Output.write(message: read "should-not-run")
         return item + 1
     })
     match FalliblePipeline.collect<Int, String>(pipeline: read still_failed) {
         Ok(items) => {
-            Log.write(message: read String.from_int(value: List.len<Int>(list: read items)))
+            Output.write(message: read String.from_int(value: List.len<Int>(list: read items)))
         }
         Err(error) => {
-            Log.write(message: read error)
+            Output.write(message: read error)
         }
     }
     return Ok(Unit)
@@ -1289,12 +1289,12 @@ fn reg_vm_runs_receiver_methods_like_interpreter() {
     let source = r#"
 fn main() -> Unit {
     let greeting = String.concat(left: read "hi ", right: read "there")
-    Log.write(message: read String.from_int(value: greeting.len()))
+    Output.write(message: read String.from_int(value: greeting.len()))
     let n = 255
-    Log.write(message: read n.to_string())
+    Output.write(message: read n.to_string())
     let blank = ""
     if blank.is_empty() {
-        Log.write(message: read "blank-empty")
+        Output.write(message: read "blank-empty")
     }
     return Unit
 }

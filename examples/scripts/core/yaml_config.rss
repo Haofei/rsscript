@@ -13,6 +13,6 @@ fn main() -> Result<Unit, JsonError> {
     Assert.equal(left: name, right: "rss")
     Assert.equal_int(left: port, right: 8080)
     Assert.equal_int(left: tag_count, right: 2)
-    Log.write(message: name)
+    Output.write(message: name)
     return Ok(Unit)
 }

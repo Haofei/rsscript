@@ -19,6 +19,6 @@ fn main() -> Result<Unit, FileError> {
 
     copy_file(input, output)?
 
-    Log.write(message: "file copy ran")
+    Output.write(message: "file copy ran")
     return Ok(Unit)
 }

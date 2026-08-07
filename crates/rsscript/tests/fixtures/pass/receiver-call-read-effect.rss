@@ -18,5 +18,5 @@ impl Formatter for Point {
 
 fn print_item<F: Formatter>(item: F) -> Unit {
     let msg = item.format()
-    Log.write(message: msg)
+    Output.write(message: msg)
 }

@@ -227,47 +227,47 @@ fn main() -> Unit {
     let mut i = 0
     while i < Program.len(self: program) {
         let item = List.get<Item>(list: program.items, index: i)
-        Log.write(message: item_line(item))
+        Output.write(message: item_line(item))
         if item.kind == ITEM_TYPE || item.kind == ITEM_SUM {
-            Log.write(message: data_header_line(item))
+            Output.write(message: data_header_line(item))
             let mut g = 0
             while g < List.len(list: item.generics) {
                 let generic = List.get<GenericParam>(list: item.generics, index: g)
-                Log.write(message: String.concat(left: String.concat(left: "  generic\t", right: generic.name), right: String.concat(left: "\t", right: generic.boundText)))
+                Output.write(message: String.concat(left: String.concat(left: "  generic\t", right: generic.name), right: String.concat(left: "\t", right: generic.boundText)))
                 g = g + 1
             }
             let mut d = 0
             while d < List.len(list: item.derives) {
                 let derive = List.get<DeriveName>(list: item.derives, index: d)
-                Log.write(message: String.concat(left: "  derive\t", right: derive.name))
+                Output.write(message: String.concat(left: "  derive\t", right: derive.name))
                 d = d + 1
             }
             let mut f = 0
             while f < List.len(list: item.fields) {
                 let field = List.get<Field>(list: item.fields, index: f)
-                Log.write(message: field_line(prefix: "  field\t", field))
+                Output.write(message: field_line(prefix: "  field\t", field))
                 f = f + 1
             }
             let mut v = 0
             while v < List.len(list: item.variants) {
                 let variant = List.get<Variant>(list: item.variants, index: v)
-                Log.write(message: String.concat(left: "  variant\t", right: variant.name))
+                Output.write(message: String.concat(left: "  variant\t", right: variant.name))
                 let mut vf = 0
                 while vf < List.len(list: variant.fields) {
                     let field = List.get<Field>(list: variant.fields, index: vf)
-                    Log.write(message: field_line(prefix: "    field\t", field))
+                    Output.write(message: field_line(prefix: "    field\t", field))
                     vf = vf + 1
                 }
                 v = v + 1
             }
         }
         if item.kind == ITEM_TYPE_ALIAS {
-            Log.write(message: String.concat(left: "  target\t", right: item.aliasTarget))
+            Output.write(message: String.concat(left: "  target\t", right: item.aliasTarget))
         }
         if item.kind == ITEM_CONST {
             let typed = String.concat(left: "  type\t", right: item.constType)
-            Log.write(message: typed)
-            Log.write(message: String.concat(left: "  value\t", right: item.constValue))
+            Output.write(message: typed)
+            Output.write(message: String.concat(left: "  value\t", right: item.constValue))
         }
         if item.kind == ITEM_FUNCTION {
             let mut header = "  header\tpublic="
@@ -284,39 +284,39 @@ fn main() -> Unit {
             if item.hasDefaultImplMarker {
                 header = String.concat(left: header, right: "\tdefault-impl=true")
             }
-            Log.write(message: header)
+            Output.write(message: header)
             let mut g = 0
             while g < List.len(list: item.generics) {
                 let generic = List.get<GenericParam>(list: item.generics, index: g)
-                Log.write(message: String.concat(left: String.concat(left: "  generic\t", right: generic.name), right: String.concat(left: "\t", right: generic.boundText)))
+                Output.write(message: String.concat(left: String.concat(left: "  generic\t", right: generic.name), right: String.concat(left: "\t", right: generic.boundText)))
                 g = g + 1
             }
             let mut p = 0
             while p < List.len(list: item.params) {
                 let param = List.get<Param>(list: item.params, index: p)
-                Log.write(message: param_line(param))
+                Output.write(message: param_line(param))
                 if param.hasDefault {
                     let pos = String.concat(left: String.concat(left: String.from_int(value: param.defaultLine), right: ":"), right: String.concat(left: String.from_int(value: param.defaultColumn), right: String.concat(left: ":", right: String.from_int(value: param.defaultLength))))
-                    Log.write(message: String.concat(left: "  default\t", right: pos))
+                    Output.write(message: String.concat(left: "  default\t", right: pos))
                 }
                 p = p + 1
             }
             let mut e = 0
             while e < List.len(list: item.retainedParams) {
                 let target = List.get<String>(list: item.retainedParams, index: e)
-                Log.write(message: String.concat(left: "  retains\t", right: target))
+                Output.write(message: String.concat(left: "  retains\t", right: target))
                 e = e + 1
             }
             let mut s = 0
             while s < List.len(list: item.statements) {
                 let statementIndex = List.get<Int>(list: item.statements, index: s)
                 let statement = List.get<Stmt>(list: program.statements, index: statementIndex)
-                Log.write(message: statement_line(program, statement))
+                Output.write(message: statement_line(program, statement))
                 if statement.kind == STMT_MATCH {
                     let mut a = 0
                     while a < List.len(list: statement.arms) {
                         let arm = List.get<MatchArm>(list: statement.arms, index: a)
-                        Log.write(message: match_arm_line(program, arm))
+                        Output.write(message: match_arm_line(program, arm))
                         a = a + 1
                     }
                 }
@@ -324,7 +324,7 @@ fn main() -> Unit {
                     let mut a = 0
                     while a < List.len(list: statement.selectArms) {
                         let arm = List.get<SelectArm>(list: statement.selectArms, index: a)
-                        Log.write(message: select_arm_line(program, arm))
+                        Output.write(message: select_arm_line(program, arm))
                         a = a + 1
                     }
                 }
@@ -333,11 +333,11 @@ fn main() -> Unit {
         }
         if item.kind == ITEM_IMPL {
             let protocol = String.concat(left: "  protocol\t", right: item.protocol)
-            Log.write(message: String.concat(left: protocol, right: String.concat(left: "\tfor\t", right: item.implType)))
+            Output.write(message: String.concat(left: protocol, right: String.concat(left: "\tfor\t", right: item.implType)))
             let mut m = 0
             while m < List.len(list: item.mappings) {
                 let mapping = List.get<ProtocolMapping>(list: item.mappings, index: m)
-                Log.write(message: protocol_mapping_line(mapping))
+                Output.write(message: protocol_mapping_line(mapping))
                 m = m + 1
             }
         }

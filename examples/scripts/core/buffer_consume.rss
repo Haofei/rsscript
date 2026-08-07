@@ -13,6 +13,6 @@ fn main() -> Result<Unit, FileError> {
         Buffer.consume(buffer: take buffer)
     }
 
-    Log.write(message: "buffer consumed")
+    Output.write(message: "buffer consumed")
     return Ok(Unit)
 }

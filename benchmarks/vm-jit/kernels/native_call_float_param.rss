@@ -34,6 +34,6 @@ fn hot(limit: Int) -> Float {
 fn main() -> Unit {
     let limit = bench_size(default: 750000)
     let result = hot(limit)
-    Log.write(message: Float.to_string(value: result))
+    Output.write(message: Float.to_string(value: result))
     return Unit
 }

@@ -450,7 +450,7 @@ struct Rendered {
 
 fn render(body: read String) -> Result<fresh Rendered, HttpError> {
     let response = Rendered(status: 200, body: read body)
-    Log.write(message: read body)
+    Output.write(message: read body)
     Missing.call(value: read body)
     return response
 }
@@ -470,7 +470,13 @@ fn render(body: read String) -> Result<fresh Rendered, HttpError> {
             ..
         }
     ));
-    assert!(matches!(sites[1].resolution, CallResolution::Unknown));
+    assert!(matches!(
+        sites[1].resolution,
+        CallResolution::Resolved {
+            kind: ResolvedCalleeKind::BuiltinFunction,
+            ..
+        }
+    ));
     assert!(matches!(sites[2].resolution, CallResolution::Unknown));
 
     let bindings = &hir

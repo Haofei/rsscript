@@ -1892,7 +1892,7 @@ fn write(self:mut Self,message:read String)->Unit
 struct BufferWriter
 fn BufferWriter.write(self:mut BufferWriter,message:read String)->Unit
 {
-Log.write(message:read message)
+Output.write(message:read message)
 }
 impl Writer for BufferWriter {
 write=BufferWriter.write
@@ -1911,7 +1911,7 @@ Writer.write(self:mut writer,message:read message)
 struct BufferWriter
 
 fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit {
-    Log.write(message: read message)
+    Output.write(message: read message)
 }
 
 fn write_line<W: Writer>(writer: mut W, message: read String) -> Unit {
@@ -2013,8 +2013,8 @@ match read p{
 
 fn main()->Unit{
 let (a,b)=(5,"x")
-Log.write(message:read b)
-Log.write(message:read String.from_int(value:first(p:read (a,b))))
+Output.write(message:read b)
+Output.write(message:read String.from_int(value:first(p:read (a,b))))
 return Unit
 }
 "#;
@@ -2034,8 +2034,8 @@ return Unit
 
 fn main() -> Unit {
     let (a, b) = (5, "x")
-    Log.write(message: read b)
-    Log.write(message: read String.from_int(value: first(p: read (a, b))))
+    Output.write(message: read b)
+    Output.write(message: read String.from_int(value: first(p: read (a, b))))
     return Unit
 }
 "#

@@ -37,7 +37,7 @@ fn effect_matches(expected: String, supplied: String) -> Bool {
 // behavior is already covered by the differential corpus.
 fn prepared_external_type_is_owned(expression: Expr, parameterName: String) -> Bool {
     if expression.calleeKind != CALLEE_QUALIFIED { return true }
-    if expression.text == "Log.write" && parameterName == "message" { return true }
+    if expression.text == "Output.write" && parameterName == "message" { return true }
     if expression.text == "String.concat" && (parameterName == "left" || parameterName == "right") { return true }
     if expression.text == "String.len" && parameterName == "value" { return true }
     if expression.text == "List.push" && (parameterName == "list" || parameterName == "value") { return true }

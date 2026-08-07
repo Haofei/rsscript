@@ -34,7 +34,7 @@ fn main() -> Unit {
         i = i + 1
     }
 
-    Log.write(message: String.from_int(value: len_loop(
+    Output.write(message: String.from_int(value: len_loop(
         table,
         set,
         reps

@@ -12,7 +12,7 @@ fn fib(n: Int) -> Int {
     return fib(n: read n - 1) + fib(n: read n - 2)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: fib(n: read 28)))
+    Output.write(message: read String.from_int(value: fib(n: read 28)))
     return Unit
 }
 ";
@@ -28,7 +28,7 @@ fn is_odd(n: Int) -> Int {
     return is_even(n: read n - 1)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: is_even(n: read 20)))
+    Output.write(message: read String.from_int(value: is_even(n: read 20)))
     return Unit
 }
 ";
@@ -157,13 +157,13 @@ fn native_self_recursion_step_budget_preempts() {
 }
 
 /// Shared OSR-shaped kernel for the J0.5 limit tests: the loop is wrapped by
-/// non-native `Log.write` I/O, so the function is native-INELIGIBLE as a whole and the
+/// non-native `Output.write` I/O, so the function is native-INELIGIBLE as a whole and the
 /// hot loop is taken via OSR (not whole-function native) — which is exactly the tier
 /// J0.5 must enforce limits in. `read N` blocks const-folding.
 #[cfg(feature = "native-jit")]
 const J05_OSR_KERNEL: &str = "\
 fn loopsum(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut total = 0
     let mut i = 0
     while i < n {
@@ -174,7 +174,7 @@ fn loopsum(n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: loopsum(n: read 5000)))
+    Output.write(message: read String.from_int(value: loopsum(n: read 5000)))
     return Unit
 }
 ";
@@ -228,7 +228,7 @@ fn native_osr_trips_tight_step_budget() {
 fn native_osr_host_call_budget_stays_interpreted_and_enforced() {
     let source = "\
 fn measure(s: String, n: Int) -> Int {
-    Log.write(message: \"begin\")
+    Output.write(message: \"begin\")
     let mut total = 0
     let mut i = 0
     while i < n {
@@ -239,7 +239,7 @@ fn measure(s: String, n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: String.from_int(value: measure(s: \"abc\", n: 200)))
+    Output.write(message: String.from_int(value: measure(s: \"abc\", n: 200)))
     return Unit
 }
 ";
@@ -279,7 +279,7 @@ fn main() -> Unit {
 fn native_osr_materializes_written_handle_live_out() {
     let source = "\
 fn choose(left: String, right: String, n: Int) -> String {
-    Log.write(message: \"begin\")
+    Output.write(message: \"begin\")
     let mut selected = left
     let mut i = 0
     while i < n {
@@ -290,7 +290,7 @@ fn choose(left: String, right: String, n: Int) -> String {
 }
 
 fn main() -> Unit {
-    Log.write(message: choose(left: \"wrong\", right: \"right\", n: 200))
+    Output.write(message: choose(left: \"wrong\", right: \"right\", n: 200))
     return Unit
 }
 ";
@@ -313,7 +313,7 @@ fn main() -> Unit {
 fn native_osr_restores_bool_live_out() {
     let source = "\
 fn final_flag(seed: Bool, n: Int) -> Bool {
-    Log.write(message: \"begin\")
+    Output.write(message: \"begin\")
     let mut flag = false
     let mut i = 0
     while i < n {
@@ -328,7 +328,7 @@ fn final_flag(seed: Bool, n: Int) -> Bool {
 }
 
 fn main() -> Unit {
-    Log.write(message: String.from_bool(value: final_flag(seed: true, n: 201)))
+    Output.write(message: String.from_bool(value: final_flag(seed: true, n: 201)))
     return Unit
 }
 ";
@@ -355,7 +355,7 @@ struct Holder {
 }
 
 fn update(xs: mut List<Int>, holder: mut Holder, n: Int) -> Int {
-    Log.write(message: \"begin\")
+    Output.write(message: \"begin\")
     let mut total = 0
     let mut i = 0
     while i < n {
@@ -370,7 +370,7 @@ fn main() -> Unit {
     local xs = List<Int>.new()
     List.push(list: mut xs, value: 0)
     local holder = Holder(items: read xs)
-    Log.write(message: String.from_int(value: update(xs: mut xs, holder: mut holder, n: 200)))
+    Output.write(message: String.from_int(value: update(xs: mut xs, holder: mut holder, n: 200)))
     return Unit
 }
 ";
@@ -397,7 +397,7 @@ fn native_osr_cancel_flag_preempts() {
     // its own (every-1024-step) cancel poll before finishing.
     let source = "\
 fn loopsum(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut total = 0
     let mut i = 0
     while i < n {
@@ -408,7 +408,7 @@ fn loopsum(n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: loopsum(n: read 1000000)))
+    Output.write(message: read String.from_int(value: loopsum(n: read 1000000)))
     return Unit
 }
 ";
@@ -443,7 +443,7 @@ fn native_osr_map_insert_string_key_matches_interpreter() {
     // iteration inserts `k -> i` (overwriting), exercising `MapInsertHandleKeyInt`.
     let source = "\
 fn build_map(k: read String, n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut m = Map<String, Int>.new()
     let mut i = 0
     while i < n {
@@ -454,7 +454,7 @@ fn build_map(k: read String, n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: build_map(k: read \"hello\", n: read 200)))
+    Output.write(message: read String.from_int(value: build_map(k: read \"hello\", n: read 200)))
     return Unit
 }
 ";
@@ -508,7 +508,7 @@ fn native_osr_nonallocating_loop_runs_under_allocation_budget() {
 fn native_osr_map_insert_loop_runs_under_allocation_budget() {
     let source = "\
 fn build_map(k: read String, n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut m = Map<String, Int>.new()
     let mut i = 0
     while i < n {
@@ -519,7 +519,7 @@ fn build_map(k: read String, n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: build_map(k: read \"hello\", n: read 200)))
+    Output.write(message: read String.from_int(value: build_map(k: read \"hello\", n: read 200)))
     return Unit
 }
 ";
@@ -558,7 +558,7 @@ fn main() -> Unit {
 fn native_osr_list_push_handle_matches_interpreter() {
     let source = "\
 fn build_list(s: read String, n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut xs = List<String>.new()
     let mut i = 0
     while i < n {
@@ -571,7 +571,7 @@ fn build_list(s: read String, n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: build_list(s: read \"hi\", n: read 200)))
+    Output.write(message: read String.from_int(value: build_list(s: read \"hi\", n: read 200)))
     return Unit
 }
 ";
@@ -599,7 +599,7 @@ fn main() -> Unit {
 fn native_osr_j3_two_armed_scalar_result_matches_interpreter() {
     let source = "\
 fn f(limit: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut i = 0
     let mut total = 0
     while i < limit {
@@ -615,12 +615,12 @@ fn f(limit: Int) -> Int {
         }
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return total
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: f(limit: read 100)))
+    Output.write(message: read String.from_int(value: f(limit: read 100)))
     return Unit
 }
 ";
@@ -653,7 +653,7 @@ fn main() -> Unit {
 fn native_osr_j3_two_armed_result_live_after_reconstructs() {
     let source = "\
 fn f(limit: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut i = 0
     let mut total = 0
     let mut last: Result<Int, Int> = Ok(0)
@@ -670,12 +670,12 @@ fn f(limit: Int) -> Int {
         Ok(v) => { total = total + v }
         Err(e) => { total = total + e + 1000 }
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return total
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: f(limit: read 100)))
+    Output.write(message: read String.from_int(value: f(limit: read 100)))
     return Unit
 }
 ";
@@ -707,7 +707,7 @@ fn main() -> Unit {
 fn native_osr_set_insert_string_matches_interpreter() {
     let source = "\
 fn build_set(s: read String, n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut seen = Set<String>.new()
     let mut i = 0
     while i < n {
@@ -718,7 +718,7 @@ fn build_set(s: read String, n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: build_set(s: read \"x\", n: read 200)))
+    Output.write(message: read String.from_int(value: build_set(s: read \"x\", n: read 200)))
     return Unit
 }
 ";
@@ -751,7 +751,7 @@ fn main() -> Unit {
 fn native_osr_sorted_set_and_map_string_insert_matches_interpreter() {
     let set_src = "\
 fn build(s: read String, n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut seen = SortedSet<String>.new()
     let mut i = 0
     while i < n {
@@ -761,7 +761,7 @@ fn build(s: read String, n: Int) -> Int {
     return SortedSet.len(set: read seen)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: build(s: read \"x\", n: read 200)))
+    Output.write(message: read String.from_int(value: build(s: read \"x\", n: read 200)))
     return Unit
 }
 ";
@@ -782,7 +782,7 @@ fn main() -> Unit {
 
     let map_src = "\
 fn build(k: read String, n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut m = SortedMap<String, Int>.new()
     let mut i = 0
     while i < n {
@@ -792,7 +792,7 @@ fn build(k: read String, n: Int) -> Int {
     return SortedMap.len<String, Int>(map: read m)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: build(k: read \"k\", n: read 200)))
+    Output.write(message: read String.from_int(value: build(k: read \"k\", n: read 200)))
     return Unit
 }
 ";
@@ -824,7 +824,7 @@ struct Holder {
 }
 
 fn build(s: read String, n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut h = Holder(name: read \"init\")
     let mut i = 0
     while i < n {
@@ -835,7 +835,7 @@ fn build(s: read String, n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: build(s: read \"hello\", n: read 200)))
+    Output.write(message: read String.from_int(value: build(s: read \"hello\", n: read 200)))
     return Unit
 }
 ";
@@ -869,7 +869,7 @@ fn main() -> Unit {
 fn native_osr_deque_push_handle_matches_interpreter() {
     let source = "\
 fn build(s: read String, n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut d = Deque<String>.new()
     let mut i = 0
     while i < n {
@@ -881,7 +881,7 @@ fn build(s: read String, n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: build(s: read \"z\", n: read 100)))
+    Output.write(message: read String.from_int(value: build(s: read \"z\", n: read 100)))
     return Unit
 }
 ";
@@ -921,7 +921,7 @@ fn main() -> Unit {
 fn native_osr_two_armed_heap_string_result_matches_interpreter() {
     let source = "\
 fn f(s: read String, limit: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut i = 0
     let mut total = 0
     while i < limit {
@@ -933,11 +933,11 @@ fn f(s: read String, limit: Int) -> Int {
         }
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return total
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: f(s: read \"hello\", limit: read 100)))
+    Output.write(message: read String.from_int(value: f(s: read \"hello\", limit: read 100)))
     return Unit
 }
 ";
@@ -974,7 +974,7 @@ fn main() -> Unit {
 fn native_osr_two_armed_mixed_result_matches_interpreter() {
     let source = "\
 fn f(s: read String, limit: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut i = 0
     let mut total = 0
     while i < limit {
@@ -986,11 +986,11 @@ fn f(s: read String, limit: Int) -> Int {
         }
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return total
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: f(s: read \"hello\", limit: read 100)))
+    Output.write(message: read String.from_int(value: f(s: read \"hello\", limit: read 100)))
     return Unit
 }
 ";
@@ -1028,7 +1028,7 @@ fn main() -> Unit {
 fn native_osr_two_armed_heap_result_live_after_declines_safely() {
     let source = "\
 fn f(s: read String, limit: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut r: Result<String, String> = Ok(read \"init\")
     let mut i = 0
     while i < limit {
@@ -1041,7 +1041,7 @@ fn f(s: read String, limit: Int) -> Int {
     }
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: f(s: read \"hello\", limit: read 100)))
+    Output.write(message: read String.from_int(value: f(s: read \"hello\", limit: read 100)))
     return Unit
 }
 ";
@@ -1070,7 +1070,7 @@ fn main() -> Unit {
 fn native_osr_two_armed_heap_result_live_after_reconstructs() {
     let source = "\
 fn f(s: read String, limit: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut i = 0
     let mut total = 0
     let mut last: Result<String, String> = Ok(read \"init\")
@@ -1083,11 +1083,11 @@ fn f(s: read String, limit: Int) -> Int {
         Ok(a) => { total = total + String.len(value: read a) }
         Err(b) => { total = total + String.len(value: read b) + 1000 }
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return total
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: f(s: read \"hello\", limit: read 100)))
+    Output.write(message: read String.from_int(value: f(s: read \"hello\", limit: read 100)))
     return Unit
 }
 ";
@@ -1124,7 +1124,7 @@ fn main() -> Unit {
 fn native_osr_map_insert_string_key_lookup_matches_interpreter() {
     let source = "\
 fn build(k: read String, n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut m = Map<String, Int>.new()
     let mut i = 0
     while i < n {
@@ -1137,7 +1137,7 @@ fn build(k: read String, n: Int) -> Int {
     }
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: build(k: read \"key\", n: read 200)))
+    Output.write(message: read String.from_int(value: build(k: read \"key\", n: read 200)))
     return Unit
 }
 ";
@@ -1184,7 +1184,7 @@ fn main() -> Unit {
         acc = acc + lookup(m: read m, k: read \"beta\")
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: acc))
+    Output.write(message: read String.from_int(value: acc))
     return Unit
 }
 ";
@@ -1223,7 +1223,7 @@ fn main() -> Unit {
         acc = add(m: mut m, k: read \"key\", v: read i)
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: acc))
+    Output.write(message: read String.from_int(value: acc))
     return Unit
 }
 ";
@@ -1256,7 +1256,7 @@ fn native_osr_heap_set_and_sorted_map_discriminating() {
     // Set<String>: insert two DISTINCT keys repeatedly, then test membership of each.
     let set_src = "\
 fn build(a: read String, b: read String, n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut s = Set<String>.new()
     let mut i = 0
     while i < n {
@@ -1271,7 +1271,7 @@ fn build(a: read String, b: read String, n: Int) -> Int {
     return r
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: build(a: read \"x\", b: read \"y\", n: read 200)))
+    Output.write(message: read String.from_int(value: build(a: read \"x\", b: read \"y\", n: read 200)))
     return Unit
 }
 ";
@@ -1291,7 +1291,7 @@ fn main() -> Unit {
     // SortedMap<String,Int>: insert k -> i, then look k back up.
     let sm_src = "\
 fn build(k: read String, n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut m = SortedMap<String, Int>.new()
     let mut i = 0
     while i < n {
@@ -1304,7 +1304,7 @@ fn build(k: read String, n: Int) -> Int {
     }
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: build(k: read \"key\", n: read 200)))
+    Output.write(message: read String.from_int(value: build(k: read \"key\", n: read 200)))
     return Unit
 }
 ";
@@ -1343,7 +1343,7 @@ fn build(n: Int) -> Int {
     return List.len(list: read xs)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: build(n: read 20000)))
+    Output.write(message: read String.from_int(value: build(n: read 20000)))
     return Unit
 }
 ";
@@ -1396,7 +1396,7 @@ fn main() -> Unit {
 fn native_osr_aliased_struct_field_write_matches_interpreter() {
     // J0.4 #8 (aliased heap in-place write): a caller-aliased `mut Acc` struct whose
     // scalar field is read-modify-written in a hot loop. The function is I/O-wrapped
-    // (`Log.write`) so it is whole-tier-INELIGIBLE and the loop reaches the OSR path
+    // (`Output.write`) so it is whole-tier-INELIGIBLE and the loop reaches the OSR path
     // (a body with no I/O is tier-0-dispatched at the call site and never OSRs). The
     // OSR scalar-field replacement dissolves the field RMW to a loop-carried scalar,
     // writes it back to the struct on OSR exit, and the `mut`-param propagation carries
@@ -1406,7 +1406,7 @@ fn native_osr_aliased_struct_field_write_matches_interpreter() {
     let source = "\
 struct Acc { total: Int }
 fn bump(a: mut Acc, n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut i = 0
     while i < n {
         a.total = a.total + 2
@@ -1417,8 +1417,8 @@ fn bump(a: mut Acc, n: Int) -> Int {
 fn main() -> Unit {
     let mut a = Acc(total: 0)
     let r = bump(a: mut a, n: read 3000)
-    Log.write(message: read String.from_int(value: r))
-    Log.write(message: read String.from_int(value: a.total))
+    Output.write(message: read String.from_int(value: r))
+    Output.write(message: read String.from_int(value: a.total))
     return Unit
 }
 ";
@@ -1448,7 +1448,7 @@ fn main() -> Unit {
 fn native_osr_aliased_map_insert_matches_interpreter() {
     let source = "\
 fn fill(m: mut Map<Int, Int>, n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut i = 0
     while i < n {
         Map.insert<Int, Int>(map: mut m, key: read i, value: read i)
@@ -1460,10 +1460,10 @@ fn main() -> Unit {
     let mut m = Map<Int, Int>.new()
     let r = fill(m: mut m, n: read 2000)
     match Map.get<Int, Int>(map: read m, key: read 1999) {
-        Some(v) => { Log.write(message: read String.from_int(value: v)) }
-        None => { Log.write(message: read \"missing\") }
+        Some(v) => { Output.write(message: read String.from_int(value: v)) }
+        None => { Output.write(message: read \"missing\") }
     }
-    Log.write(message: read String.from_int(value: r))
+    Output.write(message: read String.from_int(value: r))
     return Unit
 }
 ";
@@ -1492,7 +1492,7 @@ fn main() -> Unit {
 fn native_osr_aliased_deque_push_matches_interpreter() {
     let source = "\
 fn fill(d: mut Deque<Int>, n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut i = 0
     while i < n {
         Deque.push_back<Int>(deque: mut d, value: read i)
@@ -1503,8 +1503,8 @@ fn fill(d: mut Deque<Int>, n: Int) -> Int {
 fn main() -> Unit {
     let mut d = Deque<Int>.new()
     let r = fill(d: mut d, n: read 2000)
-    Log.write(message: read String.from_int(value: Deque.len<Int>(deque: read d)))
-    Log.write(message: read String.from_int(value: r))
+    Output.write(message: read String.from_int(value: Deque.len<Int>(deque: read d)))
+    Output.write(message: read String.from_int(value: r))
     return Unit
 }
 ";
@@ -1543,7 +1543,7 @@ fn classify(x: Int) -> Int {
     return x + 1
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < n {
@@ -1553,7 +1553,7 @@ fn run(n: Int) -> Int {
     return acc
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -1588,7 +1588,7 @@ fn classify(x: Int) -> Int {
     return x + 1
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < n {
@@ -1598,7 +1598,7 @@ fn run(n: Int) -> Int {
     return acc
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -1633,7 +1633,7 @@ fn classify(x: Int) -> Int {
     return x + 1
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < n {
@@ -1643,7 +1643,7 @@ fn run(n: Int) -> Int {
     return acc
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -1693,7 +1693,7 @@ fn classify(x: Int) -> Int {
     return x + 1
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < n {
@@ -1703,7 +1703,7 @@ fn run(n: Int) -> Int {
     return acc
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -1743,7 +1743,7 @@ fn classify(x: Int) -> Result<Int, String> {
     return Ok(read x)
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < n {
@@ -1756,7 +1756,7 @@ fn run(n: Int) -> Int {
     return acc
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -1800,7 +1800,7 @@ fn classify(x: Int) -> Result<Int, String> {
     return Ok(read x)
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < n {
@@ -1813,7 +1813,7 @@ fn run(n: Int) -> Int {
     return acc
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -1862,7 +1862,7 @@ fn classify(x: Int) -> Int {
     return x + 1
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < n {
@@ -1872,7 +1872,7 @@ fn run(n: Int) -> Int {
     return acc
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -1911,7 +1911,7 @@ fn classify(x: Int) -> Int {
     return x + 1
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < n {
@@ -1921,7 +1921,7 @@ fn run(n: Int) -> Int {
     return acc
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -1957,7 +1957,7 @@ fn classify(x: Int) -> Int {
     return x + 1
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < n {
@@ -1967,7 +1967,7 @@ fn run(n: Int) -> Int {
     return acc
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -2003,7 +2003,7 @@ fn classify(x: Int) -> Int {
     return x + 1
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < n {
@@ -2013,7 +2013,7 @@ fn run(n: Int) -> Int {
     return acc
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -2054,7 +2054,7 @@ fn classify(x: Int, acc: mut List<Int>) -> Int {
     return x + 1
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc: List<Int> = []
     let mut total = 0
     let mut i = 0
@@ -2065,7 +2065,7 @@ fn run(n: Int) -> Int {
     return total + List.len(list: read acc)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -2098,7 +2098,7 @@ fn main() -> Unit {
 fn native_osr_inlined_leaf_call_nested_call_cold_arm_matches_interpreter() {
     let source = "\
 fn helper(x: Int) -> Int {
-    Log.write(message: read \"cold path hit\")
+    Output.write(message: read \"cold path hit\")
     return x * 7
 }
 fn classify(x: Int) -> Int {
@@ -2108,7 +2108,7 @@ fn classify(x: Int) -> Int {
     return x + 1
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < n {
@@ -2118,7 +2118,7 @@ fn run(n: Int) -> Int {
     return acc
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -2151,7 +2151,7 @@ fn main() -> Unit {
 fn native_osr_inlined_leaf_call_mut_arg_nested_call_cold_arm_matches_interpreter() {
     let source = "\
 fn appendErr(acc: mut List<Int>, x: Int) -> Int {
-    Log.write(message: read \"appending\")
+    Output.write(message: read \"appending\")
     List.push(list: mut acc, value: read x)
     return List.len(list: read acc)
 }
@@ -2163,7 +2163,7 @@ fn classify(x: Int) -> Int {
     return x + 1
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < n {
@@ -2173,7 +2173,7 @@ fn run(n: Int) -> Int {
     return acc
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -2222,8 +2222,8 @@ fn main() -> Unit {
     local xs = List<Int>.new()
     List.push(list: mut xs, value: read 7)
     let r = mutate(xs: read xs, limit: read 200000)
-    Log.write(message: read String.from_int(value: List.get(list: read xs, index: 0)))
-    Log.write(message: read String.from_int(value: r))
+    Output.write(message: read String.from_int(value: List.get(list: read xs, index: 0)))
+    Output.write(message: read String.from_int(value: r))
     return Unit
 }
 ";
@@ -2254,7 +2254,7 @@ fn elision_reused_loop_var_scalar_then_heap_does_not_leak() {
 fn pick(nums: read List<Int>, grid: read List<List<Int>>) -> List<Int> {
     for item in nums {
         let bump = item + 1
-        Log.write(message: read String.from_int(value: bump))
+        Output.write(message: read String.from_int(value: bump))
     }
     for item in grid {
         return item
@@ -2267,7 +2267,7 @@ fn main() -> Unit {
     local got = pick(nums: read nums, grid: read grid)
     List.push<Int>(list: mut got, value: read 99)
     let first = List.get<List<Int>>(list: read grid, index: 0)
-    Log.write(message: read String.from_int(value: List.len(list: read first)))
+    Output.write(message: read String.from_int(value: List.len(list: read first)))
     return Unit
 }
 ";
@@ -2289,7 +2289,7 @@ fn ident(i: mut Int) -> Int {
 fn main() -> Unit {
     local x = 5
     let y = ident(i: mut x)
-    Log.write(message: read String.from_int(value: y))
+    Output.write(message: read String.from_int(value: y))
     return Unit
 }
 ";
@@ -2315,7 +2315,7 @@ fn bump(n: mut Int) -> Unit {
 fn main() -> Unit {
     let w = Widget(count: 5)
     bump(n: mut w.count)
-    Log.write(message: read String.from_int(value: w.count))
+    Output.write(message: read String.from_int(value: w.count))
     return Unit
 }
 ";
@@ -2349,8 +2349,8 @@ fn main() -> Unit {
     local xs = List<Int>.new()
     List.push(list: mut xs, value: read 7)
     let r = leak(xs: read xs, n: read 200000)
-    Log.write(message: read String.from_int(value: List.get(list: read xs, index: 0)))
-    Log.write(message: read String.from_int(value: r))
+    Output.write(message: read String.from_int(value: List.get(list: read xs, index: 0)))
+    Output.write(message: read String.from_int(value: r))
     return Unit
 }
 ";
@@ -2389,7 +2389,7 @@ fn stash(xs: read List<Int>, h: mut Holder) -> Int {
     return List.len(list: read xs)
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     local holder = Holder(items: List<Int>.new())
     local xs = List<Int>.new()
     List.push(list: mut xs, value: read 7)
@@ -2404,7 +2404,7 @@ fn run(n: Int) -> Int {
     return List.get(list: read xs, index: 0)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -2436,7 +2436,7 @@ fn classify(x: Int) -> Int {
     return x + 1
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < n {
@@ -2446,7 +2446,7 @@ fn run(n: Int) -> Int {
     return acc
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -2485,7 +2485,7 @@ fn classify(x: Int) -> Int {
     return x + 1
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < n {
@@ -2495,7 +2495,7 @@ fn run(n: Int) -> Int {
     return acc
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -2537,7 +2537,7 @@ fn classify(x: Int, acc: mut List<Int>) -> Int {
     return 0
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc: List<Int> = []
     let mut total = 0
     let mut i = 0
@@ -2548,7 +2548,7 @@ fn run(n: Int) -> Int {
     return total + List.len(list: read acc)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -2588,7 +2588,7 @@ fn main() -> Unit {
 fn native_osr_inlined_leaf_caller_aliased_mut_arg_call_cold_arm_matches_interpreter() {
     let source = "\
 fn appendErr(acc: mut List<Int>, x: Int) -> Int {
-    Log.write(message: read \"appending\")
+    Output.write(message: read \"appending\")
     List.push(list: mut acc, value: read x)
     return List.len(list: read acc)
 }
@@ -2599,7 +2599,7 @@ fn classify(x: Int, acc: mut List<Int>) -> Int {
     return x + 1
 }
 fn run(n: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc: List<Int> = []
     let mut total = 0
     let mut i = 0
@@ -2610,7 +2610,7 @@ fn run(n: Int) -> Int {
     return total + List.len(list: read acc)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: run(n: read 3000)))
+    Output.write(message: read String.from_int(value: run(n: read 3000)))
     return Unit
 }
 ";
@@ -2644,7 +2644,7 @@ fn leaf(x: Int) -> Int {
 }
 
 fn hot(limit: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut acc = 0
     let mut i = 0
     while i < limit {
@@ -2683,7 +2683,7 @@ fn hot(limit: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: hot(limit: read 200)))
+    Output.write(message: read String.from_int(value: hot(limit: read 200)))
     return Unit
 }
 ";

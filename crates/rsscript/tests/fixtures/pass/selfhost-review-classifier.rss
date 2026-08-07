@@ -931,7 +931,7 @@ pub fn main() -> Result<Unit, JsonError> {
     )
     let shape_ok = selfhost_shape_is_expected()?
 
-    Log.write(message: summary_line)
+    Output.write(message: summary_line)
 
     Assert.equal_int(left: summary.total_functions, right: expected.total_functions)
     Assert.equal_int(left: summary.must_review_functions, right: expected.must_review_functions)

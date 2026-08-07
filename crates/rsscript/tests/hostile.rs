@@ -509,7 +509,7 @@ fn stdout_flood_with_output_budget_returns_clean_error() {
 fn main() -> Int {
     let mut index = 0
     while index < 100000000 {
-        Log.write(message: read "spam spam spam spam spam")
+        Output.write(message: read "spam spam spam spam spam")
         index = index + 1
     }
     return 0
@@ -557,7 +557,7 @@ fn default_limits_allow_normal_output_and_host_calls() {
 fn main() -> Int {
     let mut index = 0
     while index < 5 {
-        Log.write(message: read "hello")
+        Output.write(message: read "hello")
         index = index + 1
     }
     return index

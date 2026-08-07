@@ -30,6 +30,6 @@ fn main() -> Unit {
         i = i + 1
     }
 
-    Log.write(message: String.from_int(value: len_loop(seen, reps)))
+    Output.write(message: String.from_int(value: len_loop(seen, reps)))
     return Unit
 }

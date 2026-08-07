@@ -23,14 +23,14 @@ fn size_arg(index: Int, default: Int) -> Int {
 }
 
 fn short_hot(limit: Int, seed: Int) -> Int {
-    Log.write(message: "osr-begin")
+    Output.write(message: "osr-begin")
     let mut i = 0
     let mut total = seed
     while i < limit {
         total = total + i * 3 - i / 2 + 7
         i = i + 1
     }
-    Log.write(message: String.from_int(value: total))
+    Output.write(message: String.from_int(value: total))
     return total
 }
 
@@ -43,6 +43,6 @@ fn main() -> Unit {
         acc = acc + short_hot(limit: inner, seed: k)
         k = k + 1
     }
-    Log.write(message: String.from_int(value: acc))
+    Output.write(message: String.from_int(value: acc))
     return Unit
 }

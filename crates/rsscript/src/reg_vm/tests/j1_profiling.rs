@@ -61,7 +61,7 @@ fn main() -> Unit {{
         total = total + dispatcher(f: read g, x: read i)
         i = i + 1
     }}
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }}
 "#
@@ -91,7 +91,7 @@ fn main() -> Unit {{
         }}
         i = i + 1
     }}
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }}
 "#
@@ -113,7 +113,7 @@ fn main() -> Unit {{
         }}
         i = i + 1
     }}
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }}
 "#
@@ -147,7 +147,7 @@ fn main() -> Unit {{
         }}
         i = i + 1
     }}
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }}
 "#
@@ -676,7 +676,7 @@ fn main() -> Unit {{
 {dispatch}
         i = i + 1
     }}
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }}
 "#

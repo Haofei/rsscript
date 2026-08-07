@@ -6,7 +6,7 @@ fn read_csv(path: Path) -> Result<Unit, CsvError> {
         let row = Csv.parse_row(buffer)?
         let name = Row.field_string(row, index: 0)?
         Assert.equal(left: name, right: "RSScript")
-        Log.write(message: name)
+        Output.write(message: name)
     }
 
     return Ok(Unit)
@@ -25,7 +25,7 @@ fn main() -> Result<Unit, FileError> {
             return Ok(Unit)
         }
         Err(error) => {
-            Log.write(message: "csv read failed")
+            Output.write(message: "csv read failed")
             return Ok(Unit)
         }
     }

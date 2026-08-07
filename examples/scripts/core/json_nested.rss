@@ -4,6 +4,6 @@ fn main() -> Result<Unit, JsonError> {
     let name = Json.field_string(value: profile, name: "name")?
 
     Assert.equal(left: name, right: "RSScript")
-    Log.write(message: name)
+    Output.write(message: name)
     return Ok(Unit)
 }

@@ -269,25 +269,25 @@ impl RegVm {
         Ok(())
     }
 
-    /// Append program output to the captured `stdout` buffer, and — when live
-    /// streaming is enabled by a library caller — flush newly completed lines to
-    /// the real process stdout immediately. The captured buffer is appended to
-    /// exactly the same way regardless, so callers that read `EvalOutput.stdout`
-    /// see no difference.
-    ///
-    /// Enforces `stdout_budget`: when set, a write that would push cumulative
-    /// output past the ceiling fails with a clean error *before* appending, so the
-    /// captured buffer never exceeds the budget and a flood of output can't exhaust
-    /// host memory.
-    pub(super) fn push_stdout(&mut self, text: &str) -> Result<(), EvalError> {
+    fn reserve_output(&self, additional: usize) -> Result<(), EvalError> {
         if let Some(limit) = self.limits.stdout_budget
-            && self.stdout.len().saturating_add(text.len()) > limit
+            && self
+                .stdout
+                .len()
+                .saturating_add(self.stderr.len())
+                .saturating_add(additional)
+                > limit
         {
             return Err(EvalError::execution(
                 crate::ExecutionFailureKind::OutputLimitExceeded,
-                format!("stdout budget exceeded ({limit} bytes)"),
+                format!("output budget exceeded ({limit} bytes)"),
             ));
         }
+        Ok(())
+    }
+
+    pub(super) fn push_stdout(&mut self, text: &str) -> Result<(), EvalError> {
+        self.reserve_output(text.len())?;
         self.stdout.push_str(text);
         if self.stream_stdout {
             self.flush_stdout_stream()?;
@@ -295,10 +295,13 @@ impl RegVm {
         Ok(())
     }
 
-    /// Write every complete (newline-terminated) line appended since the last
-    /// flush to the real process stdout, then advance the streamed cursor. A
-    /// partial trailing line is left buffered until its newline arrives.
-    pub(super) fn flush_stdout_stream(&mut self) -> Result<(), EvalError> {
+    pub(super) fn push_stderr(&mut self, text: &str) -> Result<(), EvalError> {
+        self.reserve_output(text.len())?;
+        self.stderr.push_str(text);
+        Ok(())
+    }
+
+    fn flush_stdout_stream(&mut self) -> Result<(), EvalError> {
         if let Some(offset) = self.stdout[self.stream_flushed..].rfind('\n') {
             let end = self.stream_flushed + offset + 1;
             let chunk = &self.stdout[self.stream_flushed..end];

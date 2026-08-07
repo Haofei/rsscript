@@ -151,19 +151,19 @@
     fn native_osr_ladder_promotes_region() {
         let source = "\
 fn hot(limit: Int) -> Int {
-    Log.write(message: \"begin\")
+    Output.write(message: \"begin\")
     let mut i = 0
     let mut total = 0
     while i < limit {
         total = total + i * 3 + 1
         i = i + 1
     }
-    Log.write(message: \"end\")
+    Output.write(message: \"end\")
     return total
 }
 
 fn main() -> Unit {
-    Log.write(message: String.from_int(value: hot(limit: 8)))
+    Output.write(message: String.from_int(value: hot(limit: 8)))
     return Unit
 }
 ";
@@ -344,7 +344,7 @@ fn main() -> Unit {
         queue: read queue,
         limit: 50
     )
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -414,7 +414,7 @@ fn hot(queue: mut Deque<Int>, outer_limit: Int, inner_limit: Int) -> Int {
 fn main() -> Unit {
     local queue = Deque.new<Int>()
     let total = hot(queue: mut queue, outer_limit: 3, inner_limit: 4)
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -783,7 +783,7 @@ fn hot(prefix: read String, limit: Int) -> Int {
 
 fn main() -> Unit {
     let total = hot(prefix: read "1", limit: 10)
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -943,7 +943,7 @@ fn hot(outer_limit: Int, inner_limit: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: String.from_int(value: hot(outer_limit: 20, inner_limit: 2)))
+    Output.write(message: String.from_int(value: hot(outer_limit: 20, inner_limit: 2)))
     return Unit
 }
 "#;

@@ -11,6 +11,6 @@ fn main() -> Unit {
     CancellationSource.cancel(source: mut source)
 
     Assert.equal_bool(left: worker_should_stop(token), right: true)
-    Log.write(message: "cancellation ok")
+    Output.write(message: "cancellation ok")
     return Unit
 }

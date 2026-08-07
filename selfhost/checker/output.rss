@@ -14,7 +14,7 @@ fn emit_diagnostic_record(code: String, toks: List<Tok>, tokenIndex: Int) -> Uni
     let a = String.concat(left: String.concat(left: code, right: "\t"), right: line)
     let b = String.concat(left: String.concat(left: a, right: "\t"), right: column)
     let record = String.concat(left: String.concat(left: b, right: "\t"), right: length)
-    Log.write(message: record)
+    Output.write(message: record)
     return Unit
 }
 
@@ -67,7 +67,7 @@ fn emit_diagnostic_site(code: String, site: DiagnosticSite) -> Unit {
     let a = String.concat(left: String.concat(left: code, right: "\t"), right: line)
     let b = String.concat(left: String.concat(left: a, right: "\t"), right: column)
     let record = String.concat(left: String.concat(left: b, right: "\t"), right: length)
-    Log.write(message: record)
+    Output.write(message: record)
     return Unit
 }
 

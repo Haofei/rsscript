@@ -10,34 +10,34 @@ fn main() -> Unit {
     let url = Url.from_string(value: read "https://example.test/api")
     match Http.get(url: read url) {
         Ok(response) => {
-            Log.write(message: read String.from_int(value: HttpResponse.status(response: read response)))
+            Output.write(message: read String.from_int(value: HttpResponse.status(response: read response)))
         }
         Err(error) => {
             let message = HttpError.message(error: read error)
             if String.contains(value: read message, needle: read "https://example.test/api") {
-                Log.write(message: read "get-error")
+                Output.write(message: read "get-error")
             }
         }
     }
     match Http.post_json(url: read url, body: read "{\"ok\":true}") {
         Ok(response) => {
-            Log.write(message: read String.from_int(value: HttpResponse.status(response: read response)))
+            Output.write(message: read String.from_int(value: HttpResponse.status(response: read response)))
         }
         Err(error) => {
             let message = HttpError.message(error: read error)
             if String.contains(value: read message, needle: read "POST JSON https://example.test/api") {
-                Log.write(message: read "post-json-error")
+                Output.write(message: read "post-json-error")
             }
         }
     }
     match Http.post_form(url: read url, body: read "a=1") {
         Ok(response) => {
-            Log.write(message: read String.from_int(value: HttpResponse.status(response: read response)))
+            Output.write(message: read String.from_int(value: HttpResponse.status(response: read response)))
         }
         Err(error) => {
             let message = HttpError.message(error: read error)
             if String.contains(value: read message, needle: read "POST form https://example.test/api") {
-                Log.write(message: read "post-form-error")
+                Output.write(message: read "post-form-error")
             }
         }
     }
@@ -58,7 +58,7 @@ fn parity_async_http_error_intrinsics() {
 fn log_http_error(error: read HttpError, label: read String) -> Unit {
     let message = HttpError.message(error: read error)
     if String.contains(value: read message, needle: read "") {
-        Log.write(message: read label)
+        Output.write(message: read label)
     }
     return Unit
 }
@@ -144,13 +144,13 @@ fn url_arg() -> Url {
 
 async fn main() -> Result<Unit, HttpError> {
     let response = await Http.get_async(url: read url_arg())?
-    Log.write(message: read String.from_int(value: HttpResponse.status(response: read response)))
-    Log.write(message: read HttpResponse.text(response: read response))
-    Log.write(message: read String.from_int(value: Bytes.len(value: read HttpResponse.bytes(response: read response))))
+    Output.write(message: read String.from_int(value: HttpResponse.status(response: read response)))
+    Output.write(message: read HttpResponse.text(response: read response))
+    Output.write(message: read String.from_int(value: Bytes.len(value: read HttpResponse.bytes(response: read response))))
     let lines = HttpResponse.lines(response: read response)
-    Log.write(message: read String.from_int(value: List.len<String>(list: read lines)))
+    Output.write(message: read String.from_int(value: List.len<String>(list: read lines)))
     if HttpResponse.is_success(response: read response) {
-        Log.write(message: read "success")
+        Output.write(message: read "success")
     }
     return Ok(Unit)
 }
@@ -188,13 +188,13 @@ async fn main() -> Result<Unit, WebSocketError> {
     let socket = await WebSocket.connect(url: read url_arg())?
     await WebSocket.send_text(socket: read socket, text: read "ping")?
     let text = await WebSocket.recv_text(socket: read socket)?
-    Log.write(message: read Option.unwrap_or<String>(value: read text, default: read "text-none"))
+    Output.write(message: read Option.unwrap_or<String>(value: read text, default: read "text-none"))
     await WebSocket.send_bytes(socket: read socket, bytes: read String.to_bytes(value: read "bin"))?
     let bytes = await WebSocket.recv_bytes(socket: read socket)?
     let bytes = Option.unwrap_or<Bytes>(value: read bytes, default: read String.to_bytes(value: read ""))
-    Log.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
+    Output.write(message: read String.from_int(value: Bytes.len(value: read bytes)))
     await WebSocket.close(socket: read socket)?
-    Log.write(message: read "closed")
+    Output.write(message: read "closed")
     return Ok(Unit)
 }
 "#;
@@ -224,7 +224,7 @@ async fn main() -> Unit {
         Err(error) => {
             let message = TcpError.message(error: read error)
             if String.contains(value: read message, needle: read "") {
-                Log.write(message: read "tcp-error")
+                Output.write(message: read "tcp-error")
             }
         }
     }
@@ -234,7 +234,7 @@ async fn main() -> Unit {
         Err(error) => {
             let message = WebSocketError.message(error: read error)
             if String.contains(value: read message, needle: read "") {
-                Log.write(message: read "websocket-error")
+                Output.write(message: read "websocket-error")
             }
         }
     }
@@ -269,10 +269,10 @@ async fn main() -> Result<Unit, TcpError> {
     let port = port_arg()
     let stream = await Tcp.connect(host: read "127.0.0.1", port: port)?
     let written = await TcpStream.write(stream: read stream, data: read String.to_bytes(value: read ""))?
-    Log.write(message: read String.from_int(value: written))
+    Output.write(message: read String.from_int(value: written))
     await TcpStream.write_all(stream: read stream, data: read String.to_bytes(value: read "ping"))?
     let response = await TcpStream.read(stream: read stream, max_bytes: 4)?
-    Log.write(message: read String.from_int(value: Bytes.len(value: read response)))
+    Output.write(message: read String.from_int(value: Bytes.len(value: read response)))
     await TcpStream.shutdown(stream: read stream)?
     return Ok(Unit)
 }
@@ -303,7 +303,7 @@ fn main() -> Unit {
     local retry = HttpRequest.with_retry(request: take timed, attempts: 3, backoff_ms: 50)
     local with_header = HttpRequest.with_header(request: take retry, name: read "X-Test", value: read "rss")
     HttpRequest.with_header(request: take with_header, name: read "X-Trace", value: read "1")
-    Log.write(message: read "http-request-built")
+    Output.write(message: read "http-request-built")
     return Unit
 }
 "#;

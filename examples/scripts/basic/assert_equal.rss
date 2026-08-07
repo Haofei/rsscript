@@ -1,5 +1,5 @@
 fn main() -> Unit {
     Assert.equal(left: "rss", right: "rss")
-    Log.write(message: "assert equal passed")
+    Output.write(message: "assert equal passed")
     return Unit
 }

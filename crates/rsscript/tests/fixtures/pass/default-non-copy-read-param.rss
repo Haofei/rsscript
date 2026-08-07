@@ -7,7 +7,7 @@ fn reduce(x: Int, axes: List<Int> = List.new<Int>()) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: String.from_int(value: reduce(x: 5)))
-    Log.write(message: String.from_int(value: reduce(x: 5, axes: List.new<Int>())))
+    Output.write(message: String.from_int(value: reduce(x: 5)))
+    Output.write(message: String.from_int(value: reduce(x: 5, axes: List.new<Int>())))
     return Unit
 }

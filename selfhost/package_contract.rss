@@ -274,9 +274,9 @@ fn main() -> Unit {
     let fnMismatch = has_function_contract_mismatch(interfaceProgram, sourceProgram, nativeBindings)
     let declMismatch = has_declaration_contract_mismatch(interfaceProgram, sourceProgram)
     if fnMismatch || declMismatch {
-        Log.write(message: "RS1301")
+        Output.write(message: "RS1301")
     } else {
-        Log.write(message: "CLEAN")
+        Output.write(message: "CLEAN")
     }
     return Unit
 }

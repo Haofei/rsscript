@@ -108,7 +108,7 @@ fn text_len(value: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: text_len(value: read 23)))
+    Output.write(message: read String.from_int(value: text_len(value: read 23)))
     return Unit
 }
 ";
@@ -189,7 +189,7 @@ fn text_len(value: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: text_len(value: read 23)))
+    Output.write(message: read String.from_int(value: text_len(value: read 23)))
     return Unit
 }
 ";
@@ -254,7 +254,7 @@ fn parent(seed: Float) -> Float {
 }
 
 fn main() -> Unit {
-    Log.write(message: read Float.to_string(value: read parent(seed: read 3.5)))
+    Output.write(message: read Float.to_string(value: read parent(seed: read 3.5)))
     return Unit
 }
 ";
@@ -401,7 +401,7 @@ fn parent(seed: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: parent(seed: read 11)))
+    Output.write(message: read String.from_int(value: parent(seed: read 11)))
     return Unit
 }
 ";
@@ -469,7 +469,7 @@ fn main() -> Unit {
     List.push<Int>(list: mut values, value: read 5)
     List.push<Int>(list: mut values, value: read 7)
     List.push<Int>(list: mut values, value: read 11)
-    Log.write(message: read String.from_int(value: parent(values: read values, index: read 1)))
+    Output.write(message: read String.from_int(value: parent(values: read values, index: read 1)))
     return Unit
 }
 ";
@@ -539,7 +539,7 @@ fn main() -> Unit {
     List.push<Float>(list: mut values, value: read 1.25)
     List.push<Float>(list: mut values, value: read 2.5)
     List.push<Float>(list: mut values, value: read 3.75)
-    Log.write(message: read Float.to_string(value: read parent(values: read values, index: read 1)))
+    Output.write(message: read Float.to_string(value: read parent(values: read values, index: read 1)))
     return Unit
 }
 ";
@@ -612,7 +612,7 @@ fn main() -> Unit {
     List.push<Int>(list: mut values, value: read 5)
     List.push<Int>(list: mut values, value: read 7)
     List.push<Int>(list: mut values, value: read 11)
-    Log.write(message: read String.from_int(value: parent(values: mut values, index: read 1, value: read 42)))
+    Output.write(message: read String.from_int(value: parent(values: mut values, index: read 1, value: read 42)))
     return Unit
 }
 ";
@@ -684,7 +684,7 @@ fn parent(value: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: parent(value: read 23)))
+    Output.write(message: read String.from_int(value: parent(value: read 23)))
     return Unit
 }
 ";
@@ -823,7 +823,7 @@ fn main() -> Result<Unit, JsonError> {
     let doc = Json.parse(text: read "{\"profile\":{\"id\":41}}")?
     let profile = Json.field(value: read doc, name: read "profile")?
     let total = hot(profile: read profile, limit: 10)?
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Ok(Unit)
 }
 "#;
@@ -897,7 +897,7 @@ fn hot(limit: Int) -> Result<Int, JsonError> {
 
 fn main() -> Result<Unit, JsonError> {
     let total = hot(limit: 10)?
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Ok(Unit)
 }
 "#;
@@ -958,7 +958,7 @@ fn main() -> Result<Unit, JsonError> {
     fn native_osr_preserves_heap_live_through_scalar_loop() {
         let source = r#"fn main() -> Unit {
     let mut q: Deque<Int> = Deque.new<Int>()
-    Log.write(message: read String.from_int(value: Deque.len(deque: read q)))
+    Output.write(message: read String.from_int(value: Deque.len(deque: read q)))
     let mut xs: List<Int> = List.new<Int>()
     let mut i = 0
     while i < 1 {
@@ -966,9 +966,9 @@ fn main() -> Result<Unit, JsonError> {
         i = i + 1
     }
     let ys: List<Int> = xs
-    Log.write(message: read String.from_int(value: List.len(list: read ys)))
-    Log.write(message: read String.from_int(value: 766))
-    Log.write(message: read String.from_int(value: 146))
+    Output.write(message: read String.from_int(value: List.len(list: read ys)))
+    Output.write(message: read String.from_int(value: 766))
+    Output.write(message: read String.from_int(value: 146))
     return Unit
 }
 "#;
@@ -1004,7 +1004,7 @@ fn main() -> Result<Unit, JsonError> {
     let doc = Json.parse(text: read "{\"profile\":{\"id\":41}}")?
     let profile = Json.field(value: read doc, name: read "profile")?
     let total = hot(profile: read profile, limit: 200)?
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Ok(Unit)
 }
 "#;
@@ -1050,7 +1050,7 @@ fn main() -> Unit {
     List.push<Int>(list: mut values, value: 1)
     let box = Boxed(capacity: 16, values: values)
     let total = hot(box: read box, limit: 10)
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;

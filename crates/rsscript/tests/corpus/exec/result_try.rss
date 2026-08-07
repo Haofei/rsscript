@@ -11,7 +11,7 @@ fn parse(value: String) -> Result<Int, String> {
 
 fn run() -> Result<Unit, String> {
     let number = parse(value: "41")?
-    Log.write(message: String.from_int(value: number + 1))
+    Output.write(message: String.from_int(value: number + 1))
     return Ok(Unit)
 }
 
@@ -21,7 +21,7 @@ fn main() -> Unit {
             return Unit
         }
         Err(message) => {
-            Log.write(message)
+            Output.write(message)
         }
     }
     return Unit

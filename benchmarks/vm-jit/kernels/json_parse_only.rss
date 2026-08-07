@@ -13,7 +13,7 @@ fn bench_size(default: Int) -> Int {
 fn main() -> Result<Unit, JsonError> {
     let limit = bench_size(default: 50000)
     let total = hot(limit)?
-    Log.write(message: String.from_int(value: total))
+    Output.write(message: String.from_int(value: total))
     return Ok(Unit)
 }
 

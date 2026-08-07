@@ -25,6 +25,6 @@ fn bytes_loop(data: Bytes, reps: Int) -> Int {
 fn main() -> Unit {
     let reps = bench_size(default: 2000000)
     let data = Bytes.from_string(value: "the quick brown fox jumps over the lazy dog")
-    Log.write(message: String.from_int(value: bytes_loop(data, reps)))
+    Output.write(message: String.from_int(value: bytes_loop(data, reps)))
     return Unit
 }

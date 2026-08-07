@@ -26,6 +26,6 @@ async fn main() -> Result<Unit, String> {
         total = await step(value: total)?
         i = i + 1
     }
-    Log.write(message: String.from_int(value: total))
+    Output.write(message: String.from_int(value: total))
     return Ok(Unit)
 }

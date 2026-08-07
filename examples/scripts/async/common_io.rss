@@ -35,6 +35,6 @@ async fn connect_websocket(url: Url) -> Result<WebSocket, WebSocketError> {
 async fn main() -> Result<Unit, FileError> {
     let path = Path.from_string(value: "rsscript-async-common-io.txt")
     let text = await write_then_read(path)?
-    Log.write(message: text)
+    Output.write(message: text)
     return Ok(Unit)
 }

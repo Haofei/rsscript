@@ -328,7 +328,7 @@ pub fn main() -> Result<Unit, JsonError> {
     let summary = selfhost_package_risk_summary()?
     let summary_line = package_risk_summary_line(summary)
 
-    Log.write(message: summary_line)
+    Output.write(message: summary_line)
 
     Assert.equal_int(left: summary.total_cases, right: 5)
     Assert.equal_int(left: summary.mismatches, right: 0)

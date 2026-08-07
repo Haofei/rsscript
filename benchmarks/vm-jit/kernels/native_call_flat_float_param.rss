@@ -38,6 +38,6 @@ fn main() -> Unit {
     List.push<Float>(list: mut values, value: 3.75)
     List.push<Float>(list: mut values, value: 5.0)
     let result = hot(values, limit)
-    Log.write(message: Float.to_string(value: result))
+    Output.write(message: Float.to_string(value: result))
     return Unit
 }

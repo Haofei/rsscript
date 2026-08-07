@@ -14,10 +14,10 @@ fn sum_first_two(triple: (Int, Int, Int)) -> Int {
 
 fn main() -> Unit {
     let pair: (Int, String) = (7, "b")
-    Log.write(message: classify(p: pair))
+    Output.write(message: classify(p: pair))
     let counts: (Int, Int, Int) = (1, 2, 3)
-    Log.write(message: String.from_int(value: sum_first_two(triple: counts)))
+    Output.write(message: String.from_int(value: sum_first_two(triple: counts)))
     let (first, _, third) = (1, 2, 3)
-    Log.write(message: String.from_int(value: first + third))
+    Output.write(message: String.from_int(value: first + third))
     return Unit
 }

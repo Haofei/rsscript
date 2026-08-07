@@ -262,7 +262,7 @@ pub fn main() -> Result<Unit, JsonError> {
     let mismatches = export_mismatch_count(actual, expected)
     let summary = export_summary_line(actual, mismatches)
 
-    Log.write(message: summary)
+    Output.write(message: summary)
 
     Assert.equal_int(left: mismatches, right: 0)
     Assert.equal_int(left: actual.unmodeled_reasons, right: 0)

@@ -62,6 +62,6 @@ fn main() -> Unit {
     let limit = bench_size(default: 500000)
     let bag = Bag(a: build_list(n: 256), b: build_list(n: 256), c: build_list(n: 256))
     let result = hot(g: bag, limit)
-    Log.write(message: String.from_int(value: result))
+    Output.write(message: String.from_int(value: result))
     return Unit
 }

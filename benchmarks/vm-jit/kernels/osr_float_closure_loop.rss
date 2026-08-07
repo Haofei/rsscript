@@ -4,7 +4,7 @@
 // materialize that f64 capture into the loop body by BIT-REINTERPRETING its i64
 // capture slot (the `closure_capture` helper returns `f64::to_bits` as i64; the
 // inlined body's Float-class capture register bit-casts it back to f64 — NOT an
-// integer→float conversion). `apply_loop` is also I/O-tangled (`Log.write` around
+// integer→float conversion). `apply_loop` is also I/O-tangled (`Output.write` around
 // the loop in the same, once-called function), so the whole function is native-
 // INELIGIBLE — only OSR can run the loop natively, and only by inlining the
 // capturing closure into it (otherwise the per-iteration `CallClosure` keeps the
@@ -28,7 +28,7 @@ fn bench_size(default: Int) -> Int {
 }
 
 fn apply_loop(g: Fn(Float) -> Float, limit: Int, seed: Float) -> Float {
-    Log.write(message: "osr-begin")
+    Output.write(message: "osr-begin")
     let mut i = 0
     let mut total = seed
     let mut x = 0.0
@@ -37,7 +37,7 @@ fn apply_loop(g: Fn(Float) -> Float, limit: Int, seed: Float) -> Float {
         x = x + 1.0
         i = i + 1
     }
-    Log.write(message: String.from_float(value: total))
+    Output.write(message: String.from_float(value: total))
     return total
 }
 
@@ -48,6 +48,6 @@ fn main() -> Unit {
         return value * scale + scale
     }
     let result = apply_loop(g, limit, seed: 0.0)
-    Log.write(message: String.from_float(value: result))
+    Output.write(message: String.from_float(value: result))
     return Unit
 }

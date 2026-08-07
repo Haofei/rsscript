@@ -27,6 +27,6 @@ fn hot(limit: Int) -> Int {
 fn main() -> Unit {
     let limit = bench_size(default: 2000000)
     let result = hot(limit)
-    Log.write(message: String.from_int(value: result))
+    Output.write(message: String.from_int(value: result))
     return Unit
 }

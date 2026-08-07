@@ -24,7 +24,7 @@ fn main() -> Unit {
     let added_dup = Set.insert(set: mut seen, value: a_dup)
 
     if interned {
-        Log.write(message: "uop interned")
+        Output.write(message: "uop interned")
     }
     return Unit
 }

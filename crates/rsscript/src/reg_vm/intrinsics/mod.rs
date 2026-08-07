@@ -261,20 +261,6 @@ impl RegVm {
                     &expect_row_buffer_bytes_ref(buffer)?,
                 )))
             }
-            RegIntrinsic::DeadlineAfter | RegIntrinsic::DeadlineAfterMs => {
-                let ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(deadline_value(deadline_after_ms(ms)))
-            }
-            RegIntrinsic::DeadlineIsExpired => {
-                let deadline = expect_deadline_unix_ms(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Bool(clock_system_unix_ms() >= deadline))
-            }
-            RegIntrinsic::DeadlineRemainingMs => {
-                let deadline = expect_deadline_unix_ms(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Int(
-                    deadline.saturating_sub(clock_system_unix_ms()).max(0),
-                ))
-            }
             RegIntrinsic::DequeIsEmpty
             | RegIntrinsic::DequeLen
             | RegIntrinsic::DequeNew
@@ -454,12 +440,6 @@ impl RegVm {
             RegIntrinsic::HexDecode | RegIntrinsic::HexEncode | RegIntrinsic::HexEncodeString => {
                 self.exec_hex_intrinsics(unit, intrinsic, args, base, next_base)
             }
-            RegIntrinsic::InstantElapsed => {
-                let start = expect_instant_unix_ms(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Int(
-                    clock_system_unix_ms().saturating_sub(start).max(0),
-                ))
-            }
             RegIntrinsic::IntBitAnd
             | RegIntrinsic::IntBitNot
             | RegIntrinsic::IntBitOr
@@ -636,20 +616,20 @@ impl RegVm {
                 let mapped = self.fresh_list(TypedVec::from_values(mapped))?;
                 Ok(value_ok(mapped))
             }
-            RegIntrinsic::LogError => {
+            RegIntrinsic::OutputError => {
                 let line =
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string();
-                self.stderr.push_str(&line);
-                self.stderr.push('\n');
+                self.push_stderr(&line)?;
+                self.push_stderr("\n")?;
                 Ok(VmValue::Unit)
             }
-            RegIntrinsic::LogErrorJson => {
+            RegIntrinsic::OutputErrorJson => {
                 let value = expect_json_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                self.stderr.push_str(&value.to_string());
-                self.stderr.push('\n');
+                self.push_stderr(&value.to_string())?;
+                self.push_stderr("\n")?;
                 Ok(VmValue::Unit)
             }
-            RegIntrinsic::LogTrace => {
+            RegIntrinsic::OutputTrace => {
                 let event =
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string();
                 let message =
@@ -657,14 +637,14 @@ impl RegVm {
                 self.push_stdout(&format!("trace {event}: {message}\n"))?;
                 Ok(VmValue::Unit)
             }
-            RegIntrinsic::LogWrite => {
+            RegIntrinsic::OutputWrite => {
                 let line =
                     expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string();
                 self.push_stdout(&line)?;
                 self.push_stdout("\n")?;
                 Ok(VmValue::Unit)
             }
-            RegIntrinsic::LogWriteJson => {
+            RegIntrinsic::OutputWriteJson => {
                 let value = expect_json_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 self.push_stdout(&value.to_string())?;
                 self.push_stdout("\n")?;
@@ -709,10 +689,6 @@ impl RegVm {
                     Ordering::Greater => 1,
                 };
                 Ok(VmValue::Int(value))
-            }
-            RegIntrinsic::OsClose => {
-                let _ = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(VmValue::Unit)
             }
             RegIntrinsic::PatchApplyText => {
                 let original = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -1017,30 +993,6 @@ impl RegVm {
                     return Ok(VmValue::Unit);
                 }
                 Ok(json_result(self.channel_send(sender, value)))
-            }
-            RegIntrinsic::TimerSleep => {
-                let ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                self.park_sleep_ms(ms);
-                Ok(VmValue::Unit)
-            }
-            RegIntrinsic::TimerSleepCancellable => {
-                let ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let _ = expect_cancellation_id_ref(
-                    intrinsic_arg(&self.stack, base, args, 1)?,
-                    "CancellationToken",
-                )?;
-                self.park_sleep_ms(ms);
-                Ok(VmValue::Unit)
-            }
-            RegIntrinsic::TimerSleepUntil => {
-                let target_unix_ms =
-                    expect_deadline_unix_ms(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let now_unix_ms = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_millis() as i64)
-                    .unwrap_or(0);
-                self.park_sleep_ms(target_unix_ms - now_unix_ms);
-                Ok(VmValue::Unit)
             }
             RegIntrinsic::UrlDecodeComponent
             | RegIntrinsic::UrlEncodeComponent

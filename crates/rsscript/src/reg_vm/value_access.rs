@@ -9,36 +9,6 @@ use crate::vm_value::VmValue;
 
 use super::*;
 
-pub(super) fn expect_instant_unix_ms(value: &VmValue) -> Result<i64, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name().as_ref() == "Instant" => {
-            let value = data.get("unix_ms").ok_or_else(|| {
-                EvalError::Runtime("Instant value is missing unix_ms.".to_string())
-            })?;
-            expect_int_ref(value)
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected Instant, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-pub(super) fn expect_deadline_unix_ms(value: &VmValue) -> Result<i64, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name().as_ref() == "Deadline" => {
-            let value = data.get("unix_ms").ok_or_else(|| {
-                EvalError::Runtime("Deadline value is missing unix_ms.".to_string())
-            })?;
-            expect_int_ref(value)
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected Deadline, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
 pub(super) fn expect_cancellation_id_ref(
     value: &VmValue,
     expected_name: &str,

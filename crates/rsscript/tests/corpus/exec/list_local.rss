@@ -4,6 +4,6 @@ fn main() -> Unit {
     List.push<Int>(list: mut xs, value: 10)
     List.push<Int>(list: mut xs, value: 20)
     List.push<Int>(list: mut xs, value: 12)
-    Log.write(message: String.from_int(value: List.sum(list: xs)))
+    Output.write(message: String.from_int(value: List.sum(list: xs)))
     return Unit
 }

@@ -7,6 +7,6 @@ fn count(value: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: String.from_int(value: count(value: 3)))
+    Output.write(message: String.from_int(value: count(value: 3)))
     return Unit
 }

@@ -1,7 +1,7 @@
 // OSR × J3 for VARIANTS kernel (Pending #1): a hot loop that constructs and matches
 // a *non-escaping* user `sum`/variant value (`Shape`) each iteration, wrapped by
 // non-native I/O in the SAME, once-called function — so the function is native-
-// INELIGIBLE as a whole (the `Log.write` calls keep it off the whole-function native
+// INELIGIBLE as a whole (the `Output.write` calls keep it off the whole-function native
 // tier), and the only way to run the loop natively is OSR. The variant is built and
 // matched inline in one loop body (NO helper functions ⇒ no inlining needed).
 //
@@ -34,7 +34,7 @@ fn bench_size(default: Int) -> Int {
 }
 
 fn f(limit: Int) -> Int {
-    Log.write(message: "osr-variant-begin")
+    Output.write(message: "osr-variant-begin")
     let mut i = 0
     let mut total = 0
     while i < limit {
@@ -57,13 +57,13 @@ fn f(limit: Int) -> Int {
         }
         i = i + 1
     }
-    Log.write(message: String.from_int(value: total))
+    Output.write(message: String.from_int(value: total))
     return total
 }
 
 fn main() -> Unit {
     let limit = bench_size(default: 2000000)
     let result = f(limit)
-    Log.write(message: String.from_int(value: result))
+    Output.write(message: String.from_int(value: result))
     return Unit
 }

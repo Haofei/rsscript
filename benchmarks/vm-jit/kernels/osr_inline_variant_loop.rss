@@ -55,7 +55,7 @@ fn area(shape: Shape) -> Int {
 }
 
 fn run(limit: Int) -> Int {
-    Log.write(message: "begin")
+    Output.write(message: "begin")
     let mut index = 0
     let mut total = 0
     while index < limit {
@@ -63,12 +63,12 @@ fn run(limit: Int) -> Int {
         total = total + area(shape)
         index = index + 1
     }
-    Log.write(message: String.from_int(value: total))
+    Output.write(message: String.from_int(value: total))
     return total
 }
 
 fn main() -> Unit {
     let limit = bench_size(default: 300000)
-    Log.write(message: String.from_int(value: run(limit)))
+    Output.write(message: String.from_int(value: run(limit)))
     return Unit
 }

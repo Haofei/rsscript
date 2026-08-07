@@ -178,7 +178,7 @@ fn main() -> Unit {
     List.push<Int>(list: mut xs, value: read 1)
     let a = scalar(n: 41, ok: true)
     let b = list_len(xs: read xs)
-    Log.write(message: read String.from_int(value: a + b))
+    Output.write(message: read String.from_int(value: a + b))
     return Unit
 }
 "#;
@@ -256,7 +256,7 @@ fn main() -> Unit {
     local b = List.new<Int>()
     List.push<Int>(list: mut b, value: read 5)
     let bag = Bag(a: take a, b: take b)
-    Log.write(message: read String.from_int(value: caller(g: read bag)))
+    Output.write(message: read String.from_int(value: caller(g: read bag)))
     return Unit
 }
 "#;
@@ -324,7 +324,7 @@ fn scan(chars: read List<Char>, i: Int) -> Int {
 
 fn main() -> Unit {
     let chars = String.chars(value: read "abc")
-    Log.write(message: read String.from_int(value: scan(chars: read chars, i: 1)))
+    Output.write(message: read String.from_int(value: scan(chars: read chars, i: 1)))
     return Unit
 }
 "#;
@@ -384,7 +384,7 @@ fn main() -> Unit {
     local xs = List.new<Int>()
     List.push<Int>(list: mut xs, value: read 3)
     List.push<Int>(list: mut xs, value: read 7)
-    Log.write(message: read String.from_int(value: scan(xs: read xs, i: 0)))
+    Output.write(message: read String.from_int(value: scan(xs: read xs, i: 0)))
     return Unit
 }
 "#;
@@ -438,7 +438,7 @@ fn pick(opt: read Option<Int>) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: pick(opt: read Some(42))))
+    Output.write(message: read String.from_int(value: pick(opt: read Some(42))))
     return Unit
 }
 "#;
@@ -488,7 +488,7 @@ fn measure(s: read String) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: measure(s: read "hello")))
+    Output.write(message: read String.from_int(value: measure(s: read "hello")))
     return Unit
 }
 "#;
@@ -564,8 +564,8 @@ fn main() -> Unit {
     local xs = List.new<Int>()
     List.push<Int>(list: mut xs, value: read 7)
     let r = stash(xs: read xs, n: read 3)
-    Log.write(message: read String.from_int(value: List.get<Int>(list: read xs, index: 0)))
-    Log.write(message: read String.from_int(value: r))
+    Output.write(message: read String.from_int(value: List.get<Int>(list: read xs, index: 0)))
+    Output.write(message: read String.from_int(value: r))
     return Unit
 }
 "#;
@@ -623,7 +623,7 @@ fn fib(n: Int) -> Int {
 
 fn main() -> Unit {
     let value = fib(n: 10)
-    Log.write(message: read String.from_int(value: value))
+    Output.write(message: read String.from_int(value: value))
     return Unit
 }
 "#;

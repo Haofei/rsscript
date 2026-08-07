@@ -43,16 +43,16 @@ async fn main() -> Result<Unit, ChannelError> {
                         async let consumer = drain(receiver: read receiver)
                         await producer?
                         let total = await consumer?
-                        Log.write(message: read String.from_int(value: total))
+                        Output.write(message: read String.from_int(value: total))
                     }
                 }
                 Err(error) => {
-                    Log.write(message: read ChannelError.message(error: read error))
+                    Output.write(message: read ChannelError.message(error: read error))
                 }
             }
         }
         Err(error) => {
-            Log.write(message: read ChannelError.message(error: read error))
+            Output.write(message: read ChannelError.message(error: read error))
         }
     }
     return Ok(Unit)
@@ -69,7 +69,7 @@ fn compiled_backend_accepts_inline_read_copy_expression_args() {
 fn main() -> Unit {
     local xs = List.new<Int>()
     List.push<Int>(list: mut xs, value: read (0 - 1))
-    Log.write(message: read String.from_int(value: List.get<Int>(list: read xs, index: 0)))
+    Output.write(message: read String.from_int(value: List.get<Int>(list: read xs, index: 0)))
     return Unit
 }
 "#;
@@ -83,7 +83,7 @@ fn reg_vm_runs_array_literal_and_index_like_interpreter() {
 fn main() -> Unit {
     let values: List<Int> = [2, 4, 6, 8]
     let total = values[0] + values[1] + values[2] + values[3]
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -102,7 +102,7 @@ struct Box {
 fn main() -> Unit {
     local box = Box(value: 7)
     let managed = manage box
-    Log.write(message: read String.from_int(value: managed.value))
+    Output.write(message: read String.from_int(value: managed.value))
     return Unit
 }
 "#;
@@ -123,7 +123,7 @@ struct BufferWriter {
 }
 
 fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit {
-    Log.write(message: read message)
+    Output.write(message: read message)
 }
 
 impl Writer for BufferWriter {
@@ -167,7 +167,7 @@ fn read_alias(value: read G) -> Int {
 
 fn main() -> Unit {
     let gauge: G = Gauge(value: 7)
-    Log.write(message: String.from_int(
+    Output.write(message: String.from_int(
         value: read_alias(value: read gauge)
     ))
     return Unit
@@ -190,7 +190,7 @@ sum Envelope<T> {
 }
 
 fn main() -> Unit {
-    Log.write(message: "generic sum compiled")
+    Output.write(message: "generic sum compiled")
     return Unit
 }
 "#;
@@ -207,7 +207,7 @@ fn main() -> Unit {
     List.push<Int>(list: mut values, value: read 2)
     List.push<Int>(list: mut values, value: read 3)
     values[2] = 30
-    Log.write(message: read String.from_int(value: values[2]))
+    Output.write(message: read String.from_int(value: values[2]))
     return Unit
 }
 "#;

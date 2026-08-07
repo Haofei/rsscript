@@ -27,7 +27,7 @@ fn main() -> Unit {
     Map.insert(map: mut intern, key: a_again, value: a_again)
 
     let size = Map.len(map: intern)
-    Log.write(message: String.concat(
+    Output.write(message: String.concat(
         left: "intern size: ",
         right: Int.to_string(value: size),
     ))
@@ -35,7 +35,7 @@ fn main() -> Unit {
     // Lookup the canonical node for a structural duplicate.
     let found = Map.contains_key(map: intern, key: a_again)
     if found {
-        Log.write(message: "a_again interns to an existing node")
+        Output.write(message: "a_again interns to an existing node")
     }
 
     // Dedup with a Set<Uop>.
@@ -43,7 +43,7 @@ fn main() -> Unit {
     let inserted_a = Set.insert(set: mut seen, value: a)
     let inserted_dup = Set.insert(set: mut seen, value: a_again)
     let unique = Set.len(set: seen)
-    Log.write(message: String.concat(
+    Output.write(message: String.concat(
         left: "unique nodes: ",
         right: Int.to_string(value: unique),
     ))

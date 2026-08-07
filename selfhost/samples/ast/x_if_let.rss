@@ -41,5 +41,5 @@ fn run(enabled: Bool) -> String {
 
 fn main() -> Unit {
     let result = run(enabled: true)
-    Log.write(message: result)
+    Output.write(message: result)
 }

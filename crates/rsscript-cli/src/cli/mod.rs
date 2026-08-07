@@ -552,7 +552,7 @@ mod tests {
             .expect("runtime fingerprint should compute");
         fs::write(
             &*source,
-            "fn main() -> Unit { Log.write(message: \"changed\") }\n",
+            "fn main() -> Unit { Output.write(message: \"changed\") }\n",
         )
         .expect("source should change");
         let changed = super::run_input_fingerprint(&source, &root.join("runtime-a"), false)

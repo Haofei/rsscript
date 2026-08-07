@@ -2901,7 +2901,7 @@ pub(in crate::reg_vm) const MAX_OSR_MATERIALIZE_NODES: usize = 64;
 
 /// OSR × J3: scalar-replace non-escaping scalar `Option`s that live entirely
 /// inside the loop region `[header, exit)` of an otherwise native-INELIGIBLE
-/// function (one whose pre/post-loop code does I/O — calls, `Log.write`, …, which
+/// function (one whose pre/post-loop code does I/O — calls, `Output.write`, …, which
 /// the whole-function [`native_scalar_replace_options`] would reject).
 ///
 /// Soundness model (region-scoped, conservative): an `Option` register is

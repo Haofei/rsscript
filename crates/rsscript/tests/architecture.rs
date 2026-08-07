@@ -1650,6 +1650,44 @@ fn vm_core_does_not_embed_network_intrinsics() {
 }
 
 #[test]
+fn vm_core_does_not_embed_time_logging_or_os_intrinsics() {
+    let root = workspace_root();
+    let catalog = read(&root.join("crates/rsscript/intrinsics.toml"));
+    for prefix in ["Deadline", "InstantElapsed", "Log", "OsClose", "Timer"] {
+        assert!(
+            !catalog.contains(&format!("{{ id = \"{prefix}")),
+            "host operation `{prefix}` must be supplied by an external provider"
+        );
+    }
+    for namespace in ["Deadline", "Instant", "Log", "OS", "Timer"] {
+        assert!(!catalog.contains(&format!("{{ namespace = \"{namespace}\"")));
+    }
+
+    let vm_root = root.join("crates/rsscript/src/reg_vm");
+    for path in rust_files_below(&vm_root) {
+        if path
+            .components()
+            .any(|component| component.as_os_str() == "tests")
+        {
+            continue;
+        }
+        let source = read(&path);
+        for forbidden in [
+            "SystemTime",
+            "std::thread::sleep",
+            "RegIntrinsic::Log",
+            "RegIntrinsic::Timer",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "VM core must not read ambient time or emit host logs: {} contains `{forbidden}`",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
 fn high_risk_state_machines_keep_dedicated_module_owners() {
     let root = workspace_root();
     let required = [

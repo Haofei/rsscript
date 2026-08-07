@@ -2452,7 +2452,7 @@ fn standard_library_export_capabilities(export: &RsScriptPackageExport) -> Vec<C
         }
         "Regex.compile" | "Regex.is_match" | "Regex.find" | "Regex.captures"
         | "Regex.replace_all" | "Regex.split" => categories.push(CapabilityCategory::ComputeRegex),
-        "Log.write" => categories.push(CapabilityCategory::TelemetryEmit),
+        "Output.write" => categories.push(CapabilityCategory::TelemetryEmit),
         "Directory.exists"
         | "Directory.is_file"
         | "Directory.is_dir"

@@ -1,5 +1,5 @@
 // expect: RS0015
 fn main() -> Unit {
-    let x = Log.write(message: read "hello"
+    let x = Output.write(message: read "hello"
     return Unit
 }

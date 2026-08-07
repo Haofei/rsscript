@@ -16,10 +16,10 @@ async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
 fn main() -> Result<Unit, TimerError> {
     select {
         value = await after(value: 7, ms: 1)? => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         other = await after(value: 9, ms: 50)? => {
-            Log.write(message: read String.from_int(value: other))
+            Output.write(message: read String.from_int(value: other))
         }
     }
     return Ok(Unit)
@@ -41,8 +41,8 @@ fn choose(flag: Bool) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: String.from_int(value: choose(flag: true)))
-    Log.write(message: String.from_int(value: choose(flag: false)))
+    Output.write(message: String.from_int(value: choose(flag: true)))
+    Output.write(message: String.from_int(value: choose(flag: false)))
     return Unit
 }
 "#;
@@ -60,7 +60,7 @@ fn main() -> Unit {
         total = total + index
         index = index + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -83,7 +83,7 @@ fn main() -> Unit {
         total = total + mix(value: index, salt: 1)
         index = index + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -101,7 +101,7 @@ fn main() -> Unit {
         total = total + index
         index = index + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -124,7 +124,7 @@ fn main() -> Unit {
         total = total + mix(value: index, salt: 1)
         index = index + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -144,7 +144,7 @@ fn bench_size(default: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: bench_size(default: 7)))
+    Output.write(message: read String.from_int(value: bench_size(default: 7)))
     return Unit
 }
 "#;
@@ -166,21 +166,21 @@ fn main() -> Unit {
     List.push<Int>(list: mut values, value: read 2)
     List.push<Int>(list: mut values, value: read 3)
     values[2] = 30
-    Log.write(message: read String.from_int(value: values[2]))
+    Output.write(message: read String.from_int(value: values[2]))
 
     let greeting = String.concat(left: read "hi ", right: read "there")
-    Log.write(message: read String.from_int(value: greeting.len()))
+    Output.write(message: read String.from_int(value: greeting.len()))
     let n = 255
-    Log.write(message: read n.to_string())
+    Output.write(message: read n.to_string())
     let blank = ""
     if blank.is_empty() {
-        Log.write(message: read "blank-empty")
+        Output.write(message: read "blank-empty")
     }
 
     let point = Point(x: 3, y: 4)
     match read point {
         Point { x, y } => {
-            Log.write(message: read String.from_int(value: x + y))
+            Output.write(message: read String.from_int(value: x + y))
         }
     }
     return Unit
@@ -205,7 +205,7 @@ fn main() -> Unit {
         }
         total = total + value
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -229,7 +229,7 @@ fn main() -> Unit {
         }
         total = total + index
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -249,7 +249,7 @@ fn checked(ok: Bool) -> Result<Int, String> {
 
 fn main() -> Result<Unit, String> {
     let value = checked(ok: false)?
-    Log.write(message: read String.from_int(value: value))
+    Output.write(message: read String.from_int(value: value))
     return Ok(Unit)
 }
 "#;
@@ -278,7 +278,7 @@ fn bench_size(default: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: bench_size(default: 7)))
+    Output.write(message: read String.from_int(value: bench_size(default: 7)))
     return Unit
 }
 "#;
@@ -294,7 +294,7 @@ async fn main() -> Result<Unit, ChannelError> {
     local values = [1, 2, 3]
     let stream = Stream.from_list<Int>(items: take values)
     await for value in stream {
-        Log.write(message: read String.from_int(value: value))
+        Output.write(message: read String.from_int(value: value))
     }
     return Ok(Unit)
 }
@@ -315,7 +315,7 @@ fn main() -> Unit {
     let point = Point(x: 3, y: 4)
     match read point {
         Point { x, y } => {
-            Log.write(message: read String.from_int(value: x + y))
+            Output.write(message: read String.from_int(value: x + y))
         }
     }
     return Unit
@@ -332,13 +332,13 @@ fn main() -> Unit {
     let value = Some(3)
     match value {
         Some(item) if item > 0 => {
-            Log.write(message: read "positive")
+            Output.write(message: read "positive")
         }
         Some(_) => {
-            Log.write(message: read "other")
+            Output.write(message: read "other")
         }
         None => {
-            Log.write(message: read "none")
+            Output.write(message: read "none")
         }
     }
     return Unit
@@ -355,10 +355,10 @@ fn main() -> Unit {
     let value = 1
     match value {
         1 => {
-            Log.write(message: read "one")
+            Output.write(message: read "one")
         }
         _ => {
-            Log.write(message: read "other")
+            Output.write(message: read "other")
         }
     }
     return Unit
@@ -379,13 +379,13 @@ sum Expr {
 fn describe(expr: read Expr) -> Unit {
     match read expr {
         Call { callee, arg_count } if arg_count == 0 => {
-            Log.write(message: read callee)
+            Output.write(message: read callee)
         }
         Call { callee, .. } => {
-            Log.write(message: read String.concat(left: read callee, right: read ":args"))
+            Output.write(message: read String.concat(left: read callee, right: read ":args"))
         }
         Literal { value } => {
-            Log.write(message: read value)
+            Output.write(message: read value)
         }
     }
     return Unit
@@ -429,8 +429,8 @@ fn int_label(value: Int) -> String {
 
 fn main() -> Unit {
     let d = North
-    Log.write(message: read direction_name(d: read d))
-    Log.write(message: read int_label(value: 1))
+    Output.write(message: read direction_name(d: read d))
+    Output.write(message: read int_label(value: 1))
     return Unit
 }
 "#;
@@ -457,9 +457,9 @@ fn describe(value: read Direction, enabled: Bool) -> String {
 fn main() -> Unit {
     let north = North
     let south = South
-    Log.write(message: read describe(value: read north, enabled: true))
-    Log.write(message: read describe(value: read north, enabled: false))
-    Log.write(message: read describe(value: read south, enabled: true))
+    Output.write(message: read describe(value: read north, enabled: true))
+    Output.write(message: read describe(value: read north, enabled: false))
+    Output.write(message: read describe(value: read south, enabled: true))
     return Unit
 }
 "#;
@@ -478,10 +478,10 @@ async fn ready(value: Int) -> Result<Int, String> {
 fn main() -> Result<Unit, String> {
     select {
         value = await ready(value: 7)? => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         other = await ready(value: 9)? => {
-            Log.write(message: read String.from_int(value: other))
+            Output.write(message: read String.from_int(value: other))
         }
     }
     return Ok(Unit)
@@ -506,10 +506,10 @@ async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
 fn main() -> Result<Unit, TimerError> {
     select {
         value = await after(value: 7, ms: 50)? => {
-            Log.write(message: read String.from_int(value: value))
+            Output.write(message: read String.from_int(value: value))
         }
         other = await after(value: 9, ms: 1)? => {
-            Log.write(message: read String.from_int(value: other))
+            Output.write(message: read String.from_int(value: other))
         }
     }
     return Ok(Unit)
@@ -536,21 +536,21 @@ async fn winner() -> Result<Int, TimerError> {
 
 async fn loser() -> Result<Int, TimerError> {
     await Timer.sleep(ms: 30)?
-    Log.write(message: read "loser ran")
+    Output.write(message: read "loser ran")
     return Ok(2)
 }
 
 async fn main() -> Result<Unit, TimerError> {
     select {
         _ = await winner()? => {
-            Log.write(message: read "winner")
+            Output.write(message: read "winner")
         }
         _ = await loser()? => {
-            Log.write(message: read "loser won")
+            Output.write(message: read "loser won")
         }
     }
     await Timer.sleep(ms: 80)?
-    Log.write(message: read "done")
+    Output.write(message: read "done")
     return Ok(Unit)
 }
 "#;

@@ -426,7 +426,7 @@ pub fn main() -> Result<Unit, JsonError> {
     let decision = classify_package_diff(facts)
     let summary = diff_summary_line(facts, decision)
 
-    Log.write(message: summary)
+    Output.write(message: summary)
 
     Assert.equal_int(left: decision.risk, right: facts.declared_risk)
     Assert.equal_int(left: decision.mismatches, right: 0)

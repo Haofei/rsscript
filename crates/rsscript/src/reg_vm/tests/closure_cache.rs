@@ -29,7 +29,7 @@ fn main() -> Unit {
         total = total + apply(f: read g, x: read i)
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 "#;
@@ -51,7 +51,7 @@ fn main() -> Unit {
     let f: Fn(Int) -> Int = |x| { return x + 1 }
     let g: Fn(Int) -> Int = |x| { return x + 1 }
     if f == g {
-        Log.write(message: read String.from_int(value: 1))
+        Output.write(message: read String.from_int(value: 1))
     }
     return Unit
 }

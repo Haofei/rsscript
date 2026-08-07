@@ -94,6 +94,6 @@ fn main() -> Unit {
     List.push<String>(list: mut fields, value: Json.raw_field(name: "list_ok", value: json_bool(value: list_ok)))
     List.push<String>(list: mut fields, value: Json.raw_field(name: "map_ok", value: json_bool(value: map_ok)))
     List.push<String>(list: mut fields, value: Json.raw_field(name: "option_ok", value: json_bool(value: option_ok)))
-    Log.write(message: Json.object(fields))
+    Output.write(message: Json.object(fields))
     return Unit
 }

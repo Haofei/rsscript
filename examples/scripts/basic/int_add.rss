@@ -1,5 +1,5 @@
 fn main() -> Unit {
     let _ = 20 + 22
-    Log.write(message: "int add ran")
+    Output.write(message: "int add ran")
     return Unit
 }

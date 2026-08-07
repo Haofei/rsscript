@@ -131,12 +131,12 @@ fn inspect_session(session: Session) -> Unit {
             User.touch(user: owner)
         }
         None => {
-            Log.write(message: session.trace_id)
+            Output.write(message: session.trace_id)
         }
     }
 
     audit_step(callback: || {
-        Log.write(message: session.trace_id)
+        Output.write(message: session.trace_id)
     })
 
     return Unit
@@ -293,7 +293,7 @@ fn process_image_http(plan: UploadPlan, cache: mut RetainedImageStore) -> Result
 }
 
 fn record_audit_http(trace_id: String) -> Result<Unit, HttpError> {
-    Log.write(message: trace_id)
+    Output.write(message: trace_id)
     return Ok(Unit)
 }
 
@@ -309,7 +309,7 @@ fn decode_row_status_http(path: Path) -> Result<String, HttpError> {
 }
 
 fn record_status_http(status: String) -> Result<Unit, HttpError> {
-    Log.write(message: status)
+    Output.write(message: status)
     return Ok(Unit)
 }
 
@@ -336,21 +336,21 @@ fn inspect_environment(env: LexicalScope, function: ClosureRecord) -> Unit {
     let has_closure = ClosureRecord.has_closure(function)
 
     if has_parent {
-        Log.write(message: "parent")
+        Output.write(message: "parent")
     } else {
-        Log.write(message: "root")
+        Output.write(message: "root")
     }
 
     if has_function {
-        Log.write(message: "function")
+        Output.write(message: "function")
     } else {
-        Log.write(message: "empty")
+        Output.write(message: "empty")
     }
 
     if has_closure {
-        Log.write(message: "closure")
+        Output.write(message: "closure")
     } else {
-        Log.write(message: "no closure")
+        Output.write(message: "no closure")
     }
 
     return Unit
@@ -409,7 +409,7 @@ fn complete_request(
     count_request(counter: mut counter)
     consume_local_buffer()
 
-    Log.write(message: status)
+    Output.write(message: status)
 
     return OutboundMessage.ok(body: status)?
 }

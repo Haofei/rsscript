@@ -27,6 +27,6 @@ fn main() -> Unit {
     // `size` is the fib argument (exponential work); keep it small.
     let n = bench_size(default: 30)
     let result = fib(n)
-    Log.write(message: String.from_int(value: result))
+    Output.write(message: String.from_int(value: result))
     return Unit
 }

@@ -13,7 +13,7 @@ fn area(shape: Shape) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: String.from_int(value: area(shape: Rectangle(width: 3, height: 5))))
-    Log.write(message: String.from_int(value: area(shape: Prism(width: 2, height: 9, depth: 7))))
+    Output.write(message: String.from_int(value: area(shape: Rectangle(width: 3, height: 5))))
+    Output.write(message: String.from_int(value: area(shape: Prism(width: 2, height: 9, depth: 7))))
     return Unit
 }

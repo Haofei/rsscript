@@ -1,5 +1,5 @@
 fn main() -> Unit {
     let greeting = String.concat(left: "hello, ", right: "world")
-    Log.write(message: greeting)
+    Output.write(message: greeting)
     return Unit
 }

@@ -10,6 +10,6 @@ fn compute(a: Int, b: Int, c: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: Int.to_string(value: compute(a: 2, b: 3, c: 4)))
+    Output.write(message: Int.to_string(value: compute(a: 2, b: 3, c: 4)))
     return Unit
 }

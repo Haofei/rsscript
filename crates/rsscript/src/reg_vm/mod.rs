@@ -724,7 +724,7 @@ pub fn reg_vm_eval_source_main_with_args_and_external_bindings(
 }
 
 /// Streaming-stdout source entry point: evaluates `main` and
-/// writes `Log.write` output live (line-flushed) to the real process stdout as it
+/// writes `Output.write` output live (line-flushed) to the real process stdout as it
 /// runs. The captured stdout in the returned `EvalOutput` is unchanged, so it must
 /// not be re-printed by the caller. Other callers and the tests keep using the
 /// non-streaming `reg_vm_eval_source_main_with_args`, whose behavior is untouched.
@@ -1385,7 +1385,7 @@ impl RegVmExecutable {
     }
 
     /// Like [`Self::eval_main_with_args_and_external_bindings`] but streams program
-    /// stdout (`Log.write` output) live to the real process stdout, line-flushed,
+    /// stdout (`Output.write` output) live to the real process stdout, line-flushed,
     /// as the program runs. This lets a library caller show output immediately
     /// instead of buffering until exit. The returned
     /// `EvalOutput.stdout` is still the full captured buffer (identical to the
@@ -1707,8 +1707,6 @@ enum Wait {
     Send { sender: VmSender, value: VmValue },
     /// `await`-ing a spawned task / `async let`: ready when that task finishes.
     Join { task: TaskId },
-    /// `Timer.sleep*`: ready once the wall clock reaches `deadline`.
-    Sleep { deadline: std::time::Instant },
     /// `select { ... }`: ready as soon as any arm task in `handles` finishes. The
     /// winning arm index and its value are written to `winner_dst`/`value_dst`.
     Select {
@@ -1780,12 +1778,7 @@ pub struct VmLimits {
     pub cancel: Option<rsscript_operation::CancellationToken>,
     /// Monotonic execution deadline shared with Provider calls.
     pub deadline: Option<rsscript_operation::MonotonicDeadline>,
-    /// Maximum total bytes a program may write to captured stdout (every
-    /// `Log.write`/`Debug.print`/trace path funnels through `push_stdout`). `None`
-    /// (default) = unlimited. When `Some(limit)`, the write that would push the
-    /// cumulative output past `limit` fails with a "stdout budget exceeded" error
-    /// — this stops a program that floods the host with output rather than looping
-    /// silently (which `step_budget` already catches).
+    /// Maximum output bytes exposed to an external Provider call.
     pub stdout_budget: Option<usize>,
     /// Maximum number of stdlib/runtime intrinsic calls — every `Type.method`
     /// dispatch out of pure VM bytecode into host-provided library code (the
@@ -6992,17 +6985,6 @@ fn peel_select_operation(operation: &HirExpr) -> (&HirExpr, bool) {
             other => return (other, has_try),
         }
     }
-}
-
-fn clock_system_unix_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or(std::time::Duration::ZERO)
-        .as_millis() as i64
-}
-
-fn deadline_after_ms(ms: i64) -> i64 {
-    clock_system_unix_ms().saturating_add(ms.max(0))
 }
 
 #[cfg(test)]

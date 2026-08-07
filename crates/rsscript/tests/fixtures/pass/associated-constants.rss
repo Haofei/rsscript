@@ -9,6 +9,6 @@ fn describe() -> String {
 }
 
 fn main() -> Unit {
-    Log.write(message: describe())
+    Output.write(message: describe())
     return Unit
 }

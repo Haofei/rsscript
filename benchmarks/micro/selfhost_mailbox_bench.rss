@@ -155,6 +155,6 @@ fn main() -> Unit {
         }
         drained = mailbox_take<Int>(m: mut box)
     }
-    Log.write(message: String.from_int(value: sink))
+    Output.write(message: String.from_int(value: sink))
     return Unit
 }

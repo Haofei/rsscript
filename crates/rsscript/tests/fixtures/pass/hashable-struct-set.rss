@@ -18,7 +18,7 @@ fn main() -> Unit {
     let count = Set.len(set: seen)
 
     if present {
-        Log.write(message: "member")
+        Output.write(message: "member")
     }
     return Unit
 }

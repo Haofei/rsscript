@@ -180,7 +180,7 @@ fn base_programs() -> Vec<(&'static str, &'static str)> {
 fn main() -> Unit {
     let a = 6
     let b = 7
-    Log.write(message: read String.from_int(value: a * b + 0))
+    Output.write(message: read String.from_int(value: a * b + 0))
     return Unit
 }
 ",
@@ -199,9 +199,9 @@ fn classify(n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: classify(n: read 3)))
-    Log.write(message: read String.from_int(value: classify(n: read 42)))
-    Log.write(message: read String.from_int(value: classify(n: read 999)))
+    Output.write(message: read String.from_int(value: classify(n: read 3)))
+    Output.write(message: read String.from_int(value: classify(n: read 42)))
+    Output.write(message: read String.from_int(value: classify(n: read 999)))
     return Unit
 }
 ",
@@ -220,7 +220,7 @@ fn sum_to(n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: sum_to(n: read 10)))
+    Output.write(message: read String.from_int(value: sum_to(n: read 10)))
     return Unit
 }
 ",
@@ -238,8 +238,8 @@ fn twice(n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: combine(a: read 7, b: read 4, c: read 5)))
-    Log.write(message: read String.from_int(value: twice(n: read 21)))
+    Output.write(message: read String.from_int(value: combine(a: read 7, b: read 4, c: read 5)))
+    Output.write(message: read String.from_int(value: twice(n: read 21)))
     return Unit
 }
 ",

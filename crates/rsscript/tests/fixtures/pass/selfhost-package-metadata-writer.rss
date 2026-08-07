@@ -91,7 +91,7 @@ pub fn main() -> Result<Unit, FileError> {
         left: "selfhost package metadata wrote ",
         right: input.package_name,
     )
-    Log.write(message)
+    Output.write(message)
 
     return Ok(Unit)
 }

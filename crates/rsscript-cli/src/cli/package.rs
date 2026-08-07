@@ -276,7 +276,7 @@ paths = ["src"]
 fn package_main_template(name: &str) -> String {
     format!(
         r#"fn main() -> Unit {{
-    Log.write(message: read "hello {name}")
+    Output.write(message: read "hello {name}")
     return Unit
 }}
 "#

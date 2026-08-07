@@ -3,6 +3,6 @@ protocol Writer {
     fn write(self: mut Self, message: String) -> Unit
         retains(message)
     {
-        Log.write(message)
+        Output.write(message)
     }
 }

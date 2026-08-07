@@ -25,7 +25,7 @@ fn main() -> Unit {
     List.push(list: mut xs, value: 4)
     List.push(list: mut xs, value: 5)
     List.push(list: mut xs, value: 6)
-    Log.write(message: head_tail(xs))
-    Log.write(message: String.from_int(value: ends(xs)))
+    Output.write(message: head_tail(xs))
+    Output.write(message: String.from_int(value: ends(xs)))
     return Unit
 }

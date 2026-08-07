@@ -12,7 +12,7 @@
 /// canonical TCO shape (`return sum_to(n: n - 1, acc: acc + n)`). After TCO it is
 /// a loop with no self-edge, so it compiles + runs on the native tier
 /// (`native_calls > 0`) — proof TCO made a previously recursion-only function
-/// native-eligible. The driver tangles it with I/O (`Log.write`) to exercise the
+/// native-eligible. The driver tangles it with I/O (`Output.write`) to exercise the
 /// real entry path, and the result must stay byte-identical to the interpreter.
 #[cfg(feature = "native-jit")]
 #[test]
@@ -32,7 +32,7 @@ fn main() -> Unit {
         total = total + sum_to(n: 200, acc: 0)
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 ";
@@ -71,7 +71,7 @@ fn fib(n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: fib(n: 20)))
+    Output.write(message: read String.from_int(value: fib(n: 20)))
     return Unit
 }
 ";
@@ -120,7 +120,7 @@ fn is_odd(n: Int) -> Bool {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_bool(value: is_even(n: 1000)))
+    Output.write(message: read String.from_bool(value: is_even(n: 1000)))
     return Unit
 }
 ";
@@ -208,7 +208,7 @@ fn main() -> Int {
 
 /// IntToFloat OSR positive test: a hot loop that converts the loop counter with
 /// `Int.to_float` and then does pure FLOAT arithmetic (`+ f * 0.5 - 1.0`), wrapped
-/// by non-native I/O (`Log.write` before/after) in the SAME function — so the
+/// by non-native I/O (`Output.write` before/after) in the SAME function — so the
 /// function is whole-function native-INELIGIBLE and only OSR can run the loop
 /// natively. The in-loop `Int.to_float` lowers to a `CallIntrinsic { IntToFloat }`;
 /// before native IntToFloat lowering existed this bailed OSR (a non-native
@@ -224,7 +224,7 @@ fn main() -> Int {
 fn native_osr_int_to_float_loop_matches_interpreter() {
     let source = "\
 fn compute(limit: Int) -> Float {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut index = 0
     let mut acc = 0.0
     while index < limit {
@@ -232,12 +232,12 @@ fn compute(limit: Int) -> Float {
         acc = acc + f * 0.5 - 1.0
         index = index + 1
     }
-    Log.write(message: read Float.to_string(value: read acc))
+    Output.write(message: read Float.to_string(value: read acc))
     return acc
 }
 
 fn main() -> Unit {
-    Log.write(message: read Float.to_string(value: read compute(limit: read 1000)))
+    Output.write(message: read Float.to_string(value: read compute(limit: read 1000)))
     return Unit
 }
 ";
@@ -272,7 +272,7 @@ fn main() -> Unit {
 fn native_osr_float_to_int_loop_matches_interpreter() {
     let source = "\
 fn compute(limit: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut index = 0
     let mut total = 0
     while index < limit {
@@ -280,12 +280,12 @@ fn compute(limit: Int) -> Int {
         total = total + Math.floor(value: read f) + Math.ceil(value: read f)
         index = index + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return total
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: compute(limit: read 1000)))
+    Output.write(message: read String.from_int(value: compute(limit: read 1000)))
     return Unit
 }
 ";
@@ -322,7 +322,7 @@ fn main() -> Unit {
 fn native_osr_other_intrinsic_in_loop_does_not_osr() {
     let source = "\
 fn compute(limit: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut index = 0
     let mut total = 0
     while index < limit {
@@ -330,12 +330,12 @@ fn compute(limit: Int) -> Int {
         total = total + String.len(value: read s)
         index = index + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return total
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: compute(limit: read 1000)))
+    Output.write(message: read String.from_int(value: compute(limit: read 1000)))
     return Unit
 }
 ";
@@ -367,7 +367,7 @@ fn main() -> Unit {
 fn native_osr_j3_string_length_fold_loop_matches_interpreter() {
     let source = "\
 fn f(limit: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut i = 0
     let mut total = 0
     while i < limit {
@@ -377,12 +377,12 @@ fn f(limit: Int) -> Int {
         total = total + String.len(value: read k) + String.len(value: read h)
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return total
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: f(limit: read 50)))
+    Output.write(message: read String.from_int(value: f(limit: read 50)))
     return Unit
 }
 ";
@@ -414,7 +414,7 @@ fn main() -> Unit {
 fn native_osr_j3_string_length_fold_escaping_does_not_osr() {
     let source = "\
 fn f(limit: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut i = 0
     let mut total = 0
     while i < limit {
@@ -422,16 +422,16 @@ fn f(limit: Int) -> Int {
         let k = String.concat(left: read \"v=\", right: read s)
         total = total + String.len(value: read k)
         if i == 0 {
-            Log.write(message: read k)
+            Output.write(message: read k)
         }
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return total
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: f(limit: read 50)))
+    Output.write(message: read String.from_int(value: f(limit: read 50)))
     return Unit
 }
 ";
@@ -462,7 +462,7 @@ fn main() -> Unit {
 fn native_osr_j3_string_length_fold_non_ascii_slice_does_not_osr() {
     let source = "\
 fn f(limit: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut i = 0
     let mut total = 0
     while i < limit {
@@ -472,12 +472,12 @@ fn f(limit: Int) -> Int {
         total = total + String.len(value: read h)
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return total
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: f(limit: read 50)))
+    Output.write(message: read String.from_int(value: f(limit: read 50)))
     return Unit
 }
 ";
@@ -541,7 +541,7 @@ fn main() -> Unit {
         }
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 ";
@@ -605,7 +605,7 @@ fn main() -> Unit {
         }
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 ";
@@ -661,7 +661,7 @@ fn main() -> Unit {
         total = total + branchy(i: read i)
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 ";
@@ -711,7 +711,7 @@ fn hot(limit: Int, seed: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: hot(limit: read 50, seed: read 0)))
+    Output.write(message: read String.from_int(value: hot(limit: read 50, seed: read 0)))
     return Unit
 }
 ";
@@ -758,7 +758,7 @@ fn scan(data: read Bytes, limit: Int) -> Int {
 
 fn main() -> Unit {
     let data = Bytes.from_string(value: read \"the quick brown fox\")
-    Log.write(message: read String.from_int(value: scan(data: read data, limit: read 50)))
+    Output.write(message: read String.from_int(value: scan(data: read data, limit: read 50)))
     return Unit
 }
 ";
@@ -796,11 +796,11 @@ fn main() -> Unit {
 fn native_osr_bytes_length_fold_constant_source_osrs_and_matches_interpreter() {
     // `data = "the quick brown fox"` is 19 bytes. Per iteration:
     //   len(slice(data,0,5)) + len(data) = 5 + 19 = 24.
-    // limit = 50 ⇒ total = 24 * 50 = 1200. The leading `Log.write("begin")` makes the
+    // limit = 50 ⇒ total = 24 * 50 = 1200. The leading `Output.write("begin")` makes the
     // function native-INELIGIBLE as a whole, so only the hot loop can OSR.
     let source = "\
 fn scan(limit: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let data = Bytes.from_string(value: read \"the quick brown fox\")
     let mut index = 0
     let mut total = 0
@@ -813,7 +813,7 @@ fn scan(limit: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: scan(limit: read 50)))
+    Output.write(message: read String.from_int(value: scan(limit: read 50)))
     return Unit
 }
 ";
@@ -846,11 +846,11 @@ fn main() -> Unit {
 fn native_osr_bytes_length_fold_in_condition_osrs_and_matches_interpreter() {
     // `data = "the quick brown fox"` is 19 bytes; `Bytes.len(data)` in the condition
     // folds to the constant 19. The loop runs 19 times, adding 7 each iteration ⇒
-    // total = 19 * 7 = 133. The leading `Log.write("begin")` makes the function
+    // total = 19 * 7 = 133. The leading `Output.write("begin")` makes the function
     // native-INELIGIBLE as a whole, so only the hot loop can OSR.
     let source = "\
 fn scan() -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let data = Bytes.from_string(value: read \"the quick brown fox\")
     let mut index = 0
     let mut total = 0
@@ -862,7 +862,7 @@ fn scan() -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: scan()))
+    Output.write(message: read String.from_int(value: scan()))
     return Unit
 }
 ";
@@ -884,7 +884,7 @@ fn main() -> Unit {
 }
 
 /// NEGATIVE Bytes-fold test (escape): the same constant-source Bytes value, but the
-/// `head` slice ESCAPES the measurement — it is also passed to `Log.write` (an opaque
+/// `head` slice ESCAPES the measurement — it is also passed to `Output.write` (an opaque
 /// non-fold consumer). The escape analysis must refuse to dissolve `head` (its
 /// allocation is observed), so the allocating `Bytes.slice` survives and the loop does
 /// NOT OSR (`osr_entries == 0`), while the result stays interpreter-identical.
@@ -893,21 +893,21 @@ fn main() -> Unit {
 fn native_osr_bytes_length_fold_escaping_slice_does_not_osr() {
     let source = "\
 fn scan(limit: Int) -> Int {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let data = Bytes.from_string(value: read \"the quick brown fox\")
     let mut index = 0
     let mut total = 0
     while index < limit {
         let head = Bytes.slice(value: read data, start: 0, len: 5)
         total = total + Bytes.len(value: read head)
-        Log.write(message: read Bytes.to_string(value: read head))
+        Output.write(message: read Bytes.to_string(value: read head))
         index = index + 1
     }
     return total
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: scan(limit: read 3)))
+    Output.write(message: read String.from_int(value: scan(limit: read 3)))
     return Unit
 }
 ";
@@ -923,7 +923,7 @@ fn main() -> Unit {
     );
     assert_eq!(
         stats.osr_entries, 0,
-        "a Bytes slice that escapes to Log.write must NOT be dissolved / must NOT OSR: {stats:?}",
+        "a Bytes slice that escapes to Output.write must NOT be dissolved / must NOT OSR: {stats:?}",
     );
 }
 
@@ -946,7 +946,7 @@ fn build(text: read String, limit: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: build(text: read \"hello world\", limit: read 50)))
+    Output.write(message: read String.from_int(value: build(text: read \"hello world\", limit: read 50)))
     return Unit
 }
 ";
@@ -986,7 +986,7 @@ fn add3(a: Int, b: Int, c: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: add3(a: read 1, b: read 2, c: read 3)))
+    Output.write(message: read String.from_int(value: add3(a: read 1, b: read 2, c: read 3)))
     return Unit
 }
 ";
@@ -1030,7 +1030,7 @@ fn main() -> Unit {
         total = total + blocked_a() + blocked_b()
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 ";
@@ -1100,7 +1100,7 @@ fn f(limit: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: f(limit: read 200)))
+    Output.write(message: read String.from_int(value: f(limit: read 200)))
     return Unit
 }
 ";
@@ -1143,7 +1143,7 @@ fn main() -> Unit {
 fn native_osr_direct_invariant_list_read_matches_interpreter() {
     let source = "\
 fn main() -> Unit {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut index = 0
     let mut step_index = 0
     let mut total = 0
@@ -1161,7 +1161,7 @@ fn main() -> Unit {
             step_index = 0
         }
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 ";
@@ -1206,7 +1206,7 @@ fn main() -> Unit {
 fn native_osr_mutated_list_in_loop_stays_correct() {
     let source = "\
 fn main() -> Unit {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut i = 0
     let mut total = 0
     local xs = List<Int>.new()
@@ -1216,8 +1216,8 @@ fn main() -> Unit {
         List.push<Int>(list: mut xs, value: read i)
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
-    Log.write(message: read String.from_int(value: List.len<Int>(list: read xs)))
+    Output.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: List.len<Int>(list: read xs)))
     return Unit
 }
 ";
@@ -1253,7 +1253,7 @@ fn main() -> Unit {
 fn native_osr_direct_list_oob_deopts_like_interpreter() {
     let source = "\
 fn main() -> Unit {
-    Log.write(message: read \"begin\")
+    Output.write(message: read \"begin\")
     let mut i = 0
     let mut total = 0
     local xs = List<Int>.new()
@@ -1263,7 +1263,7 @@ fn main() -> Unit {
         total = total + List.get<Int>(list: read xs, index: i)
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 ";
@@ -1302,9 +1302,9 @@ fn replace(xs: mut List<Int>, index: Int) -> Int {
 fn main() -> Unit {
     local xs = List<Int>.new()
     List.push<Int>(list: mut xs, value: 1)
-    Log.write(message: \"begin\")
+    Output.write(message: \"begin\")
     let value = replace(xs: mut xs, index: 1)
-    Log.write(message: String.from_int(value: value))
+    Output.write(message: String.from_int(value: value))
     return Unit
 }
 ";
@@ -1333,7 +1333,7 @@ fn fib(n: Int) -> Int {
     return fib(n: read n - 1) + fib(n: read n - 2)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: fib(n: read 28)))
+    Output.write(message: read String.from_int(value: fib(n: read 28)))
     return Unit
 }
 ";
@@ -1366,7 +1366,7 @@ fn sum(n: Int) -> Int {
     return n + sum(n: read n - 1)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: sum(n: read 1000)))
+    Output.write(message: read String.from_int(value: sum(n: read 1000)))
     return Unit
 }
 ";
@@ -1396,7 +1396,7 @@ fn fib(n: Int) -> Int {
     return fib(n: read n - 1) + fib(n: read n - 2)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: fib(n: read 32)))
+    Output.write(message: read String.from_int(value: fib(n: read 32)))
     return Unit
 }
 ";
@@ -1452,8 +1452,8 @@ fn fb(n: Int) -> Float {
     return 0.5 + fa(n: n - 1)
 }
 fn main() -> Unit {
-    Log.write(message: read Float.to_string(value: read fa(n: 11)))
-    Log.write(message: read Float.to_string(value: read fb(n: 10)))
+    Output.write(message: read Float.to_string(value: read fa(n: 11)))
+    Output.write(message: read Float.to_string(value: read fb(n: 10)))
     return Unit
 }
 ";
@@ -1488,8 +1488,8 @@ fn is_odd(n: Int) -> Int {
     return is_even(n: read n - 1)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: is_even(n: read 20)))
-    Log.write(message: read String.from_int(value: is_odd(n: read 21)))
+    Output.write(message: read String.from_int(value: is_even(n: read 20)))
+    Output.write(message: read String.from_int(value: is_odd(n: read 21)))
     return Unit
 }
 ";
@@ -1525,8 +1525,8 @@ fn is_odd(n: Int) -> Bool {
     return is_even(n: n - 1)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_bool(value: is_even(n: 20)))
-    Log.write(message: read String.from_bool(value: is_odd(n: 20)))
+    Output.write(message: read String.from_bool(value: is_even(n: 20)))
+    Output.write(message: read String.from_bool(value: is_odd(n: 20)))
     return Unit
 }
 ";
@@ -1561,8 +1561,8 @@ fn even_down(n: Int) -> Bool {
     return even_down(n: n - 2)
 }
 fn main() -> Unit {
-    Log.write(message: read String.from_bool(value: even_down(n: 20)))
-    Log.write(message: read String.from_bool(value: even_down(n: 7)))
+    Output.write(message: read String.from_bool(value: even_down(n: 20)))
+    Output.write(message: read String.from_bool(value: even_down(n: 7)))
     return Unit
 }
 ";
@@ -1598,8 +1598,8 @@ fn fpow(base: Float, n: Int) -> Float {
     return base * fpow(base: base, n: n - 1)
 }
 fn main() -> Unit {
-    Log.write(message: read Float.to_string(value: read fpow(base: 2.0, n: 10)))
-    Log.write(message: read Float.to_string(value: read fpow(base: 1.5, n: 4)))
+    Output.write(message: read Float.to_string(value: read fpow(base: 2.0, n: 10)))
+    Output.write(message: read Float.to_string(value: read fpow(base: 1.5, n: 4)))
     return Unit
 }
 ";

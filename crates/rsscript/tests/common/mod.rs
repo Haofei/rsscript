@@ -101,7 +101,7 @@ pub const TEST_HOST_INTERFACES: &[(&str, &str)] = &[
     ),
     (
         "host/log.rssi",
-        include_str!("../../../../stdlib/log/log.rssi"),
+        include_str!("../../../../stdlib/output/output.rssi"),
     ),
     (
         "host/path.rssi",

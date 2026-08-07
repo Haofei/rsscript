@@ -259,7 +259,7 @@ fn render(program: &Program) -> String {
     }
     source.push_str("    return acc\n}\n\n");
     source.push_str("fn main() -> Unit {\n");
-    source.push_str("    Log.write(message: read String.from_int(value: compute()))\n");
+    source.push_str("    Output.write(message: read String.from_int(value: compute()))\n");
     source.push_str("    return Unit\n}\n");
     source
 }
@@ -280,7 +280,7 @@ fn compute(seed: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: read compute(seed: read 7)))
+    Output.write(message: read String.from_int(value: read compute(seed: read 7)))
     return Unit
 }
 ";
@@ -328,7 +328,7 @@ fn Cell.combine(self: mut Cell, source: read Cell, target: mut Cell) -> Unit {
 }
 fn record(order: mut Int, value: Int) -> Int {
     order = order * 10 + value
-    Log.write(message: String.from_int(value: value))
+    Output.write(message: String.from_int(value: value))
     return value
 }
 
@@ -363,26 +363,26 @@ pub fn main() -> Unit {
         first: record(order: mut receiver_order, value: 2)
     )
 
-    Log.write(message: String.from_int(value: encoded))
-    Log.write(message: String.from_int(value: order))
-    Log.write(message: String.from_int(value: receiver_encoded))
-    Log.write(message: String.from_int(value: receiver_order))
-    Log.write(message: String.from_int(value: pair(second, first)))
-    Log.write(message: String.from_int(value: pair_value.first * 10 + pair_value.second))
-    Log.write(message: String.from_int(value: duo_value(value: duo)))
-    Log.write(message: String.from_int(value: default_box.value))
-    Log.write(message: String.from_int(value: encode(a: 1, b: 2, c: 3)))
-    Log.write(message: String.from_int(value: encode(a: 1, c: 3, b: 2)))
-    Log.write(message: String.from_int(value: encode(b: 2, a: 1, c: 3)))
-    Log.write(message: String.from_int(value: encode(b: 2, c: 3, a: 1)))
-    Log.write(message: String.from_int(value: encode(c: 3, a: 1, b: 2)))
-    Log.write(message: String.from_int(value: encode(c: 3, b: 2, a: 1)))
-    Log.write(message: String.from_int(value: digits(c: 9, b: 2)))
-    Log.write(message: typed(count: 4, text: read "value="))
-    Log.write(message: String.from_int(value: x * 100 + y))
-    Log.write(message: String.from_int(value: b.add()))
-    Log.write(message: String.from_int(value: target.n))
-    Log.write(message: String.from_int(value: pick()))
+    Output.write(message: String.from_int(value: encoded))
+    Output.write(message: String.from_int(value: order))
+    Output.write(message: String.from_int(value: receiver_encoded))
+    Output.write(message: String.from_int(value: receiver_order))
+    Output.write(message: String.from_int(value: pair(second, first)))
+    Output.write(message: String.from_int(value: pair_value.first * 10 + pair_value.second))
+    Output.write(message: String.from_int(value: duo_value(value: duo)))
+    Output.write(message: String.from_int(value: default_box.value))
+    Output.write(message: String.from_int(value: encode(a: 1, b: 2, c: 3)))
+    Output.write(message: String.from_int(value: encode(a: 1, c: 3, b: 2)))
+    Output.write(message: String.from_int(value: encode(b: 2, a: 1, c: 3)))
+    Output.write(message: String.from_int(value: encode(b: 2, c: 3, a: 1)))
+    Output.write(message: String.from_int(value: encode(c: 3, a: 1, b: 2)))
+    Output.write(message: String.from_int(value: encode(c: 3, b: 2, a: 1)))
+    Output.write(message: String.from_int(value: digits(c: 9, b: 2)))
+    Output.write(message: typed(count: 4, text: read "value="))
+    Output.write(message: String.from_int(value: x * 100 + y))
+    Output.write(message: String.from_int(value: b.add()))
+    Output.write(message: String.from_int(value: target.n))
+    Output.write(message: String.from_int(value: pick()))
     return Unit
 }
 "#;
@@ -407,7 +407,7 @@ fn combine(a: Int, b: Int, c: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: combine(a: read 7, b: read 4, c: read 5)))
+    Output.write(message: read String.from_int(value: combine(a: read 7, b: read 4, c: read 5)))
     return Unit
 }
 ";
@@ -437,9 +437,9 @@ fn area(shape: read Shape) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: area(shape: read Circle(radius: 4))))
-    Log.write(message: read String.from_int(value: area(shape: read Rectangle(width: 3, height: 5))))
-    Log.write(message: read String.from_int(value: area(shape: read Prism(width: 2, height: 9, depth: 7))))
+    Output.write(message: read String.from_int(value: area(shape: read Circle(radius: 4))))
+    Output.write(message: read String.from_int(value: area(shape: read Rectangle(width: 3, height: 5))))
+    Output.write(message: read String.from_int(value: area(shape: read Prism(width: 2, height: 9, depth: 7))))
     return Unit
 }
 ";
@@ -463,8 +463,8 @@ fn value_or_zero(entry: read Entry) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: value_or_zero(entry: read Pair(key: 10, value: Some(5)))))
-    Log.write(message: read String.from_int(value: value_or_zero(entry: read Pair(key: 10, value: None))))
+    Output.write(message: read String.from_int(value: value_or_zero(entry: read Pair(key: 10, value: Some(5)))))
+    Output.write(message: read String.from_int(value: value_or_zero(entry: read Pair(key: 10, value: None))))
     return Unit
 }
 ";
@@ -487,9 +487,9 @@ fn classify(n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: classify(n: read 3)))
-    Log.write(message: read String.from_int(value: classify(n: read 42)))
-    Log.write(message: read String.from_int(value: classify(n: read 999)))
+    Output.write(message: read String.from_int(value: classify(n: read 3)))
+    Output.write(message: read String.from_int(value: classify(n: read 42)))
+    Output.write(message: read String.from_int(value: classify(n: read 999)))
     return Unit
 }
 ";
@@ -508,8 +508,8 @@ fn choose(flag: Bool) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: String.from_int(value: choose(flag: true)))
-    Log.write(message: String.from_int(value: choose(flag: false)))
+    Output.write(message: String.from_int(value: choose(flag: true)))
+    Output.write(message: String.from_int(value: choose(flag: false)))
     return Unit
 }
 ";
@@ -531,7 +531,7 @@ fn sum_to(n: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: sum_to(n: read 10)))
+    Output.write(message: read String.from_int(value: sum_to(n: read 10)))
     return Unit
 }
 ";
@@ -601,7 +601,7 @@ fn main() -> Unit {
     let mut table = Map<Int, Int>.new()
     Map.insert<Int, Int>(map: mut table, key: read 1, value: read 50)
     Map.insert<Int, Int>(map: mut table, key: read 2, value: read 25)
-    Log.write(message: read String.from_int(value: compute(xs: mut xs, ys: read ys, table: mut table)))
+    Output.write(message: read String.from_int(value: compute(xs: mut xs, ys: read ys, table: mut table)))
     return Unit
 }
 ";
@@ -636,9 +636,9 @@ fn main() -> Unit {
         a.v = a.v + snapshot
         i = i + 1
     }
-    Log.write(message: read String.from_int(value: a.v))
-    Log.write(message: read String.from_int(value: a.w))
-    Log.write(message: read String.from_int(value: total(b: read a)))
+    Output.write(message: read String.from_int(value: a.v))
+    Output.write(message: read String.from_int(value: a.w))
+    Output.write(message: read String.from_int(value: total(b: read a)))
     return Unit
 }
 ";
@@ -673,19 +673,19 @@ fn main() -> Unit {
     // Same structural key: overwrites rather than adds.
     Map.insert(map: mut counts, key: read p1_again, value: read 99)
 
-    Log.write(message: read String.from_int(value: Map.len(map: read counts)))
-    Log.write(message: read String.from_bool(value: Map.contains_key(map: read counts, key: read p1_again)))
+    Output.write(message: read String.from_int(value: Map.len(map: read counts)))
+    Output.write(message: read String.from_bool(value: Map.contains_key(map: read counts, key: read p1_again)))
     let absent = Point(x: 9, y: 9, tags: List.new<Int>())
-    Log.write(message: read String.from_bool(value: Map.contains_key(map: read counts, key: read absent)))
+    Output.write(message: read String.from_bool(value: Map.contains_key(map: read counts, key: read absent)))
     // Round-trips keys back to `Point` values (key reconstruction).
-    Log.write(message: read String.from_int(value: List.len(list: read Map.keys(map: read counts))))
+    Output.write(message: read String.from_int(value: List.len(list: read Map.keys(map: read counts))))
 
     let seen = Set.new<Point>()
     Set.insert(set: mut seen, value: read p1)
     Set.insert(set: mut seen, value: read p2)
     Set.insert(set: mut seen, value: read p1_again)
-    Log.write(message: read String.from_int(value: Set.len(set: read seen)))
-    Log.write(message: read String.from_bool(value: Set.contains(set: read seen, value: read p1_again)))
+    Output.write(message: read String.from_int(value: Set.len(set: read seen)))
+    Output.write(message: read String.from_bool(value: Set.contains(set: read seen, value: read p1_again)))
     return Unit
 }
 ";
@@ -708,17 +708,17 @@ fn main() -> Unit {
     Deque.push_back<Int>(deque: mut deque, value: read 3)
     Deque.push_front<Int>(deque: mut deque, value: read 4)
     match Deque.pop_front<Int>(deque: mut deque) {
-        Some(v) => { Log.write(message: read String.from_int(value: v)) }
-        None => { Log.write(message: read \"none\") }
+        Some(v) => { Output.write(message: read String.from_int(value: v)) }
+        None => { Output.write(message: read \"none\") }
     }
     match Deque.pop_back<Int>(deque: mut deque) {
-        Some(v) => { Log.write(message: read String.from_int(value: v)) }
-        None => { Log.write(message: read \"none\") }
+        Some(v) => { Output.write(message: read String.from_int(value: v)) }
+        None => { Output.write(message: read \"none\") }
     }
     let dq = Deque.to_list<Int>(deque: read deque)
     let mut d = 0
     while d < Deque.len<Int>(deque: read deque) {
-        Log.write(message: read String.from_int(value: dq[d]))
+        Output.write(message: read String.from_int(value: dq[d]))
         d = d + 1
     }
 
@@ -734,7 +734,7 @@ fn main() -> Unit {
     let xs = SortedSet.to_list<Int>(set: read sset)
     let mut i = 0
     while i < SortedSet.len<Int>(set: read sset) {
-        Log.write(message: read String.from_int(value: xs[i]))
+        Output.write(message: read String.from_int(value: xs[i]))
         i = i + 1
     }
 
@@ -750,8 +750,8 @@ fn main() -> Unit {
     let vs = SortedMap.values<Int, Int>(map: read smap)
     let mut j = 0
     while j < SortedMap.len<Int, Int>(map: read smap) {
-        Log.write(message: read String.from_int(value: ks[j]))
-        Log.write(message: read String.from_int(value: vs[j]))
+        Output.write(message: read String.from_int(value: ks[j]))
+        Output.write(message: read String.from_int(value: vs[j]))
         j = j + 1
     }
     return Unit
@@ -791,7 +791,7 @@ fn blend(p: read Vec2, xs: read List<Int>, n: Int) -> Int {
 fn main() -> Unit {
     let xs = [10, 20, 30, 40]
     let total = blend(p: read Vec2(x: 5, y: 9), xs: read xs, n: read 64)
-    Log.write(message: read String.from_int(value: total))
+    Output.write(message: read String.from_int(value: total))
     return Unit
 }
 ";
@@ -830,7 +830,7 @@ fn blend(p: read Vec2f, xs: read List<Float>, n: Int) -> Float {
 fn main() -> Unit {
     let xs = [1.5, 2.25, 3.75, 4.0]
     let total = blend(p: read Vec2f(x: 0.5, y: 9.0), xs: read xs, n: read 64)
-    Log.write(message: read String.from_float(value: total))
+    Output.write(message: read String.from_float(value: total))
     return Unit
 }
 ";
@@ -856,7 +856,7 @@ fn sum_n(xs: read List<Float>, n: Int) -> Float {
 
 fn main() -> Unit {
     let xs = [1.0, 2.0, 3.0]
-    Log.write(message: read String.from_float(value: sum_n(xs: read xs, n: read 8)))
+    Output.write(message: read String.from_float(value: sum_n(xs: read xs, n: read 8)))
     return Unit
 }
 ";
@@ -901,8 +901,8 @@ fn main() -> Unit {
     let is = [10, 20, 30, 40]
     let f = sum_floats(xs: read fs, n: read 96)
     let s = sum_ints(xs: read is, n: read 96)
-    Log.write(message: read String.from_float(value: f))
-    Log.write(message: read String.from_int(value: s))
+    Output.write(message: read String.from_float(value: f))
+    Output.write(message: read String.from_int(value: s))
     return Unit
 }
 ";
@@ -929,7 +929,7 @@ fn sum_n(xs: read List<Int>, n: Int) -> Int {
 
 fn main() -> Unit {
     let xs = [7, 8, 9]
-    Log.write(message: read String.from_int(value: sum_n(xs: read xs, n: read 64)))
+    Output.write(message: read String.from_int(value: sum_n(xs: read xs, n: read 64)))
     return Unit
 }
 ";
@@ -958,7 +958,7 @@ fn main() -> Unit {\n\
     bump(c: mut c)\n\
     bump(c: mut c)\n\
     add(c: mut c, amount: 10)\n\
-    Log.write(message: read String.from_int(value: c.n))\n\
+    Output.write(message: read String.from_int(value: c.n))\n\
     return Unit\n\
 }\n";
     common::differential::assert_backends_agree("mut-param-field.rss", source, &[]);
@@ -1004,7 +1004,7 @@ fn scan(xs: read List<Int>) -> Int {
 
 fn main() -> Unit {
     let xs = [1, 2, 3]
-    Log.write(message: read String.from_int(value: scan(xs: read xs)))
+    Output.write(message: read String.from_int(value: scan(xs: read xs)))
     return Unit
 }
 ";
@@ -1028,7 +1028,7 @@ fn sum_n(xs: read List<Int>, n: Int) -> Int {
 
 fn main() -> Unit {
     let xs = [1, 2, 3]
-    Log.write(message: read String.from_int(value: sum_n(xs: read xs, n: read 8)))
+    Output.write(message: read String.from_int(value: sum_n(xs: read xs, n: read 8)))
     return Unit
 }
 ";
@@ -1064,7 +1064,7 @@ fn accumulate(limit: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: accumulate(limit: read 8)))
+    Output.write(message: read String.from_int(value: accumulate(limit: read 8)))
     return Unit
 }
 ";
@@ -1113,7 +1113,7 @@ fn driver(limit: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: driver(limit: read 250)))
+    Output.write(message: read String.from_int(value: driver(limit: read 250)))
     return Unit
 }
 ";
@@ -1138,7 +1138,7 @@ fn blend(x: Float, k: Float, n: Int) -> Float {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_float(value: blend(x: read 1.25, k: read 0.5, n: read 16)))
+    Output.write(message: read String.from_float(value: blend(x: read 1.25, k: read 0.5, n: read 16)))
     return Unit
 }
 ";
@@ -1419,7 +1419,7 @@ fn render_float(program: &FloatProgram) -> String {
     }
     source.push_str("    return count\n}\n\n");
     source.push_str("fn main() -> Unit {\n");
-    source.push_str("    Log.write(message: read String.from_int(value: compute()))\n");
+    source.push_str("    Output.write(message: read String.from_int(value: compute()))\n");
     source.push_str("    return Unit\n}\n");
     source
 }
@@ -1516,9 +1516,9 @@ fn render_string(program: &StringProgram) -> String {
         "    let result = {}\n",
         render_string_expr(&program.result)
     ));
-    source.push_str("    Log.write(message: read result)\n");
+    source.push_str("    Output.write(message: read result)\n");
     source.push_str(
-        "    Log.write(message: read String.from_int(value: String.len(value: read result)))\n",
+        "    Output.write(message: read String.from_int(value: String.len(value: read result)))\n",
     );
     source.push_str("    return Unit\n}\n");
     source
@@ -1624,11 +1624,11 @@ fn render_bytes(program: &BytesProgram) -> String {
             "    let sliced = Bytes.slice(value: read result, start: {start}, len: {len})\n",
         ));
         source.push_str(
-            "    Log.write(message: read String.from_int(value: Bytes.len(value: read sliced)))\n",
+            "    Output.write(message: read String.from_int(value: Bytes.len(value: read sliced)))\n",
         );
     } else {
         source.push_str(
-            "    Log.write(message: read String.from_int(value: Bytes.len(value: read result)))\n",
+            "    Output.write(message: read String.from_int(value: Bytes.len(value: read result)))\n",
         );
     }
     source.push_str("    return Unit\n}\n");

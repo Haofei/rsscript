@@ -555,86 +555,86 @@ fn main() -> Unit {
         emitted = emitted + emit_diagnostic_records(code: "RS1002", toks, tokenIndices: implicitConvTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS1004", toks, tokenIndices: surfaceRefTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS1001", toks, tokenIndices: operatorOverloadTokens)
-        if emitted == 0 { Log.write(message: "CLEAN") }
+        if emitted == 0 { Output.write(message: "CLEAN") }
         return Unit
     }
     if missingReturn {
-        Log.write(message: "RS0002")
+        Output.write(message: "RS0002")
     }
     if untypedParam {
-        Log.write(message: "RS0003")
+        Output.write(message: "RS0003")
     }
     if unknownEffect {
-        Log.write(message: "RS0004")
+        Output.write(message: "RS0004")
     }
     if duplicateFound {
         if !structured  {
-            Log.write(message: "RS0005")
+            Output.write(message: "RS0005")
         }
     }
     if hasProfile {
-        Log.write(message: "RS0010")
+        Output.write(message: "RS0010")
     }
     if shareParam {
-        Log.write(message: "RS0011")
+        Output.write(message: "RS0011")
     }
     if removedRuntime {
-        Log.write(message: "RS0012")
+        Output.write(message: "RS0012")
     }
     if invalidSelf {
         if !structured {
-            Log.write(message: "RS0028")
+            Output.write(message: "RS0028")
         }
     }
     if retainsBad {
         if !structured  {
-            Log.write(message: "RS0007")
+            Output.write(message: "RS0007")
         }
     }
     if pureBad && !structured  {
-        Log.write(message: "RS0009")
+        Output.write(message: "RS0009")
     }
     if nonExhaustive && !structured  {
-        Log.write(message: "RS0021")
+        Output.write(message: "RS0021")
     }
     if badAwait && !structured  {
-        Log.write(message: "RS0029")
+        Output.write(message: "RS0029")
     }
     if invalidTry && !structured  {
-        Log.write(message: "RS0013")
+        Output.write(message: "RS0013")
     }
     if unsupportedSyntax && !structured  {
-        Log.write(message: "RS0015")
+        Output.write(message: "RS0015")
     }
     if unnamedArg {
-        Log.write(message: "RS0201")
+        Output.write(message: "RS0201")
     }
     if missingDataEffect {
-        Log.write(message: "RS0202")
+        Output.write(message: "RS0202")
     }
     if asyncNotConsumed {
-        Log.write(message: "RS0022")
+        Output.write(message: "RS0022")
     }
     if fdSurface {
-        Log.write(message: "RS0023")
+        Output.write(message: "RS0023")
     }
     if lowerConflict && !structured  {
-        Log.write(message: "RS0035")
+        Output.write(message: "RS0035")
     }
     if unknownProtocol {
-        Log.write(message: "RS0027")
+        Output.write(message: "RS0027")
     }
     if noallocAlloc {
-        Log.write(message: "RS0014")
+        Output.write(message: "RS0014")
     }
     if noBlockCall {
-        Log.write(message: "RS0018")
+        Output.write(message: "RS0018")
     }
     if noPanicCall {
-        Log.write(message: "RS0019")
+        Output.write(message: "RS0019")
     }
     if unknownType && !structured  {
-        Log.write(message: "RS0024")
+        Output.write(message: "RS0024")
     }
     if outOfRangeInt {
         if structured {
@@ -644,20 +644,20 @@ fn main() -> Unit {
                 outOfRangeIntIndex = outOfRangeIntIndex + 1
             }
         } else {
-            Log.write(message: "RS0033")
+            Output.write(message: "RS0033")
         }
     }
     if cyclicAlias && !structured {
-        Log.write(message: "RS0039")
+        Output.write(message: "RS0039")
     }
     if hasUnknownFeat {
-        Log.write(message: "RS0016")
+        Output.write(message: "RS0016")
     }
     if hasDupFeat {
-        Log.write(message: "RS0017")
+        Output.write(message: "RS0017")
     }
     if headerCount > 0 {
-        Log.write(message: "RS0006")
+        Output.write(message: "RS0006")
     }
     if resourceDerive {
         if structured {
@@ -667,150 +667,150 @@ fn main() -> Unit {
                 resourceDeriveIndex = resourceDeriveIndex + 1
             }
         } else {
-            Log.write(message: "RS0212")
+            Output.write(message: "RS0212")
         }
     }
     if deriveFieldBad && !structured  {
-        Log.write(message: "RS0211")
+        Output.write(message: "RS0211")
     }
     if protocolBad && !structured  {
-        Log.write(message: "RS0032")
+        Output.write(message: "RS0032")
     }
     if surfaceRef {
-        Log.write(message: "RS1004")
+        Output.write(message: "RS1004")
     }
     if variantArity && !structured  {
-        Log.write(message: "RS0037")
+        Output.write(message: "RS0037")
     }
     if uninferable {
-        Log.write(message: "RS0034")
+        Output.write(message: "RS0034")
     }
     if immutableAssign {
-        Log.write(message: "RS0311")
+        Output.write(message: "RS0311")
     }
     if dupArg {
-        Log.write(message: "RS0205")
+        Output.write(message: "RS0205")
     }
     if noallocCall && !structured  {
-        Log.write(message: "RS0020")
+        Output.write(message: "RS0020")
     }
     if invalidWeak {
-        Log.write(message: "RS0902")
+        Output.write(message: "RS0902")
     }
     if ownStruct {
-        Log.write(message: "RS1003")
+        Output.write(message: "RS1003")
     }
     if localClass {
-        Log.write(message: "RS0306")
+        Output.write(message: "RS0306")
     }
     if assignTypeMismatch {
-        Log.write(message: "RS0313")
+        Output.write(message: "RS0313")
     }
     if indexAssignBad {
-        Log.write(message: "RS0312")
+        Output.write(message: "RS0312")
     }
     if manageNonLocal {
-        Log.write(message: "RS0307")
+        Output.write(message: "RS0307")
     }
     if takeNonLocal {
-        Log.write(message: "RS0308")
+        Output.write(message: "RS0308")
     }
     if managedToLocal {
-        Log.write(message: "RS0301")
+        Output.write(message: "RS0301")
     }
     if useAfterManage {
-        Log.write(message: "RS0401")
+        Output.write(message: "RS0401")
     }
     if retainedLocal {
-        Log.write(message: "RS0501")
+        Output.write(message: "RS0501")
     }
     if placeConflict0303 && !structured  {
-        Log.write(message: "RS0303")
+        Output.write(message: "RS0303")
     }
     if placeConflict0305 && !structured  {
-        Log.write(message: "RS0305")
+        Output.write(message: "RS0305")
     }
     if placeConflict0309 && !structured  {
-        Log.write(message: "RS0309")
+        Output.write(message: "RS0309")
     }
     if placeConflict0302 && !structured  {
-        Log.write(message: "RS0302")
+        Output.write(message: "RS0302")
     }
     if placeConflict0304 && !structured  {
-        Log.write(message: "RS0304")
+        Output.write(message: "RS0304")
     }
     if freshReturnBad {
-        Log.write(message: "RS0601")
+        Output.write(message: "RS0601")
     }
     if closureCapture0801 && !structured  {
-        Log.write(message: "RS0801")
+        Output.write(message: "RS0801")
     }
     if closureCapture0804 && !structured  {
-        Log.write(message: "RS0804")
+        Output.write(message: "RS0804")
     }
     if captureContract && !structured  {
-        Log.write(message: "RS0805")
+        Output.write(message: "RS0805")
     }
     if resourceGenericBad {
-        Log.write(message: "RS0704")
+        Output.write(message: "RS0704")
     }
     if protocolImplBad {
-        Log.write(message: "RS1301")
+        Output.write(message: "RS1301")
     }
     if noescapeEscape && !structured  {
-        Log.write(message: "RS0802")
+        Output.write(message: "RS0802")
     }
     if localClosureEscape && !structured  {
-        Log.write(message: "RS0803")
+        Output.write(message: "RS0803")
     }
     if resourceEscape && !structured  {
-        Log.write(message: "RS0702")
+        Output.write(message: "RS0702")
     }
     if missingTry {
-        Log.write(message: "RS0706")
+        Output.write(message: "RS0706")
     }
     if nonTransferPayload && !structured  {
-        Log.write(message: "RS0036")
+        Output.write(message: "RS0036")
     }
     if resourceField {
-        Log.write(message: "RS0701")
+        Output.write(message: "RS0701")
     }
     if freshMut {
-        Log.write(message: "RS0604")
+        Output.write(message: "RS0604")
     }
     if invalidFreshRet {
-        Log.write(message: "RS0603")
+        Output.write(message: "RS0603")
     }
     if implicitConv {
-        Log.write(message: "RS1002")
+        Output.write(message: "RS1002")
     }
     if operatorOverload {
-        Log.write(message: "RS1001")
+        Output.write(message: "RS1001")
     }
     if retTypeMismatch {
-        Log.write(message: "RS0208")
+        Output.write(message: "RS0208")
     }
     if bindTypeMismatch {
-        Log.write(message: "RS0207")
+        Output.write(message: "RS0207")
     }
     if opTypeMismatch {
-        Log.write(message: "RS0210")
+        Output.write(message: "RS0210")
     }
     if cfTypeMismatch {
-        Log.write(message: "RS0209")
+        Output.write(message: "RS0209")
     }
     if takeHandle {
-        Log.write(message: "RS0901")
+        Output.write(message: "RS0901")
     }
     if weakInit {
-        Log.write(message: "RS0904")
+        Output.write(message: "RS0904")
     }
     if weakRead {
-        Log.write(message: "RS0903")
+        Output.write(message: "RS0903")
     }
     let anyDiag = duplicateFound || hasUnknownFeat || hasDupFeat || headerCount > 0 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || pureBad || nonExhaustive || badAwait || invalidTry || unsupportedSyntax || fdSurface || lowerConflict || unknownProtocol || protocolImplBad || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || implicitConv || operatorOverload || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourceGenericBad || resourceEscape || noescapeEscape || localClosureEscape || missingTry || nonTransferPayload || takeHandle || weakInit || weakRead
     if !anyDiag  {
-        Log.write(message: "CLEAN")
+        Output.write(message: "CLEAN")
     }
     return Unit
 }

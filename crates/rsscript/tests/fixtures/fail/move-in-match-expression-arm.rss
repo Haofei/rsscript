@@ -23,5 +23,5 @@ fn main() -> Unit {
             0
         }
     }
-    Log.write(message: String.from_int(value: r))
+    Output.write(message: String.from_int(value: r))
 }

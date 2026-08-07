@@ -772,7 +772,7 @@ fn calc(x: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: calc(x: read 7)))
+    Output.write(message: read String.from_int(value: calc(x: read 7)))
     return Unit
 }
 "#;
@@ -813,7 +813,7 @@ fn calc(x: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: calc(x: read 7)))
+    Output.write(message: read String.from_int(value: calc(x: read 7)))
     return Unit
 }
 "#;
@@ -853,7 +853,7 @@ fn caller(x: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: caller(x: read 4)))
+    Output.write(message: read String.from_int(value: caller(x: read 4)))
     return Unit
 }
 "#;
@@ -895,7 +895,7 @@ fn caller(x: Int) -> Int {
 }
 
 fn main() -> Unit {
-    Log.write(message: read String.from_int(value: caller(x: read 4)))
+    Output.write(message: read String.from_int(value: caller(x: read 4)))
     return Unit
 }
 "#;

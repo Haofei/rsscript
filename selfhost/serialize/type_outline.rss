@@ -35,7 +35,7 @@ fn main() -> Unit {
                 let index = List.get<Int>(list: item.statements, index: statementIndex)
                 let statement = List.get<Stmt>(list: program.statements, index)
                 let ty = infer_statement_type(program: program, context: mut context, index: index)
-                Log.write(message: String.concat(left: String.concat(left: String.concat(left: item.name, right: "\t"), right: statement_kind_name(kind: statement.kind)), right: String.concat(left: "\t", right: ty)))
+                Output.write(message: String.concat(left: String.concat(left: String.concat(left: item.name, right: "\t"), right: statement_kind_name(kind: statement.kind)), right: String.concat(left: "\t", right: ty)))
                 statementIndex = statementIndex + 1
             }
         }

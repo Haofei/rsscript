@@ -39,6 +39,6 @@ fn main() -> Unit {
         k = k + 1
     }
     let result = hot(xs, limit)
-    Log.write(message: String.from_float(value: result))
+    Output.write(message: String.from_float(value: result))
     return Unit
 }

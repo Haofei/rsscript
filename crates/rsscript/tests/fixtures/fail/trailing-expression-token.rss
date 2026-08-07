@@ -1,6 +1,6 @@
 // expect: RS0015
 fn main() -> Unit {
-    let call = Log.write(message: read "hello") extra
+    let call = Output.write(message: read "hello") extra
     let name = call extra
     return Unit
 }

@@ -90,7 +90,7 @@ pub fn main() -> Result<Unit, JsonError> {
     let facts = selfhost_remap_facts()?
     let summary = remap_summary_line(facts)
 
-    Log.write(message: summary)
+    Output.write(message: summary)
 
     Assert.equal_int(left: facts.diagnostics, right: 1)
     Assert.equal_int(left: facts.mapped_errors, right: 1)

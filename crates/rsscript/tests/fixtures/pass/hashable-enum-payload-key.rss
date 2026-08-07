@@ -25,7 +25,7 @@ fn main() -> Unit {
     Map.insert(map: mut counts, key: end, value: classify(token: end))
     let here = Map.contains_key(map: counts, key: end)
     if here {
-        Log.write(message: "token seen")
+        Output.write(message: "token seen")
     }
     return Unit
 }

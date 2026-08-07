@@ -26,6 +26,6 @@ fn main() -> Result<Unit, ChannelError> {
         let count = await consumer?
     }
 
-    Log.write(message: "channel pipeline ok")
+    Output.write(message: "channel pipeline ok")
     return Ok(Unit)
 }

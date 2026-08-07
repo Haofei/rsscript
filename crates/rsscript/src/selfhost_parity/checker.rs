@@ -835,7 +835,7 @@ fn checker_rs0034_structured_multiset_parity() {
     let used = Ok(2)
     let annotated: Result<Int, String> = Ok(3)
     let determined = Some(4)
-    Log.debug(value: read used)
+    Output.debug(value: read used)
 }
 "#;
     let oracle = checker_oracle_records("structured-rs0034.rss", source, "RS0034");
@@ -965,7 +965,7 @@ fn conditions(value: read String) -> Unit {
         return Unit
     }
     for item in value {
-        Log.write(message: read "item")
+        Output.write(message: read "item")
     }
     return Unit
 }
@@ -1052,7 +1052,7 @@ fn checker_rs0207_structured_multiset_parity() {
 fn bad() -> Unit {
     let value: String = 42
     needs_text(value: read 7)
-    Log.write(message: read 9)
+    Output.write(message: read 9)
     return Unit
 }
 "#;
@@ -2181,7 +2181,7 @@ fn consume(value: take Frame) -> Unit
 fn invalid_direct() -> Unit {
     local value = Frame(id: 1)
     consume(value: take value)
-    Log.write(message: read "moved")
+    Output.write(message: read "moved")
     let first = value.id
     let second = value.id
 }
@@ -2586,10 +2586,10 @@ use selfhost.types.*
 
 fn main() -> Unit {
     if str_is_unresolved_generic(s: read "owned T") {
-        Log.write(message: read "owned")
+        Output.write(message: read "owned")
     }
     if str_is_unresolved_generic(s: read "Triple<Int, Int, T>") {
-        Log.write(message: read "third")
+        Output.write(message: read "third")
     }
     let mut substitutions = Map<String, String>.new()
     Map.insert(map: mut substitutions, key: "T", value: "String")
@@ -2598,7 +2598,7 @@ fn main() -> Unit {
         substitutions: substitutions,
         depth: 0
     ) == "Result<List<String>, Int>" {
-        Log.write(message: read "substitute")
+        Output.write(message: read "substitute")
     }
     let mut genericNames = Set<String>.new()
     Set.insert(set: mut genericNames, value: "T")
@@ -2611,7 +2611,7 @@ fn main() -> Unit {
         depth: 0
     )
     if Map.get_or_default(map: inferred, key: "T", default: "") == "Int" {
-        Log.write(message: read "infer")
+        Output.write(message: read "infer")
     }
 }
 "#

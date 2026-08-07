@@ -19,12 +19,12 @@ fn main() -> Unit {
     let session = Session(owner: Weak.from(value: read user))
     let downgraded = Weak.downgrade(value: read user)
     match Weak.upgrade(value: read session.owner) {
-        Some(owner) => Log.write(message: read String.from_int(value: owner.id))
-        None => Log.write(message: read "missing")
+        Some(owner) => Output.write(message: read String.from_int(value: owner.id))
+        None => Output.write(message: read "missing")
     }
     match Weak.upgrade(value: read downgraded) {
-        Some(owner) => Log.write(message: read String.from_int(value: owner.id))
-        None => Log.write(message: read "missing")
+        Some(owner) => Output.write(message: read String.from_int(value: owner.id))
+        None => Output.write(message: read "missing")
     }
     return Unit
 }
@@ -74,8 +74,8 @@ pub fn Host.echo(message: read String) -> String
     let source = r#"
 fn main() -> Unit {
     let handle = Host.open()
-    Log.write(message: read Host.describe(handle: read handle))
-    Log.write(message: read Host.echo(message: read "native"))
+    Output.write(message: read Host.describe(handle: read handle))
+    Output.write(message: read Host.echo(message: read "native"))
     return Unit
 }
 "#;
@@ -150,8 +150,8 @@ pub fn Beta.describe(self: read Beta) -> String
 fn main() -> Unit {
     let alpha = Alpha.open()
     let beta = Beta.open()
-    Log.write(message: read alpha.describe())
-    Log.write(message: read beta.describe())
+    Output.write(message: read alpha.describe())
+    Output.write(message: read beta.describe())
     return Unit
 }
 "#;
@@ -179,18 +179,18 @@ resource Handle {
     id: Int
 
     drop {
-        Log.write(message: read "drop")
-        Log.write(message: read String.from_int(value: id))
+        Output.write(message: read "drop")
+        Output.write(message: read String.from_int(value: id))
     }
 }
 
 fn return_case() -> Unit {
     with Handle(id: 1) as handle {
-        Log.write(message: read "return-body")
-        Log.write(message: read String.from_int(value: handle.id))
+        Output.write(message: read "return-body")
+        Output.write(message: read String.from_int(value: handle.id))
         return Unit
     }
-    Log.write(message: read "return-after")
+    Output.write(message: read "return-after")
     return Unit
 }
 
@@ -198,13 +198,13 @@ fn break_case() -> Unit {
     let mut index = 0
     while index < 1 {
         with Handle(id: 2) as handle {
-            Log.write(message: read "break-body")
-            Log.write(message: read String.from_int(value: handle.id))
+            Output.write(message: read "break-body")
+            Output.write(message: read String.from_int(value: handle.id))
             break
         }
-        Log.write(message: read "break-after-with")
+        Output.write(message: read "break-after-with")
     }
-    Log.write(message: read "after-break")
+    Output.write(message: read "after-break")
     return Unit
 }
 
@@ -212,14 +212,14 @@ fn continue_case() -> Unit {
     let mut index = 0
     while index < 2 {
         with Handle(id: index + 3) as handle {
-            Log.write(message: read "continue-body")
-            Log.write(message: read String.from_int(value: handle.id))
+            Output.write(message: read "continue-body")
+            Output.write(message: read String.from_int(value: handle.id))
             index = index + 1
             continue
         }
-        Log.write(message: read "continue-after-with")
+        Output.write(message: read "continue-after-with")
     }
-    Log.write(message: read "after-continue")
+    Output.write(message: read "after-continue")
     return Unit
 }
 
@@ -229,11 +229,11 @@ fn fail() -> Result<Unit, String> {
 
 fn try_case() -> Result<Unit, String> {
     with Handle(id: 5) as handle {
-        Log.write(message: read "try-body")
-        Log.write(message: read String.from_int(value: handle.id))
+        Output.write(message: read "try-body")
+        Output.write(message: read String.from_int(value: handle.id))
         fail()?
     }
-    Log.write(message: read "try-after")
+    Output.write(message: read "try-after")
     return Ok(Unit)
 }
 
@@ -243,10 +243,10 @@ fn main() -> Unit {
     continue_case()
     match try_case() {
         Ok(_) => {
-            Log.write(message: read "try-ok")
+            Output.write(message: read "try-ok")
         }
         Err(message) => {
-            Log.write(message: read message)
+            Output.write(message: read message)
         }
     }
     return Unit

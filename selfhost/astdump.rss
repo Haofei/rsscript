@@ -3780,11 +3780,11 @@ fn main() -> Unit {
     emit_repeat(out: mut out, marker: "unknown-top-level", n: unknownTop, d: 1)
     emit_repeat(out: mut out, marker: "malformed-declaration", n: malDecl, d: 1)
     let rendered = StringBuilder.finish(builder: take out)
-    // `emit` stores a newline after every logical dump line. `Log.write` owns
+    // `emit` stores a newline after every logical dump line. `Output.write` owns
     // the protocol's one final newline, so drop only that trailing separator.
     let renderedLen = String.len(value: rendered)
     if renderedLen > 0 {
-        Log.write(message: String.slice(value: rendered, start: 0, len: (renderedLen - 1)))
+        Output.write(message: String.slice(value: rendered, start: 0, len: (renderedLen - 1)))
     }
     return Unit
 }

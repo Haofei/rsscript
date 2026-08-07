@@ -38,6 +38,6 @@ fn main() -> Unit {
         k = k + 1
     }
     let result = hot(xs, limit)
-    Log.write(message: String.from_int(value: result))
+    Output.write(message: String.from_int(value: result))
     return Unit
 }

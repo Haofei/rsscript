@@ -41,6 +41,6 @@ fn main() -> Unit {
     List.push<Int>(list: mut values, value: 0)
     List.push<Int>(list: mut values, value: 0)
     let result = hot(values: mut values, limit)
-    Log.write(message: String.from_int(value: result))
+    Output.write(message: String.from_int(value: result))
     return Unit
 }

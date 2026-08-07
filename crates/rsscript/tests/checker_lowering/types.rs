@@ -457,7 +457,7 @@ struct BufferWriter {
 }
 
 fn BufferWriter.write(self: mut BufferWriter, message: read String) -> Unit {
-    Log.write(message: read message)
+    Output.write(message: read message)
 }
 
 impl Writer for BufferWriter {
@@ -568,7 +568,7 @@ fn main() -> Unit {
 
     let unclosed_call = r#"
 fn main() -> Unit {
-    let x = Log.write(message: read "hello"
+    let x = Output.write(message: read "hello"
     return Unit
 }
 "#;

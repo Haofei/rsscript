@@ -51,11 +51,6 @@ pub(super) fn receiver_value(channel_id: i64, closed: bool) -> VmValue {
     VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Receiver"), fields)))
 }
 
-pub(super) fn deadline_value(unix_ms: i64) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![("unix_ms".to_string(), VmValue::Int(unix_ms))];
-    VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Deadline"), fields)))
-}
-
 pub(super) fn cancellation_source_value(id: i64) -> VmValue {
     cancellation_handle_value("CancellationSource", id)
 }

@@ -100,11 +100,11 @@ fn mailbox_take_from<T>(m: mut Mailbox<T>, source: Int) -> Option<T> {
 }
 
 fn show(label: String, value: Int) -> Unit {
-    Log.write(message: String.concat(left: label, right: String.from_int(value)))
+    Output.write(message: String.concat(left: label, right: String.from_int(value)))
 }
 
 fn show_none(label: String) -> Unit {
-    Log.write(message: String.concat(left: label, right: "none"))
+    Output.write(message: String.concat(left: label, right: "none"))
 }
 
 fn main() -> Unit {
