@@ -895,6 +895,31 @@ fn allocation_budget_is_not_mislabeled_as_live_memory() {
 }
 
 #[test]
+fn public_execution_defaults_are_bounded_without_compatibility_aliases() {
+    let root = workspace_root();
+    let vm = read(&root.join("crates/rsscript/src/reg_vm/mod.rs"));
+    let sdk = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
+    assert!(!vm.contains("pub fn safe_default"));
+    for bounded in [
+        "step_budget: Some(",
+        "allocation_budget: Some(",
+        "stdout_budget: Some(",
+        "intrinsic_call_budget: Some(",
+        "provider_call_budget: Some(",
+        "resource_limit: Some(",
+        "allow_blocking_provider_calls: false",
+    ] {
+        assert!(
+            vm.contains(bounded),
+            "VmLimits::default must retain finite `{bounded}`"
+        );
+    }
+    assert!(sdk.contains("VmLimits::default().into()"));
+    assert!(sdk.contains("Self::new(ProviderRegistry::default(), RunLimits::default())"));
+    assert!(vm.contains("pub fn unbounded_for_trusted_host"));
+}
+
+#[test]
 fn structural_semantics_are_owned_by_the_semantics_crate() {
     let root = workspace_root();
     let types = root.join("crates/rsscript-semantics/src/types.rs");

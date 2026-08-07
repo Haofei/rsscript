@@ -227,7 +227,7 @@ fn cli_vm_limits() -> VmLimits {
     });
     VmLimits {
         cancel: Some(cancel),
-        ..VmLimits::safe_default()
+        ..VmLimits::default()
     }
 }
 

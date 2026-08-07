@@ -32,6 +32,9 @@ ambient clock reads, script deadlines, or timer sleeps. Monotonic deadlines stay
 in the explicit `host` control module for bounding an execution.
 The AOT host must construct and retain `RuntimeServices` explicitly;
 process-global Tokio runtime discovery and its compatibility registry are gone.
+Public VM and SDK defaults carry finite step, allocation, output, intrinsic,
+provider-call, resource, and recursion budgets; the old `safe_default` alias is
+removed, and unlimited execution requires `unbounded_for_trusted_host()`.
 The compiler now consumes runtime `core` only; VM
 compatibility intrinsics for filesystem and process access fail with an explicit
 provider-required error instead of reaching the OS. Disabled hosts fail before

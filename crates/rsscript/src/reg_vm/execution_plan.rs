@@ -152,7 +152,7 @@ mod tests {
             TierPlan::Tier0 { force_all: true }
         ));
         assert_eq!(
-            ExecutionPlan::streaming(VmLimits::safe_default()).stdout,
+            ExecutionPlan::streaming(VmLimits::default()).stdout,
             StdoutMode::Streaming
         );
     }

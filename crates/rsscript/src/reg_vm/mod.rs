@@ -1398,7 +1398,7 @@ impl RegVmExecutable {
         self.eval_main_with_args_and_external_bindings_streaming_stdout_with_limits(
             args,
             external_bindings,
-            VmLimits::safe_default(),
+            VmLimits::default(),
         )
     }
 
@@ -1779,10 +1779,10 @@ pub struct VmLimits {
     pub deadline: Option<rsscript_operation::MonotonicDeadline>,
     /// Maximum output bytes exposed to an external Provider call.
     pub stdout_budget: Option<usize>,
-    /// Maximum number of stdlib/runtime intrinsic calls — every `Type.method`
-    /// dispatch out of pure VM bytecode into host-provided library code (the
-    /// `call_intrinsic`/`call_typed_intrinsic` boundary), which is where all file /
-    /// process / network / clock / logging effects (and the pure stdlib) enter.
+    /// Maximum number of deterministic stdlib/runtime intrinsic calls — every
+    /// `Type.method` dispatch out of VM bytecode into the built-in runtime
+    /// implementation. External host effects are counted separately by
+    /// `provider_call_budget`.
     /// `None` means uncounted. When `Some(limit)`, the call that would exceed
     /// `limit` fails with an "intrinsic call budget exceeded" error. This caps the volume
     /// of runtime-library calls independently of raw instruction count (a single
@@ -1836,11 +1836,6 @@ impl Default for VmLimits {
 }
 
 impl VmLimits {
-    /// Compatibility spelling for the bounded public default.
-    pub fn safe_default() -> Self {
-        Self::default()
-    }
-
     /// Disable accounting limits for a host-controlled, trusted workload.
     ///
     /// This is intentionally verbose: process isolation and provider authority
