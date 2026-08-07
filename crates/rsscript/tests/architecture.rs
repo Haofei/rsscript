@@ -1955,3 +1955,47 @@ fn selfhost_frontend_does_not_restore_retired_language_contracts() {
         );
     }
 }
+
+#[test]
+fn github_workflows_follow_current_workspace_boundaries() {
+    let root = workspace_root();
+    let workflow_dir = root.join(".github/workflows");
+    let workflows = fs::read_dir(&workflow_dir)
+        .expect("workflow directory should exist")
+        .map(|entry| entry.expect("workflow entry").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "yml"))
+        .map(|path| read(&path))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    for retired in [
+        "rsscript-engine",
+        "crates/rsscript/src/cli/run_cmd.rs",
+        "crates/rsscript/src/native_plugin/",
+        "crates/runtime/src/fs.rs",
+        "crates/runtime/src/process.rs",
+        "crates/runtime/src/socket.rs",
+        "crates/runtime/src/websocket.rs",
+    ] {
+        assert!(
+            !workflows.contains(retired),
+            "GitHub workflows must not reference retired workspace boundary `{retired}`"
+        );
+    }
+
+    for current in [
+        "-p rsscript-compiler",
+        "crates/rsscript-bytecode/**",
+        "crates/rsscript-provider-api/**",
+        "providers/**",
+    ] {
+        assert!(
+            workflows.contains(current),
+            "GitHub workflows must cover current workspace boundary `{current}`"
+        );
+    }
+
+    let release = read(&workflow_dir.join("release.yml"));
+    assert!(release.contains("for PACKAGE in rsscript-cli reir"));
+    assert!(!release.contains("for PACKAGE in rsscript reir"));
+}

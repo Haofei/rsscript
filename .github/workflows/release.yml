@@ -48,8 +48,12 @@ jobs:
             exit 1
           }
           EXPECTED="${GITHUB_REF_NAME#v}"
-          for PACKAGE in rsscript reir; do
-            ACTUAL="$(cargo metadata --locked --no-deps --format-version 1 | jq -r ".packages[] | select(.name == \"$PACKAGE\") | .version")"
+          for PACKAGE in rsscript-cli reir; do
+            ACTUAL="$(cargo metadata --locked --no-deps --format-version 1 | jq -r ".packages[] | select(.name == \"$PACKAGE\") | .version // empty")"
+            [ -n "$ACTUAL" ] || {
+              echo "::error::release package $PACKAGE does not exist"
+              exit 1
+            }
             [ "$ACTUAL" = "$EXPECTED" ] || {
               echo "::error::$PACKAGE version $ACTUAL does not match tag $GITHUB_REF_NAME"
               exit 1
@@ -70,24 +74,24 @@ jobs:
       # paths remain release blockers.
       - name: Validate native JIT
         run: |
-          cargo nextest run --locked -p rsscript-engine --features native-jit --no-fail-fast
+          cargo nextest run --locked -p rsscript-compiler --features native-jit --no-fail-fast
 
       - name: Validate generated backend parity
         run: |
-          RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test --locked -p rsscript-engine --test runtime -- --test-threads=1
-          RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test --locked -p rsscript-engine --test differential -- --test-threads=1
+          RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test --locked -p rsscript-compiler --test runtime -- --test-threads=1
+          RSSCRIPT_FULL_BACKEND_PARITY=1 cargo test --locked -p rsscript-compiler --test differential -- --test-threads=1
 
       # Keep corpus cases in one process so the compiled self-host tools are
       # reused. Exhaustive scheduled variants remain in selfhost.yml.
       - name: Validate release self-host corpus
         run: |
-          RSS_SELFHOST_TIER=2 cargo test --locked -p rsscript-engine --release --lib \
+          RSS_SELFHOST_TIER=2 cargo test --locked -p rsscript-compiler --release --lib \
             selfhost_parity::lexer_parity_corpus \
             -- --ignored --exact --nocapture --test-threads=1
-          RSS_SELFHOST_PARSE_TIER=1 cargo test --locked -p rsscript-engine --release --lib \
+          RSS_SELFHOST_PARSE_TIER=1 cargo test --locked -p rsscript-compiler --release --lib \
             selfhost_parity::parser_parity_corpus \
             -- --ignored --exact --nocapture --test-threads=1
-          cargo test --locked -p rsscript-engine --release --lib \
+          cargo test --locked -p rsscript-compiler --release --lib \
             selfhost_parity::checker_parity_corpus \
             -- --ignored --exact --nocapture --test-threads=1
 

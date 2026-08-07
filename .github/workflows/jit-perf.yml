@@ -38,4 +38,4 @@ jobs:
         run: docker compose build dev
 
       - name: JIT perf gate
-        run: docker compose run --rm dev cargo test --release -p rsscript-engine --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture
+        run: docker compose run --rm dev cargo test --release -p rsscript-compiler --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture

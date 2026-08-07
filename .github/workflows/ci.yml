@@ -67,7 +67,8 @@ jobs:
       - name: Process containment tests
         run: cargo test --locked -p rss-process-guard
 
-      - name: Package authorization and native cache tests
+      - name: Package authorization and provider boundary tests
         run: |
-          cargo test --locked -p rsscript-engine --lib package::authorization
-          cargo test --locked -p rsscript-engine --lib native_plugin
+          cargo test --locked -p rsscript-compiler --lib package::authorization
+          cargo test --locked -p rsscript-provider-api
+          cargo test --locked -p rsscript-bytecode

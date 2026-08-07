@@ -4,51 +4,53 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - ".github/workflows/security-sensitive.yml"
-      - ".github/workflows/experimental.yml"
-      - ".github/workflows/release.yml"
+      - ".github/workflows/**"
       - "Dockerfile"
       - "compose.yaml"
       - "crates/lsp/**"
       - "crates/native-abi/**"
       - "crates/process-guard/**"
       - "crates/reir/**"
-      - "crates/rsscript/src/cli/run_cmd.rs"
-      - "crates/rsscript/src/native_plugin/**"
+      - "crates/rsscript-bytecode/**"
+      - "crates/rsscript-cli/**"
+      - "crates/rsscript-compiler/**"
+      - "crates/rsscript-operation/**"
+      - "crates/rsscript-provider-api/**"
+      - "crates/rsscript-provider-bindgen/**"
       - "crates/rsscript/src/package/**"
       - "crates/rsscript/src/reg_vm/**"
-      - "crates/runtime/src/fs.rs"
-      - "crates/runtime/src/process.rs"
-      - "crates/runtime/src/resource_budget.rs"
-      - "crates/runtime/src/socket.rs"
-      - "crates/runtime/src/websocket.rs"
+      - "crates/rsscript/src/eval_types.rs"
+      - "crates/runtime/**"
       - "crates/vm-jit/**"
       - "fuzz/**"
+      - "integrations/**"
       - "packages/native-abi-fixture/**"
+      - "providers/**"
   push:
     branches: [main]
     paths:
-      - ".github/workflows/security-sensitive.yml"
-      - ".github/workflows/experimental.yml"
-      - ".github/workflows/release.yml"
+      - ".github/workflows/**"
       - "Dockerfile"
       - "compose.yaml"
       - "crates/lsp/**"
       - "crates/native-abi/**"
       - "crates/process-guard/**"
       - "crates/reir/**"
-      - "crates/rsscript/src/cli/run_cmd.rs"
-      - "crates/rsscript/src/native_plugin/**"
+      - "crates/rsscript-bytecode/**"
+      - "crates/rsscript-cli/**"
+      - "crates/rsscript-compiler/**"
+      - "crates/rsscript-operation/**"
+      - "crates/rsscript-provider-api/**"
+      - "crates/rsscript-provider-bindgen/**"
       - "crates/rsscript/src/package/**"
       - "crates/rsscript/src/reg_vm/**"
-      - "crates/runtime/src/fs.rs"
-      - "crates/runtime/src/process.rs"
-      - "crates/runtime/src/resource_budget.rs"
-      - "crates/runtime/src/socket.rs"
-      - "crates/runtime/src/websocket.rs"
+      - "crates/rsscript/src/eval_types.rs"
+      - "crates/runtime/**"
       - "crates/vm-jit/**"
       - "fuzz/**"
+      - "integrations/**"
       - "packages/native-abi-fixture/**"
+      - "providers/**"
   workflow_dispatch:
 
 permissions:
@@ -86,7 +88,7 @@ jobs:
         run: |
           cargo test --locked -p vm-jit
           RSS_DIFF_PROPTEST_CASES=16 RSS_DIFF_SHRINK_ITERS=0 \
-            cargo test --locked -p rsscript-engine --test differential \
+            cargo test --locked -p rsscript-compiler --test differential \
             backends_agree_on_seed_decoded_programs \
             --features native-jit -- --test-threads=1
 
