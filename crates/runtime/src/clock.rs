@@ -1,33 +1,8 @@
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-
-#[derive(Debug, Clone)]
-pub struct RssInstant {
-    inner: Instant,
-}
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct RssDuration {
     pub ms: i64,
-}
-
-pub fn clock_now() -> RssInstant {
-    RssInstant {
-        inner: Instant::now(),
-    }
-}
-
-pub fn clock_system_unix_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_millis() as i64
-}
-
-pub fn instant_elapsed(start: &RssInstant) -> RssDuration {
-    let elapsed = start.inner.elapsed();
-    RssDuration {
-        ms: elapsed.as_millis() as i64,
-    }
 }
 
 pub fn duration_ms(value: i64) -> RssDuration {

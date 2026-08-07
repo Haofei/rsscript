@@ -23,7 +23,7 @@ mod regex;
 mod resource_budget;
 mod string_helpers;
 mod text_edit;
-pub(crate) use clock::deadline_remaining_duration;
+pub(crate) use clock::{RssDeadline, deadline_after_ms, deadline_remaining_duration};
 
 // Generated Rust uses root paths. Keep that compatibility surface explicit and
 // share the same manifest with `abi` so the two cannot drift.
@@ -37,14 +37,12 @@ macro_rules! runtime_abi_exports {
             AsyncPoll, CancellationToken, Context, DeferredPending, Executor, LoopControl,
             LoopResultPending, NativeAsyncCompleter, NativeAsyncPending, Pending, PollFnPending,
             ReadyPending, RssCancellationSource, RssCancellationToken, RuntimeServices, TaskGroup,
-            TaskGroupJoin, TaskGroupScope, ThenPending, TimerError, TimerSleepPending, TryPending,
-            WakeHandle, cancellation_never, cancellation_source_cancel, cancellation_source_new,
-            cancellation_source_token, cancellation_token_is_cancelled, native_async_pending,
-            pending_defer, pending_loop_result, pending_poll_fn, pending_ready, pending_then,
-            pending_try, run_pending, spawn_tokio_native, spawn_tokio_native_with_cancellation,
-            spawn_tokio_native_with_services, timer_sleep_cancellable_native_start,
-            timer_sleep_native_start, timer_sleep_native_start_with_cancellation,
-            timer_sleep_start, timer_sleep_until_native_start, tokio_native_runtime_worker_threads,
+            TaskGroupJoin, TaskGroupScope, ThenPending, TryPending, WakeHandle, cancellation_never,
+            cancellation_source_cancel, cancellation_source_new, cancellation_source_token,
+            cancellation_token_is_cancelled, native_async_pending, pending_defer,
+            pending_loop_result, pending_poll_fn, pending_ready, pending_then, pending_try,
+            run_pending, spawn_tokio_native, spawn_tokio_native_with_cancellation,
+            spawn_tokio_native_with_services, tokio_native_runtime_worker_threads,
             trace_async_runtime_phase,
         };
         pub use crate::channel::{
@@ -56,9 +54,8 @@ macro_rules! runtime_abi_exports {
             stream_from_iterator, stream_from_list, stream_next,
         };
         pub use crate::clock::{
-            RssDeadline, RssDuration, RssInstant, clock_now, clock_system_unix_ms, deadline_after,
-            deadline_after_ms, deadline_is_expired, deadline_remaining_ms, duration_add,
-            duration_as_ms, duration_as_seconds, duration_ms, duration_seconds, instant_elapsed,
+            RssDuration, duration_add, duration_as_ms, duration_as_seconds, duration_ms,
+            duration_seconds,
         };
         pub use crate::collections::{
             RssFalliblePipeline, RssPersistentMap, RssPipeline, buffer_clear, buffer_consume,
@@ -148,7 +145,6 @@ macro_rules! runtime_abi_exports {
             math_saturating_mul, math_saturating_sub, math_sin, math_sqrt, math_tanh,
             math_trunc_float, math_wrapping_add, math_wrapping_mul, math_wrapping_sub,
         };
-        pub use crate::operation_context::OperationContext;
         pub use crate::output::{log_error, log_error_json, log_trace, log_write, log_write_json};
         pub use crate::path::{
             RuntimePath, path_extension, path_file_name, path_from_string, path_is_absolute,
@@ -192,10 +188,14 @@ runtime_abi_exports!();
 
 /// Host integration APIs with explicit operation controls.
 pub mod host {
+    pub use crate::clock::{
+        RssDeadline, deadline_after, deadline_after_ms, deadline_is_expired, deadline_remaining_ms,
+    };
+    pub use crate::operation_context::OperationContext;
     pub use crate::{
-        NativeAsyncPending, OperationContext, ResourceBudget, ResourceBudgetError, RuntimeError,
-        RuntimeErrorKind, SourceSpan, cancellation_never, cancellation_source_cancel,
-        cancellation_source_new, cancellation_source_token, install_runtime_diagnostic_panic_hook,
-        spawn_tokio_native, spawn_tokio_native_with_cancellation,
+        NativeAsyncPending, ResourceBudget, ResourceBudgetError, RuntimeError, RuntimeErrorKind,
+        SourceSpan, cancellation_never, cancellation_source_cancel, cancellation_source_new,
+        cancellation_source_token, install_runtime_diagnostic_panic_hook, spawn_tokio_native,
+        spawn_tokio_native_with_cancellation,
     };
 }

@@ -15,7 +15,7 @@ fn generated_abi_root_and_module_remain_available() {
 fn host_controls_and_root_abi_are_available_without_a_compatibility_facade() {
     let budget = host::ResourceBudget::new(16);
     let context = host::OperationContext::new(
-        rsscript_runtime::deadline_after_ms(1_000),
+        host::deadline_after_ms(1_000),
         host::cancellation_never(),
         budget,
     );

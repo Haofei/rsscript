@@ -1764,6 +1764,38 @@ fn rust_aot_lowering_does_not_restore_removed_host_abi_types() {
 }
 
 #[test]
+fn generated_aot_abi_does_not_expose_wall_clock_or_timer_services() {
+    let root = workspace_root();
+    let runtime = read(&root.join("crates/runtime/src/lib.rs"));
+    let abi_macro = runtime
+        .split("macro_rules! runtime_abi_exports")
+        .nth(1)
+        .and_then(|source| source.split("/// Exact compatibility surface").next())
+        .expect("generated AOT ABI macro");
+    for forbidden in [
+        "RssInstant",
+        "clock_now",
+        "clock_system_unix_ms",
+        "instant_elapsed",
+        "RssDeadline",
+        "deadline_after",
+        "TimerError",
+        "TimerSleepPending",
+        "timer_sleep",
+        "OperationContext",
+    ] {
+        assert!(
+            !abi_macro.contains(forbidden),
+            "generated AOT ABI must obtain host time through a provider: `{forbidden}`"
+        );
+    }
+    assert!(
+        runtime.contains("pub mod host"),
+        "execution deadlines remain explicit host controls"
+    );
+}
+
+#[test]
 fn program_arguments_enter_through_the_explicit_main_abi() {
     let root = workspace_root();
     let catalog = read(&root.join("crates/rsscript/intrinsics.toml"));

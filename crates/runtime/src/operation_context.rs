@@ -77,10 +77,10 @@ impl std::fmt::Debug for OperationContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clock::{deadline_after_ms, deadline_is_expired};
     use crate::{
         cancellation_never, cancellation_source_cancel, cancellation_source_new,
-        cancellation_source_token, cancellation_token_is_cancelled, deadline_after_ms,
-        deadline_is_expired,
+        cancellation_source_token, cancellation_token_is_cancelled,
     };
 
     #[test]

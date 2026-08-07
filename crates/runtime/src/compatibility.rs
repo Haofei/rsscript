@@ -6,7 +6,8 @@
 
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-use crate::{OperationContext, ResourceBudget, RssCancellationToken, RssDeadline, RuntimeServices};
+use crate::operation_context::OperationContext;
+use crate::{ResourceBudget, RssCancellationToken, RssDeadline, RuntimeServices};
 
 /// The only process-wide runtime factory. It exists solely for generated-ABI
 /// compatibility entrypoints; canonical operations receive an explicit owner.

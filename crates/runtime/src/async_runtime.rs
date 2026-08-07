@@ -5,16 +5,19 @@ use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TimerError {
+#[cfg(test)]
+pub(crate) struct TimerError {
     message: String,
 }
 
+#[cfg(test)]
 impl std::fmt::Display for TimerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter, "{}", self.message)
     }
 }
 
+#[cfg(test)]
 impl std::error::Error for TimerError {}
 use tracing::info;
 
@@ -947,6 +950,7 @@ impl CancellationToken {
         })
     }
 
+    #[cfg(test)]
     async fn cancelled(&self) {
         let mut notified = Box::pin(self.notification.notified());
         notified.as_mut().enable();
@@ -1232,37 +1236,16 @@ impl<T> Default for TaskGroup<T> {
     }
 }
 
-pub struct TimerSleepPending {
-    deadline: Instant,
-}
-
-impl Pending<Result<(), TimerError>> for TimerSleepPending {
-    fn poll(&mut self, cx: &mut Context<'_>) -> AsyncPoll<Result<(), TimerError>> {
-        let now = Instant::now();
-        if now >= self.deadline {
-            return AsyncPoll::Ready(Ok(()));
-        }
-        let remaining = self.deadline.saturating_duration_since(now);
-        cx.wake_after(remaining);
-        AsyncPoll::Pending
-    }
-}
-
-pub fn timer_sleep_start(ms: i64) -> TimerSleepPending {
-    let millis = u64::try_from(ms).unwrap_or(0);
-    TimerSleepPending {
-        deadline: Instant::now() + Duration::from_millis(millis),
-    }
-}
-
-pub fn timer_sleep_native_start(ms: i64) -> NativeAsyncPending<Result<(), TimerError>> {
+#[cfg(test)]
+fn timer_sleep_native_start(ms: i64) -> NativeAsyncPending<Result<(), TimerError>> {
     timer_sleep_native_start_with_cancellation(ms, CancellationToken::new())
 }
 
 /// Sleep until a monotonic [`crate::clock::RssDeadline`] passes. Bridges the
 /// cooperative `Deadline` primitive to the existing async sleep: an already
 /// expired deadline yields immediately (zero remaining).
-pub fn timer_sleep_until_native_start(
+#[cfg(test)]
+fn timer_sleep_until_native_start(
     deadline: &crate::clock::RssDeadline,
 ) -> NativeAsyncPending<Result<(), TimerError>> {
     timer_sleep_native_start(crate::clock::deadline_remaining_ms(deadline))
@@ -1274,7 +1257,8 @@ pub fn timer_sleep_until_native_start(
 /// hanging. The caller checks the token to learn whether it elapsed or woke on
 /// cancel. This is the building block for a background loop that sleeps between
 /// iterations but stops immediately on shutdown.
-pub fn timer_sleep_cancellable_native_start(
+#[cfg(test)]
+fn timer_sleep_cancellable_native_start(
     ms: i64,
     token: &RssCancellationToken,
 ) -> NativeAsyncPending<Result<(), TimerError>> {
@@ -1288,7 +1272,8 @@ pub fn timer_sleep_cancellable_native_start(
     })
 }
 
-pub fn timer_sleep_native_start_with_cancellation(
+#[cfg(test)]
+fn timer_sleep_native_start_with_cancellation(
     ms: i64,
     cancellation: CancellationToken,
 ) -> NativeAsyncPending<Result<(), TimerError>> {
