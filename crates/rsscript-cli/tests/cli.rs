@@ -4,6 +4,17 @@ use std::fs;
 use std::process::Command;
 
 #[test]
+fn top_level_help_succeeds_on_stdout() {
+    let output = Command::new(env!("CARGO_BIN_EXE_rss"))
+        .arg("--help")
+        .output()
+        .expect("rss --help should run");
+    assert!(output.status.success());
+    assert!(String::from_utf8_lossy(&output.stdout).starts_with("usage:\n"));
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
 fn fix_write_resolves_missing_data_effects_to_a_clean_check() {
     let bin = env!("CARGO_BIN_EXE_rss");
     let temp = tempfile::tempdir().expect("temp dir should be creatable");

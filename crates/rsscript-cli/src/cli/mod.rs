@@ -33,6 +33,10 @@ pub fn run() -> ExitCode {
     };
 
     match command {
+        "--help" | "-h" => {
+            print_help();
+            ExitCode::SUCCESS
+        }
         #[cfg(feature = "execution")]
         "build" => artifact::run_build(&args[2..]),
         "check" => check::run_check(&args[2..]),
@@ -425,26 +429,24 @@ pub(crate) fn is_package_directory(path: &str) -> bool {
     let path = Path::new(path);
     path.is_dir() && path.join("rsspkg.toml").exists()
 }
+const USAGE: &str = r#"usage:
+  rss build [--out <artifact.rssbc>] [--analysis-out <analysis.json>] <file-or-package-directory>
+  rss check [--json] [--lint] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>
+  rss check [--json] <package-directory>
+  rss check --explain <code>
+  rss fix [--write] [--json] [--interface <file.rssi> ...] <file.rss>  # apply machine-applicable fixes
+  rss fmt <file.rss>  # writes formatted source to stdout
+  rss inspect <imports|bytecode> [--json] <file-or-artifact-or-package>
+  rss inspect <analysis|resources|async|call-graph> [--json] <package-directory>
+  rss run [--json] <file-or-package-directory> [-- <args>...]  # verified VM
+  rss run --aot [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]"#;
+
 pub(crate) fn print_usage() {
-    eprintln!("usage:");
-    eprintln!(
-        "  rss build [--out <artifact.rssbc>] [--analysis-out <analysis.json>] <file-or-package-directory>"
-    );
-    eprintln!(
-        "  rss check [--json] [--lint] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>"
-    );
-    eprintln!("  rss check [--json] <package-directory>");
-    eprintln!("  rss check --explain <code>");
-    eprintln!(
-        "  rss fix [--write] [--json] [--interface <file.rssi> ...] <file.rss>  # apply machine-applicable fixes"
-    );
-    eprintln!("  rss fmt <file.rss>  # writes formatted source to stdout");
-    eprintln!("  rss inspect <imports|bytecode> [--json] <file-or-artifact-or-package>");
-    eprintln!("  rss inspect <analysis|resources|async|call-graph> [--json] <package-directory>");
-    eprintln!("  rss run [--json] <file-or-package-directory> [-- <args>...]  # verified VM");
-    eprintln!(
-        "  rss run --aot [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]"
-    );
+    eprintln!("{USAGE}");
+}
+
+fn print_help() {
+    println!("{USAGE}");
 }
 
 #[cfg(test)]
