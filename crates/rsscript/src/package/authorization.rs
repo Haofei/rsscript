@@ -1078,7 +1078,7 @@ mod tests {
     fn add_native_dependency(root: &Path) {
         fs::write(
             root.join("rsspkg.toml"),
-            "[package]\nname = \"authorized-test\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n\n[native.rust]\nenabled = true\npath = \"native/rust\"\ncrate = \"authorized_test_native\"\nbuild_scripts = \"forbid\"\nproc_macros = \"forbid\"\nunsafe = \"forbid\"\n",
+            "[package]\nname = \"authorized-test\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n\n[native.rust]\nenabled = true\npath = \"native/rust\"\ncrate = \"authorized_test_native\"\n\n[native.rust.policy]\nbuild_scripts = \"forbid\"\nproc_macros = \"forbid\"\nrss_unsafe_apis = \"forbid\"\nwrapper_unsafe_blocks = \"forbid\"\ntransitive_unsafe_blocks = \"forbid\"\n",
         )
         .expect("fixture native manifest declaration");
         fs::create_dir_all(root.join("native/rust/src")).expect("fixture native source directory");
