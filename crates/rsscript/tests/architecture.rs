@@ -1793,3 +1793,28 @@ fn high_risk_state_machines_keep_dedicated_module_owners() {
         missing.join(", ")
     );
 }
+
+#[test]
+fn workspace_analysis_does_not_flow_through_optional_review() {
+    let root = workspace_root();
+    let authorization = read(&root.join("crates/rsscript/src/package/authorization.rs"));
+    let authorization = authorization
+        .split("#[cfg(test)]")
+        .next()
+        .expect("production authorization source");
+    let analysis = read(&root.join("crates/rsscript/src/package/analysis.rs"));
+    let types = read(&root.join("crates/rsscript/src/package/types.rs"));
+
+    assert!(authorization.contains("analyze_package_dir_captured"));
+    assert!(!authorization.contains("review_package_dir_captured_with_features"));
+    for forbidden in ["crate::review", "super::review", "PackageRisk"] {
+        assert!(
+            !analysis.contains(forbidden),
+            "neutral package analysis must not depend on `{forbidden}`"
+        );
+    }
+    assert!(
+        !types.contains("impl From<&PackageReview> for PackageAnalysis"),
+        "review output must not be the constructor for neutral package analysis"
+    );
+}

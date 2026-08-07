@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
 
+use super::analysis::analyze_package_dir_captured;
 use super::check::check_package_dir_captured;
 use super::dependency::{DependencyResolutionScope, resolve_dependency_graph};
 use super::{
@@ -106,6 +107,23 @@ impl PackageGraphSnapshot {
             module.file = self.remap_path_label(&module.file);
         }
         for diagnostic in &mut review.diagnostics {
+            self.remap_diagnostic(diagnostic);
+        }
+    }
+
+    pub(super) fn remap_analysis(&self, analysis: &mut PackageAnalysis) {
+        for file in &mut analysis.files {
+            file.path = self.remap_path_label(&file.path);
+        }
+        for external_import in &mut analysis.external_imports {
+            if let Some(span) = &mut external_import.span {
+                self.remap_span(span);
+            }
+        }
+        for await_site in &mut analysis.await_sites {
+            self.remap_span(&mut await_site.span);
+        }
+        for diagnostic in &mut analysis.diagnostics {
             self.remap_diagnostic(diagnostic);
         }
     }
@@ -253,12 +271,10 @@ fn load_workspace_snapshot_inner(
     let lowering_input = package_lowering_input(package_snapshot.root())?;
     check_operation(operation)?;
     let digest = lowering_input_digest(&lowering_input);
-    let mut review =
-        super::review::review_package_dir_captured_with_features(package_snapshot.root(), None)
-            .map_err(|error| package_snapshot.remap_error(error))?;
+    let mut analysis = analyze_package_dir_captured(package_snapshot.root())
+        .map_err(|error| package_snapshot.remap_error(error))?;
     check_operation(operation)?;
-    package_snapshot.remap_review(&mut review);
-    let mut analysis = PackageAnalysis::from(&review);
+    package_snapshot.remap_analysis(&mut analysis);
     analysis.snapshot_digest = digest.clone();
     Ok(WorkspaceSnapshot {
         package_dir,

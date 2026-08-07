@@ -68,6 +68,12 @@ Core package analysis uses `rsscript.package_analysis.v1`. It can report semanti
 facts and external symbols but contains no host grants. Binding descriptors use
 `rsscript.bindings.v1` and may carry optional review metadata.
 
+`WorkspaceSnapshot` derives analysis directly from captured sources, interfaces,
+and the semantic database. It never invokes package review, risk classification,
+provider selection, or native implementation inspection. Analysis and lowering
+therefore share one immutable digest even when the optional review subsystem is
+not compiled or run.
+
 Review/REIR combines validated semantic facts with binding, provider, deployment,
 or runtime evidence. Disabling review must not change AST, HIR, validation,
 lowering, or generated code.

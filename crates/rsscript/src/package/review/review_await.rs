@@ -1,9 +1,31 @@
-use super::*;
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::runtime_abi;
+use crate::syntax::ast::{Block, Callee, Expr, Item, Stmt};
+
+use super::{PackageReviewFileKind, PackageSource};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum AwaitBoundary {
+    RuntimePending,
+    NativePending,
+    RssCall,
+    Unknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct CollectedAwaitSite {
+    pub(super) function: String,
+    pub(super) callee: Option<String>,
+    pub(super) boundary: AwaitBoundary,
+    pub(super) live_across_await: Vec<String>,
+    pub(super) span: crate::diagnostic::Span,
+}
 
 pub(super) fn collect_package_await_sites(
     sources: &[PackageSource],
     database: &crate::semantic::SemanticDatabase,
-) -> Vec<PackageReviewAwaitSite> {
+) -> Vec<CollectedAwaitSite> {
     let context = collect_await_site_context(database.source_programs());
     let mut await_sites = database
         .sources()
@@ -89,7 +111,7 @@ pub(super) fn collect_await_sites_in_block(
     function: &str,
     block: &Block,
     context: &AwaitSiteContext,
-) -> Vec<PackageReviewAwaitSite> {
+) -> Vec<CollectedAwaitSite> {
     let mut sites = Vec::new();
     collect_await_sites_from_block(
         function,
@@ -110,7 +132,7 @@ pub(super) fn collect_await_sites_from_stmt(
     scoped_live: &BTreeSet<String>,
     pending_callees: &BTreeMap<String, String>,
     context: &AwaitSiteContext,
-    sites: &mut Vec<PackageReviewAwaitSite>,
+    sites: &mut Vec<CollectedAwaitSite>,
 ) {
     match statement {
         Stmt::Let(stmt) => {
@@ -368,7 +390,7 @@ pub(super) fn collect_await_sites_from_block(
     scoped_live: &BTreeSet<String>,
     pending_callees: &BTreeMap<String, String>,
     context: &AwaitSiteContext,
-    sites: &mut Vec<PackageReviewAwaitSite>,
+    sites: &mut Vec<CollectedAwaitSite>,
 ) {
     let live_after_statements = block_live_after_statements(block, continuation_uses);
     for (index, statement) in block.statements.iter().enumerate() {
@@ -394,7 +416,7 @@ pub(super) fn collect_await_sites_from_expr(
     scoped_live: &BTreeSet<String>,
     pending_callees: &BTreeMap<String, String>,
     context: &AwaitSiteContext,
-    sites: &mut Vec<PackageReviewAwaitSite>,
+    sites: &mut Vec<CollectedAwaitSite>,
 ) {
     match expr {
         Expr::Await { value, span } => {
@@ -402,7 +424,7 @@ pub(super) fn collect_await_sites_from_expr(
             live_across_await.extend(live_after.iter().cloned());
             collect_expr_uses(value, &mut live_across_await);
             let callee = awaited_callee(value, pending_callees);
-            sites.push(PackageReviewAwaitSite {
+            sites.push(CollectedAwaitSite {
                 function: function.to_string(),
                 boundary: await_boundary(callee.as_deref(), context),
                 callee,
@@ -729,23 +751,20 @@ pub(super) fn is_builtin_value_ident(name: &str) -> bool {
     matches!(name, "Unit" | "true" | "false")
 }
 
-pub(super) fn await_boundary(
-    callee: Option<&str>,
-    context: &AwaitSiteContext,
-) -> PackageReviewAwaitBoundary {
+pub(super) fn await_boundary(callee: Option<&str>, context: &AwaitSiteContext) -> AwaitBoundary {
     let Some(callee) = callee else {
-        return PackageReviewAwaitBoundary::Unknown;
+        return AwaitBoundary::Unknown;
     };
     if runtime_intrinsic_label(callee) {
-        return PackageReviewAwaitBoundary::RuntimePending;
+        return AwaitBoundary::RuntimePending;
     }
     if context.async_native_callees.contains(callee) {
-        return PackageReviewAwaitBoundary::NativePending;
+        return AwaitBoundary::NativePending;
     }
     if context.async_rss_callees.contains(callee) {
-        return PackageReviewAwaitBoundary::RssCall;
+        return AwaitBoundary::RssCall;
     }
-    PackageReviewAwaitBoundary::Unknown
+    AwaitBoundary::Unknown
 }
 
 pub(super) fn runtime_intrinsic_label(callee: &str) -> bool {
@@ -813,5 +832,34 @@ pub(super) fn awaited_callee(
             awaited_callee(value, pending_callees)
         }
         _ => None,
+    }
+}
+
+fn callee_label(callee: &Callee) -> String {
+    match callee {
+        Callee::Name(name) => name.clone(),
+        Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
+        Callee::ReceiverCall {
+            receiver,
+            method,
+            effect,
+        } => format!(
+            "{} {}.{method}",
+            (*effect).map(|effect| effect.as_str()).unwrap_or("read"),
+            expression_label(receiver)
+        ),
+    }
+}
+
+fn expression_label(expr: &Expr) -> String {
+    match expr {
+        Expr::Ident(name, _) => name.clone(),
+        Expr::Field { base, name, .. } => format!("{}.{}", expression_label(base), name),
+        Expr::Index { base, .. } => format!("{}[]", expression_label(base)),
+        Expr::Call { callee, .. } => format!("{}()", callee_label(callee)),
+        Expr::Effect { value, .. } | Expr::Manage { value, .. } | Expr::Try { value, .. } => {
+            expression_label(value)
+        }
+        _ => "<expr>".to_string(),
     }
 }

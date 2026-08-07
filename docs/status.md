@@ -13,7 +13,9 @@ The platform-neutral language cut is active:
   native ABI adapts that model instead of defining it;
 - execution/deployment policy types and legacy API facade are removed;
 - neutral package analysis uses `rsscript.package_analysis.v1`; optional review
-  output uses the distinct `rsscript.package_review.v1` schema.
+  output uses the distinct `rsscript.package_review.v1` schema; workspace
+  snapshots now derive analysis directly from captured semantic inputs instead
+  of converting a risk-oriented package review.
 
 The `rsscript-compiler` implementation still contains analyzer orchestration,
 package tooling, VM, and AOT lowering while those

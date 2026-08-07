@@ -47,7 +47,7 @@ pub struct PackageAnalysis {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub module_digest: Option<String>,
     pub package: PackageIdentity,
-    pub files: Vec<PackageReviewFile>,
+    pub files: Vec<PackageAnalysisFile>,
     pub summary: PackageAnalysisSummary,
     pub exports: Vec<PackageAnalysisExport>,
     pub external_imports: Vec<PackageAnalysisExternalImport>,
@@ -103,81 +103,10 @@ pub struct PackageAnalysisAwaitSite {
     pub span: Span,
 }
 
-impl From<&PackageReview> for PackageAnalysis {
-    fn from(review: &PackageReview) -> Self {
-        let summary = &review.summary;
-        Self {
-            schema: PACKAGE_ANALYSIS_SCHEMA.to_string(),
-            producer: PackageAnalysisProducer::current(),
-            language_version: env!("CARGO_PKG_VERSION").to_string(),
-            interface_catalog_digest: crate::interfaces::interface_catalog_digest(),
-            snapshot_digest: String::new(),
-            module_digest: None,
-            package: review.package.clone(),
-            files: review.files.clone(),
-            summary: PackageAnalysisSummary {
-                interface_files: summary.interface_files,
-                source_files: summary.source_files,
-                public_types: summary.public_types,
-                public_sum_types: summary.public_sum_types,
-                public_type_aliases: summary.public_type_aliases,
-                public_consts: summary.public_consts,
-                public_functions: summary.public_functions,
-                mutating_apis: summary.mutating_apis,
-                retaining_apis: summary.retaining_apis,
-                resource_apis: summary.resource_apis,
-                fresh_returning_apis: summary.fresh_returning_apis,
-                async_apis: summary.async_apis,
-                await_sites: summary.await_sites,
-                diagnostics: summary.diagnostics,
-                errors: summary.errors,
-            },
-            exports: review
-                .exports
-                .iter()
-                .map(|export| PackageAnalysisExport {
-                    name: export.name.clone(),
-                    kind: export.kind.clone(),
-                    function_kind: export.function_kind.clone(),
-                    retained_params: export.retained_params.clone(),
-                    semantic_facts: export
-                        .reasons
-                        .iter()
-                        .filter(|reason| {
-                            reason.starts_with("mut parameter")
-                                || reason.starts_with("take parameter")
-                                || reason.starts_with("resource ")
-                                || reason.starts_with("retains(")
-                                || reason.as_str() == "returns fresh value"
-                                || reason.as_str() == "async boundary"
-                        })
-                        .cloned()
-                        .collect(),
-                })
-                .collect(),
-            external_imports: review
-                .external_bindings
-                .iter()
-                .map(|binding| PackageAnalysisExternalImport {
-                    function: binding.function.clone(),
-                    symbol: binding.binding_symbol.clone(),
-                    call_chain: binding.call_chain.clone(),
-                    span: binding.span.clone(),
-                })
-                .collect(),
-            await_sites: review
-                .await_sites
-                .iter()
-                .map(|site| PackageAnalysisAwaitSite {
-                    function: site.function.clone(),
-                    callee: site.callee.clone(),
-                    live_across_await: site.live_across_await.clone(),
-                    span: site.span.clone(),
-                })
-                .collect(),
-            diagnostics: review.diagnostics.clone(),
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisFile {
+    pub path: String,
+    pub kind: PackageReviewFileKind,
 }
 
 /// The tool + version that produced an artifact, so consumers can reason about

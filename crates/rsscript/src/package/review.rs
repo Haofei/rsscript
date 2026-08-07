@@ -9,8 +9,7 @@ use crate::diagnostic::{Diagnostic, Span, code};
 use crate::hir::CallResolution;
 use crate::lint::lint_source;
 use crate::review::{ReviewMap, ReviewMapClassification, review_map_semantic_database};
-use crate::runtime_abi;
-use crate::syntax::ast::{Block, Callee, Expr, Item, Stmt, TypeKind};
+use crate::syntax::ast::{Callee, Expr, Item, TypeKind};
 
 use super::contract::{
     PackageFunctionContract, collect_package_const_contracts, collect_package_function_contracts,
@@ -33,8 +32,7 @@ use super::{
     package_feature_may_change_boundary_risk, package_feature_resolution_diagnostics,
 };
 
-mod review_await;
-use review_await::*;
+use super::analysis_await::*;
 
 pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
     let snapshot = super::authorization::snapshot_package_graph_inputs(package_dir)?;
@@ -42,11 +40,6 @@ pub fn review_package_dir(package_dir: &Path) -> Result<PackageReview, String> {
         .map_err(|error| snapshot.remap_error(error))?;
     snapshot.remap_review(&mut review);
     Ok(review)
-}
-
-pub fn analyze_package_dir(package_dir: &Path) -> Result<super::PackageAnalysis, String> {
-    super::authorization::load_workspace_snapshot(package_dir)
-        .map(|snapshot| snapshot.analysis().clone())
 }
 
 pub(super) fn review_package_dir_captured_with_features(
@@ -218,7 +211,21 @@ pub(super) fn review_package_dir_captured_with_features(
     reasons.sort();
     reasons.dedup();
 
-    let await_sites = collect_package_await_sites(sources, review_analysis.database());
+    let await_sites = collect_package_await_sites(sources, review_analysis.database())
+        .into_iter()
+        .map(|site| PackageReviewAwaitSite {
+            function: site.function,
+            callee: site.callee,
+            boundary: match site.boundary {
+                AwaitBoundary::RuntimePending => PackageReviewAwaitBoundary::RuntimePending,
+                AwaitBoundary::NativePending => PackageReviewAwaitBoundary::NativePending,
+                AwaitBoundary::RssCall => PackageReviewAwaitBoundary::RssCall,
+                AwaitBoundary::Unknown => PackageReviewAwaitBoundary::Unknown,
+            },
+            live_across_await: site.live_across_await,
+            span: site.span,
+        })
+        .collect::<Vec<_>>();
     let api_summary = package_api_effect_summary(sources, &review_map, &await_sites);
     let risk = if interface_diagnostic_exports.is_empty() {
         package_risk(

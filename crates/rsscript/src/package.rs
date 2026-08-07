@@ -31,6 +31,9 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::diagnostic::Diagnostic;
 
+mod analysis;
+#[path = "package/review/review_await.rs"]
+mod analysis_await;
 mod artifact_store;
 mod authorization;
 mod check;
@@ -55,6 +58,7 @@ const PACKAGE_TREE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const PACKAGE_TREE_MAX_DEPTH: usize = 64;
 const PACKAGE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
 
+pub use analysis::analyze_package_dir;
 pub use artifact_store::ArtifactStore;
 pub use authorization::{
     ExecutablePackageSnapshot, PreparedPackage, WorkspaceSnapshot, load_workspace_snapshot,
@@ -74,7 +78,7 @@ pub use lock::{diff_package_locks, lock_package_dir};
 pub use metadata::{package_lowering_input, package_metadata, package_metadata_verify};
 pub(crate) use native::package_native_plugin_build_dependencies;
 use native::{manifest_native_enabled, manifest_native_unsafe_boundary};
-pub use review::{analyze_package_dir, review_package_dir};
+pub use review::review_package_dir;
 use source_set::{LoadedPackage, Manifest, ManifestNativeRust, PackageSource};
 pub use types::*;
 
