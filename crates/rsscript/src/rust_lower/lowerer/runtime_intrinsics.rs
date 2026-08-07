@@ -246,21 +246,6 @@ impl<'a> RustLowerer<'a> {
             return Some(format!("{}({args})", rust_ident(name)));
         }
 
-        if let Some((target, fields)) = runtime_struct_constructor(name) {
-            let mut lowered_fields = Vec::new();
-            for (index, arg) in args.iter().enumerate() {
-                let Some(field) = arg.name.as_deref().or_else(|| fields.get(index).copied()) else {
-                    continue;
-                };
-                lowered_fields.push(format!(
-                    "{}: {}",
-                    rust_ident(field),
-                    self.lower_owned_expr(&arg.value)
-                ));
-            }
-            return Some(format!("{target} {{ {} }}", lowered_fields.join(", ")));
-        }
-
         None
     }
 

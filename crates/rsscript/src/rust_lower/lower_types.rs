@@ -311,7 +311,6 @@ impl RustLowerer<'_> {
             "StringView" => "str".to_string(),
             "StringBuilder" => "String".to_string(),
             "Url" => "String".to_string(),
-            "Fd" => "i64".to_string(),
             "BytesView" | "BufferView" if position == ManagedPosition::Nested => {
                 "&[u8]".to_string()
             }
@@ -321,9 +320,7 @@ impl RustLowerer<'_> {
             "BytesView" | "BufferView" => "[u8]".to_string(),
             "Bytes" | "Buffer" => "Vec<u8>".to_string(),
             "Path" => "std::path::PathBuf".to_string(),
-            "Instant" => "rsscript_runtime::RssInstant".to_string(),
             "Duration" => "rsscript_runtime::RssDuration".to_string(),
-            "Deadline" => "rsscript_runtime::RssDeadline".to_string(),
             "CancellationSource" => "rsscript_runtime::RssCancellationSource".to_string(),
             "CancellationToken" => "rsscript_runtime::RssCancellationToken".to_string(),
             "Channel" if ty.args.len() == 1 => format!(
@@ -352,25 +349,8 @@ impl RustLowerer<'_> {
                 self.lower_type_ref(&ty.args[1], ManagedPosition::Nested)
             ),
             "ChannelError" => "rsscript_runtime::ChannelError".to_string(),
-            "TcpStream" => "rsscript_runtime::RssTcpStream".to_string(),
-            "TcpError" => "rsscript_runtime::TcpError".to_string(),
-            "WebSocket" => "rsscript_runtime::RssWebSocket".to_string(),
-            "WebSocketError" => "rsscript_runtime::WebSocketError".to_string(),
             "Regex" => "rsscript_runtime::RssRegex".to_string(),
             "RegexError" => "rsscript_runtime::RegexError".to_string(),
-            "TempDir" => "rsscript_runtime::TempDir".to_string(),
-            "File" => "rsscript_runtime::File".to_string(),
-            "FileMetadata" => "rsscript_runtime::FileMetadata".to_string(),
-            "FileError" => "rsscript_runtime::FileError".to_string(),
-            "IOError" => "std::io::Error".to_string(),
-            "ProcessEnv" => "rsscript_runtime::ProcessEnv".to_string(),
-            "ProcessEvent" => "rsscript_runtime::ProcessEvent".to_string(),
-            "ProcessOutput" => "rsscript_runtime::ProcessOutput".to_string(),
-            "ProcessRequest" => "rsscript_runtime::ProcessRequest".to_string(),
-            "HttpRequest" => "rsscript_runtime::HttpRequest".to_string(),
-            "HttpResponse" => "rsscript_runtime::HttpResponse".to_string(),
-            "HttpError" => "rsscript_runtime::HttpError".to_string(),
-            "TimerError" => "rsscript_runtime::TimerError".to_string(),
             "JsonValue" => "rsscript_runtime::JsonValue".to_string(),
             "JsonError" => "rsscript_runtime::JsonError".to_string(),
             "RowBuffer" => "rsscript_runtime::RowBuffer".to_string(),

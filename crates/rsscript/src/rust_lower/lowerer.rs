@@ -76,11 +76,10 @@ impl<'a> RustLowerer<'a> {
         // falls through to the unknown-type path and mis-lowers, e.g. a named-field
         // class constructed as a positional `Widget(1)` call — review #8).
         //
-        // Bundled stdlib interface types are EXCLUDED: they declare runtime-backed
-        // types (e.g. `ProcessRequest`, lowered as `rsscript_runtime::ProcessRequest`)
-        // as plain structs, and classifying those as local user types would drop the
-        // `rsscript_runtime::` qualification. So only *non-builtin* (dependency)
-        // interface types are ingested; the current program wins on any conflict.
+        // Bundled standard-library interface types are EXCLUDED because their
+        // implementations are supplied by the AOT runtime rather than emitted as
+        // local Rust structs. Only dependency interface types are ingested; the
+        // current program wins on any conflict.
         let builtin_type_names = builtin_interface_type_names();
         let type_declarations = interface_programs
             .iter()

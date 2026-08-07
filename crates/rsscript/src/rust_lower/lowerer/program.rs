@@ -137,11 +137,6 @@ impl<'a> RustLowerer<'a> {
             }
             Stmt::With(stmt) => {
                 let resource = self.lower_expr(&stmt.resource);
-                let resource = if is_file_open_expr(&stmt.resource) {
-                    format!("{resource}?")
-                } else {
-                    resource
-                };
                 out.push_str(&format!("{pad}{{\n"));
                 let inner_pad = "    ".repeat(indent + 1);
                 out.push_str(&format!(

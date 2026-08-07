@@ -1736,6 +1736,34 @@ fn vm_core_does_not_embed_time_logging_or_os_intrinsics() {
 }
 
 #[test]
+fn rust_aot_lowering_does_not_restore_removed_host_abi_types() {
+    let root = workspace_root();
+    let lowering_root = root.join("crates/rsscript/src/rust_lower");
+    let forbidden = [
+        "rsscript_runtime::File",
+        "rsscript_runtime::Http",
+        "rsscript_runtime::Process",
+        "rsscript_runtime::RssTcp",
+        "rsscript_runtime::RssWebSocket",
+        "rsscript_runtime::TempDir",
+        "rsscript_runtime::RssInstant",
+        "rsscript_runtime::RssDeadline",
+        "runtime_struct_constructor",
+        "is_file_open_expr",
+    ];
+    for path in rust_files_below(&lowering_root) {
+        let source = read(&path);
+        for symbol in forbidden {
+            assert!(
+                !source.contains(symbol),
+                "experimental AOT lowering must not restore host ABI `{symbol}` in {}",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
 fn program_arguments_enter_through_the_explicit_main_abi() {
     let root = workspace_root();
     let catalog = read(&root.join("crates/rsscript/intrinsics.toml"));

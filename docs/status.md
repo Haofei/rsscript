@@ -24,6 +24,9 @@ remaining boundaries are migrated. Stable embedders use the small
 does not depend back on that façade.
 Native plugin loading and guarded child-process execution have been removed
 from the compiler; the CLI composition root owns its bounded AOT subprocesses.
+The experimental Rust AOT lowering path no longer special-cases filesystem,
+process, network, wall-clock, or OS-handle types; external host calls remain
+provider boundaries instead of mapping back to the retired runtime façade.
 The compiler now consumes runtime `core` only; VM
 compatibility intrinsics for filesystem and process access fail with an explicit
 provider-required error instead of reaching the OS. Disabled hosts fail before

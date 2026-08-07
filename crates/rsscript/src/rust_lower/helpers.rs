@@ -949,10 +949,6 @@ pub(super) fn protocol_method_name(name: &str) -> &str {
         .unwrap_or(name)
 }
 
-pub(super) fn is_file_open_expr(expr: &Expr) -> bool {
-    matches!(expr, Expr::Call { callee, .. } if is_file_open_callee(callee) || is_file_open_read_callee(callee) || is_file_open_write_callee(callee))
-}
-
 pub(super) fn lower_string_concat_call(lowerer: &mut RustLowerer<'_>, args: &[CallArg]) -> String {
     let left = lower_call_arg(lowerer, args, "left", 0, "\"\".to_string()");
     let right = lower_call_arg(lowerer, args, "right", 1, "\"\".to_string()");
@@ -988,32 +984,6 @@ pub(super) fn lower_builtin_value_ident(name: &str) -> Option<&'static str> {
 
 pub(super) fn is_rust_enum_constructor(name: &str) -> bool {
     matches!(name, "Ok" | "Err" | "Some")
-}
-
-pub(super) fn runtime_struct_constructor(
-    name: &str,
-) -> Option<(&'static str, &'static [&'static str])> {
-    match name {
-        "ProcessEnv" => Some(("rsscript_runtime::ProcessEnv", &["name", "value"])),
-        "ProcessEvent" => Some((
-            "rsscript_runtime::ProcessEvent",
-            &["kind", "data", "status"],
-        )),
-        "ProcessRequest" => Some((
-            "rsscript_runtime::ProcessRequest",
-            &[
-                "command",
-                "args",
-                "cwd",
-                "stdin",
-                "env",
-                "timeout_ms",
-                "merge_stderr",
-                "output_cap_bytes",
-            ],
-        )),
-        _ => None,
-    }
 }
 
 pub(super) fn lower_source_span(span: &Span) -> String {
