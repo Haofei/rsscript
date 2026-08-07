@@ -7,6 +7,7 @@ mod channel;
 mod clock;
 mod collections;
 mod compatibility;
+mod csv;
 mod date;
 mod diagnostics;
 mod encoding;
@@ -17,6 +18,7 @@ mod managed;
 mod math;
 mod operation_context;
 mod output;
+mod path;
 mod regex;
 mod resource_budget;
 mod string_helpers;
@@ -93,6 +95,9 @@ macro_rules! runtime_abi_exports {
             sorted_set_clear, sorted_set_contains, sorted_set_insert, sorted_set_is_empty,
             sorted_set_len, sorted_set_new, sorted_set_remove, sorted_set_to_list, url_from_string,
         };
+        pub use crate::csv::{
+            CsvError, Row, RowBuffer, csv_parse_row, row_buffer_new, row_field_string,
+        };
         pub use crate::date::{
             date_add_days, date_add_ms, date_day, date_days_between, date_days_in_month,
             date_format_iso, date_format_ymd, date_hour, date_is_leap_year, date_minute,
@@ -145,6 +150,11 @@ macro_rules! runtime_abi_exports {
         };
         pub use crate::operation_context::OperationContext;
         pub use crate::output::{log_error, log_error_json, log_trace, log_write, log_write_json};
+        pub use crate::path::{
+            RuntimePath, path_extension, path_file_name, path_from_string, path_is_absolute,
+            path_join, path_normalize, path_parent, path_resolve_relative, path_safe_relative,
+            path_starts_with, path_to_string, path_with_extension,
+        };
         pub use crate::regex::{
             RegexError, RssRegex, regex_captures, regex_compile, regex_error_message, regex_find,
             regex_is_match, regex_replace_all, regex_split,
