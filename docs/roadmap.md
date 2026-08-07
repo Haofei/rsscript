@@ -16,14 +16,23 @@ language specification and tests remain authoritative for existing behavior.
 6. Added bounded `rsscript.bytecode.v1`, structural verification, verified-only
    VM construction, a stable embedding façade, build/inspect commands, and the
    provider-replacement demonstration.
+7. Published the strict execution-report contract, added a reusable Provider
+   Conformance Kit for all official Providers, and added property/fuzz coverage
+   for ownership, retention, resource handles, Artifact bytes, bindings, and
+   report consumers.
+8. Established a versioned Core SLO/reporting gate and a three-platform release
+   dry-run with checksums, provenance, and explicit pre-1.0 SDK distribution.
 
 ## Current priority: conformance and boundary hardening
 
-1. Expand bytecode decoder/verifier fuzzing and schema compatibility fixtures.
-2. Deepen resource/cancellation state-machine and provider conformance tests.
+1. Run and calibrate the Core SLO and multi-platform release dry-run on hosted
+   runners before creating the first alpha tag.
+2. Add real-workload peak-live-memory and Provider-call overhead telemetry to
+   the existing Core metrics schema when the VM can report those values without
+   estimates.
 3. Continue reducing compatibility-crate API and crate-wide lint exceptions.
-4. Measure check latency, cold load/verify, memory, cancellation latency,
-   provider overhead, VM throughput, and artifact size on product workloads.
+4. Complete query-level invalidation in the language service; its current
+   revision cache is intentionally a document-level boundary.
 5. Promote a feature only through the maturity matrix; do not add syntax while a
    Core row remains partial.
 

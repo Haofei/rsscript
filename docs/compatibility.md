@@ -22,3 +22,8 @@ return `UnsupportedLanguageVersion` rather than attempt execution.
 Artifact checksums detect corruption and bind sections together; they are not a
 signature or proof of provenance. Hosts that need origin authentication must
 verify an external signature before loading the Artifact.
+
+Release binaries, pre-release tags, and the Git-revision-only alpha SDK policy
+are defined in [releasing.md](releasing.md). A binary release version does not
+implicitly promote Experimental providers, AOT, JIT, REIR, plugins, or research
+surfaces to the Core compatibility contract.

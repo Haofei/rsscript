@@ -69,3 +69,14 @@ verification. `rss run` uses that verified VM by default. `rss build` and
 `embedded-report-pipeline` demo runs identical artifact bytes with memory and
 filesystem providers. The roadmap now prioritizes conformance and boundary
 hardening over new language, JIT, self-hosting, or package-system scope.
+Execution reports now have a strict checked-in v1 schema and representative
+success/failure fixtures. A reusable conformance crate validates every official
+Provider's descriptor, ABI linkage, import resolution, and runtime-owned
+cancellation/deadline gate. Core product metrics are separate from JIT
+microbenchmarks and produce a strict versioned report checked against a release
+SLO. Raw Artifact, binding, and execution-report consumers have bounded fuzz
+targets, while ownership/retention/resource transitions have property coverage.
+The release workflow now performs an artifact-identical dry-run across Linux
+x86_64, Apple Silicon macOS, and Windows x86_64, with per-target checksums and
+provenance. During the alpha architecture window `rsscript-sdk` is distributed
+only by a pinned Git revision and is mechanically excluded from crates.io.

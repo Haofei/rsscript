@@ -23,6 +23,7 @@ When documents disagree, use this order:
 | [support.md](support.md) | Supported and unsupported execution surfaces |
 | [status.md](status.md) | Current closure state, accepted limitations, and open engineering debt |
 | [roadmap.md](roadmap.md) | Prioritized future work and explicit freezes |
+| [releasing.md](releasing.md) | Multi-platform binaries, dry-run, provenance, and SDK distribution |
 | [package.md](package.md) | Implemented package artifacts, commands, review model, and trust boundary |
 | [architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md) | Module ownership and dependency rules |
 | [development/DEVELOPMENT.md](development/DEVELOPMENT.md) | Local development and verification |

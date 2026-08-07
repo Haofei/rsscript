@@ -1159,6 +1159,11 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         facade["dependencies"]["rsscript-provider-api"]["optional"].as_bool(),
         Some(true)
     );
+    assert_eq!(
+        facade["package"]["publish"].as_bool(),
+        Some(false),
+        "the alpha SDK must not advertise a broken crates.io package graph"
+    );
 
     let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript/Cargo.toml")))
         .expect("compiler manifest should parse");
@@ -2002,4 +2007,16 @@ fn github_workflows_follow_current_workspace_boundaries() {
     let release = read(&workflow_dir.join("release.yml"));
     assert!(release.contains("for PACKAGE in rsscript-cli reir"));
     assert!(!release.contains("for PACKAGE in rsscript reir"));
+    for target in [
+        "x86_64-unknown-linux-gnu",
+        "aarch64-apple-darwin",
+        "x86_64-pc-windows-msvc",
+    ] {
+        assert!(
+            release.contains(target),
+            "release dry-run must build supported target `{target}`"
+        );
+    }
+    assert!(release.contains("merge-multiple: true"));
+    assert!(release.contains("prerelease: ${{ contains(github.ref_name, '-') }}"));
 }
