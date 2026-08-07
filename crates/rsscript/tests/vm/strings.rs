@@ -10,7 +10,7 @@ fn greeting(name: read String) -> fresh String {
     return $"hello {name}"
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let name = "rss"
     Output.write(message: read $"hello {name}")
     Output.write(message: read $"literal {{}} and {greeting(name: read "vm")}")
@@ -25,7 +25,7 @@ fn main() -> Unit {
 fn reg_vm_runs_env_string_intrinsics_like_interpreter() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     match Env.get(name: read "RSSCRIPT_VM_PARITY_ENV_SHOULD_NOT_EXIST") {
         Some(value) => {
             Output.write(message: read value)
@@ -55,7 +55,7 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_char_intrinsics_like_interpreter() {
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     match Char.from_code(value: 97) {
         Some(first) => {
             Output.write(message: read Char.to_string(value: read first))
@@ -119,7 +119,7 @@ fn main() -> Unit {
 fn reg_vm_runs_bytes_intrinsics_like_interpreter() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let data = Bytes.from_string(value: read "abcdef")
     let from_string = String.to_bytes(value: read "gh")
     let joined = Bytes.concat(left: read data, right: read from_string)
@@ -163,7 +163,7 @@ fn main() -> Unit {
 fn reg_vm_runs_regex_intrinsics_like_interpreter() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     match Regex.compile(pattern: read "([a-z]+)-(\\d+)") {
         Ok(regex) => {
             if Regex.is_match(regex: read regex, value: read "item-42") {
@@ -206,7 +206,7 @@ fn main() -> Unit {
 fn reg_vm_runs_regex_capture_edges_like_interpreter() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     match Regex.compile(pattern: read "(a)?b") {
         Ok(regex) => {
             let captures = Regex.captures(regex: read regex, value: read "b")
@@ -235,7 +235,7 @@ fn main() -> Unit {
 fn reg_vm_runs_yaml_parse_like_interpreter() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     match Yaml.parse(text: read "name: rss\ncount: 10\nitems:\n  - one\n  - two\n") {
         Ok(doc) => {
             match Json.field_string(value: read doc, name: read "name") {
@@ -293,7 +293,7 @@ fn main() -> Unit {
 fn reg_vm_runs_string_view_builder_intrinsics_like_interpreter() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let text = "aébc=tail"
     let view = String.view(value: read text, start: 0, len: 6)
 
@@ -353,7 +353,7 @@ fn main() -> Unit {
 fn reg_vm_runs_read_only_collection_and_string_intrinsics_like_interpreter() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let words: List<String> = ["red", "green", "blue"]
     Assert.equal_bool(left: List.is_empty<String>(list: read words), right: false)
     Assert.equal(left: read List.join<String>(list: read words, separator: read "|"), right: read "red|green|blue")
@@ -386,7 +386,7 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_string_scalar_option_intrinsics_like_interpreter() {
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     Output.write(message: read String.trim(value: read "  Hello World  "))
     Output.write(message: read String.to_lowercase(value: read "MiXeD"))
     Output.write(message: read String.to_uppercase(value: read "MiXeD"))
@@ -433,7 +433,7 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_string_collection_and_more_option_intrinsics_like_interpreter() {
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     Output.write(message: read String.copy(value: read "copy-me"))
     Output.write(message: read String.from_bool(value: true))
     let parts = String.split(value: read "red,green,blue", delimiter: read ",")
@@ -486,7 +486,7 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_json_pure_intrinsics_like_interpreter() {
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let object = Json.value(value: read {"answer": 42, "ok": true})
     Output.write(message: read Json.kind(value: read object))
     if Json.is_object(value: read object) {
@@ -522,7 +522,7 @@ struct AgentToolArgs derives(Clone, JsonDecode) {
     include_hidden: Option<Bool>
 }
 
-fn main() -> Result<Unit, JsonError> {
+fn main(args: read List<String>) -> Result<Unit, JsonError> {
     let encoded = Json.encode(value: read {
         "path": "src",
         "max_results": 20,
@@ -563,7 +563,7 @@ fn main() -> Result<Unit, JsonError> {
 #[test]
 fn reg_vm_runs_json_result_intrinsics_like_interpreter() {
     let source = r#"
-fn main() -> Result<Unit, JsonError> {
+fn main(args: read List<String>) -> Result<Unit, JsonError> {
     match Json.parse(text: read "{\"name\":\"rss\",\"count\":3,\"ok\":true,\"obj\":{\"b\":2,\"a\":1}}") {
         Ok(doc) => {
             match Json.object_len(value: read doc) {
@@ -673,7 +673,7 @@ fn main() -> Result<Unit, JsonError> {
 #[test]
 fn reg_vm_runs_json_field_intrinsics_like_interpreter() {
     let source = r#"
-fn main() -> Result<Unit, JsonError> {
+fn main(args: read List<String>) -> Result<Unit, JsonError> {
     let doc = Json.parse(text: read "{\"name\":\"rss\",\"count\":3,\"ok\":true,\"none\":null,\"bad_int\":\"x\"}")?
 
     match Json.field(value: read doc, name: read "name") {
@@ -835,7 +835,7 @@ struct JsonAcc {
     total: Int
 }
 
-fn main() -> Result<Unit, JsonError> {
+fn main(args: read List<String>) -> Result<Unit, JsonError> {
     let mixed = Json.parse(text: read "[\"profile\",\"project\",1]")?
     if Json.array_contains_string(value: read mixed, item: read "profile")? {
         Output.write(message: read "has-profile")
@@ -926,7 +926,7 @@ fn main() -> Result<Unit, JsonError> {
 #[test]
 fn reg_vm_runs_json_builder_intrinsics_like_interpreter() {
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     Output.write(message: read Json.quote_string(value: read "a\"b"))
 
     let string_field = Json.string_field(name: read "name", value: read "rss")
@@ -960,7 +960,7 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_json_path_intrinsics_like_interpreter() {
     let source = r#"
-fn main() -> Result<Unit, JsonError> {
+fn main(args: read List<String>) -> Result<Unit, JsonError> {
     let doc = Json.parse(text: read "{\"choices\":[{\"message\":{\"content\":\"done\",\"count\":2,\"ok\":true,\"none\":null}}],\"raw\":{\"x\":1}}")?
 
     match Json.at_string(value: read doc, path: read "$.choices[0].message.content") {
@@ -1111,7 +1111,7 @@ fn main() -> Result<Unit, JsonError> {
 #[test]
 fn reg_vm_runs_json_text_path_intrinsics_like_interpreter() {
     let source = r#"
-fn main() -> Result<Unit, JsonError> {
+fn main(args: read List<String>) -> Result<Unit, JsonError> {
     let text = "{\"profile\":{\"name\":\"rss\",\"active\":true,\"nested\":{\"x\":1},\"none\":null},\"items\":[{\"id\":1},{\"id\":2}]}"
 
     match Json.string_at(text: read text, path: read "profile.name") {
@@ -1191,8 +1191,8 @@ fn reg_vm_runs_csv_row_intrinsics_like_interpreter() {
 
     let source = r#"
 
-fn main() -> Result<Unit, CsvError> {
-    let path = Path.from_string(value: read Option.unwrap_or<String>(value: read Args.get(index: 0), default: read "missing.csv"))
+fn main(args: read List<String>) -> Result<Unit, CsvError> {
+    let path = Path.from_string(value: read Option.unwrap_or<String>(value: read Arguments.get(args: read args, index: 0), default: read "missing.csv"))
     local buffer = RowBuffer.new(size: 4096)
     with Csv.open_read(path: read path)? as file {
         Csv.read_into(file: mut file, buffer: mut buffer)?

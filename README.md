@@ -40,6 +40,10 @@ service declares an ordinary bodyless function in a `.rssi` interface and maps
 that symbol to a runtime provider with binding metadata. `.rss` implementation
 files contain source bodies; `.rssi` files contain declarations.
 
+Runner arguments cross the entry ABI explicitly: a program may declare either
+`fn main()` or `fn main(args: read List<String>)`. `Arguments.*` helpers operate
+only on that list; the compiler and VM never read ambient process arguments.
+
 ```rsscript
 module host.fs
 

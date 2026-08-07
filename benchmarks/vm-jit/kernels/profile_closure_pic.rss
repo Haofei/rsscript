@@ -6,7 +6,7 @@
 // through `profile_closure_pic_sites` and `profile_closure_pic_arms` telemetry.
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
             return value
@@ -21,7 +21,7 @@ fn dispatch(f: Fn(Int) -> Int, x: Int) -> Int {
     return f(x)
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let limit = bench_size(default: 600000)
     let mut i = 0
     let mut total = 0

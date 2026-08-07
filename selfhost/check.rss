@@ -27,9 +27,9 @@ use selfhost.syntax.parser_items.*
 use selfhost.syntax.token_ranges.*
 use selfhost.types.*
 
-fn main() -> Unit {
-    let source = Args.get_or_default(index: 0, default: "")
-    let structured = Args.get_or_default(index: 1, default: "") == "records"
+fn main(args: read List<String>) -> Unit {
+    let source = Arguments.get_or_default(args: read args, index: 0, default: "")
+    let structured = Arguments.get_or_default(args: read args, index: 1, default: "") == "records"
     let toks = tokenize(source: source)
     let program = parse_program(toks: toks)
     let semanticIndex = SemanticIndex.prepare(program: program)

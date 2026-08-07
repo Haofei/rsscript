@@ -220,8 +220,8 @@ fn select_arm_line(program: Program, arm: SelectArm) -> String {
     return String.concat(left: head, right: String.concat(left: "\t", right: String.concat(left: operationText, right: String.concat(left: "\tbody=", right: String.from_int(value: List.len(list: arm.body))))))
 }
 
-fn main() -> Unit {
-    let source = Args.get_or_default(index: 0, default: "")
+fn main(args: read List<String>) -> Unit {
+    let source = Arguments.get_or_default(args: read args, index: 0, default: "")
     let toks = tokenize(source: source)
     let program = parse_program(toks: toks)
     let mut i = 0

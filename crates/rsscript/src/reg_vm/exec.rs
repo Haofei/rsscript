@@ -33,12 +33,12 @@ impl RegVm {
 
     pub(super) fn new(
         unit: Rc<RegUnit>,
-        args: Vec<String>,
+        entry_args: Vec<String>,
         external_bindings: HashMap<String, ExternalFunction>,
     ) -> Self {
         Self {
             unit,
-            args,
+            entry_args,
             external_bindings,
             stdout: String::new(),
             stream_stdout: false,

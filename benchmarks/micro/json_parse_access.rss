@@ -1,5 +1,5 @@
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
             return value
@@ -10,7 +10,7 @@ fn bench_size(default: Int) -> Int {
     }
 }
 
-fn main() -> Result<Unit, JsonError> {
+fn main(args: read List<String>) -> Result<Unit, JsonError> {
     let limit = bench_size(default: 50000)
     let text = "{\"profile\":{\"id\":41,\"active\":true,\"name\":\"rss\"},\"items\":[1,2,3,4]}"
     let mut index = 0

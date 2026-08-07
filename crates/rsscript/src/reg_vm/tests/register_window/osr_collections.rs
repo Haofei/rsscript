@@ -4,7 +4,7 @@
         let source = r#"
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+    let raw = Arguments.get_or_default(args: read args, index: 0, default: read String.from_int(value: default))
     match String.parse_int(value: read raw) {
         Some(value) => {
             return value
@@ -15,7 +15,7 @@ fn bench_size(default: Int) -> Int {
     }
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let limit = bench_size(default: 40000)
     let mut index = 0
     local values = List<Int>.new()
@@ -74,7 +74,7 @@ fn main() -> Unit {
         // unlike a flat PARAM buffer, which would dangle on realloc and stays vetoed.
         let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let limit = 64
     let mut index = 0
     local values = List<Int>.new()
@@ -103,7 +103,7 @@ fn main() -> Unit {
     fn native_osr_enters_later_native_loop_after_setup_loop() {
         let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let limit = 10
     let mut index = 0
     local values = List<Int>.new()
@@ -161,7 +161,7 @@ fn main() -> Unit {
     #[test]
     fn native_osr_enters_two_sequential_regions() {
         let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let mut first = 0
     let mut total = 0
     while first < 80 {
@@ -211,7 +211,7 @@ fn main() -> Unit {
     #[test]
     fn native_osr_outer_decline_does_not_block_nested_inner_region() {
         let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let adjust: Fn(Int) -> Int = |value| { return value + 7 }
     let mut outer = 0
     let mut total = 0
@@ -282,7 +282,7 @@ async fn step(value: Int) -> Result<Int, String> {
     return Ok(value + 1)
 }
 
-async fn main() -> Result<Unit, String> {
+async fn main(args: read List<String>) -> Result<Unit, String> {
     let mut index = 0
     let mut total = 0
     while index < 2000 {
@@ -322,7 +322,7 @@ async fn step(value: Int) -> Option<Int> {
     return Some(value + 1)
 }
 
-async fn main() -> Option<Unit> {
+async fn main(args: read List<String>) -> Option<Unit> {
     let mut index = 0
     let mut total = 0
     while index < 2000 {
@@ -388,7 +388,7 @@ async fn main() -> Option<Unit> {
     fn native_osr_selects_and_lowers_readonly_full_list_slice_loop() {
         let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let limit = 10
     local base = List<Int>.new()
     let mut k = 0
@@ -465,7 +465,7 @@ fn main() -> Unit {
     fn native_osr_enters_loop_with_transactional_list_set_int() {
         let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     local values = List<Int>.new()
     let mut i = 0
     while i < 8 {
@@ -507,7 +507,7 @@ fn hot(values: mut List<Int>, slot: Int, replacement: Int) -> Int {
     return List.get<Int>(list: read values, index: slot)
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     local values = List<Int>.new()
     List.push<Int>(list: mut values, value: read 1)
     List.push<Int>(list: mut values, value: read 2)
@@ -557,7 +557,7 @@ fn hot(values: mut List<Int>, limit: Int) -> Int {
     return total
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     local values = List<Int>.new()
     let mut i = 0
     while i < 8 {
@@ -619,7 +619,7 @@ fn main() -> Unit {
     fn native_osr_selects_outer_loop_with_list_sort_int() {
         let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let mut outer = 0
     let mut total = 0
 
@@ -675,7 +675,7 @@ fn main() -> Unit {
     fn native_osr_enters_loop_with_transactional_map_get_int() {
         let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     local table = Map<Int, Int>.new()
     let mut i = 0
     while i < 32 {
@@ -730,7 +730,7 @@ fn main() -> Unit {
     fn native_osr_enters_loop_with_transactional_set_contains_int() {
         let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     local seen = Set.new<Int>()
     let limit = 2000
     let mut i = 0
@@ -780,7 +780,7 @@ fn main() -> Unit {
     fn native_osr_enters_loop_with_transactional_sorted_set_contains_int() {
         let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     local seen = SortedSet.new<Int>()
     let limit = 2000
     let mut i = 0
@@ -840,7 +840,7 @@ fn sum_len(seen: read SortedSet<Int>) -> Int {
     return total
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     local seen = SortedSet.new<Int>()
     let mut i = 0
     while i < 32 {
@@ -927,7 +927,7 @@ fn collection_empty_score(
     return total
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     local values = List<Int>.new()
     local table = Map<Int, Int>.new()
     local set = Set.new<Int>()
@@ -1007,7 +1007,7 @@ fn map_set_len_score(table: read Map<Int, Int>, set: read Set<Int>) -> Int {
     return (Map.len<Int, Int>(map: read table) * 10) + Set.len<Int>(set: read set)
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     local table = Map<Int, Int>.new()
     local set = Set.new<Int>()
     let empty_score = map_set_len_score(table: read table, set: read set)
@@ -1063,7 +1063,7 @@ fn bytes_slice_score(data: read Bytes, reps: Int) -> Int {
     return total
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let data = Bytes.from_string(value: read "abcdef")
     let total = bytes_slice_score(data: read data, reps: 3)
     Output.write(message: read String.from_int(value: total))
@@ -1134,7 +1134,7 @@ fn edge_score(data: read Bytes) -> Int {
         + Bytes.len(value: read negative_len)
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let data = Bytes.from_string(value: read "abcdef")
     Output.write(message: read String.from_int(value: edge_score(data: read data)))
     return Unit
@@ -1177,7 +1177,7 @@ fn retained_slice(data: read Bytes) -> Bytes {
     return Bytes.slice(value: read data, start: 1, len: 4)
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let data = Bytes.from_string(value: read "abcdef")
     let head = retained_slice(data: read data)
     Output.write(message: read String.from_int(value: Bytes.len(value: read head)))
@@ -1221,7 +1221,7 @@ fn byte_count(data: read Bytes) -> Int {
     return Bytes.len(value: read data)
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let data = Bytes.from_string(value: read "abcdef")
     Output.write(message: read String.from_int(value: byte_count(data: read data)))
     return Unit
@@ -1268,7 +1268,7 @@ fn string_slice_score(value: read String, reps: Int) -> Int {
     return total
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let total = string_slice_score(value: read "abcdef", reps: 3)
     Output.write(message: read String.from_int(value: total))
     return Unit
@@ -1311,7 +1311,7 @@ fn main() -> Unit {
     fn native_osr_enters_loop_with_transactional_sorted_map_insert_int() {
         let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     local table = SortedMap<Int, Int>.new()
     let mut i = 0
     while i < 32 {
@@ -1352,7 +1352,7 @@ fn main() -> Unit {
     fn native_osr_enters_loop_with_sorted_map_get_match_int() {
         let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     local table = SortedMap<Int, Int>.new()
     let mut i = 0
     while i < 32 {
@@ -1735,7 +1735,7 @@ fn main() -> Unit {
     fn native_osr_enters_loop_with_transactional_deque_pop_front_int() {
         let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     local q = Deque<Int>.new()
     let mut i = 0
     while i < 32 {
@@ -1814,7 +1814,7 @@ struct Box {
     value: Int
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let mut box = Box(value: 0)
     let mut i = 0
     let mut total = 0
@@ -1846,7 +1846,7 @@ struct Box {
     value: Int
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let mut box = Box(value: 0)
     let mut i = 0
     while i < 32 {
@@ -1882,7 +1882,7 @@ fn bump(box: mut Box) -> Int {
     return box.value
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let mut box = Box(value: 0)
     let _value = bump(box: mut box)
     Output.write(message: read String.from_int(value: box.value))
@@ -1925,7 +1925,7 @@ fn bump_loop(box: mut Box, limit: Int) -> Unit {
     return Unit
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let mut box = Box(value: 0)
     bump_loop(box: mut box, limit: 32)
     Output.write(message: read String.from_int(value: box.value))
@@ -1999,7 +1999,7 @@ fn hot(x: Int) -> Int {
     return x
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let value = hot(x: 1)
     Output.write(message: read String.from_int(value: value))
     return Unit

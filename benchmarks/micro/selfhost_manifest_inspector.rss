@@ -62,8 +62,8 @@ fn inspect(path: Path) -> Result<fresh String, JsonError> {
     return Ok(Json.object(fields))
 }
 
-fn main() -> Result<Unit, String> {
-    let path = Args.get_or_default(index: 0, default: "benchmarks/micro/fixtures/package-medium/rsspkg.toml")
+fn main(args: read List<String>) -> Result<Unit, String> {
+    let path = Arguments.get_or_default(args: read args, index: 0, default: "benchmarks/micro/fixtures/package-medium/rsspkg.toml")
     match inspect(path: Path.from_string(value: path)) {
         Ok(report) => {
             Output.write(message: report)

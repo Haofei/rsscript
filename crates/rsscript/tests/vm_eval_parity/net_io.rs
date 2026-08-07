@@ -6,7 +6,7 @@ use super::*;
 fn parity_sync_http_error_intrinsics() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let url = Url.from_string(value: read "https://example.test/api")
     match Http.get(url: read url) {
         Ok(response) => {
@@ -63,7 +63,7 @@ fn log_http_error(error: read HttpError, label: read String) -> Unit {
     return Unit
 }
 
-async fn main() -> Unit {
+async fn main(args: read List<String>) -> Unit {
     match await Http.get_async(url: read Url.from_string(value: read "https://example.test/api")) {
         Ok(_) => {}
         Err(error) => {
@@ -138,12 +138,12 @@ fn parity_http_response_intrinsics() {
         let backend_url = format!("http://127.0.0.1:{backend_port}/health");
         let source = r#"
 
-fn url_arg() -> Url {
-    return Url.from_string(value: read Args.get_or_default(index: 0, default: read "http://127.0.0.1:1/health"))
+fn url_arg(args: read List<String>) -> Url {
+    return Url.from_string(value: read Arguments.get_or_default(args: read args, index: 0, default: read "http://127.0.0.1:1/health"))
 }
 
-async fn main() -> Result<Unit, HttpError> {
-    let response = await Http.get_async(url: read url_arg())?
+async fn main(args: read List<String>) -> Result<Unit, HttpError> {
+    let response = await Http.get_async(url: read url_arg(args: read args))?
     Output.write(message: read String.from_int(value: HttpResponse.status(response: read response)))
     Output.write(message: read HttpResponse.text(response: read response))
     Output.write(message: read String.from_int(value: Bytes.len(value: read HttpResponse.bytes(response: read response))))
@@ -180,12 +180,12 @@ fn parity_websocket_intrinsics() {
         let backend_url = format!("ws://127.0.0.1:{backend_port}/socket");
         let source = r#"
 
-fn url_arg() -> Url {
-    return Url.from_string(value: read Args.get_or_default(index: 0, default: read "ws://127.0.0.1:1/socket"))
+fn url_arg(args: read List<String>) -> Url {
+    return Url.from_string(value: read Arguments.get_or_default(args: read args, index: 0, default: read "ws://127.0.0.1:1/socket"))
 }
 
-async fn main() -> Result<Unit, WebSocketError> {
-    let socket = await WebSocket.connect(url: read url_arg())?
+async fn main(args: read List<String>) -> Result<Unit, WebSocketError> {
+    let socket = await WebSocket.connect(url: read url_arg(args: read args))?
     await WebSocket.send_text(socket: read socket, text: read "ping")?
     let text = await WebSocket.recv_text(socket: read socket)?
     Output.write(message: read Option.unwrap_or<String>(value: read text, default: read "text-none"))
@@ -218,7 +218,7 @@ async fn main() -> Result<Unit, WebSocketError> {
 fn parity_async_socket_error_intrinsics() {
     let source = r#"
 
-async fn main() -> Unit {
+async fn main(args: read List<String>) -> Unit {
     match await Tcp.connect(host: read "127.0.0.1", port: 9) {
         Ok(_) => {}
         Err(error) => {
@@ -254,8 +254,8 @@ fn parity_tcp_stream_intrinsics() {
     let (backend_port, backend_server) = common::spawn_tcp_echo_server();
     let source = r#"
 
-fn port_arg() -> Int {
-    match String.parse_int(value: read Args.get_or_default(index: 0, default: read "0")) {
+fn port_arg(args: read List<String>) -> Int {
+    match String.parse_int(value: read Arguments.get_or_default(args: read args, index: 0, default: read "0")) {
         Some(port) => {
             return port
         }
@@ -265,8 +265,8 @@ fn port_arg() -> Int {
     }
 }
 
-async fn main() -> Result<Unit, TcpError> {
-    let port = port_arg()
+async fn main(args: read List<String>) -> Result<Unit, TcpError> {
+    let port = port_arg(args: read args)
     let stream = await Tcp.connect(host: read "127.0.0.1", port: port)?
     let written = await TcpStream.write(stream: read stream, data: read String.to_bytes(value: read ""))?
     Output.write(message: read String.from_int(value: written))
@@ -296,7 +296,7 @@ async fn main() -> Result<Unit, TcpError> {
 fn parity_http_request_builder_intrinsics() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let url = Url.from_string(value: read "https://example.test/api")
     local base = HttpRequest.json(url: read url, body: read "{\"ok\":true}")
     local timed = HttpRequest.with_timeout(request: take base, timeout_ms: 250)

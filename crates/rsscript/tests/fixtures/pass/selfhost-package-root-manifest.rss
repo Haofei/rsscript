@@ -7,8 +7,8 @@ struct PackageRootManifestFacts {
     source_paths: Int
 }
 
-fn selfhost_package_root() -> fresh Path {
-    let input = Args.get_or_default(
+fn selfhost_package_root(args: read List<String>) -> fresh Path {
+    let input = Arguments.get_or_default(args: read args,
         index: 0,
         default: "tests/fixtures/pass/selfhost-package-source-set",
     )
@@ -16,15 +16,15 @@ fn selfhost_package_root() -> fresh Path {
     return Path.from_string(value: input)
 }
 
-fn selfhost_manifest_path() -> fresh Path {
+fn selfhost_manifest_path(args: read List<String>) -> fresh Path {
     return Path.join(
-        base: selfhost_package_root(),
+        base: selfhost_package_root(args: read args),
         child: "rsspkg.toml",
     )
 }
 
-fn selfhost_root_manifest_facts() -> Result<fresh PackageRootManifestFacts, JsonError> {
-    let manifest = Toml.parse_file(path: selfhost_manifest_path())?
+fn selfhost_root_manifest_facts(args: read List<String>) -> Result<fresh PackageRootManifestFacts, JsonError> {
+    let manifest = Toml.parse_file(path: selfhost_manifest_path(args: read args))?
     let package = Json.field(value: manifest, name: "package")?
     let interfaces = Json.field(value: manifest, name: "interfaces")?
     let interface_paths = Json.field(value: interfaces, name: "paths")?
@@ -55,8 +55,8 @@ fn root_manifest_summary_line(facts: PackageRootManifestFacts) -> fresh String {
     return String.concat(left: eighth, right: source_count)
 }
 
-pub fn main() -> Result<Unit, JsonError> {
-    let facts = selfhost_root_manifest_facts()?
+pub fn main(args: read List<String>) -> Result<Unit, JsonError> {
+    let facts = selfhost_root_manifest_facts(args: read args)?
     let summary = root_manifest_summary_line(facts)
 
     Output.write(message: summary)

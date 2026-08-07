@@ -2429,9 +2429,6 @@ fn standard_library_export_capabilities(export: &RsScriptPackageExport) -> Vec<C
         | "Process.run_many_stdout_timeout_async" => {
             categories.push(CapabilityCategory::ProcessSpawn);
         }
-        "Args.count" | "Args.get_or_default" => {
-            categories.push(CapabilityCategory::ProcessArgs);
-        }
         "Clock.now" | "Clock.system_unix_ms" | "Instant.elapsed" => {
             categories.push(CapabilityCategory::TimeRead);
         }

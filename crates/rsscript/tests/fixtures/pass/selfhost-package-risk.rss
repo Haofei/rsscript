@@ -281,8 +281,8 @@ fn fold_package_risk_case(
     return Ok(add_package_risk_case(summary, facts))
 }
 
-fn selfhost_package_risk_summary() -> Result<fresh PackageRiskSummary, JsonError> {
-    let input = Args.get_or_default(
+fn selfhost_package_risk_summary(args: read List<String>) -> Result<fresh PackageRiskSummary, JsonError> {
+    let input = Arguments.get_or_default(args: read args,
         index: 0,
         default: "tests/fixtures/pass/selfhost-package-review.json",
     )
@@ -324,8 +324,8 @@ fn package_risk_summary_line(
     return String.concat(left: twelfth, right: unknown)
 }
 
-pub fn main() -> Result<Unit, JsonError> {
-    let summary = selfhost_package_risk_summary()?
+pub fn main(args: read List<String>) -> Result<Unit, JsonError> {
+    let summary = selfhost_package_risk_summary(args: read args)?
     let summary_line = package_risk_summary_line(summary)
 
     Output.write(message: summary_line)

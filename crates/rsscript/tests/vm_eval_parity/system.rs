@@ -6,11 +6,11 @@ use super::*;
 fn parity_args_intrinsics() {
     let source = r#"
 
-fn main() -> Unit {
-    let args = Args.all()
-    Output.write(message: read String.from_int(value: Args.count()))
+fn main(args: read List<String>) -> Unit {
+    let args = Arguments.all(args: read args)
+    Output.write(message: read String.from_int(value: Arguments.count(args: read args)))
     Output.write(message: read List.join<String>(list: read args, separator: read "|"))
-    match Args.get(index: 0) {
+    match Arguments.get(args: read args, index: 0) {
         Some(value) => {
             Output.write(message: read value)
         }
@@ -18,7 +18,7 @@ fn main() -> Unit {
             Output.write(message: read "first-none")
         }
     }
-    match Args.get(index: 2) {
+    match Arguments.get(args: read args, index: 2) {
         Some(value) => {
             Output.write(message: read value)
         }
@@ -26,7 +26,7 @@ fn main() -> Unit {
             Output.write(message: read "third-none")
         }
     }
-    match Args.get(index: 99) {
+    match Arguments.get(args: read args, index: 99) {
         Some(value) => {
             Output.write(message: read value)
         }
@@ -34,7 +34,7 @@ fn main() -> Unit {
             Output.write(message: read "missing-none")
         }
     }
-    match Args.get(index: 0 - 1) {
+    match Arguments.get(args: read args, index: 0 - 1) {
         Some(value) => {
             Output.write(message: read value)
         }
@@ -42,9 +42,9 @@ fn main() -> Unit {
             Output.write(message: read "negative-none")
         }
     }
-    Output.write(message: read Args.get_or_default(index: 1, default: read "fallback"))
-    Output.write(message: read Args.get_or_default(index: 99, default: read "fallback"))
-    Output.write(message: read Args.get_or_default(index: 0 - 1, default: read "negative-fallback"))
+    Output.write(message: read Arguments.get_or_default(args: read args, index: 1, default: read "fallback"))
+    Output.write(message: read Arguments.get_or_default(args: read args, index: 99, default: read "fallback"))
+    Output.write(message: read Arguments.get_or_default(args: read args, index: 0 - 1, default: read "negative-fallback"))
     return Unit
 }
 "#;
@@ -60,7 +60,7 @@ fn main() -> Unit {
 fn parity_clock_and_instant_intrinsics() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let unix = Clock.system_unix_ms()
     if unix > 0 {
         Output.write(message: read "unix-positive")

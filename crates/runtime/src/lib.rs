@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+mod arguments;
 mod asserts;
 mod async_runtime;
 mod channel;
@@ -46,6 +47,9 @@ pub(crate) use clock::deadline_remaining_duration;
 // share the same manifest with `abi` so the two cannot drift.
 macro_rules! runtime_abi_exports {
     () => {
+        pub use crate::arguments::{
+            arguments_all, arguments_count, arguments_get, arguments_get_or_default,
+        };
         pub use crate::asserts::{assert_equal, assert_equal_bool, assert_equal_int};
         pub use crate::async_runtime::{
             AsyncPoll, CancellationToken, Context, DeferredPending, Executor, LoopControl,
@@ -212,10 +216,9 @@ macro_rules! runtime_abi_exports {
         pub use crate::process::{
             DEFAULT_RUNTIME_PROCESS_TIMEOUT_MS, ProcessEnv, ProcessEvent, ProcessOutput,
             ProcessRequest, RUNTIME_PROCESS_CONCURRENCY_CEILING,
-            RUNTIME_PROCESS_OUTPUT_CEILING_BYTES, RUNTIME_PROCESS_TIMEOUT_CEILING_MS, args_all,
-            args_count, args_get, args_get_or_default, log_error, log_error_json, log_trace,
-            log_write, log_write_json, os_close, process_run, process_run_async,
-            process_run_many_stdout, process_run_many_stdout_async,
+            RUNTIME_PROCESS_OUTPUT_CEILING_BYTES, RUNTIME_PROCESS_TIMEOUT_CEILING_MS, log_error,
+            log_error_json, log_trace, log_write, log_write_json, os_close, process_run,
+            process_run_async, process_run_many_stdout, process_run_many_stdout_async,
             process_run_many_stdout_timeout, process_run_many_stdout_timeout_async,
             process_run_request, process_run_request_async, process_run_request_cancellable_async,
             process_run_stdout, process_run_stdout_async, process_run_stdout_timeout,

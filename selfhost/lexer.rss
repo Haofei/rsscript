@@ -33,8 +33,8 @@ fn tok_len(t: Tok) -> Int {
     return t.len
 }
 
-fn main() -> Unit {
-    let source = Args.get_or_default(index: 0, default: "")
+fn main(args: read List<String>) -> Unit {
+    let source = Arguments.get_or_default(args: read args, index: 0, default: "")
     let toks = tokenize(source: source)
     let ntok = List.len(list: toks)
     let mut i = 0

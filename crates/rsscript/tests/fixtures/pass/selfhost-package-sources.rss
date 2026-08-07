@@ -23,8 +23,8 @@ struct PackageSourceContentFacts {
     tool_symbols: Int
 }
 
-fn selfhost_source_root() -> fresh Path {
-    let input = Args.get_or_default(
+fn selfhost_source_root(args: read List<String>) -> fresh Path {
+    let input = Arguments.get_or_default(args: read args,
         index: 0,
         default: "tests/fixtures/pass/selfhost-package-source-set",
     )
@@ -370,8 +370,8 @@ fn count_root_paths(
     )
 }
 
-fn selfhost_source_set_facts() -> Result<fresh PackageSourceSetFacts, String> {
-    let root = selfhost_source_root()
+fn selfhost_source_set_facts(args: read List<String>) -> Result<fresh PackageSourceSetFacts, String> {
+    let root = selfhost_source_root(args: read args)
     require_directory(path: root, label: "package root")?
     let paths = package_source_path_sets(root)?
     let manifest = PackageSourceSetFacts(
@@ -435,8 +435,8 @@ fn source_set_summary_line(facts: PackageSourceSetFacts) -> fresh String {
     return StringBuilder.finish(builder: take builder)
 }
 
-pub fn main() -> Result<Unit, String> {
-    let facts = selfhost_source_set_facts()?
+pub fn main(args: read List<String>) -> Result<Unit, String> {
+    let facts = selfhost_source_set_facts(args: read args)?
     let summary = source_set_summary_line(facts)
 
     Output.write(message: summary)

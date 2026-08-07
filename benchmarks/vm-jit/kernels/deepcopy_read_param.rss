@@ -10,7 +10,7 @@
 // a mut arg, an aggregate store, or a return.
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
             return value
@@ -58,7 +58,7 @@ fn build_list(n: Int) -> List<Int> {
     return xs
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let limit = bench_size(default: 500000)
     let bag = Bag(a: build_list(n: 256), b: build_list(n: 256), c: build_list(n: 256))
     let result = hot(g: bag, limit)

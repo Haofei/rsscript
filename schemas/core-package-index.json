@@ -3,6 +3,17 @@
   "generated_by": "build.rs",
   "default_core": [
     {
+      "path": "stdlib/arguments/arguments.rssi",
+      "module": "arguments.arguments",
+      "functions": [
+        "Arguments.all",
+        "Arguments.count",
+        "Arguments.get",
+        "Arguments.get_or_default"
+      ],
+      "types": []
+    },
+    {
       "path": "stdlib/clock/clock.rssi",
       "module": "clock.clock",
       "functions": [
@@ -333,6 +344,16 @@
       "types": []
     },
     {
+      "path": "stdlib/dyn/dyn.rssi",
+      "module": "dyn.dyn",
+      "functions": [
+        "Dyn.from"
+      ],
+      "types": [
+        "Dyn"
+      ]
+    },
+    {
       "path": "stdlib/encoding/encoding.rssi",
       "module": "encoding.encoding",
       "functions": [
@@ -554,18 +575,6 @@
       ]
     },
     {
-      "path": "stdlib/log/log.rssi",
-      "module": "log.log",
-      "functions": [
-        "Log.error",
-        "Log.error_json",
-        "Log.trace",
-        "Log.write",
-        "Log.write_json"
-      ],
-      "types": []
-    },
-    {
       "path": "stdlib/math/math.rssi",
       "module": "math.math",
       "functions": [
@@ -617,14 +626,14 @@
       "types": []
     },
     {
-      "path": "stdlib/os/os.rssi",
-      "module": "os.os",
+      "path": "stdlib/output/output.rssi",
+      "module": "output.output",
       "functions": [
-        "Args.all",
-        "Args.count",
-        "Args.get",
-        "Args.get_or_default",
-        "OS.close"
+        "Output.error",
+        "Output.error_json",
+        "Output.trace",
+        "Output.write",
+        "Output.write_json"
       ],
       "types": []
     },

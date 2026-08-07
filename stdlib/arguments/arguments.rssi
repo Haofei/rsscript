@@ -1,0 +1,18 @@
+/// Return an owned copy of explicitly supplied program arguments.
+pub fn Arguments.all(args: read List<String>) -> fresh List<String>
+
+/// Return the number of explicitly supplied program arguments.
+pub fn Arguments.count(args: read List<String>) -> Int
+
+/// Return one explicitly supplied program argument when the index is valid.
+pub fn Arguments.get(
+    args: read List<String>,
+    index: Int,
+) -> Option<String>
+
+/// Return one explicitly supplied program argument or the caller-provided default.
+pub fn Arguments.get_or_default(
+    args: read List<String>,
+    index: Int,
+    default: String,
+) -> String

@@ -153,8 +153,7 @@ pub fn reg_vm_eval_source_main_with_args(
 }
 
 pub fn reg_vm_eval_source_main(file: &str, source: &str) -> Result<EvalOutput, EvalError> {
-    let args = std::env::args().skip(1).collect::<Vec<_>>();
-    reg_vm_eval_source_main_with_args(file, source, args)
+    reg_vm_eval_source_main_with_args(file, source, std::iter::empty::<String>())
 }
 
 /// Compile `source` and run `main` under explicit resilience limits.
@@ -1865,7 +1864,7 @@ impl VmLimits {
 
 struct RegVm {
     unit: Rc<RegUnit>,
-    args: Vec<String>,
+    entry_args: Vec<String>,
     external_bindings: HashMap<String, ExternalFunction>,
     stdout: String,
     /// When set, complete lines appended to `stdout` are also written live to the

@@ -3,7 +3,7 @@
 // transaction table and `String.len` reads that output handle before returning Int.
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
             return value
@@ -25,7 +25,7 @@ fn hot(limit: Int, seed: Int) -> Int {
     return String.len(value: text)
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let limit = bench_size(default: 2000000)
     let result = hot(limit, seed: 0)
     Output.write(message: String.from_int(value: result))

@@ -29,7 +29,7 @@ use rsscript::{
 #[test]
 fn eval_runs_pure_arithmetic_main() {
     let source = r#"
-fn main() -> Int {
+fn main(args: read List<String>) -> Int {
     let x = 2
     let y = 3
     return x + y * 4
@@ -51,7 +51,7 @@ fn add(a: Int, b: Int) -> Int {
     return a + b
 }
 
-fn main() -> Int {
+fn main(args: read List<String>) -> Int {
     let mut total = add(a: 1, b: 2)
     total = total + 4
     return total
@@ -75,7 +75,7 @@ fn change_id(key: mut Key, new_id: Int) -> Unit {
     return Unit
 }
 
-fn main() -> Bool {
+fn main(args: read List<String>) -> Bool {
     let key = Key(id: 1)
     let map = Map.new<Key, Int>()
     Map.insert<Key, Int>(map: mut map, key, value: 7)
@@ -98,7 +98,7 @@ fn float_fold_program(folder_body: &str) -> String {
     // Build the list once, then fold it many times so the fold (not the one-time
     // list construction) dominates the measured time.
     format!(
-        r#"fn main() -> Float {{
+        r#"fn main(args: read List<String>) -> Float {{
     let mut index = 0
     local values = List<Float>.new()
     while index < 50000 {{
@@ -218,15 +218,8 @@ provider = "test"
 "#,
     )
     .expect("host manifest should write");
-    fs::write(
-        package_dir.join("host/interface/host.rssi"),
-        format!(
-            "{}\n{}",
-            include_str!("../../../stdlib/os/os.rssi"),
-            include_str!("../../../stdlib/output/output.rssi")
-        ),
-    )
-    .expect("host interface should write");
+    fs::write(package_dir.join("host/interface/host.rssi"), "")
+        .expect("host interface should write");
     fs::write(
         package_dir.join("src/helper.rss"),
         r#"
@@ -239,8 +232,8 @@ fn decorate(value: read String) -> String {
     fs::write(
         package_dir.join("src/main.rss"),
         r#"
-fn main() -> Unit {
-    let args = Args.all()
+fn main(args: read List<String>) -> Unit {
+    let args = Arguments.all(args: read args)
     let joined = List.join<String>(list: read args, separator: read "|")
     Output.write(message: read decorate(value: read joined))
     return Unit
@@ -260,7 +253,7 @@ fn main() -> Unit {
 #[test]
 fn eval_runs_nested_pattern_match() {
     let source = r#"
-fn main() -> String {
+fn main(args: read List<String>) -> String {
     let value = Some(Some("rss"))
     match value {
         Some(Some(text)) => {
@@ -287,7 +280,7 @@ fn eval_runs_random_int_runtime_intrinsic() {
     // `Random.int` is a register-VM built-in intrinsic: evaluation succeeds and
     // returns a value within the requested range.
     let source = r#"
-fn main() -> Int {
+fn main(args: read List<String>) -> Int {
     return Random.int(min: 0, max: 10)
 }
 "#;
@@ -313,7 +306,7 @@ async fn add_after_sleep(value: Int) -> Result<Int, TimerError> {
     return Ok(value + 1)
 }
 
-async fn main() -> Result<Unit, TimerError> {
+async fn main(args: read List<String>) -> Result<Unit, TimerError> {
     let value = await add_after_sleep(value: 4)?
     Output.write(message: read String.from_int(value: value))
 
@@ -343,7 +336,7 @@ async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
     return Ok(value)
 }
 
-fn main() -> Result<Unit, TimerError> {
+fn main(args: read List<String>) -> Result<Unit, TimerError> {
     select {
         value = await after(value: 7, ms: 1)? => {
             Output.write(message: read String.from_int(value: value))
@@ -370,7 +363,7 @@ async fn fetch_profile() -> Result<String, String> {
     return Ok("profile")
 }
 
-fn main() -> Result<Unit, String> {
+fn main(args: read List<String>) -> Result<Unit, String> {
     task_group {
         async let user = fetch_user()
         async let profile = fetch_profile()
@@ -398,7 +391,7 @@ fn parity_async_file_intrinsics() {
     let file = common::unique_temp_dir("rsscript-parity-async-file").with_extension("txt");
     let template = r#"
 
-async fn main() -> Result<Unit, FileError> {
+async fn main(args: read List<String>) -> Result<Unit, FileError> {
     let path = Path.from_string(value: read "ASYNC_FILE_PATH")
     await File.write_string_async(path: read path, text: read "hello async")?
     let text = await File.read_all_string_async(path: read path)?
@@ -423,7 +416,7 @@ async fn main() -> Result<Unit, FileError> {
 fn parity_async_process_intrinsics() {
     let source = r#"
 
-async fn main() -> Result<Unit, String> {
+async fn main(args: read List<String>) -> Result<Unit, String> {
     let output = await Process.run_async(command: read "printf", args: read ["ok"])?
     Output.write(message: read String.from_int(value: output.status))
 
@@ -519,7 +512,7 @@ fn eval_matches_lowered_rust_for_pure_core_example() {
 #[test]
 fn eval_string_len_matches_lowered_rust_for_utf8_bytes() {
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let len = String.len(value: read "é")
     Output.write(message: read String.from_int(value: len))
 }
@@ -632,7 +625,7 @@ pub fn Host.echo(message: read String) -> String
 pub fn Host.tag(value: Int) -> String
 "#;
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     Output.write(message: read Host.echo(message: read "hello"))
     Output.write(message: read Host.tag(value: 7))
     return Unit
@@ -659,7 +652,7 @@ fn main() -> Unit {
 fn eval_reports_unbound_external_declarations() {
     let interface = "pub fn Host.echo(message: read String) -> String\n";
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     Output.write(message: read Host.echo(message: read "hello"))
     return Unit
 }
@@ -733,7 +726,7 @@ pub fn Beta.open() -> Beta
 pub fn Beta.describe(self: read Beta) -> String
 "#;
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let alpha = Alpha.open()
     let beta = Beta.open()
     Output.write(message: read alpha.describe())
@@ -771,7 +764,7 @@ fn is_even(value: Int) -> Bool {
     return half * 2 == value
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let numbers: List<Int> = [1, 2, 3, 4, 5]
 
     Output.write(message: read String.from_bool(value: List.all<Int>(list: read numbers, predicate: |item| {
@@ -985,7 +978,7 @@ pub fn Host.describe(handle: read HostHandle) -> String
 pub fn Host.echo(message: read String) -> String
 "#;
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let handle = Host.open()
     Output.write(message: read Host.describe(handle: read handle))
     Output.write(message: read Host.echo(message: read "native"))
@@ -1047,13 +1040,7 @@ pub fn echo(message: &String) -> String {
         &[("parity-native-host.rss".to_string(), source.to_string())],
         package,
         &runtime_path,
-        &[
-            ("host-bindings.rssi".to_string(), interface.to_string()),
-            (
-                "host-log.rssi".to_string(),
-                include_str!("../../../stdlib/output/output.rssi").to_string(),
-            ),
-        ],
+        &[("host-bindings.rssi".to_string(), interface.to_string())],
         &[NativeRustDependency {
             crate_name: "rsscript_test_native".to_string(),
             path: native_dir.to_string_lossy().to_string(),
@@ -1114,7 +1101,7 @@ pub fn echo(message: &String) -> String {
 // parity: hir_expr:Number hir_expr:ObjectLiteral hir_expr:String hir_expr:Try
 // parity: value:Bool value:Bytes value:Float value:Int value:Json value:List value:Managed
 // parity: value:Char value:Closure value:Map value:Native value:String value:Struct value:Unit value:Variant
-// parity: runtime:Args.all runtime:Args.count runtime:Args.get runtime:Args.get_or_default
+// parity: runtime:Arguments.all runtime:Arguments.count runtime:Arguments.get runtime:Arguments.get_or_default
 // parity: runtime:Assert.equal runtime:Assert.equal_bool runtime:Assert.equal_int
 // parity: runtime:Base64.decode runtime:Base64.decode_string runtime:Base64.encode runtime:Base64.encode_bytes
 // parity: runtime:Char.compare runtime:Char.from_code runtime:Char.is_alpha

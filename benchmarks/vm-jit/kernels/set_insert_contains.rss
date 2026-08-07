@@ -4,7 +4,7 @@
 // SetContains/len) and hashing cost. Not reachable by the native tier.
 
 fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: String.from_int(value: default))
+    let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
             return value
@@ -15,7 +15,7 @@ fn bench_size(default: Int) -> Int {
     }
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let limit = bench_size(default: 30000)
     local seen = Set.new<Int>()
     let mut index = 0

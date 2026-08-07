@@ -76,10 +76,6 @@ pub const TEST_HOST_INTERFACES: &[(&str, &str)] = &[
         include_str!("../../../../packages/async/interface/websocket.rssi"),
     ),
     (
-        "host/args.rssi",
-        include_str!("../../../../stdlib/os/os.rssi"),
-    ),
-    (
         "host/clock.rssi",
         include_str!("../../../../stdlib/clock/clock.rssi"),
     ),
@@ -98,10 +94,6 @@ pub const TEST_HOST_INTERFACES: &[(&str, &str)] = &[
     (
         "host/http.rssi",
         include_str!("../../../../stdlib/http/client.rssi"),
-    ),
-    (
-        "host/log.rssi",
-        include_str!("../../../../stdlib/output/output.rssi"),
     ),
     (
         "host/path.rssi",

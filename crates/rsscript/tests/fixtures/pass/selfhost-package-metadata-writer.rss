@@ -8,8 +8,8 @@ struct PackageMetadataInput {
     unknown_apis: Int
 }
 
-fn output_path() -> fresh Path {
-    let input = Args.get_or_default(
+fn output_path(args: read List<String>) -> fresh Path {
+    let input = Arguments.get_or_default(args: read args,
         index: 0,
         default: "target/rsscript-selfhost-package-metadata.txt",
     )
@@ -17,10 +17,10 @@ fn output_path() -> fresh Path {
     return Path.from_string(value: input)
 }
 
-fn package_metadata_input() -> fresh PackageMetadataInput {
-    let package_name = Args.get_or_default(index: 1, default: "rss-selfhost-package")
-    let version = Args.get_or_default(index: 2, default: "0.5.0")
-    let edition = Args.get_or_default(index: 3, default: "2024")
+fn package_metadata_input(args: read List<String>) -> fresh PackageMetadataInput {
+    let package_name = Arguments.get_or_default(args: read args, index: 1, default: "rss-selfhost-package")
+    let version = Arguments.get_or_default(args: read args, index: 2, default: "0.5.0")
+    let edition = Arguments.get_or_default(args: read args, index: 3, default: "2024")
 
     return PackageMetadataInput(
         package_name: package_name,
@@ -80,9 +80,9 @@ fn write_metadata_file(path: Path, text: String) -> Result<Unit, FileError> {
     return Ok(Unit)
 }
 
-pub fn main() -> Result<Unit, FileError> {
-    let path = output_path()
-    let input = package_metadata_input()
+pub fn main(args: read List<String>) -> Result<Unit, FileError> {
+    let path = output_path(args: read args)
+    let input = package_metadata_input(args: read args)
     let text = metadata_text(input)
 
     write_metadata_file(path, text)?

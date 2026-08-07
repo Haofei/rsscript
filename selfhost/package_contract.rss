@@ -263,10 +263,10 @@ fn has_declaration_contract_mismatch(interfaceProgram: Program, sourceProgram: P
     return false
 }
 
-fn main() -> Unit {
-    let interfaceSource = Args.get_or_default(index: 0, default: "")
-    let source = Args.get_or_default(index: 1, default: "")
-    let nativeBindings = Args.get_or_default(index: 2, default: "")
+fn main(args: read List<String>) -> Unit {
+    let interfaceSource = Arguments.get_or_default(args: read args, index: 0, default: "")
+    let source = Arguments.get_or_default(args: read args, index: 1, default: "")
+    let nativeBindings = Arguments.get_or_default(args: read args, index: 2, default: "")
     let interfaceTokens = tokenize(source: interfaceSource)
     let sourceTokens = tokenize(source: source)
     let interfaceProgram = parse_program(toks: interfaceTokens)

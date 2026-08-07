@@ -11,7 +11,7 @@
 // Drive: `... osr_threshold_sweep.rss -- <outer> <inner>`.
 
 fn size_arg(index: Int, default: Int) -> Int {
-    let raw = Args.get_or_default(index, default: String.from_int(value: default))
+    let raw = Arguments.get_or_default(args: read args, index, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
             return value
@@ -34,7 +34,7 @@ fn short_hot(limit: Int, seed: Int) -> Int {
     return total
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let outer = size_arg(index: 0, default: 1000)
     let inner = size_arg(index: 1, default: 1500)
     let mut k = 0

@@ -306,7 +306,7 @@ fn selfhost_checker_entry_is_orchestration_only() {
         })
         .collect::<Vec<_>>();
 
-    assert_eq!(declarations, ["fn main() -> Unit {"]);
+    assert_eq!(declarations, ["fn main(args: read List<String>) -> Unit {"]);
     assert!(checker.lines().count() < 1_000);
     for import in [
         "use selfhost.checker.support.*",
@@ -1685,6 +1685,36 @@ fn vm_core_does_not_embed_time_logging_or_os_intrinsics() {
             );
         }
     }
+}
+
+#[test]
+fn program_arguments_enter_through_the_explicit_main_abi() {
+    let root = workspace_root();
+    let catalog = read(&root.join("crates/rsscript/intrinsics.toml"));
+    assert!(!catalog.contains("{ id = \"Args"));
+    assert!(!catalog.contains("{ namespace = \"Args\""));
+
+    let vm_root = root.join("crates/rsscript/src/reg_vm");
+    for path in rust_files_below(&vm_root) {
+        if path
+            .components()
+            .any(|component| component.as_os_str() == "tests")
+        {
+            continue;
+        }
+        let source = read(&path);
+        for forbidden in ["std::env::args", "RegIntrinsic::Args"] {
+            assert!(
+                !source.contains(forbidden),
+                "VM core must not read ambient program arguments: {} contains `{forbidden}`",
+                path.display()
+            );
+        }
+    }
+
+    let scheduler = read(&root.join("crates/rsscript/src/reg_vm/scheduler.rs"));
+    assert!(scheduler.contains("List<String>"));
+    assert!(scheduler.contains("self.entry_args"));
 }
 
 #[test]

@@ -241,13 +241,6 @@ mod tests {
                 normalized_effects: vec!["native".to_owned()],
             },
             RsScriptPackageExport {
-                name: "Args.get_or_default".to_owned(),
-                kind: "function".to_owned(),
-                classification: "review_if_changed".to_owned(),
-                reasons: vec!["public function".to_owned()],
-                normalized_effects: vec!["native".to_owned()],
-            },
-            RsScriptPackageExport {
                 name: "Hash.sha256_file".to_owned(),
                 kind: "function".to_owned(),
                 classification: "review_if_changed".to_owned(),

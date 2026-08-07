@@ -26,6 +26,10 @@ pub const STANDARD_PACKAGE_INTERFACES: &[(&str, &str)] = &[
 
 pub const CORE_INTERFACES: &[(&str, &str)] = &[
     (
+        "stdlib/arguments/arguments.rssi",
+        include_str!("../../../stdlib/arguments/arguments.rssi"),
+    ),
+    (
         "stdlib/dyn/dyn.rssi",
         include_str!("../../../stdlib/dyn/dyn.rssi"),
     ),

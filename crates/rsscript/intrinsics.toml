@@ -1,9 +1,9 @@
 schema = 1
 intrinsic = [
-  { id = "ArgsAll" },
-  { id = "ArgsCount" },
-  { id = "ArgsGet" },
-  { id = "ArgsGetOrDefault" },
+  { id = "ArgumentsAll" },
+  { id = "ArgumentsCount" },
+  { id = "ArgumentsGet" },
+  { id = "ArgumentsGetOrDefault" },
   { id = "AssertEqual" },
   { id = "AssertEqualBool" },
   { id = "AssertEqualInt" },
@@ -377,10 +377,10 @@ intrinsic = [
   { id = "WeakUpgrade" },
 ]
 binding = [
-  { namespace = "Args", name = "all", vm_id = "ArgsAll", runtime_target = "rsscript_runtime::args_all", lowering = "direct" },
-  { namespace = "Args", name = "count", vm_id = "ArgsCount", runtime_target = "rsscript_runtime::args_count", lowering = "direct" },
-  { namespace = "Args", name = "get", vm_id = "ArgsGet", runtime_target = "rsscript_runtime::args_get", lowering = "direct" },
-  { namespace = "Args", name = "get_or_default", vm_id = "ArgsGetOrDefault", runtime_target = "rsscript_runtime::args_get_or_default", lowering = "direct" },
+  { namespace = "Arguments", name = "all", vm_id = "ArgumentsAll", runtime_target = "rsscript_runtime::arguments_all", lowering = "direct" },
+  { namespace = "Arguments", name = "count", vm_id = "ArgumentsCount", runtime_target = "rsscript_runtime::arguments_count", lowering = "direct" },
+  { namespace = "Arguments", name = "get", vm_id = "ArgumentsGet", runtime_target = "rsscript_runtime::arguments_get", lowering = "direct" },
+  { namespace = "Arguments", name = "get_or_default", vm_id = "ArgumentsGetOrDefault", runtime_target = "rsscript_runtime::arguments_get_or_default", lowering = "direct" },
   { namespace = "Assert", name = "equal", vm_id = "AssertEqual", runtime_target = "rsscript_runtime::assert_equal", lowering = "direct" },
   { namespace = "Assert", name = "equal_bool", vm_id = "AssertEqualBool", runtime_target = "rsscript_runtime::assert_equal_bool", lowering = "direct" },
   { namespace = "Assert", name = "equal_int", vm_id = "AssertEqualInt", runtime_target = "rsscript_runtime::assert_equal_int", lowering = "direct" },

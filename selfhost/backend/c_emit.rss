@@ -484,8 +484,8 @@ fn emit_pure_function_program(lines: List<String>, end: Int) -> Bool {
     return true
 }
 
-fn main() -> Unit {
-    let ir = Args.get_or_default(index: 0, default: "")
+fn main(args: read List<String>) -> Unit {
+    let ir = Arguments.get_or_default(args: read args, index: 0, default: "")
     let lines = String.split(value: ir, delimiter: "\n")
     if List.len(list: lines) < 3 { return Unit }
     if line_at(lines, index: 0) != "rss-ir-v1" { return Unit }

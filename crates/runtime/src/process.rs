@@ -23,31 +23,6 @@ pub fn os_close(fd: i64) {
     let _ = fd;
 }
 
-pub fn args_count() -> i64 {
-    std::env::args().skip(1).count() as i64
-}
-
-pub fn args_all() -> Vec<String> {
-    std::env::args().skip(1).collect()
-}
-
-pub fn args_get(index: i64) -> Option<String> {
-    if index < 0 {
-        return None;
-    }
-    std::env::args().skip(1).nth(index as usize)
-}
-
-pub fn args_get_or_default(index: i64, default: &str) -> String {
-    if index < 0 {
-        return default.to_string();
-    }
-    std::env::args()
-        .skip(1)
-        .nth(index as usize)
-        .unwrap_or_else(|| default.to_string())
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessOutput {
     pub status: i64,

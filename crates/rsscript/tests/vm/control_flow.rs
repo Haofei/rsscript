@@ -13,7 +13,7 @@ async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
     return Ok(value)
 }
 
-fn main() -> Result<Unit, TimerError> {
+fn main(args: read List<String>) -> Result<Unit, TimerError> {
     select {
         value = await after(value: 7, ms: 1)? => {
             Output.write(message: read String.from_int(value: value))
@@ -40,7 +40,7 @@ fn choose(flag: Bool) -> Int {
     }
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     Output.write(message: String.from_int(value: choose(flag: true)))
     Output.write(message: String.from_int(value: choose(flag: false)))
     return Unit
@@ -53,7 +53,7 @@ fn main() -> Unit {
 #[test]
 fn vm_runs_pure_loop_sum_like_interpreter() {
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let mut index = 0
     let mut total = 0
     while index < 10 {
@@ -76,7 +76,7 @@ fn mix(value: Int, salt: Int) -> Int {
     return doubled + salt
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let mut index = 0
     let mut total = 0
     while index < 10 {
@@ -94,7 +94,7 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_pure_loop_sum_like_interpreter() {
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let mut index = 0
     let mut total = 0
     while index < 10 {
@@ -117,7 +117,7 @@ fn mix(value: Int, salt: Int) -> Int {
     return doubled + salt
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let mut index = 0
     let mut total = 0
     while index < 10 {
@@ -135,16 +135,16 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_if_and_args_parse_like_interpreter() {
     let source = r#"
-fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+fn bench_size(args: read List<String>, default: Int) -> Int {
+    let raw = Arguments.get_or_default(args: read args, index: 0, default: read String.from_int(value: default))
     if raw == "11" {
         return 11
     }
     return default
 }
 
-fn main() -> Unit {
-    Output.write(message: read String.from_int(value: bench_size(default: 7)))
+fn main(args: read List<String>) -> Unit {
+    Output.write(message: read String.from_int(value: bench_size(args: read args, default: 7)))
     return Unit
 }
 "#;
@@ -160,7 +160,7 @@ struct Point {
     y: Int
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let mut values = List<Int>.new()
     List.push<Int>(list: mut values, value: read 1)
     List.push<Int>(list: mut values, value: read 2)
@@ -193,7 +193,7 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_for_break_continue_like_interpreter() {
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let values: List<Int> = [1, 2, 3, 4, 5, 6]
     let mut total = 0
     for value in values {
@@ -216,7 +216,7 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_while_break_continue_like_interpreter() {
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let mut index = 0
     let mut total = 0
     while index < 8 {
@@ -247,7 +247,7 @@ fn checked(ok: Bool) -> Result<Int, String> {
     return Err("bad")
 }
 
-fn main() -> Result<Unit, String> {
+fn main(args: read List<String>) -> Result<Unit, String> {
     let value = checked(ok: false)?
     Output.write(message: read String.from_int(value: value))
     return Ok(Unit)
@@ -265,8 +265,8 @@ fn main() -> Result<Unit, String> {
 #[test]
 fn vm_runs_args_parse_match_like_interpreter() {
     let source = r#"
-fn bench_size(default: Int) -> Int {
-    let raw = Args.get_or_default(index: 0, default: read String.from_int(value: default))
+fn bench_size(args: read List<String>, default: Int) -> Int {
+    let raw = Arguments.get_or_default(args: read args, index: 0, default: read String.from_int(value: default))
     match String.parse_int(value: read raw) {
         Some(value) => {
             return value
@@ -277,8 +277,8 @@ fn bench_size(default: Int) -> Int {
     }
 }
 
-fn main() -> Unit {
-    Output.write(message: read String.from_int(value: bench_size(default: 7)))
+fn main(args: read List<String>) -> Unit {
+    Output.write(message: read String.from_int(value: bench_size(args: read args, default: 7)))
     return Unit
 }
 "#;
@@ -290,7 +290,7 @@ fn main() -> Unit {
 fn reg_vm_runs_async_for_like_interpreter() {
     let source = r#"
 
-async fn main() -> Result<Unit, ChannelError> {
+async fn main(args: read List<String>) -> Result<Unit, ChannelError> {
     local values = [1, 2, 3]
     let stream = Stream.from_list<Int>(items: take values)
     await for value in stream {
@@ -311,7 +311,7 @@ struct Point {
     y: Int
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let point = Point(x: 3, y: 4)
     match read point {
         Point { x, y } => {
@@ -328,7 +328,7 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_guarded_match_like_compiled_backend() {
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let value = Some(3)
     match value {
         Some(item) if item > 0 => {
@@ -351,7 +351,7 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_literal_match_like_compiled_backend() {
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let value = 1
     match value {
         1 => {
@@ -391,7 +391,7 @@ fn describe(expr: read Expr) -> Unit {
     return Unit
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     return Unit
 }
 "#;
@@ -427,7 +427,7 @@ fn int_label(value: Int) -> String {
     }
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let d = North
     Output.write(message: read direction_name(d: read d))
     Output.write(message: read int_label(value: 1))
@@ -454,7 +454,7 @@ fn describe(value: read Direction, enabled: Bool) -> String {
     }
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let north = North
     let south = South
     Output.write(message: read describe(value: read north, enabled: true))
@@ -475,7 +475,7 @@ async fn ready(value: Int) -> Result<Int, String> {
     return Ok(value)
 }
 
-fn main() -> Result<Unit, String> {
+fn main(args: read List<String>) -> Result<Unit, String> {
     select {
         value = await ready(value: 7)? => {
             Output.write(message: read String.from_int(value: value))
@@ -503,7 +503,7 @@ async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
     return Ok(value)
 }
 
-fn main() -> Result<Unit, TimerError> {
+fn main(args: read List<String>) -> Result<Unit, TimerError> {
     select {
         value = await after(value: 7, ms: 50)? => {
             Output.write(message: read String.from_int(value: value))
@@ -540,7 +540,7 @@ async fn loser() -> Result<Int, TimerError> {
     return Ok(2)
 }
 
-async fn main() -> Result<Unit, TimerError> {
+async fn main(args: read List<String>) -> Result<Unit, TimerError> {
     select {
         _ = await winner()? => {
             Output.write(message: read "winner")

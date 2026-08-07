@@ -10,7 +10,7 @@ fn float_mix(value: Float, salt: Float) -> Float {
     return value * 2.0 + salt
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     Output.write(message: read String.from_int(value: 17 % 5))
     Output.write(message: read String.from_int(value: Math.abs(value: -9)))
     Output.write(message: read String.from_int(value: Math.min(left: 4, right: 7)))
@@ -85,7 +85,7 @@ fn main() -> Unit {
 fn reg_vm_runs_format_date_and_int_bit_helpers_like_backend() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     Output.write(message: read String.format(template: read "hello {}, {{}} {}", args: read ["rss", "vm"]))
     Output.write(message: read String.format(template: read "missing {}", args: read List<String>.new()))
 
@@ -156,13 +156,13 @@ fn main() -> Unit {
 fn reg_vm_runs_basic_args_assert_and_int_intrinsics_like_interpreter() {
     let source = r#"
 
-fn main() -> Unit {
-    let args = Args.all()
-    Assert.equal_int(left: Args.count(), right: 2)
+fn main(args: read List<String>) -> Unit {
+    let args = Arguments.all(args: read args)
+    Assert.equal_int(left: Arguments.count(args: read args), right: 2)
     Assert.equal_int(left: List.len<String>(list: read args), right: 2)
     Assert.equal(left: read Int.to_string(value: read 42), right: read "42")
     Assert.equal_bool(left: true, right: true)
-    match Args.get(index: 0) {
+    match Arguments.get(args: read args, index: 0) {
         Some(value) => {
             Output.write(message: read value)
         }
@@ -170,7 +170,7 @@ fn main() -> Unit {
             Output.write(message: read "missing-first")
         }
     }
-    match Args.get(index: 99) {
+    match Arguments.get(args: read args, index: 99) {
         Some(value) => {
             Output.write(message: read value)
         }
@@ -178,7 +178,7 @@ fn main() -> Unit {
             Output.write(message: read "missing-none")
         }
     }
-    match Args.get(index: 0 - 1) {
+    match Arguments.get(args: read args, index: 0 - 1) {
         Some(value) => {
             Output.write(message: read value)
         }
@@ -201,7 +201,7 @@ fn main() -> Unit {
 fn reg_vm_runs_duration_and_url_intrinsics_like_interpreter() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let short = Duration.ms(value: 750)
     let long = Duration.seconds(value: 2)
     let total = Duration.add(left: read short, right: read long)
@@ -223,7 +223,7 @@ fn main() -> Unit {
 fn reg_vm_runs_hash_intrinsics_like_interpreter() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let digest = Hash.sha256_string(value: read "abc")
     Output.write(message: read digest)
     let bytes = Bytes.from_string(value: read "abc")
@@ -274,7 +274,7 @@ fn main() -> Unit {
 fn reg_vm_runs_encoding_intrinsics_like_interpreter() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let encoded = Base64.encode(value: read "rsscript")
     Output.write(message: read encoded)
 
@@ -348,7 +348,7 @@ fn main() -> Unit {
 fn reg_vm_runs_pure_path_intrinsics_like_interpreter() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let root = Path.from_string(value: read "fixtures")
     let path = Path.join(base: read root, child: read "rsscript-path.txt")
 
@@ -434,7 +434,7 @@ fn explode() -> Bool {
     return 1 / zero() == 0
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let left = false && explode()
     let right = true || explode()
     if left == false && right == true {
@@ -453,7 +453,7 @@ fn main() -> Unit {
 fn reg_vm_runs_log_and_workspace_intrinsics_like_interpreter() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     Output.write(message: read "stdout line")
     Output.write_json(value: read Json.value(value: read {"stream": "stdout", "count": 1}))
     Output.error(message: read "stderr line")
@@ -482,7 +482,7 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_object_literal_like_interpreter() {
     let source = r#"
-fn main() -> JsonValue {
+fn main(args: read List<String>) -> JsonValue {
     return {"ok": true, "name": "rss", "count": 3, "tags": ["agent", "json"]}
 }
 "#;
@@ -502,7 +502,7 @@ fn checked(value: Int) -> Result<Int, String> {
     return Ok(value + 1)
 }
 
-fn main() -> Result<Unit, String> {
+fn main(args: read List<String>) -> Result<Unit, String> {
     let value = checked(value: 4)?
     Output.write(message: read String.from_int(value: value))
     return Ok(Unit)
@@ -516,7 +516,7 @@ fn main() -> Result<Unit, String> {
 fn reg_vm_runs_pipeline_chain_like_interpreter() {
     let source = r#"
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let mut index = 0
     local values = List<Int>.new()
     while index < 10 {
@@ -561,7 +561,7 @@ struct Acc {
     total: Int
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let mut index = 0
     local values = List<Int>.new()
     while index < 10 {
@@ -601,7 +601,7 @@ fn main() -> Unit {
 #[test]
 fn reg_vm_runs_diff_patch_ord_like_interpreter() {
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let original = "one\ntwo\nthree\n"
     let changed = "one\n2\nthree\n"
     let patch = Diff.unified(old: read original, new: read changed)
@@ -671,10 +671,10 @@ fn reg_vm_runs_file_parse_intrinsics_like_interpreter() {
     let arg_refs = args.iter().map(String::as_str).collect::<Vec<_>>();
 
     let source = r#"
-fn main() -> Result<Unit, JsonError> {
-    let json_path = Path.from_string(value: read Option.unwrap_or<String>(value: read Args.get(index: 0), default: read "missing-json"))
-    let toml_path = Path.from_string(value: read Option.unwrap_or<String>(value: read Args.get(index: 1), default: read "missing-toml"))
-    let yaml_path = Path.from_string(value: read Option.unwrap_or<String>(value: read Args.get(index: 2), default: read "missing-yaml"))
+fn main(args: read List<String>) -> Result<Unit, JsonError> {
+    let json_path = Path.from_string(value: read Option.unwrap_or<String>(value: read Arguments.get(args: read args, index: 0), default: read "missing-json"))
+    let toml_path = Path.from_string(value: read Option.unwrap_or<String>(value: read Arguments.get(args: read args, index: 1), default: read "missing-toml"))
+    let yaml_path = Path.from_string(value: read Option.unwrap_or<String>(value: read Arguments.get(args: read args, index: 2), default: read "missing-yaml"))
 
     let json = Json.parse_file(path: read json_path)?
     let json_name = Json.field(value: read json, name: read "name")?
@@ -720,7 +720,7 @@ fn main() -> Result<Unit, JsonError> {
 fn reg_vm_runs_cancellation_and_stream_intrinsics_like_interpreter() {
     let source = r#"
 
-async fn main() -> Result<Unit, ChannelError> {
+async fn main(args: read List<String>) -> Result<Unit, ChannelError> {
     local source = CancellationSource.new()
     let token = CancellationSource.token(source: read source)
     if !CancellationToken.is_cancelled(token: read token) {
@@ -780,7 +780,7 @@ async fn main() -> Result<Unit, ChannelError> {
 fn reg_vm_runs_http_request_builder_intrinsics_like_interpreter() {
     let source = r#"
 
-fn main() -> HttpRequest {
+fn main(args: read List<String>) -> HttpRequest {
     let url = Url.from_string(value: read "https://example.test/api")
     local base = HttpRequest.json(url: read url, body: read "{\"ok\":true}")
     local timed = HttpRequest.with_timeout(request: take base, timeout_ms: 250)
@@ -803,7 +803,7 @@ fn main() -> HttpRequest {
 fn reg_vm_runs_runtime_facade_batch_like_interpreter() {
     let source = r#"
 
-async fn main() -> Result<Unit, String> {
+async fn main(args: read List<String>) -> Result<Unit, String> {
     match Channel.bounded<Int>(capacity: 1) {
         Ok(channel) => {
             let sender = Channel.sender<Int>(channel: read channel)
@@ -883,9 +883,9 @@ fn reg_vm_runs_tempdir_and_path_fs_intrinsics_like_interpreter() {
 
     let source = r#"
 
-fn main() -> Result<Unit, FileError> {
-    let root = Path.from_string(value: read Args.get_or_default(index: 0, default: read "target/rss-vm-tempdir"))
-    let marker = Path.from_string(value: read Args.get_or_default(index: 1, default: read "target/rss-vm-tempdir/marker.txt"))
+fn main(args: read List<String>) -> Result<Unit, FileError> {
+    let root = Path.from_string(value: read Arguments.get_or_default(args: read args, index: 0, default: read "target/rss-vm-tempdir"))
+    let marker = Path.from_string(value: read Arguments.get_or_default(args: read args, index: 1, default: read "target/rss-vm-tempdir/marker.txt"))
 
     if Path.exists(path: read root) {
         Output.write(message: read "root-exists")
@@ -945,8 +945,8 @@ fn reg_vm_runs_file_core_intrinsics_like_interpreter() {
 
     let source = r#"
 
-fn main() -> Result<Unit, FileError> {
-    let root = Path.from_string(value: read Args.get_or_default(index: 0, default: read "target/rss-vm-file-core"))
+fn main(args: read List<String>) -> Result<Unit, FileError> {
+    let root = Path.from_string(value: read Arguments.get_or_default(args: read args, index: 0, default: read "target/rss-vm-file-core"))
     let path_file = Path.join(base: read root, child: read "path.txt")
     File.write_string_to_path(path: read path_file, text: read "file text")?
     if File.exists(path: read path_file) {
@@ -1009,8 +1009,8 @@ fn reg_vm_runs_directory_and_file_stream_intrinsics_like_interpreter() {
 
     let source = r#"
 
-fn main() -> Result<Unit, FileError> {
-    let root = Path.from_string(value: read Args.get_or_default(index: 0, default: read "target/rss-vm-directory"))
+fn main(args: read List<String>) -> Result<Unit, FileError> {
+    let root = Path.from_string(value: read Arguments.get_or_default(args: read args, index: 0, default: read "target/rss-vm-directory"))
     let nested = Path.join(base: read root, child: read "nested")
     let deep = Path.join(base: read nested, child: read "deep")
     let single = Path.join(base: read root, child: read "single")
@@ -1120,7 +1120,7 @@ fn reg_vm_runs_env_path_and_file_extra_intrinsics_like_interpreter() {
 
     let source = r#"
 
-async fn main() -> Result<Unit, FileError> {
+async fn main(args: read List<String>) -> Result<Unit, FileError> {
     let current = Env.current_dir()?
     Env.set_current_dir(path: read current)?
     Env.set(name: read "RSSCRIPT_VM_IGNORED", value: read "ignored")
@@ -1141,7 +1141,7 @@ async fn main() -> Result<Unit, FileError> {
         }
     }
 
-    let root = Path.from_string(value: read Args.get_or_default(index: 0, default: read "target/rss-vm-env-path-file"))
+    let root = Path.from_string(value: read Arguments.get_or_default(args: read args, index: 0, default: read "target/rss-vm-env-path-file"))
     let nested = Path.join(base: read root, child: read "nested")
     Directory.create_all(path: read nested)?
 
@@ -1199,7 +1199,7 @@ async fn main() -> Result<Unit, FileError> {
 fn reg_vm_runs_time_and_fallible_pipeline_intrinsics_like_interpreter() {
     let source = r#"
 
-fn main() -> Result<Unit, String> {
+fn main(args: read List<String>) -> Result<Unit, String> {
     let start = Clock.now()
     let unix_ms = Clock.system_unix_ms()
     if unix_ms > 0 {
@@ -1287,7 +1287,7 @@ fn main() -> Result<Unit, String> {
 #[test]
 fn reg_vm_runs_receiver_methods_like_interpreter() {
     let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let greeting = String.concat(left: read "hi ", right: read "there")
     Output.write(message: read String.from_int(value: greeting.len()))
     let n = 255

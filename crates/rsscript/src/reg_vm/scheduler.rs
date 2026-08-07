@@ -10,7 +10,34 @@ impl RegVm {
         })?;
         let unit = Rc::clone(&self.unit);
         let func = Rc::clone(&unit.functions[function_id]);
-        let root = self.create_task(func, Vec::new());
+        let args = match func.params {
+            0 => Vec::new(),
+            1 => {
+                let signature = unit.native_signatures.get(name).ok_or_else(|| {
+                    EvalError::Runtime(format!(
+                        "reg VM cannot validate the `{name}` entry-point signature."
+                    ))
+                })?;
+                if signature.params.as_slice() != ["List<String>"] {
+                    return Err(EvalError::Runtime(format!(
+                        "reg VM entry point `{name}` must accept either no parameters or one `List<String>` parameter."
+                    )));
+                }
+                vec![VmValue::List(Rc::new(RefCell::new(
+                    self.entry_args
+                        .iter()
+                        .cloned()
+                        .map(VmValue::string)
+                        .collect(),
+                )))]
+            }
+            _ => {
+                return Err(EvalError::Runtime(format!(
+                    "reg VM entry point `{name}` must accept either no parameters or one `List<String>` parameter."
+                )));
+            }
+        };
+        let root = self.create_task(func, args);
         self.run_scheduler(&unit, root)
     }
 

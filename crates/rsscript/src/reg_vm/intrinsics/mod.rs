@@ -37,28 +37,35 @@ impl RegVm {
     ) -> Result<VmValue, EvalError> {
         self.charge_intrinsic_call()?;
         match intrinsic {
-            RegIntrinsic::ArgsAll => Ok(VmValue::List(Rc::new(RefCell::new(
-                self.args.iter().cloned().map(VmValue::string).collect(),
-            )))),
-            RegIntrinsic::ArgsCount => Ok(VmValue::Int(self.args.len() as i64)),
-            RegIntrinsic::ArgsGet => {
-                let index = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+            RegIntrinsic::ArgumentsAll => {
+                let values = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                Ok(VmValue::List(Rc::new(RefCell::new(
+                    values.borrow().clone(),
+                ))))
+            }
+            RegIntrinsic::ArgumentsCount => {
+                let values = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let len = values.borrow().len();
+                Ok(VmValue::Int(len as i64))
+            }
+            RegIntrinsic::ArgumentsGet => {
+                let values = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let index = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 Ok(usize::try_from(index)
                     .ok()
-                    .and_then(|index| self.args.get(index).cloned())
-                    .map(|value| VmValue::some(VmValue::string(value)))
+                    .and_then(|index| values.borrow().get(index))
+                    .map(VmValue::some)
                     .unwrap_or(VmValue::OptionNone))
             }
-            RegIntrinsic::ArgsGetOrDefault => {
-                let index = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+            RegIntrinsic::ArgumentsGetOrDefault => {
+                let values = expect_list_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
+                let index = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
                 let default =
-                    expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_string();
-                Ok(VmValue::string(
-                    usize::try_from(index)
-                        .ok()
-                        .and_then(|index| self.args.get(index).cloned())
-                        .unwrap_or(default),
-                ))
+                    expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?.to_string();
+                Ok(usize::try_from(index)
+                    .ok()
+                    .and_then(|index| values.borrow().get(index))
+                    .unwrap_or_else(|| VmValue::string(default)))
             }
             RegIntrinsic::AssertEqual => {
                 let left = intrinsic_arg(&self.stack, base, args, 0)?;

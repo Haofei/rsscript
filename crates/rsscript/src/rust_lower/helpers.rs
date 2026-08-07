@@ -1149,12 +1149,19 @@ pub(super) fn rust_package_main(program: &Program, package_name: &str) -> Option
     })?;
     let (main, kind) = main;
     let crate_name = cargo_crate_name(package_name);
-    let call = match kind {
-        RunnableMainKind::Unit => format!("{}::{}();", crate_name, rust_ident(&main.name)),
+    let argument = if kind.takes_arguments() {
+        "&std::env::args().skip(1).collect::<Vec<String>>()"
+    } else {
+        ""
+    };
+    let call = match kind.return_kind() {
+        RunnableMainReturn::Unit => {
+            format!("{}::{}({argument});", crate_name, rust_ident(&main.name))
+        }
         // A `main` returning `Err` is a failed run on every backend (ledger
         // SH-005): report it to stderr and exit non-zero, rather than panicking.
-        RunnableMainKind::ResultUnit => format!(
-            "if let Err(error) = {}::{}() {{ \
+        RunnableMainReturn::ResultUnit => format!(
+            "if let Err(error) = {}::{}({argument}) {{ \
              eprintln!(\"RSScript main returned an error: {{error:?}}\"); \
              std::process::exit(1); }}",
             crate_name,
@@ -1181,25 +1188,74 @@ pub(super) fn is_runnable_main(function: &FunctionDecl) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum RunnableMainKind {
     Unit,
+    UnitWithArguments,
+    ResultUnit,
+    ResultUnitWithArguments,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunnableMainReturn {
+    Unit,
     ResultUnit,
 }
 
+impl RunnableMainKind {
+    fn takes_arguments(self) -> bool {
+        matches!(
+            self,
+            Self::UnitWithArguments | Self::ResultUnitWithArguments
+        )
+    }
+
+    fn return_kind(self) -> RunnableMainReturn {
+        match self {
+            Self::Unit | Self::UnitWithArguments => RunnableMainReturn::Unit,
+            Self::ResultUnit | Self::ResultUnitWithArguments => RunnableMainReturn::ResultUnit,
+        }
+    }
+}
+
 pub(super) fn runnable_main_kind(function: &FunctionDecl) -> Option<RunnableMainKind> {
-    if function.name != "main" || !function.params.is_empty() {
+    if function.name != "main" {
         return None;
     }
+    let takes_arguments = match function.params.as_slice() {
+        [] => false,
+        [param]
+            if param.effective_effect() == Some(DataEffect::Read)
+                && param.ty.name == "List"
+                && param.ty.args.len() == 1
+                && param.ty.args[0].name == "String"
+                && param.ty.args[0].args.is_empty() =>
+        {
+            true
+        }
+        _ => return None,
+    };
     let Some(return_ty) = function.return_ty.as_ref() else {
-        return Some(RunnableMainKind::Unit);
+        return Some(if takes_arguments {
+            RunnableMainKind::UnitWithArguments
+        } else {
+            RunnableMainKind::Unit
+        });
     };
     if return_ty.name == "Unit" && return_ty.args.is_empty() {
-        return Some(RunnableMainKind::Unit);
+        return Some(if takes_arguments {
+            RunnableMainKind::UnitWithArguments
+        } else {
+            RunnableMainKind::Unit
+        });
     }
     if return_ty.name == "Result"
         && return_ty.args.len() == 2
         && return_ty.args[0].name == "Unit"
         && return_ty.args[0].args.is_empty()
     {
-        return Some(RunnableMainKind::ResultUnit);
+        return Some(if takes_arguments {
+            RunnableMainKind::ResultUnitWithArguments
+        } else {
+            RunnableMainKind::ResultUnit
+        });
     }
     None
 }

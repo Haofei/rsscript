@@ -101,7 +101,7 @@ fn mailbox_take_from<T>(m: mut Mailbox<T>, source: Int) -> Option<T> {
 
 fn input_size(default: Int) -> Int {
     let fallback = String.from_int(value: default)
-    let raw = Args.get_or_default(index: 0, default: fallback)
+    let raw = Arguments.get_or_default(args: read args, index: 0, default: fallback)
     match String.parse_int(value: raw) {
         Some(n) => { return n }
         None => { return default }
@@ -115,7 +115,7 @@ fn is_some_int(value: Option<Int>) -> Bool {
     }
 }
 
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let cycles = input_size(default: 60000)
     let mut box = mailbox_new<Int>(capacity: 16)
     let mut p = 0

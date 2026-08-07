@@ -1776,7 +1776,6 @@ Example:
 "Http.get" = ["network.client"]
 "Http.post_json" = ["network.client"]
 "Http.post_form" = ["network.client"]
-"Args.get_or_default" = ["process.args"]
 "Process.run_stdout" = ["process.spawn"]
 "Clock.now" = ["time.read"]
 "Clock.system_unix_ms" = ["time.read"]
@@ -1820,9 +1819,8 @@ adapters. `Hash.sha256_string` and `Hash.sha256_bytes` require `compute.hash`,
 `Regex.replace_all`, and `Regex.split` require `compute.regex`, `Log.write`
 requires `telemetry.emit`, `TempDir.new`, `TempDir.new_in`, and `TempDir.keep`
 require `filesystem.write`,
-`TempDir.path` requires `filesystem.read`, and
-`Args.get_or_default` requires `process.args`, while `Process.run_stdout`
-requires `process.spawn`. These facts are still
+`TempDir.path` requires `filesystem.read`, while `Process.run_stdout` requires
+`process.spawn`. These facts are still
 compiler-contract evidence about the public façade surface; they are not a scan
 of arbitrary Rust implementation behavior.
 Deterministic encoding helpers such as `Base64.encode`, `Hex.decode`, and

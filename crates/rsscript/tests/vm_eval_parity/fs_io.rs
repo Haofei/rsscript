@@ -6,7 +6,7 @@ use super::*;
 fn parity_path_intrinsics() {
     common::run_with_large_stack(|| {
         let source = r#"
-fn main() -> Unit {
+fn main(args: read List<String>) -> Unit {
     let root = Path.from_string(value: read "fixtures")
     let path = Path.join(base: read root, child: read "rsscript-path.txt")
     Output.write(message: read Path.to_string(path: read path))
@@ -94,8 +94,8 @@ fn parity_path_file_directory_intrinsics() {
         let backend_root_arg = backend_root.display().to_string();
         let source = r#"
 
-fn main() -> Result<Unit, FileError> {
-    let root = Args.get_or_default(index: 0, default: read "target/rsscript-parity-fs")
+fn main(args: read List<String>) -> Result<Unit, FileError> {
+    let root = Arguments.get_or_default(args: read args, index: 0, default: read "target/rsscript-parity-fs")
     let root_path = Path.from_string(value: read root)
     let nested = Path.join(base: read root_path, child: read "nested")
     let single = Path.join(base: read root_path, child: read "single")
@@ -288,8 +288,8 @@ fn parity_csv_intrinsics() {
     let backend_path = backend_root.join("data.csv").display().to_string();
     let source = r#"
 
-fn main() -> Result<Unit, CsvError> {
-    let path = Path.from_string(value: read Args.get_or_default(index: 0, default: read "data.csv"))
+fn main(args: read List<String>) -> Result<Unit, CsvError> {
+    let path = Path.from_string(value: read Arguments.get_or_default(args: read args, index: 0, default: read "data.csv"))
     local buffer = RowBuffer.new(size: 4096)
 
     with Csv.open_read(path: read path)? as file {
@@ -346,8 +346,8 @@ fn parity_tempdir_intrinsics() {
 
     let source = r#"
 
-fn main() -> Result<Unit, FileError> {
-    let root = Path.from_string(value: read Args.get_or_default(index: 0, default: read "target/rsscript-parity-tempdir"))
+fn main(args: read List<String>) -> Result<Unit, FileError> {
+    let root = Path.from_string(value: read Arguments.get_or_default(args: read args, index: 0, default: read "target/rsscript-parity-tempdir"))
     with TempDir.new_in(parent: read root)? as child {
         let path = TempDir.path(dir: read child)
         if Path.is_dir(path: read path) {
@@ -389,7 +389,7 @@ fn main() -> Result<Unit, FileError> {
 fn parity_process_run_intrinsics() {
     let source = r#"
 
-fn main() -> Result<Unit, String> {
+fn main(args: read List<String>) -> Result<Unit, String> {
     let mut args = List<String>.new()
     List.push<String>(list: mut args, value: read "hello")
     let stdout = Process.run_stdout(command: read "printf", args: read args)?
@@ -502,7 +502,7 @@ fn main() -> Result<Unit, String> {
 #[test]
 fn parity_json_path_intrinsics() {
     let source = r#"
-fn main() -> Result<Unit, JsonError> {
+fn main(args: read List<String>) -> Result<Unit, JsonError> {
     let text = "{\"profile\":{\"name\":\"rss\",\"age\":7,\"active\":true,\"nested\":{\"value\":\"ok\"}},\"items\":[{\"id\":1},{\"id\":2}],\"missing\":null}"
     let doc = Json.parse(text: read text)?
 
@@ -627,10 +627,10 @@ fn parity_json_toml_yaml_parse_file_intrinsics() {
 
     let source = r#"
 
-fn main() -> Result<Unit, JsonError> {
-    let json_path = Path.from_string(value: read Args.get_or_default(index: 0, default: read "data.json"))
-    let toml_path = Path.from_string(value: read Args.get_or_default(index: 1, default: read "data.toml"))
-    let yaml_path = Path.from_string(value: read Args.get_or_default(index: 2, default: read "data.yaml"))
+fn main(args: read List<String>) -> Result<Unit, JsonError> {
+    let json_path = Path.from_string(value: read Arguments.get_or_default(args: read args, index: 0, default: read "data.json"))
+    let toml_path = Path.from_string(value: read Arguments.get_or_default(args: read args, index: 1, default: read "data.toml"))
+    let yaml_path = Path.from_string(value: read Arguments.get_or_default(args: read args, index: 2, default: read "data.yaml"))
 
     let json_doc = Json.parse_file(path: read json_path)?
     let json_name = Json.field_string(value: read json_doc, name: read "name")?

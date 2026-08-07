@@ -24,7 +24,7 @@ kind     = "execution" | "diagnostics"
 
 # execution only:
 backends = ["vm", "compiled"]   # default ["vm"]; "compiled" adds VM<->compiled parity
-args     = ["..."]              # program args (Args.*)
+args     = ["..."]              # explicit `main(args: List<String>)` values
 stdout   = "...\n"              # expected stdout (optional)
 value    = "42"                 # expected `main` return display, VM only (optional)
 
