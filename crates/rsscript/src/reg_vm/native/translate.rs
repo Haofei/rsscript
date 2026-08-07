@@ -2070,7 +2070,7 @@ pub(in crate::reg_vm) fn translate_to_native_jit_with_calls(
     let native_reg_types: Vec<NativeTy> = (0..n_regs)
         .map(|reg| ty[reg].unwrap_or(NativeTy::Int))
         .collect();
-    let memo_scopes = native_memoize_loop_invariant_host_calls(
+    let memo_scopes = native_memoize_loop_invariant_runtime_helper_calls(
         &code,
         &reachable,
         &mut jit_code,
@@ -3919,7 +3919,7 @@ fn translate_osr_loop_inner(
         native_reg_types.push(NativeTy::Int);
     }
     let reachable = native_reachable_instructions(code);
-    let memo_scopes = native_memoize_loop_invariant_host_calls(
+    let memo_scopes = native_memoize_loop_invariant_runtime_helper_calls(
         code,
         &reachable,
         &mut jit_code,

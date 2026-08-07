@@ -11,7 +11,7 @@
 // median should beat the off median. The closure is monomorphic at the call site
 // (one callee, one scalar Int capture), the precondition for the OSR × J2 inline.
 
-fn bench_size(default: Int) -> Int {
+fn bench_size(args: read List<String>, default: Int) -> Int {
     let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
@@ -36,7 +36,7 @@ fn apply_loop(g: Fn(Int) -> Int, limit: Int, seed: Int) -> Int {
 }
 
 fn main(args: read List<String>) -> Unit {
-    let limit = bench_size(default: 2000000)
+    let limit = bench_size(args: read args, default: 2000000)
     let base = 7
     let g = fn(value) captures(read base) {
         return value * 2 + base

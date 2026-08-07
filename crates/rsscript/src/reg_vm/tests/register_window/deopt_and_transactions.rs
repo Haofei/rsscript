@@ -261,6 +261,7 @@
         let mut vm = empty_vm();
         // threshold 0 => without the gate this function would tier up on the first
         // call; collect_stats so we can observe the native machinery never runs.
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         vm.limits = VmLimits {
             step_budget: Some(1_000),
@@ -283,6 +284,7 @@
     #[test]
     fn try_native_refuses_dispatch_while_cancel_armed() {
         let mut vm = empty_vm();
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         vm.limits = VmLimits {
             cancel: Some(rsscript_operation::CancellationToken::new()),
@@ -343,6 +345,7 @@
         let mut vm = empty_vm();
         // threshold 0 => compile/attempt on the very first call; collect_stats so we
         // can observe the attempt count.
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         let func = always_arg_mismatch_func();
 
@@ -441,6 +444,7 @@
     fn precise_deopt_resumes_at_safepoint_and_restores_live_regs() {
         let mut vm = empty_vm();
         // threshold 0 => compile/attempt on the first call; precise_deopt on.
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(
             NativeState::new_with_opt(0, false, true, false, true, false, false)
                 .expect("native module"),
@@ -532,6 +536,7 @@
             ],
         ));
         let mut vm = empty_vm();
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(
             NativeState::new_with_opt(0, false, true, false, true, false, false)
                 .expect("native module"),
@@ -586,6 +591,7 @@
         let caller = Rc::clone(&unit.functions[1]);
 
         let mut vm = RegVm::new(Rc::clone(&unit), Vec::new(), HashMap::new());
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(
             NativeState::new_with_opt(0, false, true, false, true, false, false)
                 .expect("native module"),
@@ -683,6 +689,7 @@
         let top = Rc::clone(&unit.functions[2]);
 
         let mut vm = RegVm::new(Rc::clone(&unit), Vec::new(), HashMap::new());
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(
             NativeState::new_with_opt(0, false, true, false, true, false, false)
                 .expect("native module"),
@@ -946,6 +953,7 @@ fn main() -> Unit {
     fn deopt_without_precise_flag_falls_back_from_top() {
         let mut vm = empty_vm();
         // precise_deopt OFF (the last arg).
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(
             NativeState::new_with_opt(0, false, true, false, false, false, false)
                 .expect("native module"),
@@ -1110,6 +1118,7 @@ fn main() -> Unit {
     fn native_heap_result_passthrough_round_trips() {
         let mut vm = empty_vm();
         // threshold 0 => compile/attempt on the first call.
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         let func = Rc::new(list_passthrough_func());
 
@@ -1426,6 +1435,7 @@ fn main() -> Unit {
     #[test]
     fn precise_deopt_after_native_heap_write_falls_back_from_top() {
         let mut vm = empty_vm();
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(
             NativeState::new_with_opt(0, false, true, false, true, false, false)
                 .expect("native module"),
@@ -1510,6 +1520,7 @@ fn main() -> Unit {
     #[test]
     fn native_string_from_int_return_allocates_heap_result() {
         let mut vm = empty_vm();
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         let func = Rc::new(string_from_int_return_func());
 
@@ -1552,6 +1563,7 @@ fn main() -> Unit {
     #[test]
     fn native_string_from_int_handle_feeds_string_len() {
         let mut vm = empty_vm();
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         let func = Rc::new(string_from_int_len_func());
 
@@ -1588,6 +1600,7 @@ fn main() -> Unit {
     #[test]
     fn native_string_concat_handle_feeds_string_len() {
         let mut vm = empty_vm();
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         let func = Rc::new(string_concat_len_func());
 
@@ -1636,6 +1649,7 @@ fn main() -> Unit {
     fn native_heap_result_force_deopt_leaves_output_table_empty() {
         let mut vm = empty_vm();
         // force_bail = true: pretend native bailed at its first guard (entry).
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, true, true).expect("native module"));
         let func = Rc::new(list_passthrough_func());
 

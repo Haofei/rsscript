@@ -137,8 +137,8 @@
         let telemetry = tier::NativeCompileTelemetry::from_jit_function(&jit);
         assert_eq!(telemetry.direct_list_bounds_check_sites, 1);
         assert_eq!(telemetry.direct_list_store_load_forwarded_moves, 1);
-        assert_eq!(telemetry.memoized_host_call_sites, 0);
-        assert_eq!(telemetry.host_call_sites, 0);
+        assert_eq!(telemetry.memoized_runtime_helper_call_sites, 0);
+        assert_eq!(telemetry.runtime_helper_call_sites, 0);
     }
 
     #[cfg(feature = "native-jit")]
@@ -1189,8 +1189,8 @@ fn main() -> Unit {
             );
         }
         let telemetry = tier::NativeCompileTelemetry::from_jit_function(&jit);
-        assert_eq!(telemetry.memoized_host_call_sites, 3);
-        assert_eq!(telemetry.host_call_sites, 0);
+        assert_eq!(telemetry.memoized_runtime_helper_call_sites, 3);
+        assert_eq!(telemetry.runtime_helper_call_sites, 0);
     }
 
     #[cfg(feature = "native-jit")]
@@ -1207,8 +1207,8 @@ fn main() -> Unit {
             admission_rejected: 3,
             admission_rejected_bytes: 512,
             direct_list_bounds_check_sites: 4,
-            memoized_host_call_sites: 3,
-            host_call_sites: 2,
+            memoized_runtime_helper_call_sites: 3,
+            runtime_helper_call_sites: 2,
             fused_map_match_helper_sites: 1,
             direct_list_store_load_forwarded_moves: 1,
             ..NativeStats::default()
@@ -1220,8 +1220,11 @@ fn main() -> Unit {
         assert_eq!(json["optimized_calls"].as_u64(), Some(13));
         assert_eq!(json["promotions"].as_u64(), Some(1));
         assert_eq!(json["direct_list_bounds_check_sites"].as_u64(), Some(4));
-        assert_eq!(json["memoized_host_call_sites"].as_u64(), Some(3));
-        assert_eq!(json["host_call_sites"].as_u64(), Some(2));
+        assert_eq!(
+            json["memoized_runtime_helper_call_sites"].as_u64(),
+            Some(3)
+        );
+        assert_eq!(json["runtime_helper_call_sites"].as_u64(), Some(2));
         assert_eq!(json["fused_map_match_helper_sites"].as_u64(), Some(1));
         assert_eq!(json["admission_admitted"].as_u64(), Some(5));
         assert_eq!(json["admission_admitted_bytes"].as_u64(), Some(4096));
@@ -1239,8 +1242,8 @@ fn main() -> Unit {
             "optimized_calls=13",
             "promotions=1",
             "direct_list_bounds_check_sites=4",
-            "memoized_host_call_sites=3",
-            "host_call_sites=2",
+            "memoized_runtime_helper_call_sites=3",
+            "runtime_helper_call_sites=2",
             "fused_map_match_helper_sites=1",
             "direct_list_store_load_forwarded_moves=1",
             "admission_admitted=5",

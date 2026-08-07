@@ -173,7 +173,7 @@ pub(in crate::reg_vm) struct Profitability {
     pub decline: bool,
     pub scalar_ops: u32,
     pub direct_reads: u32,
-    pub host_calls: u32,
+    pub runtime_helper_calls: u32,
     pub closure_guards: u32,
     pub pic_sites: u32,
     pub native_calls: u32,
@@ -186,11 +186,11 @@ impl Profitability {
     /// Used only for DECLINED regions (the `native_decline_reasons` map key).
     pub(in crate::reg_vm) fn reason(&self, region: &str) -> String {
         format!(
-            "unprofitable[{region}]: score={} scalar={} direct={} host_calls={} closure_guard={} pic_sites={} native_calls={} backedge={} hot_instrs={}",
+            "unprofitable[{region}]: score={} scalar={} direct={} runtime_helper_calls={} closure_guard={} pic_sites={} native_calls={} backedge={} hot_instrs={}",
             self.score,
             self.scalar_ops,
             self.direct_reads,
-            self.host_calls,
+            self.runtime_helper_calls,
             self.closure_guards,
             self.pic_sites,
             self.native_calls,
@@ -204,12 +204,12 @@ impl Profitability {
     /// calibrated against the real per-kernel score distribution.
     pub(in crate::reg_vm) fn summary(&self, region: &str) -> String {
         format!(
-            "profit[{region}]: verdict={} score={} scalar={} direct={} host_calls={} closure_guard={} pic_sites={} native_calls={} backedge={} hot_instrs={}",
+            "profit[{region}]: verdict={} score={} scalar={} direct={} runtime_helper_calls={} closure_guard={} pic_sites={} native_calls={} backedge={} hot_instrs={}",
             if self.decline { "DECLINE" } else { "keep" },
             self.score,
             self.scalar_ops,
             self.direct_reads,
-            self.host_calls,
+            self.runtime_helper_calls,
             self.closure_guards,
             self.pic_sites,
             self.native_calls,
@@ -302,7 +302,7 @@ pub(in crate::reg_vm) fn native_region_profitability(
                 score -= W_CLOSURE_PIC;
             }
             JitInstr::HostCall { .. } => {
-                p.host_calls += 1;
+                p.runtime_helper_calls += 1;
                 score -= W_HOST_CALL;
             }
             JitInstr::GuardClosureId { .. } => {

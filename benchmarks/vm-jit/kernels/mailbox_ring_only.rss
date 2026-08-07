@@ -39,7 +39,7 @@ fn mailbox_take(m: mut MailboxInt) -> Option<Int> {
     return Some(value)
 }
 
-fn bench_size(default: Int) -> Int {
+fn bench_size(args: read List<String>, default: Int) -> Int {
     let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
@@ -52,7 +52,7 @@ fn bench_size(default: Int) -> Int {
 }
 
 fn main(args: read List<String>) -> Unit {
-    let limit = bench_size(default: 60000)
+    let limit = bench_size(args: read args, default: 60000)
     let total = hot(limit)
     Output.write(message: String.from_int(value: total))
     return Unit

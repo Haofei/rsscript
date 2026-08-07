@@ -1177,6 +1177,10 @@ impl RegVmExecutable {
         &self,
         args: impl IntoIterator<Item = impl Into<String>>,
     ) -> Result<(EvalOutput, NativeStats, Vec<String>), EvalError> {
+        // Cranelift does not yet account the interpreter's execution budgets.
+        // This explicitly native, experimental entry point is therefore trusted-only;
+        // bounded callers must use the corresponding `_with_limits` entry point,
+        // which keeps execution on the interpreter while limits are armed.
         self.eval_main_with_args_native_inner_reported(
             args,
             0,
@@ -1187,7 +1191,7 @@ impl RegVmExecutable {
             true,
             None,
             false,
-            VmLimits::default(),
+            VmLimits::unbounded_for_trusted_host(),
         )
     }
 
@@ -1203,6 +1207,8 @@ impl RegVmExecutable {
         forced_safepoint: Option<u32>,
         force_all_safepoints_override: bool,
     ) -> Result<(EvalOutput, NativeStats), EvalError> {
+        // Native code does not yet poll or account interpreter budgets. Keep this
+        // opt-in experimental API explicit about its trusted-host execution model.
         self.eval_main_with_args_native_inner_reported(
             args,
             tier_up_threshold,
@@ -1213,7 +1219,7 @@ impl RegVmExecutable {
             false,
             forced_safepoint,
             force_all_safepoints_override,
-            VmLimits::default(),
+            VmLimits::unbounded_for_trusted_host(),
         )
         .map(|(output, stats, _lines)| (output, stats))
     }
@@ -2314,9 +2320,9 @@ pub struct NativeStats {
     /// Bounds checks retained on direct flat-list loads and stores.
     pub direct_list_bounds_check_sites: u64,
     /// Loop-invariant scalar host calls emitted with lazy memoization.
-    pub memoized_host_call_sites: u64,
+    pub memoized_runtime_helper_call_sites: u64,
     /// Ordinary, non-memoized host calls emitted across compiled regions.
-    pub host_call_sites: u64,
+    pub runtime_helper_call_sites: u64,
     /// Map/sorted-map match sites whose payload and found flag use one host call.
     pub fused_map_match_helper_sites: u64,
     /// Direct flat-list stores followed by the matching `Move` shape produced when
@@ -2396,7 +2402,7 @@ pub struct NativeStats {
 impl NativeStats {
     fn summary(&self) -> String {
         format!(
-            "native-jit: considered={} translated={} compiled={} baseline_compiles={} optimized_compiles={} baseline_calls={} optimized_calls={} promotions={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_host_call_sites={} host_call_sites={} fused_map_match_helper_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
+            "native-jit: considered={} translated={} compiled={} baseline_compiles={} optimized_compiles={} baseline_calls={} optimized_calls={} promotions={} ir_instrs={} code_bytes={} admission_admitted={} admission_admitted_bytes={} admission_rejected={} admission_rejected_bytes={} deopt_sites={} direct_list_bounds_check_sites={} memoized_runtime_helper_call_sites={} runtime_helper_call_sites={} fused_map_match_helper_sites={} direct_list_store_load_forwarded_moves={} native_call_edges={} native_call_depth_max={} profile_closure_guards={} profile_closure_id_reads={} profile_closure_pic_sites={} profile_closure_pic_arms={} profile_branch_sites={} profile_branch_samples={} profile_branch_taken={} profile_branch_fallthrough={} profile_branch_cold_blocks={} profile_branch_side_exits={} not_eligible={} top_decline={} \
 compile_failed={} calls={} bails={} child_bails={} child_resumes={} arg_mismatch={} shape_versions={} shape_cache_hits={} shape_limit_fallbacks={} shape_bails={} tier_deferred={} \
 compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             self.considered,
@@ -2415,8 +2421,8 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             self.admission_rejected_bytes,
             self.deopt_sites,
             self.direct_list_bounds_check_sites,
-            self.memoized_host_call_sites,
-            self.host_call_sites,
+            self.memoized_runtime_helper_call_sites,
+            self.runtime_helper_call_sites,
             self.fused_map_match_helper_sites,
             self.direct_list_store_load_forwarded_moves,
             self.native_call_edges,
@@ -2504,8 +2510,8 @@ compile_ms={:.3} run_ms={:.3} osr_entries={} unprofitable_declines={}",
             "admission_rejected_bytes": self.admission_rejected_bytes,
             "deopt_sites": self.deopt_sites,
             "direct_list_bounds_check_sites": self.direct_list_bounds_check_sites,
-            "memoized_host_call_sites": self.memoized_host_call_sites,
-            "host_call_sites": self.host_call_sites,
+            "memoized_runtime_helper_call_sites": self.memoized_runtime_helper_call_sites,
+            "runtime_helper_call_sites": self.runtime_helper_call_sites,
             "direct_list_store_load_forwarded_moves": self.direct_list_store_load_forwarded_moves,
             "native_call_edges": self.native_call_edges,
             "native_call_depth_max": self.native_call_depth_max,

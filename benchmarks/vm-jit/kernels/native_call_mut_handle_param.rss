@@ -6,7 +6,7 @@ struct Cell {
     value: Int
 }
 
-fn bench_size(default: Int) -> Int {
+fn bench_size(args: read List<String>, default: Int) -> Int {
     let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
@@ -34,7 +34,7 @@ fn hot(cell: mut Cell, limit: Int) -> Int {
 }
 
 fn main(args: read List<String>) -> Unit {
-    let limit = bench_size(default: 250000)
+    let limit = bench_size(args: read args, default: 250000)
     let mut cell = Cell(value: 0)
     let result = hot(cell: mut cell, limit)
     Output.write(message: String.from_int(value: result))

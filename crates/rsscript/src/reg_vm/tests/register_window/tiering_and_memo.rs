@@ -18,6 +18,7 @@
         let mut native = NativeState::new_with_opt(1, false, true, false, true, false, false)
             .expect("native ladder");
         native.optimize_work_threshold = u64::MAX;
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(native);
         vm.prepare_frame(0, 1).expect("frame");
         let func = native_constant_func("promote", 7);
@@ -58,6 +59,7 @@
         let mut native = NativeState::new_with_opt(1, false, true, false, true, false, false)
             .expect("native ladder");
         native.optimize_work_threshold = u64::MAX;
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(native);
         vm.prepare_frame(0, 1).expect("frame");
         let func = native_constant_func("stay_baseline", 9);
@@ -83,6 +85,7 @@
         let mut native = NativeState::new_with_opt(1, false, true, false, true, false, false)
             .expect("native ladder");
         native.optimize_work_threshold = u64::MAX;
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(native);
         vm.prepare_frame(0, 1).expect("frame");
         let func = native_constant_func("shared_budget", 11);
@@ -118,6 +121,7 @@
     #[test]
     fn baseline_only_mode_preserves_precise_deopt() {
         let mut vm = empty_vm();
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(
             NativeState::new_with_opt(0, false, true, true, true, false, false)
                 .expect("baseline-only native module"),
@@ -176,6 +180,7 @@ fn main() -> Unit {
         let mut native = NativeState::new_with_opt(1, false, true, false, true, true, false)
             .expect("native ladder");
         native.optimize_work_threshold = 0;
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(native);
         vm.jit_enabled = true;
         vm.jit_force_all = true;
@@ -194,6 +199,7 @@ fn main() -> Unit {
     #[test]
     fn native_admission_budget_bounds_many_functions_and_keeps_existing_dispatch() {
         let mut vm = empty_vm();
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         vm.prepare_frame(0, 1).expect("frame");
         let functions: Vec<_> = (0..32)
@@ -240,6 +246,7 @@ fn main() -> Unit {
     #[test]
     fn native_post_compile_budget_rejection_falls_back_without_admission() {
         let mut vm = empty_vm();
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         vm.native.as_mut().expect("native").admission.max_code_bytes = 1;
         vm.prepare_frame(0, 1).expect("frame");
@@ -266,6 +273,7 @@ fn main() -> Unit {
     #[test]
     fn native_zero_compile_time_budget_rejects_before_compilation() {
         let mut vm = empty_vm();
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         vm.native
             .as_mut()

@@ -3,7 +3,7 @@
 // to a compiled native child. This pins the native-to-native FlatFloat ABI:
 // the caller must forward both the raw f64 pointer and the parallel length word.
 
-fn bench_size(default: Int) -> Int {
+fn bench_size(args: read List<String>, default: Int) -> Int {
     let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
@@ -31,7 +31,7 @@ fn hot(values: List<Float>, limit: Int) -> Float {
 }
 
 fn main(args: read List<String>) -> Unit {
-    let limit = bench_size(default: 750000)
+    let limit = bench_size(args: read args, default: 750000)
     local values = List.new<Float>()
     List.push<Float>(list: mut values, value: 1.25)
     List.push<Float>(list: mut values, value: 2.5)

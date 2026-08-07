@@ -202,6 +202,7 @@ fn main() -> Unit {
             Vec::<String>::new(),
             HashMap::new(),
         );
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         vm.prepare_frame(0, func.regs).expect("frame");
         vm.set_reg(0, VmValue::Int(23));
@@ -267,6 +268,7 @@ fn main() -> Unit {
             Vec::<String>::new(),
             HashMap::new(),
         );
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         vm.prepare_frame(0, func.regs).expect("frame");
         vm.set_reg(0, VmValue::Float(3.5));
@@ -329,6 +331,7 @@ fn main() -> Unit { return Unit }
                 Vec::<String>::new(),
                 HashMap::new(),
             );
+            vm.set_limits(VmLimits::unbounded_for_trusted_host());
             vm.native = Some(NativeState::new(0, false, true).expect("native module"));
             vm.prepare_frame(0, func.regs).expect("frame");
             vm.set_reg(0, VmValue::Float(left));
@@ -414,6 +417,7 @@ fn main() -> Unit {
             Vec::<String>::new(),
             HashMap::new(),
         );
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         vm.prepare_frame(0, func.regs).expect("frame");
         vm.set_reg(0, VmValue::Int(11));
@@ -483,6 +487,7 @@ fn main() -> Unit {
             Vec::<String>::new(),
             HashMap::new(),
         );
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         vm.prepare_frame(0, func.regs).expect("frame");
         vm.set_reg(0, VmValue::List(Rc::clone(&values)));
@@ -553,6 +558,7 @@ fn main() -> Unit {
             Vec::<String>::new(),
             HashMap::new(),
         );
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         vm.prepare_frame(0, func.regs).expect("frame");
         vm.set_reg(0, VmValue::List(Rc::clone(&values)));
@@ -626,6 +632,7 @@ fn main() -> Unit {
             Vec::<String>::new(),
             HashMap::new(),
         );
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         vm.prepare_frame(0, func.regs).expect("frame");
         vm.set_reg(0, VmValue::List(Rc::clone(&values)));
@@ -697,6 +704,7 @@ fn main() -> Unit {
             Vec::<String>::new(),
             HashMap::new(),
         );
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         vm.prepare_frame(0, func.regs).expect("frame");
         vm.set_reg(0, VmValue::Int(23));
@@ -771,6 +779,7 @@ fn main() -> Unit {
             Vec::<String>::new(),
             HashMap::new(),
         );
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         vm.prepare_frame(0, func.regs).expect("frame");
         vm.set_reg(0, boxed);

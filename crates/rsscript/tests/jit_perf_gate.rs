@@ -30,8 +30,8 @@ struct GateRow {
     bails: Option<i64>,
     compiled_code_bytes: Option<i64>,
     direct_list_bounds_check_sites: Option<i64>,
-    memoized_host_call_sites: Option<i64>,
-    host_call_sites: Option<i64>,
+    memoized_runtime_helper_call_sites: Option<i64>,
+    runtime_helper_call_sites: Option<i64>,
     direct_list_store_load_forwarded_moves: Option<i64>,
     native_call_edges: Option<i64>,
     native_call_depth_max: Option<i64>,
@@ -228,8 +228,9 @@ fn jit_perf_gate_against_baseline() {
         let bails = jit_counter(jit, "bails");
         let compiled_code_bytes = jit_counter(jit, "compiled_code_bytes");
         let direct_list_bounds_check_sites = jit_counter(jit, "direct_list_bounds_check_sites");
-        let memoized_host_call_sites = jit_counter(jit, "memoized_host_call_sites");
-        let host_call_sites = jit_counter(jit, "host_call_sites");
+        let memoized_runtime_helper_call_sites =
+            jit_counter(jit, "memoized_runtime_helper_call_sites");
+        let runtime_helper_call_sites = jit_counter(jit, "runtime_helper_call_sites");
         let direct_list_store_load_forwarded_moves =
             jit_counter(jit, "direct_list_store_load_forwarded_moves");
         let native_call_edges = jit_counter(jit, "native_call_edges");
@@ -291,8 +292,8 @@ fn jit_perf_gate_against_baseline() {
             bails,
             compiled_code_bytes,
             direct_list_bounds_check_sites,
-            memoized_host_call_sites,
-            host_call_sites,
+            memoized_runtime_helper_call_sites,
+            runtime_helper_call_sites,
             direct_list_store_load_forwarded_moves,
             native_call_edges,
             native_call_depth_max,
@@ -588,7 +589,7 @@ fn expected_min_counters(case: &str) -> &'static [(&'static str, i64)] {
         ],
         "native_call_mut_handle_param.rss" => &[("compiled_code_bytes", 1)],
         "profile_closure_pic.rss" => &[
-            ("host_call_sites", 1),
+            ("runtime_helper_call_sites", 1),
             ("profile_closure_pic_sites", 1),
             ("profile_closure_pic_arms", 3),
             ("profile_branch_sites", 1),
@@ -614,12 +615,14 @@ fn expected_min_counters(case: &str) -> &'static [(&'static str, i64)] {
             ("profile_branch_samples", 1),
             ("compiled_code_bytes", 1),
         ],
-        "native_sorted_set_len_loop.rss" => {
-            &[("memoized_host_call_sites", 1), ("compiled_code_bytes", 1)]
-        }
-        "native_bytes_slice_len_loop.rss" => {
-            &[("memoized_host_call_sites", 1), ("compiled_code_bytes", 1)]
-        }
+        "native_sorted_set_len_loop.rss" => &[
+            ("memoized_runtime_helper_call_sites", 1),
+            ("compiled_code_bytes", 1),
+        ],
+        "native_bytes_slice_len_loop.rss" => &[
+            ("memoized_runtime_helper_call_sites", 1),
+            ("compiled_code_bytes", 1),
+        ],
         _ => &[],
     }
 }
@@ -634,8 +637,8 @@ fn print_gate_table(rows: &[GateRow]) {
         "try",
         "bails",
         "bounds",
-        "memo",
-        "host",
+        "memo_h",
+        "helper",
         "fwd",
         "edges",
         "depth",
@@ -652,8 +655,8 @@ fn print_gate_table(rows: &[GateRow]) {
             row.attempts,
             fmt_counter(row.bails),
             fmt_counter(row.direct_list_bounds_check_sites),
-            fmt_counter(row.memoized_host_call_sites),
-            fmt_counter(row.host_call_sites),
+            fmt_counter(row.memoized_runtime_helper_call_sites),
+            fmt_counter(row.runtime_helper_call_sites),
             fmt_counter(row.direct_list_store_load_forwarded_moves),
             fmt_counter(row.native_call_edges),
             fmt_counter(row.native_call_depth_max),

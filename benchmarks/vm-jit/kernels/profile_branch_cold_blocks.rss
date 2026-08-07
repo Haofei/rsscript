@@ -6,7 +6,7 @@
 // then mark the cold successor block in `JitFunction::cold_blocks`, exposed as
 // `profile_branch_cold_blocks` / `br_c` telemetry.
 
-fn bench_size(default: Int) -> Int {
+fn bench_size(args: read List<String>, default: Int) -> Int {
     let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
@@ -26,7 +26,7 @@ fn branchy(value: Int) -> Int {
 }
 
 fn main(args: read List<String>) -> Unit {
-    let limit = bench_size(default: 250000)
+    let limit = bench_size(args: read args, default: 250000)
     let mut i = 0
     let mut total = 0
     while i < limit {

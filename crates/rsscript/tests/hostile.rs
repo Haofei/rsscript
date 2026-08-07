@@ -549,10 +549,10 @@ fn main() -> Int {
     assert_execution_failure(&err, ExecutionFailureKind::IntrinsicBudgetExceeded);
 }
 
-/// A normal program that writes a little output and makes a few stdlib calls
+/// A normal program that writes a little output and makes a few runtime calls
 /// completes within the bounded defaults.
 #[test]
-fn default_limits_allow_normal_output_and_host_calls() {
+fn default_limits_allow_normal_output_and_runtime_calls() {
     let source = r#"
 fn main() -> Int {
     let mut index = 0

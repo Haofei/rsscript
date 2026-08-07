@@ -3,7 +3,7 @@
 // collection structure the suite was missing (have Map/SortedMap/Set/Deque).
 // Exercises SortedSetInsert / SortedSetContains and the ordered backing.
 
-fn bench_size(default: Int) -> Int {
+fn bench_size(args: read List<String>, default: Int) -> Int {
     let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
@@ -16,7 +16,7 @@ fn bench_size(default: Int) -> Int {
 }
 
 fn main(args: read List<String>) -> Unit {
-    let limit = bench_size(default: 8000)
+    let limit = bench_size(args: read args, default: 8000)
     local s = SortedSet<Int>.new()
     let mut index = 0
 

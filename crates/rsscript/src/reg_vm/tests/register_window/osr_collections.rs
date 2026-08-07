@@ -3,7 +3,7 @@
     fn native_osr_finds_later_native_loop_after_setup_loop() {
         let source = r#"
 
-fn bench_size(default: Int) -> Int {
+fn bench_size(args: read List<String>, default: Int) -> Int {
     let raw = Arguments.get_or_default(args: read args, index: 0, default: read String.from_int(value: default))
     match String.parse_int(value: read raw) {
         Some(value) => {
@@ -16,7 +16,7 @@ fn bench_size(default: Int) -> Int {
 }
 
 fn main(args: read List<String>) -> Unit {
-    let limit = bench_size(default: 40000)
+    let limit = bench_size(args: read args, default: 40000)
     let mut index = 0
     local values = List<Int>.new()
 
@@ -142,6 +142,7 @@ fn main(args: read List<String>) -> Unit {
             Vec::<String>::new(),
             std::iter::empty::<(String, ExternalFunction)>().collect(),
         );
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         assert_eq!(
             vm.resolve_osr_candidate(func),
@@ -196,7 +197,7 @@ fn main(args: read List<String>) -> Unit {
         let (native, stats) = executable
             .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
             .expect("forced OSR run");
-        assert_eq!(native, reference);
+        assert_eval_observables_eq(&native, &reference);
         assert_eq!(
             stats.osr_entries, 2,
             "each sequential loop should enter its distinct region once: {stats:?}"
@@ -261,7 +262,7 @@ fn main(args: read List<String>) -> Unit {
         let (native, stats) = executable
             .eval_main_with_args_native_osr_with_stats(std::iter::empty::<&str>())
             .expect("forced OSR run");
-        assert_eq!(native, reference);
+        assert_eval_observables_eq(&native, &reference);
         assert_eq!(
             stats.osr_entries, 2,
             "the inner region should enter once per outer iteration: {stats:?}"
@@ -1395,7 +1396,7 @@ fn main(args: read List<String>) -> Unit {
         let telemetry = super::super::tier::NativeCompileTelemetry::from_jit_function(&jit.0);
         assert_eq!(telemetry.fused_map_match_helper_sites, 1);
         assert_eq!(
-            telemetry.host_call_sites, 1,
+            telemetry.runtime_helper_call_sites, 1,
             "one sorted-map match must cross exactly one host-helper boundary",
         );
         let (out, stats) = executable
@@ -1770,6 +1771,7 @@ fn main(args: read List<String>) -> Unit {
             Vec::<String>::new(),
             std::iter::empty::<(String, ExternalFunction)>().collect(),
         );
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(NativeState::new(0, false, true).expect("native module"));
         assert_eq!(
             vm.resolve_osr_candidate(func),

@@ -15,7 +15,7 @@
 // monomorphic at the call site (one callee, one scalar Float capture), the
 // precondition for the OSR × J2 inline.
 
-fn bench_size(default: Int) -> Int {
+fn bench_size(args: read List<String>, default: Int) -> Int {
     let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
@@ -42,7 +42,7 @@ fn apply_loop(g: Fn(Float) -> Float, limit: Int, seed: Float) -> Float {
 }
 
 fn main(args: read List<String>) -> Unit {
-    let limit = bench_size(default: 2000000)
+    let limit = bench_size(args: read args, default: 2000000)
     let scale = 1.5
     let g = fn(value) captures(read scale) {
         return value * scale + scale

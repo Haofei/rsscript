@@ -410,6 +410,16 @@ mod register_window_tests {
         }
     }
 
+    #[cfg(feature = "native-jit")]
+    fn assert_eval_observables_eq(actual: &EvalOutput, expected: &EvalOutput) {
+        assert_eq!(actual.value, expected.value);
+        assert_eq!(actual.display_value, expected.display_value);
+        assert_eq!(actual.native_value, expected.native_value);
+        assert_eq!(actual.stdout, expected.stdout);
+        assert_eq!(actual.stderr, expected.stderr);
+        assert_eq!(actual.provider_call_traces, expected.provider_call_traces);
+    }
+
     include!("register_window/lowering.rs");
     include!("register_window/translation.rs");
     include!("register_window/tiering_and_memo.rs");

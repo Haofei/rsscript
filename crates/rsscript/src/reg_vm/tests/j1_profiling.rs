@@ -403,6 +403,7 @@ fn main() -> Unit {
         );
 
         let mut vm = RegVm::new(Rc::clone(&exec.unit), Vec::new(), HashMap::new());
+        vm.set_limits(VmLimits::unbounded_for_trusted_host());
         vm.native = Some(
             NativeState::new_with_opt(0, false, true, false, false, false, false)
                 .expect("native module"),

@@ -348,7 +348,7 @@ where
 }
 
 #[cfg(feature = "native-jit")]
-pub(super) fn native_memoize_loop_invariant_host_calls(
+pub(super) fn native_memoize_loop_invariant_runtime_helper_calls(
     code: &[RegInstr],
     reachable: &[bool],
     jit_code: &mut [vm_jit::JitInstr],
@@ -378,7 +378,8 @@ pub(super) fn native_memoize_loop_invariant_host_calls(
                 continue;
             }
             native_propagate_derived_loop_invariant(&code[ip], &mut invariants, ip);
-            let Some((helper, dst, args)) = native_memoizable_host_call(&jit_code[ip]) else {
+            let Some((helper, dst, args)) = native_memoizable_runtime_helper_call(&jit_code[ip])
+            else {
                 continue;
             };
             let dst = *dst;
@@ -407,7 +408,7 @@ pub(super) fn native_memoize_loop_invariant_host_calls(
             let args_loop_stable = if field_load_eligible {
                 true
             } else {
-                native_host_args_loop_invariant(&args, &invariants, ip)
+                native_runtime_helper_args_loop_invariant(&args, &invariants, ip)
             };
             if !(native_memoizable_helper(helper)
                 || field_load_eligible
@@ -454,7 +455,7 @@ pub(super) fn native_memoize_loop_invariant_host_calls(
 }
 
 #[cfg(feature = "native-jit")]
-fn native_memoizable_host_call(
+fn native_memoizable_runtime_helper_call(
     instr: &vm_jit::JitInstr,
 ) -> Option<(vm_jit::HostHelper, &u32, &Vec<vm_jit::HostArg>)> {
     match instr {
@@ -891,7 +892,7 @@ fn native_loop_invariant_regs(
 }
 
 #[cfg(feature = "native-jit")]
-fn native_host_args_loop_invariant(
+fn native_runtime_helper_args_loop_invariant(
     args: &[vm_jit::HostArg],
     invariants: &NativeLoopInvariants,
     helper_ip: usize,

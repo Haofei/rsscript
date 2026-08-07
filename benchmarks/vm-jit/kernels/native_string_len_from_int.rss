@@ -2,7 +2,7 @@
 // loop runs natively, then `String.from_int(total)` allocates in the native
 // transaction table and `String.len` reads that output handle before returning Int.
 
-fn bench_size(default: Int) -> Int {
+fn bench_size(args: read List<String>, default: Int) -> Int {
     let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
@@ -26,7 +26,7 @@ fn hot(limit: Int, seed: Int) -> Int {
 }
 
 fn main(args: read List<String>) -> Unit {
-    let limit = bench_size(default: 2000000)
+    let limit = bench_size(args: read args, default: 2000000)
     let result = hot(limit, seed: 0)
     Output.write(message: String.from_int(value: result))
     return Unit

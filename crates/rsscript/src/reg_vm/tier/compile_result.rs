@@ -23,8 +23,8 @@ fn profile_closure_pic_arm_count(code: &[vm_jit::JitInstr], closure_id_ip: usize
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(in crate::reg_vm) struct NativeCompileTelemetry {
     pub(in crate::reg_vm) direct_list_bounds_check_sites: u64,
-    pub(in crate::reg_vm) memoized_host_call_sites: u64,
-    pub(in crate::reg_vm) host_call_sites: u64,
+    pub(in crate::reg_vm) memoized_runtime_helper_call_sites: u64,
+    pub(in crate::reg_vm) runtime_helper_call_sites: u64,
     pub(in crate::reg_vm) fused_map_match_helper_sites: u64,
     pub(in crate::reg_vm) direct_list_store_load_forwarded_moves: u64,
     native_call_edges: u64,
@@ -48,10 +48,10 @@ impl NativeCompileTelemetry {
                     telemetry.direct_list_bounds_check_sites += 1;
                 }
                 vm_jit::JitInstr::MemoizedHostCall { .. } => {
-                    telemetry.memoized_host_call_sites += 1;
+                    telemetry.memoized_runtime_helper_call_sites += 1;
                 }
                 vm_jit::JitInstr::HostCall { helper, .. } => {
-                    telemetry.host_call_sites += 1;
+                    telemetry.runtime_helper_call_sites += 1;
                     if *helper == vm_jit::HostHelper::ClosureId {
                         telemetry.profile_closure_id_reads += 1;
                         telemetry.profile_closure_pic_sites += 1;
@@ -63,7 +63,7 @@ impl NativeCompileTelemetry {
                 | vm_jit::JitInstr::MatchMapGetFloat { .. }
                 | vm_jit::JitInstr::MatchSortedMapGetInt { .. }
                 | vm_jit::JitInstr::MatchSortedMapGetFloat { .. } => {
-                    telemetry.host_call_sites += 1;
+                    telemetry.runtime_helper_call_sites += 1;
                     telemetry.fused_map_match_helper_sites += 1;
                 }
                 vm_jit::JitInstr::CallNative { .. }
@@ -138,8 +138,8 @@ pub(super) fn record_native_compile_stats(
     native.stats.compiled_ir_instrs += jit_fn.code.len() as u64;
     native.stats.compiled_code_bytes += module.code_size_bytes(id).unwrap_or(0);
     native.stats.direct_list_bounds_check_sites += telemetry.direct_list_bounds_check_sites;
-    native.stats.memoized_host_call_sites += telemetry.memoized_host_call_sites;
-    native.stats.host_call_sites += telemetry.host_call_sites;
+    native.stats.memoized_runtime_helper_call_sites += telemetry.memoized_runtime_helper_call_sites;
+    native.stats.runtime_helper_call_sites += telemetry.runtime_helper_call_sites;
     native.stats.fused_map_match_helper_sites += telemetry.fused_map_match_helper_sites;
     native.stats.direct_list_store_load_forwarded_moves +=
         telemetry.direct_list_store_load_forwarded_moves;

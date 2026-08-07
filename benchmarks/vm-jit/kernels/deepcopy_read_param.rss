@@ -9,7 +9,7 @@
 // read-only-safe set), so elision fires; nothing routes `g` through an intrinsic,
 // a mut arg, an aggregate store, or a return.
 
-fn bench_size(default: Int) -> Int {
+fn bench_size(args: read List<String>, default: Int) -> Int {
     let raw = Arguments.get_or_default(args: read args, index: 0, default: String.from_int(value: default))
     match String.parse_int(value: raw) {
         Some(value) => {
@@ -59,7 +59,7 @@ fn build_list(n: Int) -> List<Int> {
 }
 
 fn main(args: read List<String>) -> Unit {
-    let limit = bench_size(default: 500000)
+    let limit = bench_size(args: read args, default: 500000)
     let bag = Bag(a: build_list(n: 256), b: build_list(n: 256), c: build_list(n: 256))
     let result = hot(g: bag, limit)
     Output.write(message: String.from_int(value: result))
