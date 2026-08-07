@@ -85,56 +85,6 @@ pub(super) struct WebSocketFrame {
     pub(super) payload: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
-pub(super) struct VmProcessOutput {
-    pub(super) status: i64,
-    pub(super) stdout: String,
-    pub(super) stderr: String,
-    pub(super) merged: String,
-    pub(super) truncated: bool,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub(super) struct VmProcessRequest {
-    pub(super) command: String,
-    pub(super) args: Vec<String>,
-    pub(super) cwd: Option<PathBuf>,
-    pub(super) stdin: Option<String>,
-    pub(super) env: Vec<(String, String)>,
-    /// Process deadline in ms; enforced by `process_run_request` (kills the child
-    /// past the deadline), matching the compiled runtime.
-    pub(super) timeout_ms: i64,
-    pub(super) merge_stderr: bool,
-    pub(super) output_cap_bytes: i64,
-}
-
-pub(super) fn process_output_value(output: VmProcessOutput) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("status".to_string(), VmValue::Int(output.status)),
-        ("stdout".to_string(), VmValue::string(output.stdout)),
-        ("stderr".to_string(), VmValue::string(output.stderr)),
-        ("merged".to_string(), VmValue::string(output.merged)),
-        ("truncated".to_string(), VmValue::Bool(output.truncated)),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::from("ProcessOutput"),
-        fields,
-    )))
-}
-
-pub(super) fn process_event_value(kind: &str, data: &str, status: i64) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("kind".to_string(), VmValue::string(kind)),
-        ("data".to_string(), VmValue::string(data)),
-        ("status".to_string(), VmValue::Int(status)),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::from("ProcessEvent"),
-        fields,
-    )))
-}
-
 pub(super) fn cancellation_source_value(id: i64) -> VmValue {
     cancellation_handle_value("CancellationSource", id)
 }

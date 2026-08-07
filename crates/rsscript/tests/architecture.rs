@@ -548,7 +548,6 @@ fn register_vm_test_domains_remain_separate_modules() {
     let source = read(&aggregator);
     let expected = [
         "intrinsic_registry",
-        "resource_boundary",
         "register_window",
         "closure_cache",
         "j1_profiling",
@@ -1588,6 +1587,32 @@ fn vm_core_does_not_embed_filesystem_intrinsics() {
             "VM core must not access the filesystem directly: {}",
             path.display()
         );
+    }
+}
+
+#[test]
+fn vm_core_does_not_embed_process_intrinsics() {
+    let root = workspace_root();
+    let catalog = read(&root.join("crates/rsscript/intrinsics.toml"));
+    assert!(!catalog.contains("{ id = \"Process"));
+    assert!(!catalog.contains("{ namespace = \"Process\""));
+
+    let vm_root = root.join("crates/rsscript/src/reg_vm");
+    for path in rust_files_below(&vm_root) {
+        if path
+            .components()
+            .any(|component| component.as_os_str() == "tests")
+        {
+            continue;
+        }
+        let source = read(&path);
+        for forbidden in ["std::process::Command", "RegIntrinsic::Process"] {
+            assert!(
+                !source.contains(forbidden),
+                "VM core must not execute child processes directly: {} contains `{forbidden}`",
+                path.display()
+            );
+        }
     }
 }
 

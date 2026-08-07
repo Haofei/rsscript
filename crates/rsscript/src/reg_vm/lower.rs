@@ -1702,18 +1702,6 @@ impl RegLowerer<'_> {
                             });
                             return Ok(dst);
                         }
-                        ("Process", "run_many_stdout_timeout") => {
-                            RegIntrinsic::ProcessRunManyStdoutTimeout
-                        }
-                        ("Process", "run_many_stdout_timeout_async") => {
-                            RegIntrinsic::ProcessRunManyStdoutTimeoutAsync
-                        }
-                        ("Process", "run_request_cancellable_async") => {
-                            RegIntrinsic::ProcessRunRequestCancellableAsync
-                        }
-                        ("Process", "run_stdout_timeout_async") => {
-                            RegIntrinsic::ProcessRunStdoutTimeoutAsync
-                        }
                         ("Pipeline", "filter") => {
                             if arg_regs.len() != 2 {
                                 return Err(EvalError::Runtime(format!(

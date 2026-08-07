@@ -2,7 +2,6 @@
 //! (channels, senders, files, HTTP requests, config handles, …). Split out of
 //! `reg_vm/mod.rs`; the VM core calls these via `use value_access::*`.
 
-use std::path::PathBuf;
 use std::rc::Rc;
 
 use crate::eval_types::EvalError;
@@ -207,94 +206,6 @@ pub(super) fn option_payload_value(value: &VmValue) -> Result<Option<VmValue>, E
             other.display()
         ))),
     }
-}
-
-pub(super) fn expect_process_request_ref(value: &VmValue) -> Result<VmProcessRequest, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name().as_ref() == "ProcessRequest" => {
-            let command = data.get("command").ok_or_else(|| {
-                EvalError::Runtime("ProcessRequest command is missing.".to_string())
-            })?;
-            let args = data.get("args").ok_or_else(|| {
-                EvalError::Runtime("ProcessRequest args are missing.".to_string())
-            })?;
-            let cwd = data
-                .get("cwd")
-                .map(option_payload_value)
-                .transpose()?
-                .flatten()
-                .map(|value| expect_string_ref(&value).map(PathBuf::from))
-                .transpose()?;
-            let stdin = data
-                .get("stdin")
-                .map(option_payload_value)
-                .transpose()?
-                .flatten()
-                .map(|value| expect_string_ref(&value).map(str::to_string))
-                .transpose()?;
-            let env = data
-                .get("env")
-                .map(expect_process_env_list_ref)
-                .transpose()?
-                .unwrap_or_default();
-            let timeout_ms = data
-                .get("timeout_ms")
-                .map(expect_int_ref)
-                .transpose()?
-                .unwrap_or(0);
-            let merge_stderr = data
-                .get("merge_stderr")
-                .map(expect_bool_ref)
-                .transpose()?
-                .unwrap_or(false);
-            let output_cap_bytes = data
-                .get("output_cap_bytes")
-                .map(expect_int_ref)
-                .transpose()?
-                .unwrap_or(0);
-            Ok(VmProcessRequest {
-                command: expect_string_ref(command)?.to_string(),
-                args: expect_string_list_ref(args)?,
-                cwd,
-                stdin,
-                env,
-                timeout_ms,
-                merge_stderr,
-                output_cap_bytes,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected ProcessRequest, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-pub(super) fn expect_process_env_list_ref(
-    value: &VmValue,
-) -> Result<Vec<(String, String)>, EvalError> {
-    let list = expect_list_ref(value)?;
-    list.borrow()
-        .iter()
-        .map(|value| match value {
-            VmValue::Struct(data) if data.name().as_ref() == "ProcessEnv" => {
-                let name = data
-                    .get("name")
-                    .ok_or_else(|| EvalError::Runtime("ProcessEnv name is missing.".to_string()))?;
-                let value = data.get("value").ok_or_else(|| {
-                    EvalError::Runtime("ProcessEnv value is missing.".to_string())
-                })?;
-                Ok((
-                    expect_string_ref(name)?.to_string(),
-                    expect_string_ref(value)?.to_string(),
-                ))
-            }
-            other => Err(EvalError::Runtime(format!(
-                "expected ProcessEnv, got `{}`.",
-                other.display()
-            ))),
-        })
-        .collect()
 }
 
 pub(super) fn expect_row_buffer_bytes_ref(value: &VmValue) -> Result<Vec<u8>, EvalError> {
