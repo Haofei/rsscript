@@ -1,9 +1,0 @@
-// expect: RS0004
-struct Image
-struct ImageError
-
-fn load(path: Path) -> Result<Image, ImageError>
-
-{
-    return Image()
-}

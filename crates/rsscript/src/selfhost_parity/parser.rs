@@ -959,6 +959,22 @@ fn parser_rejects_malformed_source_smoke() {
     compare_parse(oracle, actual, false).unwrap_or_else(|msg| panic!("{msg}"));
 }
 
+#[test]
+fn parser_rejects_retired_language_declarations() {
+    let cases = [
+        "features: local\nfn main() -> Unit { return Unit }\n",
+        "profile: trusted\nfn main() -> Unit { return Unit }\n",
+        "native fn Host.run() -> Unit\n",
+    ];
+    let exe = compile_parser().expect("rss parser should compile");
+    for source in cases {
+        let oracle = parse_oracle_error("retired-language-declaration.rss", source);
+        assert!(oracle.is_some(), "Rust parser unexpectedly accepted `{source}`");
+        let actual = run_parser(&exe, source).expect("rss parser should run");
+        assert!(actual.is_some(), "self-hosted parser accepted `{source}`");
+    }
+}
+
 /// Phase-2 gate (ignored by default): the rss parser's accept/reject matches the
 /// Rust parser over the whole `.rss` corpus.
 #[test]

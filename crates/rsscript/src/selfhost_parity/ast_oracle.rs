@@ -958,28 +958,6 @@ fn astdump_shared_body_pipe_closure_parity() {
     assert_eq!(actual, oracle);
 }
 
-/// The large self-hosted checker's driver is the largest single top-level
-/// function in the AST corpus. Keep a focused parity probe so renderer work can
-/// distinguish this one body from corpus-wide setup or scheduling cost.
-#[test]
-#[ignore]
-fn astdump_selfhost_checker_main_parity() {
-    let path = selfhost_dir().join("check.rss");
-    let full = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-    let main_start = full
-        .find("fn main() -> Unit {")
-        .expect("selfhost checker must retain its main declaration");
-    let source = format!("features: local\n{}", &full[main_start..]);
-    let oracle = ast_oracle_dump("selfhost/check-main.rss", &source);
-    let exe = compile_astdump().expect("rss astdump should compile");
-    let actual = run_astdump(&exe, &source).expect("rss astdump should run");
-    assert_eq!(
-        actual, oracle,
-        "AST dump mismatch for selfhost/check.rss main"
-    );
-}
-
 /// Phase-5 totality gate (ignored by default): the AST oracle renders every file
 /// in the corpus without panicking and deterministically. This proves the
 /// serializer is total over the real grammar — no unhandled node — which is the

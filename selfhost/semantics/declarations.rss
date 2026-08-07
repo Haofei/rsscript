@@ -17,7 +17,6 @@ fn collect_program_declaration_diagnostics(program: Program, diagnostics: mut Di
     collect_program_fresh_return_diagnostics(program, diagnostics: mut diagnostics)
     collect_program_resource_generic_diagnostics(program, diagnostics: mut diagnostics)
     collect_program_retains_diagnostics(program, diagnostics: mut diagnostics)
-    collect_program_removed_share_diagnostics(program, diagnostics: mut diagnostics)
     collect_program_lower_name_diagnostics(program, diagnostics: mut diagnostics)
     collect_program_duplicate_declaration_diagnostics(program, diagnostics: mut diagnostics)
     return Unit
@@ -403,34 +402,6 @@ fn collect_program_retains_diagnostics(program: Program, diagnostics: mut Diagno
         itemIndex = itemIndex + 1
     }
     return Unit
-}
-
-// RS0011: `share` is no longer a data effect.
-fn collect_program_removed_share_diagnostics(program: Program, diagnostics: mut DiagnosticBag) -> Unit {
-    let mut itemIndex = 0
-    while itemIndex < Program.len(self: program) {
-        let item = List.get<Item>(list: program.items, index: itemIndex)
-        if item.kind == ITEM_FUNCTION {
-            let mut paramIndex = 0
-            while paramIndex < List.len(list: item.params) {
-                let param = List.get<Param>(list: item.params, index: paramIndex)
-                if String.starts_with(value: param.typeText, prefix: "share") && param.typeLine > 0 {
-                    DiagnosticBag.add(self: mut diagnostics, code: "RS0011", line: param.typeLine, column: param.typeColumn, length: param.typeLength)
-                }
-                paramIndex = paramIndex + 1
-            }
-        }
-        itemIndex = itemIndex + 1
-    }
-    return Unit
-}
-
-fn is_valid_declaration_effect(name: String) -> Bool {
-    return name == "no_panic" || name == "noalloc" || name == "no_block" || name == "pure" || name == "unsafe" || name == "native" || name == "parallel"
-}
-
-fn is_removed_declaration_effect(name: String) -> Bool {
-    return name == "io" || name == "allocates" || name == "may_panic" || name == "may_fail" || name == "async" || name == "suspends"
 }
 
 // RS0005 uses the callable, type, and per-type-field namespaces preserved by

@@ -92,7 +92,7 @@ fn fn_name_start(toks: List<Tok>, i: Int) -> Int {
     }
     let mut mods = true
     while mods {
-        let isMod = at_ident(toks: toks, i: j, wid: WORD_PUB) || at_ident(toks: toks, i: j, wid: WORD_ASYNC) || at_ident(toks: toks, i: j, wid: WORD_NATIVE)
+        let isMod = at_ident(toks: toks, i: j, wid: WORD_PUB) || at_ident(toks: toks, i: j, wid: WORD_ASYNC)
         if isMod {
             j = j + 1
         } else {

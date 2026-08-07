@@ -404,33 +404,6 @@ fn checker_rs0003_structured_multiset_parity() {
 }
 
 
-#[test]
-fn checker_rs0004_retains_effect_is_not_unknown() {
-    let source = r#"fn retain(image: read Image) -> Unit
-{
-    return Unit
-}
-"#;
-    let oracle = checker_oracle_records("structured-rs0004-retains.rss", source, "RS0004");
-    assert!(
-        oracle.is_empty(),
-        "retains must not be an RS0004 effect item"
-    );
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0004",
-    );
-    assert_eq!(oracle, actual, "retains effect classification diverged");
-}
-
-
-
-
-
-
-
-
-
 
 
 #[test]
@@ -480,21 +453,6 @@ fn result_bad(value: read Result<Int, String>) -> Int {
 }
 
 
-
-#[test]
-fn checker_rs0011_structured_multiset_parity() {
-    let source = r#"fn old(first: share String, second: share List<Int>) -> Unit {
-    return Unit
-}
-"#;
-    let oracle = checker_oracle_records("structured-rs0011.rss", source, "RS0011");
-    assert_eq!(oracle.len(), 2, "fixture must exercise both share types");
-    let actual = diagnostic_records_for_code(
-        run_cached_checker_records(source).expect("rss checker should emit records"),
-        "RS0011",
-    );
-    assert_eq!(oracle, actual, "RS0011 structured diagnostics diverged");
-}
 
 #[test]
 fn checker_rs0028_structured_multiset_parity() {

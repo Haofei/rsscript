@@ -62,29 +62,13 @@ fn main(args: read List<String>) -> Unit {
         astDiagnosticIndex = astDiagnosticIndex + 1
     }
     let ntok = List.len(list: toks)
-    // Feature-header diagnostics: RS0016 (unknown feature), RS0017 (duplicate
-    // feature within a header), RS0006 (a second `features:` header).
-    let mut headerCount = 0
-    let mut hasUnknownFeat = false
-    let mut hasDupFeat = false
     // RS0002 (any fn missing an explicit return type) / RS0003 (any untyped param).
     let mut missingReturn = false
     let mut untypedParam = false
     let mut signatureDiagnostics = DiagnosticBag.empty()
-    // Signature-family diagnostics: RS0004 (unknown effect), RS0010 (removed
-    // profile), RS0011 (removed share data effect), RS0012 (removed runtime effect).
-    let mut hasProfile = false
-    let mut shareParam = false
-    let mut unknownEffect = false
-    let mut removedRuntime = false
     let mut retainsBad = false
     let mut unknownType = false
     let mut unknownTypeTokens = List<Int>.new()
-    let mut pureBad = false
-    let mut pureBadTokens = List<Int>.new()
-    // RS0020: a noalloc fn that calls a non-variant, non-noalloc function.
-    let mut noallocCall = false
-    let mut noallocCallTokens = List<Int>.new()
     // RS0029: any `await` in a non-async function.
     let mut badAwait = false
     let mut badAwaitTokens = List<Int>.new()
@@ -103,22 +87,12 @@ fn main(args: read List<String>) -> Unit {
     let mut nonExhaustiveTokens = List<Int>.new()
     // RS0035: an invalid `#lower_name` pin or a lowered-name collision.
     let mut lowerConflict = false
-    // RS0014/0018/0019: runtime-guarantee body violations.
-    let mut noallocAlloc = false
-    let mut noallocAllocSites = List<DiagnosticSite>.new()
-    let mut noBlockCall = false
-    let mut noBlockCallSites = List<DiagnosticSite>.new()
-    let mut noPanicCall = false
-    let mut noPanicCallSites = List<DiagnosticSite>.new()
     // RS0024: forward-reference-tolerant known-type set for the whole file.
     let declared = collect_declared_types(toks)
-    // RS0009: resource types, sum variants, and pure/all fn names.
+    // Current declaration facts used by resource, match, and async checks.
     let mut resources = Set<String>.new()
     let mut sumVariants = Set<String>.new()
-    let mut pureFns = Set<String>.new()
     let mut allFns = Set<String>.new()
-    let mut noBlockFns = Set<String>.new()
-    let mut noPanicFns = Set<String>.new()
     // RS0201: public unqualified fn names + dotted (method) fn names, for the
     // named-argument requirement.
     let mut pubFns = Set<String>.new()
@@ -128,10 +102,7 @@ fn main(args: read List<String>) -> Unit {
     let mut unnamedArgTokens = List<Int>.new()
     // Signature table (cross-function): same-file async fn names, for RS0022.
     let mut asyncFns = Set<String>.new()
-    let mut unsafeFns = Set<String>.new()
-    collect_rs0009(toks, resources: mut resources, sumVariants: mut sumVariants, pureFns: mut pureFns, allFns: mut allFns, noBlockFns: mut noBlockFns, noPanicFns: mut noPanicFns, asyncFns: mut asyncFns, unsafeFns: mut unsafeFns)
-    // RS0020: names of `` fns (allowed callees inside noalloc fns).
-    let noallocFns = collect_noalloc_fns(toks)
+    collect_current_decl_sets(toks, resources: mut resources, sumVariants: mut sumVariants, allFns: mut allFns, asyncFns: mut asyncFns)
     // RS0022: an unconsumed call to a same-file async fn.
     let mut asyncNotConsumedTokens = List<Int>.new()
     let mut asyncNotConsumed = collect_unconsumed_async_call_tokens(
@@ -285,17 +256,10 @@ fn main(args: read List<String>) -> Unit {
         } else {
             let cls = classify_top(toks: toks, i: i)
             let isPub = cls.isPub
-            let isFeatures = cls.isFeatures
-            let isProfile = cls.isProfile
             let isSum = cls.isSum
-            let isNativeMod = cls.isNativeMod
             let isTypeAlias = cls.isTypeAlias
             let isConst = cls.isConst
-            if isFeatures {
-                i = declaration_line_end(toks: toks, start: i)
-            } else if isProfile {
-                i = declaration_line_end(toks: toks, start: i)
-            } else if starts_type_decl(toks: toks, i: i, isPub: isPub) {
+            if starts_type_decl(toks: toks, i: i, isPub: isPub) {
                 let r = parse_type_decl(toks: toks, i: i)
                 if r < 0 {
                     running = false
@@ -328,13 +292,6 @@ fn main(args: read List<String>) -> Unit {
                 }
             } else if at_ident(toks: toks, i: i, wid: WORD_IMPL) {
                 let r = parse_impl_decl(toks: toks, i: i)
-                if r < 0 {
-                    running = false
-                } else {
-                    i = r
-                }
-            } else if isNativeMod {
-                let r = parse_native_module_decl(toks: toks, i: i)
                 if r < 0 {
                     running = false
                 } else {
@@ -376,8 +333,6 @@ fn main(args: read List<String>) -> Unit {
                     let ns = fn_name_start(toks, i)
                     let name = dotted_name_text(toks, i: ns)
                     if collect_fn_unknown_type_tokens(toks, start: i, declared, out: mut unknownTypeTokens) { unknownType = true }
-                    if collect_fn_pure_bad_tokens(toks, start: i, resources, sumVariants, pureFns, allFns, declared, out: mut pureBadTokens) { pureBad = true }
-                    if collect_fn_noalloc_call_tokens(toks, start: i, declared, sumVariants, noallocFns, out: mut noallocCallTokens) { noallocCall = true }
                     if collect_fn_nonexhaustive_match_tokens(toks, start: i, declared, allFns, astNonExhaustiveSites, out: mut nonExhaustiveTokens) { nonExhaustive = true }
                     if collect_fn_bad_await_tokens(toks, start: i, astAwaitSites, out: mut badAwaitTokens) { badAwait = true }
                     if collect_fn_invalid_try_tokens(toks, start: i, declared, allFns, out: mut invalidTryTokens) { invalidTry = true }
@@ -421,10 +376,6 @@ fn main(args: read List<String>) -> Unit {
                     if bit_set(mask: ccMask, bitval: 1) { closureCapture0801 = true }
                     if bit_set(mask: ccMask, bitval: 2) { closureCapture0804 = true }
                     if collect_fn_fd_surface_tokens(toks, start: i, out: mut fdSurfaceTokens) { fdSurface = true }
-                    // RS0014/0018/0019: runtime-guarantee body violations.
-                    if collect_fn_noalloc_alloc_sites(source, toks, start: i, declared, out: mut noallocAllocSites) { noallocAlloc = true }
-                    if collect_fn_guarantee_call_bad_sites(source, toks, start: i, effName: "no_block", allFns, guaranteeFns: noBlockFns, out: mut noBlockCallSites) { noBlockCall = true }
-                    if collect_fn_guarantee_call_bad_sites(source, toks, start: i, effName: "no_panic", allFns, guaranteeFns: noPanicFns, out: mut noPanicCallSites) { noPanicCall = true }
                     i = r
                 }
             } else {
@@ -448,18 +399,11 @@ fn main(args: read List<String>) -> Unit {
         || DiagnosticBag.has_code(self: callDiagnostics, code: "RS0202")
     missingReturn = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0002")
     untypedParam = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0003")
-    unknownEffect = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0004")
     let invalidSelf = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0028")
     retainsBad = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0007")
     variantArity = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0037")
     dupArg = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0205")
     let duplicateFound = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0005")
-    shareParam = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0011")
-    hasProfile = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0010")
-    hasUnknownFeat = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0016")
-    hasDupFeat = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0017")
-    headerCount = count_bag_code(diagnostics: signatureDiagnostics, code: "RS0006")
-    removedRuntime = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0012")
     let unknownProtocol = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0027")
     let invalidFreshRet = DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0603")
     let resourceGenericBad = tokenResourceGenericBad || DiagnosticBag.has_code(self: signatureDiagnostics, code: "RS0704")
@@ -472,16 +416,9 @@ fn main(args: read List<String>) -> Unit {
         let mut emitted = 0
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0002")
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0003")
-        emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0004")
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0005")
-        emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0006")
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0007")
-        emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0010")
-        emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0011")
-        emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0012")
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0015")
-        emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0016")
-        emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0017")
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0028")
         emitted = emitted + emit_diagnostic_records(code: "RS0033", toks, tokenIndices: outOfRangeIntTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS0039", toks, tokenIndices: cyclicAliasTokens)
@@ -496,9 +433,6 @@ fn main(args: read List<String>) -> Unit {
         emitted = emitted + emit_diagnostic_records(code: "RS0201", toks, tokenIndices: unnamedArgTokens)
         emitted = emitted + emit_bag_code(diagnostics: callDiagnostics, code: "RS0202")
         emitted = emitted + emit_diagnostic_sites(code: "RS0202", sites: missingDataEffectSites)
-        emitted = emitted + emit_diagnostic_sites(code: "RS0014", sites: noallocAllocSites)
-        emitted = emitted + emit_diagnostic_sites(code: "RS0018", sites: noBlockCallSites)
-        emitted = emitted + emit_diagnostic_sites(code: "RS0019", sites: noPanicCallSites)
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0027")
         emitted = emitted + emit_diagnostic_records(code: "RS0023", toks, tokenIndices: fdSurfaceTokens)
         emitted = emitted + emit_bag_code(diagnostics: typeDiagnostics, code: "RS0022")
@@ -509,9 +443,7 @@ fn main(args: read List<String>) -> Unit {
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0037")
         emitted = emitted + emit_bag_code(diagnostics: signatureDiagnostics, code: "RS0035")
         emitted = emitted + emit_diagnostic_records(code: "RS0024", toks, tokenIndices: unknownTypeTokens)
-        emitted = emitted + emit_diagnostic_records(code: "RS0009", toks, tokenIndices: pureBadTokens)
         emitted = emitted + emit_diagnostic_records(code: "RS0013", toks, tokenIndices: invalidTryTokens)
-        emitted = emitted + emit_diagnostic_records(code: "RS0020", toks, tokenIndices: noallocCallTokens)
         emitted = emitted + emit_bag_code(diagnostics: typeDiagnostics, code: "RS0021")
         emitted = emitted + emit_diagnostic_records(code: "RS0021", toks, tokenIndices: nonExhaustiveTokens)
         emitted = emitted + emit_bag_code(diagnostics: typeDiagnostics, code: "RS0032")
@@ -564,22 +496,10 @@ fn main(args: read List<String>) -> Unit {
     if untypedParam {
         Output.write(message: "RS0003")
     }
-    if unknownEffect {
-        Output.write(message: "RS0004")
-    }
     if duplicateFound {
         if !structured  {
             Output.write(message: "RS0005")
         }
-    }
-    if hasProfile {
-        Output.write(message: "RS0010")
-    }
-    if shareParam {
-        Output.write(message: "RS0011")
-    }
-    if removedRuntime {
-        Output.write(message: "RS0012")
     }
     if invalidSelf {
         if !structured {
@@ -590,9 +510,6 @@ fn main(args: read List<String>) -> Unit {
         if !structured  {
             Output.write(message: "RS0007")
         }
-    }
-    if pureBad && !structured  {
-        Output.write(message: "RS0009")
     }
     if nonExhaustive && !structured  {
         Output.write(message: "RS0021")
@@ -624,15 +541,6 @@ fn main(args: read List<String>) -> Unit {
     if unknownProtocol {
         Output.write(message: "RS0027")
     }
-    if noallocAlloc {
-        Output.write(message: "RS0014")
-    }
-    if noBlockCall {
-        Output.write(message: "RS0018")
-    }
-    if noPanicCall {
-        Output.write(message: "RS0019")
-    }
     if unknownType && !structured  {
         Output.write(message: "RS0024")
     }
@@ -649,15 +557,6 @@ fn main(args: read List<String>) -> Unit {
     }
     if cyclicAlias && !structured {
         Output.write(message: "RS0039")
-    }
-    if hasUnknownFeat {
-        Output.write(message: "RS0016")
-    }
-    if hasDupFeat {
-        Output.write(message: "RS0017")
-    }
-    if headerCount > 0 {
-        Output.write(message: "RS0006")
     }
     if resourceDerive {
         if structured {
@@ -690,9 +589,6 @@ fn main(args: read List<String>) -> Unit {
     }
     if dupArg {
         Output.write(message: "RS0205")
-    }
-    if noallocCall && !structured  {
-        Output.write(message: "RS0020")
     }
     if invalidWeak {
         Output.write(message: "RS0902")
@@ -808,7 +704,7 @@ fn main(args: read List<String>) -> Unit {
     if weakRead {
         Output.write(message: "RS0903")
     }
-    let anyDiag = duplicateFound || hasUnknownFeat || hasDupFeat || headerCount > 0 || missingReturn || untypedParam || hasProfile || shareParam || unknownEffect || removedRuntime || invalidSelf || outOfRangeInt || retainsBad || unknownType || pureBad || nonExhaustive || badAwait || invalidTry || unsupportedSyntax || fdSurface || lowerConflict || unknownProtocol || protocolImplBad || noallocAlloc || noBlockCall || noPanicCall || asyncNotConsumed || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || noallocCall || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || implicitConv || operatorOverload || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourceGenericBad || resourceEscape || noescapeEscape || localClosureEscape || missingTry || nonTransferPayload || takeHandle || weakInit || weakRead
+    let anyDiag = duplicateFound || missingReturn || untypedParam || invalidSelf || outOfRangeInt || retainsBad || unknownType || nonExhaustive || badAwait || invalidTry || unsupportedSyntax || fdSurface || lowerConflict || unknownProtocol || protocolImplBad || asyncNotConsumed || unnamedArg || missingDataEffect || resourceDerive || variantArity || uninferable || immutableAssign || dupArg || invalidWeak || ownStruct || localClass || resourceField || freshMut || invalidFreshRet || implicitConv || operatorOverload || retTypeMismatch || bindTypeMismatch || opTypeMismatch || cfTypeMismatch || deriveFieldBad || protocolBad || surfaceRef || assignTypeMismatch || indexAssignBad || manageNonLocal || takeNonLocal || managedToLocal || useAfterManage || retainedLocal || placeConflict0303 || placeConflict0305 || placeConflict0309 || placeConflict0302 || placeConflict0304 || freshReturnBad || closureCapture0801 || closureCapture0804 || captureContract || resourceGenericBad || resourceEscape || noescapeEscape || localClosureEscape || missingTry || nonTransferPayload || takeHandle || weakInit || weakRead
     if !anyDiag  {
         Output.write(message: "CLEAN")
     }

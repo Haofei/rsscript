@@ -1,8 +1,0 @@
-// expect: RS0009
-
-fn noisy(message: String) -> Unit
-
-{
-    Output.write(message)
-    return Unit
-}

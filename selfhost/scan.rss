@@ -4,8 +4,7 @@
 // the self-hosted lexer, parser, and checker. The test harness
 // (selfhost_parity.rs) compiles this file and each tool as separate VM sources;
 // tools import it with `use selfhost.scan.*`.
-// This file declares `features: local` for its own tokenizer helpers; tool files
-// that use local-only constructs declare their own feature header.
+// Tool sources use the same platform-neutral syntax as user programs.
 //
 // Contents:
 //   * the unified `Tok` struct (carries kind, val, line, col, and identifier/
@@ -119,15 +118,15 @@ const WORD_DEVICE: Int = 28
 const WORD_FFI: Int = 29
 const WORD_REFLECTION: Int = 30
 
-// The 30 reserved keywords (crate::lexer::KEYWORDS). Contextual words
-// (await, native) and builtin constants (true false Ok Err Some None Unit)
+// Reserved keywords (crate::lexer::KEYWORDS). Contextual words and builtin
+// constants (true false Ok Err Some None Unit)
 // are NOT here — they lex as Ident.
 fn is_kw(word: String) -> Bool {
     return word == "if" || word == "else" || word == "for" || word == "in"
         || word == "match" || word == "loop" || word == "while" || word == "break"
-        || word == "continue" || word == "return" || word == "features" || word == "class"
+        || word == "continue" || word == "return" || word == "class"
         || word == "struct" || word == "resource" || word == "handle" || word == "fn"
-        || word == "let" || word == "pub" || word == "async" || word == "effects"
+        || word == "let" || word == "pub" || word == "async"
         || word == "drop" || word == "with" || word == "as" || word == "read"
         || word == "mut" || word == "take" || word == "fresh" || word == "manage"
         || word == "weak" || word == "local"
@@ -438,25 +437,20 @@ fn word_id(word: String) -> Int {
     if word == "sum" { return WORD_SUM }
     if word == "protocol" { return WORD_PROTOCOL }
     if word == "impl" { return WORD_IMPL }
-    if word == "native" { return WORD_NATIVE }
     if word == "module" { return WORD_MODULE }
     if word == "type" { return WORD_TYPE }
     if word == "const" { return WORD_CONST }
     if word == "pub" { return WORD_PUB }
     if word == "async" { return WORD_ASYNC }
     if word == "use" { return WORD_USE }
-    if word == "profile" { return WORD_PROFILE }
-    if word == "features" { return WORD_FEATURES }
     if word == "for" { return WORD_FOR }
     if word == "deprecated" { return WORD_DEPRECATED }
     if word == "lower_name" { return WORD_LOWER_NAME }
     if word == "derives" { return WORD_DERIVES }
-    if word == "effects" { return WORD_EFFECTS }
     if word == "fresh" { return WORD_FRESH }
     if word == "_" { return WORD_UNDERSCORE }
     if word == "as" { return WORD_AS }
     if word == "local" { return WORD_LOCAL }
-    if word == "unsafe" { return WORD_UNSAFE }
     if word == "device" { return WORD_DEVICE }
     if word == "ffi" { return WORD_FFI }
     if word == "reflection" { return WORD_REFLECTION }
@@ -776,14 +770,14 @@ fn starts_top_level_item(toks: List<Tok>, index: Int) -> Bool {
         return false
     }
     // Attributes begin a declaration even though `#` is a symbol. In
-    // particular, a body-less native function may be followed immediately by
+    // particular, a body-less interface function may be followed immediately by
     // `#lower_name(...) fn ...`; signature scanning must stop before it.
     if at_symbol(toks, i: index, code: SYM_HASH) {
         return true
     }
     if is_ident_tok(toks, i: index) == false { return false }
     let v = tk_val(toks, i: index)
-    return v == WORD_FEATURES || v == WORD_PROFILE || v == WORD_CLASS || v == WORD_STRUCT || v == WORD_RESOURCE || v == WORD_FN || v == WORD_PUB || v == WORD_ASYNC || v == WORD_NATIVE || v == WORD_PROTOCOL || v == WORD_IMPL
+    return v == WORD_CLASS || v == WORD_STRUCT || v == WORD_RESOURCE || v == WORD_FN || v == WORD_PUB || v == WORD_ASYNC || v == WORD_PROTOCOL || v == WORD_IMPL
 }
 
 fn function_signature_end(toks: List<Tok>, start: Int) -> Int {
@@ -858,7 +852,7 @@ fn function_decl_name_start(toks: List<Tok>, i: Int) -> Int {
     }
     let mut modifiers = true
     while modifiers {
-        if at_ident(toks, i: j, wid: WORD_PUB) || at_ident(toks, i: j, wid: WORD_ASYNC) || at_ident(toks, i: j, wid: WORD_NATIVE) {
+        if at_ident(toks, i: j, wid: WORD_PUB) || at_ident(toks, i: j, wid: WORD_ASYNC) {
             j = j + 1
         } else {
             modifiers = false
@@ -1178,10 +1172,10 @@ fn parse_function_decl(toks: List<Tok>, i: Int) -> Int {
             attrs = false
         }
     }
-    // Modifiers: pub / async / native.
+    // Modifiers: pub / async.
     let mut mods = true
     while mods {
-        let isMod = at_ident(toks, i: j, wid: WORD_PUB) || at_ident(toks, i: j, wid: WORD_ASYNC) || at_ident(toks, i: j, wid: WORD_NATIVE)
+        let isMod = at_ident(toks, i: j, wid: WORD_PUB) || at_ident(toks, i: j, wid: WORD_ASYNC)
         if isMod {
             j = j + 1
         } else {
@@ -1301,7 +1295,7 @@ fn starts_type_decl(toks: List<Tok>, i: Int, isPub: Bool) -> Bool {
 }
 
 fn starts_fn_like(toks: List<Tok>, i: Int, isPub: Bool) -> Bool {
-    return isPub || at_ident(toks, i, wid: WORD_ASYNC) || at_ident(toks, i, wid: WORD_NATIVE) || at_ident(toks, i, wid: WORD_FN) || at_symbol(toks, i, code: SYM_HASH)
+    return isPub || at_ident(toks, i, wid: WORD_ASYNC) || at_ident(toks, i, wid: WORD_FN) || at_symbol(toks, i, code: SYM_HASH)
 }
 
 // Top-level declaration classification shared by the parser and the checker

@@ -1911,3 +1911,32 @@ fn workspace_analysis_does_not_flow_through_optional_review() {
         "review output must not be the constructor for neutral package analysis"
     );
 }
+
+#[test]
+fn selfhost_frontend_does_not_restore_retired_language_contracts() {
+    let root = workspace_root();
+    let checker = read(&root.join("selfhost/check.rss"));
+    for retired_code in [
+        "RS0004", "RS0006", "RS0009", "RS0010", "RS0011", "RS0012", "RS0014", "RS0016", "RS0017",
+        "RS0018", "RS0019", "RS0020", "RS0101",
+    ] {
+        assert!(
+            !checker.contains(retired_code),
+            "self-hosted checker must not emit retired diagnostic `{retired_code}`"
+        );
+    }
+
+    let scanner = read(&root.join("selfhost/scan.rss"));
+    for retired_mapping in [
+        "word == \"features\"",
+        "word == \"profile\"",
+        "word == \"native\"",
+        "word == \"effects\"",
+        "word == \"unsafe\"",
+    ] {
+        assert!(
+            !scanner.contains(retired_mapping),
+            "self-hosted scanner must not restore retired keyword mapping `{retired_mapping}`"
+        );
+    }
+}

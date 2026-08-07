@@ -3489,9 +3489,8 @@ fn collect_fn_pure_bad_tokens(toks: List<Tok>, start: Int, resources: Set<String
     return bad
 }
 
-// Pre-pass filling RS0009 lookup sets: user resource type names, sum variant
-// names, pure fn (simple) names, and all fn (simple) names.
-fn collect_rs0009(toks: List<Tok>, resources: mut Set<String>, sumVariants: mut Set<String>, pureFns: mut Set<String>, allFns: mut Set<String>, noBlockFns: mut Set<String>, noPanicFns: mut Set<String>, asyncFns: mut Set<String>, unsafeFns: mut Set<String>) -> Unit {
+// Collect the declaration facts used by current resource, match, and async checks.
+fn collect_current_decl_sets(toks: List<Tok>, resources: mut Set<String>, sumVariants: mut Set<String>, allFns: mut Set<String>, asyncFns: mut Set<String>) -> Unit {
     let ntok = List.len(list: toks)
     let mut i = 0
     let mut running = true
@@ -3503,11 +3502,7 @@ fn collect_rs0009(toks: List<Tok>, resources: mut Set<String>, sumVariants: mut 
         } else {
             let cls = classify_top(toks: toks, i: i)
             let isPub = cls.isPub
-            if cls.isFeatures {
-                i = declaration_line_end(toks: toks, start: i)
-            } else if cls.isProfile {
-                i = declaration_line_end(toks: toks, start: i)
-            } else if starts_type_decl(toks: toks, i: i, isPub: isPub) {
+            if starts_type_decl(toks: toks, i: i, isPub: isPub) {
                 let r = parse_type_decl(toks: toks, i: i)
                 if r < 0 {
                     running = false
@@ -3546,9 +3541,6 @@ fn collect_rs0009(toks: List<Tok>, resources: mut Set<String>, sumVariants: mut 
             } else if at_ident(toks: toks, i: i, wid: WORD_IMPL) {
                 let r = parse_impl_decl(toks: toks, i: i)
                 if r < 0 { running = false } else { i = r }
-            } else if cls.isNativeMod {
-                let r = parse_native_module_decl(toks: toks, i: i)
-                if r < 0 { running = false } else { i = r }
             } else if cls.isTypeAlias {
                 let r = parse_type_alias_decl(toks: toks, i: i)
                 if r < 0 { running = false } else { i = r }
@@ -3571,21 +3563,9 @@ fn collect_rs0009(toks: List<Tok>, resources: mut Set<String>, sumVariants: mut 
                     if fn_is_async(toks, start: i) {
                         Set.insert<String>(set: mut asyncFns, value: fullName)
                     }
-                    if fn_has_named_effect(toks, start: i, effName: "unsafe") {
-                        Set.insert<String>(set: mut unsafeFns, value: fullName)
-                    }
                     if at_symbol(toks: toks, i: (nameIdx + 1), code: SYM_DOT) == false {
                         let fname = tk_text(toks, i: nameIdx)
                         Set.insert<String>(set: mut allFns, value: fname)
-                        if fn_is_pure(toks, start: i) {
-                            Set.insert<String>(set: mut pureFns, value: fname)
-                        }
-                        if fn_has_named_effect(toks, start: i, effName: "no_block") {
-                            Set.insert<String>(set: mut noBlockFns, value: fname)
-                        }
-                        if fn_has_named_effect(toks, start: i, effName: "no_panic") {
-                            Set.insert<String>(set: mut noPanicFns, value: fname)
-                        }
                     }
                     i = r
                 }

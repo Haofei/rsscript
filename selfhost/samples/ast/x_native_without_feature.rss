@@ -1,6 +1,0 @@
-// expect: RS0101
-fn Host.emit(message: String) -> Unit
-
-{
-    return Unit
-}

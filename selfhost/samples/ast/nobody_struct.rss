@@ -1,4 +1,3 @@
-// expect: RS0004
 struct Picture
 struct PictureError
 

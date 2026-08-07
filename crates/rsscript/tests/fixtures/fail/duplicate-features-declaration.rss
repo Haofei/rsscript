@@ -1,5 +1,0 @@
-// expect: RS0006
-
-fn duplicate_features() -> Unit {
-    return Unit
-}

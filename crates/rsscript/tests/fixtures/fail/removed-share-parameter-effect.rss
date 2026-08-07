@@ -1,9 +1,0 @@
-// expect: RS0011
-
-struct Image {
-    pixels: Buffer
-}
-
-fn cache_put(value: share Image) -> Unit {
-    return Unit
-}

@@ -2468,7 +2468,7 @@ fn has_self_generic(toks: List<Tok>, i: Int) -> Bool {
 
 fn emit_function(out: mut StringBuilder, program: Program, toks: List<Tok>, start: Int, d: Int, protoName: String) -> Int {
     let mut j = start
-    // Attributes: #deprecated("...") / #lower_name("...")  (before pub/async/native).
+    // Attributes: #deprecated("...") / #lower_name("...")  (before pub/async).
     let mut depReason = ""
     let mut haveDep = false
     let mut lowerName = ""
@@ -2525,9 +2525,8 @@ fn emit_function(out: mut StringBuilder, program: Program, toks: List<Tok>, star
     let sigEnd = function_signature_end(toks: toks, start: (pclose + 1))
     let mut bodyOpen = -1
     if at_symbol(toks: toks, i: sigEnd, code: SYM_LBRACE) { bodyOpen = sigEnd }
-    // A body exists iff sigEnd lands on `{` — including native fns, whose body may
-    // sit on a line after the `` clause (parse_function_decl treats
-    // it as a normal body; the earlier same_stmt_line guard wrongly dropped it).
+    // A body exists iff sigEnd lands on `{`, including when the opening brace is
+    // placed on the following line.
     let mut hasBody = bodyOpen >= 0
     let defaultImpl = has_default_impl(toks, start: (pclose + 1), end: sigEnd)
     // A `fresh` anywhere in the return-type region (e.g. `-> Result<fresh String, E>`)
@@ -3702,10 +3701,6 @@ fn main(args: read List<String>) -> Unit {
     let program = parse_program_headers(toks: toks)
     let ntok = List.len(list: toks)
     emit(out: mut out, depth: 0, s: "program")
-    // Section 1: features are dumped FIRST regardless of source position (the
-    // oracle emits by struct-field order, not source order), so a pre-pass emits
-    // every `feature <name>` before any item; the item pass then skips headers.
-    emit_shared_features(out: mut out, program)
     let mut i = 0
     let mut malDecl = 0
     let mut unknownTop = 0
@@ -3719,15 +3714,7 @@ fn main(args: read List<String>) -> Unit {
             i = i + 1
         } else {
             let cls = classify_top(toks: toks, i: i)
-            if cls.isFeatures {
-                // Already emitted in the pre-pass; skip the header line.
-                i = declaration_line_end(toks: toks, start: (i + 2))
-            } else if cls.isProfile {
-                // `profile …` is no longer a recognized top-level item → the oracle
-                // records it as unknown-top-level (section 5).
-                unknownTop = unknownTop + 1
-                i = declaration_line_end(toks: toks, start: i)
-            } else if starts_type_decl(toks: toks, i: i, isPub: cls.isPub) {
+            if starts_type_decl(toks: toks, i: i, isPub: cls.isPub) {
                 // A struct/class/resource with no name (`struct {`) fails to parse →
                 // program-level malformed-declaration.
                 if type_decl_malformed(toks, start: i) {
@@ -3750,9 +3737,8 @@ fn main(args: read List<String>) -> Unit {
                 // Protocol methods become top-level functions emitted in source order;
                 // the `protocol <name>` line is emitted later (protocols section).
                 i = advance(toks, i, r: emit_protocol(out: mut out, program, toks, start: i, d: 1))
-            } else if at_ident(toks: toks, i: i, wid: WORD_IMPL) || cls.isNativeMod {
-                // impls emit in the protocol-impls section (later pass); native-modules
-                // remain deferred — skip in source order to keep the stream valid.
+            } else if at_ident(toks: toks, i: i, wid: WORD_IMPL) {
+                // Implementations emit in the protocol-impls section later.
                 i = advance(toks, i, r: next_decl_skip(toks, start: i))
             } else if starts_fn_like(toks: toks, i: i, isPub: cls.isPub) {
                 // A fn whose name won't parse (`fn (…)`) is a program-level malformed
@@ -3774,9 +3760,7 @@ fn main(args: read List<String>) -> Unit {
     // Sections 3 & 4: protocol names, then protocol-impls (after all items).
     emit_protocols_pass(out: mut out, program)
     emit_impls_pass(out: mut out, program)
-    // Section 5, in ast_oracle_dump order: unknown-feature, duplicate-feature (both
-    // in emit_feature_diags), then unknown-top-level, then malformed-declaration.
-    emit_feature_diags(out: mut out, toks, ntok)
+    // Section 5: unknown top-level input, then malformed declarations.
     emit_repeat(out: mut out, marker: "unknown-top-level", n: unknownTop, d: 1)
     emit_repeat(out: mut out, marker: "malformed-declaration", n: malDecl, d: 1)
     let rendered = StringBuilder.finish(builder: take out)
@@ -3885,13 +3869,12 @@ fn type_decl_malformed(toks: List<Tok>, start: Int) -> Bool {
 }
 
 // Position of the function name (just past `fn`) after skipping #attrs and
-// pub/async/native, or -1 if this isn't a fn-like head.
+// pub/async, or -1 if this isn't a fn-like head.
 fn fn_name_start(toks: List<Tok>, start: Int) -> Int {
     let mut j = start
     while at_symbol(toks: toks, i: j, code: SYM_HASH) { j = j + 5 }
     if is_kw_text(toks, i: j, word: "pub") { j = j + 1 }
     if is_kw_text(toks, i: j, word: "async") { j = j + 1 }
-    if is_kw_text(toks, i: j, word: "native") { j = j + 1 }
     if is_kw_text(toks, i: j, word: "fn") == false { return -1 }
     return j + 1
 }
@@ -3919,89 +3902,10 @@ fn fn_malformed(toks: List<Tok>, start: Int) -> Bool {
     return false
 }
 
-// True if token i begins a top-level `features:` header (depth checked by caller).
-fn is_features_header(toks: List<Tok>, i: Int) -> Bool {
-    return is_kw_text(toks, i, word: "features") && at_symbol(toks: toks, i: (i + 1), code: SYM_COLON)
-}
-
-// Section 1 pre-pass: emit `feature <name>` for every known feature across all
-// top-level `features:` headers, in source order.
-fn is_known_feature_name(name: String) -> Bool {
-    return name == "local" || name == "native" || name == "unsafe" || name == "async" || name == "device" || name == "ffi" || name == "reflection"
-}
-
-fn emit_shared_features(out: mut StringBuilder, program: Program) -> Unit {
-    return Unit
-}
-
-// True if a known-feature token with the same text as token k appears earlier in
-// the same header [hStart, k) (per-header duplicate, mirroring parse_features).
-fn feat_dup_before(toks: List<Tok>, hStart: Int, k: Int) -> Bool {
-    let target = tk_text(toks, i: k)
-    let mut m = hStart
-    while m < k {
-        if is_feature_word(toks, i: m) && tk_text(toks, i: m) == target {
-            return true
-        }
-        m = m + 1
-    }
-    return false
-}
-
-// Section 5 post-pass: unknown-feature markers (all headers) then duplicate-feature
-// markers (all headers), matching ast_oracle_dump.
-fn emit_feature_diags(out: mut StringBuilder, toks: List<Tok>, ntok: Int) -> Unit {
-    let mut depth = 0
-    let mut i = 0
-    while i < ntok {
-        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) {
-            depth = depth + 1
-        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACE) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) {
-            if depth > 0 { depth = depth - 1 }
-        } else if depth == 0 && is_features_header(toks, i) {
-            let fend = declaration_line_end(toks: toks, start: (i + 2))
-            let mut k = i + 2
-            while k < fend {
-                if at_symbol(toks: toks, i: k, code: SYM_COMMA) == false && tk_kind(toks: toks, i: k) != TOK_EOF && is_feature_word(toks, i: k) == false {
-                    emit(out: mut out, depth: 1, s: String.concat(left: "unknown-feature ", right: escape(s: tk_text(toks, i: k))))
-                }
-                k = k + 1
-            }
-        }
-        i = i + 1
-    }
-    depth = 0
-    i = 0
-    while i < ntok {
-        if at_symbol(toks: toks, i: i, code: SYM_LPAREN) || at_symbol(toks: toks, i: i, code: SYM_LBRACE) || at_symbol(toks: toks, i: i, code: SYM_LBRACKET) {
-            depth = depth + 1
-        } else if at_symbol(toks: toks, i: i, code: SYM_RPAREN) || at_symbol(toks: toks, i: i, code: SYM_RBRACE) || at_symbol(toks: toks, i: i, code: SYM_RBRACKET) {
-            if depth > 0 { depth = depth - 1 }
-        } else if depth == 0 && is_features_header(toks, i) {
-            let fend = declaration_line_end(toks: toks, start: (i + 2))
-            let mut k = i + 2
-            while k < fend {
-                if is_feature_word(toks, i: k) && feat_dup_before(toks, hStart: (i + 2), k) {
-                    emit(out: mut out, depth: 1, s: String.concat(left: "duplicate-feature ", right: tk_text(toks, i: k)))
-                }
-                k = k + 1
-            }
-        }
-        i = i + 1
-    }
-    return Unit
-}
-
 // Progress guard: never let the driver stall on a decl that returned <= i.
 fn advance(toks: List<Tok>, i: Int, r: Int) -> Int {
     if r > i { return r }
     return i + 1
-}
-
-fn is_feature_word(toks: List<Tok>, i: Int) -> Bool {
-    if is_ident_tok(toks: toks, i: i) == false { return false }
-    let v = tk_val(toks: toks, i: i)
-    return v == WORD_LOCAL || v == WORD_NATIVE || v == WORD_UNSAFE || v == WORD_ASYNC || v == WORD_DEVICE || v == WORD_FFI || v == WORD_REFLECTION
 }
 
 // Skip an unsupported top-level item: to its block end if it has one, else its line end.

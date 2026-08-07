@@ -573,7 +573,7 @@ fn fn_return_range(toks: List<Tok>, start: Int) -> RetRange {
 // A token that begins a top-level declaration — used to bound a body-less fn
 // signature's return type (which ends at the next decl, not a `{`).
 fn is_decl_start_kw(toks: List<Tok>, i: Int) -> Bool {
-    return is_kw_text(toks, i, word: "fn") || is_kw_text(toks, i, word: "pub") || is_kw_text(toks, i, word: "struct") || is_kw_text(toks, i, word: "class") || is_kw_text(toks, i, word: "resource") || is_kw_text(toks, i, word: "const") || is_kw_text(toks, i, word: "module") || is_kw_text(toks, i, word: "use") || is_kw_text(toks, i, word: "protocol") || is_kw_text(toks, i, word: "impl") || is_kw_text(toks, i, word: "native") || is_kw_text(toks, i, word: "opaque") || is_kw_text(toks, i, word: "async") || is_kw_text(toks, i, word: "features")
+    return is_kw_text(toks, i, word: "fn") || is_kw_text(toks, i, word: "pub") || is_kw_text(toks, i, word: "struct") || is_kw_text(toks, i, word: "class") || is_kw_text(toks, i, word: "resource") || is_kw_text(toks, i, word: "const") || is_kw_text(toks, i, word: "module") || is_kw_text(toks, i, word: "use") || is_kw_text(toks, i, word: "protocol") || is_kw_text(toks, i, word: "impl") || is_kw_text(toks, i, word: "opaque") || is_kw_text(toks, i, word: "async")
 }
 
 // (declared_fn_return / declared_qualified_return were replaced by the O(1)

@@ -31,20 +31,11 @@ fn run_package_contract_checker(
     interface_source: &str,
     source: &str,
 ) -> Result<Vec<String>, String> {
-    run_package_contract_checker_with_native(exe, interface_source, source, "")
-}
-
-fn run_package_contract_checker_with_native(
-    exe: &RegVmExecutable,
-    interface_source: &str,
-    source: &str,
-    external_bindings: &str,
-) -> Result<Vec<String>, String> {
     let output = exe
         .eval_main_with_args([
             interface_source.to_string(),
             source.to_string(),
-            external_bindings.to_string(),
+            String::new(),
         ])
         .map_err(|e| format!("rss package contract checker failed to run: {e:?}"))?;
     parse_package_contract_output(&output.stdout)
@@ -84,32 +75,9 @@ fn write_package_contract_fixture(
 }
 
 fn package_contract_oracle_codes(interface_source: &str, source: &str) -> Vec<String> {
-    package_contract_oracle_codes_with_native(interface_source, source, &[])
-}
-
-fn package_contract_oracle_codes_with_native(
-    interface_source: &str,
-    source: &str,
-    external_bindings: &[(&str, &str)],
-) -> Vec<String> {
     let dir = selfhost_unique_temp_dir("rss-selfhost-package-contract");
     write_package_contract_fixture(&dir, interface_source, source)
         .expect("package contract fixture should be writable");
-    if !external_bindings.is_empty() {
-        std::fs::create_dir_all(dir.join("native"))
-            .expect("native binding directory should be writable");
-        let mut manifest = String::from("schema = \"rsscript.bindings.v1\"\n");
-        for (symbol, target) in external_bindings {
-            let (provider, entry) = target
-                .split_once("::")
-                .expect("test external binding target should contain `::`");
-            manifest.push_str(&format!(
-                "\n[[function]]\nsymbol = \"{symbol}\"\nprovider = \"{provider}\"\nentry = \"{entry}\"\n"
-            ));
-        }
-        std::fs::write(dir.join("native/bindings.rssbind.toml"), manifest)
-            .expect("native binding manifest should be writable");
-    }
     let review = review_package_dir(&dir).expect("package review should succeed");
     let _ = std::fs::remove_dir_all(&dir);
     let mut codes = review
@@ -189,7 +157,7 @@ fn package_contract_function_rs1301_parity_smoke() {
         ),
         (
             "signature mismatch",
-            "pub fn render(body: read String) -> fresh String\n    effects(no_panic)\n",
+            "pub fn render(body: read String) -> fresh String\n",
             "pub fn render(body: read String) -> String {\n    return body\n}\n",
         ),
     ];
@@ -274,20 +242,6 @@ fn package_contract_declaration_rs1301_parity() {
             "package declaration contract parity diverged for {name}"
         );
     }
-}
-
-#[test]
-fn package_contract_native_function_exemption_parity() {
-    let interface_source = "features: native\n\nnative fn Native.echo(message: read String) -> String\n    effects(native)\n";
-    let source = "fn helper() -> Unit {\n    return Unit\n}\n";
-    let external_bindings = [("Native.echo", "rss_native::echo")];
-    let oracle =
-        package_contract_oracle_codes_with_native(interface_source, source, &external_bindings);
-    let exe = compile_package_contract_checker().expect("rss package checker should compile");
-    let actual =
-        run_package_contract_checker_with_native(&exe, interface_source, source, "Native.echo")
-            .expect("rss package contract checker should run");
-    assert_eq!(oracle, actual, "native interface exemption diverged");
 }
 
 #[test]

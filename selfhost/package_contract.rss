@@ -1,7 +1,7 @@
 // Self-hosted package-contract checker — RS1301 frontier.
 //
 // Reads interface source as argv[0], package source as argv[1], and an optional
-// comma-separated native-binding symbol list as argv[2]. Emits RS1301 when the
+// comma-separated external-binding symbol list as argv[2]. Emits RS1301 when the
 // interface and source package contracts differ; otherwise emits CLEAN.
 //
 // This is intentionally separate from check.rss: RS1301 is package-level, not a
@@ -81,7 +81,7 @@ fn comma_list_contains(values: String, wanted: String) -> Bool {
     return false
 }
 
-fn has_function_contract_mismatch(interfaceProgram: Program, sourceProgram: Program, nativeBindings: String) -> Bool {
+fn has_function_contract_mismatch(interfaceProgram: Program, sourceProgram: Program, externalBindings: String) -> Bool {
     let interfaceFns = collect_package_functions(program: interfaceProgram, sourceVisibility: false)
     let sourceFns = collect_package_functions(program: sourceProgram, sourceVisibility: true)
     let n = List.len(list: interfaceFns.names)
@@ -93,7 +93,7 @@ fn has_function_contract_mismatch(interfaceProgram: Program, sourceProgram: Prog
         let got = Map.get_or_default<String, String>(map: sourceFns.sigs, key: name, default: "")
         if got == "" {
             let externalExempt = Set.contains<String>(set: interfaceFns.externalNames, value: name)
-            if !externalExempt  || comma_list_contains(values: nativeBindings, wanted: name) == false {
+            if !externalExempt  || comma_list_contains(values: externalBindings, wanted: name) == false {
                 mismatch = true
             }
         } else if got != want {
@@ -266,12 +266,12 @@ fn has_declaration_contract_mismatch(interfaceProgram: Program, sourceProgram: P
 fn main(args: read List<String>) -> Unit {
     let interfaceSource = Arguments.get_or_default(args: read args, index: 0, default: "")
     let source = Arguments.get_or_default(args: read args, index: 1, default: "")
-    let nativeBindings = Arguments.get_or_default(args: read args, index: 2, default: "")
+    let externalBindings = Arguments.get_or_default(args: read args, index: 2, default: "")
     let interfaceTokens = tokenize(source: interfaceSource)
     let sourceTokens = tokenize(source: source)
     let interfaceProgram = parse_program(toks: interfaceTokens)
     let sourceProgram = parse_program(toks: sourceTokens)
-    let fnMismatch = has_function_contract_mismatch(interfaceProgram, sourceProgram, nativeBindings)
+    let fnMismatch = has_function_contract_mismatch(interfaceProgram, sourceProgram, externalBindings)
     let declMismatch = has_declaration_contract_mismatch(interfaceProgram, sourceProgram)
     if fnMismatch || declMismatch {
         Output.write(message: "RS1301")

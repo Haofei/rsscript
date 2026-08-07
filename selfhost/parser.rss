@@ -5,17 +5,16 @@
 //   ERR <line> <col> — first syntax error position
 //
 // Oracle: crate::syntax::parse_source_raw (see selfhost_parity.rs). That parser
-// is LENIENT: it only rejects on four span vectors — unknown_top_level_spans,
-// malformed_declaration_spans, unknown_features, duplicate_features. Function
-// and type BODIES are never validated for these; acceptance turns on top-level
+// is intentionally declaration-oriented. Function and type bodies are not
+// validated here; acceptance turns on top-level
 // dispatch, declaration-name presence, and balanced ()/{}/<>. This recognizer
 // replicates crate::syntax::parser::mod.rs::parse_program and the None-conditions
 // of each declaration parser faithfully; it recognize-and-skips statement,
 // expression and pattern interiors (they cannot produce an oracle rejection).
 //
 // The tokenizer, token accessors, declaration parsers and dispatch predicates
-// live in selfhost/scan.rss. Only the parser-unique column accessor,
-// feature-line predicates, and the driver remain here.
+// live in selfhost/scan.rss. Only the parser-unique column accessor and the
+// driver remain here.
 //
 // rss constraints honored (ledger SH-016/SH-017/SH-018): char literals for
 // code-point tests, `||` chains wrapped via operator continuation (both in the
@@ -30,33 +29,6 @@ fn tk_col(toks: List<Tok>, i: Int) -> Int {
     if i >= List.len(list: toks) { return 0 }
     let t = List.get(list: toks, index: i)
     return t.col
-}
-
-// ---------------------------------------------------------------------------
-// Feature-line predicates.
-// ---------------------------------------------------------------------------
-
-fn is_feature_tok(toks: List<Tok>, i: Int) -> Bool {
-    if is_ident_tok(toks: toks, i: i) == false {
-        return false
-    }
-    let v = tk_val(toks: toks, i: i)
-    return v == WORD_LOCAL || v == WORD_NATIVE || v == WORD_UNSAFE || v == WORD_ASYNC || v == WORD_DEVICE || v == WORD_FFI || v == WORD_REFLECTION
-}
-
-fn feature_dup(toks: List<Tok>, fstart: Int, k: Int) -> Bool {
-    let wk = tk_val(toks: toks, i: k)
-    let mut j = fstart
-    let mut found = false
-    while j < k {
-        if is_feature_tok(toks, i: j) {
-            if tk_val(toks: toks, i: j) == wk {
-                found = true
-            }
-        }
-        j = j + 1
-    }
-    return found
 }
 
 // ---------------------------------------------------------------------------
@@ -79,44 +51,10 @@ fn main(args: read List<String>) -> Unit {
         } else {
             let cls = classify_top(toks: toks, i: i)
             let isPub = cls.isPub
-            let isFeatures = cls.isFeatures
-            let isProfile = cls.isProfile
             let isSum = cls.isSum
-            let isNativeMod = cls.isNativeMod
             let isTypeAlias = cls.isTypeAlias
             let isConst = cls.isConst
-            if isFeatures {
-                let fstart = i + 2
-                let fend = declaration_line_end(toks: toks, start: fstart)
-                let mut k = fstart
-                let mut ferr = -1
-                while k < fend {
-                    if at_symbol(toks: toks, i: k, code: SYM_COMMA) {
-                        k = k + 1
-                    } else {
-                        if is_feature_tok(toks, i: k) {
-                            if ferr < 0 && feature_dup(toks, fstart, k) {
-                                ferr = k
-                            }
-                        } else {
-                            let kd = tk_kind(toks: toks, i: k)
-                            if ferr < 0 && kd != TOK_EOF && kd != -1 {
-                                ferr = k
-                            }
-                        }
-                        k = k + 1
-                    }
-                }
-                if ferr >= 0 {
-                    errLine = tk_line(toks: toks, i: ferr)
-                    errCol = tk_col(toks, i: ferr)
-                    running = false
-                } else {
-                    i = fend
-                }
-            } else if isProfile {
-                i = i + 1
-            } else if starts_type_decl(toks: toks, i: i, isPub: isPub) {
+            if starts_type_decl(toks: toks, i: i, isPub: isPub) {
                 let r = parse_type_decl(toks: toks, i: i)
                 if r < 0 {
                     errLine = tk_line(toks: toks, i: i)
@@ -145,15 +83,6 @@ fn main(args: read List<String>) -> Unit {
                 }
             } else if at_ident(toks: toks, i: i, wid: WORD_IMPL) {
                 let r = parse_impl_decl(toks: toks, i: i)
-                if r < 0 {
-                    errLine = tk_line(toks: toks, i: i)
-                    errCol = tk_col(toks, i)
-                    running = false
-                } else {
-                    i = r
-                }
-            } else if isNativeMod {
-                let r = parse_native_module_decl(toks: toks, i: i)
                 if r < 0 {
                     errLine = tk_line(toks: toks, i: i)
                     errCol = tk_col(toks, i)
