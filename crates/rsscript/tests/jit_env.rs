@@ -61,10 +61,12 @@ fn main() -> Unit {
         heavy_stats.osr_entries > 0,
         "the heavier body must reach 100 work units within eight backedges: {heavy_stats:?}"
     );
-    assert_eq!(
-        tiered, reference,
-        "work-based OSR timing must not change program output"
-    );
+    assert_eq!(tiered.value, reference.value);
+    assert_eq!(tiered.display_value, reference.display_value);
+    assert_eq!(tiered.native_value, reference.native_value);
+    assert_eq!(tiered.stdout, reference.stdout);
+    assert_eq!(tiered.stderr, reference.stderr);
+    assert_eq!(tiered.provider_call_traces, reference.provider_call_traces);
 
     let (_, tiny_stats) = run("rss-osr-tiny.rss", tiny_source, Some("100"));
     assert_eq!(
