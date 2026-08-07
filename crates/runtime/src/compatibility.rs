@@ -6,8 +6,6 @@
 
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
-#[cfg(feature = "host-compat")]
-use crate::async_runtime::ProcessPermit;
 use crate::{OperationContext, ResourceBudget, RssCancellationToken, RssDeadline, RuntimeServices};
 
 /// The only process-wide runtime factory. It exists solely for generated-ABI
@@ -41,13 +39,6 @@ pub(crate) fn generated_abi_operation_context(
         byte_budget,
         generated_abi_runtime_services(),
     )
-}
-
-#[cfg(feature = "host-compat")]
-pub(crate) fn generated_abi_process_permit(
-    cancellation: Option<&RssCancellationToken>,
-) -> Result<ProcessPermit, String> {
-    generated_abi_runtime_services().acquire_process_permit(cancellation)
 }
 
 pub(crate) fn generated_abi_services_for_pending() -> Arc<RuntimeServices> {

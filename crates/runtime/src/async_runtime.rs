@@ -689,89 +689,9 @@ impl OwnedTokioRuntime {
     }
 }
 
-#[cfg(feature = "host-compat")]
-struct ProcessConcurrency {
-    active: Mutex<usize>,
-    ready: Condvar,
-    limit: usize,
-    closed: AtomicBool,
-}
-
-#[cfg(feature = "host-compat")]
-pub(crate) struct ProcessPermit {
-    concurrency: Arc<ProcessConcurrency>,
-    _runtime_owner: Arc<RuntimeServices>,
-}
-
-#[cfg(feature = "host-compat")]
-impl Drop for ProcessPermit {
-    fn drop(&mut self) {
-        let mut active = self
-            .concurrency
-            .active
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *active = active.saturating_sub(1);
-        self.concurrency.ready.notify_one();
-    }
-}
-
-#[cfg(feature = "host-compat")]
-impl ProcessConcurrency {
-    fn new(limit: usize) -> Self {
-        Self {
-            active: Mutex::new(0),
-            ready: Condvar::new(),
-            limit: limit.clamp(1, 32),
-            closed: AtomicBool::new(false),
-        }
-    }
-
-    fn shutdown(&self) {
-        self.closed.store(true, Ordering::Release);
-        self.ready.notify_all();
-    }
-
-    fn acquire(
-        self: &Arc<Self>,
-        runtime_owner: Arc<RuntimeServices>,
-        cancellation: Option<&RssCancellationToken>,
-    ) -> Result<ProcessPermit, String> {
-        let mut active = self
-            .active
-            .lock()
-            .map_err(|_| "process concurrency lock poisoned".to_string())?;
-        while *active >= self.limit {
-            if self.closed.load(Ordering::Acquire) {
-                return Err("runtime services are shut down".to_string());
-            }
-            if cancellation.is_some_and(cancellation_token_is_cancelled) {
-                return Err("process cancelled while waiting for a concurrency slot".to_string());
-            }
-            let (next, _) = self
-                .ready
-                .wait_timeout(active, Duration::from_millis(25))
-                .map_err(|_| "process concurrency lock poisoned".to_string())?;
-            active = next;
-        }
-        if self.closed.load(Ordering::Acquire) {
-            return Err("runtime services are shut down".to_string());
-        }
-        *active += 1;
-        Ok(ProcessPermit {
-            concurrency: Arc::clone(self),
-            _runtime_owner: runtime_owner,
-        })
-    }
-}
-
 pub struct RuntimeServices {
     runtime: OwnedTokioRuntime,
     worker_threads: usize,
-    #[cfg(feature = "host-compat")]
-    process_concurrency: Arc<ProcessConcurrency>,
-    #[cfg(feature = "net")]
-    http_client: reqwest::Client,
 }
 
 impl RuntimeServices {
@@ -787,28 +707,13 @@ impl RuntimeServices {
             ));
         }
         let runtime = OwnedTokioRuntime::new(worker_threads)?;
-        #[cfg(feature = "net")]
-        let http_client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .build()
-            .map_err(|error| format!("failed to build runtime HTTP client: {error}"))?;
         Ok(Self {
             runtime,
             worker_threads,
-            #[cfg(feature = "host-compat")]
-            process_concurrency: Arc::new(ProcessConcurrency::new(
-                std::thread::available_parallelism()
-                    .map(usize::from)
-                    .unwrap_or(4),
-            )),
-            #[cfg(feature = "net")]
-            http_client,
         })
     }
 
     pub fn shutdown(&self, timeout: Duration) {
-        #[cfg(feature = "host-compat")]
-        self.process_concurrency.shutdown();
         self.runtime.shutdown(timeout);
     }
 
@@ -822,20 +727,6 @@ impl RuntimeServices {
 
     pub(crate) fn runtime_handle(&self) -> Result<tokio::runtime::Handle, String> {
         self.runtime.handle()
-    }
-
-    #[cfg(feature = "host-compat")]
-    pub(crate) fn acquire_process_permit(
-        self: &Arc<Self>,
-        cancellation: Option<&RssCancellationToken>,
-    ) -> Result<ProcessPermit, String> {
-        self.process_concurrency
-            .acquire(Arc::clone(self), cancellation)
-    }
-
-    #[cfg(feature = "net")]
-    pub(crate) fn http_client(&self) -> &reqwest::Client {
-        &self.http_client
     }
 }
 
@@ -1103,11 +994,6 @@ pub fn cancellation_token_is_cancelled(token: &RssCancellationToken) -> bool {
 
 pub(crate) fn cancellation_token_register_wake(token: &RssCancellationToken, wake: WakeHandle) {
     token.token.register_wake(wake);
-}
-
-#[cfg(feature = "net")]
-pub(crate) async fn cancellation_token_cancelled(token: &RssCancellationToken) {
-    token.token.cancelled().await;
 }
 
 pub fn trace_async_runtime_phase(

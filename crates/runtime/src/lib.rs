@@ -9,38 +9,18 @@ mod collections;
 mod compatibility;
 mod date;
 mod diagnostics;
-#[cfg(feature = "host-compat")]
-mod domain;
 mod encoding;
-#[cfg(feature = "host-compat")]
-mod env;
 mod error;
-#[cfg(feature = "host-compat")]
-mod fs;
 mod hash;
 mod json;
 mod managed;
 mod math;
-#[cfg(feature = "net")]
-mod network;
 mod operation_context;
-#[cfg(feature = "host-compat")]
-mod process;
-#[cfg(feature = "host-compat")]
-mod random;
+mod output;
 mod regex;
 mod resource_budget;
-#[cfg(feature = "net")]
-mod socket;
 mod string_helpers;
-#[cfg(feature = "host-compat")]
-mod tempdir;
 mod text_edit;
-#[cfg(feature = "net")]
-mod websocket;
-
-#[cfg(feature = "net")]
-pub(crate) use async_runtime::cancellation_token_cancelled;
 pub(crate) use clock::deadline_remaining_duration;
 
 // Generated Rust uses root paths. Keep that compatibility surface explicit and
@@ -123,58 +103,12 @@ macro_rules! runtime_abi_exports {
             ManagedValue, RUNTIME_DIAGNOSTIC_PREFIX, Resource,
             install_runtime_diagnostic_panic_hook,
         };
-        #[cfg(feature = "host-compat")]
-        pub use crate::domain::{
-            CsvError, HttpError, HttpRequest, HttpResponse, Row, RowBuffer, csv_open_read,
-            csv_parse_row, csv_read_into, csv_read_into_with_budget, csv_rows, http_error_message,
-            http_request_debug_summary, http_request_json, http_request_with_header,
-            http_request_with_retry, http_request_with_timeout, http_response_bytes,
-            http_response_is_success, http_response_lines, http_response_status,
-            http_response_text, row_buffer_new, row_field_string,
-        };
-        #[cfg(feature = "net")]
-        pub use crate::domain::{
-            http_get, http_get_async, http_get_async_with_context, http_get_retry_async,
-            http_get_timeout_async, http_post_form, http_post_form_async, http_post_json,
-            http_post_json_async, http_post_json_bearer_retry_async, http_post_json_retry_async,
-            http_post_json_timeout_async, http_send_async, http_send_async_with_context,
-        };
         pub use crate::encoding::{
             DecodeError, base64_decode, base64_decode_string, base64_encode, base64_encode_bytes,
             decode_error_message, gzip_decompress_bytes, gzip_decompress_bytes_with_budget,
             hex_decode, hex_encode, hex_encode_string, url_decode_component, url_encode_component,
         };
-        #[cfg(feature = "host-compat")]
-        pub use crate::env::{
-            env_current_dir, env_get, env_get_or_default, env_home_dir, env_run_workspace_root,
-            env_set, env_set_current_dir, env_temp_dir,
-        };
         pub use crate::error::{RuntimeError, RuntimeErrorKind, SourceSpan};
-        #[cfg(feature = "host-compat")]
-        #[allow(deprecated)]
-        pub use crate::fs::{
-            File, FileError, FileMetadata, RUNTIME_DIRECTORY_MAX_DEPTH,
-            RUNTIME_DIRECTORY_MAX_ENTRIES, RUNTIME_DIRECTORY_MAX_PATH_BYTES,
-            RUNTIME_READ_CEILING_BYTES, RuntimeBytes, RuntimePath, directory_copy_file,
-            directory_create, directory_create_all, directory_exists, directory_is_dir,
-            directory_is_file, directory_list_files, directory_list_paths, directory_metadata,
-            directory_read_string, directory_remove_dir_all, directory_remove_file,
-            directory_rename, directory_write_string, file_append_bytes, file_append_string,
-            file_bytes_stream, file_error_message, file_exists, file_open, file_open_read,
-            file_open_write, file_read_all, file_read_all_async, file_read_all_string,
-            file_read_all_string_async, file_read_all_with_budget, file_read_bytes,
-            file_read_bytes_from_offset, file_read_bytes_from_offset_with_budget,
-            file_read_bytes_with_budget, file_read_into, file_read_into_with_budget,
-            file_read_string, file_read_string_with_budget, file_remove, file_write,
-            file_write_async, file_write_atomic, file_write_buffer, file_write_bytes,
-            file_write_string, file_write_string_async, file_write_string_to_path, path_exists,
-            path_extension, path_file_name, path_from_string, path_is_absolute, path_join,
-            path_lexically_resolve_relative, path_lexically_safe_relative, path_normalize,
-            path_parent, path_resolve_relative, path_safe_relative, path_starts_with,
-            path_to_string, path_with_extension,
-        };
-        #[cfg(feature = "host-compat")]
-        pub use crate::hash::hash_sha256_file;
         pub use crate::hash::{
             hash_sha3_224_bytes, hash_sha3_256_bytes, hash_sha256_bytes, hash_sha256_string,
             hash_shake128_bytes, hmac_sha256_bytes, hmac_sha256_string,
@@ -197,8 +131,6 @@ macro_rules! runtime_abi_exports {
             json_to_string_at, json_to_string_at_or, json_value, json_value_at, json_values,
             yaml_parse,
         };
-        #[cfg(feature = "host-compat")]
-        pub use crate::json::{json_parse_file, toml_parse_file, yaml_parse_file};
         #[allow(deprecated)]
         pub use crate::managed::{
             Managed, ManagedRead, ManagedWrite, WeakManaged, manage, manage_at, unwrap_runtime,
@@ -212,38 +144,13 @@ macro_rules! runtime_abi_exports {
             math_trunc_float, math_wrapping_add, math_wrapping_mul, math_wrapping_sub,
         };
         pub use crate::operation_context::OperationContext;
-        #[cfg(feature = "host-compat")]
-        pub use crate::process::{
-            DEFAULT_RUNTIME_PROCESS_TIMEOUT_MS, ProcessEnv, ProcessEvent, ProcessOutput,
-            ProcessRequest, RUNTIME_PROCESS_CONCURRENCY_CEILING,
-            RUNTIME_PROCESS_OUTPUT_CEILING_BYTES, RUNTIME_PROCESS_TIMEOUT_CEILING_MS, log_error,
-            log_error_json, log_trace, log_write, log_write_json, os_close, process_run,
-            process_run_async, process_run_many_stdout, process_run_many_stdout_async,
-            process_run_many_stdout_timeout, process_run_many_stdout_timeout_async,
-            process_run_request, process_run_request_async, process_run_request_cancellable_async,
-            process_run_stdout, process_run_stdout_async, process_run_stdout_timeout,
-            process_run_stdout_timeout_async, process_run_timeout, process_run_timeout_async,
-            process_stream,
-        };
-        #[cfg(feature = "host-compat")]
-        pub use crate::random::{
-            random_bool, random_bytes, random_float, random_int, random_string, uuid_new_v4,
-        };
+        pub use crate::output::{log_error, log_error_json, log_trace, log_write, log_write_json};
         pub use crate::regex::{
             RegexError, RssRegex, regex_captures, regex_compile, regex_error_message, regex_find,
             regex_is_match, regex_replace_all, regex_split,
         };
         pub use crate::resource_budget::{
             RUNTIME_ALLOCATION_CEILING_BYTES, ResourceBudget, ResourceBudgetError,
-        };
-        #[cfg(feature = "net")]
-        pub use crate::socket::{
-            AllowAllNetworkTargetPolicy, DenyPrivateNetworkTargetPolicy, NetworkTargetPolicy,
-            RssTcpStream, TcpError, tcp_connect, tcp_connect_with_context,
-            tcp_connect_with_policy_and_context, tcp_error_message, tcp_stream_read,
-            tcp_stream_read_with_context, tcp_stream_shutdown, tcp_stream_shutdown_with_context,
-            tcp_stream_write, tcp_stream_write_all, tcp_stream_write_all_with_context,
-            tcp_stream_write_with_context,
         };
         pub use crate::string_helpers::{
             char_compare, char_from_code, char_is_alpha, char_is_alphanumeric, char_is_digit,
@@ -262,21 +169,7 @@ macro_rules! runtime_abi_exports {
             string_view_contains, string_view_is_empty, string_view_len, string_view_slice,
             string_view_starts_with, string_view_to_string,
         };
-        #[cfg(feature = "host-compat")]
-        pub use crate::tempdir::{
-            TempDir, tempdir_keep, tempdir_new, tempdir_new_in, tempdir_path,
-        };
         pub use crate::text_edit::{diff_unified, patch_apply_text};
-        #[cfg(feature = "net")]
-        pub use crate::websocket::{
-            RssWebSocket, WebSocketError, websocket_close, websocket_close_with_context,
-            websocket_connect, websocket_connect_with_context,
-            websocket_connect_with_policy_and_context, websocket_error_message,
-            websocket_recv_bytes, websocket_recv_bytes_with_context, websocket_recv_text,
-            websocket_recv_text_with_context, websocket_send_bytes,
-            websocket_send_bytes_with_context, websocket_send_text,
-            websocket_send_text_with_context,
-        };
     };
 }
 
@@ -295,74 +188,14 @@ pub mod host {
         cancellation_source_new, cancellation_source_token, install_runtime_diagnostic_panic_hook,
         spawn_tokio_native, spawn_tokio_native_with_cancellation,
     };
-
-    #[cfg(feature = "host-compat")]
-    pub mod filesystem {
-        pub use crate::{
-            File, FileError, RuntimeBytes, RuntimePath, directory_create_all, directory_exists,
-            directory_list_paths, file_open_read, file_open_write, file_read_all_with_budget,
-            file_read_bytes_with_budget, file_read_string_with_budget, file_write_atomic,
-            path_lexically_resolve_relative, path_lexically_safe_relative,
-        };
-    }
-
-    #[cfg(feature = "host-compat")]
-    pub mod process {
-        pub use crate::{
-            ProcessEnv, ProcessEvent, ProcessOutput, ProcessRequest, process_run_request_async,
-            process_run_request_cancellable_async, process_stream,
-        };
-    }
-}
-
-/// Network APIs. Resource limits, cancellation, and deadlines use `OperationContext`.
-#[cfg(feature = "net")]
-pub mod net {
-    pub mod policy {
-        pub use crate::{
-            AllowAllNetworkTargetPolicy, DenyPrivateNetworkTargetPolicy, NetworkTargetPolicy,
-        };
-    }
-
-    pub mod http {
-        pub use crate::{
-            HttpError, HttpRequest, HttpResponse, http_error_message, http_get_async_with_context,
-            http_request_json, http_request_with_header, http_request_with_retry,
-            http_request_with_timeout, http_response_bytes, http_response_is_success,
-            http_response_lines, http_response_status, http_response_text,
-            http_send_async_with_context,
-        };
-    }
-
-    pub mod tcp {
-        pub use crate::{
-            RssTcpStream, TcpError, tcp_connect_with_context, tcp_connect_with_policy_and_context,
-            tcp_error_message, tcp_stream_read_with_context, tcp_stream_shutdown_with_context,
-            tcp_stream_write_all_with_context, tcp_stream_write_with_context,
-        };
-    }
-
-    pub mod websocket {
-        pub use crate::{
-            RssWebSocket, WebSocketError, websocket_close_with_context,
-            websocket_connect_with_context, websocket_connect_with_policy_and_context,
-            websocket_error_message, websocket_recv_bytes_with_context,
-            websocket_recv_text_with_context, websocket_send_bytes_with_context,
-            websocket_send_text_with_context,
-        };
-    }
 }
 
 /// Versioned canonical API for handwritten runtime consumers.
 pub mod api {
     pub mod v1 {
         pub use crate::host;
-        #[cfg(feature = "net")]
-        pub use crate::net;
 
         pub mod data {
-            #[cfg(feature = "host-compat")]
-            pub use crate::toml_parse_file;
             pub use crate::{
                 DecodeError, JsonError, JsonValue, base64_decode, base64_encode_bytes,
                 gzip_decompress_bytes_with_budget, hash_sha256_bytes, hex_decode, hex_encode,

@@ -70,12 +70,7 @@ fn compatibility_factory_is_the_only_global_runtime_lookup() {
     assert!(compatibility.contains("fn generated_abi_runtime_services"));
     assert!(compatibility.contains("Weak<RuntimeServices>"));
 
-    for module in [
-        "operation_context.rs",
-        "async_runtime.rs",
-        "domain.rs",
-        "process/policy.rs",
-    ] {
+    for module in ["operation_context.rs", "async_runtime.rs"] {
         let source = fs::read_to_string(source_dir.join(module))
             .unwrap_or_else(|error| panic!("{module} should be readable: {error}"));
         assert!(
@@ -86,15 +81,22 @@ fn compatibility_factory_is_the_only_global_runtime_lookup() {
 }
 
 #[test]
-fn explicit_network_contexts_do_not_use_the_compatibility_spawner() {
+fn concrete_host_modules_are_absent() {
     let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    for module in ["socket.rs", "websocket.rs"] {
-        let source =
-            fs::read_to_string(source_dir.join(module)).expect("module should be readable");
+    for module in [
+        "domain.rs",
+        "env.rs",
+        "fs.rs",
+        "network/mod.rs",
+        "process.rs",
+        "random.rs",
+        "socket.rs",
+        "tempdir.rs",
+        "websocket.rs",
+    ] {
         assert!(
-            !source.contains("spawn_tokio_native("),
-            "{module} bypasses OperationContext"
+            !source_dir.join(module).exists(),
+            "legacy host module `{module}` must stay outside the AOT runtime"
         );
-        assert!(source.contains("spawn_tokio_native_with_services"));
     }
 }

@@ -1308,20 +1308,44 @@ fn runtime_does_not_depend_on_the_compiler_package() {
         "the default runtime must not enable concrete network services"
     );
 
-    let runtime_source = read(&root.join("crates/runtime/src/lib.rs"));
-    for host_module in ["domain", "env", "fs", "process", "random", "tempdir"] {
+    let runtime_source_dir = root.join("crates/runtime/src");
+    for host_module in [
+        "domain.rs",
+        "env.rs",
+        "fs.rs",
+        "network/mod.rs",
+        "process.rs",
+        "process/capture.rs",
+        "process/environment.rs",
+        "process/policy.rs",
+        "process/supervisor.rs",
+        "random.rs",
+        "socket.rs",
+        "tempdir.rs",
+        "websocket.rs",
+    ] {
         assert!(
-            runtime_source.contains(&format!(
-                "#[cfg(feature = \"host-compat\")]\nmod {host_module};"
-            )),
-            "runtime-core must not compile concrete `{host_module}` services"
+            !runtime_source_dir.join(host_module).exists(),
+            "AOT runtime must not contain legacy host service `{host_module}`"
         );
     }
-    for optional_dependency in ["rand", "rss-process-guard", "uuid"] {
-        assert_eq!(
-            manifest["dependencies"][optional_dependency]["optional"].as_bool(),
-            Some(true),
-            "runtime-core dependency `{optional_dependency}` must be opt-in"
+    for removed_feature in ["host-compat", "net"] {
+        assert!(
+            manifest["features"].get(removed_feature).is_none(),
+            "AOT runtime must not retain legacy `{removed_feature}` feature"
+        );
+    }
+    for removed_dependency in [
+        "rand",
+        "reqwest",
+        "rss-process-guard",
+        "tokio-tungstenite",
+        "toml",
+        "uuid",
+    ] {
+        assert!(
+            manifest["dependencies"].get(removed_dependency).is_none(),
+            "AOT runtime must not depend on concrete host crate `{removed_dependency}`"
         );
     }
 

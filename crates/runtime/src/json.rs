@@ -1,8 +1,5 @@
 use std::fmt;
 
-#[cfg(feature = "host-compat")]
-use crate::fs::RuntimePath;
-
 #[derive(Debug, Clone)]
 pub struct JsonValue {
     inner: serde_json::Value,
@@ -75,13 +72,6 @@ where
     serde_json::from_str(text).map_err(JsonError::from)
 }
 
-#[cfg(feature = "host-compat")]
-pub fn json_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
-    let text =
-        crate::fs::file_read_string(path).map_err(|error| JsonError::new(error.to_string()))?;
-    json_parse(&text)
-}
-
 pub fn json_quote_string(value: &str) -> String {
     serde_json::to_string(value).expect("serializing a string to JSON cannot fail")
 }
@@ -139,29 +129,11 @@ pub fn json_values(items: &[JsonValue]) -> JsonValue {
     }
 }
 
-#[cfg(feature = "host-compat")]
-pub fn toml_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
-    let text =
-        crate::fs::file_read_string(path).map_err(|error| JsonError::new(error.to_string()))?;
-    let value = text
-        .parse::<toml::Value>()
-        .map_err(|error| JsonError::new(error.to_string()))?;
-    let inner = serde_json::to_value(value)?;
-    Ok(JsonValue { inner })
-}
-
 pub fn yaml_parse(text: &str) -> Result<JsonValue, JsonError> {
     let value: serde_yaml_ng::Value =
         serde_yaml_ng::from_str(text).map_err(|error| JsonError::new(error.to_string()))?;
     let inner = serde_json::to_value(value)?;
     Ok(JsonValue { inner })
-}
-
-#[cfg(feature = "host-compat")]
-pub fn yaml_parse_file<P: RuntimePath + ?Sized>(path: &P) -> Result<JsonValue, JsonError> {
-    let text =
-        crate::fs::file_read_string(path).map_err(|error| JsonError::new(error.to_string()))?;
-    yaml_parse(&text)
 }
 
 pub fn json_field(value: &JsonValue, name: &str) -> Result<JsonValue, JsonError> {
@@ -762,27 +734,5 @@ mod tests {
             !json_error_message(&error).is_empty(),
             "YAML parse error should carry a message"
         );
-    }
-
-    #[test]
-    #[cfg(feature = "host-compat")]
-    fn json_file_loader_rejects_oversized_inputs_before_reading() {
-        let path = std::env::temp_dir().join(format!(
-            "rsscript-json-oversized-{}-{}",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
-        let file = std::fs::File::create(&path).expect("oversized fixture should be created");
-        file.set_len(crate::fs::RUNTIME_READ_CEILING_BYTES as u64 + 1)
-            .expect("sparse oversized fixture should be sized");
-
-        assert!(
-            json_parse_file(&path)
-                .expect_err("JSON must be bounded")
-                .to_string()
-                .contains("exceeds")
-        );
-
-        let _ = std::fs::remove_file(path);
     }
 }

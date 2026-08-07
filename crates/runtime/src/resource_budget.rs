@@ -110,7 +110,7 @@ pub(crate) struct ResourceReservation {
 }
 
 impl ResourceReservation {
-    #[cfg(any(feature = "host-compat", test))]
+    #[cfg(test)]
     pub(crate) fn commit(mut self, actual_bytes: usize) {
         let actual = u64::try_from(actual_bytes)
             .unwrap_or(u64::MAX)

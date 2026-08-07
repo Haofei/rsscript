@@ -28,13 +28,3 @@ fn canonical_api_is_domain_organized() {
     api::v1::values::map_insert(&mut values, &"key", &7);
     assert_eq!(api::v1::values::map_get(&values, &"key"), Some(7));
 }
-
-#[cfg(feature = "net")]
-#[test]
-fn network_facade_uses_operation_context_entrypoints() {
-    use rsscript_runtime::net;
-
-    let _http = net::http::http_send_async_with_context;
-    let _tcp = net::tcp::tcp_connect_with_context;
-    let _websocket = net::websocket::websocket_connect_with_context;
-}
