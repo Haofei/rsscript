@@ -17,7 +17,7 @@ test = false
 [features]
 default = []
 execution = ["rsscript/execution"]
-host-tools = ["execution", "rsscript/host-tools", "dep:rss-process-guard"]
+host-tools = ["execution", "dep:rss-process-guard"]
 native-jit = ["rsscript/native-jit", "execution"]
 
 [dependencies]

@@ -12,7 +12,6 @@ name = "rsscript"
 doctest = false
 
 [dependencies]
-rss-process-guard = { path = "../process-guard", optional = true }
 rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
@@ -51,7 +50,6 @@ vm-jit = { path = "../vm-jit", optional = true }
 default = []
 execution = ["dep:rsscript-bytecode", "dep:rsscript-lowering", "dep:rsscript-provider-api"]
 language-service = []
-host-tools = ["execution", "dep:rss-process-guard"]
 # Native (Cranelift) baseline JIT for the integer/control core. Off by default so
 # normal builds/tests don't pull in the codegen dependency; enable for the Rust
 # differential/benchmark harnesses and force-JIT CI.

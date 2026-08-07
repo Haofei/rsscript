@@ -45,11 +45,3 @@ pub struct RemappedRustcDiagnostic {
     pub diagnostic: Diagnostic,
     pub mapped: bool,
 }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RustBackendCheckResult {
-    pub success: bool,
-    pub diagnostics: Vec<Diagnostic>,
-    pub cargo_status: Option<i32>,
-    pub stderr: String,
-}

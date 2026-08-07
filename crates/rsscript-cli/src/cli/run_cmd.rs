@@ -1,12 +1,12 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Duration;
 
 use rsscript::{
-    CancellationToken, EvalError, EvalOutput, NativeValue, VmLimits, check_generated_rust_package,
-    configure_reduced_build_environment, format_diagnostics_human, format_diagnostics_json,
-    parse_runtime_diagnostics, prepare_package_for_execution, reg_vm_compile_package_input,
-    write_generated_rust_package,
+    CancellationToken, EvalError, EvalOutput, NativeValue, VmLimits, format_diagnostics_human,
+    format_diagnostics_json, parse_runtime_diagnostics, prepare_package_for_execution,
+    reg_vm_compile_package_input, write_generated_rust_package,
 };
 
 use super::{
@@ -330,7 +330,7 @@ fn build_and_run_package(
     };
     let build_stderr = String::from_utf8_lossy(&build_output.stderr);
     if !build_output.status.success() {
-        return finish_failed_aot_build(package_dir, json, &build_stderr, build_output.status);
+        return finish_failed_aot_build(&build_stderr, build_output.status);
     }
     let executable = match cargo_artifact_executable(&build_output.stdout) {
         Ok(executable) => executable,
@@ -374,34 +374,46 @@ fn build_and_run_package(
     exit_code(output.status)
 }
 
-fn finish_failed_aot_build(
-    package_dir: &Path,
-    json: bool,
-    stderr: &str,
-    status: std::process::ExitStatus,
-) -> ExitCode {
-    match check_generated_rust_package(package_dir) {
-        Ok(result) if !result.diagnostics.is_empty() => {
-            print_diagnostics(json, &result.diagnostics);
-            return if result
-                .diagnostics
-                .iter()
-                .any(|diagnostic| diagnostic.severity.is_error())
-            {
-                ExitCode::from(1)
-            } else {
-                ExitCode::SUCCESS
-            };
-        }
-        Ok(_) => {}
-        Err(error) => {
-            eprintln!("{error}");
-        }
-    }
+fn finish_failed_aot_build(stderr: &str, status: std::process::ExitStatus) -> ExitCode {
     if !stderr.trim().is_empty() {
         eprintln!("{}", stderr.trim());
     }
     exit_code(status)
+}
+
+fn configure_reduced_build_environment(command: &mut Command) {
+    const ALLOWED: &[&str] = &[
+        "PATH",
+        "HOME",
+        "USERPROFILE",
+        "CARGO_HOME",
+        "RUSTUP_HOME",
+        "RUSTC",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "TMPDIR",
+        "TMP",
+        "TEMP",
+        "SYSTEMROOT",
+        "WINDIR",
+    ];
+    let preserved = ALLOWED
+        .iter()
+        .filter_map(|name| std::env::var_os(name).map(|value| (OsString::from(name), value)))
+        .collect::<Vec<_>>();
+    command.env_clear();
+    command.envs(preserved);
+    command
+        .env("CARGO_TERM_COLOR", "never")
+        .env("TERM", "dumb")
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
+        .env("TZ", "UTC")
+        .env("SOURCE_DATE_EPOCH", "0")
+        .env_remove("CARGO_TARGET_DIR");
 }
 
 fn exit_code(status: std::process::ExitStatus) -> ExitCode {

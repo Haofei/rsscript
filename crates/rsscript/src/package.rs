@@ -25,22 +25,9 @@
 // Compatibility package/review tooling keeps its lint debt local to this module.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-#[cfg(feature = "host-tools")]
-use std::process::Stdio;
-use std::process::{Command, ExitStatus};
-#[cfg(feature = "host-tools")]
-use std::sync::Arc;
-#[cfg(feature = "host-tools")]
-use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(feature = "host-tools")]
-use std::thread;
-use std::time::Duration;
-#[cfg(feature = "host-tools")]
-use std::time::Instant;
 
 use crate::diagnostic::Diagnostic;
 
@@ -67,9 +54,6 @@ const PACKAGE_TREE_MAX_ENTRIES: usize = 40_000;
 const PACKAGE_TREE_MAX_BYTES: u64 = 512 * 1024 * 1024;
 const PACKAGE_TREE_MAX_DEPTH: usize = 64;
 const PACKAGE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
-pub(crate) const CARGO_OUTPUT_MAX_BYTES: usize = 4 * 1024 * 1024;
-pub(crate) const CARGO_METADATA_TIMEOUT: Duration = Duration::from_secs(60);
-pub(crate) const CARGO_BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
 pub use artifact_store::ArtifactStore;
 pub use authorization::{
@@ -515,168 +499,6 @@ pub(crate) fn collect_bounded_regular_files(
         &mut files,
     )?;
     Ok(files)
-}
-
-#[derive(Debug)]
-pub(crate) struct BoundedCommandOutput {
-    pub status: ExitStatus,
-    pub stdout: Vec<u8>,
-    pub stderr: Vec<u8>,
-}
-
-#[doc(hidden)]
-pub fn configure_reduced_build_environment(command: &mut Command) {
-    const ALLOWED: &[&str] = &[
-        "PATH",
-        "HOME",
-        "USERPROFILE",
-        "CARGO_HOME",
-        "RUSTUP_HOME",
-        "RUSTC",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "NO_PROXY",
-        "SSL_CERT_FILE",
-        "SSL_CERT_DIR",
-        "TMPDIR",
-        "TMP",
-        "TEMP",
-        "SYSTEMROOT",
-        "WINDIR",
-    ];
-    let preserved = ALLOWED
-        .iter()
-        .filter_map(|name| std::env::var_os(name).map(|value| (OsString::from(name), value)))
-        .collect::<Vec<_>>();
-    command.env_clear();
-    command.envs(preserved);
-    command
-        .env("CARGO_TERM_COLOR", "never")
-        .env("TERM", "dumb")
-        .env("LANG", "C")
-        .env("LC_ALL", "C")
-        .env("TZ", "UTC")
-        .env("SOURCE_DATE_EPOCH", "0")
-        .env_remove("CARGO_TARGET_DIR");
-}
-
-pub(crate) fn run_bounded_command(
-    command: &mut Command,
-    operation: &str,
-    timeout: Duration,
-    output_cap: usize,
-) -> Result<BoundedCommandOutput, String> {
-    #[cfg(not(feature = "host-tools"))]
-    {
-        let _ = (command, operation, timeout, output_cap);
-        Err(
-            "host command execution is disabled; use a composition root with `host-tools`"
-                .to_string(),
-        )
-    }
-    #[cfg(feature = "host-tools")]
-    {
-        command.stdout(Stdio::piped()).stderr(Stdio::piped());
-        let (mut child, guard) = rss_process_guard::spawn_guarded(
-            command,
-            rss_process_guard::ProcessLimits::compiler_worker(),
-        )
-        .map_err(|error| format!("failed to start guarded {operation}: {error}"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| format!("failed to capture {operation} stdout"))?;
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| format!("failed to capture {operation} stderr"))?;
-        let output_exceeded = Arc::new(AtomicBool::new(false));
-        let stdout_exceeded = Arc::clone(&output_exceeded);
-        let stderr_exceeded = Arc::clone(&output_exceeded);
-        let stdout_reader =
-            thread::spawn(move || read_bounded_output(stdout, output_cap, &stdout_exceeded));
-        let stderr_reader =
-            thread::spawn(move || read_bounded_output(stderr, output_cap, &stderr_exceeded));
-        let deadline = Instant::now() + timeout;
-        let status = loop {
-            if let Some(status) = child
-                .try_wait()
-                .map_err(|error| format!("failed while waiting for {operation}: {error}"))?
-            {
-                break status;
-            }
-            if output_exceeded.load(Ordering::Acquire) {
-                terminate_bounded_child(&mut child, &guard);
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-                return Err(format!(
-                    "{operation} exceeded output limit of {output_cap} bytes per stream"
-                ));
-            }
-            if Instant::now() >= deadline {
-                terminate_bounded_child(&mut child, &guard);
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-                return Err(format!(
-                    "{operation} exceeded deadline of {} seconds",
-                    timeout.as_secs_f64()
-                ));
-            }
-            thread::sleep(Duration::from_millis(10));
-        };
-        let (stdout, stdout_exceeded) = stdout_reader
-            .join()
-            .map_err(|_| format!("{operation} stdout reader panicked"))??;
-        let (stderr, stderr_exceeded) = stderr_reader
-            .join()
-            .map_err(|_| format!("{operation} stderr reader panicked"))??;
-        if stdout_exceeded || stderr_exceeded {
-            return Err(format!(
-                "{operation} exceeded output limit of {output_cap} bytes per stream"
-            ));
-        }
-        Ok(BoundedCommandOutput {
-            status,
-            stdout,
-            stderr,
-        })
-    }
-}
-
-#[cfg(feature = "host-tools")]
-fn terminate_bounded_child(
-    child: &mut std::process::Child,
-    guard: &rss_process_guard::ProcessGuard,
-) {
-    let _ = guard.terminate();
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-#[cfg(feature = "host-tools")]
-fn read_bounded_output(
-    mut input: impl Read,
-    cap: usize,
-    shared_exceeded: &AtomicBool,
-) -> Result<(Vec<u8>, bool), String> {
-    let mut output = Vec::with_capacity(cap.min(64 * 1024));
-    let mut exceeded = false;
-    let mut buffer = [0_u8; 16 * 1024];
-    loop {
-        let read = input
-            .read(&mut buffer)
-            .map_err(|error| format!("failed to read child output: {error}"))?;
-        if read == 0 {
-            break;
-        }
-        let remaining = cap.saturating_sub(output.len());
-        output.extend_from_slice(&buffer[..read.min(remaining)]);
-        if read > remaining {
-            exceeded = true;
-            shared_exceeded.store(true, Ordering::Release);
-        }
-    }
-    Ok((output, exceeded))
 }
 
 fn canonical_checked_root(path: &Path, operation: &str) -> Result<PathBuf, String> {
@@ -1284,48 +1106,5 @@ mod preparation_limit_tests {
                 .expect_err("symlink must be rejected");
         assert!(error.contains("rejects symlinks"), "{error}");
         fs::remove_dir_all(root).expect("fixture cleanup");
-    }
-
-    #[cfg(all(unix, feature = "host-tools"))]
-    #[test]
-    fn bounded_command_enforces_deadline_and_output_cap() {
-        let mut timeout_command = Command::new("sh");
-        timeout_command.args(["-c", "sleep 2"]);
-        let timeout_error = run_bounded_command(
-            &mut timeout_command,
-            "timeout fixture",
-            Duration::from_millis(25),
-            1024,
-        )
-        .expect_err("sleeping command must time out");
-        assert!(
-            timeout_error.contains("exceeded deadline"),
-            "{timeout_error}"
-        );
-
-        let mut output_command = Command::new("sh");
-        output_command.args(["-c", "printf 123456789"]);
-        let output_error = run_bounded_command(
-            &mut output_command,
-            "output fixture",
-            Duration::from_secs(2),
-            4,
-        )
-        .expect_err("verbose command must exceed cap");
-        assert!(
-            output_error.contains("exceeded output limit"),
-            "{output_error}"
-        );
-    }
-
-    #[test]
-    fn reduced_build_environment_drops_unlisted_values() {
-        let mut command = Command::new("cargo");
-        command.env("RSS_SHOULD_NOT_REACH_NATIVE_BUILD", "secret");
-        configure_reduced_build_environment(&mut command);
-        let debug = format!("{command:?}");
-        assert!(!debug.contains("RSS_SHOULD_NOT_REACH_NATIVE_BUILD"));
-        assert!(debug.contains("CARGO_TERM_COLOR"));
-        assert!(debug.contains("SOURCE_DATE_EPOCH"));
     }
 }

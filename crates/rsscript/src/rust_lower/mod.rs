@@ -37,7 +37,6 @@ use crate::runtime_abi;
 use crate::syntax::ast::Program;
 use crate::syntax::parse_source;
 
-mod backend_check;
 mod helpers;
 mod intrinsics;
 mod lower_async;
@@ -51,14 +50,13 @@ mod rustc_remap;
 mod source_map;
 mod types;
 
-pub use backend_check::check_generated_rust_package;
 pub(crate) use helpers::set_lower_name_overrides;
 pub use runtime_diagnostics::parse_runtime_diagnostics;
 pub use rustc_remap::{remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines};
 pub use source_map::parse_source_map_json;
 pub use types::{
     GeneratedRustPackage, LoweredRust, NativeRustDependency, RemappedRustcDiagnostic,
-    RustBackendCheckResult, RustSourceMapEntry,
+    RustSourceMapEntry,
 };
 
 use helpers::{

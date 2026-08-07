@@ -1039,7 +1039,6 @@ fn lsp_dependency_closure_selects_frontend_only() {
         "rsscript-bytecode",
         "rsscript-lowering",
         "rsscript-provider-api",
-        "rss-process-guard",
         "vm-jit",
     ] {
         assert_eq!(
@@ -1145,13 +1144,15 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         manifest["dependencies"].get("rss-native-abi").is_none(),
         "compiler must not depend on the native plugin ABI"
     );
-    for dependency in ["rss-process-guard", "vm-jit"] {
-        assert_eq!(
-            manifest["dependencies"][dependency]["optional"].as_bool(),
-            Some(true),
-            "host dependency `{dependency}` must be opt-in"
-        );
-    }
+    assert!(
+        manifest["dependencies"].get("rss-process-guard").is_none(),
+        "compiler must not own child-process execution"
+    );
+    assert_eq!(
+        manifest["dependencies"]["vm-jit"]["optional"].as_bool(),
+        Some(true),
+        "host dependency `vm-jit` must be opt-in"
+    );
 }
 
 #[test]

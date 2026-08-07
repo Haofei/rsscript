@@ -1875,7 +1875,6 @@ dependencies = [
  "rand 0.8.7",
  "regex",
  "reir",
- "rss-process-guard",
  "rss-testgen",
  "rsscript-abi-model",
  "rsscript-bytecode",

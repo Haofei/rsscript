@@ -1,12 +1,10 @@
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(test)]
 use std::env;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
-use std::process::Command;
 #[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
-
-use serde::Deserialize;
 
 use crate::rust_lower::NativeRustDependency;
 
@@ -16,11 +14,10 @@ use super::source_set::{
     selected_root_package_features,
 };
 use super::{
-    CARGO_METADATA_TIMEOUT, CARGO_OUTPUT_MAX_BYTES, Manifest, ManifestNativeRust,
-    PackageNativeRustAuthorDeclaration, PackageNativeRustCheck, PackageNativeRustReview,
-    PackageNativeRustSemanticReview, PackageNativeRustSourceScan, PackageNativeRustUnsafePolicies,
-    PackageRisk, PackageSource, canonical_path_label, configure_reduced_build_environment,
-    read_utf8_file_bounded, run_bounded_command,
+    Manifest, ManifestNativeRust, PackageNativeRustAuthorDeclaration, PackageNativeRustCheck,
+    PackageNativeRustReview, PackageNativeRustSemanticReview, PackageNativeRustSourceScan,
+    PackageNativeRustUnsafePolicies, PackageRisk, PackageSource, canonical_path_label,
+    read_utf8_file_bounded,
 };
 
 mod bindings;
@@ -30,22 +27,6 @@ pub(super) use bindings::{
 };
 
 const NATIVE_MANIFEST_MAX_BYTES: u64 = 1024 * 1024;
-
-#[derive(Debug, Deserialize)]
-struct CargoMetadata {
-    packages: Vec<CargoMetadataPackage>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CargoMetadataPackage {
-    name: String,
-    targets: Vec<CargoMetadataTarget>,
-}
-
-#[derive(Debug, Deserialize)]
-struct CargoMetadataTarget {
-    kind: Vec<String>,
-}
 
 pub(super) fn package_native_rust_dependencies(
     package_dir: &Path,
@@ -655,7 +636,7 @@ fn scan_native_cargo_metadata(
     native: &PackageNativeRustReview,
     reasons: &mut Vec<String>,
 ) -> Result<NativeCargoMetadataScan, String> {
-    let Some(expected_name) = native
+    let Some(_expected_name) = native
         .crate_name
         .as_deref()
         .map(str::trim)
@@ -663,82 +644,58 @@ fn scan_native_cargo_metadata(
     else {
         return Ok(NativeCargoMetadataScan::default());
     };
-    let native_root = cargo_toml
-        .parent()
-        .ok_or_else(|| format!("native Cargo.toml has no parent: {}", cargo_toml.display()))?;
-    let scan_root = native_cargo_metadata_temp_dir(cargo_toml)?;
-    super::copy_package_directory(native_root, scan_root.path())?;
-    let scan_cargo_toml = scan_root.path().join("Cargo.toml");
-    isolate_cargo_manifest_from_parent_workspace(&scan_cargo_toml)?;
-    if !scan_root.path().join("Cargo.lock").is_file() {
-        if let Some(reviewed_lock) = reviewed_native_cargo_lock(native_root, expected_name)? {
-            fs::copy(&reviewed_lock, scan_root.path().join("Cargo.lock")).map_err(|error| {
-                format!(
-                    "failed to stage reviewed Cargo.lock {}: {error}",
-                    reviewed_lock.display()
-                )
-            })?;
-        } else {
-            prepare_native_cargo_lock(&scan_cargo_toml)?;
-        }
-    }
-    let mut command = Command::new("cargo");
-    command
-        .arg("metadata")
-        .arg("--format-version")
-        .arg("1")
-        .arg("--no-deps")
-        .arg("--frozen")
-        .arg("--offline")
-        .arg("--manifest-path")
-        .arg(&scan_cargo_toml);
-    configure_reduced_build_environment(&mut command);
-    let output = run_bounded_command(
-        &mut command,
-        "native package cargo metadata",
-        CARGO_METADATA_TIMEOUT,
-        CARGO_OUTPUT_MAX_BYTES,
-    );
-    let output = output.map_err(|error| {
-        format!(
-            "failed to run bounded cargo metadata for {}: {error}",
-            cargo_toml.display()
-        )
-    })?;
-    if !output.status.success() {
-        reasons.push("native Rust cargo metadata failed".to_string());
-        return Ok(NativeCargoMetadataScan::default());
-    }
-
-    let metadata: CargoMetadata = serde_json::from_slice(&output.stdout).map_err(|error| {
-        format!(
-            "failed to parse cargo metadata for {}: {error}",
-            cargo_toml.display()
-        )
-    })?;
-    let Some(package) = metadata.packages.first() else {
-        reasons.push("native Rust cargo metadata reported no packages".to_string());
+    let source = read_utf8_file_bounded(
+        cargo_toml,
+        NATIVE_MANIFEST_MAX_BYTES,
+        "native Cargo.toml metadata read",
+    )?;
+    let manifest: toml::Value = toml::from_str(&source)
+        .map_err(|error| format!("failed to parse {}: {error}", cargo_toml.display()))?;
+    let package_name = manifest
+        .get("package")
+        .and_then(|package| package.get("name"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned);
+    let Some(package_name) = package_name else {
+        reasons.push("native Rust Cargo.toml has no package name".to_string());
         return Ok(NativeCargoMetadataScan::default());
     };
 
     if let Some(expected) = native.crate_name.as_deref().map(str::trim)
         && !expected.is_empty()
-        && expected != package.name
+        && expected != package_name
     {
         reasons.push(format!(
             "native Rust crate name `{expected}` does not match Cargo package `{}`",
-            package.name
+            package_name
         ));
     }
 
-    let mut target_kinds = package
-        .targets
-        .iter()
-        .flat_map(|target| target.kind.iter().cloned())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect::<Vec<_>>();
-    target_kinds.sort();
+    let native_root = cargo_toml.parent().unwrap_or_else(|| Path::new("."));
+    let mut target_kinds = BTreeSet::new();
+    if native_root.join("src/lib.rs").is_file() || manifest.get("lib").is_some() {
+        target_kinds.insert("lib".to_string());
+    }
+    if native_root.join("build.rs").is_file()
+        || manifest
+            .get("package")
+            .and_then(|package| package.get("build"))
+            .is_some()
+    {
+        target_kinds.insert("custom-build".to_string());
+    }
+    if manifest
+        .get("lib")
+        .and_then(|library| library.get("proc-macro"))
+        .and_then(toml::Value::as_bool)
+        == Some(true)
+    {
+        target_kinds.insert("proc-macro".to_string());
+    }
+    if manifest.get("bin").is_some() || native_root.join("src/main.rs").is_file() {
+        target_kinds.insert("bin".to_string());
+    }
+    let target_kinds = target_kinds.into_iter().collect::<Vec<_>>();
 
     if target_kinds.iter().any(|kind| kind == "custom-build")
         && native.build_scripts.as_deref() == Some("forbid")
@@ -753,7 +710,7 @@ fn scan_native_cargo_metadata(
 
     Ok(NativeCargoMetadataScan {
         ok: true,
-        package_name: Some(package.name.clone()),
+        package_name: Some(package_name),
         target_kinds,
     })
 }
@@ -823,29 +780,36 @@ pub(super) fn reviewed_native_cargo_lock(
 }
 
 pub(super) fn prepare_native_cargo_lock(cargo_toml: &Path) -> Result<(), String> {
-    let mut command = Command::new("cargo");
-    command
-        .arg("generate-lockfile")
-        .arg("--offline")
-        .arg("--manifest-path")
-        .arg(cargo_toml);
-    configure_reduced_build_environment(&mut command);
-    let output = run_bounded_command(
-        &mut command,
-        "dependency-free native offline lock review",
-        CARGO_METADATA_TIMEOUT,
-        CARGO_OUTPUT_MAX_BYTES,
+    let source = read_utf8_file_bounded(
+        cargo_toml,
+        NATIVE_MANIFEST_MAX_BYTES,
+        "dependency-free native Cargo.toml lock generation",
     )?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(format!(
-            "failed to prepare dependency-free native Cargo.lock offline:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        ))
-    }
+    let manifest: toml::Value = toml::from_str(&source)
+        .map_err(|error| format!("failed to parse {}: {error}", cargo_toml.display()))?;
+    let package = manifest
+        .get("package")
+        .ok_or_else(|| format!("{} has no [package] table", cargo_toml.display()))?;
+    let name = package
+        .get("name")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| format!("{} has no package name", cargo_toml.display()))?;
+    let version = package
+        .get("version")
+        .and_then(toml::Value::as_str)
+        .ok_or_else(|| format!("{} has no package version", cargo_toml.display()))?;
+    let lock = format!(
+        "# This file is automatically @generated by RSScript.\nversion = 4\n\n[[package]]\nname = {name:?}\nversion = {version:?}\n"
+    );
+    let lock_path = cargo_toml
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", cargo_toml.display()))?
+        .join("Cargo.lock");
+    fs::write(&lock_path, lock)
+        .map_err(|error| format!("failed to write {}: {error}", lock_path.display()))
 }
 
+#[cfg(test)]
 fn isolate_cargo_manifest_from_parent_workspace(cargo_toml: &Path) -> Result<(), String> {
     let manifest = read_utf8_file_bounded(
         cargo_toml,
@@ -860,35 +824,6 @@ fn isolate_cargo_manifest_from_parent_workspace(cargo_toml: &Path) -> Result<(),
     }
     fs::write(cargo_toml, format!("{manifest}\n[workspace]\n"))
         .map_err(|error| format!("failed to write {}: {error}", cargo_toml.display()))
-}
-
-fn native_cargo_metadata_temp_dir(cargo_toml: &Path) -> Result<tempfile::TempDir, String> {
-    let name = cargo_toml
-        .parent()
-        .and_then(|path| path.file_name())
-        .and_then(|name| name.to_str())
-        .unwrap_or("native");
-    tempfile::Builder::new()
-        .prefix(&format!("rsscript-native-metadata-{name}-"))
-        .tempdir_in(temp_root_dir())
-        .map_err(|error| format!("failed to create native metadata staging directory: {error}"))
-}
-
-fn temp_root_dir() -> PathBuf {
-    let root = env::var_os("RSSCRIPT_TEMP_DIR")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .or_else(|| ramdisk_root_dir().map(|root| root.join("rsscript-temp")))
-        .unwrap_or_else(env::temp_dir);
-    let _ = fs::create_dir_all(&root);
-
-    root
-}
-
-fn ramdisk_root_dir() -> Option<PathBuf> {
-    env::var_os("RSSCRIPT_RAMDISK_PATH")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
 }
 
 #[derive(Debug, Default)]
