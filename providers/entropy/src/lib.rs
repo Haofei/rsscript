@@ -33,9 +33,9 @@ pub fn functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInterprete
 mod tests {
     use super::*;
     #[test]
-    fn links() {
-        let mut r =
-            rsscript_provider_api::ProviderRegistry::new(rsscript_abi_model::RUNTIME_ABI_VERSION);
-        r.register_provider(&descriptor(), functions()).unwrap();
+    fn conforms_to_provider_contract() {
+        let report =
+            rsscript_provider_conformance::assert_provider_conforms(descriptor(), functions());
+        assert_eq!(report.provider_id, "rsscript.entropy");
     }
 }

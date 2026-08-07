@@ -15,7 +15,9 @@ These crates are composition-root packages. Each one implements explicit
 The compiler, semantics, executable IR, and runtime-core do not depend on these
 packages. Hosts select and register only the providers they need. A provider
 descriptor and its implementation signatures are validated together before any
-script executes.
+script executes. Every official Provider also runs the reusable
+`rsscript-provider-conformance` preflight, so descriptor shape, ABI linkage,
+import resolution, cancellation, and deadline gating are enforced uniformly.
 
 The complete descriptor, ABI, cancellation, cleanup, and conformance contract
 is documented in [`docs/provider-sdk.md`](../docs/provider-sdk.md). The

@@ -176,7 +176,7 @@ fn binding(
 mod tests {
     use super::*;
     #[test]
-    fn descriptor_and_implementations_link() {
+    fn conforms_to_provider_contract() {
         let root = std::env::temp_dir().join(format!(
             "rsscript-provider-fs-{}-{}",
             std::process::id(),
@@ -184,11 +184,11 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         let provider = RootedFsProvider::new(&root).unwrap();
-        let mut registry =
-            rsscript_provider_api::ProviderRegistry::new(rsscript_abi_model::RUNTIME_ABI_VERSION);
-        registry
-            .register_provider(&descriptor(), provider.functions())
-            .unwrap();
+        let report = rsscript_provider_conformance::assert_provider_conforms(
+            descriptor(),
+            provider.functions(),
+        );
+        assert_eq!(report.provider_id, "rsscript.fs");
         std::fs::remove_dir_all(root).unwrap();
     }
 

@@ -7,6 +7,7 @@ members = [
     "crates/rsscript-interface-catalog",
     "crates/rsscript-provider-api",
     "crates/rsscript-provider-bindgen",
+    "crates/rsscript-provider-conformance",
     "crates/rsscript-syntax",
     "crates/rsscript-source-model",
     "crates/rsscript-operation",

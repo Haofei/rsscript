@@ -37,8 +37,9 @@ called until this preflight succeeds.
    containing exactly the declared symbols and the same semantic signatures.
 4. Register descriptor and implementations at the host composition root.
 5. Call `Runtime::link`, then run the resulting `LinkedPackage`.
-6. Test descriptor/implementation linking and test every advertised
-   cancellation, cleanup, and error-mapping behavior.
+6. Run `rsscript_provider_conformance::assert_provider_conforms` in the
+   Provider's test suite, then add Provider-specific tests for every advertised
+   cancellation, cleanup, authority, budget, and error-mapping behavior.
 
 The descriptor fields are:
 
@@ -80,6 +81,19 @@ library or native-plugin ABI concerns belong in a separate adapter and must not
 leak into the provider contract.
 
 ## Conformance checklist
+
+The `rsscript-provider-conformance` crate supplies the common fail-closed
+preflight used by every official Provider. It checks descriptor structure,
+unique entries and parameters, ABI compatibility, exact implementation
+linkage, import resolution, and the runtime-owned cancellation/deadline gate.
+It never performs a real Provider operation: cancelled and already-expired
+contexts stop the call before Provider code receives arguments. The returned
+`ProviderConformanceReport` also inventories blocking, cancellable, and
+resource-producing functions for test assertions and release evidence.
+
+This generic kit complements rather than replaces behavior tests. A Provider
+that advertises cooperative cancellation, rooted authority, byte limits, or
+resource cleanup must still demonstrate those semantics with its real call.
 
 - Changing providers leaves `CompiledPackage::bytecode()` byte-for-byte equal.
 - A changed effect, type, retention flag, result type, or async flag changes the

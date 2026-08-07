@@ -1,0 +1,10 @@
+[package]
+name = "rsscript-provider-conformance"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "Reusable contract checks for RSScript Provider implementations"
+publish = false
+
+[dependencies]
+rsscript-provider-api = { path = "../rsscript-provider-api" }

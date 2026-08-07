@@ -1954,6 +1954,14 @@ dependencies = [
  "rsscript-abi-model",
  "rsscript-provider-api",
  "rsscript-provider-bindgen",
+ "rsscript-provider-conformance",
+]
+
+[[package]]
+name = "rsscript-provider-conformance"
+version = "0.1.0"
+dependencies = [
+ "rsscript-provider-api",
 ]
 
 [[package]]
@@ -1964,6 +1972,7 @@ dependencies = [
  "rsscript-abi-model",
  "rsscript-provider-api",
  "rsscript-provider-bindgen",
+ "rsscript-provider-conformance",
 ]
 
 [[package]]
@@ -1973,6 +1982,7 @@ dependencies = [
  "rsscript-abi-model",
  "rsscript-provider-api",
  "rsscript-provider-bindgen",
+ "rsscript-provider-conformance",
 ]
 
 [[package]]
@@ -1982,6 +1992,7 @@ dependencies = [
  "rsscript-abi-model",
  "rsscript-provider-api",
  "rsscript-provider-bindgen",
+ "rsscript-provider-conformance",
 ]
 
 [[package]]
@@ -1992,6 +2003,7 @@ dependencies = [
  "rsscript-abi-model",
  "rsscript-provider-api",
  "rsscript-provider-bindgen",
+ "rsscript-provider-conformance",
 ]
 
 [[package]]
@@ -2001,6 +2013,7 @@ dependencies = [
  "rsscript-abi-model",
  "rsscript-provider-api",
  "rsscript-provider-bindgen",
+ "rsscript-provider-conformance",
 ]
 
 [[package]]
@@ -2011,6 +2024,7 @@ dependencies = [
  "rsscript-abi-model",
  "rsscript-provider-api",
  "rsscript-provider-bindgen",
+ "rsscript-provider-conformance",
 ]
 
 [[package]]
@@ -2020,6 +2034,7 @@ dependencies = [
  "rsscript-abi-model",
  "rsscript-provider-api",
  "rsscript-provider-bindgen",
+ "rsscript-provider-conformance",
 ]
 
 [[package]]

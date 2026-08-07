@@ -34,10 +34,11 @@ pub fn stderr_functions() -> BTreeMap<ExternalSymbol, ProviderFunction<NativeInt
 mod tests {
     use super::*;
     #[test]
-    fn links() {
-        let mut r =
-            rsscript_provider_api::ProviderRegistry::new(rsscript_abi_model::RUNTIME_ABI_VERSION);
-        r.register_provider(&descriptor(), functions(|_| Ok(())))
-            .unwrap();
+    fn conforms_to_provider_contract() {
+        let report = rsscript_provider_conformance::assert_provider_conforms(
+            descriptor(),
+            functions(|_| Ok(())),
+        );
+        assert_eq!(report.provider_id, "rsscript.log");
     }
 }

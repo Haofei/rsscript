@@ -1987,6 +1987,7 @@ fn github_workflows_follow_current_workspace_boundaries() {
         "-p rsscript-compiler",
         "crates/rsscript-bytecode/**",
         "crates/rsscript-provider-api/**",
+        "crates/rsscript-provider-conformance/**",
         "providers/**",
     ] {
         assert!(

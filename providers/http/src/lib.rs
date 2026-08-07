@@ -167,17 +167,17 @@ mod tests {
     use std::io::Write;
 
     #[test]
-    fn descriptor_and_implementation_link_without_network_access() {
+    fn conforms_to_provider_contract_without_network_access() {
         let provider = HttpProvider::new(
             reqwest::blocking::Client::builder(),
             ["https://example.com"],
         )
         .unwrap();
-        let mut registry =
-            rsscript_provider_api::ProviderRegistry::new(rsscript_abi_model::RUNTIME_ABI_VERSION);
-        registry
-            .register_provider(&descriptor(), provider.functions())
-            .unwrap();
+        let report = rsscript_provider_conformance::assert_provider_conforms(
+            descriptor(),
+            provider.functions(),
+        );
+        assert_eq!(report.provider_id, "rsscript.http");
     }
 
     #[test]
