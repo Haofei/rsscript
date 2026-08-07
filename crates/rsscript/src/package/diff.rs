@@ -759,7 +759,7 @@ mod external_binding_diff_tests {
     }
 
     #[test]
-    fn reports_added_and_removed_capabilities_high_risk_first() {
+    fn reports_added_and_removed_external_bindings_high_risk_first() {
         let old = vec![cap("Db.read", "database.read", PackageRisk::Elevated)];
         let new = vec![
             cap("Db.read", "database.read", PackageRisk::Elevated),

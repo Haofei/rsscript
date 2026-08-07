@@ -1011,10 +1011,12 @@ fn reir_is_a_one_way_optional_integration() {
         !compiler_library.contains("reir"),
         "the compiler façade must not expose REIR formatting APIs"
     );
-    let package_cli = read(&root.join("crates/rsscript-cli/src/cli/package.rs"));
+    let package_cli = read(&root.join("crates/rsscript-cli/src/cli/mod.rs"));
     assert!(
-        !package_cli.contains("--reir") && !package_cli.contains("_reir"),
-        "package commands must emit neutral artifacts only"
+        !package_cli.contains("mod package;")
+            && !package_cli.contains("\"pkg\"")
+            && !package_cli.contains("rss pkg"),
+        "repository/review package commands must stay out of the product CLI"
     );
 }
 

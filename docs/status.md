@@ -35,9 +35,9 @@ process-global Tokio runtime discovery and its compatibility registry are gone.
 Public VM and SDK defaults carry finite step, allocation, output, intrinsic,
 provider-call, resource, and recursion budgets; the old `safe_default` alias is
 removed, and unlimited execution requires `unbounded_for_trusted_host()`.
-The compiler now consumes runtime `core` only; VM
-compatibility intrinsics for filesystem and process access fail with an explicit
-provider-required error instead of reaching the OS. Disabled hosts fail before
+The compiler now consumes runtime `core` only; filesystem, environment, process,
+network, wall-clock, and entropy intrinsics are absent from the VM core and must
+be supplied as explicit external symbols by Providers. Disabled hosts fail before
 build, spawn, or dynamic loading when those integrations are requested.
 REIR conversion lives in the one-way `integrations/rsscript-review-reir`
 adapter and is absent from normal compiler dependencies, public compiler APIs,

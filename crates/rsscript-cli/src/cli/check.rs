@@ -8,9 +8,9 @@ use rsscript::{
     standard_package_interfaces,
 };
 
-#[cfg(feature = "execution")]
-use super::package::run_package_check;
 use super::{is_package_directory, print_usage, read_interface_sources, required_flag_value};
+#[cfg(feature = "execution")]
+use rsscript::{analyze_package_dir, format_package_analysis_json};
 
 /// Parse `--explain <CODE>` (optionally with `--json`), in any order.
 fn parse_explain_args(args: &[String]) -> Option<(&str, bool)> {
@@ -79,7 +79,7 @@ pub(crate) fn parse_check_args(args: &[String]) -> Result<CheckOptions<'_>, Stri
 fn package_check_option_error(options: &CheckOptions<'_>) -> Option<String> {
     if options.lint {
         return Some(
-            "`rss check --lint` is only valid for single-file checks; package checks use `rss pkg`."
+            "`rss check --lint` is only valid for single-file checks; package checks include package diagnostics."
                 .to_string(),
         );
     }
@@ -94,6 +94,31 @@ fn package_check_option_error(options: &CheckOptions<'_>) -> Option<String> {
         );
     }
     None
+}
+
+#[cfg(feature = "execution")]
+fn run_package_check(json: bool, path: &str) -> ExitCode {
+    let analysis = match analyze_package_dir(std::path::Path::new(path)) {
+        Ok(analysis) => analysis,
+        Err(error) => {
+            eprintln!("{error}");
+            return ExitCode::from(2);
+        }
+    };
+    if json {
+        println!("{}", format_package_analysis_json(&analysis));
+    } else if !analysis.diagnostics.is_empty() {
+        print!("{}", format_diagnostics_human(&analysis.diagnostics));
+    }
+    if analysis
+        .diagnostics
+        .iter()
+        .any(|diagnostic| diagnostic.severity.is_error())
+    {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 pub(crate) fn run_check(args: &[String]) -> ExitCode {
     if let Some((code, json)) = parse_explain_args(args) {

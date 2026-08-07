@@ -21,8 +21,6 @@ mod check;
 mod fix;
 mod fmt;
 #[cfg(feature = "execution")]
-mod package;
-#[cfg(feature = "execution")]
 mod process;
 #[cfg(feature = "execution")]
 mod run_cmd;
@@ -43,13 +41,9 @@ pub fn run() -> ExitCode {
         #[cfg(feature = "execution")]
         "inspect" => artifact::run_inspect(&args[2..]),
         #[cfg(feature = "execution")]
-        "new" => package::run_new_package(&args[2..]),
-        #[cfg(feature = "execution")]
-        "pkg" => package::run_package(&args[2..]),
-        #[cfg(feature = "execution")]
         "run" => run_cmd::run_input(&args[2..]),
         #[cfg(not(feature = "execution"))]
-        "build" | "inspect" | "new" | "pkg" | "run" => {
+        "build" | "inspect" | "run" => {
             eprintln!("`rss {command}` requires the `execution` feature");
             ExitCode::from(2)
         }
@@ -447,20 +441,10 @@ pub(crate) fn print_usage() {
     eprintln!("  rss fmt <file.rss>  # writes formatted source to stdout");
     eprintln!("  rss inspect <imports|bytecode> [--json] <file-or-artifact-or-package>");
     eprintln!("  rss inspect <analysis|resources|async|call-graph> [--json] <package-directory>");
-    eprintln!("  rss new <package-name>");
     eprintln!("  rss run [--json] <file-or-package-directory> [-- <args>...]  # verified VM");
     eprintln!(
         "  rss run --aot [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]"
     );
-    eprintln!("  rss pkg [--json] [package-directory]");
-    eprintln!("  rss pkg add <dependency|dependency@version|path-to-package>");
-    eprintln!("  rss pkg analysis [package-directory]");
-    eprintln!("  rss pkg review [--json] [package-directory]");
-    eprintln!("  rss pkg diff [--json] <old-package-directory> <new-package-directory>");
-    eprintln!("  rss pkg ci [--json] [package-directory]");
-    eprintln!("  rss pkg lock [--json] [package-directory]");
-    eprintln!("  rss pkg tree [--json] [package-directory]");
-    eprintln!("  rss pkg metadata [--verify|--dry-run] [--json] [package-directory]");
 }
 
 #[cfg(test)]

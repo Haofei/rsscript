@@ -28,7 +28,7 @@ and a threat model consistent with [threat-model.md](threat-model.md).
 
 `✓` is Core coverage; `Experimental` and `Partial` are not Core support claims.
 
-| Capability | Spec | Parser | Semantics | VM | Rust AOT | JIT | LSP | Tests |
+| Language area | Spec | Parser | Semantics | VM | Rust AOT | JIT | LSP | Tests |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | Ownership effects | ✓ | ✓ | ✓ | ✓ | Experimental | Experimental | ✓ | ✓ |
 | Retention / escape | ✓ | ✓ | ✓ | ✓ | Experimental | Experimental | ✓ | ✓ |
@@ -38,6 +38,6 @@ and a threat model consistent with [threat-model.md](threat-model.md).
 | External symbols | ✓ | ✓ | ✓ | ✓ | Experimental | Experimental | ✓ | ✓ |
 | Dynamic protocols | ✓ | ✓ | ✓ | ✓ | Experimental | Partial | ✓ | ✓ |
 
-Parser acceptance alone never marks a capability supported. Core promotion
+Parser acceptance alone never marks a language area supported. Core promotion
 requires semantic validation, verified-VM conformance, diagnostics, LSP behavior,
 and regression coverage together.

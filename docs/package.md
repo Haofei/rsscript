@@ -16,8 +16,10 @@ executable `module_digest` when built, diagnostics, exports, semantic summaries,
 and external symbols. It does not contain permission grants. Package
 build-selection features remain package metadata and are not language features.
 
-`rss pkg analysis [package-directory]` prints the neutral analysis artifact as
-JSON. `rss pkg review` derives optional review output separately.
+`rss build --analysis-out <analysis.json> <package-directory>` writes the neutral
+analysis artifact, and `rss inspect analysis --json <package-directory>` prints
+it. Optional review is derived by the separate REIR integration rather than by
+the product CLI.
 
 Provider loading uses the platform-neutral types in `rsscript-abi-model` and the
 registry contract in `rsscript-provider-api`. Semantic signatures are hashed from

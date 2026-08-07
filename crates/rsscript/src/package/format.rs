@@ -112,7 +112,7 @@ pub fn format_package_review_human(review: &PackageReview) -> String {
     output.push_str(&format_package_review_await_sites_human(
         &review.await_sites,
     ));
-    output.push_str(&format_package_review_capabilities_human(
+    output.push_str(&format_package_review_external_bindings_human(
         &review.external_bindings,
     ));
     output.push_str(&format_package_review_exports_human(&review.exports));
@@ -178,7 +178,7 @@ pub fn format_package_review_markdown(review: &PackageReview) -> String {
     if rows.is_empty() {
         let _ = writeln!(out, "\nNo declared external_bindings.");
     } else {
-        let _ = writeln!(out, "\n### Capabilities (by risk)\n");
+        let _ = writeln!(out, "\n### External bindings (by risk)\n");
         let _ = writeln!(out, "| risk | external_binding | provider | via |");
         let _ = writeln!(out, "|------|------------|----------|-----|");
         for row in rows {
@@ -212,7 +212,7 @@ pub fn format_package_review_markdown(review: &PackageReview) -> String {
 
 /// Distinct external_bindings the package requires, ranked high-risk first, so a
 /// reviewer sees the powers (and any unrecognized ones) at a glance.
-fn format_package_review_capabilities_human(
+fn format_package_review_external_bindings_human(
     external_bindings: &[crate::package::types::PackageExternalBinding],
 ) -> String {
     if external_bindings.is_empty() {
