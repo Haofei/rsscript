@@ -1,8 +1,9 @@
 use super::CliError;
 use super::safe_io::{MAX_CLI_INPUT_BYTES, read_bounded_text_accounted};
 use reir::adapters::rsscript::{
-    rsscript_check_json_to_bundle, rsscript_json_to_bundle, rsscript_lock_diff_json_to_bundle,
-    rsscript_lock_json_to_bundle, rsscript_metadata_json_to_bundle, rsscript_tree_json_to_bundle,
+    rsscript_analysis_json_to_bundle, rsscript_check_json_to_bundle, rsscript_json_to_bundle,
+    rsscript_lock_diff_json_to_bundle, rsscript_lock_json_to_bundle,
+    rsscript_metadata_json_to_bundle, rsscript_tree_json_to_bundle,
 };
 use reir::api::v1::{
     model::{Bundle, FactRole},
@@ -17,6 +18,7 @@ use std::process::ExitCode;
 pub(super) const MAX_MERGE_INPUT_FILES: usize = 1024;
 
 pub(super) struct RsscriptCollectInputs<'a> {
+    pub(super) package_analysis_json: Option<&'a str>,
     pub(super) review_map_json: Option<&'a str>,
     pub(super) package_review_json: Option<&'a str>,
     pub(super) package_check_json: Option<&'a str>,
@@ -32,6 +34,13 @@ pub(super) fn collect_rsscript_bundle(
     inputs: RsscriptCollectInputs<'_>,
 ) -> Result<Bundle, CliError> {
     let mut bundles = Vec::new();
+    if let Some(json) = inputs.package_analysis_json {
+        bundles.push(rsscript_analysis_json_to_bundle(json).map_err(|error| {
+            CliError::runtime(format!(
+                "failed to collect RSScript package analysis: {error}"
+            ))
+        })?);
+    }
     if inputs.review_map_json.is_some() || inputs.package_review_json.is_some() {
         bundles.push(
             rsscript_json_to_bundle(

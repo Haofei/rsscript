@@ -2027,7 +2027,6 @@ name = "rsscript-review-reir"
 version = "0.1.0"
 dependencies = [
  "reir",
- "rsscript-compiler",
  "serde_json",
 ]
 

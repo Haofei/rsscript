@@ -999,12 +999,12 @@ fn reir_is_a_one_way_optional_integration() {
     let integration_dependencies = normal_dependency_packages(&integration_manifest);
     assert_eq!(
         integration_dependencies,
-        BTreeSet::from([
-            "reir".to_string(),
-            "rsscript-compiler".to_string(),
-            "serde_json".to_string(),
-        ])
+        BTreeSet::from(["reir".to_string(), "serde_json".to_string(),])
     );
+    let integration_library = read(&root.join("integrations/rsscript-review-reir/src/lib.rs"));
+    assert!(integration_library.contains("package_analysis"));
+    assert!(!integration_library.contains("PackageReview"));
+    assert!(!integration_library.contains("format_package_review"));
 
     let compiler_library = read(&root.join("crates/rsscript/src/lib.rs"));
     assert!(

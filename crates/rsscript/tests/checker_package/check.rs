@@ -1,4 +1,4 @@
-//! Spec §2.5 — package health check (rss pkg / pkg ci)
+//! Internal package graph and health-check invariants.
 #![allow(unused_imports, dead_code)]
 use super::*;
 

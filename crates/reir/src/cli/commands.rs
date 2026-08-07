@@ -57,6 +57,7 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
     }
 
     let mut producer = None;
+    let mut package_analysis = None;
     let mut review_map = None;
     let mut package_review = None;
     let mut package_check = None;
@@ -75,6 +76,9 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
         match args[index].as_str() {
             "--strict" => strict = true,
             "--producer" => producer = Some(take_value(args, &mut index, "--producer")?),
+            "--package-analysis" => {
+                package_analysis = Some(take_value(args, &mut index, "--package-analysis")?)
+            }
             "--review-map" => review_map = Some(take_value(args, &mut index, "--review-map")?),
             "--package-review" => {
                 package_review = Some(take_value(args, &mut index, "--package-review")?)
@@ -112,6 +116,7 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
         let from_path =
             from.ok_or_else(|| CliError::usage("terraform collect requires --from <path>"))?;
         if review_map.is_some()
+            || package_analysis.is_some()
             || package_review.is_some()
             || package_check.is_some()
             || package_lock.is_some()
@@ -174,6 +179,7 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
         ));
     }
     if review_map.is_none()
+        && package_analysis.is_none()
         && package_review.is_none()
         && package_check.is_none()
         && package_lock.is_none()
@@ -187,6 +193,8 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
     }
 
     let mut aggregate_input_bytes = 0;
+    let package_analysis_json =
+        read_optional_text_accounted(package_analysis.as_deref(), &mut aggregate_input_bytes)?;
     let review_map_json =
         read_optional_text_accounted(review_map.as_deref(), &mut aggregate_input_bytes)?;
     let package_review_json =
@@ -202,6 +210,7 @@ pub(super) fn try_run_collect(args: &[String]) -> Result<ExitCode, CliError> {
     let package_metadata_json =
         read_optional_text_accounted(package_metadata.as_deref(), &mut aggregate_input_bytes)?;
     let bundle = collect_rsscript_bundle(RsscriptCollectInputs {
+        package_analysis_json: package_analysis_json.as_deref(),
         review_map_json: review_map_json.as_deref(),
         package_review_json: package_review_json.as_deref(),
         package_check_json: package_check_json.as_deref(),

@@ -14,6 +14,19 @@ pub fn rsscript_to_bundle(
     .unwrap_or_else(|error| rsscript_budget_exceeded_bundle(error, PRODUCER_SOURCE))
 }
 
+/// Build a REIR bundle from neutral `rsscript.package_analysis.v1` JSON.
+pub fn rsscript_analysis_json_to_bundle(
+    package_analysis_json: &str,
+) -> Result<Bundle, serde_json::Error> {
+    let analysis = package_analysis_input_from_json(package_analysis_json)?;
+    build_rsscript_bundle(
+        rsscript_provenance("rsscript-package-analysis", PACKAGE_ANALYSIS_SOURCE),
+        package_analysis_to_facts(&analysis),
+        [],
+    )
+    .map_err(adapter_error_to_json)
+}
+
 /// Build a REIR bundle from RSScript review-map JSON and package-review JSON.
 pub fn rsscript_json_to_bundle(
     review_map_json: Option<&str>,

@@ -11,5 +11,4 @@ doctest = false
 
 [dependencies]
 reir = { path = "../../crates/reir" }
-rsscript = { package = "rsscript-compiler", path = "../../crates/rsscript", features = ["execution"] }
 serde_json = "1"

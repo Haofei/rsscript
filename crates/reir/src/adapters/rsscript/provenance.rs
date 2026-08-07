@@ -73,6 +73,38 @@ fn package_metadata(
     }
 }
 
+fn package_analysis_metadata(
+    input: &RsScriptPackageAnalysisInput,
+    value: Option<String>,
+    reason: Option<String>,
+) -> Evidence {
+    Evidence {
+        reason,
+        resource: Some(format!("{}@{}", input.package.name, input.package.version)),
+        provider: Some("rsscript".to_owned()),
+        value,
+        source: Some(PACKAGE_ANALYSIS_SOURCE.to_owned()),
+        ..rsscript_evidence(EvidenceKind::PackageMetadata)
+    }
+}
+
+fn package_analysis_span(
+    span: &RsScriptDiagnosticSpan,
+    symbol: &str,
+    reason: String,
+) -> Evidence {
+    Evidence {
+        file: (!span.file.is_empty()).then(|| span.file.clone()),
+        line: Some(span.line.max(1)),
+        column: Some(span.column.max(1)),
+        length: Some(span.length),
+        symbol: Some(symbol.to_owned()),
+        reason: Some(reason),
+        source: Some(PACKAGE_ANALYSIS_SOURCE.to_owned()),
+        ..rsscript_evidence(EvidenceKind::SourceSpan)
+    }
+}
+
 fn lockfile_supply_chain_fact(
     package_slug: &str,
     field: &str,

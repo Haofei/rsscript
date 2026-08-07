@@ -279,6 +279,7 @@ fn collect_rsscript_bundle_merges_package_manager_inputs() {
         }"#;
 
     let bundle = collect_rsscript_bundle(RsscriptCollectInputs {
+        package_analysis_json: None,
         review_map_json: None,
         package_review_json: Some(package_review),
         package_check_json: Some(package_check),
@@ -308,6 +309,43 @@ fn collect_rsscript_bundle_merges_package_manager_inputs() {
                 .facts
                 .contains(&"fact.lockfile.demo_0_1_0.effective_interface_hash".to_owned())
     }));
+}
+
+#[test]
+fn collect_rsscript_bundle_accepts_neutral_package_analysis() {
+    let analysis = r#"{
+        "$schema": "rsscript.package_analysis.v1",
+        "language_version": "2026",
+        "interface_catalog_digest": "sha256:interfaces",
+        "snapshot_digest": "sha256:snapshot",
+        "module_digest": "sha256:module",
+        "package": { "name": "demo", "version": "0.1.0", "edition": "2026" },
+        "exports": [],
+        "external_imports": [],
+        "await_sites": [],
+        "diagnostics": []
+    }"#;
+    let bundle = collect_rsscript_bundle(RsscriptCollectInputs {
+        package_analysis_json: Some(analysis),
+        review_map_json: None,
+        package_review_json: None,
+        package_check_json: None,
+        package_lock_json: None,
+        package_lock_path: None,
+        lock_update_json: None,
+        package_tree_json: None,
+        package_metadata_json: None,
+        package_name: None,
+    })
+    .expect("neutral package analysis should collect");
+
+    assert_eq!(bundle.producers.len(), 1);
+    assert!(
+        bundle
+            .facts
+            .iter()
+            .any(|fact| { fact.kind == FactKind::Extension("package_analysis".to_owned()) })
+    );
 }
 
 #[test]

@@ -1,7 +1,8 @@
 //! RSScript language and package producer adapter for REIR.
-//! Converts RSScript compiler/package review output into REIR facts.
+//! Converts neutral RSScript package analysis into REIR facts. Legacy package
+//! evidence decoders remain available for previously emitted artifacts.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -18,8 +19,10 @@ const EDGE_SCHEMA: &str = "reir.edge.v0.1";
 const PRODUCER_VERSION: &str = "0.5.0";
 const ADAPTER_VERSION: &str = "0.1";
 const PRODUCER_SOURCE: &str = "compiler_contract";
+const PACKAGE_ANALYSIS_SCHEMA: &str = "rsscript.package_analysis.v1";
 const REVIEW_MAP_SOURCE: &str = "rsscript_review_map";
 const PACKAGE_REVIEW_SOURCE: &str = "rsscript_package_review";
+const PACKAGE_ANALYSIS_SOURCE: &str = "rsscript_package_analysis";
 const PACKAGE_CHECK_SOURCE: &str = "rsscript_package_check";
 const LOCKFILE_SOURCE: &str = "rsscript_lockfile";
 const PACKAGE_METADATA_SOURCE: &str = "rsscript_package_metadata";
