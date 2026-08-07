@@ -397,60 +397,6 @@ fn main() -> Unit {
 }
 
 #[test]
-fn parity_string_env_intrinsics_for_missing_values() {
-    let source = r#"
-fn main() -> Result<Unit, FileError> {
-    match Env.get(name: read "__RSSCRIPT_PARITY_ENV_MISSING__") {
-        Some(value) => {
-            Output.write(message: read value)
-        }
-        None => {
-            Output.write(message: read "env-missing")
-        }
-    }
-    Output.write(message: read Env.get_or_default(name: read "__RSSCRIPT_PARITY_ENV_MISSING__", default: read "env-fallback"))
-    Env.set(name: read "__RSSCRIPT_PARITY_ENV_SET__", value: read "ignored")
-    let current = Env.current_dir()?
-    if Path.is_dir(path: read current) {
-        Output.write(message: read "current-dir")
-    }
-    Env.set_current_dir(path: read current)?
-    let root = Env.run_workspace_root()
-    if Path.is_dir(path: read root) {
-        Output.write(message: read "workspace-root")
-    }
-    match Env.home_dir() {
-        Some(path) => {
-            if Path.is_dir(path: read path) {
-                Output.write(message: read "home-dir")
-            } else {
-                Output.write(message: read "home-path")
-            }
-        }
-        None => {
-            Output.write(message: read "home-none")
-        }
-    }
-    if Path.is_dir(path: read Env.temp_dir()) {
-        Output.write(message: read "temp-dir")
-    }
-    match String.env(value: read "__RSSCRIPT_PARITY_ENV_MISSING__") {
-        Some(value) => {
-            Output.write(message: read value)
-        }
-        None => {
-            Output.write(message: read "string-missing")
-        }
-    }
-    Output.write(message: read String.env_or(value: read "__RSSCRIPT_PARITY_ENV_MISSING__", default: read "fallback"))
-    Output.write(message: read "__RSSCRIPT_PARITY_ENV_MISSING__".env_or("method-fallback"))
-    return Ok(Unit)
-}
-"#;
-    common::assert_vm_eval_matches_backend("parity-env.rss", "rsscript_parity_env", source);
-}
-
-#[test]
 fn parity_regex_intrinsics() {
     let source = r#"
 

@@ -11,10 +11,6 @@ pub const STANDARD_PACKAGE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../../../packages/async/interface/channel.rssi"),
     ),
     (
-        "packages/async/interface/csv.rssi",
-        include_str!("../../../packages/async/interface/csv.rssi"),
-    ),
-    (
         "packages/async/interface/stream.rssi",
         include_str!("../../../packages/async/interface/stream.rssi"),
     ),
@@ -98,6 +94,10 @@ pub const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../../../stdlib/diff/diff.rssi"),
     ),
     (
+        "stdlib/duration/duration.rssi",
+        include_str!("../../../stdlib/duration/duration.rssi"),
+    ),
+    (
         "stdlib/encoding/encoding.rssi",
         include_str!("../../../stdlib/encoding/encoding.rssi"),
     ),
@@ -130,6 +130,10 @@ pub const CORE_INTERFACES: &[(&str, &str)] = &[
         include_str!("../../../stdlib/patch/patch.rssi"),
     ),
     (
+        "stdlib/path/path.rssi",
+        include_str!("../../../stdlib/path/path.rssi"),
+    ),
+    (
         "stdlib/regex/regex.rssi",
         include_str!("../../../stdlib/regex/regex.rssi"),
     ),
@@ -144,10 +148,6 @@ pub const CORE_INTERFACES: &[(&str, &str)] = &[
     (
         "stdlib/test/assert.rssi",
         include_str!("../../../stdlib/test/assert.rssi"),
-    ),
-    (
-        "stdlib/toml/toml.rssi",
-        include_str!("../../../stdlib/toml/toml.rssi"),
     ),
     (
         "stdlib/url/url.rssi",

@@ -33,32 +33,6 @@ fn main() -> Unit {
 }
 
 #[test]
-fn parity_deadline_intrinsics() {
-    let source = r#"
-
-fn main() -> Unit {
-    let immediate = Deadline.after_ms(ms: 0)
-    if Deadline.is_expired(deadline: read immediate) {
-        Output.write(message: read "expired-now")
-    }
-    Output.write(message: read String.from_int(value: Deadline.remaining_ms(deadline: read immediate)))
-
-    let negative = Deadline.after(duration: read Duration.ms(value: 0 - 1))
-    if Deadline.is_expired(deadline: read negative) {
-        Output.write(message: read "expired-negative")
-    }
-    Output.write(message: read String.from_int(value: Deadline.remaining_ms(deadline: read negative)))
-    return Unit
-}
-"#;
-    common::assert_vm_eval_matches_backend(
-        "parity-deadline.rss",
-        "rsscript_parity_deadline",
-        source,
-    );
-}
-
-#[test]
 fn parity_channel_sync_intrinsics() {
     let source = r#"
 

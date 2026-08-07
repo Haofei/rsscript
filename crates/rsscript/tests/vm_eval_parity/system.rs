@@ -55,23 +55,3 @@ fn main(args: read List<String>) -> Unit {
         &["alpha", "beta value", "gamma"],
     );
 }
-
-#[test]
-fn parity_clock_and_instant_intrinsics() {
-    let source = r#"
-
-fn main(args: read List<String>) -> Unit {
-    let unix = Clock.system_unix_ms()
-    if unix > 0 {
-        Output.write(message: read "unix-positive")
-    }
-    let start = Clock.now()
-    let elapsed = Instant.elapsed(start: read start)
-    let elapsed_ms = Duration.as_ms(value: read elapsed)
-    Assert.equal_int(left: elapsed_ms, right: elapsed_ms)
-    Output.write(message: read "elapsed-ok")
-    return Unit
-}
-"#;
-    common::assert_vm_eval_matches_backend("parity-clock.rss", "rsscript_parity_clock", source);
-}

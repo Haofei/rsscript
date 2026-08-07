@@ -14,9 +14,6 @@ pub fn Hash.sha3_256_bytes(value: Bytes) -> fresh Bytes
 pub fn Hash.shake128_bytes(value: Bytes, out_len: Int) -> fresh Bytes
 
 
-pub fn Hash.sha256_file(path: Path) -> Result<fresh String, FileError>
-
-
 pub fn Hmac.sha256_string(
     key: String,
     value: String,

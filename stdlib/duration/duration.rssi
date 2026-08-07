@@ -1,26 +1,12 @@
-
-struct Instant
+/// A deterministic duration value. Reading wall-clock time is provider-backed.
 struct Duration
-
-pub fn Clock.now() -> fresh Instant
-
-
-pub fn Clock.system_unix_ms() -> Int
-
-
-pub fn Instant.elapsed(start: Instant) -> fresh Duration
-
 
 pub fn Duration.ms(value: Int) -> fresh Duration
 
-
 pub fn Duration.seconds(value: Int) -> fresh Duration
-
 
 pub fn Duration.as_ms(value: Duration) -> Int
 
-
 pub fn Duration.as_seconds(value: Duration) -> Int
-
 
 pub fn Duration.add(left: Duration, right: Duration) -> fresh Duration

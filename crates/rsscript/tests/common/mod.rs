@@ -24,8 +24,7 @@ pub const FULL_BACKEND_PARITY_ENV: &str = "RSSCRIPT_FULL_BACKEND_PARITY";
 
 static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Host contracts used explicitly by cross-backend fixtures. They are test
-/// dependencies, not part of the language's default interface surface.
+/// Structured-async contracts used explicitly by cross-backend fixtures.
 pub const TEST_HOST_INTERFACES: &[(&str, &str)] = &[
     (
         "async/cancellation.rssi",
@@ -42,78 +41,6 @@ pub const TEST_HOST_INTERFACES: &[(&str, &str)] = &[
     (
         "async/task.rssi",
         include_str!("../../../../packages/async/interface/task.rssi"),
-    ),
-    (
-        "host/async-csv.rssi",
-        include_str!("../../../../packages/async/interface/csv.rssi"),
-    ),
-    (
-        "host/deadline.rssi",
-        include_str!("../../../../packages/async/interface/deadline.rssi"),
-    ),
-    (
-        "host/async-file.rssi",
-        include_str!("../../../../packages/async/interface/file.rssi"),
-    ),
-    (
-        "host/async-http.rssi",
-        include_str!("../../../../packages/async/interface/http.rssi"),
-    ),
-    (
-        "host/async-process.rssi",
-        include_str!("../../../../packages/async/interface/process.rssi"),
-    ),
-    (
-        "host/tcp.rssi",
-        include_str!("../../../../packages/async/interface/tcp.rssi"),
-    ),
-    (
-        "host/timer.rssi",
-        include_str!("../../../../packages/async/interface/timer.rssi"),
-    ),
-    (
-        "host/websocket.rssi",
-        include_str!("../../../../packages/async/interface/websocket.rssi"),
-    ),
-    (
-        "host/clock.rssi",
-        include_str!("../../../../stdlib/clock/clock.rssi"),
-    ),
-    (
-        "host/env.rssi",
-        include_str!("../../../../stdlib/env/env.rssi"),
-    ),
-    (
-        "host/directory.rssi",
-        include_str!("../../../../stdlib/fs/directory.rssi"),
-    ),
-    (
-        "host/file.rssi",
-        include_str!("../../../../stdlib/fs/file.rssi"),
-    ),
-    (
-        "host/http.rssi",
-        include_str!("../../../../stdlib/http/client.rssi"),
-    ),
-    (
-        "host/path.rssi",
-        include_str!("../../../../stdlib/path/path.rssi"),
-    ),
-    (
-        "host/process.rssi",
-        include_str!("../../../../stdlib/process/process.rssi"),
-    ),
-    (
-        "host/random.rssi",
-        include_str!("../../../../stdlib/random/random.rssi"),
-    ),
-    (
-        "host/tempdir.rssi",
-        include_str!("../../../../stdlib/tempdir/tempdir.rssi"),
-    ),
-    (
-        "host/workspace.rssi",
-        include_str!("../../../../stdlib/workspace/workspace.rssi"),
     ),
 ];
 

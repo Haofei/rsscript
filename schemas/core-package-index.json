@@ -14,24 +14,6 @@
       "types": []
     },
     {
-      "path": "stdlib/clock/clock.rssi",
-      "module": "clock.clock",
-      "functions": [
-        "Clock.now",
-        "Clock.system_unix_ms",
-        "Duration.add",
-        "Duration.as_ms",
-        "Duration.as_seconds",
-        "Duration.ms",
-        "Duration.seconds",
-        "Instant.elapsed"
-      ],
-      "types": [
-        "Duration",
-        "Instant"
-      ]
-    },
-    {
       "path": "stdlib/clone/clone.rssi",
       "module": "clone.clone",
       "functions": [
@@ -300,9 +282,7 @@
       "path": "stdlib/csv/csv.rssi",
       "module": "csv.csv",
       "functions": [
-        "Csv.open_read",
         "Csv.parse_row",
-        "Csv.read_into",
         "Row.field_string",
         "RowBuffer.new"
       ],
@@ -344,6 +324,20 @@
       "types": []
     },
     {
+      "path": "stdlib/duration/duration.rssi",
+      "module": "duration.duration",
+      "functions": [
+        "Duration.add",
+        "Duration.as_ms",
+        "Duration.as_seconds",
+        "Duration.ms",
+        "Duration.seconds"
+      ],
+      "types": [
+        "Duration"
+      ]
+    },
+    {
       "path": "stdlib/dyn/dyn.rssi",
       "module": "dyn.dyn",
       "functions": [
@@ -374,80 +368,10 @@
       ]
     },
     {
-      "path": "stdlib/env/env.rssi",
-      "module": "env.env",
-      "functions": [
-        "Env.current_dir",
-        "Env.get",
-        "Env.get_or_default",
-        "Env.home_dir",
-        "Env.run_workspace_root",
-        "Env.set",
-        "Env.set_current_dir",
-        "Env.temp_dir"
-      ],
-      "types": []
-    },
-    {
-      "path": "stdlib/fs/directory.rssi",
-      "module": "fs.directory",
-      "functions": [
-        "Directory.copy_file",
-        "Directory.create",
-        "Directory.create_all",
-        "Directory.create_dir_all",
-        "Directory.exists",
-        "Directory.is_dir",
-        "Directory.is_file",
-        "Directory.list_files",
-        "Directory.list_paths",
-        "Directory.metadata",
-        "Directory.read_string",
-        "Directory.remove_dir_all",
-        "Directory.remove_file",
-        "Directory.rename",
-        "Directory.write_string"
-      ],
-      "types": [
-        "FileMetadata"
-      ]
-    },
-    {
-      "path": "stdlib/fs/file.rssi",
-      "module": "fs.file",
-      "functions": [
-        "File.append_bytes",
-        "File.append_string",
-        "File.exists",
-        "File.open",
-        "File.open_read",
-        "File.open_write",
-        "File.read_all",
-        "File.read_all_string",
-        "File.read_bytes",
-        "File.read_into",
-        "File.read_string",
-        "File.remove",
-        "File.write",
-        "File.write_atomic",
-        "File.write_buffer",
-        "File.write_buffer_view",
-        "File.write_bytes",
-        "File.write_bytes_view",
-        "File.write_string",
-        "File.write_string_to_path",
-        "FileError.message"
-      ],
-      "types": [
-        "File"
-      ]
-    },
-    {
       "path": "stdlib/hash/hash.rssi",
       "module": "hash.hash",
       "functions": [
         "Hash.sha256_bytes",
-        "Hash.sha256_file",
         "Hash.sha256_string",
         "Hash.sha3_224_bytes",
         "Hash.sha3_256_bytes",
@@ -465,30 +389,6 @@
       ],
       "types": [
         "Hashable"
-      ]
-    },
-    {
-      "path": "stdlib/http/client.rssi",
-      "module": "http.client",
-      "functions": [
-        "Http.get",
-        "Http.post_form",
-        "Http.post_json",
-        "HttpError.message",
-        "HttpRequest.json",
-        "HttpRequest.with_header",
-        "HttpRequest.with_retry",
-        "HttpRequest.with_timeout",
-        "HttpResponse.bytes",
-        "HttpResponse.is_success",
-        "HttpResponse.lines",
-        "HttpResponse.status",
-        "HttpResponse.text"
-      ],
-      "types": [
-        "HttpError",
-        "HttpRequest",
-        "HttpResponse"
       ]
     },
     {
@@ -553,7 +453,6 @@
         "Json.object_keys",
         "Json.object_len",
         "Json.parse",
-        "Json.parse_file",
         "Json.quote_string",
         "Json.raw_field",
         "Json.string_array",
@@ -649,57 +548,18 @@
       "path": "stdlib/path/path.rssi",
       "module": "path.path",
       "functions": [
-        "Path.exists",
         "Path.extension",
         "Path.file_name",
         "Path.from_string",
         "Path.is_absolute",
-        "Path.is_dir",
-        "Path.is_file",
         "Path.join",
-        "Path.list_files",
-        "Path.list_paths",
         "Path.normalize",
         "Path.parent",
-        "Path.read_string",
         "Path.resolve_relative",
         "Path.safe_relative",
         "Path.starts_with",
         "Path.to_string",
-        "Path.with_extension",
-        "Path.write_string"
-      ],
-      "types": []
-    },
-    {
-      "path": "stdlib/process/process.rssi",
-      "module": "process.process",
-      "functions": [
-        "Process.run",
-        "Process.run_many_stdout",
-        "Process.run_many_stdout_timeout",
-        "Process.run_request",
-        "Process.run_stdout",
-        "Process.run_stdout_timeout",
-        "Process.run_timeout"
-      ],
-      "types": [
-        "ProcessEnv",
-        "ProcessEvent",
-        "ProcessOutput",
-        "ProcessRequest"
-      ]
-    },
-    {
-      "path": "stdlib/random/random.rssi",
-      "module": "random.random",
-      "functions": [
-        "Random.bool",
-        "Random.bytes",
-        "Random.float",
-        "Random.int",
-        "Random.string",
-        "Uuid.new_v4"
+        "Path.with_extension"
       ],
       "types": []
     },
@@ -826,33 +686,12 @@
       ]
     },
     {
-      "path": "stdlib/tempdir/tempdir.rssi",
-      "module": "tempdir.tempdir",
-      "functions": [
-        "TempDir.keep",
-        "TempDir.new",
-        "TempDir.new_in",
-        "TempDir.path"
-      ],
-      "types": [
-        "TempDir"
-      ]
-    },
-    {
       "path": "stdlib/test/assert.rssi",
       "module": "test.assert",
       "functions": [
         "Assert.equal",
         "Assert.equal_bool",
         "Assert.equal_int"
-      ],
-      "types": []
-    },
-    {
-      "path": "stdlib/toml/toml.rssi",
-      "module": "toml.toml",
-      "functions": [
-        "Toml.parse_file"
       ],
       "types": []
     },
@@ -876,19 +715,10 @@
       "types": []
     },
     {
-      "path": "stdlib/workspace/workspace.rssi",
-      "module": "workspace.workspace",
-      "functions": [
-        "Workspace.resolve"
-      ],
-      "types": []
-    },
-    {
       "path": "stdlib/yaml/yaml.rssi",
       "module": "yaml.yaml",
       "functions": [
-        "Yaml.parse",
-        "Yaml.parse_file"
+        "Yaml.parse"
       ],
       "types": []
     }
@@ -902,16 +732,8 @@
       "interface_files": [
         "interface/cancellation.rssi",
         "interface/channel.rssi",
-        "interface/csv.rssi",
-        "interface/deadline.rssi",
-        "interface/file.rssi",
-        "interface/http.rssi",
-        "interface/process.rssi",
         "interface/stream.rssi",
-        "interface/task.rssi",
-        "interface/tcp.rssi",
-        "interface/timer.rssi",
-        "interface/websocket.rssi"
+        "interface/task.rssi"
       ],
       "source_files": [],
       "native_rust": null,

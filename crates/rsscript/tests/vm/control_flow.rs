@@ -3,33 +3,6 @@
 use super::*;
 
 #[test]
-fn reg_vm_runs_select_first_ready_like_backend() {
-    // `select` runs both arms concurrently; the shorter sleep (1ms) wins over the
-    // longer (50ms), so the scheduler's clock — not arm order — must decide.
-    let source = r#"
-
-async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
-    await Timer.sleep(ms: ms)?
-    return Ok(value)
-}
-
-fn main(args: read List<String>) -> Result<Unit, TimerError> {
-    select {
-        value = await after(value: 7, ms: 1)? => {
-            Output.write(message: read String.from_int(value: value))
-        }
-        other = await after(value: 9, ms: 50)? => {
-            Output.write(message: read String.from_int(value: other))
-        }
-    }
-    return Ok(Unit)
-}
-"#;
-
-    assert_reg_vm_matches_compiled_backend("reg-vm-select.rss", source, []);
-}
-
-#[test]
 fn reg_vm_runs_if_expression_like_compiled_backend() {
     let source = r#"
 fn choose(flag: Bool) -> Int {
@@ -489,71 +462,4 @@ fn main(args: read List<String>) -> Result<Unit, String> {
 "#;
 
     assert_reg_vm_matches_compiled_backend("reg-vm-immediate-select.rss", source, []);
-}
-
-#[test]
-fn reg_vm_runs_select_winner_by_timing_not_arm_order_like_backend() {
-    // The shorter sleep is the *second* arm, so a correct first-ready select must
-    // pick it (value 9) — proving the winner is decided by the scheduler clock,
-    // not by arm declaration order.
-    let source = r#"
-
-async fn after(value: Int, ms: Int) -> Result<Int, TimerError> {
-    await Timer.sleep(ms: ms)?
-    return Ok(value)
-}
-
-fn main(args: read List<String>) -> Result<Unit, TimerError> {
-    select {
-        value = await after(value: 7, ms: 50)? => {
-            Output.write(message: read String.from_int(value: value))
-        }
-        other = await after(value: 9, ms: 1)? => {
-            Output.write(message: read String.from_int(value: other))
-        }
-    }
-    return Ok(Unit)
-}
-"#;
-
-    assert_reg_vm_matches_compiled_backend("reg-vm-select-second-arm.rss", source, []);
-}
-
-#[test]
-fn reg_vm_select_does_not_run_loser_side_effects_like_backend() {
-    // After `select` picks a winner, the losing arm's operation must NOT keep
-    // running and producing side effects. The loser here sleeps longer and then
-    // logs "loser ran"; the winner finishes first. main keeps running (a trailing
-    // sleep yields the scheduler), which is exactly the window in which an
-    // un-cancelled loser would still get scheduled. Expected output: "winner",
-    // then "done" — never "loser ran".
-    let source = r#"
-
-async fn winner() -> Result<Int, TimerError> {
-    await Timer.sleep(ms: 1)?
-    return Ok(1)
-}
-
-async fn loser() -> Result<Int, TimerError> {
-    await Timer.sleep(ms: 30)?
-    Output.write(message: read "loser ran")
-    return Ok(2)
-}
-
-async fn main(args: read List<String>) -> Result<Unit, TimerError> {
-    select {
-        _ = await winner()? => {
-            Output.write(message: read "winner")
-        }
-        _ = await loser()? => {
-            Output.write(message: read "loser won")
-        }
-    }
-    await Timer.sleep(ms: 80)?
-    Output.write(message: read "done")
-    return Ok(Unit)
-}
-"#;
-
-    assert_reg_vm_matches_compiled_backend("reg-vm-select-loser-cancel.rss", source, []);
 }

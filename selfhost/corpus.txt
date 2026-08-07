@@ -448,14 +448,8 @@ crates/rsscript/tests/hostile-malformed/unbalanced-parens.rss
 crates/rsscript/tests/hostile-malformed/unicode-bidi.rss
 crates/rsscript/tests/hostile-malformed/unterminated-multiline.rss
 crates/rsscript/tests/hostile-malformed/unterminated-string.rss
-examples/scripts/async/cancellable_sleep.rss
 examples/scripts/async/cancellation.rss
 examples/scripts/async/channel_pipeline.rss
-examples/scripts/async/common_io.rss
-examples/scripts/async/deadline_poll.rss
-examples/scripts/async/sleep_until_deadline.rss
-examples/scripts/async/task_group_cancel.rss
-examples/scripts/async/task_group_child_cancellation.rss
 examples/scripts/basic/assert_equal.rss
 examples/scripts/basic/bool_literals.rss
 examples/scripts/basic/hello.rss
@@ -464,11 +458,6 @@ examples/scripts/basic/int_add.rss
 examples/scripts/basic/operators.rss
 examples/scripts/basic/option.rss
 examples/scripts/basic/string_concat.rss
-examples/scripts/core/buffer_consume.rss
-examples/scripts/core/csv_read.rss
-examples/scripts/core/file_copy.rss
-examples/scripts/core/file_copy_buffer.rss
-examples/scripts/core/interpreter_host_boundary.rss
 examples/scripts/core/interpreter_pure_parity.rss
 examples/scripts/core/json_nested.rss
 examples/scripts/core/uop_interning.rss

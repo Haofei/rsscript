@@ -507,6 +507,12 @@ impl RustLowerer<'_> {
         let source_map_start = self.source_map.len();
         let marker = self.record_source_marker(out, 0, "function", &function.span);
         let is_public = function.is_public || is_runnable_main(function);
+        if is_runnable && !function.params.is_empty() {
+            // The explicit entry argument is part of the runner ABI even when a
+            // particular script does not inspect it. Do not let that stable ABI
+            // create backend-only warnings that the VM cannot reproduce.
+            out.push_str("#[allow(unused_variables)]\n");
+        }
         out.push_str(&format!(
             "{}fn {}{}(",
             visibility(is_public),

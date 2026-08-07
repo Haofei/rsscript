@@ -22,12 +22,8 @@ pub(crate) use std::thread;
 mod async_concurrency;
 #[path = "vm_eval_parity/data.rs"]
 mod data;
-#[path = "vm_eval_parity/fs_io.rs"]
-mod fs_io;
 #[path = "vm_eval_parity/misc.rs"]
 mod misc;
-#[path = "vm_eval_parity/net_io.rs"]
-mod net_io;
 #[path = "vm_eval_parity/owned_fn.rs"]
 mod owned_fn;
 #[path = "vm_eval_parity/system.rs"]

@@ -1260,6 +1260,27 @@ fn interface_catalog_is_platform_neutral() {
             "interface catalog must not contain `{forbidden}`"
         );
     }
+
+    for removed in [
+        "stdlib/clock/clock.rssi",
+        "stdlib/env/env.rssi",
+        "stdlib/fs/directory.rssi",
+        "stdlib/fs/file.rssi",
+        "stdlib/http/client.rssi",
+        "stdlib/process/process.rssi",
+        "stdlib/random/random.rssi",
+        "stdlib/tempdir/tempdir.rssi",
+        "stdlib/workspace/workspace.rssi",
+        "packages/async/interface/file.rssi",
+        "packages/async/interface/http.rssi",
+        "packages/async/interface/process.rssi",
+        "packages/async/interface/timer.rssi",
+    ] {
+        assert!(
+            !root.join(removed).exists(),
+            "legacy host façade must not return at `{removed}`"
+        );
+    }
 }
 
 #[test]

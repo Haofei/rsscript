@@ -34,24 +34,3 @@ pub fn Path.with_extension(path: Path, extension: String) -> fresh Path
 
 
 pub fn Path.starts_with(path: Path, base: Path) -> Bool
-
-
-pub fn Path.exists(path: Path) -> Bool
-
-
-pub fn Path.is_file(path: Path) -> Bool
-
-
-pub fn Path.is_dir(path: Path) -> Bool
-
-
-pub fn Path.list_files(path: Path) -> Result<fresh List<String>, FileError>
-
-
-pub fn Path.list_paths(path: Path) -> Result<fresh List<Path>, FileError>
-
-
-pub fn Path.read_string(path: Path) -> Result<String, FileError>
-
-
-pub fn Path.write_string(path: Path, text: String) -> Result<Unit, FileError>

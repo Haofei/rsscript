@@ -1,7 +1,0 @@
-
-fn main() -> Result<Unit, FileError> {
-    let root = Env.run_workspace_root()
-    Env.set_current_dir(path: root)?
-    Output.write(message: "host-ok")
-    return Ok(Unit)
-}

@@ -22,37 +22,6 @@ fn main(args: read List<String>) -> Unit {
 }
 
 #[test]
-fn reg_vm_runs_env_string_intrinsics_like_interpreter() {
-    let source = r#"
-
-fn main(args: read List<String>) -> Unit {
-    match Env.get(name: read "RSSCRIPT_VM_PARITY_ENV_SHOULD_NOT_EXIST") {
-        Some(value) => {
-            Output.write(message: read value)
-        }
-        None => {
-            Output.write(message: read "env-none")
-        }
-    }
-    Output.write(message: read Env.get_or_default(name: read "RSSCRIPT_VM_PARITY_ENV_SHOULD_NOT_EXIST", default: read "env-default"))
-
-    match String.env(value: read "RSSCRIPT_VM_PARITY_STRING_ENV_SHOULD_NOT_EXIST") {
-        Some(value) => {
-            Output.write(message: read value)
-        }
-        None => {
-            Output.write(message: read "string-env-none")
-        }
-    }
-    Output.write(message: read String.env_or(value: read "RSSCRIPT_VM_PARITY_STRING_ENV_SHOULD_NOT_EXIST", default: read "string-env-default"))
-    return Unit
-}
-"#;
-
-    assert_reg_vm_matches_compiled_backend("reg-vm-env-string-intrinsics.rss", source, []);
-}
-
-#[test]
 fn reg_vm_runs_char_intrinsics_like_interpreter() {
     let source = r#"
 fn main(args: read List<String>) -> Unit {
@@ -1175,72 +1144,4 @@ fn main(args: read List<String>) -> Result<Unit, JsonError> {
 "#;
 
     assert_reg_vm_matches_compiled_backend("reg-vm-json-text-path-intrinsics.rss", source, []);
-}
-
-#[test]
-fn reg_vm_runs_csv_row_intrinsics_like_interpreter() {
-    let root = std::env::current_dir()
-        .expect("cwd should be available")
-        .join("target")
-        .join(format!("rss-vm-csv-{}-fixture", std::process::id()));
-    let _ = fs::remove_dir_all(&root);
-    fs::create_dir_all(&root).expect("csv fixture dir should be created");
-    let csv_path = root.join("data.csv");
-    fs::write(&csv_path, "name,amount\nalpha,10\nbeta,20\n").expect("csv fixture should write");
-    let csv_arg = csv_path.display().to_string();
-
-    let source = r#"
-
-fn main(args: read List<String>) -> Result<Unit, CsvError> {
-    let path = Path.from_string(value: read Option.unwrap_or<String>(value: read Arguments.get(args: read args, index: 0), default: read "missing.csv"))
-    local buffer = RowBuffer.new(size: 4096)
-    with Csv.open_read(path: read path)? as file {
-        Csv.read_into(file: mut file, buffer: mut buffer)?
-    }
-
-    let row = Csv.parse_row(buffer: read buffer)?
-    let name = Row.field_string(row: read row, index: 0)?
-    let amount = Row.field_string(row: read row, index: 1)?
-    Output.write(message: read name)
-    Output.write(message: read amount)
-
-    match Row.field_string(row: read row, index: 5) {
-        Ok(value) => {
-            Output.write(message: read value)
-        }
-        Err(error) => {
-            Output.write(message: read "field-error")
-        }
-    }
-
-    match Csv.rows(path: read path, buffer_size: 16) {
-        Ok(stream) => {
-            match Stream.collect_list<Row>(stream: read stream) {
-                Ok(rows) => {
-                    Output.write(message: read String.from_int(value: List.len<Row>(list: read rows)))
-                    let first = Row.field_string(row: read rows[0], index: 0)?
-                    let second = Row.field_string(row: read rows[1], index: 1)?
-                    Output.write(message: read first)
-                    Output.write(message: read second)
-                }
-                Err(error) => {
-                    Output.write(message: read ChannelError.message(error: read error))
-                }
-            }
-        }
-        Err(error) => {
-            Output.write(message: read ChannelError.message(error: read error))
-        }
-    }
-
-    return Ok(Unit)
-}
-"#;
-
-    assert_reg_vm_matches_compiled_backend(
-        "reg-vm-csv-row-intrinsics.rss",
-        source,
-        [csv_arg.as_str()],
-    );
-    let _ = fs::remove_dir_all(&root);
 }

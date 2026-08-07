@@ -1,8 +1,0 @@
-
-type WorkspacePath = Path
-type PathError = String
-
-pub fn Workspace.resolve(
-    root: Path,
-    relative: String,
-) -> Result<fresh Path, String>

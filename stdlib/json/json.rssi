@@ -5,8 +5,6 @@ pub fn Json.parse(text: String) -> Result<fresh JsonValue, JsonError>
 
 pub fn Json.json_parse(text: String) -> Result<fresh JsonValue, JsonError>
 
-pub fn Json.parse_file(path: Path) -> Result<fresh JsonValue, JsonError>
-
 pub fn Json.value(value: JsonLiteral) -> fresh JsonValue
 
 
