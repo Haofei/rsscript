@@ -189,34 +189,3 @@ pub mod host {
         spawn_tokio_native, spawn_tokio_native_with_cancellation,
     };
 }
-
-/// Versioned canonical API for handwritten runtime consumers.
-pub mod api {
-    pub mod v1 {
-        pub use crate::host;
-
-        pub mod data {
-            pub use crate::{
-                DecodeError, JsonError, JsonValue, base64_decode, base64_encode_bytes,
-                gzip_decompress_bytes_with_budget, hash_sha256_bytes, hex_decode, hex_encode,
-                json_parse, json_to_string, yaml_parse,
-            };
-        }
-
-        pub mod time {
-            pub use crate::{
-                RssDeadline, RssDuration, RssInstant, clock_now, deadline_after, deadline_after_ms,
-                deadline_is_expired, deadline_remaining_ms, duration_add, duration_as_ms,
-                duration_ms, instant_elapsed,
-            };
-        }
-
-        pub mod values {
-            pub use crate::{
-                Managed, RssPersistentMap, manage, map_get, map_insert, map_new, option_map,
-                persistent_map_get, persistent_map_insert, persistent_map_new, result_map,
-                set_insert, set_new,
-            };
-        }
-    }
-}

@@ -32,6 +32,11 @@ fn canonical_facades_exclude_compatibility_entrypoints() {
         .expect("host facade marker should exist")
         .1;
 
+    assert!(
+        !source.contains("pub mod api"),
+        "the removed api::v1 compatibility facade must not return"
+    );
+
     for obsolete in [
         "unwrap_runtime_or_panic",
         "unwrap_runtime,",
