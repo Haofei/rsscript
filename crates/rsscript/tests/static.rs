@@ -18,5 +18,7 @@ mod core_index;
 mod generate;
 #[path = "language_deletion.rs"]
 mod language_deletion;
+#[path = "semantic_properties.rs"]
+mod semantic_properties;
 #[path = "vscode_grammar.rs"]
 mod vscode_grammar;

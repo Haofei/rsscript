@@ -1,4 +1,4 @@
-# Coverage-guided fuzzing harness for the RSScript front end.
+# Coverage-guided fuzzing harness for RSScript front-end and wire boundaries.
 #
 # This is a standalone crate, deliberately detached from the parent workspace
 # (note the empty `[workspace]` table below) so that `cargo build --workspace`
@@ -8,6 +8,7 @@
 #     cargo install cargo-fuzz          # once
 #     cargo +nightly fuzz run parse_check
 #     cargo +nightly fuzz run format_idempotent
+#     cargo +nightly fuzz run bytecode_artifact
 #
 # These targets are the coverage-guided deployment of the in-process generative
 # fuzzers in `crates/rsscript/tests/hostile.rs` and the seed-decoded backend
@@ -29,6 +30,12 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
+jsonschema = { version = "0.49", default-features = false }
+serde_json = "1"
+toml = "0.8"
+
+[dependencies.rsscript-bytecode]
+path = "../crates/rsscript-bytecode"
 
 [dependencies.rsscript]
 package = "rsscript-compiler"
@@ -84,6 +91,31 @@ bench = false
 [[bin]]
 name = "no_panic"
 path = "fuzz_targets/no_panic.rs"
+test = false
+doc = false
+bench = false
+
+# Raw hostile Artifact bytes must be rejected cleanly by both the decoder and
+# the independent verifier. Accepted Artifacts must round-trip canonically.
+[[bin]]
+name = "bytecode_artifact"
+path = "fuzz_targets/bytecode_artifact.rs"
+test = false
+doc = false
+bench = false
+
+# Machine-consumed TOML and JSON descriptors are validated against the same
+# strict checked-in schemas used by tests and downstream tooling.
+[[bin]]
+name = "binding_descriptor"
+path = "fuzz_targets/binding_descriptor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "execution_report"
+path = "fuzz_targets/execution_report.rs"
 test = false
 doc = false
 bench = false

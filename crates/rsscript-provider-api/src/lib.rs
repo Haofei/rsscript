@@ -734,6 +734,7 @@ impl Error for ProviderLoadError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
     use rsscript_abi_model::{DataEffect, ParameterSignature};
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -920,5 +921,70 @@ mod tests {
         assert_eq!(table.created(), 1);
         assert_eq!(table.cleaned(), 0);
         assert_eq!(table.cleanup_failures(), 1);
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(128))]
+
+        #[test]
+        fn resource_table_preserves_generation_and_exact_cleanup_invariants(
+            operations in prop::collection::vec(any::<u8>(), 1..256)
+        ) {
+            struct CountedResource(Arc<std::sync::atomic::AtomicU64>);
+            impl ProviderResource for CountedResource {
+                fn cleanup(&mut self) -> Result<(), ProviderError> {
+                    self.0.fetch_add(1, Ordering::Relaxed);
+                    Ok(())
+                }
+            }
+
+            let cleanups = Arc::new(std::sync::atomic::AtomicU64::new(0));
+            let mut table = ProviderResourceTable::new(Some(8));
+            let mut live = Vec::new();
+            let mut stale = Vec::new();
+            let mut created = 0u64;
+
+            for operation in operations {
+                match operation % 4 {
+                    0 | 1 => {
+                        let result = table.register(Box::new(CountedResource(Arc::clone(&cleanups))));
+                        if live.len() < 8 {
+                            let handle = result.expect("registration below the limit must succeed");
+                            prop_assert!(!live.contains(&handle));
+                            live.push(handle);
+                            created += 1;
+                        } else {
+                            let exhausted = matches!(
+                                result,
+                                Err(ProviderError { code: ProviderErrorCode::ResourceExhausted, .. })
+                            );
+                            prop_assert!(exhausted);
+                        }
+                    }
+                    2 if !live.is_empty() => {
+                        let index = usize::from(operation) % live.len();
+                        let handle = live.swap_remove(index);
+                        table.cleanup(handle).expect("live handle cleanup must succeed");
+                        stale.push(handle);
+                    }
+                    _ => {
+                        prop_assert!(table.cleanup_all().is_empty());
+                        stale.append(&mut live);
+                    }
+                }
+
+                if !stale.is_empty() {
+                    let handle = stale[usize::from(operation) % stale.len()];
+                    prop_assert!(table.cleanup(handle).is_err(), "stale handle must fail closed");
+                }
+                prop_assert_eq!(table.live(), live.len());
+                prop_assert_eq!(table.created(), created);
+                prop_assert_eq!(table.cleaned(), cleanups.load(Ordering::Relaxed));
+                prop_assert_eq!(table.cleanup_failures(), 0);
+            }
+
+            drop(table);
+            prop_assert_eq!(cleanups.load(Ordering::Relaxed), created);
+        }
     }
 }

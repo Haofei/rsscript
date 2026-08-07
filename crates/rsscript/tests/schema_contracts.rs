@@ -76,9 +76,25 @@ fn public_schemas_reject_unknown_top_level_fields() {
         "rsscript.bytecode.v1.schema.json",
         "rsscript-bindings-v1.json",
         "rsscript.execution_report.v1.schema.json",
+        "rsscript.core_metrics.v1.schema.json",
     ] {
         let schema = schema(name);
         let validator = jsonschema::validator_for(&schema).expect("schema must be valid");
         assert!(!validator.is_valid(&serde_json::json!({"unexpected": true})));
     }
+}
+
+#[test]
+fn binding_schema_rejects_unknown_function_fields() {
+    let schema = schema("rsscript-bindings-v1.json");
+    let validator = jsonschema::validator_for(&schema).expect("schema must be valid");
+    assert!(!validator.is_valid(&serde_json::json!({
+        "schema": "rsscript.bindings.v1",
+        "function": [{
+            "symbol": "host.log.emit",
+            "provider": "rsscript.log",
+            "entry": "emit",
+            "unexpected": true
+        }]
+    })));
 }

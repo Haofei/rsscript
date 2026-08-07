@@ -1,6 +1,7 @@
 # RSScript fuzzing
 
-Coverage-guided ([cargo-fuzz] / libFuzzer) harness for the RSScript front end.
+Coverage-guided ([cargo-fuzz] / libFuzzer) harness for the RSScript front end,
+Artifact verifier, binding descriptors, and execution reports.
 This is a **standalone crate**, detached from the parent workspace, so it never
 builds during `cargo build --workspace` or stable CI (libFuzzer needs nightly).
 
@@ -17,6 +18,13 @@ Raw-bytes (front-end robustness):
   counterpart of `tests/hostile.rs`.
 - **`format_idempotent`** — `format(format(x)) == format(x)` for any accepted
   program. Counterpart of the `reformat` transform in `tests/metamorphic.rs`.
+- **`bytecode_artifact`** — hostile bytes must be rejected cleanly by the
+  section decoder and independent verifier; accepted Artifacts must round-trip
+  to exactly the same canonical bytes.
+- **`binding_descriptor`** — arbitrary UTF-8/TOML is projected through the
+  strict `rsscript.bindings.v1` schema without panicking.
+- **`execution_report`** — arbitrary JSON is checked against the strict
+  `rsscript.execution_report.v1` consumer contract without panicking.
 
 Generative (driven by `rss-testgen`):
 - **`differential`** — seed -> well-typed program -> every in-process backend
@@ -36,6 +44,9 @@ cargo +nightly fuzz run parse_check
 cargo +nightly fuzz run format_idempotent
 cargo +nightly fuzz run differential
 cargo +nightly fuzz run fail_closed
+cargo +nightly fuzz run bytecode_artifact
+cargo +nightly fuzz run binding_descriptor
+cargo +nightly fuzz run execution_report
 ```
 
 Native-JIT/deopt/OSR differential smoke:

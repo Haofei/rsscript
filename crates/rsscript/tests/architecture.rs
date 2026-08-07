@@ -1988,6 +1988,9 @@ fn github_workflows_follow_current_workspace_boundaries() {
         "crates/rsscript-bytecode/**",
         "crates/rsscript-provider-api/**",
         "crates/rsscript-provider-conformance/**",
+        "fuzz run bytecode_artifact",
+        "fuzz run binding_descriptor",
+        "fuzz run execution_report",
         "providers/**",
     ] {
         assert!(

@@ -11,12 +11,17 @@
       "type": "array",
       "items": {
         "type": "object",
-        "additionalProperties": true,
+        "additionalProperties": false,
         "required": ["symbol", "provider", "entry"],
         "properties": {
           "symbol": { "type": "string", "minLength": 1 },
           "provider": { "type": "string", "minLength": 1 },
-          "entry": { "type": "string", "minLength": 1 }
+          "entry": { "type": "string", "minLength": 1 },
+          "review_effects": {
+            "type": "array",
+            "items": { "type": "string", "minLength": 1 },
+            "default": []
+          }
         }
       }
     }
