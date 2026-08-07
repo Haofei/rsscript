@@ -219,11 +219,7 @@ impl RegVm {
                     Ok(receiver_value(channel.id, false))
                 }))
             }
-            RegIntrinsic::ChannelErrorMessage
-            | RegIntrinsic::DecodeErrorMessage
-            | RegIntrinsic::HttpErrorMessage
-            | RegIntrinsic::TcpErrorMessage
-            | RegIntrinsic::WebSocketErrorMessage => {
+            RegIntrinsic::ChannelErrorMessage | RegIntrinsic::DecodeErrorMessage => {
                 read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "message")
             }
             RegIntrinsic::CharCompare
@@ -457,141 +453,6 @@ impl RegVm {
             }
             RegIntrinsic::HexDecode | RegIntrinsic::HexEncode | RegIntrinsic::HexEncodeString => {
                 self.exec_hex_intrinsics(unit, intrinsic, args, base, next_base)
-            }
-            RegIntrinsic::HttpGet => {
-                let url = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(http_get_local(url)))
-            }
-            RegIntrinsic::HttpGetAsync => {
-                let url = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(http_get_local(url)))
-            }
-            RegIntrinsic::HttpGetRetryAsync => {
-                let url = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let _timeout = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let attempts = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                let _backoff = expect_int_ref(intrinsic_arg(&self.stack, base, args, 3)?)?;
-                let mut last = Err(http_error_value("HTTP retry attempts must be positive"));
-                for _ in 0..attempts.max(1) {
-                    last = http_get_local(url);
-                    if last.is_ok() {
-                        break;
-                    }
-                }
-                Ok(json_result(last))
-            }
-            RegIntrinsic::HttpGetTimeoutAsync => {
-                let url = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let _timeout = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(json_result(http_get_local(url)))
-            }
-            RegIntrinsic::HttpPostForm | RegIntrinsic::HttpPostFormAsync => {
-                let url = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let _ = intrinsic_arg(&self.stack, base, args, 1)?;
-                Ok(value_err(http_error_value(format!(
-                    "HTTP client runtime is not configured for POST form {url}"
-                ))))
-            }
-            RegIntrinsic::HttpPostJson | RegIntrinsic::HttpPostJsonAsync => {
-                let url = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let _ = intrinsic_arg(&self.stack, base, args, 1)?;
-                Ok(value_err(http_error_value(format!(
-                    "HTTP client runtime is not configured for POST JSON {url}"
-                ))))
-            }
-            RegIntrinsic::HttpPostJsonBearerRetryAsync => {
-                let url = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let _body = intrinsic_arg(&self.stack, base, args, 1)?;
-                let _token = intrinsic_arg(&self.stack, base, args, 2)?;
-                let timeout = expect_int_ref(intrinsic_arg(&self.stack, base, args, 3)?)?;
-                let attempts = expect_int_ref(intrinsic_arg(&self.stack, base, args, 4)?)?;
-                let backoff = expect_int_ref(intrinsic_arg(&self.stack, base, args, 5)?)?;
-                Ok(value_err(http_error_value(format!(
-                    "HTTP async provider is not configured for POST JSON {url} with timeout {timeout}ms attempts {attempts} backoff {backoff}ms"
-                ))))
-            }
-            RegIntrinsic::HttpPostJsonRetryAsync => {
-                let url = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let _body = intrinsic_arg(&self.stack, base, args, 1)?;
-                let timeout = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                let attempts = expect_int_ref(intrinsic_arg(&self.stack, base, args, 3)?)?;
-                let backoff = expect_int_ref(intrinsic_arg(&self.stack, base, args, 4)?)?;
-                Ok(value_err(http_error_value(format!(
-                    "HTTP async provider is not configured for POST JSON {url} with timeout {timeout}ms attempts {attempts} backoff {backoff}ms"
-                ))))
-            }
-            RegIntrinsic::HttpPostJsonTimeoutAsync => {
-                let url = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let _body = intrinsic_arg(&self.stack, base, args, 1)?;
-                let timeout = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                Ok(value_err(http_error_value(format!(
-                    "HTTP async provider is not configured for POST JSON {url} with timeout {timeout}ms"
-                ))))
-            }
-            RegIntrinsic::HttpSendAsync => {
-                let request = expect_http_request_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                if request.method == "GET" {
-                    Ok(json_result(http_get_local(&request.url)))
-                } else {
-                    Ok(value_err(http_error_value(format!(
-                        "HTTP async provider is not configured for {} {}",
-                        request.method, request.url
-                    ))))
-                }
-            }
-            RegIntrinsic::HttpRequestJson => {
-                let url = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let body = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(http_request_value("POST", url, body, 0, 1, 0, 0))
-            }
-            RegIntrinsic::HttpRequestWithHeader => {
-                let request = intrinsic_arg(&self.stack, base, args, 0)?;
-                let _name = expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let _value = expect_string_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                let mut request = expect_http_request_ref(request)?;
-                request.header_count = request.header_count.saturating_add(1);
-                Ok(request.to_value())
-            }
-            RegIntrinsic::HttpRequestWithRetry => {
-                let request = intrinsic_arg(&self.stack, base, args, 0)?;
-                let attempts = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let backoff_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 2)?)?;
-                let mut request = expect_http_request_ref(request)?;
-                request.attempts = attempts;
-                request.backoff_ms = backoff_ms;
-                Ok(request.to_value())
-            }
-            RegIntrinsic::HttpRequestWithTimeout => {
-                let request = intrinsic_arg(&self.stack, base, args, 0)?;
-                let timeout_ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                let mut request = expect_http_request_ref(request)?;
-                request.timeout_ms = timeout_ms;
-                Ok(request.to_value())
-            }
-            RegIntrinsic::HttpResponseBytes => {
-                let response = intrinsic_arg(&self.stack, base, args, 0)?;
-                let text = read_field_ref(response, "body")?;
-                let text = expect_string_ref(&text)?;
-                Ok(VmValue::Bytes(Rc::new(text.as_bytes().to_vec())))
-            }
-            RegIntrinsic::HttpResponseIsSuccess => {
-                let response = intrinsic_arg(&self.stack, base, args, 0)?;
-                let status = expect_int_ref(&read_field_ref(response, "status")?)?;
-                Ok(VmValue::Bool((200..300).contains(&status)))
-            }
-            RegIntrinsic::HttpResponseLines => {
-                let response = intrinsic_arg(&self.stack, base, args, 0)?;
-                let text = read_field_ref(response, "body")?;
-                let text = expect_string_ref(&text)?;
-                Ok(VmValue::List(Rc::new(RefCell::new(
-                    text.lines().map(VmValue::string).collect(),
-                ))))
-            }
-            RegIntrinsic::HttpResponseStatus => {
-                read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "status")
-            }
-            RegIntrinsic::HttpResponseText => {
-                read_field_ref(intrinsic_arg(&self.stack, base, args, 0)?, "body")
             }
             RegIntrinsic::InstantElapsed => {
                 let start = expect_instant_unix_ms(intrinsic_arg(&self.stack, base, args, 0)?)?;
@@ -1157,40 +1018,6 @@ impl RegVm {
                 }
                 Ok(json_result(self.channel_send(sender, value)))
             }
-            RegIntrinsic::TcpConnect => {
-                let host =
-                    expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string();
-                let port = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(json_result(self.tcp_connect(&host, port)))
-            }
-            RegIntrinsic::TcpStreamRead => {
-                let id = expect_tcp_stream_id_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let max_bytes = expect_int_ref(intrinsic_arg(&self.stack, base, args, 1)?)?;
-                Ok(json_result(
-                    self.tcp_stream_read(id, max_bytes)
-                        .map(|bytes| VmValue::Bytes(Rc::new(bytes))),
-                ))
-            }
-            RegIntrinsic::TcpStreamShutdown => {
-                let id = expect_tcp_stream_id_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    self.tcp_stream_shutdown(id).map(|()| VmValue::Unit),
-                ))
-            }
-            RegIntrinsic::TcpStreamWrite => {
-                let id = expect_tcp_stream_id_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let data = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_vec();
-                Ok(json_result(
-                    self.tcp_stream_write(id, &data).map(VmValue::Int),
-                ))
-            }
-            RegIntrinsic::TcpStreamWriteAll => {
-                let id = expect_tcp_stream_id_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let data = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_vec();
-                Ok(json_result(
-                    self.tcp_stream_write_all(id, &data).map(|()| VmValue::Unit),
-                ))
-            }
             RegIntrinsic::TimerSleep => {
                 let ms = expect_int_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
                 self.park_sleep_ms(ms);
@@ -1220,57 +1047,6 @@ impl RegVm {
             | RegIntrinsic::UrlFromString
             | RegIntrinsic::UrlToString => {
                 self.exec_url_intrinsics(unit, intrinsic, args, base, next_base)
-            }
-            RegIntrinsic::WebSocketConnect => {
-                let url =
-                    expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?.to_string();
-                Ok(json_result(self.websocket_connect(&url)))
-            }
-            RegIntrinsic::WebSocketClose => {
-                let id = expect_websocket_id_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    self.websocket_close(id).map(|()| VmValue::Unit),
-                ))
-            }
-            RegIntrinsic::WebSocketRecvBytes => {
-                let id = expect_websocket_id_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    self.websocket_recv(id, WebSocketExpectedFrame::Binary).map(
-                        |value| match value {
-                            Some(bytes) => value_some(VmValue::Bytes(Rc::new(bytes))),
-                            None => value_none(),
-                        },
-                    ),
-                ))
-            }
-            RegIntrinsic::WebSocketRecvText => {
-                let id = expect_websocket_id_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                Ok(json_result(
-                    self.websocket_recv(id, WebSocketExpectedFrame::Text).map(
-                        |value| match value {
-                            Some(bytes) => {
-                                value_some(VmValue::string(String::from_utf8_lossy(&bytes)))
-                            }
-                            None => value_none(),
-                        },
-                    ),
-                ))
-            }
-            RegIntrinsic::WebSocketSendBytes => {
-                let id = expect_websocket_id_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let data = expect_bytes_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_vec();
-                Ok(json_result(
-                    self.websocket_send(id, 0x2, &data).map(|()| VmValue::Unit),
-                ))
-            }
-            RegIntrinsic::WebSocketSendText => {
-                let id = expect_websocket_id_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;
-                let text =
-                    expect_string_ref(intrinsic_arg(&self.stack, base, args, 1)?)?.to_string();
-                Ok(json_result(
-                    self.websocket_send(id, 0x1, text.as_bytes())
-                        .map(|()| VmValue::Unit),
-                ))
             }
             RegIntrinsic::YamlParse => {
                 let text = expect_string_ref(intrinsic_arg(&self.stack, base, args, 0)?)?;

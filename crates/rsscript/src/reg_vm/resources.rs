@@ -56,35 +56,6 @@ pub(super) fn deadline_value(unix_ms: i64) -> VmValue {
     VmValue::Struct(Rc::new(VmStruct::from_named(Rc::from("Deadline"), fields)))
 }
 
-pub(super) fn http_request_value(
-    method: impl Into<String>,
-    url: impl Into<String>,
-    body: impl Into<String>,
-    timeout_ms: i64,
-    attempts: i64,
-    backoff_ms: i64,
-    header_count: i64,
-) -> VmValue {
-    let fields: Vec<(String, VmValue)> = vec![
-        ("method".to_string(), VmValue::string(method.into())),
-        ("url".to_string(), VmValue::string(url.into())),
-        ("body".to_string(), VmValue::string(body.into())),
-        ("timeout_ms".to_string(), VmValue::Int(timeout_ms)),
-        ("attempts".to_string(), VmValue::Int(attempts)),
-        ("backoff_ms".to_string(), VmValue::Int(backoff_ms)),
-        ("header_count".to_string(), VmValue::Int(header_count)),
-    ];
-    VmValue::Struct(Rc::new(VmStruct::from_named(
-        Rc::from("HttpRequest"),
-        fields,
-    )))
-}
-
-pub(super) struct WebSocketFrame {
-    pub(super) opcode: u8,
-    pub(super) payload: Vec<u8>,
-}
-
 pub(super) fn cancellation_source_value(id: i64) -> VmValue {
     cancellation_handle_value("CancellationSource", id)
 }

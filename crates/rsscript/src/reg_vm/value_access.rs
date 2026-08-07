@@ -165,29 +165,6 @@ pub(super) fn expect_stream_ref(value: &VmValue) -> Result<VmStreamState, EvalEr
     }
 }
 
-pub(super) fn expect_tcp_stream_id_ref(value: &VmValue) -> Result<i64, EvalError> {
-    expect_id_struct_ref(value, "TcpStream")
-}
-
-pub(super) fn expect_websocket_id_ref(value: &VmValue) -> Result<i64, EvalError> {
-    expect_id_struct_ref(value, "WebSocket")
-}
-
-pub(super) fn expect_id_struct_ref(value: &VmValue, expected_name: &str) -> Result<i64, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name().as_ref() == expected_name => {
-            let id = data.get("id").ok_or_else(|| {
-                EvalError::Runtime(format!("{expected_name} value is missing id."))
-            })?;
-            expect_int_ref(id)
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected {expected_name}, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
 pub(super) fn option_payload_value(value: &VmValue) -> Result<Option<VmValue>, EvalError> {
     match value {
         // Inline and heap `Some` are unified into one owned payload; the inline
@@ -232,37 +209,6 @@ pub(super) fn expect_row_fields_ref(value: &VmValue) -> Result<Vec<String>, Eval
         }
         other => Err(EvalError::Runtime(format!(
             "expected Row, got `{}`.",
-            other.display()
-        ))),
-    }
-}
-
-pub(super) fn expect_http_request_ref(value: &VmValue) -> Result<VmHttpRequest, EvalError> {
-    match value {
-        VmValue::Struct(data) if data.name().as_ref() == "HttpRequest" => {
-            let string_field = |name: &str| {
-                data.get(name)
-                    .ok_or_else(|| EvalError::Runtime(format!("HttpRequest {name} is missing.")))
-                    .and_then(expect_string_ref)
-                    .map(str::to_string)
-            };
-            let int_field = |name: &str| {
-                data.get(name)
-                    .ok_or_else(|| EvalError::Runtime(format!("HttpRequest {name} is missing.")))
-                    .and_then(expect_int_ref)
-            };
-            Ok(VmHttpRequest {
-                method: string_field("method")?,
-                url: string_field("url")?,
-                body: string_field("body")?,
-                timeout_ms: int_field("timeout_ms")?,
-                attempts: int_field("attempts")?,
-                backoff_ms: int_field("backoff_ms")?,
-                header_count: int_field("header_count")?,
-            })
-        }
-        other => Err(EvalError::Runtime(format!(
-            "expected HttpRequest, got `{}`.",
             other.display()
         ))),
     }

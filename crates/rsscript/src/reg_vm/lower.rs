@@ -1411,9 +1411,6 @@ impl RegLowerer<'_> {
                             });
                             return Ok(dst);
                         }
-                        ("Http", "post_json_bearer_retry_async") => {
-                            RegIntrinsic::HttpPostJsonBearerRetryAsync
-                        }
                         ("Json", "array_contains_substring") => {
                             RegIntrinsic::JsonArrayContainsSubstring
                         }

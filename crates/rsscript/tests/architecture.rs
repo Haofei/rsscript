@@ -1617,6 +1617,39 @@ fn vm_core_does_not_embed_process_intrinsics() {
 }
 
 #[test]
+fn vm_core_does_not_embed_network_intrinsics() {
+    let root = workspace_root();
+    let catalog = read(&root.join("crates/rsscript/intrinsics.toml"));
+    for prefix in ["Http", "Tcp", "WebSocket"] {
+        assert!(!catalog.contains(&format!("{{ id = \"{prefix}")));
+        assert!(!catalog.contains(&format!("{{ namespace = \"{prefix}")));
+    }
+
+    let vm_root = root.join("crates/rsscript/src/reg_vm");
+    for path in rust_files_below(&vm_root) {
+        if path
+            .components()
+            .any(|component| component.as_os_str() == "tests")
+        {
+            continue;
+        }
+        let source = read(&path);
+        for forbidden in [
+            "std::net",
+            "TcpStream",
+            "RegIntrinsic::Http",
+            "RegIntrinsic::WebSocket",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "VM core must not access the network directly: {} contains `{forbidden}`",
+                path.display()
+            );
+        }
+    }
+}
+
+#[test]
 fn high_risk_state_machines_keep_dedicated_module_owners() {
     let root = workspace_root();
     let required = [
