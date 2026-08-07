@@ -827,6 +827,12 @@ fn language_engine_does_not_read_the_operating_system() {
     .unwrap();
     let loader_dependencies = dependency_packages(&loader_manifest);
     assert_eq!(loader_dependencies, BTreeSet::from(["toml".to_string()]));
+
+    let description = language_manifest["package"]["description"]
+        .as_str()
+        .expect("language-service description");
+    assert!(!description.to_ascii_lowercase().contains("incremental"));
+    assert!(language_service.contains("does not claim a\n//! query-level incremental"));
 }
 
 #[test]

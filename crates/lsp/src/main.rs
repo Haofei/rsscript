@@ -1,9 +1,9 @@
 //! Language server for RsScript.
 //!
-//! Reuses the `rsscript` checker library directly: diagnostics come from the
-//! same `analyze_source_with_core` + `lint_source` path as the CLI, and
-//! formatting from `format_source`, so the editor never disagrees with the
-//! command line.
+//! Reuses the frontend-only `rsscript-language-service` boundary: diagnostics
+//! come from the same checker and lint path as the CLI, and formatting comes
+//! from the same formatter. The protocol adapter never depends on the compiler
+//! monolith, VM, Provider implementations, or optional backends.
 
 mod backend;
 mod diagnostics;

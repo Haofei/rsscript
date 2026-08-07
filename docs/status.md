@@ -45,7 +45,9 @@ CLI package output, and package metadata writes. The retired policy-oriented
 examples and action have been removed. The LSP now consumes the document-oriented
 `rsscript-language-service` API with the frontend-only feature set. Its dependency
 closure contains no runtime, provider, bytecode, JIT, native ABI, process guard,
-HTTP, WebSocket, or REIR package. The lexer, parser, source AST, syntax
+HTTP, WebSocket, or REIR package. The service provides revision-keyed diagnostic
+caching and document/interface invalidation; it deliberately does not claim a
+query-level incremental semantic engine yet. The lexer, parser, source AST, syntax
 desugarings, spans, and
 bounded parse budget are now owned by the independent `rsscript-syntax` and
 `rsscript-work-budget` crates. Structural types, type interning, substitution,

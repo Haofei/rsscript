@@ -1,10 +1,12 @@
 #![forbid(unsafe_code)]
 
-//! Editor-facing RSScript language service.
+//! Revisioned, cached editor-facing RSScript language service.
 //!
 //! This crate is the only compiler-facing dependency of the LSP. Its API is
 //! deliberately document-oriented so editor clients do not couple themselves to
 //! analyzer databases, runtime values, VM registers, or optional backends.
+//! Cache invalidation is document/interface-granular; this crate does not claim a
+//! query-level incremental semantic engine.
 
 use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationContext};
 use std::collections::BTreeMap;

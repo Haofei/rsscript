@@ -136,9 +136,6 @@ impl Backend {
         if cancellation.is_cancelled() {
             return;
         }
-        if cancellation.is_cancelled() {
-            return;
-        }
         {
             let mut documents = documents.lock().await;
             let current_generation = documents.generation(&analysis_key);
