@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use crate::{ResourceBudget, RssCancellationToken, RssDeadline, RuntimeServices};
+use crate::async_runtime::RuntimeServices;
+use crate::{ResourceBudget, RssCancellationToken, RssDeadline};
 
 /// Controls shared by one runtime operation and any work it starts.
 ///
@@ -18,14 +19,6 @@ impl OperationContext {
         deadline: RssDeadline,
         cancellation: RssCancellationToken,
         byte_budget: ResourceBudget,
-    ) -> Self {
-        crate::compatibility::generated_abi_operation_context(deadline, cancellation, byte_budget)
-    }
-
-    pub fn with_services(
-        deadline: RssDeadline,
-        cancellation: RssCancellationToken,
-        byte_budget: ResourceBudget,
         services: Arc<RuntimeServices>,
     ) -> Self {
         Self {
@@ -34,15 +27,6 @@ impl OperationContext {
             byte_budget,
             services,
         }
-    }
-
-    /// Adapts APIs that historically accepted resource controls in this order.
-    pub fn from_resources(
-        byte_budget: ResourceBudget,
-        cancellation: RssCancellationToken,
-        deadline: RssDeadline,
-    ) -> Self {
-        Self::new(deadline, cancellation, byte_budget)
     }
 
     pub fn deadline(&self) -> &RssDeadline {
@@ -86,10 +70,12 @@ mod tests {
     #[test]
     fn clones_share_cancellation_and_byte_consumption() {
         let mut source = cancellation_source_new();
+        let services = Arc::new(RuntimeServices::new().expect("runtime services"));
         let context = OperationContext::new(
             deadline_after_ms(10_000),
             cancellation_source_token(&source),
             ResourceBudget::new(8),
+            services,
         );
         let clone = context.clone();
 
@@ -105,12 +91,14 @@ mod tests {
     }
 
     #[test]
-    fn resource_adapter_preserves_all_controls() {
+    fn constructor_preserves_all_controls() {
         let budget = ResourceBudget::new(4);
-        let context = OperationContext::from_resources(
-            budget.clone(),
-            cancellation_never(),
+        let services = Arc::new(RuntimeServices::new().expect("runtime services"));
+        let context = OperationContext::new(
             deadline_after_ms(0),
+            cancellation_never(),
+            budget.clone(),
+            services,
         );
 
         assert!(deadline_is_expired(context.deadline()));
@@ -125,7 +113,7 @@ mod tests {
     #[test]
     fn context_explicitly_retains_its_runtime_services_owner() {
         let services = Arc::new(RuntimeServices::new().expect("runtime services"));
-        let context = OperationContext::with_services(
+        let context = OperationContext::new(
             deadline_after_ms(10_000),
             cancellation_never(),
             ResourceBudget::new(8),

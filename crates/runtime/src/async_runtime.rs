@@ -739,7 +739,8 @@ impl Drop for RuntimeServices {
     }
 }
 
-pub fn spawn_tokio_native<T, F>(future: F) -> NativeAsyncPending<T>
+#[cfg(test)]
+fn spawn_tokio_native<T, F>(future: F) -> NativeAsyncPending<T>
 where
     T: Send + 'static,
     F: Future<Output = T> + Send + 'static,
@@ -747,7 +748,8 @@ where
     spawn_tokio_native_with_cancellation(CancellationToken::new(), future)
 }
 
-pub fn spawn_tokio_native_with_cancellation<T, F>(
+#[cfg(test)]
+fn spawn_tokio_native_with_cancellation<T, F>(
     cancellation: CancellationToken,
     future: F,
 ) -> NativeAsyncPending<T>
@@ -755,9 +757,14 @@ where
     T: Send + 'static,
     F: Future<Output = T> + Send + 'static,
 {
-    let services = crate::compatibility::generated_abi_services_for_pending();
+    thread_local! {
+        static TEST_RUNTIME_SERVICES: Arc<RuntimeServices> = Arc::new(
+            RuntimeServices::with_worker_threads(2).expect("test runtime services should start")
+        );
+    }
+    let services = TEST_RUNTIME_SERVICES.with(Arc::clone);
     spawn_tokio_native_with_services(&services, cancellation, future)
-        .expect("default runtime services should be running")
+        .expect("test runtime services should be running")
 }
 
 pub fn spawn_tokio_native_with_services<T, F>(

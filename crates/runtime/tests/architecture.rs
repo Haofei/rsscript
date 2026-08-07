@@ -52,37 +52,26 @@ fn canonical_facades_exclude_compatibility_entrypoints() {
 }
 
 #[test]
-fn compatibility_runtime_registry_does_not_own_services() {
+fn runtime_services_are_explicit_and_process_global_lookup_is_absent() {
     let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let compatibility = source_dir.join("compatibility.rs");
-    let compatibility_source =
-        fs::read_to_string(&compatibility).expect("compatibility module should be readable");
-    assert!(compatibility_source.contains("Weak<RuntimeServices>"));
-    assert!(!compatibility_source.contains("OnceLock<Arc<RuntimeServices>>"));
-
-    let async_runtime = fs::read_to_string(source_dir.join("async_runtime.rs"))
-        .expect("async runtime source should be readable");
-    assert!(!async_runtime.contains("COMPATIBILITY_RUNTIME"));
-    assert!(!async_runtime.contains("fn default_runtime_services"));
-    assert!(!async_runtime.contains("fn tokio_native_runtime("));
-}
-
-#[test]
-fn compatibility_factory_is_the_only_global_runtime_lookup() {
-    let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-    let compatibility = fs::read_to_string(source_dir.join("compatibility.rs"))
-        .expect("compatibility module should be readable");
-    assert!(compatibility.contains("fn generated_abi_runtime_services"));
-    assert!(compatibility.contains("Weak<RuntimeServices>"));
-
-    for module in ["operation_context.rs", "async_runtime.rs"] {
+    assert!(!source_dir.join("compatibility.rs").exists());
+    for module in ["lib.rs", "operation_context.rs", "async_runtime.rs"] {
         let source = fs::read_to_string(source_dir.join(module))
             .unwrap_or_else(|error| panic!("{module} should be readable: {error}"));
-        assert!(
-            !source.contains("runtime_services("),
-            "{module} must not look up the process-wide runtime directly"
-        );
+        for forbidden in [
+            "OnceLock",
+            "generated_abi_runtime_services",
+            "default_runtime_services",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{module} contains global runtime lookup `{forbidden}`"
+            );
+        }
     }
+    let operation = fs::read_to_string(source_dir.join("operation_context.rs"))
+        .expect("operation context source");
+    assert!(operation.contains("services: Arc<RuntimeServices>"));
 }
 
 #[test]

@@ -30,6 +30,8 @@ provider boundaries instead of mapping back to the retired runtime façade.
 Its generated-code ABI likewise exposes only pure `Duration` arithmetic, not
 ambient clock reads, script deadlines, or timer sleeps. Monotonic deadlines stay
 in the explicit `host` control module for bounding an execution.
+The AOT host must construct and retain `RuntimeServices` explicitly;
+process-global Tokio runtime discovery and its compatibility registry are gone.
 The compiler now consumes runtime `core` only; VM
 compatibility intrinsics for filesystem and process access fail with an explicit
 provider-required error instead of reaching the OS. Disabled hosts fail before

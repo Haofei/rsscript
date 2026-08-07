@@ -1,4 +1,5 @@
 use rsscript_runtime::{abi, host};
+use std::sync::Arc;
 
 #[test]
 fn generated_abi_root_and_module_remain_available() {
@@ -14,10 +15,12 @@ fn generated_abi_root_and_module_remain_available() {
 #[test]
 fn host_controls_and_root_abi_are_available_without_a_compatibility_facade() {
     let budget = host::ResourceBudget::new(16);
+    let services = Arc::new(host::RuntimeServices::new().expect("runtime services"));
     let context = host::OperationContext::new(
         host::deadline_after_ms(1_000),
         host::cancellation_never(),
         budget,
+        services,
     );
     assert_eq!(context.byte_budget().bytes_used(), 0);
 
