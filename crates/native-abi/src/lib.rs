@@ -722,7 +722,10 @@ mod tests {
         }
         let callable = NativeInterpreterFn::from(echo as NativeHostFn);
         assert_eq!(
-            callable.call(vec![NativeValue::Int(7)]),
+            callable.call_with_context(
+                &mut rsscript_provider_api::ProviderCallContext::default(),
+                vec![NativeValue::Int(7)],
+            ),
             Ok(NativeValue::Int(7))
         );
     }

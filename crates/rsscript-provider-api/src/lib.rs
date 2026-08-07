@@ -462,10 +462,9 @@ impl NativeInterpreterFn {
         }
     }
 
-    pub fn call(&self, args: Vec<NativeValue>) -> Result<NativeValue, ProviderError> {
-        self.call_with_context(&mut ProviderCallContext::default(), args)
-    }
-
+    /// Invoke through an explicit runtime-owned context. Callers cannot bypass
+    /// cancellation, deadline, authority, tracing, or resource registration by
+    /// using a context-free convenience path.
     pub fn call_with_context(
         &self,
         context: &mut ProviderCallContext<'_>,
