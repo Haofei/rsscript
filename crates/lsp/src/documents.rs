@@ -4,7 +4,9 @@ use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::sync::Arc;
 
-use rsscript_language_service::Diagnostic as RsDiagnostic;
+use rsscript_language_service::{
+    Diagnostic as RsDiagnostic, DocumentKind as ServiceDocumentKind, LanguageService,
+};
 use tower_lsp::lsp_types::*;
 
 use crate::scheduler::*;
@@ -72,6 +74,7 @@ impl ChangeOutcome {
 
 pub(crate) struct DocumentStore {
     pub(crate) documents: HashMap<Url, Document>,
+    pub(crate) language_service: LanguageService,
     pub(crate) next_revision: u64,
     pub(crate) generations: HashMap<AnalysisKey, u64>,
 }
@@ -80,6 +83,7 @@ impl DocumentStore {
     pub(crate) fn new() -> Self {
         Self {
             documents: HashMap::new(),
+            language_service: LanguageService::default(),
             next_revision: 1,
             generations: HashMap::new(),
         }
@@ -94,6 +98,25 @@ impl DocumentStore {
 
     pub(crate) fn generation(&self, analysis_key: &AnalysisKey) -> u64 {
         self.generations.get(analysis_key).copied().unwrap_or(0)
+    }
+}
+
+fn service_document_kind(uri: &Url) -> ServiceDocumentKind {
+    if uri.path().ends_with(".rssi") {
+        ServiceDocumentKind::Interface
+    } else {
+        ServiceDocumentKind::Source
+    }
+}
+
+fn sync_language_service(documents: &mut DocumentStore, uri: &Url) {
+    if let Some(document) = documents.get(uri).cloned() {
+        documents.language_service.set_file(
+            uri.path(),
+            document.revision,
+            service_document_kind(uri),
+            document.text,
+        );
     }
 }
 
@@ -203,6 +226,7 @@ pub(crate) fn open_document(
             source_index: Arc::new(SourceIndexCache::default()),
         },
     );
+    sync_language_service(documents, &uri);
     Some(analysis_job(documents, uri, revision, version))
 }
 
@@ -248,6 +272,7 @@ pub(crate) fn change_document(
     document.version = version;
     document.sync_state = DocumentSyncState::Synchronized;
     document.source_index = Arc::new(SourceIndexCache::default());
+    sync_language_service(documents, &uri);
     ChangeOutcome::Applied(Box::new(analysis_job(documents, uri, revision, version)))
 }
 
@@ -261,6 +286,7 @@ pub(crate) fn mark_document_desynchronized(documents: &mut DocumentStore, uri: &
         document.sync_state = DocumentSyncState::Desynchronized;
         document.source_index = Arc::new(SourceIndexCache::default());
     }
+    documents.language_service.remove_file(uri.path());
 }
 
 pub(crate) fn save_document(
@@ -282,5 +308,6 @@ pub(crate) fn save_document(
     document.revision = revision;
     document.sync_state = DocumentSyncState::Synchronized;
     document.source_index = Arc::new(SourceIndexCache::default());
+    sync_language_service(documents, &uri);
     Some(analysis_job(documents, uri, revision, version))
 }

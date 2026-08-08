@@ -26,8 +26,9 @@ language specification and tests remain authoritative for existing behavior.
 ## Current priority: conformance and boundary hardening
 
 1. Continue reducing compatibility-crate API and crate-wide lint exceptions.
-2. Complete query-level invalidation in the language service; its current
-   revision cache is intentionally a document-level boundary.
+2. Extend the query-level language-service cache only with measured editor
+   workloads; formatting, lint, symbols, dependency discovery, and semantic
+   diagnostics now invalidate independently.
 3. Use the exact reachable-value live-memory metric and cumulative allocation
    quota together in workload tuning; extend the model only when a new VM-owned
    value kind is introduced. Provider-owned memory remains Provider telemetry.

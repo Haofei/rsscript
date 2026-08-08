@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use rsscript_language_service::{document_symbols, explain_diagnostic_code, format_source};
+use rsscript_language_service::explain_diagnostic_code;
 use serde_json::json;
 use tokio::sync::Semaphore;
 use tower_lsp::jsonrpc::Result;
@@ -338,6 +338,9 @@ impl LanguageServer for Backend {
         {
             let mut documents = self.documents.lock().await;
             documents.allocate_revision(&analysis_key);
+            documents
+                .language_service
+                .remove_file(params.text_document.uri.path());
             documents.remove(&params.text_document.uri);
             enqueue_diagnostics(
                 &self.diagnostics_publications,
@@ -395,12 +398,14 @@ impl LanguageServer for Backend {
     }
 
     async fn formatting(&self, params: DocumentFormattingParams) -> Result<Option<Vec<TextEdit>>> {
-        let documents = snapshot_documents(&self.documents).await;
-        let Some(document) = documents.get(&params.text_document.uri) else {
+        let mut documents = self.documents.lock().await;
+        let Some(document) = documents.get(&params.text_document.uri).cloned() else {
             return Ok(None);
         };
         let path = params.text_document.uri.path();
-        let formatted = format_source(path, &document.text);
+        let Some(formatted) = documents.language_service.format(path) else {
+            return Ok(None);
+        };
         if formatted == document.text.as_ref() {
             return Ok(None);
         }
@@ -571,12 +576,14 @@ impl LanguageServer for Backend {
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
         let uri = params.text_document.uri;
-        let documents = snapshot_documents(&self.documents).await;
-        let Some(document) = documents.get(&uri) else {
+        let mut documents = self.documents.lock().await;
+        let Some(document) = documents.get(&uri).cloned() else {
             return Ok(None);
         };
 
-        let symbols = document_symbols(uri.path(), &document.text)
+        let symbols = documents
+            .language_service
+            .document_symbols(uri.path())
             .into_iter()
             .map(|symbol| to_lsp_document_symbol(&document.text, symbol))
             .collect::<Vec<_>>();

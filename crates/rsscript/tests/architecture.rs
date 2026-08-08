@@ -831,8 +831,19 @@ fn language_engine_does_not_read_the_operating_system() {
     let description = language_manifest["package"]["description"]
         .as_str()
         .expect("language-service description");
-    assert!(!description.to_ascii_lowercase().contains("incremental"));
-    assert!(language_service.contains("does not claim a\n//! query-level incremental"));
+    assert!(description.to_ascii_lowercase().contains("incremental"));
+    for boundary in [
+        "dependency_cache",
+        "lint_cache",
+        "format_cache",
+        "symbol_cache",
+        "invalidate_interface_dependents",
+    ] {
+        assert!(
+            language_service.contains(boundary),
+            "language service must retain query boundary `{boundary}`"
+        );
+    }
 }
 
 #[test]
