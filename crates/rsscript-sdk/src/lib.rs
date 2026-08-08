@@ -1,10 +1,88 @@
 #![forbid(unsafe_code)]
 
+// Public exports are deliberately explicit so adding a compiler, bytecode, or
+// VM symbol cannot silently expand the embedding contract.
+pub use rsscript_compiler::syntax;
+pub use rsscript_compiler::{
+    AnalysisResult, CommitBehavior, Completion, CompletionKind, ContinuationOptions, Continuations,
+    Definition, Diagnostic, DiagnosticExplanation, Effect, ExpectedType, Fix, FixEdit,
+    FrontendCompletion, FrontendStopReason, GenerateContext, LiteralClass, PrefixStatus, Reference,
+    RssDocumentSymbol, SemanticDatabase, Severity, SourceFileSnapshot, SourceSnapshot, Span,
+    SymbolCompleteness, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, TextRange, TypeRef,
+    VSCODE_GRAMMAR_PATH, ValidatedProgram, analyze_source, analyze_source_result,
+    analyze_source_result_with_operation, analyze_source_with_core, analyze_source_with_interfaces,
+    analyze_source_with_interfaces_result, analyze_source_with_interfaces_result_with_operation,
+    analyze_source_with_interfaces_without_core, analyze_source_without_core,
+    analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
+    analyze_sources_with_interfaces_without_core,
+    analyze_sources_with_interfaces_without_core_result, analyze_syntax_source, core_interfaces,
+    core_package_index_json, document_symbols, explain_diagnostic_code,
+    format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
+    format_diagnostics_json_with_source, format_program, format_source, lint_source, prefix_status,
+    standard_package_interfaces, symbol_index, valid_continuations, validate_source,
+    validate_source_with_operation, validate_sources_with_interfaces,
+    validate_sources_with_interfaces_with_operation, validate_sources_with_interfaces_without_core,
+    vscode_tmlanguage_json,
+};
+
 #[cfg(feature = "execution")]
-pub use rsscript_bytecode::*;
-pub use rsscript_compiler::*;
+pub use rsscript_bytecode::{
+    BYTECODE_MAGIC, BYTECODE_SCHEMA, BytecodeArtifact, BytecodeCompatibility, BytecodeError,
+    BytecodeErrorCode, BytecodeHeader, BytecodeLimits, BytecodeVerifier, VerificationContext,
+    VerifiedBytecode, decode_executable_payload, encode_executable_payload,
+};
 #[cfg(feature = "execution")]
-pub use rsscript_vm::*;
+pub use rsscript_compiler::{
+    ArtifactStore, CompiledIr, ExecutablePackageSnapshot, GeneratedRustPackage,
+    LowerCoverageReport, LoweredRust, NativeRustDependency, PackageAnalysis,
+    PackageAnalysisAwaitSite, PackageAnalysisExport, PackageAnalysisExternalImport,
+    PackageAnalysisFile, PackageAnalysisProducer, PackageAnalysisSummary, PackageCheck,
+    PackageCheckLock, PackageDependencyKind, PackageDiff, PackageGraphCheck, PackageIdentity,
+    PackageInterfaceChange, PackageInterfaceChangeKind, PackageLock, PackageLockDiff,
+    PackageLockFieldChange, PackageLockMetadata, PackageLockPackage, PackageLockPackageChange,
+    PackageLoweringInput, PackageManifestChange, PackageMetadataMismatch, PackageMetadataReport,
+    PackageNativeRustAuthorDeclaration, PackageNativeRustCheck, PackageNativeRustReview,
+    PackageNativeRustSemanticReview, PackageNativeRustSourceScan, PackageReview,
+    PackageReviewExport, PackageReviewFile, PackageReviewFileKind, PackageReviewMetadata,
+    PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree, PackageTreeNode,
+    PackageTreeSummary, PreparedPackage, RemappedRustcDiagnostic, ReviewFix, ReviewMap,
+    ReviewMapCategorySummary, ReviewMapClassification, ReviewMapFile, ReviewMapFileRisk,
+    ReviewMapRegion, ReviewMapSummary, ReviewRisk, SymbolInventoryEntry, WorkspaceSnapshot,
+    analyze_package_dir, check_package_dir, compile_package_input_to_ir, compile_source_to_ir,
+    compile_validated_to_ir, diff_package_dirs, diff_package_locks, format_package_analysis_json,
+    format_package_check_human, format_package_check_json, format_package_diff_human,
+    format_package_diff_json, format_package_lock_diff_human, format_package_lock_diff_json,
+    format_package_lock_json, format_package_lock_toml, format_package_metadata_human,
+    format_package_metadata_json, format_package_review_human, format_package_review_json,
+    format_package_review_markdown, format_package_tree_human, format_package_tree_json,
+    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
+    load_workspace_snapshot, load_workspace_snapshot_with_operation, lock_package_dir,
+    lower_coverage_report, lower_program_to_rust, lower_program_to_rust_with_map,
+    lower_source_to_rust, lower_source_to_rust_package,
+    lower_source_to_rust_package_with_interfaces, lower_source_to_rust_with_map,
+    lower_sources_to_rust_package_with_interfaces, lower_sources_to_rust_package_with_options,
+    lowered_symbol_name, package_lowering_input, package_metadata, package_metadata_verify,
+    package_sources, package_sources_with_dependency_interfaces, package_tree,
+    parse_runtime_diagnostics, parse_source_map_json, prepare_executable_package,
+    prepare_package_for_execution, remap_rustc_diagnostic_json, remap_rustc_diagnostic_json_lines,
+    review_map_sources, review_package_dir, review_sources, symbol_inventory,
+    write_generated_rust_package, write_package_artifact_atomic,
+};
+#[cfg(feature = "native-jit")]
+pub use rsscript_vm::NativeStats;
+#[cfg(feature = "execution")]
+pub use rsscript_vm::{
+    AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior, CancellationBehavior,
+    CoverageBucket, EvalError, EvalExecutionReport, EvalOutput, ExecutionFailureKind,
+    ExecutionUsage, ExternalFunction, ExternalFunctionRegistry, ExternalImport, ExternalSymbol,
+    FunctionSignature, NativeInterpreterFn, NativeValue, ProviderAuthority, ProviderCallContext,
+    ProviderCallMode, ProviderCallTrace, ProviderCallable, ProviderDescriptor, ProviderError,
+    ProviderErrorCode, ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor,
+    ProviderFuture, ProviderInvocationContract, ProviderLoadError, ProviderResource,
+    ProviderResourceRegistry, ProviderResourceTable, ProviderTraceSink, RegVmExecutable,
+    ResolvedProviderFunction, ResourceCleanupContract, ResourceHandle, SignatureHash, VmLimits,
+    compile_executable_ir,
+};
 #[cfg(feature = "execution")]
 mod artifact_bundle;
 #[cfg(feature = "execution")]
@@ -12,9 +90,15 @@ mod semantic_diff;
 #[cfg(feature = "execution")]
 mod vm_adapter;
 #[cfg(feature = "execution")]
-pub use artifact_bundle::*;
+pub use artifact_bundle::{
+    ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, ArtifactBundle, ArtifactBundleError,
+    BuildProvenanceV1, InterfaceRequirementV1,
+};
 #[cfg(feature = "execution")]
-pub use semantic_diff::*;
+pub use semantic_diff::{
+    AwaitFactV1, ChangedFactV1, CountChangeV1, ExportFactV1, ExternalCallFactV1, FactSetDiffV1,
+    SEMANTIC_DIFF_SCHEMA, SemanticDiffV1,
+};
 #[cfg(feature = "execution")]
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -24,7 +108,24 @@ use std::path::Path;
 #[cfg(feature = "execution")]
 use std::time::{Duration, Instant};
 #[cfg(feature = "execution")]
-pub use vm_adapter::*;
+pub use vm_adapter::{
+    reg_vm_compile_package, reg_vm_compile_package_input, reg_vm_compile_source,
+    reg_vm_compile_validated, reg_vm_eval_package_main_with_args,
+    reg_vm_eval_package_main_with_args_and_external_bindings,
+    reg_vm_eval_package_main_with_args_and_external_bindings_and_limits,
+    reg_vm_eval_package_main_with_args_and_external_bindings_streaming_stdout,
+    reg_vm_eval_source_main, reg_vm_eval_source_main_jit, reg_vm_eval_source_main_with_args,
+    reg_vm_eval_source_main_with_args_and_external_bindings,
+    reg_vm_eval_source_main_with_args_and_external_bindings_and_limits,
+    reg_vm_eval_source_main_with_args_streaming_stdout, reg_vm_eval_source_main_with_limits,
+};
+#[cfg(feature = "native-jit")]
+pub use vm_adapter::{
+    reg_vm_eval_source_main_native, reg_vm_eval_source_main_native_force_all_safepoints,
+    reg_vm_eval_source_main_native_force_deopt, reg_vm_eval_source_main_native_force_safepoint,
+    reg_vm_eval_source_main_native_osr, reg_vm_eval_source_main_native_osr_report,
+    reg_vm_eval_source_main_native_precise, with_native_cost_model_disabled,
+};
 
 /// Frontend-only editor API consumed by `rsscript-language-service`.
 /// Runtime and Provider types are deliberately excluded.

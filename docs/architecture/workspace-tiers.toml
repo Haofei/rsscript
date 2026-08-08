@@ -1,0 +1,74 @@
+schema = 1
+
+# This file is the machine-checked maturity inventory for every Cargo workspace
+# package. A package must occur exactly once. `core`, `applications`, and
+# `runner` are the root default-members; every other tier is opt-in.
+
+core = [
+  "rsscript-abi-model",
+  "rsscript-build-support",
+  "rsscript-bytecode",
+  "rsscript-compiler",
+  "rsscript-diagnostics",
+  "rsscript-exec-ir",
+  "rsscript-interface-catalog",
+  "rsscript-language-service",
+  "rsscript-lowering",
+  "rsscript-operation",
+  "rsscript-provider-api",
+  "rsscript-provider-bindgen",
+  "rsscript-provider-conformance",
+  "rsscript-runner-protocol",
+  "rsscript-sdk",
+  "rsscript-semantics",
+  "rsscript-source-model",
+  "rsscript-syntax",
+  "rsscript-text",
+  "rsscript-vm",
+  "rsscript-work-budget",
+  "rsscript-workspace-loader",
+]
+
+applications = [
+  "rss-lsp",
+  "rsscript-cli",
+]
+
+runner = [
+  "rss-process-guard",
+]
+
+providers = [
+  "rsscript-provider-cli",
+  "rsscript-provider-entropy",
+  "rsscript-provider-env",
+  "rsscript-provider-fs",
+  "rsscript-provider-http",
+  "rsscript-provider-log",
+  "rsscript-provider-process",
+  "rsscript-provider-time",
+]
+
+integrations = [
+  "reir",
+  "rsscript-review-reir",
+]
+
+experimental = [
+  "rss-native-abi",
+  "rsscript-aot-runtime",
+  "vm-jit",
+]
+
+research = [
+  "rss-testgen",
+  "rss_native_abi_fixture_bridge",
+]
+
+tooling = [
+  "rsscript-xtask",
+]
+
+examples = [
+  "embedded-report-pipeline",
+]

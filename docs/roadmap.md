@@ -29,14 +29,20 @@ language specification and tests remain authoritative for existing behavior.
 
 ## Current priority: conformance and boundary hardening
 
-1. Continue reducing compatibility-crate API and crate-wide lint exceptions.
-2. Extend the query-level language-service cache only with measured editor
+The checked migration baseline and package maturity inventory live in
+[`architecture/migration-baseline.md`](architecture/migration-baseline.md) and
+[`architecture/workspace-tiers.toml`](architecture/workspace-tiers.toml).
+
+1. Preserve the checked diagnostics, Artifact, execution, cancellation, and
+   Provider baselines while responsibilities move.
+2. Continue reducing compatibility-crate API and crate-wide lint exceptions.
+3. Extend the query-level language-service cache only with measured editor
    workloads; formatting, lint, symbols, dependency discovery, and semantic
    diagnostics now invalidate independently.
-3. Use the exact reachable-value live-memory metric and cumulative allocation
+4. Use the exact reachable-value live-memory metric and cumulative allocation
    quota together in workload tuning; extend the model only when a new VM-owned
    value kind is introduced. Provider-owned memory remains Provider telemetry.
-4. Promote a feature only through the maturity matrix; do not add syntax while a
+5. Promote a feature only through the maturity matrix; do not add syntax while a
    Core row remains partial.
 
 ## Frozen scope

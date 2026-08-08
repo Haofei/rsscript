@@ -102,6 +102,46 @@ fn metadata_workspace_dependencies(
         .collect()
 }
 
+fn metadata_default_members(metadata: &serde_json::Value) -> BTreeSet<String> {
+    let packages = metadata["packages"]
+        .as_array()
+        .expect("metadata packages")
+        .iter()
+        .map(|package| {
+            (
+                package["id"].as_str().expect("package id"),
+                package["name"].as_str().expect("package name"),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
+    metadata["workspace_default_members"]
+        .as_array()
+        .expect("workspace default members")
+        .iter()
+        .map(|member| {
+            let id = member.as_str().expect("default member id");
+            packages
+                .get(id)
+                .unwrap_or_else(|| panic!("default member `{id}` is not a workspace package"))
+                .to_string()
+        })
+        .collect()
+}
+
+fn collect_rust_sources(path: &Path, sources: &mut Vec<PathBuf>) {
+    for entry in fs::read_dir(path)
+        .unwrap_or_else(|error| panic!("read source directory {}: {error}", path.display()))
+    {
+        let entry = entry.expect("source directory entry");
+        let path = entry.path();
+        if path.is_dir() {
+            collect_rust_sources(&path, sources);
+        } else if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
+            sources.push(path);
+        }
+    }
+}
+
 #[test]
 fn cargo_metadata_enforces_composition_dependency_direction() {
     let root = workspace_root();
@@ -155,6 +195,104 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
                 "composition root must remain a dependency leaf; `{name}` depends on it"
             );
         }
+    }
+}
+
+#[test]
+fn workspace_tiers_are_exhaustive_and_define_default_members() {
+    let root = workspace_root();
+    let metadata = cargo_metadata(&root);
+    let inventory = read(&root.join("docs/architecture/workspace-tiers.toml"));
+    let inventory: toml::Value = toml::from_str(&inventory).expect("workspace tier inventory");
+    assert_eq!(inventory["schema"].as_integer(), Some(1));
+
+    let tier_names = [
+        "core",
+        "applications",
+        "runner",
+        "providers",
+        "integrations",
+        "experimental",
+        "research",
+        "tooling",
+        "examples",
+    ];
+    let mut classified = BTreeSet::new();
+    let mut defaults = BTreeSet::new();
+    for tier in tier_names {
+        for package in inventory[tier]
+            .as_array()
+            .unwrap_or_else(|| panic!("tier `{tier}` must be an array"))
+        {
+            let package = package
+                .as_str()
+                .unwrap_or_else(|| panic!("tier `{tier}` contains a non-string package"));
+            assert!(
+                classified.insert(package.to_string()),
+                "workspace package `{package}` occurs in more than one maturity tier"
+            );
+            if matches!(tier, "core" | "applications" | "runner") {
+                defaults.insert(package.to_string());
+            }
+        }
+    }
+
+    let workspace = metadata["workspace_members"]
+        .as_array()
+        .expect("workspace members")
+        .iter()
+        .map(|member| {
+            let member = member.as_str().expect("workspace member id");
+            metadata["packages"]
+                .as_array()
+                .expect("metadata packages")
+                .iter()
+                .find(|package| package["id"].as_str() == Some(member))
+                .and_then(|package| package["name"].as_str())
+                .unwrap_or_else(|| panic!("workspace member `{member}` has no package metadata"))
+                .to_string()
+        })
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        classified, workspace,
+        "every workspace package must occur in exactly one maturity tier"
+    );
+    assert_eq!(
+        metadata_default_members(&metadata),
+        defaults,
+        "root default-members must contain only Core, applications, and the runner"
+    );
+}
+
+#[test]
+fn migration_boundary_rejects_disabled_cemetery_code_and_root_glob_exports() {
+    let root = workspace_root();
+    let mut sources = Vec::new();
+    collect_rust_sources(&root.join("crates"), &mut sources);
+    let disabled = sources
+        .iter()
+        .filter_map(|path| {
+            let source = read(path);
+            source.contains(&["#[cfg(", "any())]"].concat()).then(|| {
+                path.strip_prefix(&root)
+                    .unwrap_or(path)
+                    .display()
+                    .to_string()
+            })
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        disabled.is_empty(),
+        "delete disabled cemetery code instead of hiding it behind cfg(any()): {}",
+        disabled.join(", ")
+    );
+
+    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    for implementation in ["rsscript_compiler", "rsscript_bytecode", "rsscript_vm"] {
+        assert!(
+            !sdk.contains(&format!("pub use {implementation}::*")),
+            "the stable SDK root must explicitly inventory exports from `{implementation}`"
+        );
     }
 }
 
@@ -551,59 +689,21 @@ fn function_source<'a>(source: &'a str, signature: &str) -> &'a str {
 }
 
 #[test]
-fn register_vm_test_domains_remain_separate_modules() {
+fn register_vm_has_no_disabled_test_composition_tree() {
     let root = workspace_root();
-    let aggregator = root.join("crates/rsscript-vm/src/reg_vm/tests.rs");
-    let source = read(&aggregator);
-    let expected = [
-        "intrinsic_registry",
-        "register_window",
-        "closure_cache",
-        "j1_profiling",
-    ];
-
     assert!(
-        source.lines().count() <= expected.len() + 2,
-        "reg_vm/tests.rs must remain a composition root"
+        !root.join("crates/rsscript-vm/src/reg_vm/tests.rs").exists(),
+        "disabled VM test aggregators must be deleted instead of cfg-disabled"
     );
-    for domain in expected {
-        assert!(
-            source.contains(&format!("tests/{domain}.rs")),
-            "reg_vm test composition root is missing `{domain}`"
-        );
-        assert!(
-            root.join(format!("crates/rsscript-vm/src/reg_vm/tests/{domain}.rs"))
-                .is_file(),
-            "reg_vm test domain `{domain}` must have its own module"
-        );
-    }
-
-    let register_window =
-        read(&root.join("crates/rsscript-vm/src/reg_vm/tests/register_window.rs"));
-    let register_window_domains = [
-        "lowering",
-        "translation",
-        "tiering_and_memo",
-        "abi_and_heap",
-        "osr_collections",
-        "closures",
-        "deopt_and_transactions",
-    ];
     assert!(
-        register_window.lines().count() <= 600,
-        "register_window.rs must remain a helper and composition root"
+        !root.join("crates/rsscript-vm/src/reg_vm/tests").exists(),
+        "disabled VM test trees must be deleted instead of retained as cemetery code"
     );
-    for domain in register_window_domains {
+    for active in ["exec.rs", "execution_plan.rs", "tier.rs", "value_ops.rs"] {
+        let source = read(&root.join("crates/rsscript-vm/src/reg_vm").join(active));
         assert!(
-            register_window.contains(&format!("register_window/{domain}.rs")),
-            "register-window composition root is missing `{domain}`"
-        );
-        assert!(
-            root.join(format!(
-                "crates/rsscript-vm/src/reg_vm/tests/register_window/{domain}.rs"
-            ))
-            .is_file(),
-            "register-window test domain `{domain}` must have its own module"
+            source.contains("mod tests"),
+            "active VM domain `{active}` must keep colocated executable tests"
         );
     }
 }

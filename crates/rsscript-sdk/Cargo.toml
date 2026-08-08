@@ -92,3 +92,8 @@ required-features = ["native-jit"]
 name = "execution_report_schema"
 path = "tests/execution_report_schema.rs"
 required-features = ["execution"]
+
+[[test]]
+name = "migration_baseline"
+path = "tests/migration_baseline.rs"
+required-features = ["execution"]

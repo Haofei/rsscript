@@ -45,6 +45,40 @@ members = [
     "packages/native-abi-fixture/native/rust",
 ]
 
+# The root workspace also contains providers, integrations, compatibility
+# packages, and research backends so the full maintenance gate can still test
+# them together. Normal `cargo check`, `cargo test`, and `cargo clippy` commands
+# intentionally select only the supported product path below. Experimental and
+# research packages have path-triggered/nightly workflows and remain available
+# through explicit `-p` or `--workspace` commands.
+default-members = [
+    "crates/rsscript-abi-model",
+    "crates/rsscript-bytecode",
+    "crates/rsscript-diagnostics",
+    "crates/rsscript-exec-ir",
+    "crates/rsscript-sdk",
+    "crates/rsscript-interface-catalog",
+    "crates/rsscript-provider-api",
+    "crates/rsscript-provider-bindgen",
+    "crates/rsscript-provider-conformance",
+    "crates/rsscript-syntax",
+    "crates/rsscript-source-model",
+    "crates/rsscript-text",
+    "crates/rsscript-build-support",
+    "crates/rsscript-operation",
+    "crates/rsscript-runner-protocol",
+    "crates/rsscript-work-budget",
+    "crates/rsscript-semantics",
+    "crates/rsscript-lowering",
+    "crates/rsscript-language-service",
+    "crates/rsscript-workspace-loader",
+    "crates/rsscript-vm",
+    "crates/rsscript-cli",
+    "crates/rsscript-compiler",
+    "crates/lsp",
+    "crates/process-guard",
+]
+
 # Release tuning for the `rss` tool / VM. Thin LTO + a single codegen unit let the
 # optimizer inline across the interpreter's hot dispatch/value helpers, which are
 # spread across modules. Small but real on the interpreter (~3% on numeric loops);

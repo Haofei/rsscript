@@ -53,8 +53,6 @@ pub(crate) struct RegNativeSignature {
 mod deep_copy;
 mod profile;
 
-#[cfg(any())]
-pub(crate) use deep_copy::elide_deepcopy_enabled_for_test;
 use deep_copy::*;
 pub(crate) use profile::*;
 

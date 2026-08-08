@@ -15,7 +15,7 @@ use rsscript_compiler::{
 pub use rsscript_vm::with_native_cost_model_disabled;
 use rsscript_vm::{EvalError, EvalOutput, ExternalFunction};
 #[allow(unused_imports)]
-pub use rsscript_vm::{JitPlan, RegVmExecutable, VmLimits};
+pub use rsscript_vm::{RegVmExecutable, VmLimits};
 
 pub fn reg_vm_compile_package(package_dir: &Path) -> Result<RegVmExecutable, EvalError> {
     let prepared = prepare_package_for_execution(package_dir).map_err(EvalError::Runtime)?;

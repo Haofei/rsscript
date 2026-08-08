@@ -48,8 +48,6 @@ use crate::eval_types::{
     NativeValue, ProviderCallContext, ProviderCallMode, ProviderError, ProviderFuture,
     ProviderResourceRegistry,
 };
-#[cfg(any())]
-use crate::syntax::parse_source;
 #[cfg(feature = "native-jit")]
 use crate::text_util::string_pad_len;
 use crate::text_util::{
@@ -79,12 +77,8 @@ fn intern_struct_layout(name: &str, fields: &[(String, Reg)]) -> Rc<TypeLayout> 
     intern_layout(Rc::from(name), field_names)
 }
 
-#[cfg(any())]
-mod architecture;
 mod bytecode;
 mod calls;
-#[cfg(any())]
-mod compile;
 mod exec;
 mod execution_plan;
 mod intrinsics;
@@ -102,13 +96,6 @@ mod tier;
 mod value_access;
 mod value_convert;
 mod value_ops;
-#[cfg(any())]
-pub(crate) use compile::reg_vm_compile_sources;
-#[cfg(any())]
-pub use compile::{
-    reg_vm_compile_package, reg_vm_compile_package_input, reg_vm_compile_source,
-    reg_vm_compile_validated,
-};
 use execution_plan::*;
 pub(crate) use lower::*;
 pub(crate) use model::*;
@@ -163,164 +150,6 @@ pub fn compile_executable_ir(
         unit: Rc::new(unit),
         artifact,
     })
-}
-
-#[cfg(any())]
-pub fn reg_vm_eval_source_main_with_args(
-    file: &str,
-    source: &str,
-    args: impl IntoIterator<Item = impl Into<String>>,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_args(args)
-}
-
-#[cfg(any())]
-pub fn reg_vm_eval_source_main(file: &str, source: &str) -> Result<EvalOutput, EvalError> {
-    reg_vm_eval_source_main_with_args(file, source, std::iter::empty::<String>())
-}
-
-/// Compile `source` and run `main` under explicit resilience limits.
-///
-/// Limits bound selected resources but do not isolate untrusted code. Deploy
-/// externally supplied scripts inside an operating-system isolation boundary.
-#[cfg(any())]
-pub fn reg_vm_eval_source_main_with_limits(
-    file: &str,
-    source: &str,
-    args: impl IntoIterator<Item = impl Into<String>>,
-    limits: VmLimits,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_limits(args, limits)
-}
-
-/// Compile and run `source` with explicit external bindings and resource limits.
-#[cfg(any())]
-pub fn reg_vm_eval_source_main_with_args_and_external_bindings_and_limits(
-    file: &str,
-    source: &str,
-    args: impl IntoIterator<Item = impl Into<String>>,
-    external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
-    limits: VmLimits,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_args_and_external_bindings_and_limits(
-        args,
-        external_bindings,
-        limits,
-    )
-}
-
-/// Tier-0 JIT entry point.
-///
-/// Compiles the source, runs the per-function JIT-eligibility analysis (the seam
-/// where native code generation will plug in), then executes through the shared
-/// `run_frame` interpreter. Because execution reuses the interpreter's runtime,
-/// the JIT and the interpreter share a single source of semantic truth — there
-/// is no VM<->JIT gap *by construction* at this tier.
-///
-/// The next tier replaces the shared-execution step with native machine code for
-/// `jit_plan().eligible_functions` (it must live in a separate crate because
-/// `rsscript` is `#![forbid(unsafe_code)]`). That tier is gated by the N-way
-/// differential in `tests/common/differential.rs`: `interp ≡ jit ≡ compiled`.
-#[cfg(any())]
-pub fn reg_vm_eval_source_main_jit(
-    file: &str,
-    source: &str,
-    args: impl IntoIterator<Item = impl Into<String>>,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_args_jit(args)
-}
-
-/// Native (Cranelift) JIT entry point. Like [`reg_vm_eval_source_main_jit`] but
-/// the integer/control core executes as machine code (tier-0 covers the rest,
-/// the interpreter the remainder). Verified to equal the other backends by the
-/// N-way differential.
-#[cfg(any())]
-pub fn reg_vm_eval_source_main_native(
-    file: &str,
-    source: &str,
-    args: impl IntoIterator<Item = impl Into<String>>,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_args_native(args)
-}
-
-/// Native-tier entry point in **deopt stress mode** (the native code always bails
-/// to the interpreter). Used by the differential to verify the fallback path.
-#[cfg(any())]
-pub fn reg_vm_eval_source_main_native_force_deopt(
-    file: &str,
-    source: &str,
-    args: impl IntoIterator<Item = impl Into<String>>,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_args_native_force_deopt(args)
-}
-
-/// Native-tier entry point that forces one generated safepoint to deopt
-/// unconditionally. Used by differential/deopt-stress tests to exercise precise
-/// safepoint payloads at sites that may not naturally bail for the chosen input.
-#[cfg(any())]
-#[allow(dead_code)]
-pub fn reg_vm_eval_source_main_native_force_safepoint(
-    file: &str,
-    source: &str,
-    args: impl IntoIterator<Item = impl Into<String>>,
-    safepoint: u32,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_args_native_force_safepoint(args, safepoint)
-}
-
-/// Native-tier entry point that forces every generated safepoint to deopt
-/// unconditionally. This is the deterministic test/fuzz equivalent of
-/// `RSS_JIT_DEOPT_EVERY=1`: native code still executes far enough to capture each
-/// safepoint payload, then precise-resumes/falls back through production deopt
-/// machinery.
-#[cfg(any())]
-#[allow(dead_code)]
-pub fn reg_vm_eval_source_main_native_force_all_safepoints(
-    file: &str,
-    source: &str,
-    args: impl IntoIterator<Item = impl Into<String>>,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_args_native_force_all_safepoints(args)
-}
-
-/// Native-tier entry point with J0.2 **precise resume** forced on: a real native
-/// guard bail reconstructs the interpreter register window and resumes at the
-/// safepoint instead of re-running from the function top. Must equal every other
-/// backend. Validation/test entry point (sets the flag deterministically).
-#[cfg(any())]
-pub fn reg_vm_eval_source_main_native_precise(
-    file: &str,
-    source: &str,
-    args: impl IntoIterator<Item = impl Into<String>>,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_args_native_precise(args)
-}
-
-/// Native-tier entry point with J5.2 **OSR** (on-stack replacement) forced on: a
-/// function with a qualifying native-subset hot loop runs that loop natively
-/// mid-function (OSR-entry at the loop header reading the live-in window;
-/// OSR-exit/precise-resume at the post-loop ip with the live-out window). Must
-/// equal every other backend byte-for-byte. Validation/test/bench entry point.
-#[cfg(any())]
-pub fn reg_vm_eval_source_main_native_osr(
-    file: &str,
-    source: &str,
-    args: impl IntoIterator<Item = impl Into<String>>,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_args_native_osr(args)
-}
-
-/// Lever 2 test entry point: run `main` with the native tier + OSR forced on AND the
-/// `RSS_JIT_REPORT` missed-optimization report armed deterministically, returning the
-/// report's per-region lines (one `\n`-joined block per function) alongside the output
-/// and stats. The report is observational, so the output equals every other backend.
-#[cfg(any())]
-pub fn reg_vm_eval_source_main_native_osr_report(
-    file: &str,
-    source: &str,
-    args: impl IntoIterator<Item = impl Into<String>>,
-) -> Result<(EvalOutput, NativeStats, Vec<String>), EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_args_native_osr_report(args)
 }
 
 // ============================================================================
@@ -736,82 +565,6 @@ enum PureStep {
     Return(VmValue),
     /// Not in the pure subset; the caller must handle it (frames, calls, async…).
     NotPure,
-}
-
-#[cfg(any())]
-pub fn reg_vm_eval_source_main_with_args_and_external_bindings(
-    file: &str,
-    source: &str,
-    args: impl IntoIterator<Item = impl Into<String>>,
-    external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?
-        .eval_main_with_args_and_external_bindings(args, external_bindings)
-}
-
-/// Streaming-stdout source entry point: evaluates `main` and
-/// writes `Output.write` output live (line-flushed) to the real process stdout as it
-/// runs. The captured stdout in the returned `EvalOutput` is unchanged, so it must
-/// not be re-printed by the caller. Other callers and the tests keep using the
-/// non-streaming `reg_vm_eval_source_main_with_args`, whose behavior is untouched.
-#[cfg(any())]
-pub fn reg_vm_eval_source_main_with_args_streaming_stdout(
-    file: &str,
-    source: &str,
-    args: impl IntoIterator<Item = impl Into<String>>,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(file, source)?.eval_main_with_args_and_external_bindings_streaming_stdout(
-        args,
-        std::iter::empty::<(String, ExternalFunction)>(),
-    )
-}
-
-/// Streaming-stdout package entry point. See
-/// [`reg_vm_eval_source_main_with_args_streaming_stdout`].
-#[cfg(any())]
-pub fn reg_vm_eval_package_main_with_args_and_external_bindings_streaming_stdout(
-    package_dir: &Path,
-    args: impl IntoIterator<Item = impl Into<String>>,
-    external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_package(package_dir)?
-        .eval_main_with_args_and_external_bindings_streaming_stdout(args, external_bindings)
-}
-
-#[cfg(any())]
-pub fn reg_vm_eval_package_main_with_args(
-    package_dir: &Path,
-    args: impl IntoIterator<Item = impl Into<String>>,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_eval_package_main_with_args_and_external_bindings(
-        package_dir,
-        args,
-        std::iter::empty::<(String, ExternalFunction)>(),
-    )
-}
-
-#[cfg(any())]
-pub fn reg_vm_eval_package_main_with_args_and_external_bindings(
-    package_dir: &Path,
-    args: impl IntoIterator<Item = impl Into<String>>,
-    external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_package(package_dir)?
-        .eval_main_with_args_and_external_bindings(args, external_bindings)
-}
-
-#[cfg(any())]
-pub fn reg_vm_eval_package_main_with_args_and_external_bindings_and_limits(
-    package_dir: &Path,
-    args: impl IntoIterator<Item = impl Into<String>>,
-    external_bindings: impl IntoIterator<Item = (impl Into<String>, ExternalFunction)>,
-    limits: VmLimits,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_package(package_dir)?.eval_main_with_args_and_external_bindings_and_limits(
-        args,
-        external_bindings,
-        limits,
-    )
 }
 
 #[derive(Debug, Clone)]
@@ -7052,6 +6805,3 @@ fn peel_select_operation(operation: &HirExpr) -> (&HirExpr, bool) {
         }
     }
 }
-
-#[cfg(any())]
-mod tests;

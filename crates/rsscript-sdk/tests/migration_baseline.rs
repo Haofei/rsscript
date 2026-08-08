@@ -1,0 +1,112 @@
+use rsscript_sdk::{
+    ArtifactVerifier, CancellationToken, Compiler, ExecutionRequest, RunLimits, Runtime,
+    TerminationReason, format_diagnostics_json,
+};
+use sha2::{Digest, Sha256};
+
+const BASELINE_SOURCE: &str = r#"
+fn main() -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < 32 {
+        total = total + index
+        index = index + 1
+    }
+    return total
+}
+"#;
+
+const LOOP_SOURCE: &str = r#"
+fn main() -> Int {
+    let mut value = 0
+    while true {
+        value = value + 1
+    }
+    return value
+}
+"#;
+
+fn sha256(bytes: impl AsRef<[u8]>) -> String {
+    format!("{:x}", Sha256::digest(bytes.as_ref()))
+}
+
+#[test]
+fn canonical_compilation_and_diagnostics_are_migration_baselines() {
+    let compiler = Compiler;
+    let first = compiler
+        .compile("migration-baseline.rss", BASELINE_SOURCE)
+        .expect("baseline source compiles");
+    let second = compiler
+        .compile("migration-baseline.rss", BASELINE_SOURCE)
+        .expect("baseline source compiles repeatedly");
+    let first_bytes = first.bundle_bytes().expect("bundle encoding");
+    let second_bytes = second.bundle_bytes().expect("bundle encoding");
+    assert_eq!(
+        first_bytes, second_bytes,
+        "the same immutable input must produce byte-identical bundle bytes"
+    );
+    assert_eq!(
+        sha256(&first_bytes),
+        "0698f33020b6753c623eb5ba8c32aac2a7c43fec9c86e5e0a204e80fc3b1bef6",
+        "an intentional Artifact encoding or lowering change must update this digest"
+    );
+
+    let diagnostics = compiler.check(
+        "migration-diagnostic.rss",
+        "fn main() -> Int { return true }",
+    );
+    let diagnostics = format_diagnostics_json(&diagnostics);
+    assert_eq!(
+        sha256(diagnostics.as_bytes()),
+        "b21cd30fa2e516596a5141d47cbde0099ec934e06e0f6a291a57f9082b21cb32",
+        "an intentional diagnostic code/span change must update this digest"
+    );
+}
+
+#[test]
+fn verified_execution_outcomes_are_migration_baselines() {
+    let compiler = Compiler;
+    let verified = ArtifactVerifier
+        .verify(
+            compiler
+                .compile("migration-baseline.rss", BASELINE_SOURCE)
+                .expect("baseline source compiles"),
+        )
+        .expect("baseline Artifact verifies");
+    let report = Runtime::default()
+        .link(&verified)
+        .expect("baseline Artifact links")
+        .execute(ExecutionRequest::default());
+    assert_eq!(report.termination_reason, TerminationReason::Completed);
+    assert_eq!(report.value, "496");
+    assert!(report.failure.is_none());
+    assert!(report.usage.steps_consumed > 0);
+
+    let loop_artifact = ArtifactVerifier
+        .verify(
+            compiler
+                .compile("migration-loop.rss", LOOP_SOURCE)
+                .expect("loop source compiles"),
+        )
+        .expect("loop Artifact verifies");
+    let runtime = Runtime::default();
+    let linked = runtime.link(&loop_artifact).expect("loop Artifact links");
+    let budget_report = linked
+        .execute(ExecutionRequest::default().limits(RunLimits::bounded().with_step_budget(32)));
+    assert_eq!(
+        budget_report.termination_reason,
+        TerminationReason::StepBudgetExceeded
+    );
+    assert!(budget_report.failure.is_some());
+
+    let cancellation = CancellationToken::new();
+    cancellation.cancel();
+    let cancelled_report = linked.execute(
+        ExecutionRequest::default().limits(RunLimits::bounded().with_cancellation(cancellation)),
+    );
+    assert_eq!(
+        cancelled_report.termination_reason,
+        TerminationReason::Cancelled
+    );
+    assert!(cancelled_report.failure.is_some());
+}

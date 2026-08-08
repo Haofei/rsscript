@@ -41,11 +41,11 @@ The default interface set contains deterministic core APIs only. Host packages
 must be explicit dependencies and are never injected for single-file analysis.
 
 `rsscript-compiler` is the frontend and lowering composition layer. It is
-frontend-only by default and does not depend on the embedding SDK or CLI. Its
-optional execution feature depends on `rsscript-vm` through one adapter module;
-the VM never depends back on the compiler. `rsscript-exec-ir` owns the complete,
-lifetime-independent backend input, while `rsscript-lowering` contains only the
-validated-HIR projection into that model.
+frontend-only by default and does not depend on the embedding SDK, VM, or CLI.
+The SDK-owned adapter is the only module that combines compiler output with the
+VM emitter; neither side depends back on the composition layer.
+`rsscript-exec-ir` owns the complete, lifetime-independent backend input, while
+`rsscript-lowering` contains only the validated-HIR projection into that model.
 `rsscript-sdk` is the stable embedding façade; embedders do not depend on the
 compiler's analyzer database, register VM, Rust AOT, JIT, package review, or
 source-map types directly. `rsscript-cli` is the composition root.
