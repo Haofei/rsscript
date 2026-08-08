@@ -44,6 +44,10 @@ must be explicit dependencies and are never injected for single-file analysis.
 frontend-only by default and does not depend on the embedding SDK, VM, or CLI.
 The SDK-owned adapter is the only module that combines compiler output with the
 VM emitter; neither side depends back on the composition layer.
+`rsscript-semantics` owns immutable source snapshots, `SemanticDatabase`, the
+complete/incomplete analysis state, and the error-free `ValidatedProgram`
+transition. The compiler analyzer is currently the sole integration point that
+assembles those facts while the remaining semantic passes migrate.
 `rsscript-exec-ir` owns the complete, lifetime-independent backend input, while
 `rsscript-lowering` contains only the validated-HIR projection into that model.
 `rsscript-sdk` is the stable embedding façade; embedders do not depend on the

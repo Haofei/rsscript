@@ -63,7 +63,8 @@ baselines during internal refactoring.
 | Asset | Current owner | Migration disposition |
 | --- | --- | --- |
 | Parser/CST/AST | `rsscript-syntax` | Keep |
-| Analyzer orchestration and most checks | `rsscript-compiler` | Move semantic facts and queries to `rsscript-semantics` |
+| Immutable snapshots, semantic database and validation phase types | `rsscript-semantics` | Migrated; compiler only assembles them through the analyzer boundary |
+| Analyzer orchestration and most checks | `rsscript-compiler` | Move remaining semantic checks and queries to `rsscript-semantics` |
 | Typed HIR model | `rsscript-semantics` | Keep source-shaped |
 | Owned executable IR | `rsscript-exec-ir` | Transitional; replace source-shaped nodes with typed CFG MIR |
 | HIR projection | `rsscript-lowering` | Evolve into HIR-to-MIR lowering |

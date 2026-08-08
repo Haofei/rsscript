@@ -10,5 +10,6 @@ doctest = false
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
+rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-syntax = { path = "../rsscript-syntax" }

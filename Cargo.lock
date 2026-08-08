@@ -2118,6 +2118,7 @@ name = "rsscript-semantics"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
+ "rsscript-diagnostics",
  "rsscript-interface-catalog",
  "rsscript-syntax",
 ]

@@ -35,14 +35,17 @@ The checked migration baseline and package maturity inventory live in
 
 1. Preserve the checked diagnostics, Artifact, execution, cancellation, and
    Provider baselines while responsibilities move.
-2. Continue reducing compatibility-crate API and crate-wide lint exceptions.
-3. Extend the query-level language-service cache only with measured editor
+2. Move remaining ownership/resource/call checks behind the semantic query
+   boundary. Immutable snapshots, `SemanticDatabase`, `AnalysisResult`, and
+   `ValidatedProgram` are now owned by `rsscript-semantics`.
+3. Continue reducing compatibility-crate API and crate-wide lint exceptions.
+4. Extend the query-level language-service cache only with measured editor
    workloads; formatting, lint, symbols, dependency discovery, and semantic
    diagnostics now invalidate independently.
-4. Use the exact reachable-value live-memory metric and cumulative allocation
+5. Use the exact reachable-value live-memory metric and cumulative allocation
    quota together in workload tuning; extend the model only when a new VM-owned
    value kind is introduced. Provider-owned memory remains Provider telemetry.
-5. Promote a feature only through the maturity matrix; do not add syntax while a
+6. Promote a feature only through the maturity matrix; do not add syntax while a
    Core row remains partial.
 
 ## Frozen scope

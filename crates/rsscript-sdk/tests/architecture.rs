@@ -1081,6 +1081,11 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     let types = root.join("crates/rsscript-semantics/src/types.rs");
     assert!(types.is_file());
     assert!(
+        root.join("crates/rsscript-semantics/src/database.rs")
+            .is_file(),
+        "semantic phase types and immutable facts must be owned by semantics"
+    );
+    assert!(
         !root
             .join("crates/rsscript-compiler/src/semantic_types.rs")
             .exists()
@@ -1098,19 +1103,71 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
 
     let semantics = read(&root.join("crates/rsscript-semantics/src/lib.rs"));
     for exported in [
+        "AnalysisResult",
+        "FrontendCompletion",
+        "FrontendStopReason",
         "ResolvedParamEffect",
         "ResolvedType",
         "ResolvedTypeKind",
+        "SemanticDatabase",
         "SemanticTypeFacts",
+        "SourceSnapshot",
         "TypeArena",
         "TypeId",
         "TypeQualifiers",
+        "ValidatedProgram",
     ] {
         assert!(
             semantics.contains(exported),
             "semantics must export structural model `{exported}`"
         );
     }
+
+    let database = read(&root.join("crates/rsscript-semantics/src/database.rs"));
+    for owned in [
+        "pub struct SourceSnapshot",
+        "pub struct SemanticDatabase",
+        "pub struct AnalysisResult",
+        "pub struct ValidatedProgram",
+        "pub fn into_validated",
+    ] {
+        assert!(
+            database.contains(owned),
+            "semantics must own phase contract `{owned}`"
+        );
+    }
+    let compiler_projection = read(&root.join("crates/rsscript-compiler/src/semantic.rs"));
+    for forbidden in [
+        "pub struct SourceSnapshot",
+        "pub struct SemanticDatabase",
+        "pub struct AnalysisResult",
+        "pub struct ValidatedProgram",
+        "pub enum FrontendCompletion",
+    ] {
+        assert!(
+            !compiler_projection.contains(forbidden),
+            "compiler semantic compatibility module must not re-own `{forbidden}`"
+        );
+    }
+    assert!(compiler_projection.contains("pub use rsscript_semantics"));
+
+    let mut constructor_users = Vec::new();
+    for path in rust_files_below(&root.join("crates")) {
+        let source = read(&path);
+        if source.contains(&["SemanticDatabase::", "from_frontend_parts"].concat()) {
+            constructor_users.push(
+                path.strip_prefix(&root)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string(),
+            );
+        }
+    }
+    assert_eq!(
+        constructor_users,
+        ["crates/rsscript-compiler/src/analyzer.rs"],
+        "only the migrating semantic analyzer may assemble checked database parts"
+    );
 
     let manifest: toml::Value =
         toml::from_str(&read(&root.join("crates/rsscript-semantics/Cargo.toml")))

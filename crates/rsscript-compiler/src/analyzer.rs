@@ -997,8 +997,8 @@ fn analyze_program(prepared: PreparedAnalysis) -> AnalysisResult {
     );
     let completion = budget_completion(&analyzer.budget);
     let diagnostics = analyzer.diagnostics.into_vec();
-    AnalysisResult::new(
-        SemanticDatabase::new(
+    AnalysisResult::from_frontend(
+        SemanticDatabase::from_frontend_parts(
             source_snapshot,
             interface_snapshot,
             source_programs,
@@ -1076,8 +1076,8 @@ fn analyze_syntax_program(prepared: PreparedAnalysis) -> AnalysisResult {
     );
     let completion = budget_completion(&analyzer.budget);
     let diagnostics = analyzer.diagnostics.into_vec();
-    AnalysisResult::new(
-        SemanticDatabase::new(
+    AnalysisResult::from_frontend(
+        SemanticDatabase::from_frontend_parts(
             source_snapshot,
             interface_snapshot,
             source_programs,

@@ -11,9 +11,14 @@ pub use rsscript_abi_model::{
 };
 
 mod call_binding;
+mod database;
 pub mod hir;
 mod types;
 pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
+pub use database::{
+    AnalysisResult, FrontendCompletion, FrontendStopReason, SemanticDatabase, SourceFileSnapshot,
+    SourceSnapshot, ValidatedProgram,
+};
 pub use types::{
     ResolvedParamEffect, ResolvedType, ResolvedTypeKind, SemanticTypeFacts, TypeArena, TypeId,
     TypeQualifiers,
