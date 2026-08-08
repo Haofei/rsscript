@@ -1032,6 +1032,7 @@ mod tests {
             let mut live = Vec::new();
             let mut stale = Vec::new();
             let mut created = 0u64;
+            let mut peak_live = 0usize;
 
             for operation in operations {
                 match operation % 4 {
@@ -1041,6 +1042,7 @@ mod tests {
                             let handle = result.expect("registration below the limit must succeed");
                             prop_assert!(!live.contains(&handle));
                             live.push(handle);
+                            peak_live = peak_live.max(live.len());
                             created += 1;
                         } else {
                             let exhausted = matches!(
@@ -1067,6 +1069,7 @@ mod tests {
                     prop_assert!(table.cleanup(handle).is_err(), "stale handle must fail closed");
                 }
                 prop_assert_eq!(table.live(), live.len());
+                prop_assert_eq!(table.peak_live(), peak_live);
                 prop_assert_eq!(table.created(), created);
                 prop_assert_eq!(table.cleaned(), cleanups.load(Ordering::Relaxed));
                 prop_assert_eq!(table.cleanup_failures(), 0);
