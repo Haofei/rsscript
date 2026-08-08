@@ -1,0 +1,365 @@
+#![forbid(unsafe_code)]
+
+use std::io::{self, Read, Write};
+
+use serde::{Deserialize, Serialize};
+
+pub const RUNNER_REQUEST_SCHEMA: &str = "rsscript.runner_request.v1";
+pub const RUNNER_RESPONSE_SCHEMA: &str = "rsscript.runner_response.v1";
+const REQUEST_MAGIC: &[u8; 8] = b"RSSRUNQ1";
+const RESPONSE_MAGIC: &[u8; 8] = b"RSSRUNS1";
+pub const MAX_HEADER_BYTES: usize = 1024 * 1024;
+pub const MAX_BUNDLE_BYTES: usize = 64 * 1024 * 1024;
+pub const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_ARGUMENTS: usize = 256;
+pub const MAX_ARGUMENT_BYTES: usize = 64 * 1024;
+pub const MAX_WALL_TIME_MS: u64 = 60_000;
+pub const MAX_DEPTH: usize = 1024;
+pub const MAX_STEP_BUDGET: u64 = 100_000_000;
+pub const MAX_ALLOCATION_BUDGET: usize = 512 * 1024 * 1024;
+pub const MAX_LIVE_MEMORY_LIMIT: usize = 256 * 1024 * 1024;
+pub const MAX_OUTPUT_BUDGET: usize = 4 * 1024 * 1024;
+pub const MAX_INTRINSIC_CALL_BUDGET: u64 = 10_000_000;
+pub const MAX_PROVIDER_CALL_BUDGET: u64 = 100_000;
+pub const MAX_RESOURCE_LIMIT: usize = 16_384;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerLimitsV1 {
+    pub wall_time_ms: u64,
+    pub max_depth: usize,
+    pub step_budget: u64,
+    pub allocation_budget: usize,
+    pub live_memory_limit: usize,
+    pub output_budget: usize,
+    pub intrinsic_call_budget: u64,
+    pub provider_call_budget: u64,
+    pub resource_limit: usize,
+}
+
+impl Default for RunnerLimitsV1 {
+    fn default() -> Self {
+        Self {
+            wall_time_ms: 60_000,
+            max_depth: 256,
+            step_budget: 10_000_000,
+            allocation_budget: 256 * 1024 * 1024,
+            live_memory_limit: 128 * 1024 * 1024,
+            output_budget: 1024 * 1024,
+            intrinsic_call_budget: 1_000_000,
+            provider_call_budget: 10_000,
+            resource_limit: 4096,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerRequestV1 {
+    pub schema: String,
+    pub args: Vec<String>,
+    pub limits: RunnerLimitsV1,
+    pub metadata_only_trace: bool,
+}
+
+impl RunnerRequestV1 {
+    pub fn new(args: Vec<String>) -> Result<Self, ProtocolError> {
+        validate_args(&args)?;
+        Ok(Self {
+            schema: RUNNER_REQUEST_SCHEMA.to_string(),
+            args,
+            limits: RunnerLimitsV1::default(),
+            metadata_only_trace: true,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunnerTerminationV1 {
+    Completed,
+    VerificationRejected,
+    LinkRejected,
+    ProtocolRejected,
+    HostFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RunnerResponseV1 {
+    pub schema: String,
+    pub runner_termination: RunnerTerminationV1,
+    pub report: Option<serde_json::Value>,
+    pub error: Option<String>,
+}
+
+impl RunnerResponseV1 {
+    pub fn report(report: serde_json::Value) -> Self {
+        Self {
+            schema: RUNNER_RESPONSE_SCHEMA.to_string(),
+            runner_termination: RunnerTerminationV1::Completed,
+            report: Some(report),
+            error: None,
+        }
+    }
+
+    pub fn rejected(termination: RunnerTerminationV1, error: impl Into<String>) -> Self {
+        Self {
+            schema: RUNNER_RESPONSE_SCHEMA.to_string(),
+            runner_termination: termination,
+            report: None,
+            error: Some(error.into()),
+        }
+    }
+}
+
+pub fn write_request(
+    mut output: impl Write,
+    request: &RunnerRequestV1,
+    bundle: &[u8],
+) -> Result<(), ProtocolError> {
+    validate_request(request)?;
+    if bundle.len() > MAX_BUNDLE_BYTES {
+        return Err(ProtocolError::Limit("Artifact Bundle"));
+    }
+    let header = serde_json::to_vec(request).map_err(ProtocolError::Json)?;
+    write_frame_header(&mut output, REQUEST_MAGIC, header.len(), bundle.len())?;
+    output.write_all(&header)?;
+    output.write_all(bundle)?;
+    output.flush()?;
+    Ok(())
+}
+
+pub fn read_request(mut input: impl Read) -> Result<(RunnerRequestV1, Vec<u8>), ProtocolError> {
+    let (header_len, bundle_len) = read_frame_header(&mut input, REQUEST_MAGIC)?;
+    if header_len > MAX_HEADER_BYTES || bundle_len > MAX_BUNDLE_BYTES {
+        return Err(ProtocolError::Limit("runner request"));
+    }
+    let mut header = vec![0; header_len];
+    input.read_exact(&mut header)?;
+    let request: RunnerRequestV1 = serde_json::from_slice(&header).map_err(ProtocolError::Json)?;
+    validate_request(&request)?;
+    let mut bundle = vec![0; bundle_len];
+    input.read_exact(&mut bundle)?;
+    let mut trailing = [0_u8; 1];
+    if input.read(&mut trailing)? != 0 {
+        return Err(ProtocolError::TrailingBytes);
+    }
+    Ok((request, bundle))
+}
+
+pub fn write_response(
+    mut output: impl Write,
+    response: &RunnerResponseV1,
+) -> Result<(), ProtocolError> {
+    if response.schema != RUNNER_RESPONSE_SCHEMA {
+        return Err(ProtocolError::Schema(response.schema.clone()));
+    }
+    let bytes = serde_json::to_vec(response).map_err(ProtocolError::Json)?;
+    if bytes.len() > MAX_RESPONSE_BYTES {
+        return Err(ProtocolError::Limit("runner response"));
+    }
+    output.write_all(RESPONSE_MAGIC)?;
+    output.write_all(&(bytes.len() as u64).to_be_bytes())?;
+    output.write_all(&bytes)?;
+    output.flush()?;
+    Ok(())
+}
+
+pub fn read_response(mut input: impl Read) -> Result<RunnerResponseV1, ProtocolError> {
+    let mut magic = [0_u8; 8];
+    input.read_exact(&mut magic)?;
+    if &magic != RESPONSE_MAGIC {
+        return Err(ProtocolError::Magic);
+    }
+    let length = read_u64(&mut input)?;
+    let length = usize::try_from(length).map_err(|_| ProtocolError::Limit("runner response"))?;
+    if length > MAX_RESPONSE_BYTES {
+        return Err(ProtocolError::Limit("runner response"));
+    }
+    let mut bytes = vec![0; length];
+    input.read_exact(&mut bytes)?;
+    let mut trailing = [0_u8; 1];
+    if input.read(&mut trailing)? != 0 {
+        return Err(ProtocolError::TrailingBytes);
+    }
+    let response: RunnerResponseV1 = serde_json::from_slice(&bytes).map_err(ProtocolError::Json)?;
+    if response.schema != RUNNER_RESPONSE_SCHEMA {
+        return Err(ProtocolError::Schema(response.schema));
+    }
+    Ok(response)
+}
+
+fn validate_request(request: &RunnerRequestV1) -> Result<(), ProtocolError> {
+    if request.schema != RUNNER_REQUEST_SCHEMA {
+        return Err(ProtocolError::Schema(request.schema.clone()));
+    }
+    validate_args(&request.args)?;
+    if request.limits.wall_time_ms == 0
+        || request.limits.max_depth == 0
+        || request.limits.step_budget == 0
+        || request.limits.output_budget == 0
+    {
+        return Err(ProtocolError::Invalid("runner limits must be non-zero"));
+    }
+    if request.limits.wall_time_ms > MAX_WALL_TIME_MS
+        || request.limits.max_depth > MAX_DEPTH
+        || request.limits.step_budget > MAX_STEP_BUDGET
+        || request.limits.allocation_budget > MAX_ALLOCATION_BUDGET
+        || request.limits.live_memory_limit > MAX_LIVE_MEMORY_LIMIT
+        || request.limits.output_budget > MAX_OUTPUT_BUDGET
+        || request.limits.intrinsic_call_budget > MAX_INTRINSIC_CALL_BUDGET
+        || request.limits.provider_call_budget > MAX_PROVIDER_CALL_BUDGET
+        || request.limits.resource_limit > MAX_RESOURCE_LIMIT
+    {
+        return Err(ProtocolError::Limit("runner limits"));
+    }
+    Ok(())
+}
+
+fn validate_args(args: &[String]) -> Result<(), ProtocolError> {
+    if args.len() > MAX_ARGUMENTS {
+        return Err(ProtocolError::Limit("arguments"));
+    }
+    if args
+        .iter()
+        .any(|argument| argument.len() > MAX_ARGUMENT_BYTES)
+    {
+        return Err(ProtocolError::Limit("argument bytes"));
+    }
+    Ok(())
+}
+
+fn write_frame_header(
+    output: &mut impl Write,
+    magic: &[u8; 8],
+    header_len: usize,
+    bundle_len: usize,
+) -> Result<(), ProtocolError> {
+    if header_len > MAX_HEADER_BYTES {
+        return Err(ProtocolError::Limit("runner header"));
+    }
+    output.write_all(magic)?;
+    output.write_all(&(header_len as u64).to_be_bytes())?;
+    output.write_all(&(bundle_len as u64).to_be_bytes())?;
+    Ok(())
+}
+
+fn read_frame_header(
+    input: &mut impl Read,
+    expected: &[u8; 8],
+) -> Result<(usize, usize), ProtocolError> {
+    let mut magic = [0_u8; 8];
+    input.read_exact(&mut magic)?;
+    if &magic != expected {
+        return Err(ProtocolError::Magic);
+    }
+    let header =
+        usize::try_from(read_u64(input)?).map_err(|_| ProtocolError::Limit("runner header"))?;
+    let bundle =
+        usize::try_from(read_u64(input)?).map_err(|_| ProtocolError::Limit("Artifact Bundle"))?;
+    Ok((header, bundle))
+}
+
+fn read_u64(input: &mut impl Read) -> Result<u64, ProtocolError> {
+    let mut bytes = [0_u8; 8];
+    input.read_exact(&mut bytes)?;
+    Ok(u64::from_be_bytes(bytes))
+}
+
+#[derive(Debug)]
+pub enum ProtocolError {
+    Io(io::Error),
+    Json(serde_json::Error),
+    Magic,
+    Schema(String),
+    Limit(&'static str),
+    Invalid(&'static str),
+    TrailingBytes,
+}
+
+impl std::fmt::Display for ProtocolError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Io(error) => write!(formatter, "runner I/O failed: {error}"),
+            Self::Json(error) => write!(formatter, "runner JSON failed: {error}"),
+            Self::Magic => formatter.write_str("invalid runner protocol magic"),
+            Self::Schema(schema) => write!(formatter, "unsupported runner schema `{schema}`"),
+            Self::Limit(name) => write!(formatter, "{name} exceeds the protocol limit"),
+            Self::Invalid(message) => formatter.write_str(message),
+            Self::TrailingBytes => formatter.write_str("runner request contains trailing bytes"),
+        }
+    }
+}
+
+impl std::error::Error for ProtocolError {}
+
+impl From<io::Error> for ProtocolError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::*;
+
+    #[test]
+    fn request_and_response_round_trip_through_bounded_frames() {
+        let request = RunnerRequestV1::new(vec!["hello".to_string()]).expect("request");
+        let mut bytes = Vec::new();
+        write_request(&mut bytes, &request, b"bundle").expect("encode request");
+        let (decoded, bundle) = read_request(bytes.as_slice()).expect("decode request");
+        assert_eq!(decoded, request);
+        assert_eq!(bundle, b"bundle");
+
+        let response = RunnerResponseV1::report(serde_json::json!({"ok": true}));
+        let mut bytes = Vec::new();
+        write_response(&mut bytes, &response).expect("encode response");
+        assert_eq!(
+            read_response(bytes.as_slice()).expect("decode response"),
+            response
+        );
+    }
+
+    #[test]
+    fn wire_headers_match_checked_in_fail_closed_schemas() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let request_schema: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(root.join("schemas/rsscript.runner_request.v1.schema.json"))
+                .expect("request schema"),
+        )
+        .expect("parse request schema");
+        let response_schema: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(root.join("schemas/rsscript.runner_response.v1.schema.json"))
+                .expect("response schema"),
+        )
+        .expect("parse response schema");
+        let request = RunnerRequestV1::new(vec!["hello".to_string()]).expect("request");
+        let response = RunnerResponseV1::report(serde_json::json!({"schema": "report"}));
+        assert!(
+            jsonschema::validator_for(&request_schema)
+                .expect("request validator")
+                .is_valid(&serde_json::to_value(request).unwrap())
+        );
+        assert!(
+            jsonschema::validator_for(&response_schema)
+                .expect("response validator")
+                .is_valid(&serde_json::to_value(response).unwrap())
+        );
+    }
+
+    #[test]
+    fn oversized_or_trailing_frames_fail_closed() {
+        let request = RunnerRequestV1::new(Vec::new()).expect("request");
+        let mut bytes = Vec::new();
+        write_request(&mut bytes, &request, b"bundle").expect("request frame");
+        bytes.push(0);
+        assert!(matches!(
+            read_request(bytes.as_slice()),
+            Err(ProtocolError::TrailingBytes)
+        ));
+    }
+}

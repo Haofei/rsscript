@@ -22,8 +22,8 @@ tooling, and the optional Rust AOT projection. The reference VM is physically
 owned by `rsscript-vm`, consumes the frontend-independent owned model from
 `rsscript-exec-ir`, and has no Cargo dependency on compiler, syntax, semantics,
 or HIR lowering crates. `rsscript-lowering` is now the one-way projection from
-validated HIR into that owned execution model; `vm_adapter` is the compiler's
-single optional composition point for source-to-VM convenience APIs. Stable embedders use the small
+validated HIR into that owned execution model; `vm_adapter` lives in the SDK as
+the single optional composition point for source-to-VM convenience APIs. Stable embedders use the small
 `rsscript-sdk` façade instead of those implementation modules; the compiler
 does not depend back on that façade.
 Native plugin loading and guarded child-process execution have been removed
@@ -70,8 +70,13 @@ concrete filesystem, environment, process, HTTP, time, entropy, logging, and CLI
 implementations now live in independent `providers/` composition packages.
 `rsscript.bytecode.v1` is bounded and checked in; the VM is constructed only
 after artifact, checksum, import, control-flow, function, and register
-verification. `rss run` uses that verified VM by default. `rss build` and
-`rss inspect` expose bytecode and neutral analysis. The primary
+verification. `rss build` now emits a digest-bound Artifact Bundle containing
+bytecode, analysis, provenance, and interface requirements. `rss verify` rejects
+tampered bundles. `rss diff` emits policy-neutral semantic fact changes.
+`rss run` uses the versioned, size-bounded reference runner by default; the
+child re-verifies the bundle under process and VM limits, while trusted
+same-process execution requires `--trusted-in-process`. `rss inspect` exposes
+bytecode and neutral analysis. The primary
 `embedded-report-pipeline` demo runs identical artifact bytes with memory and
 filesystem providers. The roadmap now prioritizes conformance and boundary
 hardening over new language, JIT, self-hosting, or package-system scope.

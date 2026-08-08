@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsscript.dev/schemas/rsscript.semantic_diff.v1.schema.json",
+  "title": "RSScript semantic diff v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "old", "new", "imports", "exports", "external_calls", "await_sites", "summary"],
+  "properties": {
+    "schema": { "const": "rsscript.semantic_diff.v1" },
+    "old": { "$ref": "#/$defs/identity" },
+    "new": { "$ref": "#/$defs/identity" },
+    "imports": { "$ref": "#/$defs/import_diff" },
+    "exports": { "$ref": "#/$defs/export_diff" },
+    "external_calls": { "$ref": "#/$defs/external_call_diff" },
+    "await_sites": { "$ref": "#/$defs/await_diff" },
+    "summary": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/count_change" }
+    }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bundle_digest", "module_digest", "snapshot_digest", "source_content_hash", "interface_catalog_digest"],
+      "properties": {
+        "bundle_digest": { "$ref": "#/$defs/digest" },
+        "module_digest": { "$ref": "#/$defs/digest" },
+        "snapshot_digest": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/digest" }] },
+        "source_content_hash": { "$ref": "#/$defs/digest" },
+        "interface_catalog_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "import": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "signature_hash", "abi_version"],
+      "properties": {
+        "symbol": { "type": "string" },
+        "signature_hash": { "type": "string" },
+        "abi_version": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "export": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "kind", "function_kind", "retained_params", "semantic_facts"],
+      "properties": {
+        "name": { "type": "string" },
+        "kind": { "type": "string" },
+        "function_kind": { "type": ["string", "null"] },
+        "retained_params": { "type": "array", "items": { "type": "string" } },
+        "semantic_facts": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "external_call": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function", "symbol", "call_chain"],
+      "properties": {
+        "function": { "type": "string" },
+        "symbol": { "type": "string" },
+        "call_chain": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "await": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["function", "callee", "live_across_await"],
+      "properties": {
+        "function": { "type": "string" },
+        "callee": { "type": ["string", "null"] },
+        "live_across_await": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "change_import": { "$ref": "#/$defs/change_base_import" },
+    "change_base_import": {
+      "type": "object", "additionalProperties": false,
+      "required": ["key", "old", "new"],
+      "properties": { "key": { "type": "string" }, "old": { "$ref": "#/$defs/import" }, "new": { "$ref": "#/$defs/import" } }
+    },
+    "change_export": {
+      "type": "object", "additionalProperties": false,
+      "required": ["key", "old", "new"],
+      "properties": { "key": { "type": "string" }, "old": { "$ref": "#/$defs/export" }, "new": { "$ref": "#/$defs/export" } }
+    },
+    "import_diff": {
+      "type": "object", "additionalProperties": false,
+      "required": ["added", "removed", "changed"],
+      "properties": {
+        "added": { "type": "array", "items": { "$ref": "#/$defs/import" } },
+        "removed": { "type": "array", "items": { "$ref": "#/$defs/import" } },
+        "changed": { "type": "array", "items": { "$ref": "#/$defs/change_import" } }
+      }
+    },
+    "export_diff": {
+      "type": "object", "additionalProperties": false,
+      "required": ["added", "removed", "changed"],
+      "properties": {
+        "added": { "type": "array", "items": { "$ref": "#/$defs/export" } },
+        "removed": { "type": "array", "items": { "$ref": "#/$defs/export" } },
+        "changed": { "type": "array", "items": { "$ref": "#/$defs/change_export" } }
+      }
+    },
+    "set_diff_base": { "type": "object" },
+    "external_call_diff": {
+      "type": "object", "additionalProperties": false,
+      "required": ["added", "removed", "changed"],
+      "properties": {
+        "added": { "type": "array", "items": { "$ref": "#/$defs/external_call" } },
+        "removed": { "type": "array", "items": { "$ref": "#/$defs/external_call" } },
+        "changed": { "type": "array", "maxItems": 0 }
+      }
+    },
+    "await_diff": {
+      "type": "object", "additionalProperties": false,
+      "required": ["added", "removed", "changed"],
+      "properties": {
+        "added": { "type": "array", "items": { "$ref": "#/$defs/await" } },
+        "removed": { "type": "array", "items": { "$ref": "#/$defs/await" } },
+        "changed": { "type": "array", "maxItems": 0 }
+      }
+    },
+    "count_change": {
+      "type": "object", "additionalProperties": false,
+      "required": ["old", "new"],
+      "properties": { "old": { "type": "integer", "minimum": 0 }, "new": { "type": "integer", "minimum": 0 } }
+    }
+  }
+}

@@ -5,7 +5,7 @@ use std::process::ExitCode;
 use rsscript_compiler::{PackageAnalysis, analyze_package_dir, format_package_analysis_json};
 use rsscript_sdk::{
     ARTIFACT_BUNDLE_MAGIC, ArtifactBundle, ArtifactVerifier, BYTECODE_MAGIC, BuiltArtifact,
-    Compiler, RegVmExecutable,
+    Compiler, RegVmExecutable, SemanticDiffV1,
 };
 use serde_json::json;
 
@@ -100,6 +100,81 @@ pub(crate) fn run_verify(args: &[String]) -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+pub(crate) fn run_diff(args: &[String]) -> ExitCode {
+    let (format, old, new) = match parse_diff_args(args) {
+        Ok(parsed) => parsed,
+        Err(error) => return usage_error(error),
+    };
+    let old = match bundle_from_input(old) {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            eprintln!("cannot build old input: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let new = match bundle_from_input(new) {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            eprintln!("cannot build new input: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    let diff = SemanticDiffV1::between(&old, &new);
+    match format {
+        DiffFormat::Json => println!(
+            "{}",
+            serde_json::to_string_pretty(&diff).expect("semantic diff serializes")
+        ),
+        DiffFormat::Markdown => print!("{}", diff.to_markdown()),
+    }
+    ExitCode::SUCCESS
+}
+
+fn bundle_from_input(input: &str) -> Result<ArtifactBundle, String> {
+    let path = Path::new(input);
+    if path.is_file() {
+        let bytes = fs::read(path).map_err(|error| format!("cannot read {input}: {error}"))?;
+        if bytes.starts_with(ARTIFACT_BUNDLE_MAGIC) {
+            return ArtifactBundle::from_bytes(&bytes).map_err(|error| error.to_string());
+        }
+    }
+    build_input(input).map(BuiltArtifact::into_bundle)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DiffFormat {
+    Json,
+    Markdown,
+}
+
+fn parse_diff_args(args: &[String]) -> Result<(DiffFormat, &str, &str), String> {
+    let mut format = DiffFormat::Markdown;
+    let mut explicit_format = None;
+    let mut inputs = Vec::new();
+    for argument in args {
+        match argument.as_str() {
+            "--json" => {
+                if explicit_format.replace(DiffFormat::Json).is_some() {
+                    return Err("select exactly one diff output format".to_string());
+                }
+                format = DiffFormat::Json;
+            }
+            "--markdown" => {
+                if explicit_format.replace(DiffFormat::Markdown).is_some() {
+                    return Err("select exactly one diff output format".to_string());
+                }
+                format = DiffFormat::Markdown;
+            }
+            value if value.starts_with("--") => return Err(format!("unknown argument `{value}`")),
+            value => inputs.push(value),
+        }
+    }
+    let [old, new] = inputs.as_slice() else {
+        return Err("usage: rss diff [--json|--markdown] <old> <new>".to_string());
+    };
+    Ok((format, old, new))
 }
 
 pub(crate) fn run_inspect(args: &[String]) -> ExitCode {
@@ -407,5 +482,10 @@ mod tests {
             default_analysis_path(Path::new("target/demo.rssbundle")),
             PathBuf::from("target/demo.analysis.json")
         );
+        assert_eq!(
+            parse_diff_args(&args(&["--json", "old", "new"])).unwrap(),
+            (DiffFormat::Json, "old", "new")
+        );
+        assert!(parse_diff_args(&args(&["old"])).is_err());
     }
 }

@@ -22,9 +22,10 @@ runner as described in [threat-model.md](threat-model.md).
 ```text
 source + interfaces
   -> validation and neutral package analysis
-  -> provider-independent executable artifact
+  -> provider-independent Artifact Bundle
+  -> optional policy-neutral semantic diff
   -> explicit Provider linking and signature validation
-  -> bounded VM execution
+  -> bounded VM execution in-process or through the reference runner
   -> execution report
 ```
 
@@ -57,5 +58,7 @@ fail-closed contracts defined in [compatibility.md](compatibility.md).
   lowering.
 - Host services are explicit interfaces resolved by providers at load time.
 - Execution limits are availability controls, not permissions or isolation.
+- Analysis and executable content in a Bundle share one digest-bound provenance
+  record; semantic diff reports facts without authorizing execution.
 - New syntax is frozen until semantic IR, provider ABI, bytecode verification,
   diagnostics, and VM conformance are stable.

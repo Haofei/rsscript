@@ -8,9 +8,13 @@ pub use rsscript_vm::*;
 #[cfg(feature = "execution")]
 mod artifact_bundle;
 #[cfg(feature = "execution")]
+mod semantic_diff;
+#[cfg(feature = "execution")]
 mod vm_adapter;
 #[cfg(feature = "execution")]
 pub use artifact_bundle::*;
+#[cfg(feature = "execution")]
+pub use semantic_diff::*;
 #[cfg(feature = "execution")]
 use std::collections::BTreeMap;
 use std::error::Error;

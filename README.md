@@ -74,17 +74,18 @@ rss check <file-or-package>
 rss fmt <file>
 rss build [--out <artifact.rssbundle>] [--analysis-out <analysis.json>] <file-or-package>
 rss verify <artifact.rssbundle>
-rss run [--json] <file-or-package> [-- <args>...]
+rss diff [--json|--markdown] <old-input> <new-input>
+rss run [--json] <file-package-or-bundle> [-- <args>...]  # isolated process
+rss run --trusted-in-process [--json] <file-package-or-bundle> [-- <args>...]
 rss run --aot <file-or-package> [-- <args>...]  # Experimental
 rss inspect <imports|bytecode|analysis|resources|async|call-graph> <input>
 ```
 
-Building a package captures one immutable workspace snapshot and emits both the
-verified bytecode container and a `rsscript.package_analysis.v1` sidecar. By
-default the sidecar is written beside the bytecode as `<name>.analysis.json`;
-Every build emits a versioned Artifact Bundle containing bytecode, neutral analysis,
+Building a package captures one immutable workspace snapshot. Every build emits
+a versioned Artifact Bundle containing verified bytecode, neutral analysis,
 provenance, and exact interface requirements. `--analysis-out` optionally writes
-the embedded analysis as a separate JSON file.
+the embedded analysis as a separate JSON file. `rss diff` compares semantic
+facts without making an allow/deny decision or producing a risk score.
 
 The default Cargo feature set builds the frontend-only `check`, `fix`, and
 `fmt` path without runtime dependencies. Build the CLI with `--features
@@ -93,6 +94,13 @@ execution` to enable `build`, `run`, `inspect`, and package execution tooling.
 Execution is bounded by step, memory, host-call, output, recursion, cancellation,
 deadline, and child-process limits where applicable. Those controls are resource
 limits, not a language authority model or a sandbox claim.
+
+`rss run` uses the experimental reference isolated runner by default. It creates
+a separately bounded child process, re-verifies the Artifact Bundle inside that
+process, and links only Providers installed by the runner profile. This process
+boundary is defense in depth, not a claim that the VM itself is a security
+sandbox. Trusted hosts can opt into same-process execution explicitly with
+`--trusted-in-process`.
 
 Frontend tooling uses `rsscript-compiler` with its default features; that
 closure contains no runtime or provider. Rust hosts depend on `rsscript-sdk`

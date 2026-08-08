@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rsscript.dev/schemas/rsscript.runner_response.v1.schema.json",
+  "title": "RSScript runner response v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "runner_termination", "report", "error"],
+  "properties": {
+    "schema": { "const": "rsscript.runner_response.v1" },
+    "runner_termination": {
+      "enum": ["completed", "verification_rejected", "link_rejected", "protocol_rejected", "host_failure"]
+    },
+    "report": { "type": ["object", "null"] },
+    "error": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "runner_termination": { "const": "completed" } } },
+      "then": { "properties": { "report": { "type": "object" }, "error": { "type": "null" } } },
+      "else": { "properties": { "report": { "type": "null" }, "error": { "type": "string" } } }
+    }
+  ]
+}

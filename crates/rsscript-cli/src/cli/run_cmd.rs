@@ -3,24 +3,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Duration;
 
-use rsscript_compiler::{
-    format_diagnostics_human, format_diagnostics_json, parse_runtime_diagnostics,
-    prepare_package_for_execution, write_generated_rust_package,
-};
-use rsscript_sdk::{
-    CancellationToken, EvalError, EvalOutput, ExternalFunction, NativeValue, VmLimits,
-    reg_vm_compile_package_input, reg_vm_compile_source,
-};
+use rsscript_compiler::{parse_runtime_diagnostics, write_generated_rust_package};
 
 use super::{
     cleanup_temp_dir, cli_input_package_name, default_runtime_path, generated_target_dir_from_env,
-    is_package_directory, lower_cli_input_to_rust_package, print_diagnostics, print_usage,
-    read_cached_fingerprint, read_cli_source, required_flag_value, run_cache_dir,
-    run_input_fingerprint, write_cached_fingerprint,
+    lower_cli_input_to_rust_package, print_diagnostics, print_usage, read_cached_fingerprint,
+    required_flag_value, run_cache_dir, run_input_fingerprint, write_cached_fingerprint,
 };
 use crate::cli::process::{BoundedProcessKind, run_bounded, run_bounded_with_limits};
 
-const CLI_VM_WALL_TIME: Duration = Duration::from_secs(60);
 const CLI_AOT_WALL_TIME: Duration = Duration::from_secs(10 * 60);
 const CLI_AOT_OUTPUT_MAX_BYTES: usize = 16 * 1024 * 1024;
 
@@ -30,6 +21,7 @@ struct RunOptions<'a> {
     aot: bool,
     release: bool,
     dry_run: bool,
+    trusted_in_process: bool,
     path: Option<&'a str>,
     out_dir: Option<&'a str>,
     program_args: Vec<&'a str>,
@@ -40,6 +32,7 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
     let mut aot = false;
     let mut release = false;
     let mut dry_run = false;
+    let mut trusted_in_process = false;
     let mut path = None;
     let mut out_dir = None;
     let mut program_args = Vec::new();
@@ -57,6 +50,8 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
             release = true;
         } else if arg == "--dry-run" {
             dry_run = true;
+        } else if arg == "--trusted-in-process" {
+            trusted_in_process = true;
         } else if arg == "--out-dir" {
             index += 1;
             out_dir = Some(required_flag_value(args, index, "--out-dir")?);
@@ -75,6 +70,7 @@ fn parse_run_args(args: &[String]) -> Result<RunOptions<'_>, String> {
         aot,
         release,
         dry_run,
+        trusted_in_process,
         path,
         out_dir,
         program_args,
@@ -93,6 +89,9 @@ fn validate_run_options(options: &RunOptions<'_>) -> Result<(), String> {
     if !options.aot && options.out_dir.is_some() {
         return Err("`rss run --out-dir` requires the experimental `--aot` backend.".to_string());
     }
+    if options.aot && options.trusted_in_process {
+        return Err("`--trusted-in-process` cannot be combined with `--aot`.".to_string());
+    }
     Ok(())
 }
 pub(crate) fn run_input(args: &[String]) -> ExitCode {
@@ -108,7 +107,14 @@ pub(crate) fn run_input(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     if !options.aot {
-        return run_via_vm(path, &options.program_args, options.json);
+        if options.trusted_in_process {
+            return super::runner::run_trusted_in_process(
+                path,
+                &options.program_args,
+                options.json,
+            );
+        }
+        return super::runner::run_isolated(path, &options.program_args, options.json);
     }
     let runtime_path = match default_runtime_path() {
         Ok(path) => path,
@@ -201,91 +207,6 @@ pub(crate) fn run_input(args: &[String]) -> ExitCode {
         &options.program_args,
         options.json,
     )
-}
-
-/// Execute through the verified register VM, the sole Core execution path.
-fn run_via_vm(path: &str, program_args: &[&str], json: bool) -> ExitCode {
-    let limits = cli_vm_limits();
-    let result = if is_package_directory(path) {
-        run_package_via_vm(path, program_args, limits)
-    } else {
-        let source = match read_cli_source(Path::new(path)) {
-            Ok(source) => source,
-            Err(error) => {
-                eprintln!("{error}");
-                return ExitCode::from(2);
-            }
-        };
-        run_source_via_vm(path, &source, program_args, limits)
-    };
-    finish_vm_run(result, json)
-}
-
-fn cli_vm_limits() -> VmLimits {
-    let cancel = CancellationToken::new();
-    let watchdog = cancel.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(CLI_VM_WALL_TIME);
-        watchdog.cancel();
-    });
-    VmLimits {
-        cancel: Some(cancel),
-        ..VmLimits::default()
-    }
-}
-
-fn run_source_via_vm(
-    path: &str,
-    source: &str,
-    program_args: &[&str],
-    limits: VmLimits,
-) -> Result<EvalOutput, EvalError> {
-    reg_vm_compile_source(path, source)?.eval_main_with_limits(program_args.iter().copied(), limits)
-}
-
-fn run_package_via_vm(
-    path: &str,
-    program_args: &[&str],
-    limits: VmLimits,
-) -> Result<EvalOutput, EvalError> {
-    let package_dir = Path::new(path);
-    let prepared = prepare_package_for_execution(package_dir).map_err(EvalError::Runtime)?;
-    let input = prepared.into_lowering_input().map_err(EvalError::Runtime)?;
-    let executable = reg_vm_compile_package_input(&input)?;
-    executable.eval_main_with_args_and_external_bindings_and_limits(
-        program_args.iter().copied(),
-        std::iter::empty::<(String, ExternalFunction)>(),
-        limits,
-    )
-}
-
-fn finish_vm_run(result: Result<EvalOutput, EvalError>, json: bool) -> ExitCode {
-    match result {
-        Ok(output) => {
-            print!("{}", output.stdout);
-            eprint!("{}", output.stderr);
-            if let Some(NativeValue::Variant { name, .. }) = &output.native_value
-                && name == "Err"
-            {
-                eprintln!("RSScript main returned an error: {}", output.value);
-                return ExitCode::from(1);
-            }
-            println!("{}", output.value);
-            ExitCode::SUCCESS
-        }
-        Err(EvalError::Diagnostics(diagnostics)) => {
-            if json {
-                println!("{}", format_diagnostics_json(&diagnostics));
-            } else {
-                print!("{}", format_diagnostics_human(&diagnostics));
-            }
-            ExitCode::from(1)
-        }
-        Err(error) => {
-            eprintln!("{}", error.into_message());
-            ExitCode::from(1)
-        }
-    }
 }
 
 /// Runs the fast-path cache hit: the generated package in `cache_dir` is already
@@ -555,6 +476,7 @@ mod tests {
         assert!(!options.aot);
         assert!(!options.release);
         assert!(!options.dry_run);
+        assert!(!options.trusted_in_process);
         assert_eq!(options.path, Some("demo.rss"));
         assert_eq!(options.program_args, vec!["input"]);
     }
@@ -666,5 +588,14 @@ mod tests {
     fn removed_vm_alias_is_rejected() {
         let values = args(&["--vm", "demo.rss"]);
         assert!(super::parse_run_args(&values).is_err());
+    }
+
+    #[test]
+    fn trusted_in_process_is_explicit_and_not_an_aot_alias() {
+        let values = args(&["--trusted-in-process", "demo.rss"]);
+        let options = super::parse_run_args(&values).expect("trusted option");
+        assert!(options.trusted_in_process);
+        let invalid = args(&["--aot", "--trusted-in-process", "demo.rss"]);
+        assert!(super::parse_run_args(&invalid).is_err());
     }
 }

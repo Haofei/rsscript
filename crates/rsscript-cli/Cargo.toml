@@ -16,14 +16,21 @@ test = false
 
 [features]
 default = []
-execution = ["rsscript-compiler/execution", "dep:rsscript-sdk", "rsscript-sdk/execution"]
-host-tools = ["execution", "dep:rss-process-guard"]
+execution = [
+    "rsscript-compiler/execution",
+    "dep:rsscript-sdk",
+    "rsscript-sdk/execution",
+    "dep:rss-process-guard",
+    "dep:rsscript-runner-protocol",
+]
+host-tools = ["execution"]
 native-jit = ["rsscript-sdk/native-jit", "execution"]
 
 [dependencies]
 rsscript-compiler = { path = "../rsscript-compiler", default-features = false }
 rsscript-sdk = { path = "../rsscript-sdk", optional = true, default-features = false }
 rss-process-guard = { path = "../process-guard", optional = true }
+rsscript-runner-protocol = { path = "../rsscript-runner-protocol", optional = true }
 hex = "0.4"
 serde_json = "1"
 sha2 = "0.10"

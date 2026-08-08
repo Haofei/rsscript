@@ -277,7 +277,11 @@ fn intrinsic_catalog_is_the_only_generated_registry_source() {
 fn cli_defaults_to_verified_vm_and_requires_explicit_aot() {
     let root = workspace_root();
     let run = read(&root.join("crates/rsscript-cli/src/cli/run_cmd.rs"));
-    assert!(run.contains("if !options.aot {\n        return run_via_vm"));
+    let runner = read(&root.join("crates/rsscript-cli/src/cli/runner.rs"));
+    assert!(run.contains("super::runner::run_isolated"));
+    assert!(run.contains("options.trusted_in_process"));
+    assert!(runner.contains("ArtifactVerifier.verify_bytes"));
+    assert!(runner.contains("spawn_guarded_child_strict"));
     assert!(run.contains("arg == \"--aot\""));
     assert!(!run.contains("arg == \"--vm\""));
 

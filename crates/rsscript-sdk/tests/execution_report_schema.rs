@@ -74,3 +74,31 @@ fn execution_report_schema_is_fail_closed() {
     mismatched["termination_reason"] = serde_json::json!("unknown_reason");
     assert!(!validator.is_valid(&mismatched));
 }
+
+#[test]
+fn semantic_diff_schema_accepts_live_policy_neutral_output() {
+    let root = workspace_root();
+    let schema = load_json(&root.join("schemas/rsscript.semantic_diff.v1.schema.json"));
+    let validator = jsonschema::validator_for(&schema).expect("semantic diff schema");
+    let compiler = rsscript_sdk::Compiler;
+    let old = compiler
+        .compile("old.rss", "fn main() -> Int { return 1 }")
+        .expect("old build");
+    let new = compiler
+        .compile("new.rss", "fn main() -> Int { return 2 }")
+        .expect("new build");
+    let diff = rsscript_sdk::SemanticDiffV1::between(old.bundle(), new.bundle());
+    let value = serde_json::to_value(diff).expect("serialize semantic diff");
+    let errors = validator
+        .iter_errors(&value)
+        .map(|error| error.to_string())
+        .collect::<Vec<_>>();
+    assert!(
+        errors.is_empty(),
+        "semantic diff schema errors: {errors:#?}"
+    );
+    let text = serde_json::to_string(&value).unwrap();
+    assert!(!text.contains("risk"));
+    assert!(!text.contains("allow"));
+    assert!(!text.contains("deny"));
+}

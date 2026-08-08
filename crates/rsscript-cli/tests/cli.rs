@@ -105,7 +105,7 @@ fn fix_write_resolves_missing_data_effects_to_a_clean_check() {
 
 #[cfg(feature = "execution")]
 #[test]
-fn run_vm_cli_executes_through_register_vm() {
+fn run_cli_defaults_to_the_isolated_verified_vm() {
     let bin = env!("CARGO_BIN_EXE_rss");
     let temp = tempfile::tempdir().expect("temp dir should be creatable");
     let file = temp.path().join("hello.rss");
@@ -122,7 +122,7 @@ fn run_vm_cli_executes_through_register_vm() {
     let output = Command::new(bin)
         .args(["run", file.to_str().expect("path is utf-8")])
         .output()
-        .expect("rss run should execute through the VM");
+        .expect("rss run should execute through the isolated VM runner");
 
     assert!(
         output.status.success(),
@@ -132,4 +132,67 @@ fn run_vm_cli_executes_through_register_vm() {
     );
     assert_eq!(String::from_utf8_lossy(&output.stdout), "hello VM\n");
     assert_eq!(String::from_utf8_lossy(&output.stderr), "");
+}
+
+#[cfg(feature = "execution")]
+#[test]
+fn artifact_bundle_verify_run_and_semantic_diff_form_one_cli_workflow() {
+    let bin = env!("CARGO_BIN_EXE_rss");
+    let temp = tempfile::tempdir().expect("temp dir");
+    let old = temp.path().join("old.rss");
+    let new = temp.path().join("new.rss");
+    let bundle = temp.path().join("old.rssbundle");
+    fs::write(&old, "fn main() -> Int { return 1 }\n").unwrap();
+    fs::write(&new, "fn main() -> Int { return 2 }\n").unwrap();
+
+    let build = Command::new(bin)
+        .args([
+            "build",
+            "--out",
+            bundle.to_str().unwrap(),
+            old.to_str().unwrap(),
+        ])
+        .output()
+        .expect("build bundle");
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    assert!(
+        Command::new(bin)
+            .args(["verify", bundle.to_str().unwrap()])
+            .status()
+            .expect("verify bundle")
+            .success()
+    );
+
+    let run = Command::new(bin)
+        .args(["run", bundle.to_str().unwrap()])
+        .output()
+        .expect("run bundle");
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "1\n");
+
+    let diff = Command::new(bin)
+        .args([
+            "diff",
+            "--json",
+            old.to_str().unwrap(),
+            new.to_str().unwrap(),
+        ])
+        .output()
+        .expect("semantic diff");
+    assert!(
+        diff.status.success(),
+        "{}",
+        String::from_utf8_lossy(&diff.stderr)
+    );
+    let diff: serde_json::Value = serde_json::from_slice(&diff.stdout).expect("diff JSON");
+    assert_eq!(diff["schema"], "rsscript.semantic_diff.v1");
+    assert_ne!(diff["old"]["module_digest"], diff["new"]["module_digest"]);
 }

@@ -1861,6 +1861,7 @@ dependencies = [
  "hex",
  "rss-process-guard",
  "rsscript-compiler",
+ "rsscript-runner-protocol",
  "rsscript-sdk",
  "serde_json",
  "sha2",
@@ -2073,6 +2074,15 @@ name = "rsscript-review-reir"
 version = "0.1.0"
 dependencies = [
  "reir",
+ "serde_json",
+]
+
+[[package]]
+name = "rsscript-runner-protocol"
+version = "0.1.0"
+dependencies = [
+ "jsonschema",
+ "serde",
  "serde_json",
 ]
 

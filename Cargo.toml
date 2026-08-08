@@ -15,6 +15,7 @@ members = [
     "crates/rsscript-text",
     "crates/rsscript-build-support",
     "crates/rsscript-operation",
+    "crates/rsscript-runner-protocol",
     "crates/rsscript-work-budget",
     "crates/rsscript-semantics",
     "crates/rsscript-lowering",

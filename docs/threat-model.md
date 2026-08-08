@@ -29,6 +29,12 @@ script must run in a separately hardened runner, process, container, or stronger
 isolation boundary with OS-enforced resource and authority restrictions. The
 runner is responsible for choosing providers and limiting their authority.
 
+The reference runner uses a versioned, size-bounded protocol, verifies the
+Artifact Bundle again in the child, accepts no dynamic Provider or library path,
+and applies process-tree and resource limits. It is an experimental reference
+boundary, not a complete container: deployments that require filesystem,
+network, identity, namespace, or syscall isolation must add those OS controls.
+
 No RSScript API or documentation may describe the in-process runtime as a
 sandbox. Vulnerability reports and deployment guidance must identify which
 boundary failed: compiler invariant, verifier, runtime limit, provider, native
@@ -39,4 +45,3 @@ code, or external isolation.
 Core does not implement language-level permissions, deployment policy,
 capability grants, a package trust hierarchy, or a claim that static review can
 prove arbitrary host code safe.
-

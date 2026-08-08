@@ -24,6 +24,8 @@ mod fmt;
 mod process;
 #[cfg(feature = "execution")]
 mod run_cmd;
+#[cfg(feature = "execution")]
+mod runner;
 
 pub fn run() -> ExitCode {
     let args: Vec<String> = env::args().collect();
@@ -39,6 +41,8 @@ pub fn run() -> ExitCode {
         }
         #[cfg(feature = "execution")]
         "build" => artifact::run_build(&args[2..]),
+        #[cfg(feature = "execution")]
+        "diff" => artifact::run_diff(&args[2..]),
         "check" => check::run_check(&args[2..]),
         "fix" => fix::run_fix(&args[2..]),
         "fmt" => fmt::run_fmt(&args[2..]),
@@ -48,8 +52,10 @@ pub fn run() -> ExitCode {
         "verify" => artifact::run_verify(&args[2..]),
         #[cfg(feature = "execution")]
         "run" => run_cmd::run_input(&args[2..]),
+        #[cfg(feature = "execution")]
+        "__runner-v1" => runner::runner_entrypoint(),
         #[cfg(not(feature = "execution"))]
-        "build" | "inspect" | "run" | "verify" => {
+        "build" | "diff" | "inspect" | "run" | "verify" => {
             eprintln!("`rss {command}` requires the `execution` feature");
             ExitCode::from(2)
         }
@@ -433,6 +439,7 @@ pub(crate) fn is_package_directory(path: &str) -> bool {
 }
 const USAGE: &str = r#"usage:
   rss build [--out <artifact.rssbundle>] [--analysis-out <analysis.json>] <file-or-package-directory>
+  rss diff [--json|--markdown] <old-source-package-or-bundle> <new-source-package-or-bundle>
   rss verify <artifact.rssbundle>
   rss check [--json] [--lint] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>
   rss check [--json] <package-directory>
@@ -441,7 +448,8 @@ const USAGE: &str = r#"usage:
   rss fmt <file.rss>  # writes formatted source to stdout
   rss inspect <imports|bytecode> [--json] <file-or-artifact-or-package>
   rss inspect <analysis|resources|async|call-graph> [--json] <package-directory>
-  rss run [--json] <file-or-package-directory> [-- <args>...]  # verified VM
+  rss run [--json] <file-package-or-bundle> [-- <args>...]  # isolated runner + verified VM
+  rss run --trusted-in-process [--json] <file-package-or-bundle> [-- <args>...]
   rss run --aot [--json] [--release] [--dry-run] <file-or-package-directory> [--out-dir <directory>] [-- <args>...]"#;
 
 pub(crate) fn print_usage() {
