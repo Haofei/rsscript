@@ -74,6 +74,9 @@ impl RegVm {
                 resume_dst: usize::MAX,
             },
         );
+        self.tasks_created = self.tasks_created.saturating_add(1);
+        self.tasks_live = self.tasks_live.saturating_add(1);
+        self.tasks_peak_live = self.tasks_peak_live.max(self.tasks_live);
         self.ready_queue.push_back(tid);
         tid
     }
@@ -123,6 +126,8 @@ impl RegVm {
             self.swap_in(tid);
             match self.drive(unit, 0) {
                 Ok(Outcome::Completed(value)) => {
+                    self.tasks_completed = self.tasks_completed.saturating_add(1);
+                    self.tasks_live = self.tasks_live.saturating_sub(1);
                     // Drop the finished task's register state.
                     self.frames = Vec::new();
                     self.stack = Vec::new();
@@ -187,7 +192,12 @@ impl RegVm {
     pub(super) fn cancel_select_losers(&mut self, handles: &[TaskId], winner: TaskId) {
         for handle in handles {
             if *handle != winner {
-                self.tasks.remove(handle);
+                if let Some(task) = self.tasks.remove(handle)
+                    && task.done.is_none()
+                {
+                    self.tasks_cancelled = self.tasks_cancelled.saturating_add(1);
+                    self.tasks_live = self.tasks_live.saturating_sub(1);
+                }
             }
         }
     }

@@ -365,6 +365,7 @@ pub struct ProviderResourceTable {
     slots: Vec<ResourceSlot>,
     limit: Option<usize>,
     live: usize,
+    peak_live: usize,
     created: u64,
     cleaned: u64,
     cleanup_failures: u64,
@@ -376,6 +377,7 @@ impl ProviderResourceTable {
             slots: Vec::new(),
             limit,
             live: 0,
+            peak_live: 0,
             created: 0,
             cleaned: 0,
             cleanup_failures: 0,
@@ -410,6 +412,7 @@ impl ProviderResourceTable {
         let entry = &mut self.slots[slot];
         entry.resource = Some(resource);
         self.live += 1;
+        self.peak_live = self.peak_live.max(self.live);
         self.created += 1;
         Ok(ResourceHandle {
             slot: u32::try_from(slot).map_err(|_| {
@@ -469,6 +472,10 @@ impl ProviderResourceTable {
 
     pub fn live(&self) -> usize {
         self.live
+    }
+
+    pub fn peak_live(&self) -> usize {
+        self.peak_live
     }
 
     pub fn created(&self) -> u64 {
@@ -980,6 +987,7 @@ mod tests {
         assert!(table.cleanup_all().is_empty());
         assert_eq!(cleanups.load(Ordering::Relaxed), 2);
         assert_eq!(table.live(), 0);
+        assert_eq!(table.peak_live(), 1);
         assert_eq!(table.created(), 2);
         assert_eq!(table.cleaned(), 2);
         assert_eq!(table.cleanup_failures(), 0);

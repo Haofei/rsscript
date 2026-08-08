@@ -320,7 +320,13 @@ pub struct ExecutionUsage {
     pub resources_created: u64,
     pub resources_cleaned: u64,
     pub resource_cleanup_failures: u64,
+    pub resources_peak_live: usize,
     pub resources_live_at_return: usize,
+    pub tasks_created: u64,
+    pub tasks_completed: u64,
+    pub tasks_cancelled: u64,
+    pub tasks_peak_live: usize,
+    pub tasks_live_at_return: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

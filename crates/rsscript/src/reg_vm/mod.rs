@@ -1918,6 +1918,12 @@ struct RegVm {
     intrinsic_calls: u64,
     /// Number of calls dispatched through explicitly linked Provider symbols.
     provider_calls: u64,
+    /// Structured-concurrency lifecycle counters for execution reports.
+    tasks_created: u64,
+    tasks_completed: u64,
+    tasks_cancelled: u64,
+    tasks_live: usize,
+    tasks_peak_live: usize,
     /// Structured trace of calls crossing the Provider boundary.
     provider_trace: std::sync::Arc<crate::eval_types::ProviderTraceCollector>,
     /// VM-owned, generation-checked Provider resource slots.

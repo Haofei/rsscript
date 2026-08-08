@@ -18,7 +18,13 @@ impl RegVm {
             resources_created: self.provider_resources.created(),
             resources_cleaned: self.provider_resources.cleaned(),
             resource_cleanup_failures: self.provider_resources.cleanup_failures(),
+            resources_peak_live: self.provider_resources.peak_live(),
             resources_live_at_return: self.provider_resources.live(),
+            tasks_created: self.tasks_created,
+            tasks_completed: self.tasks_completed,
+            tasks_cancelled: self.tasks_cancelled,
+            tasks_peak_live: self.tasks_peak_live,
+            tasks_live_at_return: self.tasks_live,
         }
     }
 
@@ -63,6 +69,11 @@ impl RegVm {
             allocated_bytes: 0,
             intrinsic_calls: 0,
             provider_calls: 0,
+            tasks_created: 0,
+            tasks_completed: 0,
+            tasks_cancelled: 0,
+            tasks_live: 0,
+            tasks_peak_live: 0,
             provider_trace: std::sync::Arc::new(
                 crate::eval_types::ProviderTraceCollector::default(),
             ),

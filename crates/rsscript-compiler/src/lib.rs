@@ -850,6 +850,37 @@ mod tests {
     }
 
     #[test]
+    fn execution_usage_reports_structured_task_lifecycle() {
+        let source = r#"
+async fn work(value: Int) -> Result<Int, String> {
+    return Ok(value)
+}
+
+fn main() -> Result<Unit, String> {
+    task_group {
+        async let first = work(value: 1)
+        async let second = work(value: 2)
+        let first_value = await first?
+        let second_value = await second?
+        let total = first_value + second_value
+    }
+    return Ok(Unit)
+}
+"#;
+        let package = Compiler.compile("tasks.rss", source).expect("compile");
+        let report = Runtime::default()
+            .link(&package)
+            .expect("link")
+            .execute(Vec::<String>::new());
+        assert_eq!(report.termination_reason, TerminationReason::Completed);
+        assert_eq!(report.usage.tasks_created, 3);
+        assert_eq!(report.usage.tasks_completed, 3);
+        assert_eq!(report.usage.tasks_cancelled, 0);
+        assert_eq!(report.usage.tasks_peak_live, 3);
+        assert_eq!(report.usage.tasks_live_at_return, 0);
+    }
+
+    #[test]
     fn compiler_and_loader_observe_shared_operation_control() {
         let compiler = Compiler;
         let cancellation = CancellationToken::new();
