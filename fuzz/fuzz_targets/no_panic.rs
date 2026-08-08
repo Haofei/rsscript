@@ -19,7 +19,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use rsscript::{EvalError, VmLimits, reg_vm_eval_source_main_with_limits};
+use rsscript_sdk::{EvalError, VmLimits, reg_vm_eval_source_main_with_limits};
 use rss_testgen::generate;
 use rss_testgen::properties::checker_accepts;
 

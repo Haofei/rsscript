@@ -14,9 +14,9 @@ name = "rss-testgen"
 path = "src/bin/repro.rs"
 
 [dependencies]
-rsscript = { package = "rsscript-compiler", path = "../rsscript", features = ["execution"] }
+rsscript-sdk = { path = "../rsscript-sdk", features = ["execution"] }
 
 [features]
 # Pull the native (Cranelift) tier into the in-process backend set so the
 # differential also checks `vm-jit-native` and its force-deopt twin.
-native-jit = ["rsscript/native-jit"]
+native-jit = ["rsscript-sdk/native-jit"]

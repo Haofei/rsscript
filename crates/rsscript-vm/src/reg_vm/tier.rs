@@ -18,6 +18,7 @@ use admission::*;
 #[cfg(feature = "native-jit")]
 use call_scratch::*;
 #[cfg(all(test, feature = "native-jit"))]
+#[allow(unused_imports)]
 pub(in crate::reg_vm) use compile_result::NativeCompileTelemetry;
 #[cfg(feature = "native-jit")]
 use compile_result::{native_region_is_promotion_eligible, record_native_compile_stats};
@@ -477,7 +478,7 @@ pub(in crate::reg_vm) fn select_osr_candidate_loops(
 }
 
 #[cfg(feature = "native-jit")]
-#[cfg_attr(not(test), allow(dead_code))]
+#[allow(dead_code)]
 pub(in crate::reg_vm) fn select_osr_candidate_loop(
     unit: &RegUnit,
     func: &RegFunction,
@@ -1395,7 +1396,7 @@ impl RegVm {
     }
 
     #[cfg(feature = "native-jit")]
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     pub(super) fn resolve_osr_candidate(&mut self, func: &RegFunction) -> Option<usize> {
         self.resolve_osr_candidates(func).first_header()
     }

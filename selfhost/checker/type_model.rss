@@ -121,7 +121,7 @@ fn try_operand_root(toks: List<Tok>, qPos: Int, bodyOpen: Int, popen: Int, pclos
 
 // ===================================================================
 // RS0208 RETURN_TYPE_MISMATCH — type-inference engine.
-// Ports crates/rsscript/src/checks/calls.rs check_return_type/expr/payload +
+// Ports crates/rsscript-compiler/src/checks/calls.rs check_return_type/expr/payload +
 // argument_type_matches. Baked into CHECKER_TARGET_CODES.
 // ===================================================================
 

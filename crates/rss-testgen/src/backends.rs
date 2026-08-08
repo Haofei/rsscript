@@ -10,7 +10,7 @@
 //! driver adds it separately (via the test crate's existing compiled runner) so
 //! the bounded runs still get the full N-way check.
 
-use rsscript::{EvalOutput, NativeValue};
+use rsscript_sdk::{EvalOutput, NativeValue};
 
 /// An execution engine for a runnable RSScript program.
 pub trait Backend {
@@ -41,7 +41,7 @@ impl Backend for Interpreter {
     }
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript::reg_vm_eval_source_main_with_args(file, source, args.iter().copied())
+        rsscript_sdk::reg_vm_eval_source_main_with_args(file, source, args.iter().copied())
             .map_err(|error| format!("{error:?}"))
             .and_then(stdout_or_main_err)
     }
@@ -57,7 +57,7 @@ impl Backend for Jit {
     }
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript::reg_vm_eval_source_main_jit(file, source, args.iter().copied())
+        rsscript_sdk::reg_vm_eval_source_main_jit(file, source, args.iter().copied())
             .map_err(|error| format!("{error:?}"))
             .and_then(stdout_or_main_err)
     }
@@ -74,7 +74,7 @@ impl Backend for NativeJit {
     }
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript::reg_vm_eval_source_main_native(file, source, args.iter().copied())
+        rsscript_sdk::reg_vm_eval_source_main_native(file, source, args.iter().copied())
             .map_err(|error| format!("{error:?}"))
             .and_then(stdout_or_main_err)
     }
@@ -92,7 +92,7 @@ impl Backend for NativeJitForceDeopt {
     }
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript::reg_vm_eval_source_main_native_force_deopt(file, source, args.iter().copied())
+        rsscript_sdk::reg_vm_eval_source_main_native_force_deopt(file, source, args.iter().copied())
             .map_err(|error| format!("{error:?}"))
             .and_then(stdout_or_main_err)
     }
@@ -117,7 +117,7 @@ impl Backend for NativeJitForceSafepoint {
     }
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript::reg_vm_eval_source_main_native_force_safepoint(
+        rsscript_sdk::reg_vm_eval_source_main_native_force_safepoint(
             file,
             source,
             args.iter().copied(),
@@ -141,7 +141,7 @@ impl Backend for NativeJitForceAllSafepoints {
     }
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript::reg_vm_eval_source_main_native_force_all_safepoints(
+        rsscript_sdk::reg_vm_eval_source_main_native_force_all_safepoints(
             file,
             source,
             args.iter().copied(),
@@ -163,7 +163,7 @@ impl Backend for NativeJitOsr {
     }
 
     fn run_stdout(&self, file: &str, source: &str, args: &[&str]) -> Result<String, String> {
-        rsscript::reg_vm_eval_source_main_native_osr(file, source, args.iter().copied())
+        rsscript_sdk::reg_vm_eval_source_main_native_osr(file, source, args.iter().copied())
             .map_err(|error| format!("{error:?}"))
             .and_then(stdout_or_main_err)
     }

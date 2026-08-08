@@ -13,6 +13,7 @@ rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-exec-ir = { path = "../rsscript-exec-ir" }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-provider-api = { path = "../rsscript-provider-api" }
+rsscript-text = { path = "../rsscript-text" }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 serde_yaml_ng = "0.10"
@@ -28,11 +29,11 @@ percent-encoding = "2"
 vm-jit = { path = "../vm-jit", optional = true }
 
 [features]
-default = ["execution"]
-execution = []
+default = []
 native-jit = ["dep:vm-jit"]
 
 [build-dependencies]
+rsscript-build-support = { path = "../rsscript-build-support" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

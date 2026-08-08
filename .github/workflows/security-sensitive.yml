@@ -18,7 +18,7 @@ on:
       - "crates/rsscript-provider-api/**"
       - "crates/rsscript-provider-bindgen/**"
       - "crates/rsscript-provider-conformance/**"
-      - "crates/rsscript/src/package/**"
+      - "crates/rsscript-compiler/src/package/**"
       - "crates/rsscript-vm/src/reg_vm/**"
       - "crates/rsscript-vm/src/eval_types.rs"
       - "crates/runtime/**"
@@ -44,7 +44,7 @@ on:
       - "crates/rsscript-provider-api/**"
       - "crates/rsscript-provider-bindgen/**"
       - "crates/rsscript-provider-conformance/**"
-      - "crates/rsscript/src/package/**"
+      - "crates/rsscript-compiler/src/package/**"
       - "crates/rsscript-vm/src/reg_vm/**"
       - "crates/rsscript-vm/src/eval_types.rs"
       - "crates/runtime/**"
@@ -90,7 +90,7 @@ jobs:
         run: |
           cargo test --locked -p vm-jit
           RSS_DIFF_PROPTEST_CASES=16 RSS_DIFF_SHRINK_ITERS=0 \
-            cargo test --locked -p rsscript-compiler --test differential \
+            cargo test --locked -p rsscript-sdk --test differential \
             backends_agree_on_seed_decoded_programs \
             --features native-jit -- --test-threads=1
 

@@ -2,10 +2,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use rsscript::{
-    BYTECODE_MAGIC, PackageAnalysis, RegVmExecutable, analyze_package_dir,
-    format_package_analysis_json, load_workspace_snapshot, reg_vm_compile_package_input,
-    reg_vm_compile_source,
+use rsscript_compiler::{
+    PackageAnalysis, analyze_package_dir, format_package_analysis_json, load_workspace_snapshot,
+};
+use rsscript_sdk::{
+    BYTECODE_MAGIC, EvalError, RegVmExecutable, reg_vm_compile_package_input, reg_vm_compile_source,
 };
 use serde_json::json;
 
@@ -69,7 +70,7 @@ struct BuildProduct {
     analysis: Option<PackageAnalysis>,
 }
 
-fn build_input(input: &str) -> Result<BuildProduct, rsscript::EvalError> {
+fn build_input(input: &str) -> Result<BuildProduct, EvalError> {
     if !is_package_directory(input) {
         return compile_input(input).map(|executable| BuildProduct {
             executable,
@@ -77,10 +78,9 @@ fn build_input(input: &str) -> Result<BuildProduct, rsscript::EvalError> {
         });
     }
 
-    let snapshot =
-        load_workspace_snapshot(Path::new(input)).map_err(rsscript::EvalError::Runtime)?;
+    let snapshot = load_workspace_snapshot(Path::new(input)).map_err(EvalError::Runtime)?;
     if snapshot.analysis().summary.errors != 0 {
-        return Err(rsscript::EvalError::Diagnostics(
+        return Err(EvalError::Diagnostics(
             snapshot.analysis().diagnostics.clone(),
         ));
     }
@@ -234,7 +234,7 @@ fn inspect_analysis(view: &str, json_output: bool, input: &str) -> ExitCode {
 
 fn resource_exports(
     analysis: &PackageAnalysis,
-) -> impl Iterator<Item = &rsscript::PackageAnalysisExport> {
+) -> impl Iterator<Item = &rsscript_compiler::PackageAnalysisExport> {
     analysis.exports.iter().filter(|export| {
         export
             .semantic_facts
@@ -261,13 +261,13 @@ fn load_or_compile(input: &str) -> Result<RegVmExecutable, String> {
     compile_input(input).map_err(|error| format!("{error:?}"))
 }
 
-fn compile_input(input: &str) -> Result<RegVmExecutable, rsscript::EvalError> {
+fn compile_input(input: &str) -> Result<RegVmExecutable, EvalError> {
     if is_package_directory(input) {
-        let package = package_execution_lowering_input(Path::new(input))
-            .map_err(rsscript::EvalError::Runtime)?;
+        let package =
+            package_execution_lowering_input(Path::new(input)).map_err(EvalError::Runtime)?;
         reg_vm_compile_package_input(&package)
     } else {
-        let source = read_cli_source(Path::new(input)).map_err(rsscript::EvalError::Runtime)?;
+        let source = read_cli_source(Path::new(input)).map_err(EvalError::Runtime)?;
         reg_vm_compile_source(input, &source)
     }
 }

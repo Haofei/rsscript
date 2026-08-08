@@ -7,9 +7,9 @@ pub mod diagnostic {
 mod eval_types;
 mod fnv;
 mod reg_vm;
-#[allow(dead_code)]
-#[path = "../../rsscript/src/text_util.rs"]
-mod text_util;
+mod text_util {
+    pub(crate) use rsscript_text::*;
+}
 mod vm_value;
 
 pub use eval_types::*;

@@ -21,14 +21,14 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    let diagnostics = rsscript::analyze_source("fuzz.rss", source);
+    let diagnostics = rsscript_sdk::analyze_source("fuzz.rss", source);
 
     // Only feed the lowerer programs the checker accepts: invalid programs must
     // never reach code generation (the "RSScript owns semantics" contract).
     let has_errors = diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.severity == rsscript::Severity::Error);
+        .any(|diagnostic| diagnostic.severity == rsscript_sdk::Severity::Error);
     if !has_errors {
-        let _ = rsscript::lower_source_to_rust("fuzz.rss", source);
+        let _ = rsscript_sdk::lower_source_to_rust("fuzz.rss", source);
     }
 });

@@ -1,6 +1,6 @@
 // Canonical source-argument to declaration-parameter binding.
 //
-// This mirrors crates/rsscript/src/call_binding.rs. Explicit arguments retain
+// This mirrors crates/rsscript-compiler/src/call_binding.rs. Explicit arguments retain
 // source evaluation order; `byParameter` is the declaration-order ABI view.
 
 

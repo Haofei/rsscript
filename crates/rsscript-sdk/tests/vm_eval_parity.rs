@@ -1,0 +1,30 @@
+#![allow(unused_imports, dead_code)]
+mod common;
+pub(crate) use base64::Engine;
+pub(crate) use common::{
+    lower_test_source_to_rust_package as lower_source_to_rust_package, reg_vm_eval_source_main,
+    reg_vm_eval_source_main_with_args, reg_vm_eval_source_main_with_args_and_external_bindings,
+};
+pub(crate) use rsscript_sdk::{
+    EvalError, ExternalFunction, NativeRustDependency, NativeValue,
+    lower_sources_to_rust_package_with_options, reg_vm_eval_package_main_with_args,
+    write_generated_rust_package,
+};
+pub(crate) use sha1::{Digest, Sha1};
+pub(crate) use std::collections::BTreeMap;
+pub(crate) use std::fs;
+pub(crate) use std::io::{Read, Write};
+pub(crate) use std::net::TcpListener;
+pub(crate) use std::process::Command;
+pub(crate) use std::thread;
+
+#[path = "vm_eval_parity/async_concurrency.rs"]
+mod async_concurrency;
+#[path = "vm_eval_parity/data.rs"]
+mod data;
+#[path = "vm_eval_parity/misc.rs"]
+mod misc;
+#[path = "vm_eval_parity/owned_fn.rs"]
+mod owned_fn;
+#[path = "vm_eval_parity/system.rs"]
+mod system;

@@ -157,6 +157,7 @@ impl OsrCandidates {
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
+    #[allow(dead_code)]
     pub(crate) fn first_header(self) -> Option<usize> {
         self.iter().next().map(|candidate| candidate.header_ip)
     }

@@ -12,7 +12,7 @@ on:
       - "crates/rsscript-compiler/**"
       - "crates/rsscript-operation/**"
       - "crates/rsscript-provider-api/**"
-      - "crates/rsscript/src/**"
+      - "crates/rsscript-compiler/src/**"
       - "tools/rsscript-xtask/**"
   push:
     branches: [main]
@@ -24,7 +24,7 @@ on:
       - "crates/rsscript-compiler/**"
       - "crates/rsscript-operation/**"
       - "crates/rsscript-provider-api/**"
-      - "crates/rsscript/src/**"
+      - "crates/rsscript-compiler/src/**"
       - "tools/rsscript-xtask/**"
 
 permissions:

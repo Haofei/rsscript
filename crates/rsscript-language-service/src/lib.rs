@@ -14,7 +14,7 @@ use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationContext}
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-pub use rsscript_compiler::language::{
+pub use rsscript_compiler::{
     Definition, Diagnostic, DiagnosticExplanation, Reference, RssDocumentSymbol, Severity, Span,
     SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup, analyze_source_result_with_operation,
     analyze_source_with_core, analyze_source_with_interfaces,

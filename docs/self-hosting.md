@@ -55,7 +55,7 @@ proof:  canonical stage1 and stage2 IR/output agree
 | C backend | `selfhost/backend/c_emit.rss`, `selfhost/runtime/rssrt.{h,c}` | Initial scalar C ABI | Heap and full compiler IR |
 | Production lowering/runtime | Rust | Current executable toolchain | Not source-independent |
 
-The Rust test harness in `crates/rsscript/src/selfhost_parity.rs` resolves these
+The Rust test harness in `crates/rsscript-compiler/src/selfhost_parity.rs` resolves these
 RSS modules, runs them through the normal VM compiler, and compares deterministic
 output with production Rust oracles. Self-hosting adds no public CLI commands.
 

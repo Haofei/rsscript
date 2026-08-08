@@ -6,7 +6,7 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [dependencies]
-rsscript-sdk = { path = "../../crates/rsscript-compiler", features = ["execution"] }
+rsscript-sdk = { path = "../../crates/rsscript-sdk", features = ["execution"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

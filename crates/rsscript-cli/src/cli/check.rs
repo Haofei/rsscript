@@ -1,7 +1,7 @@
 use std::fs;
 use std::process::ExitCode;
 
-use rsscript::{
+use rsscript_compiler::{
     analyze_source_with_interfaces, analyze_source_with_interfaces_without_core,
     analyze_source_without_core, explain_diagnostic_code, format_diagnostic_explanation,
     format_diagnostics_human, format_diagnostics_json_with_source, lint_source,
@@ -10,7 +10,7 @@ use rsscript::{
 
 use super::{is_package_directory, print_usage, read_interface_sources, required_flag_value};
 #[cfg(feature = "execution")]
-use rsscript::{analyze_package_dir, format_package_analysis_json};
+use rsscript_compiler::{analyze_package_dir, format_package_analysis_json};
 
 /// Parse `--explain <CODE>` (optionally with `--json`), in any order.
 fn parse_explain_args(args: &[String]) -> Option<(&str, bool)> {

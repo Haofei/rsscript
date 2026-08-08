@@ -11,7 +11,7 @@
 #     cargo +nightly fuzz run bytecode_artifact
 #
 # These targets are the coverage-guided deployment of the in-process generative
-# fuzzers in `crates/rsscript/tests/hostile.rs` and the seed-decoded backend
+# fuzzers in `crates/rsscript-compiler/tests/hostile.rs` and the seed-decoded backend
 # differential (`backends_agree_on_seed_decoded_programs`): proptest supplies a
 # few random inputs there; libFuzzer drives the same never-panic / stability
 # contracts with coverage feedback and a persistent corpus.
@@ -37,9 +37,8 @@ toml = "0.8"
 [dependencies.rsscript-bytecode]
 path = "../crates/rsscript-bytecode"
 
-[dependencies.rsscript]
-package = "rsscript-compiler"
-path = "../crates/rsscript"
+[dependencies.rsscript-sdk]
+path = "../crates/rsscript-sdk"
 
 [dependencies.rss-testgen]
 path = "../crates/rss-testgen"
@@ -48,7 +47,7 @@ path = "../crates/rss-testgen"
 # Enable the native Cranelift tier in the generative differential. This pulls the
 # native backend, force-deopt backend, forced-safepoint backends, and OSR backend
 # into `rss-testgen::backends::all_inprocess_backends`.
-native-jit = ["rsscript/native-jit", "rss-testgen/native-jit"]
+native-jit = ["rsscript-sdk/native-jit", "rss-testgen/native-jit"]
 
 # Prevent this from interfering with `cargo test` over the parent tree.
 [[bin]]

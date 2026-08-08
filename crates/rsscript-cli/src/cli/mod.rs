@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 #[cfg(feature = "execution")]
-use rsscript::{
+use rsscript_compiler::{
     Diagnostic, format_diagnostics_human, format_diagnostics_json, lower_source_to_rust_package,
     lower_sources_to_rust_package_with_options, prepare_package_for_execution,
 };
@@ -175,7 +175,7 @@ pub(crate) fn lower_cli_input_to_rust_package(
     path: &str,
     runtime_path: &Path,
     json: bool,
-) -> Result<rsscript::GeneratedRustPackage, ExitCode> {
+) -> Result<rsscript_compiler::GeneratedRustPackage, ExitCode> {
     let runtime_path = runtime_path.display().to_string();
     if is_package_directory(path) {
         let input = package_execution_lowering_input(Path::new(path)).map_err(|error| {
@@ -211,7 +211,7 @@ pub(crate) fn lower_cli_input_to_rust_package(
 #[cfg(feature = "execution")]
 fn package_execution_lowering_input(
     package_dir: &Path,
-) -> Result<rsscript::PackageLoweringInput, String> {
+) -> Result<rsscript_compiler::PackageLoweringInput, String> {
     let prepared = prepare_package_for_execution(package_dir)?;
     if !prepared.requires_external_provider() {
         return prepared.into_lowering_input();
@@ -297,7 +297,7 @@ pub(crate) fn run_input_fingerprint(
     // version bump. build.rs derives this fingerprint from every source file.
     parts.push(format!(
         "rss-compiler:{}",
-        rsscript::COMPILED_CACHE_FINGERPRINT
+        rsscript_compiler::COMPILED_CACHE_FINGERPRINT
     ));
     parts.push(format!("runtime:{}", runtime_path.display()));
     parts.push(format!("release:{release}"));

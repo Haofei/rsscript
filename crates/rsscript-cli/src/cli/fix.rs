@@ -1,7 +1,9 @@
 use std::fs;
 use std::process::ExitCode;
 
-use rsscript::{Diagnostic, FixEdit, analyze_source_with_interfaces, standard_package_interfaces};
+use rsscript_compiler::{
+    Diagnostic, FixEdit, analyze_source_with_interfaces, standard_package_interfaces,
+};
 use serde_json::json;
 
 use super::{print_usage, read_interface_sources, required_flag_value};

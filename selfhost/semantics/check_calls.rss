@@ -1,6 +1,6 @@
 // Call-level diagnostics over the shared Program.
 //
-// This mirrors the Rust checker boundary in crates/rsscript/src/checks/calls.rs.
+// This mirrors the Rust checker boundary in crates/rsscript-compiler/src/checks/calls.rs.
 
 module selfhost.semantics.check_calls
 

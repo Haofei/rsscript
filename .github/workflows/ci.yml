@@ -42,7 +42,7 @@ jobs:
         run: |
           ! rg '^\s*(features|profile)\s*:|\beffects\s*\(|\bnative\s+(fn|module)\b|\bCapability\s*<' --glob '*.rss' --glob '*.rssi'
           ! rg 'FileFeature|HirFeatureUseKind|EffectDecl|CapabilityRisk|CAPABILITY_CATEGORIES|DeploymentProfile|ExecutionCapability|HostCapabilities|HostAuthority|ExecutionContext|AuthorizedPath|AuthorizedEndpoint|AuthorizedExecutable' crates/rsscript
-          ! rg 'stdlib/(fs|env|http|process|os|tempdir|clock|random|log)' crates/rsscript/src/interfaces.rs
+          ! rg 'stdlib/(fs|env|http|process|os|tempdir|clock|random|log)' crates/rsscript-compiler/src/interfaces.rs
           cargo fmt --all -- --check
           cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
           cargo test --locked --workspace --all-features

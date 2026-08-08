@@ -89,13 +89,13 @@ pub fn assert_inprocess_agree(file: &str, source: &str, args: &[&str]) -> Option
 /// on any input, and lowering is attempted only for programs the checker accepts
 /// (the "RSScript owns semantics" rule). Returns whether the program was accepted.
 pub fn exercise_front_end(file: &str, source: &str) -> bool {
-    let diagnostics = rsscript::analyze_source(file, source);
-    let _ = rsscript::format_source(file, source);
+    let diagnostics = rsscript_sdk::analyze_source(file, source);
+    let _ = rsscript_sdk::format_source(file, source);
     let accepted = !diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.severity == rsscript::Severity::Error);
+        .any(|diagnostic| diagnostic.severity == rsscript_sdk::Severity::Error);
     if accepted {
-        let _ = rsscript::lower_source_to_rust(file, source);
+        let _ = rsscript_sdk::lower_source_to_rust(file, source);
     }
     accepted
 }
@@ -104,9 +104,9 @@ pub fn exercise_front_end(file: &str, source: &str) -> bool {
 /// checker must report its expected diagnostic **and** lowering must produce no
 /// Rust. Panics (naming the mutation and source) on violation.
 pub fn assert_fails_closed(file: &str, mutated: &crate::mutate::MutatedProgram) {
-    let codes: Vec<String> = rsscript::analyze_source(file, &mutated.source)
+    let codes: Vec<String> = rsscript_sdk::analyze_source(file, &mutated.source)
         .into_iter()
-        .filter(|diagnostic| diagnostic.severity == rsscript::Severity::Error)
+        .filter(|diagnostic| diagnostic.severity == rsscript_sdk::Severity::Error)
         .map(|diagnostic| diagnostic.code)
         .collect();
     assert!(
@@ -117,7 +117,7 @@ pub fn assert_fails_closed(file: &str, mutated: &crate::mutate::MutatedProgram) 
         mutated.source,
     );
     assert!(
-        rsscript::lower_source_to_rust(file, &mutated.source).is_err(),
+        rsscript_sdk::lower_source_to_rust(file, &mutated.source).is_err(),
         "mutation `{}` was rejected by the checker but still lowered to Rust \
          (the defect reached the backend)\n--- source ---\n{}",
         mutated.mutation,
@@ -128,7 +128,7 @@ pub fn assert_fails_closed(file: &str, mutated: &crate::mutate::MutatedProgram) 
 /// Whether the checker accepts `source` (no error-severity diagnostics). Used by
 /// the generative drivers to assert the generator's accept rate stays high.
 pub fn checker_accepts(file: &str, source: &str) -> bool {
-    !rsscript::analyze_source(file, source)
+    !rsscript_sdk::analyze_source(file, source)
         .iter()
-        .any(|diagnostic| diagnostic.severity == rsscript::Severity::Error)
+        .any(|diagnostic| diagnostic.severity == rsscript_sdk::Severity::Error)
 }

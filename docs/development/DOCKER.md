@@ -31,7 +31,7 @@ docker compose run --rm dev cargo test --workspace --all-targets
 docker compose run --rm dev cargo test -p rsscript-compiler --features native-jit --no-run
 
 # Slow release/demo parity checks.
-docker compose run --rm dev cargo test -p rsscript-compiler --test soak -- --ignored
+docker compose run --rm dev cargo test -p rsscript-sdk --test soak -- --ignored
 
 # Open an interactive shell in the toolchain.
 docker compose run --rm dev bash

@@ -8,7 +8,7 @@ on:
       - ".github/workflows/jit-perf.yml"
       - "benchmarks/vm-jit/**"
       - "crates/rsscript-vm/src/reg_vm/**"
-      - "crates/rsscript/tests/jit_acceptance.rs"
+      - "crates/rsscript-sdk/tests/jit_acceptance.rs"
       - "crates/vm-jit/**"
   push:
     branches: [main]
@@ -16,7 +16,7 @@ on:
       - ".github/workflows/jit-perf.yml"
       - "benchmarks/vm-jit/**"
       - "crates/rsscript-vm/src/reg_vm/**"
-      - "crates/rsscript/tests/jit_acceptance.rs"
+      - "crates/rsscript-sdk/tests/jit_acceptance.rs"
       - "crates/vm-jit/**"
 
 permissions:
@@ -38,4 +38,4 @@ jobs:
         run: docker compose build dev
 
       - name: JIT perf gate
-        run: docker compose run --rm dev cargo test --release -p rsscript-compiler --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture
+        run: docker compose run --rm dev cargo test --release -p rsscript-sdk --test runtime jit_perf_gate_against_baseline --features native-jit -- --test-threads=1 --nocapture

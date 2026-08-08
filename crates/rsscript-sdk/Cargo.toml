@@ -1,0 +1,91 @@
+[package]
+name = "rsscript-sdk"
+version = "0.1.0"
+edition = "2024"
+description = "Stable compiler, VM, and Provider embedding facade for RSScript"
+license = "MIT OR Apache-2.0"
+publish = false
+autotests = false
+
+[features]
+default = []
+execution = [
+    "rsscript_compiler/execution",
+    "dep:rsscript-bytecode",
+    "dep:rsscript-interface-catalog",
+    "dep:rsscript-lowering",
+    "dep:rsscript-provider-api",
+    "dep:rsscript-vm",
+]
+native-jit = ["execution", "rsscript-vm/native-jit"]
+
+[dependencies]
+rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compiler", default-features = false, features = ["language-service"] }
+rsscript-operation = { path = "../rsscript-operation" }
+rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
+rsscript-interface-catalog = { path = "../rsscript-interface-catalog", optional = true }
+rsscript-lowering = { path = "../rsscript-lowering", optional = true }
+rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
+rsscript-vm = { path = "../rsscript-vm", optional = true, default-features = false }
+serde = { version = "1", features = ["derive"] }
+
+[build-dependencies]
+rsscript-build-support = { path = "../rsscript-build-support" }
+
+[dev-dependencies]
+base64 = "0.22"
+jsonschema = { version = "0.49", default-features = false }
+reir = { path = "../reir" }
+rsscript-abi-model = { path = "../rsscript-abi-model" }
+rsscript-review-reir = { path = "../../integrations/rsscript-review-reir" }
+rss-testgen = { path = "../rss-testgen" }
+sha1 = "0.10"
+proptest = "1"
+serde_json = "1"
+tempfile = "3"
+toml = "0.8"
+
+[[test]]
+name = "static"
+path = "tests/static.rs"
+required-features = ["execution"]
+
+[[test]]
+name = "architecture"
+path = "tests/architecture.rs"
+required-features = ["execution"]
+
+[[test]]
+name = "runtime"
+path = "tests/runtime.rs"
+required-features = ["execution"]
+
+[[test]]
+name = "schema_contracts"
+path = "tests/schema_contracts.rs"
+required-features = ["execution"]
+
+[[test]]
+name = "differential"
+path = "tests/differential.rs"
+required-features = ["execution"]
+
+[[test]]
+name = "soak"
+path = "tests/soak.rs"
+required-features = ["execution"]
+
+[[test]]
+name = "jit_cost_model"
+path = "tests/jit_cost_model.rs"
+required-features = ["native-jit"]
+
+[[test]]
+name = "jit_env"
+path = "tests/jit_env.rs"
+required-features = ["native-jit"]
+
+[[test]]
+name = "execution_report_schema"
+path = "tests/execution_report_schema.rs"
+required-features = ["execution"]

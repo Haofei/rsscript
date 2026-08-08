@@ -9,7 +9,7 @@
 //!
 //! The compiled-Rust backend is deliberately excluded here (a `rustc` invocation
 //! per case is far too slow for coverage-guided fuzzing); it is folded in by the
-//! bounded in-suite test `crates/rsscript/tests/generative.rs`.
+//! bounded in-suite test `crates/rsscript-compiler/tests/generative.rs`.
 
 #![no_main]
 

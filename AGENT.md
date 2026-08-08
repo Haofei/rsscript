@@ -84,4 +84,4 @@ cargo test --workspace --all-features
 ```
 
 Also verify the removed source syntax and compiler policy types do not reappear,
-and that `crates/rsscript/src/interfaces.rs` contains no default host includes.
+and that `crates/rsscript-compiler/src/interfaces.rs` contains no default host includes.

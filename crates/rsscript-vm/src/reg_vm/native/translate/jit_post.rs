@@ -629,6 +629,7 @@ fn native_loop_preserves_heap_query(
 }
 
 #[cfg(all(feature = "native-jit", test))]
+#[allow(dead_code)]
 pub(crate) fn native_loop_preserves_heap_projection(
     jit_code: &[vm_jit::JitInstr],
     header: usize,
@@ -663,6 +664,7 @@ pub(crate) fn native_loop_preserves_heap_projection(
 }
 
 #[cfg(all(feature = "native-jit", test))]
+#[allow(dead_code)]
 pub(crate) fn native_field_load_slot_not_stored_in_loop(
     args: &[vm_jit::HostArg],
     jit_code: &[vm_jit::JitInstr],
@@ -699,6 +701,7 @@ pub(crate) fn native_field_load_slot_not_stored_in_loop(
 }
 
 #[cfg(all(feature = "native-jit", test))]
+#[allow(dead_code)]
 pub(crate) fn native_loop_preserves_field_slot_for_receiver(
     code: &[RegInstr],
     jit_code: &[vm_jit::JitInstr],

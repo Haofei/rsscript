@@ -13,10 +13,10 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "crates/rsscript-vm/src/reg_vm/**"
-      - "crates/rsscript/tests/backend_differential.rs"
-      - "crates/rsscript/tests/jit_acceptance.rs"
-      - "crates/rsscript/tests/jit_perf_gate.rs"
-      - "crates/rsscript/tests/runtime.rs"
+      - "crates/rsscript-sdk/tests/backend_differential.rs"
+      - "crates/rsscript-sdk/tests/jit_acceptance.rs"
+      - "crates/rsscript-sdk/tests/jit_perf_gate.rs"
+      - "crates/rsscript-sdk/tests/runtime.rs"
       - "crates/vm-jit/**"
   push:
     branches: [main]
@@ -27,10 +27,10 @@ on:
       - "Cargo.lock"
       - "Cargo.toml"
       - "crates/rsscript-vm/src/reg_vm/**"
-      - "crates/rsscript/tests/backend_differential.rs"
-      - "crates/rsscript/tests/jit_acceptance.rs"
-      - "crates/rsscript/tests/jit_perf_gate.rs"
-      - "crates/rsscript/tests/runtime.rs"
+      - "crates/rsscript-sdk/tests/backend_differential.rs"
+      - "crates/rsscript-sdk/tests/jit_acceptance.rs"
+      - "crates/rsscript-sdk/tests/jit_perf_gate.rs"
+      - "crates/rsscript-sdk/tests/runtime.rs"
       - "crates/vm-jit/**"
 
 permissions:
@@ -61,4 +61,4 @@ jobs:
           tool: nextest@0.9.140
 
       - name: Test native JIT and deopt paths
-        run: cargo nextest run --locked -p rsscript-compiler --features native-jit --no-fail-fast
+        run: cargo nextest run --locked -p rsscript-sdk --features native-jit --no-fail-fast

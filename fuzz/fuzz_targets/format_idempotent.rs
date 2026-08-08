@@ -18,16 +18,16 @@ fuzz_target!(|data: &[u8]| {
         return;
     };
 
-    let diagnostics = rsscript::analyze_source("fuzz.rss", source);
+    let diagnostics = rsscript_sdk::analyze_source("fuzz.rss", source);
     let has_errors = diagnostics
         .iter()
-        .any(|diagnostic| diagnostic.severity == rsscript::Severity::Error);
+        .any(|diagnostic| diagnostic.severity == rsscript_sdk::Severity::Error);
     if has_errors {
         return;
     }
 
-    let once = rsscript::format_source("fuzz.rss", source);
-    let twice = rsscript::format_source("fuzz.rss", &once);
+    let once = rsscript_sdk::format_source("fuzz.rss", source);
+    let twice = rsscript_sdk::format_source("fuzz.rss", &once);
     assert_eq!(
         once, twice,
         "format_source is not idempotent\n--- once ---\n{once}\n--- twice ---\n{twice}"

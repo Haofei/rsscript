@@ -1,4 +1,5 @@
-// Reuse the intrinsic-catalog generator during the crate-boundary migration.
-// It emits the VM instruction enum/lookup and runtime ABI table from the same
-// declarative manifest as the compiler, preventing a second source of truth.
-include!("../rsscript/build.rs");
+fn main() {
+    if let Err(error) = rsscript_build_support::write_reg_vm_runtime_intrinsics() {
+        panic!("{error}");
+    }
+}

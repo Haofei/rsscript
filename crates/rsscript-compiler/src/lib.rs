@@ -1,1344 +1,154 @@
 #![forbid(unsafe_code)]
 
-pub use rsscript_compiler_core::Diagnostic;
-#[cfg(feature = "execution")]
-use std::collections::BTreeMap;
-use std::error::Error;
-use std::fmt;
-#[cfg(feature = "execution")]
-use std::path::Path;
-#[cfg(feature = "execution")]
-use std::time::{Duration, Instant};
+/// Build fingerprint used by external composition roots to invalidate compiler
+/// output caches whenever the implementation inputs change.
+pub const COMPILED_CACHE_FINGERPRINT: &str = env!("RSSCRIPT_COMPILED_CACHE_FINGERPRINT");
 
-/// Frontend-only editor API consumed by `rsscript-language-service`.
-/// Runtime and Provider types are deliberately excluded.
-pub mod language {
-    pub use rsscript_compiler_core::{
-        Definition, Diagnostic, DiagnosticExplanation, Reference, RssDocumentSymbol, Severity,
-        Span, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
-        analyze_source_result_with_operation, analyze_source_with_core,
-        analyze_source_with_interfaces, analyze_source_with_interfaces_result_with_operation,
-        analyze_sources_with_interfaces, document_symbols, explain_diagnostic_code, format_source,
-        lint_source, symbol_index,
-    };
+mod analyzer;
+#[cfg(feature = "execution")]
+mod call_binding;
+mod checks;
+#[cfg(feature = "execution")]
+mod compiler_output;
+mod core_index;
+mod diagnostic {
+    pub use rsscript_diagnostics::*;
 }
-#[cfg(feature = "execution")]
-pub use rsscript_compiler_core::ExecutionUsage;
-#[cfg(feature = "execution")]
-pub use rsscript_compiler_core::WorkspaceSnapshot;
-pub use rsscript_operation::{
-    CancellationToken, MonotonicDeadline, OperationAbort, OperationContext, OperationId,
-};
-#[cfg(feature = "execution")]
-pub use rsscript_provider_api as provider;
-
+mod editor_grammar;
+mod formatter;
+mod generate;
+mod hir;
 #[cfg(all(test, feature = "execution"))]
-use provider::NativeInterpreterFn;
+mod interface_metadata;
+mod interfaces;
+mod lexer {
+    pub(crate) use rsscript_syntax::lexer::*;
+}
+mod lint;
 #[cfg(feature = "execution")]
-use provider::{ProviderDescriptor, ProviderFunction, ProviderLoadError};
+mod package;
 #[cfg(feature = "execution")]
-use rsscript_compiler_core::{
-    EvalError, ExecutionFailureKind, ExternalFunctionRegistry, NativeValue, PackageAnalysis,
-    RegVmExecutable, VmLimits, load_workspace_snapshot, load_workspace_snapshot_with_operation,
-    reg_vm_compile_package_input, reg_vm_compile_source, reg_vm_compile_validated,
-    validate_source_with_operation, validate_sources_with_interfaces,
-    validate_sources_with_interfaces_with_operation,
-};
-use rsscript_compiler_core::{analyze_source, analyze_source_result_with_operation};
-
-#[derive(Default)]
-pub struct Compiler;
-
-impl Compiler {
-    pub fn check(&self, file: &str, source: &str) -> Vec<Diagnostic> {
-        analyze_source(file, source)
-    }
-
-    pub fn check_with_operation(
-        &self,
-        file: &str,
-        source: &str,
-        operation: &OperationContext,
-    ) -> Result<Vec<Diagnostic>, CompileError> {
-        operation.check().map_err(CompileError::from)?;
-        let diagnostics =
-            analyze_source_result_with_operation(file, source, operation).into_diagnostics();
-        operation.check().map_err(CompileError::from)?;
-        Ok(diagnostics)
-    }
-
-    #[cfg(feature = "execution")]
-    pub fn compile(&self, file: &str, source: &str) -> Result<CompiledPackage, CompileError> {
-        let executable = reg_vm_compile_source(file, source).map_err(CompileError::from)?;
-        Ok(CompiledPackage {
-            executable,
-            analysis: None,
-            snapshot_digest: None,
-        })
-    }
-
-    #[cfg(feature = "execution")]
-    pub fn compile_with_operation(
-        &self,
-        file: &str,
-        source: &str,
-        operation: &OperationContext,
-    ) -> Result<CompiledPackage, CompileError> {
-        let validated =
-            validate_source_with_operation(file, source, operation).map_err(|diagnostics| {
-                match operation.check() {
-                    Ok(()) => CompileError::Diagnostics(diagnostics),
-                    Err(abort) => CompileError::from(abort),
-                }
-            })?;
-        operation.check().map_err(CompileError::from)?;
-        let executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
-        operation.check().map_err(CompileError::from)?;
-        Ok(CompiledPackage {
-            executable,
-            analysis: None,
-            snapshot_digest: None,
-        })
-    }
-
-    /// Compile a source snapshot against explicit host interfaces. The
-    /// interfaces contribute semantic signatures only; provider selection is
-    /// intentionally deferred until execution.
-    #[cfg(feature = "execution")]
-    pub fn compile_with_interfaces(
-        &self,
-        sources: &[(&str, &str)],
-        interfaces: &[(&str, &str)],
-    ) -> Result<CompiledPackage, CompileError> {
-        let validated = validate_sources_with_interfaces(sources, interfaces)
-            .map_err(CompileError::Diagnostics)?;
-        let executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
-        Ok(CompiledPackage {
-            executable,
-            analysis: None,
-            snapshot_digest: None,
-        })
-    }
-
-    #[cfg(feature = "execution")]
-    pub fn compile_with_interfaces_and_operation(
-        &self,
-        sources: &[(&str, &str)],
-        interfaces: &[(&str, &str)],
-        operation: &OperationContext,
-    ) -> Result<CompiledPackage, CompileError> {
-        let validated =
-            validate_sources_with_interfaces_with_operation(sources, interfaces, operation)
-                .map_err(|diagnostics| match operation.check() {
-                    Ok(()) => CompileError::Diagnostics(diagnostics),
-                    Err(abort) => CompileError::from(abort),
-                })?;
-        operation.check().map_err(CompileError::from)?;
-        let executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
-        operation.check().map_err(CompileError::from)?;
-        Ok(CompiledPackage {
-            executable,
-            analysis: None,
-            snapshot_digest: None,
-        })
-    }
-
-    #[cfg(feature = "execution")]
-    pub fn compile_package(&self, path: &Path) -> Result<CompiledPackage, CompileError> {
-        let snapshot = self.snapshot(path)?;
-        self.build(&snapshot)
-    }
-
-    #[cfg(feature = "execution")]
-    pub fn compile_package_with_operation(
-        &self,
-        path: &Path,
-        operation: &OperationContext,
-    ) -> Result<CompiledPackage, CompileError> {
-        let snapshot = self.snapshot_with_operation(path, operation)?;
-        self.build_with_operation(&snapshot, operation)
-    }
-
-    /// Capture all package and dependency inputs exactly once.
-    #[cfg(feature = "execution")]
-    pub fn snapshot(&self, path: &Path) -> Result<WorkspaceSnapshot, CompileError> {
-        load_workspace_snapshot(path).map_err(|message| CompileError::Package {
-            code: CompileErrorCode::PackageSnapshot,
-            message,
-        })
-    }
-
-    #[cfg(feature = "execution")]
-    pub fn snapshot_with_operation(
-        &self,
-        path: &Path,
-        operation: &OperationContext,
-    ) -> Result<WorkspaceSnapshot, CompileError> {
-        operation.check().map_err(CompileError::from)?;
-        load_workspace_snapshot_with_operation(path, operation).map_err(|message| {
-            match operation.check() {
-                Ok(()) => CompileError::Package {
-                    code: CompileErrorCode::PackageSnapshot,
-                    message,
-                },
-                Err(abort) => CompileError::from(abort),
-            }
-        })
-    }
-
-    /// Build analysis and executable bytes from one immutable snapshot.
-    #[cfg(feature = "execution")]
-    pub fn build(&self, snapshot: &WorkspaceSnapshot) -> Result<CompiledPackage, CompileError> {
-        let mut analysis = snapshot.analysis().clone();
-        if analysis.summary.errors != 0 {
-            return Err(CompileError::Diagnostics(analysis.diagnostics.clone()));
-        }
-        let mut executable =
-            reg_vm_compile_package_input(snapshot.lowering_input()).map_err(CompileError::from)?;
-        executable.bind_snapshot_digest(snapshot.digest())?;
-        analysis.module_digest = Some(
-            executable
-                .bytecode_artifact()
-                .header
-                .executable_hash
-                .clone(),
-        );
-        Ok(CompiledPackage {
-            executable,
-            analysis: Some(analysis),
-            snapshot_digest: Some(snapshot.digest().to_string()),
-        })
-    }
-
-    #[cfg(feature = "execution")]
-    pub fn build_with_operation(
-        &self,
-        snapshot: &WorkspaceSnapshot,
-        operation: &OperationContext,
-    ) -> Result<CompiledPackage, CompileError> {
-        operation.check().map_err(CompileError::from)?;
-        let package = self.build(snapshot)?;
-        operation.check().map_err(CompileError::from)?;
-        Ok(package)
-    }
-
-    #[cfg(feature = "execution")]
-    pub fn load_verified(&self, bytecode: &[u8]) -> Result<CompiledPackage, CompileError> {
-        let executable = RegVmExecutable::from_bytecode(bytecode).map_err(CompileError::from)?;
-        Ok(CompiledPackage {
-            executable,
-            analysis: None,
-            snapshot_digest: None,
-        })
-    }
-
-    #[cfg(feature = "execution")]
-    pub fn load_verified_with_operation(
-        &self,
-        bytecode: &[u8],
-        operation: &OperationContext,
-    ) -> Result<CompiledPackage, CompileError> {
-        operation.check().map_err(CompileError::from)?;
-        let executable = RegVmExecutable::from_bytecode_with_operation(bytecode, operation)
-            .map_err(|error| match operation.check() {
-                Ok(()) => CompileError::from(error),
-                Err(abort) => CompileError::from(abort),
-            })?;
-        operation.check().map_err(CompileError::from)?;
-        Ok(CompiledPackage {
-            executable,
-            analysis: None,
-            snapshot_digest: None,
-        })
-    }
-}
-
+mod review;
 #[cfg(feature = "execution")]
-#[derive(Debug)]
-pub struct CompiledPackage {
-    executable: RegVmExecutable,
-    analysis: Option<PackageAnalysis>,
-    snapshot_digest: Option<String>,
-}
-
+mod runtime_abi;
 #[cfg(feature = "execution")]
-impl CompiledPackage {
-    pub fn bytecode(&self) -> Result<Vec<u8>, CompileError> {
-        self.executable.to_bytecode().map_err(CompileError::from)
-    }
-
-    pub fn analysis(&self) -> Option<&PackageAnalysis> {
-        self.analysis.as_ref()
-    }
-
-    pub fn snapshot_digest(&self) -> Option<&str> {
-        self.snapshot_digest.as_deref()
-    }
-
-    pub fn module_digest(&self) -> &str {
-        &self.executable.bytecode_artifact().header.executable_hash
-    }
-
-    pub fn external_imports(&self) -> &[rsscript_compiler_core::ExternalImport] {
-        &self.executable.bytecode_artifact().imports
-    }
-}
-
-#[cfg(feature = "execution")]
-#[derive(Default)]
-pub struct ProviderRegistry {
-    inner: ExternalFunctionRegistry,
-}
-
-#[cfg(feature = "execution")]
-impl ProviderRegistry {
-    /// Attach host-defined, instance-local authority to every resolved call.
-    /// Providers decide how to interpret these scopes; the language does not.
-    pub fn set_authority(&mut self, authority: provider::ProviderAuthority) {
-        self.inner.set_authority(authority);
-    }
-
-    pub fn register<T: Into<provider::ProviderCallable>>(
-        &mut self,
-        descriptor: &ProviderDescriptor,
-        functions: BTreeMap<provider::ExternalSymbol, ProviderFunction<T>>,
-    ) -> Result<(), ProviderLoadError> {
-        self.inner.register_provider(descriptor, functions)
-    }
-}
-
-#[cfg(feature = "execution")]
-#[derive(Debug, Clone)]
-pub struct RunLimits {
-    pub max_depth: usize,
-    pub step_budget: Option<u64>,
-    pub allocation_budget: Option<usize>,
-    pub live_memory_limit: Option<usize>,
-    pub cancellation: Option<CancellationToken>,
-    pub deadline: Option<MonotonicDeadline>,
-    pub output_budget: Option<usize>,
-    pub intrinsic_call_budget: Option<u64>,
-    pub provider_call_budget: Option<u64>,
-    pub resource_limit: Option<usize>,
-    pub allow_blocking_provider_calls: bool,
-}
-
-#[cfg(feature = "execution")]
-impl RunLimits {
-    /// Return the bounded public execution defaults.
-    pub fn bounded() -> Self {
-        Self::default()
-    }
-
-    /// Disable budgets for a host-controlled, trusted workload.
-    ///
-    /// This does not create an isolation boundary. The embedding host remains
-    /// responsible for process isolation and provider authority.
-    pub fn unbounded_for_trusted_host() -> Self {
-        VmLimits::unbounded_for_trusted_host().into()
-    }
-}
-
-#[cfg(feature = "execution")]
-impl Default for RunLimits {
-    fn default() -> Self {
-        VmLimits::default().into()
-    }
-}
-
-#[cfg(feature = "execution")]
-impl From<VmLimits> for RunLimits {
-    fn from(limits: VmLimits) -> Self {
-        Self {
-            max_depth: limits.max_depth,
-            step_budget: limits.step_budget,
-            allocation_budget: limits.allocation_budget,
-            live_memory_limit: limits.live_memory_limit,
-            cancellation: limits.cancel,
-            deadline: limits.deadline,
-            output_budget: limits.stdout_budget,
-            intrinsic_call_budget: limits.intrinsic_call_budget,
-            provider_call_budget: limits.provider_call_budget,
-            resource_limit: limits.resource_limit,
-            allow_blocking_provider_calls: limits.allow_blocking_provider_calls,
-        }
-    }
-}
-
-#[cfg(feature = "execution")]
-impl From<RunLimits> for VmLimits {
-    fn from(limits: RunLimits) -> Self {
-        Self {
-            max_depth: limits.max_depth,
-            step_budget: limits.step_budget,
-            allocation_budget: limits.allocation_budget,
-            live_memory_limit: limits.live_memory_limit,
-            cancel: limits.cancellation,
-            deadline: limits.deadline,
-            stdout_budget: limits.output_budget,
-            intrinsic_call_budget: limits.intrinsic_call_budget,
-            provider_call_budget: limits.provider_call_budget,
-            resource_limit: limits.resource_limit,
-            allow_blocking_provider_calls: limits.allow_blocking_provider_calls,
-        }
-    }
-}
-
-#[cfg(feature = "execution")]
-pub struct Runtime {
-    providers: ProviderRegistry,
-    limits: RunLimits,
-}
-
-#[cfg(feature = "execution")]
-impl Runtime {
-    pub fn new(providers: ProviderRegistry, limits: RunLimits) -> Self {
-        Self { providers, limits }
-    }
-
-    /// Resolve every external import and bind the execution limits before any
-    /// instruction can run. `LinkedPackage` has no public constructor, so the
-    /// stable SDK cannot bypass Provider preflight.
-    pub fn link<'package>(
-        &self,
-        package: &'package CompiledPackage,
-    ) -> Result<LinkedPackage<'package>, RuntimeError> {
-        for import in package.external_imports() {
-            if let Err(error) = self.providers.inner.resolve(import) {
-                return Err(RuntimeError {
-                    reason: TerminationReason::VerificationFailure,
-                    message: error.to_string(),
-                });
-            }
-        }
-        Ok(LinkedPackage {
-            package,
-            bindings: self.providers.inner.bindings().collect(),
-            limits: self.limits.clone().into(),
-        })
-    }
-}
-
-#[cfg(feature = "execution")]
-pub struct LinkedPackage<'package> {
-    package: &'package CompiledPackage,
-    bindings: Vec<(String, rsscript_compiler_core::ExternalFunction)>,
-    limits: VmLimits,
-}
-
-#[cfg(feature = "execution")]
-impl LinkedPackage<'_> {
-    pub fn module_digest(&self) -> &str {
-        self.package.module_digest()
-    }
-
-    /// Execute and always return an audit report, including partial evidence
-    /// for cancellation, budget exhaustion, and Provider failures.
-    pub fn execute(&self, args: impl IntoIterator<Item = impl Into<String>>) -> ExecutionReport {
-        let started = Instant::now();
-        let output = match self
-            .package
-            .executable
-            .execute_main_with_args_and_external_bindings_and_limits(
-                args,
-                self.bindings.iter().cloned(),
-                self.limits.clone(),
-            ) {
-            Ok(output) => output,
-            Err(error) => {
-                let diagnostics = match &error {
-                    EvalError::Diagnostics(diagnostics) => diagnostics.clone(),
-                    _ => Vec::new(),
-                };
-                return ExecutionReport::failed(
-                    self.package.module_digest(),
-                    RuntimeError::from(error),
-                    diagnostics,
-                    started.elapsed(),
-                    self.limits.cancel.as_ref(),
-                );
-            }
-        };
-        let diagnostics = match &output.failure {
-            Some(EvalError::Diagnostics(diagnostics)) => diagnostics.clone(),
-            _ => Vec::new(),
-        };
-        let failure = output.failure.map(RuntimeError::from);
-        let termination_reason = failure
-            .as_ref()
-            .map_or(TerminationReason::Completed, |error| error.reason);
-        let telemetry = ExecutionTelemetry::from_traces(
-            started.elapsed(),
-            termination_reason,
-            self.limits.cancel.as_ref(),
-            &output.provider_call_traces,
-        );
-        ExecutionReport {
-            schema: EXECUTION_REPORT_SCHEMA,
-            artifact_digest: self.package.module_digest().to_string(),
-            termination_reason,
-            usage: output.usage,
-            telemetry,
-            value: output.value.unwrap_or_default(),
-            display_value: output.display_value.unwrap_or_default(),
-            native_value: output.native_value,
-            stdout: output.stdout,
-            stderr: output.stderr,
-            provider_call_traces: output.provider_call_traces,
-            diagnostics,
-            failure,
-        }
-    }
-
-    /// Compatibility helper for callers that prefer ordinary `Result`
-    /// control flow. Use [`Self::execute`] when failure evidence is required.
-    pub fn run(
-        &self,
-        args: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Result<ExecutionReport, RuntimeError> {
-        let report = self.execute(args);
-        match report.failure.clone() {
-            Some(error) => Err(error),
-            None => Ok(report),
-        }
-    }
-}
-
-#[cfg(feature = "execution")]
-impl Default for Runtime {
-    fn default() -> Self {
-        Self::new(ProviderRegistry::default(), RunLimits::default())
-    }
-}
-
-#[cfg(feature = "execution")]
-pub const EXECUTION_REPORT_SCHEMA: &str = "rsscript.execution_report.v1";
-
-#[cfg(feature = "execution")]
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
-pub struct ExecutionTelemetry {
-    pub execution_duration_ns: u64,
-    pub cancellation_latency_ns: Option<u64>,
-    pub provider_functions: Vec<ProviderFunctionTelemetry>,
-}
-
-#[cfg(feature = "execution")]
-impl ExecutionTelemetry {
-    fn from_traces(
-        elapsed: Duration,
-        termination_reason: TerminationReason,
-        cancellation: Option<&CancellationToken>,
-        traces: &[provider::ProviderCallTrace],
-    ) -> Self {
-        let mut summaries = BTreeMap::<(String, String, String), ProviderFunctionTelemetry>::new();
-        for trace in traces {
-            let key = (
-                trace.provider_id.clone(),
-                trace.provider_version.clone(),
-                trace.symbol.clone(),
-            );
-            let summary = summaries
-                .entry(key)
-                .or_insert_with(|| ProviderFunctionTelemetry {
-                    provider_id: trace.provider_id.clone(),
-                    provider_version: trace.provider_version.clone(),
-                    symbol: trace.symbol.clone(),
-                    ..ProviderFunctionTelemetry::default()
-                });
-            summary.calls = summary.calls.saturating_add(1);
-            summary.failures = summary
-                .failures
-                .saturating_add(u64::from(trace.result.is_err()));
-            summary.request_bytes = summary.request_bytes.saturating_add(trace.request_bytes);
-            summary.response_bytes = summary.response_bytes.saturating_add(trace.response_bytes);
-            let elapsed_ns = duration_ns(trace.elapsed);
-            summary.total_duration_ns = summary.total_duration_ns.saturating_add(elapsed_ns);
-            summary.max_duration_ns = summary.max_duration_ns.max(elapsed_ns);
-        }
-        let cancellation_latency_ns = (termination_reason == TerminationReason::Cancelled)
-            .then(|| cancellation.and_then(CancellationToken::cancelled_at))
-            .flatten()
-            .map(|cancelled_at| duration_ns(cancelled_at.elapsed()));
-        Self {
-            execution_duration_ns: duration_ns(elapsed),
-            cancellation_latency_ns,
-            provider_functions: summaries.into_values().collect(),
-        }
-    }
-}
-
-#[cfg(feature = "execution")]
-fn duration_ns(duration: Duration) -> u64 {
-    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
-}
-
-#[cfg(feature = "execution")]
-#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
-pub struct ProviderFunctionTelemetry {
-    pub provider_id: String,
-    pub provider_version: String,
-    pub symbol: String,
-    pub calls: u64,
-    pub failures: u64,
-    pub request_bytes: usize,
-    pub response_bytes: usize,
-    pub total_duration_ns: u64,
-    pub max_duration_ns: u64,
-}
-
-#[cfg(feature = "execution")]
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
-pub struct ExecutionReport {
-    pub schema: &'static str,
-    pub artifact_digest: String,
-    pub termination_reason: TerminationReason,
-    pub usage: ExecutionUsage,
-    pub telemetry: ExecutionTelemetry,
-    pub value: String,
-    pub display_value: String,
-    pub native_value: Option<NativeValue>,
-    pub stdout: String,
-    pub stderr: String,
-    pub provider_call_traces: Vec<provider::ProviderCallTrace>,
-    pub diagnostics: Vec<Diagnostic>,
-    pub failure: Option<RuntimeError>,
-}
-
-#[cfg(feature = "execution")]
-impl ExecutionReport {
-    fn failed(
-        artifact_digest: impl Into<String>,
-        failure: RuntimeError,
-        diagnostics: Vec<Diagnostic>,
-        elapsed: Duration,
-        cancellation: Option<&CancellationToken>,
-    ) -> Self {
-        let termination_reason = failure.reason;
-        Self {
-            schema: EXECUTION_REPORT_SCHEMA,
-            artifact_digest: artifact_digest.into(),
-            termination_reason,
-            usage: ExecutionUsage::default(),
-            telemetry: ExecutionTelemetry::from_traces(
-                elapsed,
-                termination_reason,
-                cancellation,
-                &[],
-            ),
-            value: String::new(),
-            display_value: String::new(),
-            native_value: None,
-            stdout: String::new(),
-            stderr: String::new(),
-            provider_call_traces: Vec::new(),
-            diagnostics,
-            failure: Some(failure),
-        }
-    }
-}
-
-#[derive(Debug)]
-pub enum CompileError {
-    Diagnostics(Vec<Diagnostic>),
-    Package {
-        code: CompileErrorCode,
-        message: String,
-    },
-    Bytecode {
-        code: CompileErrorCode,
-        message: String,
-    },
-    Operation {
-        code: CompileErrorCode,
-        message: String,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CompileErrorCode {
-    Diagnostics,
-    PackageSnapshot,
-    Bytecode,
-    Cancelled,
-    DeadlineExceeded,
-}
-
-impl CompileError {
-    pub fn code(&self) -> CompileErrorCode {
-        match self {
-            Self::Diagnostics(_) => CompileErrorCode::Diagnostics,
-            Self::Package { code, .. }
-            | Self::Bytecode { code, .. }
-            | Self::Operation { code, .. } => *code,
-        }
-    }
-}
-
-impl CompileErrorCode {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Diagnostics => "diagnostics",
-            Self::PackageSnapshot => "package_snapshot",
-            Self::Bytecode => "bytecode",
-            Self::Cancelled => "cancelled",
-            Self::DeadlineExceeded => "deadline_exceeded",
-        }
-    }
-}
-
-impl From<OperationAbort> for CompileError {
-    fn from(abort: OperationAbort) -> Self {
-        match abort {
-            OperationAbort::Cancelled => Self::Operation {
-                code: CompileErrorCode::Cancelled,
-                message: "compiler operation cancelled".to_string(),
-            },
-            OperationAbort::DeadlineExceeded => Self::Operation {
-                code: CompileErrorCode::DeadlineExceeded,
-                message: "compiler operation deadline exceeded".to_string(),
-            },
-        }
-    }
-}
-
-#[cfg(feature = "execution")]
-impl From<EvalError> for CompileError {
-    fn from(error: EvalError) -> Self {
-        match error {
-            EvalError::Diagnostics(diagnostics) => Self::Diagnostics(diagnostics),
-            EvalError::Runtime(message) => Self::Bytecode {
-                code: CompileErrorCode::Bytecode,
-                message,
-            },
-            EvalError::Execution { message, .. } => Self::Bytecode {
-                code: CompileErrorCode::Bytecode,
-                message,
-            },
-            EvalError::Provider(error) => Self::Bytecode {
-                code: CompileErrorCode::Bytecode,
-                message: error.to_string(),
-            },
-        }
-    }
-}
-
-impl fmt::Display for CompileError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Diagnostics(diagnostics) => {
-                write!(
-                    formatter,
-                    "compilation failed with {} diagnostic(s)",
-                    diagnostics.len()
-                )
-            }
-            Self::Package { message, .. } => {
-                write!(formatter, "package compilation failed: {message}")
-            }
-            Self::Bytecode { message, .. } => {
-                write!(formatter, "bytecode compilation failed: {message}")
-            }
-            Self::Operation { message, .. } => formatter.write_str(message),
-        }
-    }
-}
-
-impl Error for CompileError {}
-
-#[cfg(feature = "execution")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TerminationReason {
-    Completed,
-    ScriptError,
-    Cancelled,
-    DeadlineExceeded,
-    StepBudgetExceeded,
-    AllocationBudgetExceeded,
-    LiveMemoryLimitExceeded,
-    OutputLimitExceeded,
-    ProviderError,
-    ProviderBudgetExceeded,
-    IntrinsicBudgetExceeded,
-    ResourceLimitExceeded,
-    VerificationFailure,
-    InternalError,
-}
-
-#[cfg(feature = "execution")]
-impl TerminationReason {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-            Self::ScriptError => "script_error",
-            Self::Cancelled => "cancelled",
-            Self::DeadlineExceeded => "deadline_exceeded",
-            Self::StepBudgetExceeded => "step_budget_exceeded",
-            Self::AllocationBudgetExceeded => "allocation_budget_exceeded",
-            Self::LiveMemoryLimitExceeded => "live_memory_limit_exceeded",
-            Self::OutputLimitExceeded => "output_limit_exceeded",
-            Self::ProviderError => "provider_error",
-            Self::ProviderBudgetExceeded => "provider_budget_exceeded",
-            Self::IntrinsicBudgetExceeded => "intrinsic_budget_exceeded",
-            Self::ResourceLimitExceeded => "resource_limit_exceeded",
-            Self::VerificationFailure => "verification_failure",
-            Self::InternalError => "internal_error",
-        }
-    }
-}
-
-#[cfg(feature = "execution")]
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
-pub struct RuntimeError {
-    pub reason: TerminationReason,
-    pub message: String,
-}
-
-#[cfg(feature = "execution")]
-impl From<EvalError> for RuntimeError {
-    fn from(error: EvalError) -> Self {
-        match error {
-            EvalError::Diagnostics(diagnostics) => Self {
-                reason: TerminationReason::VerificationFailure,
-                message: format!(
-                    "execution rejected with {} diagnostic(s)",
-                    diagnostics.len()
-                ),
-            },
-            EvalError::Runtime(message) => Self {
-                reason: TerminationReason::ScriptError,
-                message,
-            },
-            EvalError::Execution { kind, message } => Self {
-                reason: match kind {
-                    ExecutionFailureKind::Cancelled => TerminationReason::Cancelled,
-                    ExecutionFailureKind::DeadlineExceeded => TerminationReason::DeadlineExceeded,
-                    ExecutionFailureKind::StepBudgetExceeded => {
-                        TerminationReason::StepBudgetExceeded
-                    }
-                    ExecutionFailureKind::AllocationBudgetExceeded => {
-                        TerminationReason::AllocationBudgetExceeded
-                    }
-                    ExecutionFailureKind::LiveMemoryLimitExceeded => {
-                        TerminationReason::LiveMemoryLimitExceeded
-                    }
-                    ExecutionFailureKind::OutputLimitExceeded => {
-                        TerminationReason::OutputLimitExceeded
-                    }
-                    ExecutionFailureKind::ProviderBudgetExceeded => {
-                        TerminationReason::ProviderBudgetExceeded
-                    }
-                    ExecutionFailureKind::IntrinsicBudgetExceeded => {
-                        TerminationReason::IntrinsicBudgetExceeded
-                    }
-                    ExecutionFailureKind::ResourceLimitExceeded => {
-                        TerminationReason::ResourceLimitExceeded
-                    }
-                },
-                message,
-            },
-            EvalError::Provider(error) => Self {
-                reason: match error.code {
-                    provider::ProviderErrorCode::Cancelled => TerminationReason::Cancelled,
-                    provider::ProviderErrorCode::DeadlineExceeded => {
-                        TerminationReason::DeadlineExceeded
-                    }
-                    _ => TerminationReason::ProviderError,
-                },
-                message: error.to_string(),
-            },
-        }
-    }
-}
-
-#[cfg(feature = "execution")]
-impl fmt::Display for RuntimeError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-#[cfg(feature = "execution")]
-impl Error for RuntimeError {}
-
+mod rust_lower;
 #[cfg(all(test, feature = "execution"))]
-mod tests {
-    use super::*;
-    use provider::{
-        BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol, FunctionSignature,
-        ParameterSignature, ProviderCallMode, ProviderFunctionDescriptor, RUNTIME_ABI_VERSION,
-    };
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicBool;
-    use std::sync::atomic::Ordering;
+mod selfhost_parity;
+mod semantic;
+mod symbols;
+pub mod syntax;
+#[cfg(all(test, feature = "execution"))]
+mod test_interfaces;
+#[allow(dead_code)]
+mod text_util {
+    pub(crate) use rsscript_text::*;
+}
+#[cfg(all(test, feature = "execution"))]
+mod vm_adapter {
+    use rsscript_vm::{EvalError, RegVmExecutable};
 
-    #[test]
-    fn package_build_uses_one_immutable_snapshot_and_binds_its_digest() {
-        let directory = tempfile::tempdir().expect("workspace");
-        std::fs::create_dir(directory.path().join("src")).expect("source directory");
-        std::fs::write(
-            directory.path().join("rsspkg.toml"),
-            "[package]\nname = \"snapshot-test\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[sources]\npaths = [\"src\"]\n",
+    pub(crate) fn reg_vm_compile_sources(
+        sources: &[(&str, &str)],
+    ) -> Result<RegVmExecutable, EvalError> {
+        let interfaces = crate::interfaces::standard_package_interfaces().collect::<Vec<_>>();
+        let validated = crate::analyzer::validate_sources_with_interfaces(sources, &interfaces)
+            .map_err(EvalError::Diagnostics)?;
+        let compiled = crate::compiler_output::compile_validated_to_ir(&validated);
+        rsscript_vm::compile_executable_ir(
+            compiled.executable(),
+            compiled.source_hash(),
+            compiled.interface_catalog_digest(),
         )
-        .expect("manifest");
-        let source_path = directory.path().join("src/main.rss");
-        std::fs::write(&source_path, "fn main() -> Int { return 1 }").expect("source");
-
-        let compiler = Compiler;
-        let cancellation = CancellationToken::new();
-        cancellation.cancel();
-        let cancelled = OperationContext {
-            cancellation: Some(cancellation),
-            ..OperationContext::default()
-        };
-        let error = compiler
-            .snapshot_with_operation(directory.path(), &cancelled)
-            .expect_err("cancelled snapshot");
-        assert_eq!(error.code(), CompileErrorCode::Cancelled);
-        let snapshot = compiler.snapshot(directory.path()).expect("snapshot");
-        std::fs::write(&source_path, "fn main() -> Int { return 2 }").expect("mutate checkout");
-
-        let first = compiler.build(&snapshot).expect("first build");
-        let second = compiler.build(&snapshot).expect("repeat build");
-        assert_eq!(first.bytecode().unwrap(), second.bytecode().unwrap());
-        assert_eq!(first.snapshot_digest(), Some(snapshot.digest()));
-        let analysis = first.analysis().expect("package analysis");
-        assert_eq!(analysis.snapshot_digest, snapshot.digest());
-        assert_eq!(
-            analysis.module_digest.as_deref(),
-            Some(first.module_digest())
-        );
-        let artifact = rsscript_bytecode::BytecodeArtifact::from_bytes(&first.bytecode().unwrap())
-            .expect("artifact envelope");
-        assert_eq!(
-            artifact.header.snapshot_digest.as_deref(),
-            Some(snapshot.digest())
-        );
-        assert_eq!(analysis.language_version, artifact.header.language_version);
-        assert_eq!(analysis.producer.version, artifact.header.compiler_version);
-        assert_eq!(
-            analysis.interface_catalog_digest,
-            artifact.header.interface_catalog_digest
-        );
-        let runtime = Runtime::default();
-        let output = runtime
-            .link(&first)
-            .expect("link captured source")
-            .run(Vec::<String>::new())
-            .expect("run captured source");
-        assert_eq!(output.value, "1");
-    }
-
-    #[test]
-    fn stable_facade_compiles_serializes_loads_and_runs() {
-        let compiler = Compiler;
-        let package = compiler
-            .compile("main.rss", "fn main() -> Unit { return Unit }")
-            .expect("compile");
-        let bytecode = package.bytecode().expect("bytecode");
-        let loaded = compiler.load_verified(&bytecode).expect("load verified");
-        let runtime = Runtime::default();
-        let report = runtime
-            .link(&loaded)
-            .expect("link")
-            .run(Vec::<String>::new())
-            .expect("run");
-        assert_eq!(report.value, "Unit");
-        assert_eq!(report.termination_reason, TerminationReason::Completed);
-        assert_eq!(report.artifact_digest, loaded.module_digest());
-        assert!(report.usage.steps_consumed > 0);
-        assert_eq!(report.termination_reason.as_str(), "completed");
-        let json = serde_json::to_value(&report).expect("serialize execution report");
-        assert_eq!(json["schema"], EXECUTION_REPORT_SCHEMA);
-        assert_eq!(json["termination_reason"], "completed");
-        assert!(json["usage"]["steps_consumed"].as_u64().unwrap() > 0);
-        assert_eq!(
-            CompileErrorCode::PackageSnapshot.as_str(),
-            "package_snapshot"
-        );
-        assert!(!RunLimits::bounded().allow_blocking_provider_calls);
-        assert!(RunLimits::unbounded_for_trusted_host().allow_blocking_provider_calls);
-    }
-
-    #[test]
-    fn execution_usage_reports_structured_task_lifecycle() {
-        let source = r#"
-async fn work(value: Int) -> Result<Int, String> {
-    return Ok(value)
-}
-
-fn main() -> Result<Unit, String> {
-    task_group {
-        async let first = work(value: 1)
-        async let second = work(value: 2)
-        let first_value = await first?
-        let second_value = await second?
-        let total = first_value + second_value
-    }
-    return Ok(Unit)
-}
-"#;
-        let package = Compiler.compile("tasks.rss", source).expect("compile");
-        let report = Runtime::default()
-            .link(&package)
-            .expect("link")
-            .execute(Vec::<String>::new());
-        assert_eq!(report.termination_reason, TerminationReason::Completed);
-        assert_eq!(report.usage.tasks_created, 3);
-        assert_eq!(report.usage.tasks_completed, 3);
-        assert_eq!(report.usage.tasks_cancelled, 0);
-        assert_eq!(report.usage.tasks_peak_live, 3);
-        assert_eq!(report.usage.tasks_live_at_return, 0);
-    }
-
-    #[test]
-    fn cancelled_execution_reports_request_to_observation_latency() {
-        let package = Compiler
-            .compile(
-                "cancel.rss",
-                "fn main() -> Unit { while true {} return Unit }",
-            )
-            .expect("compile");
-        let cancellation = CancellationToken::new();
-        cancellation.cancel();
-        let runtime = Runtime::new(
-            ProviderRegistry::default(),
-            RunLimits {
-                cancellation: Some(cancellation),
-                ..RunLimits::bounded()
-            },
-        );
-        let report = runtime
-            .link(&package)
-            .expect("link")
-            .execute(Vec::<String>::new());
-        assert_eq!(report.termination_reason, TerminationReason::Cancelled);
-        assert!(report.telemetry.cancellation_latency_ns.is_some());
-        assert!(report.telemetry.execution_duration_ns > 0);
-    }
-
-    #[test]
-    fn compiler_and_loader_observe_shared_operation_control() {
-        let compiler = Compiler;
-        let cancellation = CancellationToken::new();
-        cancellation.cancel();
-        let cancelled = OperationContext {
-            cancellation: Some(cancellation),
-            ..OperationContext::default()
-        };
-        let error = compiler
-            .check_with_operation(
-                "cancelled.rss",
-                "fn main() -> Unit { return Unit }",
-                &cancelled,
-            )
-            .expect_err("cancelled check");
-        assert_eq!(error.code(), CompileErrorCode::Cancelled);
-        let error = compiler
-            .compile_with_operation(
-                "cancelled.rss",
-                "fn main() -> Unit { return Unit }",
-                &cancelled,
-            )
-            .expect_err("cancelled compile");
-        assert_eq!(error.code(), CompileErrorCode::Cancelled);
-
-        let package = compiler
-            .compile("main.rss", "fn main() -> Unit { return Unit }")
-            .expect("compile fixture");
-        let expired = OperationContext {
-            deadline: Some(MonotonicDeadline::at(
-                std::time::Instant::now() - std::time::Duration::from_millis(1),
-            )),
-            ..OperationContext::default()
-        };
-        let error = compiler
-            .load_verified_with_operation(&package.bytecode().unwrap(), &expired)
-            .expect_err("expired verifier deadline");
-        assert_eq!(error.code(), CompileErrorCode::DeadlineExceeded);
-        assert!(error.to_string().contains("deadline exceeded"));
-    }
-
-    #[test]
-    fn module_interface_keeps_stable_external_symbol_and_preflights_signature() {
-        let compiler = Compiler;
-        let package = compiler
-            .compile_with_interfaces(
-                &[(
-                    "main.rss",
-                    "module app\nuse host.log.*\nfn main() -> Unit { emit(message: read \"ok\"); return Unit }",
-                )],
-                &[(
-                    "log.rssi",
-                    "module host.log\npub fn emit(message: read String) -> Unit\n",
-                )],
-            )
-            .expect("compile external call");
-        assert_eq!(package.external_imports().len(), 1);
-        assert_eq!(
-            package.external_imports()[0].symbol.as_str(),
-            "host.log.emit"
-        );
-
-        let incompatible = FunctionSignature {
-            parameters: vec![ParameterSignature {
-                name: "message".into(),
-                effect: DataEffect::Take,
-                ty: "String".into(),
-                retained: false,
-            }],
-            result: "Unit".into(),
-            asynchronous: false,
-        };
-        let symbol = ExternalSymbol::new("host.log.emit").expect("symbol");
-        let descriptor = ProviderDescriptor {
-            provider_id: "test.log".into(),
-            provider_version: "1".into(),
-            supported_abi: vec![RUNTIME_ABI_VERSION],
-            functions: vec![ProviderFunctionDescriptor {
-                symbol: symbol.clone(),
-                signature: incompatible.clone(),
-                entry: "emit".into(),
-                call_mode: ProviderCallMode::Sync,
-                blocking: BlockingBehavior::NonBlocking,
-                cancellation: CancellationBehavior::NotApplicable,
-                thread_safe: true,
-                reentrant: true,
-                resource_cleanup: provider::ResourceCleanupContract::None,
-                error_mapping: provider::ProviderErrorMapping::StructuredV1,
-            }],
-        };
-        let called = Arc::new(AtomicBool::new(false));
-        let called_by_provider = Arc::clone(&called);
-        let mut providers = ProviderRegistry::default();
-        providers
-            .register(
-                &descriptor,
-                BTreeMap::from([(
-                    symbol,
-                    ProviderFunction {
-                        signature: incompatible,
-                        callable: NativeInterpreterFn::new(move |_| {
-                            called_by_provider.store(true, Ordering::SeqCst);
-                            Ok(NativeValue::Unit)
-                        }),
-                    },
-                )]),
-            )
-            .expect("provider descriptor and implementation should match");
-
-        let runtime = Runtime::new(providers, RunLimits::bounded());
-        let error = match runtime.link(&package) {
-            Ok(_) => panic!("import signature must fail before execution"),
-            Err(error) => error,
-        };
-        assert_eq!(error.reason, TerminationReason::VerificationFailure);
-        assert!(error.message.contains("ImportSignatureMismatch"));
-        assert!(!called.load(Ordering::SeqCst));
-    }
-
-    #[test]
-    fn provider_calls_have_a_budget_separate_from_intrinsics() {
-        let compiler = Compiler;
-        let package = compiler
-            .compile_with_interfaces(
-                &[(
-                    "main.rss",
-                    "module app\nuse host.log.*\nfn main() -> Unit { emit(message: read \"one\"); emit(message: read \"two\"); return Unit }",
-                )],
-                &[(
-                    "log.rssi",
-                    "module host.log\npub fn emit(message: read String) -> Unit\n",
-                )],
-            )
-            .expect("compile external calls");
-        let signature = FunctionSignature {
-            parameters: vec![ParameterSignature {
-                name: "message".into(),
-                effect: DataEffect::Read,
-                ty: "String".into(),
-                retained: false,
-            }],
-            result: "Unit".into(),
-            asynchronous: false,
-        };
-        let symbol = ExternalSymbol::new("host.log.emit").expect("symbol");
-        let descriptor = ProviderDescriptor {
-            provider_id: "test.log".into(),
-            provider_version: "1".into(),
-            supported_abi: vec![RUNTIME_ABI_VERSION],
-            functions: vec![ProviderFunctionDescriptor {
-                symbol: symbol.clone(),
-                signature: signature.clone(),
-                entry: "emit".into(),
-                call_mode: ProviderCallMode::Sync,
-                blocking: BlockingBehavior::NonBlocking,
-                cancellation: CancellationBehavior::NotApplicable,
-                thread_safe: true,
-                reentrant: true,
-                resource_cleanup: provider::ResourceCleanupContract::None,
-                error_mapping: provider::ProviderErrorMapping::StructuredV1,
-            }],
-        };
-        let mut providers = ProviderRegistry::default();
-        providers
-            .register(
-                &descriptor,
-                BTreeMap::from([(
-                    symbol,
-                    ProviderFunction {
-                        signature,
-                        callable: NativeInterpreterFn::new(|_| Ok(NativeValue::Unit)),
-                    },
-                )]),
-            )
-            .expect("register provider");
-        let limits = RunLimits {
-            provider_call_budget: Some(1),
-            ..RunLimits::default()
-        };
-
-        let runtime = Runtime::new(providers, limits);
-        let report = runtime
-            .link(&package)
-            .expect("link providers")
-            .execute(Vec::<String>::new());
-        assert_eq!(
-            report.termination_reason,
-            TerminationReason::ProviderBudgetExceeded
-        );
-        assert_eq!(report.usage.provider_calls, 2);
-        assert_eq!(report.provider_call_traces.len(), 1);
-        assert!(
-            report
-                .failure
-                .as_ref()
-                .is_some_and(|error| error.message.contains("provider call budget exceeded"))
-        );
-
-        let failure_symbol = descriptor.functions[0].symbol.clone();
-        let failure_signature = descriptor.functions[0].signature.clone();
-        let mut failing_providers = ProviderRegistry::default();
-        failing_providers
-            .register(
-                &descriptor,
-                BTreeMap::from([(
-                    failure_symbol,
-                    ProviderFunction {
-                        signature: failure_signature,
-                        callable: NativeInterpreterFn::new(|_| {
-                            Err(provider::ProviderError::invalid_argument(
-                                "rejected by provider",
-                            ))
-                        }),
-                    },
-                )]),
-            )
-            .expect("register failing provider");
-        let runtime = Runtime::new(failing_providers, RunLimits::bounded());
-        let report = runtime
-            .link(&package)
-            .expect("link failing provider")
-            .execute(Vec::<String>::new());
-        assert_eq!(report.termination_reason, TerminationReason::ProviderError);
-        assert_eq!(report.provider_call_traces.len(), 1);
-        assert_eq!(
-            report.provider_call_traces[0].result,
-            Err(provider::ProviderErrorCode::InvalidArgument)
-        );
-        assert!(
-            report
-                .failure
-                .as_ref()
-                .is_some_and(|error| error.message.contains("InvalidArgument"))
-        );
-    }
-
-    #[test]
-    fn provider_authority_and_trace_reach_the_execution_report() {
-        let compiler = Compiler;
-        let package = compiler
-            .compile_with_interfaces(
-                &[(
-                    "main.rss",
-                    "module app\nuse host.log.*\nfn main() -> Unit { emit(message: read \"ok\"); return Unit }",
-                )],
-                &[(
-                    "log.rssi",
-                    "module host.log\npub fn emit(message: read String) -> Unit\n",
-                )],
-            )
-            .expect("compile external call");
-        let signature = FunctionSignature {
-            parameters: vec![ParameterSignature {
-                name: "message".into(),
-                effect: DataEffect::Read,
-                ty: "String".into(),
-                retained: false,
-            }],
-            result: "Unit".into(),
-            asynchronous: false,
-        };
-        let symbol = ExternalSymbol::new("host.log.emit").expect("symbol");
-        let descriptor = ProviderDescriptor {
-            provider_id: "test.log".into(),
-            provider_version: "1".into(),
-            supported_abi: vec![RUNTIME_ABI_VERSION],
-            functions: vec![ProviderFunctionDescriptor {
-                symbol: symbol.clone(),
-                signature: signature.clone(),
-                entry: "emit".into(),
-                call_mode: ProviderCallMode::Sync,
-                blocking: BlockingBehavior::NonBlocking,
-                cancellation: CancellationBehavior::NotApplicable,
-                thread_safe: true,
-                reentrant: true,
-                resource_cleanup: provider::ResourceCleanupContract::None,
-                error_mapping: provider::ProviderErrorMapping::StructuredV1,
-            }],
-        };
-        let mut providers = ProviderRegistry::default();
-        providers.set_authority(provider::ProviderAuthority::scoped(["log.emit"]));
-        providers
-            .register(
-                &descriptor,
-                BTreeMap::from([(
-                    symbol,
-                    ProviderFunction {
-                        signature,
-                        callable: NativeInterpreterFn::new_contextual(|context, _| {
-                            assert!(context.authority.allows("log.emit"));
-                            assert_eq!(context.provider_id, "test.log");
-                            assert_eq!(context.symbol, "host.log.emit");
-                            Ok(NativeValue::Unit)
-                        }),
-                    },
-                )]),
-            )
-            .expect("register provider");
-
-        let runtime = Runtime::new(providers, RunLimits::bounded());
-        let report = runtime
-            .link(&package)
-            .expect("link provider")
-            .run(Vec::<String>::new())
-            .expect("run provider");
-        assert_eq!(report.provider_call_traces.len(), 1);
-        let trace = &report.provider_call_traces[0];
-        assert_eq!(trace.provider_id, "test.log");
-        assert_eq!(trace.provider_version, "1");
-        assert_eq!(trace.symbol, "host.log.emit");
-        assert_eq!(trace.request_bytes, 2);
-        assert_eq!(trace.response_bytes, 0);
-        assert_eq!(trace.result, Ok(()));
-        assert_eq!(report.telemetry.provider_functions.len(), 1);
-        let summary = &report.telemetry.provider_functions[0];
-        assert_eq!(summary.provider_id, "test.log");
-        assert_eq!(summary.symbol, "host.log.emit");
-        assert_eq!(summary.calls, 1);
-        assert_eq!(summary.failures, 0);
-        assert_eq!(summary.request_bytes, 2);
-        assert_eq!(summary.response_bytes, 0);
-        assert_eq!(summary.total_duration_ns, summary.max_duration_ns);
     }
 }
+
+#[cfg(all(test, feature = "execution"))]
+use rsscript_vm::RegVmExecutable;
+
+pub use analyzer::{
+    analyze_source, analyze_source_result, analyze_source_result_with_operation,
+    analyze_source_with_core, analyze_source_with_interfaces,
+    analyze_source_with_interfaces_result, analyze_source_with_interfaces_result_with_operation,
+    analyze_source_with_interfaces_without_core, analyze_source_without_core,
+    analyze_sources_with_interfaces, analyze_sources_with_interfaces_result,
+    analyze_sources_with_interfaces_without_core,
+    analyze_sources_with_interfaces_without_core_result, analyze_syntax_source, core_interfaces,
+    standard_package_interfaces, validate_source, validate_source_with_operation,
+    validate_sources_with_interfaces, validate_sources_with_interfaces_with_operation,
+    validate_sources_with_interfaces_without_core,
+};
+#[cfg(feature = "execution")]
+pub use compiler_output::{
+    CompiledIr, compile_package_input_to_ir, compile_source_to_ir, compile_validated_to_ir,
+};
+pub use core_index::core_package_index_json;
+pub use diagnostic::{
+    Diagnostic, DiagnosticExplanation, Fix, FixEdit, Severity, Span, explain_diagnostic_code,
+    format_diagnostic_explanation, format_diagnostics_human, format_diagnostics_json,
+    format_diagnostics_json_with_source,
+};
+pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
+pub use formatter::{format_program, format_source};
+pub use generate::{
+    CommitBehavior, Completion, CompletionKind, ContinuationOptions, Continuations, Effect,
+    ExpectedType, GenerateContext, LiteralClass, PrefixStatus, SymbolCompleteness, TextRange,
+    TypeRef, prefix_status, valid_continuations,
+};
+pub use lint::lint_source;
+#[cfg(feature = "execution")]
+pub use package::{
+    ArtifactStore, ExecutablePackageSnapshot, PackageAnalysis, PackageAnalysisAwaitSite,
+    PackageAnalysisExport, PackageAnalysisExternalImport, PackageAnalysisFile,
+    PackageAnalysisProducer, PackageAnalysisSummary, PackageCheck, PackageCheckLock,
+    PackageDependencyKind, PackageDiff, PackageGraphCheck, PackageIdentity, PackageInterfaceChange,
+    PackageInterfaceChangeKind, PackageLock, PackageLockDiff, PackageLockFieldChange,
+    PackageLockMetadata, PackageLockPackage, PackageLockPackageChange, PackageLoweringInput,
+    PackageManifestChange, PackageMetadataMismatch, PackageMetadataReport,
+    PackageNativeRustAuthorDeclaration, PackageNativeRustCheck, PackageNativeRustReview,
+    PackageNativeRustSemanticReview, PackageNativeRustSourceScan, PackageReview,
+    PackageReviewExport, PackageReviewFile, PackageReviewFileKind, PackageReviewMetadata,
+    PackageReviewSummary, PackageRisk, PackageSourceFile, PackageTree, PackageTreeNode,
+    PackageTreeSummary, PreparedPackage, WorkspaceSnapshot, analyze_package_dir, check_package_dir,
+    diff_package_dirs, diff_package_locks, format_package_analysis_json,
+    format_package_check_human, format_package_check_json, format_package_diff_human,
+    format_package_diff_json, format_package_lock_diff_human, format_package_lock_diff_json,
+    format_package_lock_json, format_package_lock_toml, format_package_metadata_human,
+    format_package_metadata_json, format_package_review_human, format_package_review_json,
+    format_package_review_markdown, format_package_tree_human, format_package_tree_json,
+    load_workspace_snapshot, load_workspace_snapshot_with_operation, lock_package_dir,
+    package_lowering_input, package_metadata, package_metadata_verify, package_sources,
+    package_sources_with_dependency_interfaces, package_tree, prepare_executable_package,
+    prepare_package_for_execution, review_package_dir, write_package_artifact_atomic,
+};
+#[cfg(feature = "execution")]
+pub use review::{
+    ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
+    ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary, ReviewRisk,
+    format_review_human, format_review_json, format_review_map_human, format_review_map_json,
+    review_map_sources, review_sources,
+};
+#[cfg(feature = "execution")]
+pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
+#[cfg(feature = "execution")]
+pub use rust_lower::lowered_symbol_name;
+#[cfg(feature = "execution")]
+pub use rust_lower::{
+    GeneratedRustPackage, LowerCoverageReport, LoweredRust, NativeRustDependency,
+    RemappedRustcDiagnostic, RustSourceMapEntry, lower_coverage_report, lower_program_to_rust,
+    lower_program_to_rust_with_map, lower_source_to_rust, lower_source_to_rust_package,
+    lower_source_to_rust_package_with_interfaces, lower_source_to_rust_with_map,
+    lower_sources_to_rust_package_with_interfaces, lower_sources_to_rust_package_with_options,
+    parse_runtime_diagnostics, parse_source_map_json, remap_rustc_diagnostic_json,
+    remap_rustc_diagnostic_json_lines, write_generated_rust_package,
+};
+pub use semantic::{
+    AnalysisResult, FrontendCompletion, FrontendStopReason, SemanticDatabase, SourceFileSnapshot,
+    SourceSnapshot, ValidatedProgram,
+};
+pub use symbols::{
+    Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
+    document_symbols, symbol_index,
+};
+#[cfg(feature = "execution")]
+pub use symbols::{SymbolInventoryEntry, symbol_inventory};

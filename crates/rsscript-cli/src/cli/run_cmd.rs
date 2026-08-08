@@ -3,10 +3,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 use std::time::Duration;
 
-use rsscript::{
-    CancellationToken, EvalError, EvalOutput, NativeValue, VmLimits, format_diagnostics_human,
-    format_diagnostics_json, parse_runtime_diagnostics, prepare_package_for_execution,
-    reg_vm_compile_package_input, write_generated_rust_package,
+use rsscript_compiler::{
+    format_diagnostics_human, format_diagnostics_json, parse_runtime_diagnostics,
+    prepare_package_for_execution, write_generated_rust_package,
+};
+use rsscript_sdk::{
+    CancellationToken, EvalError, EvalOutput, ExternalFunction, NativeValue, VmLimits,
+    reg_vm_compile_package_input, reg_vm_compile_source,
 };
 
 use super::{
@@ -237,8 +240,7 @@ fn run_source_via_vm(
     program_args: &[&str],
     limits: VmLimits,
 ) -> Result<EvalOutput, EvalError> {
-    rsscript::reg_vm_compile_source(path, source)?
-        .eval_main_with_limits(program_args.iter().copied(), limits)
+    reg_vm_compile_source(path, source)?.eval_main_with_limits(program_args.iter().copied(), limits)
 }
 
 fn run_package_via_vm(
@@ -252,7 +254,7 @@ fn run_package_via_vm(
     let executable = reg_vm_compile_package_input(&input)?;
     executable.eval_main_with_args_and_external_bindings_and_limits(
         program_args.iter().copied(),
-        std::iter::empty::<(String, rsscript::ExternalFunction)>(),
+        std::iter::empty::<(String, ExternalFunction)>(),
         limits,
     )
 }
@@ -465,7 +467,7 @@ fn cargo_artifact_executable(stdout: &[u8]) -> Result<PathBuf, String> {
 }
 
 fn print_run_dry_run(
-    package: &rsscript::GeneratedRustPackage,
+    package: &rsscript_compiler::GeneratedRustPackage,
     package_dir: Option<&Path>,
     release: bool,
     program_args: &[&str],

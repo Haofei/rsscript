@@ -4736,6 +4736,7 @@ fn record_jit_collection_metadata_helper_call() {
 }
 
 #[cfg(all(feature = "native-jit", test))]
+#[allow(dead_code)]
 fn reset_jit_collection_metadata_helper_calls() {
     JIT_COLLECTION_METADATA_HELPER_CALLS.with(|calls| {
         *calls.borrow_mut() = 0;
@@ -4743,6 +4744,7 @@ fn reset_jit_collection_metadata_helper_calls() {
 }
 
 #[cfg(all(feature = "native-jit", test))]
+#[allow(dead_code)]
 fn jit_collection_metadata_helper_calls() -> usize {
     JIT_COLLECTION_METADATA_HELPER_CALLS.with(|calls| *calls.borrow())
 }

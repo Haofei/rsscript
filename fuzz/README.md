@@ -95,7 +95,7 @@ Seed a corpus from the example scripts and fixtures for a faster start:
 for t in parse_check format_idempotent differential fail_closed; do
   mkdir -p corpus/$t
   cp ../examples/scripts/**/*.rss corpus/$t/ 2>/dev/null || true
-  cp ../crates/rsscript/tests/fixtures/pass/*.rss corpus/$t/ 2>/dev/null || true
+  cp ../crates/rsscript-compiler/tests/fixtures/pass/*.rss corpus/$t/ 2>/dev/null || true
 done
 ```
 

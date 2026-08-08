@@ -1,23 +1,70 @@
 [package]
-name = "rsscript-sdk"
+name = "rsscript-compiler"
 version = "0.1.0"
 edition = "2024"
-description = "Stable compiler, VM, and Provider embedding facade for RSScript"
+description = "RSScript frontend, semantic analysis, and provider-neutral lowering implementation"
 license = "MIT OR Apache-2.0"
 publish = false
 
-[features]
-default = []
-execution = ["rsscript_compiler_core/execution", "dep:rsscript-provider-api"]
+[lib]
+name = "rsscript_compiler"
+doctest = false
 
 [dependencies]
-rsscript_compiler_core = { package = "rsscript-compiler", path = "../rsscript", default-features = false, features = ["language-service"] }
+rsscript-abi-model = { path = "../rsscript-abi-model" }
+rsscript-diagnostics = { path = "../rsscript-diagnostics" }
+rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
+rsscript-lowering = { path = "../rsscript-lowering", optional = true }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
+rsscript-semantics = { path = "../rsscript-semantics" }
+rsscript-syntax = { path = "../rsscript-syntax" }
+rsscript-text = { path = "../rsscript-text" }
+rsscript-work-budget = { path = "../rsscript-work-budget" }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+sha2 = "0.10"
+sha3 = "0.10"
+regex = "1"
+semver = "1"
+toml = "0.8"
+toml_edit = "0.22"
+serde_yaml_ng = "0.10"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+flate2 = "1"
+fs2 = "0.4"
+rustix = { version = "1.1", features = ["fs"] }
+libc = "0.2"
+hex = "0.4"
+hmac = "0.12"
+percent-encoding = "2"
+rand = "0.8"
+uuid = { version = "1", features = ["v4"] }
+tempfile = "3"
+
+[features]
+# Frontend-only by default so `rss check`, formatting, and language tooling do
+# not compile the VM/runtime/provider closure. Hosts opt into execution.
+default = []
+execution = ["dep:rsscript-lowering", "dep:rsscript-provider-api"]
+language-service = []
+# Native (Cranelift) baseline JIT for the integer/control core. Off by default so
+# normal builds/tests don't pull in the codegen dependency; enable for the Rust
+# differential/benchmark harnesses and force-JIT CI.
+
+[build-dependencies]
+rsscript-build-support = { path = "../rsscript-build-support" }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+toml = "0.8"
 
 [dev-dependencies]
 jsonschema = { version = "0.49", default-features = false }
-rsscript-bytecode = { path = "../rsscript-bytecode" }
-serde_json = "1"
-tempfile = "3"
+reir = { path = "../reir" }
+rsscript-review-reir = { path = "../../integrations/rsscript-review-reir" }
+sha1 = "0.10"
+proptest = "1"
+rss-testgen = { path = "../rss-testgen" }
+rsscript-vm = { path = "../rsscript-vm", default-features = false }
