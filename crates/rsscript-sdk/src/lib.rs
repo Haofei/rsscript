@@ -6,7 +6,11 @@ pub use rsscript_compiler::*;
 #[cfg(feature = "execution")]
 pub use rsscript_vm::*;
 #[cfg(feature = "execution")]
+mod artifact_bundle;
+#[cfg(feature = "execution")]
 mod vm_adapter;
+#[cfg(feature = "execution")]
+pub use artifact_bundle::*;
 #[cfg(feature = "execution")]
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -58,13 +62,9 @@ impl Compiler {
     }
 
     #[cfg(feature = "execution")]
-    pub fn compile(&self, file: &str, source: &str) -> Result<CompiledPackage, CompileError> {
+    pub fn compile(&self, file: &str, source: &str) -> Result<BuiltArtifact, CompileError> {
         let executable = reg_vm_compile_source(file, source).map_err(CompileError::from)?;
-        Ok(CompiledPackage {
-            executable,
-            analysis: None,
-            snapshot_digest: None,
-        })
+        BuiltArtifact::from_executable(executable, source_analysis(file))
     }
 
     #[cfg(feature = "execution")]
@@ -73,7 +73,7 @@ impl Compiler {
         file: &str,
         source: &str,
         operation: &OperationContext,
-    ) -> Result<CompiledPackage, CompileError> {
+    ) -> Result<BuiltArtifact, CompileError> {
         let validated =
             validate_source_with_operation(file, source, operation).map_err(|diagnostics| {
                 match operation.check() {
@@ -84,11 +84,9 @@ impl Compiler {
         operation.check().map_err(CompileError::from)?;
         let executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
         operation.check().map_err(CompileError::from)?;
-        Ok(CompiledPackage {
-            executable,
-            analysis: None,
-            snapshot_digest: None,
-        })
+        let built = BuiltArtifact::from_executable(executable, source_analysis(file))?;
+        operation.check().map_err(CompileError::from)?;
+        Ok(built)
     }
 
     /// Compile a source snapshot against explicit host interfaces. The
@@ -99,15 +97,11 @@ impl Compiler {
         &self,
         sources: &[(&str, &str)],
         interfaces: &[(&str, &str)],
-    ) -> Result<CompiledPackage, CompileError> {
+    ) -> Result<BuiltArtifact, CompileError> {
         let validated = validate_sources_with_interfaces(sources, interfaces)
             .map_err(CompileError::Diagnostics)?;
         let executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
-        Ok(CompiledPackage {
-            executable,
-            analysis: None,
-            snapshot_digest: None,
-        })
+        BuiltArtifact::from_executable(executable, source_set_analysis(sources))
     }
 
     #[cfg(feature = "execution")]
@@ -116,7 +110,7 @@ impl Compiler {
         sources: &[(&str, &str)],
         interfaces: &[(&str, &str)],
         operation: &OperationContext,
-    ) -> Result<CompiledPackage, CompileError> {
+    ) -> Result<BuiltArtifact, CompileError> {
         let validated =
             validate_sources_with_interfaces_with_operation(sources, interfaces, operation)
                 .map_err(|diagnostics| match operation.check() {
@@ -126,15 +120,13 @@ impl Compiler {
         operation.check().map_err(CompileError::from)?;
         let executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
         operation.check().map_err(CompileError::from)?;
-        Ok(CompiledPackage {
-            executable,
-            analysis: None,
-            snapshot_digest: None,
-        })
+        let built = BuiltArtifact::from_executable(executable, source_set_analysis(sources))?;
+        operation.check().map_err(CompileError::from)?;
+        Ok(built)
     }
 
     #[cfg(feature = "execution")]
-    pub fn compile_package(&self, path: &Path) -> Result<CompiledPackage, CompileError> {
+    pub fn compile_package(&self, path: &Path) -> Result<BuiltArtifact, CompileError> {
         let snapshot = self.snapshot(path)?;
         self.build(&snapshot)
     }
@@ -144,7 +136,7 @@ impl Compiler {
         &self,
         path: &Path,
         operation: &OperationContext,
-    ) -> Result<CompiledPackage, CompileError> {
+    ) -> Result<BuiltArtifact, CompileError> {
         let snapshot = self.snapshot_with_operation(path, operation)?;
         self.build_with_operation(&snapshot, operation)
     }
@@ -178,7 +170,7 @@ impl Compiler {
 
     /// Build analysis and executable bytes from one immutable snapshot.
     #[cfg(feature = "execution")]
-    pub fn build(&self, snapshot: &WorkspaceSnapshot) -> Result<CompiledPackage, CompileError> {
+    pub fn build(&self, snapshot: &WorkspaceSnapshot) -> Result<BuiltArtifact, CompileError> {
         let mut analysis = snapshot.analysis().clone();
         if analysis.summary.errors != 0 {
             return Err(CompileError::Diagnostics(analysis.diagnostics.clone()));
@@ -193,11 +185,11 @@ impl Compiler {
                 .executable_hash
                 .clone(),
         );
-        Ok(CompiledPackage {
-            executable,
-            analysis: Some(analysis),
-            snapshot_digest: Some(snapshot.digest().to_string()),
-        })
+        let analysis = serde_json::to_value(&analysis).map_err(|error| CompileError::Package {
+            code: CompileErrorCode::PackageAnalysis,
+            message: error.to_string(),
+        })?;
+        BuiltArtifact::from_executable(executable, analysis)
     }
 
     #[cfg(feature = "execution")]
@@ -205,68 +197,133 @@ impl Compiler {
         &self,
         snapshot: &WorkspaceSnapshot,
         operation: &OperationContext,
-    ) -> Result<CompiledPackage, CompileError> {
+    ) -> Result<BuiltArtifact, CompileError> {
         operation.check().map_err(CompileError::from)?;
         let package = self.build(snapshot)?;
         operation.check().map_err(CompileError::from)?;
         Ok(package)
     }
+}
 
-    #[cfg(feature = "execution")]
-    pub fn load_verified(&self, bytecode: &[u8]) -> Result<CompiledPackage, CompileError> {
-        let executable = RegVmExecutable::from_bytecode(bytecode).map_err(CompileError::from)?;
-        Ok(CompiledPackage {
-            executable,
-            analysis: None,
-            snapshot_digest: None,
-        })
+#[cfg(feature = "execution")]
+#[derive(Debug)]
+pub struct BuiltArtifact {
+    bundle: ArtifactBundle,
+}
+
+#[cfg(feature = "execution")]
+impl BuiltArtifact {
+    fn from_executable(
+        executable: RegVmExecutable,
+        analysis: serde_json::Value,
+    ) -> Result<Self, CompileError> {
+        let artifact = executable.to_bytecode().map_err(CompileError::from)?;
+        let bundle = ArtifactBundle::new(artifact, analysis).map_err(CompileError::from)?;
+        Ok(Self { bundle })
     }
 
-    #[cfg(feature = "execution")]
-    pub fn load_verified_with_operation(
+    pub fn bundle(&self) -> &ArtifactBundle {
+        &self.bundle
+    }
+
+    pub fn into_bundle(self) -> ArtifactBundle {
+        self.bundle
+    }
+
+    pub fn bundle_bytes(&self) -> Result<Vec<u8>, CompileError> {
+        self.bundle.to_bytes().map_err(CompileError::from)
+    }
+
+    pub fn artifact_bytes(&self) -> &[u8] {
+        self.bundle.artifact_bytes()
+    }
+
+    pub fn analysis(&self) -> &serde_json::Value {
+        self.bundle.analysis()
+    }
+
+    pub fn snapshot_digest(&self) -> Option<&str> {
+        self.bundle.provenance().snapshot_digest.as_deref()
+    }
+
+    pub fn module_digest(&self) -> &str {
+        &self.bundle.provenance().module_digest
+    }
+
+    pub fn external_imports(&self) -> &[InterfaceRequirementV1] {
+        self.bundle.required_interfaces()
+    }
+}
+
+#[cfg(feature = "execution")]
+fn source_analysis(file: &str) -> serde_json::Value {
+    source_set_analysis(&[(file, "")])
+}
+
+#[cfg(feature = "execution")]
+fn source_set_analysis(sources: &[(&str, &str)]) -> serde_json::Value {
+    serde_json::json!({
+        "$schema": "rsscript.source_analysis.v1",
+        "sources": sources.iter().map(|(path, _)| *path).collect::<Vec<_>>(),
+    })
+}
+
+#[cfg(feature = "execution")]
+#[derive(Default)]
+pub struct ArtifactVerifier;
+
+#[cfg(feature = "execution")]
+impl ArtifactVerifier {
+    pub fn verify(&self, built: BuiltArtifact) -> Result<VerifiedArtifact, VerifyError> {
+        self.verify_bundle(built.into_bundle())
+    }
+
+    pub fn verify_bytes(&self, bytes: &[u8]) -> Result<VerifiedArtifact, VerifyError> {
+        let bundle = ArtifactBundle::from_bytes(bytes).map_err(VerifyError::Bundle)?;
+        self.verify_bundle(bundle)
+    }
+
+    pub fn verify_bundle(&self, bundle: ArtifactBundle) -> Result<VerifiedArtifact, VerifyError> {
+        let executable = RegVmExecutable::from_bytecode(bundle.artifact_bytes())
+            .map_err(VerifyError::Bytecode)?;
+        if executable.bytecode_artifact().header.executable_hash
+            != bundle.provenance().module_digest
+        {
+            return Err(VerifyError::DigestMismatch);
+        }
+        Ok(VerifiedArtifact { bundle, executable })
+    }
+
+    pub fn verify_bytes_with_operation(
         &self,
-        bytecode: &[u8],
+        bytes: &[u8],
         operation: &OperationContext,
-    ) -> Result<CompiledPackage, CompileError> {
-        operation.check().map_err(CompileError::from)?;
-        let executable = RegVmExecutable::from_bytecode_with_operation(bytecode, operation)
-            .map_err(|error| match operation.check() {
-                Ok(()) => CompileError::from(error),
-                Err(abort) => CompileError::from(abort),
-            })?;
-        operation.check().map_err(CompileError::from)?;
-        Ok(CompiledPackage {
-            executable,
-            analysis: None,
-            snapshot_digest: None,
-        })
+    ) -> Result<VerifiedArtifact, VerifyError> {
+        operation.check().map_err(VerifyError::Operation)?;
+        let bundle = ArtifactBundle::from_bytes(bytes).map_err(VerifyError::Bundle)?;
+        let executable =
+            RegVmExecutable::from_bytecode_with_operation(bundle.artifact_bytes(), operation)
+                .map_err(VerifyError::Bytecode)?;
+        operation.check().map_err(VerifyError::Operation)?;
+        Ok(VerifiedArtifact { bundle, executable })
     }
 }
 
 #[cfg(feature = "execution")]
 #[derive(Debug)]
-pub struct CompiledPackage {
+pub struct VerifiedArtifact {
+    bundle: ArtifactBundle,
     executable: RegVmExecutable,
-    analysis: Option<PackageAnalysis>,
-    snapshot_digest: Option<String>,
 }
 
 #[cfg(feature = "execution")]
-impl CompiledPackage {
-    pub fn bytecode(&self) -> Result<Vec<u8>, CompileError> {
-        self.executable.to_bytecode().map_err(CompileError::from)
-    }
-
-    pub fn analysis(&self) -> Option<&PackageAnalysis> {
-        self.analysis.as_ref()
-    }
-
-    pub fn snapshot_digest(&self) -> Option<&str> {
-        self.snapshot_digest.as_deref()
+impl VerifiedArtifact {
+    pub fn bundle(&self) -> &ArtifactBundle {
+        &self.bundle
     }
 
     pub fn module_digest(&self) -> &str {
-        &self.executable.bytecode_artifact().header.executable_hash
+        &self.bundle.provenance().module_digest
     }
 
     pub fn external_imports(&self) -> &[ExternalImport] {
@@ -300,17 +357,17 @@ impl ProviderRegistry {
 #[cfg(feature = "execution")]
 #[derive(Debug, Clone)]
 pub struct RunLimits {
-    pub max_depth: usize,
-    pub step_budget: Option<u64>,
-    pub allocation_budget: Option<usize>,
-    pub live_memory_limit: Option<usize>,
-    pub cancellation: Option<CancellationToken>,
-    pub deadline: Option<MonotonicDeadline>,
-    pub output_budget: Option<usize>,
-    pub intrinsic_call_budget: Option<u64>,
-    pub provider_call_budget: Option<u64>,
-    pub resource_limit: Option<usize>,
-    pub allow_blocking_provider_calls: bool,
+    max_depth: usize,
+    step_budget: Option<u64>,
+    allocation_budget: Option<usize>,
+    live_memory_limit: Option<usize>,
+    cancellation: Option<CancellationToken>,
+    deadline: Option<MonotonicDeadline>,
+    output_budget: Option<usize>,
+    intrinsic_call_budget: Option<u64>,
+    provider_call_budget: Option<u64>,
+    resource_limit: Option<usize>,
+    allow_blocking_provider_calls: bool,
 }
 
 #[cfg(feature = "execution")]
@@ -326,6 +383,65 @@ impl RunLimits {
     /// responsible for process isolation and provider authority.
     pub fn unbounded_for_trusted_host() -> Self {
         VmLimits::unbounded_for_trusted_host().into()
+    }
+
+    pub fn with_max_depth(mut self, maximum: usize) -> Self {
+        self.max_depth = maximum;
+        self
+    }
+
+    pub fn with_step_budget(mut self, budget: u64) -> Self {
+        self.step_budget = Some(budget);
+        self
+    }
+
+    pub fn with_allocation_budget(mut self, budget: usize) -> Self {
+        self.allocation_budget = Some(budget);
+        self
+    }
+
+    pub fn with_live_memory_limit(mut self, limit: usize) -> Self {
+        self.live_memory_limit = Some(limit);
+        self
+    }
+
+    pub fn with_cancellation(mut self, cancellation: CancellationToken) -> Self {
+        self.cancellation = Some(cancellation);
+        self
+    }
+
+    pub fn with_deadline(mut self, deadline: MonotonicDeadline) -> Self {
+        self.deadline = Some(deadline);
+        self
+    }
+
+    pub fn with_output_budget(mut self, budget: usize) -> Self {
+        self.output_budget = Some(budget);
+        self
+    }
+
+    pub fn with_intrinsic_call_budget(mut self, budget: u64) -> Self {
+        self.intrinsic_call_budget = Some(budget);
+        self
+    }
+
+    pub fn with_provider_call_budget(mut self, budget: u64) -> Self {
+        self.provider_call_budget = Some(budget);
+        self
+    }
+
+    pub fn with_resource_limit(mut self, limit: usize) -> Self {
+        self.resource_limit = Some(limit);
+        self
+    }
+
+    pub fn allow_blocking_provider_calls(mut self, allow: bool) -> Self {
+        self.allow_blocking_provider_calls = allow;
+        self
+    }
+
+    pub fn blocking_provider_calls_allowed(&self) -> bool {
+        self.allow_blocking_provider_calls
     }
 }
 
@@ -377,62 +493,57 @@ impl From<RunLimits> for VmLimits {
 #[cfg(feature = "execution")]
 pub struct Runtime {
     providers: ProviderRegistry,
-    limits: RunLimits,
 }
 
 #[cfg(feature = "execution")]
 impl Runtime {
-    pub fn new(providers: ProviderRegistry, limits: RunLimits) -> Self {
-        Self { providers, limits }
+    pub fn new(providers: ProviderRegistry) -> Self {
+        Self { providers }
     }
 
-    /// Resolve every external import and bind the execution limits before any
-    /// instruction can run. `LinkedPackage` has no public constructor, so the
+    /// Resolve every external import before any instruction can run.
+    /// `LinkedArtifact` has no public constructor, so the
     /// stable SDK cannot bypass Provider preflight.
-    pub fn link<'package>(
+    pub fn link<'artifact>(
         &self,
-        package: &'package CompiledPackage,
-    ) -> Result<LinkedPackage<'package>, RuntimeError> {
-        for import in package.external_imports() {
+        artifact: &'artifact VerifiedArtifact,
+    ) -> Result<LinkedArtifact<'artifact>, LinkError> {
+        for import in artifact.external_imports() {
             if let Err(error) = self.providers.inner.resolve(import) {
-                return Err(RuntimeError {
-                    reason: TerminationReason::VerificationFailure,
-                    message: error.to_string(),
-                });
+                return Err(LinkError::Provider(error));
             }
         }
-        Ok(LinkedPackage {
-            package,
+        Ok(LinkedArtifact {
+            artifact,
             bindings: self.providers.inner.bindings().collect(),
-            limits: self.limits.clone().into(),
         })
     }
 }
 
 #[cfg(feature = "execution")]
-pub struct LinkedPackage<'package> {
-    package: &'package CompiledPackage,
+pub struct LinkedArtifact<'artifact> {
+    artifact: &'artifact VerifiedArtifact,
     bindings: Vec<(String, ExternalFunction)>,
-    limits: VmLimits,
 }
 
 #[cfg(feature = "execution")]
-impl LinkedPackage<'_> {
+impl LinkedArtifact<'_> {
     pub fn module_digest(&self) -> &str {
-        self.package.module_digest()
+        self.artifact.module_digest()
     }
 
     /// Execute and always return an audit report, including partial evidence
     /// for cancellation, budget exhaustion, and Provider failures.
-    pub fn execute(&self, args: impl IntoIterator<Item = impl Into<String>>) -> ExecutionReport {
+    pub fn execute(&self, request: ExecutionRequest) -> ExecutionReport {
         let started = Instant::now();
+        let limits: VmLimits = request.limits.into();
         let output = match self
-            .package
+            .artifact
             .executable
             .execute_main_with_args_and_external_bindings_and_limits(
-                args,
+                request.args,
                 self.bindings.iter().cloned(),
-                self.limits.clone(),
+                limits.clone(),
             ) {
             Ok(output) => output,
             Err(error) => {
@@ -441,11 +552,11 @@ impl LinkedPackage<'_> {
                     _ => Vec::new(),
                 };
                 return ExecutionReport::failed(
-                    self.package.module_digest(),
+                    self.artifact.module_digest(),
                     RuntimeError::from(error),
                     diagnostics,
                     started.elapsed(),
-                    self.limits.cancel.as_ref(),
+                    limits.cancel.as_ref(),
                 );
             }
         };
@@ -460,12 +571,12 @@ impl LinkedPackage<'_> {
         let telemetry = ExecutionTelemetry::from_traces(
             started.elapsed(),
             termination_reason,
-            self.limits.cancel.as_ref(),
+            limits.cancel.as_ref(),
             &output.provider_call_traces,
         );
         ExecutionReport {
             schema: EXECUTION_REPORT_SCHEMA,
-            artifact_digest: self.package.module_digest().to_string(),
+            artifact_digest: self.artifact.module_digest().to_string(),
             termination_reason,
             usage: output.usage,
             telemetry,
@@ -474,22 +585,14 @@ impl LinkedPackage<'_> {
             native_value: output.native_value,
             stdout: output.stdout,
             stderr: output.stderr,
-            provider_call_traces: output.provider_call_traces,
+            provider_call_traces: match request.trace_policy {
+                TracePolicy::None => Vec::new(),
+                TracePolicy::MetadataOnly | TracePolicy::RedactedDebug => {
+                    output.provider_call_traces
+                }
+            },
             diagnostics,
             failure,
-        }
-    }
-
-    /// Compatibility helper for callers that prefer ordinary `Result`
-    /// control flow. Use [`Self::execute`] when failure evidence is required.
-    pub fn run(
-        &self,
-        args: impl IntoIterator<Item = impl Into<String>>,
-    ) -> Result<ExecutionReport, RuntimeError> {
-        let report = self.execute(args);
-        match report.failure.clone() {
-            Some(error) => Err(error),
-            None => Ok(report),
         }
     }
 }
@@ -497,7 +600,52 @@ impl LinkedPackage<'_> {
 #[cfg(feature = "execution")]
 impl Default for Runtime {
     fn default() -> Self {
-        Self::new(ProviderRegistry::default(), RunLimits::default())
+        Self::new(ProviderRegistry::default())
+    }
+}
+
+#[cfg(feature = "execution")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TracePolicy {
+    #[default]
+    None,
+    MetadataOnly,
+    RedactedDebug,
+}
+
+#[cfg(feature = "execution")]
+#[derive(Debug, Clone)]
+pub struct ExecutionRequest {
+    args: Vec<String>,
+    limits: RunLimits,
+    trace_policy: TracePolicy,
+}
+
+#[cfg(feature = "execution")]
+impl ExecutionRequest {
+    pub fn new(args: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            args: args.into_iter().map(Into::into).collect(),
+            limits: RunLimits::bounded(),
+            trace_policy: TracePolicy::None,
+        }
+    }
+
+    pub fn limits(mut self, limits: RunLimits) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    pub fn trace(mut self, policy: TracePolicy) -> Self {
+        self.trace_policy = policy;
+        self
+    }
+}
+
+#[cfg(feature = "execution")]
+impl Default for ExecutionRequest {
+    fn default() -> Self {
+        Self::new(std::iter::empty::<String>())
     }
 }
 
@@ -648,7 +796,9 @@ pub enum CompileError {
 pub enum CompileErrorCode {
     Diagnostics,
     PackageSnapshot,
+    PackageAnalysis,
     Bytecode,
+    ArtifactBundle,
     Cancelled,
     DeadlineExceeded,
 }
@@ -669,9 +819,21 @@ impl CompileErrorCode {
         match self {
             Self::Diagnostics => "diagnostics",
             Self::PackageSnapshot => "package_snapshot",
+            Self::PackageAnalysis => "package_analysis",
             Self::Bytecode => "bytecode",
+            Self::ArtifactBundle => "artifact_bundle",
             Self::Cancelled => "cancelled",
             Self::DeadlineExceeded => "deadline_exceeded",
+        }
+    }
+}
+
+#[cfg(feature = "execution")]
+impl From<ArtifactBundleError> for CompileError {
+    fn from(error: ArtifactBundleError) -> Self {
+        Self::Bytecode {
+            code: CompileErrorCode::ArtifactBundle,
+            message: error.to_string(),
         }
     }
 }
@@ -734,6 +896,53 @@ impl fmt::Display for CompileError {
 }
 
 impl Error for CompileError {}
+
+#[cfg(feature = "execution")]
+#[derive(Debug)]
+pub enum VerifyError {
+    Bundle(ArtifactBundleError),
+    Bytecode(EvalError),
+    Operation(OperationAbort),
+    DigestMismatch,
+}
+
+#[cfg(feature = "execution")]
+impl fmt::Display for VerifyError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bundle(error) => write!(formatter, "bundle verification failed: {error}"),
+            Self::Bytecode(error) => write!(formatter, "bytecode verification failed: {error:?}"),
+            Self::Operation(OperationAbort::Cancelled) => {
+                formatter.write_str("verification cancelled")
+            }
+            Self::Operation(OperationAbort::DeadlineExceeded) => {
+                formatter.write_str("verification deadline exceeded")
+            }
+            Self::DigestMismatch => formatter.write_str("verified artifact digest mismatch"),
+        }
+    }
+}
+
+#[cfg(feature = "execution")]
+impl Error for VerifyError {}
+
+#[cfg(feature = "execution")]
+#[derive(Debug)]
+pub enum LinkError {
+    Provider(ProviderLoadError),
+}
+
+#[cfg(feature = "execution")]
+impl fmt::Display for LinkError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Provider(error) => write!(formatter, "provider link failed: {error}"),
+        }
+    }
+}
+
+#[cfg(feature = "execution")]
+impl Error for LinkError {}
 
 #[cfg(feature = "execution")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -862,6 +1071,10 @@ mod tests {
     use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
 
+    fn verified(built: BuiltArtifact) -> VerifiedArtifact {
+        ArtifactVerifier.verify(built).expect("verify artifact")
+    }
+
     #[test]
     fn package_build_uses_one_immutable_snapshot_and_binds_its_digest() {
         let directory = tempfile::tempdir().expect("workspace");
@@ -890,32 +1103,35 @@ mod tests {
 
         let first = compiler.build(&snapshot).expect("first build");
         let second = compiler.build(&snapshot).expect("repeat build");
-        assert_eq!(first.bytecode().unwrap(), second.bytecode().unwrap());
+        assert_eq!(first.artifact_bytes(), second.artifact_bytes());
         assert_eq!(first.snapshot_digest(), Some(snapshot.digest()));
-        let analysis = first.analysis().expect("package analysis");
-        assert_eq!(analysis.snapshot_digest, snapshot.digest());
-        assert_eq!(
-            analysis.module_digest.as_deref(),
-            Some(first.module_digest())
-        );
-        let artifact = rsscript_bytecode::BytecodeArtifact::from_bytes(&first.bytecode().unwrap())
+        let analysis = first.analysis();
+        assert_eq!(analysis["snapshot_digest"], snapshot.digest());
+        assert_eq!(analysis["module_digest"], first.module_digest());
+        let artifact = rsscript_bytecode::BytecodeArtifact::from_bytes(first.artifact_bytes())
             .expect("artifact envelope");
         assert_eq!(
             artifact.header.snapshot_digest.as_deref(),
             Some(snapshot.digest())
         );
-        assert_eq!(analysis.language_version, artifact.header.language_version);
-        assert_eq!(analysis.producer.version, artifact.header.compiler_version);
         assert_eq!(
-            analysis.interface_catalog_digest,
+            analysis["language_version"],
+            artifact.header.language_version
+        );
+        assert_eq!(
+            analysis["producer"]["version"],
+            artifact.header.compiler_version
+        );
+        assert_eq!(
+            analysis["interface_catalog_digest"],
             artifact.header.interface_catalog_digest
         );
+        let first = verified(first);
         let runtime = Runtime::default();
         let output = runtime
             .link(&first)
             .expect("link captured source")
-            .run(Vec::<String>::new())
-            .expect("run captured source");
+            .execute(ExecutionRequest::default());
         assert_eq!(output.value, "1");
     }
 
@@ -925,14 +1141,15 @@ mod tests {
         let package = compiler
             .compile("main.rss", "fn main() -> Unit { return Unit }")
             .expect("compile");
-        let bytecode = package.bytecode().expect("bytecode");
-        let loaded = compiler.load_verified(&bytecode).expect("load verified");
+        let bundle_bytes = package.bundle_bytes().expect("bundle");
+        let loaded = ArtifactVerifier
+            .verify_bytes(&bundle_bytes)
+            .expect("load verified");
         let runtime = Runtime::default();
         let report = runtime
             .link(&loaded)
             .expect("link")
-            .run(Vec::<String>::new())
-            .expect("run");
+            .execute(ExecutionRequest::default());
         assert_eq!(report.value, "Unit");
         assert_eq!(report.termination_reason, TerminationReason::Completed);
         assert_eq!(report.artifact_digest, loaded.module_digest());
@@ -946,8 +1163,8 @@ mod tests {
             CompileErrorCode::PackageSnapshot.as_str(),
             "package_snapshot"
         );
-        assert!(!RunLimits::bounded().allow_blocking_provider_calls);
-        assert!(RunLimits::unbounded_for_trusted_host().allow_blocking_provider_calls);
+        assert!(!RunLimits::bounded().blocking_provider_calls_allowed());
+        assert!(RunLimits::unbounded_for_trusted_host().blocking_provider_calls_allowed());
     }
 
     #[test]
@@ -968,11 +1185,11 @@ fn main() -> Result<Unit, String> {
     return Ok(Unit)
 }
 "#;
-        let package = Compiler.compile("tasks.rss", source).expect("compile");
+        let package = verified(Compiler.compile("tasks.rss", source).expect("compile"));
         let report = Runtime::default()
             .link(&package)
             .expect("link")
-            .execute(Vec::<String>::new());
+            .execute(ExecutionRequest::default());
         assert_eq!(report.termination_reason, TerminationReason::Completed);
         assert_eq!(report.usage.tasks_created, 3);
         assert_eq!(report.usage.tasks_completed, 3);
@@ -983,25 +1200,21 @@ fn main() -> Result<Unit, String> {
 
     #[test]
     fn cancelled_execution_reports_request_to_observation_latency() {
-        let package = Compiler
-            .compile(
-                "cancel.rss",
-                "fn main() -> Unit { while true {} return Unit }",
-            )
-            .expect("compile");
+        let package = verified(
+            Compiler
+                .compile(
+                    "cancel.rss",
+                    "fn main() -> Unit { while true {} return Unit }",
+                )
+                .expect("compile"),
+        );
         let cancellation = CancellationToken::new();
         cancellation.cancel();
-        let runtime = Runtime::new(
-            ProviderRegistry::default(),
-            RunLimits {
-                cancellation: Some(cancellation),
-                ..RunLimits::bounded()
-            },
+        let runtime = Runtime::new(ProviderRegistry::default());
+        let report = runtime.link(&package).expect("link").execute(
+            ExecutionRequest::default()
+                .limits(RunLimits::bounded().with_cancellation(cancellation)),
         );
-        let report = runtime
-            .link(&package)
-            .expect("link")
-            .execute(Vec::<String>::new());
         assert_eq!(report.termination_reason, TerminationReason::Cancelled);
         assert!(report.telemetry.cancellation_latency_ns.is_some());
         assert!(report.telemetry.execution_duration_ns > 0);
@@ -1042,10 +1255,13 @@ fn main() -> Result<Unit, String> {
             )),
             ..OperationContext::default()
         };
-        let error = compiler
-            .load_verified_with_operation(&package.bytecode().unwrap(), &expired)
+        let error = ArtifactVerifier
+            .verify_bytes_with_operation(&package.bundle_bytes().unwrap(), &expired)
             .expect_err("expired verifier deadline");
-        assert_eq!(error.code(), CompileErrorCode::DeadlineExceeded);
+        assert!(matches!(
+            error,
+            VerifyError::Operation(OperationAbort::DeadlineExceeded)
+        ));
         assert!(error.to_string().contains("deadline exceeded"));
     }
 
@@ -1065,10 +1281,7 @@ fn main() -> Result<Unit, String> {
             )
             .expect("compile external call");
         assert_eq!(package.external_imports().len(), 1);
-        assert_eq!(
-            package.external_imports()[0].symbol.as_str(),
-            "host.log.emit"
-        );
+        assert_eq!(package.external_imports()[0].symbol, "host.log.emit");
 
         let incompatible = FunctionSignature {
             parameters: vec![ParameterSignature {
@@ -1117,13 +1330,13 @@ fn main() -> Result<Unit, String> {
             )
             .expect("provider descriptor and implementation should match");
 
-        let runtime = Runtime::new(providers, RunLimits::bounded());
+        let package = verified(package);
+        let runtime = Runtime::new(providers);
         let error = match runtime.link(&package) {
             Ok(_) => panic!("import signature must fail before execution"),
             Err(error) => error,
         };
-        assert_eq!(error.reason, TerminationReason::VerificationFailure);
-        assert!(error.message.contains("ImportSignatureMismatch"));
+        assert!(error.to_string().contains("ImportSignatureMismatch"));
         assert!(!called.load(Ordering::SeqCst));
     }
 
@@ -1183,16 +1396,15 @@ fn main() -> Result<Unit, String> {
                 )]),
             )
             .expect("register provider");
-        let limits = RunLimits {
-            provider_call_budget: Some(1),
-            ..RunLimits::default()
-        };
+        let limits = RunLimits::default().with_provider_call_budget(1);
 
-        let runtime = Runtime::new(providers, limits);
-        let report = runtime
-            .link(&package)
-            .expect("link providers")
-            .execute(Vec::<String>::new());
+        let package = verified(package);
+        let runtime = Runtime::new(providers);
+        let report = runtime.link(&package).expect("link providers").execute(
+            ExecutionRequest::default()
+                .limits(limits)
+                .trace(TracePolicy::MetadataOnly),
+        );
         assert_eq!(
             report.termination_reason,
             TerminationReason::ProviderBudgetExceeded
@@ -1225,11 +1437,11 @@ fn main() -> Result<Unit, String> {
                 )]),
             )
             .expect("register failing provider");
-        let runtime = Runtime::new(failing_providers, RunLimits::bounded());
+        let runtime = Runtime::new(failing_providers);
         let report = runtime
             .link(&package)
             .expect("link failing provider")
-            .execute(Vec::<String>::new());
+            .execute(ExecutionRequest::default().trace(TracePolicy::MetadataOnly));
         assert_eq!(report.termination_reason, TerminationReason::ProviderError);
         assert_eq!(report.provider_call_traces.len(), 1);
         assert_eq!(
@@ -1307,12 +1519,12 @@ fn main() -> Result<Unit, String> {
             )
             .expect("register provider");
 
-        let runtime = Runtime::new(providers, RunLimits::bounded());
+        let package = verified(package);
+        let runtime = Runtime::new(providers);
         let report = runtime
             .link(&package)
             .expect("link provider")
-            .run(Vec::<String>::new())
-            .expect("run provider");
+            .execute(ExecutionRequest::default().trace(TracePolicy::MetadataOnly));
         assert_eq!(report.provider_call_traces.len(), 1);
         let trace = &report.provider_call_traces[0];
         assert_eq!(trace.provider_id, "test.log");

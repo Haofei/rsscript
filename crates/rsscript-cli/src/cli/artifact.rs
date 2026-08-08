@@ -2,24 +2,20 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use rsscript_compiler::{
-    PackageAnalysis, analyze_package_dir, format_package_analysis_json, load_workspace_snapshot,
-};
+use rsscript_compiler::{PackageAnalysis, analyze_package_dir, format_package_analysis_json};
 use rsscript_sdk::{
-    BYTECODE_MAGIC, EvalError, RegVmExecutable, reg_vm_compile_package_input, reg_vm_compile_source,
+    ARTIFACT_BUNDLE_MAGIC, ArtifactBundle, ArtifactVerifier, BYTECODE_MAGIC, BuiltArtifact,
+    Compiler, RegVmExecutable,
 };
 use serde_json::json;
 
-use super::{is_package_directory, package_execution_lowering_input, read_cli_source};
+use super::{is_package_directory, read_cli_source};
 
 pub(crate) fn run_build(args: &[String]) -> ExitCode {
     let (input, output, analysis_output) = match parse_build_args(args) {
         Ok(parsed) => parsed,
         Err(error) => return usage_error(error),
     };
-    if analysis_output.is_some() && !is_package_directory(input) {
-        return usage_error("`--analysis-out` requires a package directory".to_string());
-    }
     let build = match build_input(input) {
         Ok(build) => build,
         Err(error) => {
@@ -27,7 +23,7 @@ pub(crate) fn run_build(args: &[String]) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let bytes = match build.executable.to_bytecode() {
+    let bytes = match build.bundle_bytes() {
         Ok(bytes) => bytes,
         Err(error) => {
             eprintln!("{error:?}");
@@ -46,7 +42,7 @@ pub(crate) fn run_build(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     }
     println!("{}", output.display());
-    if let Some(analysis) = build.analysis {
+    if analysis_output.is_some() {
         let analysis_output = analysis_output
             .map(PathBuf::from)
             .unwrap_or_else(|| default_analysis_path(&output));
@@ -56,7 +52,9 @@ pub(crate) fn run_build(args: &[String]) -> ExitCode {
             eprintln!("cannot create {}: {error}", parent.display());
             return ExitCode::from(2);
         }
-        if let Err(error) = fs::write(&analysis_output, format_package_analysis_json(&analysis)) {
+        let analysis = serde_json::to_string_pretty(build.analysis())
+            .expect("Artifact Bundle analysis must serialize");
+        if let Err(error) = fs::write(&analysis_output, format!("{analysis}\n")) {
             eprintln!("cannot write {}: {error}", analysis_output.display());
             return ExitCode::from(2);
         }
@@ -65,39 +63,43 @@ pub(crate) fn run_build(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-struct BuildProduct {
-    executable: RegVmExecutable,
-    analysis: Option<PackageAnalysis>,
+fn build_input(input: &str) -> Result<BuiltArtifact, String> {
+    let compiler = Compiler;
+    if is_package_directory(input) {
+        compiler
+            .compile_package(Path::new(input))
+            .map_err(|error| error.to_string())
+    } else {
+        let source = read_cli_source(Path::new(input))?;
+        compiler
+            .compile(input, &source)
+            .map_err(|error| error.to_string())
+    }
 }
 
-fn build_input(input: &str) -> Result<BuildProduct, EvalError> {
-    if !is_package_directory(input) {
-        return compile_input(input).map(|executable| BuildProduct {
-            executable,
-            analysis: None,
-        });
+pub(crate) fn run_verify(args: &[String]) -> ExitCode {
+    let [input] = args else {
+        return usage_error("usage: rss verify <artifact.rssbundle>".to_string());
+    };
+    let bytes = match fs::read(input) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("cannot read {input}: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    match ArtifactVerifier.verify_bytes(&bytes) {
+        Ok(verified) => {
+            println!("verified: {}", verified.bundle().digest());
+            println!("module: {}", verified.module_digest());
+            println!("interfaces: {}", verified.external_imports().len());
+            ExitCode::SUCCESS
+        }
+        Err(error) => {
+            eprintln!("verification failed: {error}");
+            ExitCode::from(1)
+        }
     }
-
-    let snapshot = load_workspace_snapshot(Path::new(input)).map_err(EvalError::Runtime)?;
-    if snapshot.analysis().summary.errors != 0 {
-        return Err(EvalError::Diagnostics(
-            snapshot.analysis().diagnostics.clone(),
-        ));
-    }
-    let mut executable = reg_vm_compile_package_input(snapshot.lowering_input())?;
-    executable.bind_snapshot_digest(snapshot.digest())?;
-    let mut analysis = snapshot.analysis().clone();
-    analysis.module_digest = Some(
-        executable
-            .bytecode_artifact()
-            .header
-            .executable_hash
-            .clone(),
-    );
-    Ok(BuildProduct {
-        executable,
-        analysis: Some(analysis),
-    })
 }
 
 pub(crate) fn run_inspect(args: &[String]) -> ExitCode {
@@ -170,6 +172,9 @@ fn inspect_bytecode(view: &str, json_output: bool, input: &str) -> ExitCode {
 }
 
 fn inspect_analysis(view: &str, json_output: bool, input: &str) -> ExitCode {
+    if view == "analysis" && Path::new(input).is_file() {
+        return inspect_bundle_analysis(input);
+    }
     if !is_package_directory(input) {
         return usage_error(format!("`rss inspect {view}` requires a package directory"));
     }
@@ -232,6 +237,28 @@ fn inspect_analysis(view: &str, json_output: bool, input: &str) -> ExitCode {
     }
 }
 
+fn inspect_bundle_analysis(input: &str) -> ExitCode {
+    let bytes = match fs::read(input) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("cannot read {input}: {error}");
+            return ExitCode::from(2);
+        }
+    };
+    let bundle = match ArtifactBundle::from_bytes(&bytes) {
+        Ok(bundle) => bundle,
+        Err(error) => {
+            eprintln!("cannot decode Artifact Bundle: {error}");
+            return ExitCode::from(1);
+        }
+    };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(bundle.analysis()).expect("bundle analysis serializes")
+    );
+    ExitCode::SUCCESS
+}
+
 fn resource_exports(
     analysis: &PackageAnalysis,
 ) -> impl Iterator<Item = &rsscript_compiler::PackageAnalysisExport> {
@@ -254,22 +281,17 @@ fn load_or_compile(input: &str) -> Result<RegVmExecutable, String> {
     let path = Path::new(input);
     if path.is_file() {
         let bytes = fs::read(path).map_err(|error| format!("cannot read {input}: {error}"))?;
+        if bytes.starts_with(ARTIFACT_BUNDLE_MAGIC) {
+            let bundle = ArtifactBundle::from_bytes(&bytes).map_err(|error| error.to_string())?;
+            return RegVmExecutable::from_bytecode(bundle.artifact_bytes())
+                .map_err(|error| format!("{error:?}"));
+        }
         if bytes.starts_with(BYTECODE_MAGIC) {
             return RegVmExecutable::from_bytecode(&bytes).map_err(|error| format!("{error:?}"));
         }
     }
-    compile_input(input).map_err(|error| format!("{error:?}"))
-}
-
-fn compile_input(input: &str) -> Result<RegVmExecutable, EvalError> {
-    if is_package_directory(input) {
-        let package =
-            package_execution_lowering_input(Path::new(input)).map_err(EvalError::Runtime)?;
-        reg_vm_compile_package_input(&package)
-    } else {
-        let source = read_cli_source(Path::new(input)).map_err(EvalError::Runtime)?;
-        reg_vm_compile_source(input, &source)
-    }
+    let built = build_input(input)?;
+    RegVmExecutable::from_bytecode(built.artifact_bytes()).map_err(|error| format!("{error:?}"))
 }
 
 fn parse_build_args(args: &[String]) -> Result<(&str, Option<&str>, Option<&str>), String> {
@@ -338,7 +360,7 @@ fn default_artifact_path(input: &str) -> PathBuf {
         .file_stem()
         .and_then(|name| name.to_str())
         .unwrap_or("package");
-    PathBuf::from("target").join(format!("{name}.rssbc"))
+    PathBuf::from("target").join(format!("{name}.rssbundle"))
 }
 
 fn default_analysis_path(artifact: &Path) -> PathBuf {
@@ -363,22 +385,26 @@ mod tests {
         let build = args(&[
             "demo.rss",
             "--out",
-            "demo.rssbc",
+            "demo.rssbundle",
             "--analysis-out",
             "demo.analysis.json",
         ]);
         assert_eq!(
             parse_build_args(&build).unwrap(),
-            ("demo.rss", Some("demo.rssbc"), Some("demo.analysis.json"))
+            (
+                "demo.rss",
+                Some("demo.rssbundle"),
+                Some("demo.analysis.json")
+            )
         );
-        let inspect = args(&["imports", "--json", "demo.rssbc"]);
+        let inspect = args(&["imports", "--json", "demo.rssbundle"]);
         assert_eq!(
             parse_inspect_args(&inspect).unwrap(),
-            ("imports", true, "demo.rssbc")
+            ("imports", true, "demo.rssbundle")
         );
         assert!(parse_build_args(&args(&["a.rss", "b.rss"])).is_err());
         assert_eq!(
-            default_analysis_path(Path::new("target/demo.rssbc")),
+            default_analysis_path(Path::new("target/demo.rssbundle")),
             PathBuf::from("target/demo.analysis.json")
         );
     }

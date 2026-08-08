@@ -45,9 +45,11 @@ pub fn run() -> ExitCode {
         #[cfg(feature = "execution")]
         "inspect" => artifact::run_inspect(&args[2..]),
         #[cfg(feature = "execution")]
+        "verify" => artifact::run_verify(&args[2..]),
+        #[cfg(feature = "execution")]
         "run" => run_cmd::run_input(&args[2..]),
         #[cfg(not(feature = "execution"))]
-        "build" | "inspect" | "run" => {
+        "build" | "inspect" | "run" | "verify" => {
             eprintln!("`rss {command}` requires the `execution` feature");
             ExitCode::from(2)
         }
@@ -430,7 +432,8 @@ pub(crate) fn is_package_directory(path: &str) -> bool {
     path.is_dir() && path.join("rsspkg.toml").exists()
 }
 const USAGE: &str = r#"usage:
-  rss build [--out <artifact.rssbc>] [--analysis-out <analysis.json>] <file-or-package-directory>
+  rss build [--out <artifact.rssbundle>] [--analysis-out <analysis.json>] <file-or-package-directory>
+  rss verify <artifact.rssbundle>
   rss check [--json] [--lint] [--core|--no-core] [--interface <file.rssi> ...] <file.rss>
   rss check [--json] <package-directory>
   rss check --explain <code>

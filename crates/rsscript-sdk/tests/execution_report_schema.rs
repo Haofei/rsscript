@@ -45,10 +45,13 @@ fn execution_report_schema_accepts_golden_reports_and_live_output() {
     let package = compiler
         .compile("main.rss", "fn main() -> Unit { return Unit }")
         .expect("compile live report fixture");
+    let package = rsscript_sdk::ArtifactVerifier
+        .verify(package)
+        .expect("verify live report fixture");
     let report = rsscript_sdk::Runtime::default()
         .link(&package)
         .expect("link live report fixture")
-        .execute(Vec::<String>::new());
+        .execute(rsscript_sdk::ExecutionRequest::default());
     let report = serde_json::to_value(report).expect("serialize live report");
     let errors = validator
         .iter_errors(&report)

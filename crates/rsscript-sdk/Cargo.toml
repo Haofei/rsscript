@@ -10,6 +10,7 @@ autotests = false
 [features]
 default = []
 execution = [
+    "dep:rsscript-abi-model",
     "rsscript_compiler/execution",
     "dep:rsscript-bytecode",
     "dep:rsscript-interface-catalog",
@@ -20,6 +21,7 @@ execution = [
 native-jit = ["execution", "rsscript-vm/native-jit"]
 
 [dependencies]
+rsscript-abi-model = { path = "../rsscript-abi-model", optional = true }
 rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compiler", default-features = false, features = ["language-service"] }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
@@ -28,6 +30,8 @@ rsscript-lowering = { path = "../rsscript-lowering", optional = true }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
 rsscript-vm = { path = "../rsscript-vm", optional = true, default-features = false }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 
 [build-dependencies]
 rsscript-build-support = { path = "../rsscript-build-support" }
@@ -41,7 +45,6 @@ rsscript-review-reir = { path = "../../integrations/rsscript-review-reir" }
 rss-testgen = { path = "../rss-testgen" }
 sha1 = "0.10"
 proptest = "1"
-serde_json = "1"
 tempfile = "3"
 toml = "0.8"
 

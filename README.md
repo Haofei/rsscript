@@ -72,7 +72,8 @@ with the validated call graph; its conclusions never change language validity.
 ```text
 rss check <file-or-package>
 rss fmt <file>
-rss build [--out <artifact.rssbc>] [--analysis-out <analysis.json>] <file-or-package>
+rss build [--out <artifact.rssbundle>] [--analysis-out <analysis.json>] <file-or-package>
+rss verify <artifact.rssbundle>
 rss run [--json] <file-or-package> [-- <args>...]
 rss run --aot <file-or-package> [-- <args>...]  # Experimental
 rss inspect <imports|bytecode|analysis|resources|async|call-graph> <input>
@@ -81,7 +82,9 @@ rss inspect <imports|bytecode|analysis|resources|async|call-graph> <input>
 Building a package captures one immutable workspace snapshot and emits both the
 verified bytecode container and a `rsscript.package_analysis.v1` sidecar. By
 default the sidecar is written beside the bytecode as `<name>.analysis.json`;
-`--analysis-out` selects an explicit path. Single-file builds emit bytecode only.
+Every build emits a versioned Artifact Bundle containing bytecode, neutral analysis,
+provenance, and exact interface requirements. `--analysis-out` optionally writes
+the embedded analysis as a separate JSON file.
 
 The default Cargo feature set builds the frontend-only `check`, `fix`, and
 `fmt` path without runtime dependencies. Build the CLI with `--features
@@ -94,7 +97,8 @@ limits, not a language authority model or a sandbox claim.
 Frontend tooling uses `rsscript-compiler` with its default features; that
 closure contains no runtime or provider. Rust hosts depend on `rsscript-sdk`
 and enable its `execution` feature to use the stable embedding surface: `Compiler`,
-`CompiledPackage`, `Runtime`, `LinkedPackage`, `ProviderRegistry`, `RunLimits`,
+`BuiltArtifact`, `VerifiedArtifact`, `Runtime`, `LinkedArtifact`,
+`ProviderRegistry`, `ExecutionRequest`, `RunLimits`,
 `Diagnostic`, and `ExecutionReport`. VM registers, JIT plans, generated Rust source maps, and
 review implementation types are not part of that embedding contract.
 

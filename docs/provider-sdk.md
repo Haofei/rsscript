@@ -23,7 +23,7 @@ Keep these three kinds of data separate:
 duplicate symbol, missing/extra implementation, or descriptor/implementation
 signature mismatch. `Runtime::link` resolves every bytecode import and rejects
 an unresolved symbol, ABI mismatch, or import signature mismatch. It returns an
-unforgeable `LinkedPackage` that owns the resolved call table and execution
+unforgeable `LinkedArtifact` that owns the resolved call table and execution
 limits; only that linked phase exposes `run` and `execute`. Provider code is not
 called until this preflight succeeds.
 
@@ -38,7 +38,8 @@ called until this preflight succeeds.
    asynchronous entries, containing exactly the declared symbols and the same
    semantic signatures.
 4. Register descriptor and implementations at the host composition root.
-5. Call `Runtime::link`, then run the resulting `LinkedPackage`.
+5. Call `Runtime::link`, then execute the resulting `LinkedArtifact` with an
+   `ExecutionRequest`.
 6. Run `rsscript_provider_conformance::assert_provider_conforms` in the
    Provider's test suite, then add Provider-specific tests for every advertised
    cancellation, cleanup, authority, budget, and error-mapping behavior.
@@ -110,7 +111,7 @@ This generic kit complements rather than replaces behavior tests. A Provider
 that advertises cooperative cancellation, rooted authority, byte limits, or
 resource cleanup must still demonstrate those semantics with its real call.
 
-- Changing providers leaves `CompiledPackage::bytecode()` byte-for-byte equal.
+- Changing providers leaves `BuiltArtifact::bundle_bytes()` byte-for-byte equal.
 - A changed effect, type, retention flag, result type, or async flag changes the
   signature hash and fails before execution.
 - Descriptor and implementation symbol sets are identical.

@@ -8,7 +8,9 @@ use rsscript_compiler::provider::{
     ExternalSymbol, NativeInterpreterFn, NativeValue, ProviderError, ProviderErrorCode,
     ProviderFunction,
 };
-use rsscript_compiler::{Compiler, ProviderRegistry, RunLimits, Runtime};
+use rsscript_compiler::{
+    ArtifactVerifier, Compiler, ExecutionRequest, ProviderRegistry, RunLimits, Runtime, TracePolicy,
+};
 use sha2::{Digest, Sha256};
 
 const SOURCE: &str = include_str!("../script/main.rss");
@@ -87,8 +89,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &[("main.rss", SOURCE)],
         &[("fs.rssi", FS_INTERFACE), ("log.rssi", LOG_INTERFACE)],
     )?;
-    let bytecode_before_providers = package.bytecode()?;
-    let artifact_hash = format!("{:x}", Sha256::digest(&bytecode_before_providers));
+    let bundle_before_providers = package.bundle_bytes()?;
+    let artifact_hash = format!("{:x}", Sha256::digest(&bundle_before_providers));
+    let verified = ArtifactVerifier.verify(package)?;
 
     let memory_files = Arc::new(Mutex::new(BTreeMap::from([(
         "input.csv".to_string(),
@@ -96,23 +99,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )])));
     let memory_log = Arc::new(Mutex::new(Vec::<String>::new()));
     let captured_log = Arc::clone(&memory_log);
-    let memory_runtime = Runtime::new(
-        registry(
-            memory_fs(Arc::clone(&memory_files)),
-            rsscript_provider_log::functions(move |message| {
-                captured_log
-                    .lock()
-                    .map_err(|_| ProviderError::internal("memory log lock poisoned"))?
-                    .push(message.to_string());
-                Ok(())
-            }),
-        ),
-        RunLimits {
-            allow_blocking_provider_calls: true,
-            ..RunLimits::bounded()
-        },
+    let memory_runtime = Runtime::new(registry(
+        memory_fs(Arc::clone(&memory_files)),
+        rsscript_provider_log::functions(move |message| {
+            captured_log
+                .lock()
+                .map_err(|_| ProviderError::internal("memory log lock poisoned"))?
+                .push(message.to_string());
+            Ok(())
+        }),
+    ));
+    let memory_execution = memory_runtime.link(&verified)?.execute(
+        ExecutionRequest::default()
+            .limits(RunLimits::bounded().allow_blocking_provider_calls(true))
+            .trace(TracePolicy::MetadataOnly),
     );
-    memory_runtime.link(&package)?.run(Vec::<String>::new())?;
+    if let Some(error) = memory_execution.failure {
+        return Err(error.to_string().into());
+    }
 
     let memory_report = memory_files
         .lock()
@@ -125,24 +129,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&demo_dir)?;
     fs::write(demo_dir.join("input.csv"), "name,total\nbob,7\n")?;
     let disk_provider = rsscript_provider_fs::RootedFsProvider::new(&demo_dir)?;
-    let production_runtime = Runtime::new(
-        registry(
-            disk_provider.functions(),
-            rsscript_provider_log::stderr_functions(),
-        ),
-        RunLimits {
-            allow_blocking_provider_calls: true,
-            ..RunLimits::bounded()
-        },
+    let production_runtime = Runtime::new(registry(
+        disk_provider.functions(),
+        rsscript_provider_log::stderr_functions(),
+    ));
+    let production_report = production_runtime.link(&verified)?.execute(
+        ExecutionRequest::default()
+            .limits(RunLimits::bounded().allow_blocking_provider_calls(true)),
     );
-    let production_result = production_runtime.link(&package)?.run(Vec::<String>::new());
-    production_result?;
+    if let Some(error) = production_report.failure {
+        return Err(error.to_string().into());
+    }
     let disk_report = fs::read_to_string(demo_dir.join("report.txt"))?;
     fs::remove_dir_all(&demo_dir)?;
 
-    assert_eq!(package.bytecode()?, bytecode_before_providers);
+    assert_eq!(verified.bundle().to_bytes()?, bundle_before_providers);
     println!("artifact sha256: {artifact_hash}");
-    println!("imports: {}", package.external_imports().len());
+    println!("imports: {}", verified.external_imports().len());
     println!("memory provider report:\n{memory_report}");
     println!("filesystem provider report:\n{disk_report}");
     Ok(())

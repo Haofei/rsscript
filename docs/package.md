@@ -16,7 +16,8 @@ executable `module_digest` when built, diagnostics, exports, semantic summaries,
 and external symbols. It does not contain permission grants. Package
 build-selection features remain package metadata and are not language features.
 
-`rss build --analysis-out <analysis.json> <package-directory>` writes the neutral
+`rss build --analysis-out <analysis.json> <package-directory>` writes an Artifact
+Bundle and optionally extracts the neutral
 analysis artifact, and `rss inspect analysis --json <package-directory>` prints
 it. Optional review is derived by the separate REIR integration rather than by
 the product CLI.

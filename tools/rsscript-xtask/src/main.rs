@@ -12,7 +12,10 @@ use rsscript_sdk::provider::{
     ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, RUNTIME_ABI_VERSION,
     ResourceCleanupContract,
 };
-use rsscript_sdk::{CancellationToken, Compiler, ProviderRegistry, RunLimits, Runtime};
+use rsscript_sdk::{
+    ArtifactVerifier, CancellationToken, Compiler, ExecutionRequest, ProviderRegistry, RunLimits,
+    Runtime,
+};
 use serde::{Deserialize, Serialize};
 
 const METRICS_SCHEMA: &str = "rsscript.core_metrics.v1";
@@ -165,6 +168,7 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
         &[("provider-metrics.rss", PROVIDER_WORKLOAD)],
         &[("provider-metrics.rssi", PROVIDER_INTERFACE)],
     )?;
+    let provider_package = ArtifactVerifier.verify(provider_package)?;
     let provider_runtime = metrics_provider_runtime()?;
 
     // Warm each path before collecting distributions so the report measures
@@ -172,14 +176,14 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
     for _ in 0..3 {
         let _ = compiler.check("core-metrics.rss", WORKLOAD);
         let package = compiler.compile("core-metrics.rss", WORKLOAD)?;
-        let bytes = package.bytecode()?;
-        let loaded = compiler.load_verified(&bytes)?;
+        let bytes = package.bundle_bytes()?;
+        let loaded = ArtifactVerifier.verify_bytes(&bytes)?;
         Runtime::default()
             .link(&loaded)?
-            .run(Vec::<String>::new())?;
+            .execute(ExecutionRequest::default());
         provider_runtime
             .link(&provider_package)?
-            .run(Vec::<String>::new())?;
+            .execute(ExecutionRequest::default());
     }
 
     let mut check = Vec::with_capacity(arguments.iterations);
@@ -197,7 +201,8 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
     let mut provider_total_duration_ns = 0;
     let mut provider_max_duration_ns = 0;
 
-    let cancellation_package = compiler.compile("cancel.rss", CANCELLATION_WORKLOAD)?;
+    let cancellation_package =
+        ArtifactVerifier.verify(compiler.compile("cancel.rss", CANCELLATION_WORKLOAD)?)?;
     for _ in 0..arguments.iterations {
         check.push(measure(|| {
             let diagnostics = compiler.check("core-metrics.rss", WORKLOAD);
@@ -211,23 +216,29 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
         let package = compiler.compile("core-metrics.rss", WORKLOAD)?;
         compile.push(elapsed_ms(started));
 
-        let bytes = package.bytecode()?;
+        let bytes = package.bundle_bytes()?;
         artifact_bytes = bytes.len();
         let started = Instant::now();
-        let loaded = compiler.load_verified(&bytes)?;
+        let loaded = ArtifactVerifier.verify_bytes(&bytes)?;
         verify.push(elapsed_ms(started));
 
         let runtime = Runtime::default();
         let linked = runtime.link(&loaded)?;
         let started = Instant::now();
-        let report = linked.run(Vec::<String>::new())?;
+        let report = linked.execute(ExecutionRequest::default());
+        if let Some(error) = &report.failure {
+            return Err(error.to_string().into());
+        }
         execute.push(elapsed_ms(started));
         execution_steps = report.usage.steps_consumed;
         execution_allocated_bytes = report.usage.allocation_bytes_consumed;
 
         let linked = provider_runtime.link(&provider_package)?;
         let started = Instant::now();
-        let report = linked.run(Vec::<String>::new())?;
+        let report = linked.execute(ExecutionRequest::default());
+        if let Some(error) = &report.failure {
+            return Err(error.to_string().into());
+        }
         provider_execute.push(elapsed_ms(started));
         let summary = report
             .telemetry
@@ -242,16 +253,13 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
 
         let cancellation = CancellationToken::new();
         cancellation.cancel();
-        let runtime = Runtime::new(
-            ProviderRegistry::default(),
-            RunLimits {
-                cancellation: Some(cancellation),
-                ..RunLimits::unbounded_for_trusted_host()
-            },
-        );
+        let runtime = Runtime::new(ProviderRegistry::default());
         let linked = runtime.link(&cancellation_package)?;
         let started = Instant::now();
-        let report = linked.execute(Vec::<String>::new());
+        let report = linked.execute(
+            ExecutionRequest::default()
+                .limits(RunLimits::unbounded_for_trusted_host().with_cancellation(cancellation)),
+        );
         cancel.push(elapsed_ms(started));
         if report.termination_reason.as_str() != "cancelled" {
             return Err(format!(
@@ -351,7 +359,7 @@ fn metrics_provider_runtime() -> Result<Runtime, Box<dyn Error>> {
             },
         )]),
     )?;
-    Ok(Runtime::new(providers, RunLimits::bounded()))
+    Ok(Runtime::new(providers))
 }
 
 fn measure(action: impl FnOnce()) -> f64 {

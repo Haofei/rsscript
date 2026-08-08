@@ -935,8 +935,12 @@ fn allocation_budget_is_not_mislabeled_as_live_memory() {
     assert!(storage.contains("visited: &mut HashSet<usize>"));
 
     let facade = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
-    assert!(facade.contains("pub allocation_budget: Option<usize>"));
-    assert!(facade.contains("pub live_memory_limit: Option<usize>"));
+    assert!(facade.contains("allocation_budget: Option<usize>"));
+    assert!(facade.contains("live_memory_limit: Option<usize>"));
+    assert!(facade.contains("pub fn with_allocation_budget"));
+    assert!(facade.contains("pub fn with_live_memory_limit"));
+    assert!(!facade.contains("pub allocation_budget: Option<usize>"));
+    assert!(!facade.contains("pub live_memory_limit: Option<usize>"));
     assert!(!facade.contains("pub memory_budget"));
 }
 
@@ -962,7 +966,8 @@ fn public_execution_defaults_are_bounded_without_compatibility_aliases() {
         );
     }
     assert!(sdk.contains("VmLimits::default().into()"));
-    assert!(sdk.contains("Self::new(ProviderRegistry::default(), RunLimits::default())"));
+    assert!(sdk.contains("Self::new(ProviderRegistry::default())"));
+    assert!(sdk.contains("limits: RunLimits::bounded()"));
     assert!(vm.contains("pub fn unbounded_for_trusted_host"));
 }
 
@@ -1132,10 +1137,18 @@ fn lsp_dependency_closure_selects_frontend_only() {
 #[test]
 fn embedding_facade_exposes_only_product_level_objects() {
     let root = workspace_root();
-    let source = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    let mut source = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    source.push_str(&read(
+        &root.join("crates/rsscript-sdk/src/artifact_bundle.rs"),
+    ));
     for object in [
         "pub struct Compiler",
-        "pub struct CompiledPackage",
+        "pub struct BuiltArtifact",
+        "pub struct VerifiedArtifact",
+        "pub struct LinkedArtifact",
+        "pub struct ArtifactBundle",
+        "pub struct ArtifactVerifier",
+        "pub struct ExecutionRequest",
         "pub struct Runtime",
         "pub struct ProviderRegistry",
         "pub struct RunLimits",
