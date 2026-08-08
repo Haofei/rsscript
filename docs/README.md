@@ -26,6 +26,7 @@ When documents disagree, use this order:
 | [releasing.md](releasing.md) | Multi-platform binaries, dry-run, provenance, and SDK distribution |
 | [package.md](package.md) | Implemented package artifacts, commands, review model, and trust boundary |
 | [architecture/ARCHITECTURE.md](architecture/ARCHITECTURE.md) | Module ownership and dependency rules |
+| [architecture/migration-baseline.md](architecture/migration-baseline.md) | Review convergence TODO, migration invariants, and mechanical exit criteria |
 | [development/DEVELOPMENT.md](development/DEVELOPMENT.md) | Local development and verification |
 | [development/DOCKER.md](development/DOCKER.md) | Containerized development |
 | [self-hosting.md](self-hosting.md) | Experimental self-hosting goal, current coverage, and validation contract |

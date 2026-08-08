@@ -32,6 +32,8 @@ language specification and tests remain authoritative for existing behavior.
 The checked migration baseline and package maturity inventory live in
 [`architecture/migration-baseline.md`](architecture/migration-baseline.md) and
 [`architecture/workspace-tiers.toml`](architecture/workspace-tiers.toml).
+The baseline's **Review convergence TODO** is the authoritative itemized
+checklist and defines the mechanical completion criteria for this migration.
 
 1. Preserve the checked diagnostics, Artifact, execution, cancellation, and
    Provider baselines while responsibilities move.
