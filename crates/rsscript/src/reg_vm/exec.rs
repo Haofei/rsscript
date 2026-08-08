@@ -9,17 +9,18 @@ fn accumulate_osr_work(current: u32, iteration_work: u32) -> u32 {
 
 impl RegVm {
     pub(super) fn usage(&self) -> crate::ExecutionUsage {
+        let resources = self.provider_resources.snapshot().unwrap_or_default();
         crate::ExecutionUsage {
             steps_consumed: self.steps,
             allocation_bytes_consumed: self.allocated_bytes,
             output_bytes: self.stdout.len().saturating_add(self.stderr.len()),
             intrinsic_calls: self.intrinsic_calls,
             provider_calls: self.provider_calls,
-            resources_created: self.provider_resources.created(),
-            resources_cleaned: self.provider_resources.cleaned(),
-            resource_cleanup_failures: self.provider_resources.cleanup_failures(),
-            resources_peak_live: self.provider_resources.peak_live(),
-            resources_live_at_return: self.provider_resources.live(),
+            resources_created: resources.created,
+            resources_cleaned: resources.cleaned,
+            resource_cleanup_failures: resources.cleanup_failures,
+            resources_peak_live: resources.peak_live,
+            resources_live_at_return: resources.live,
             tasks_created: self.tasks_created,
             tasks_completed: self.tasks_completed,
             tasks_cancelled: self.tasks_cancelled,
@@ -29,7 +30,10 @@ impl RegVm {
     }
 
     pub(super) fn cleanup_provider_resources(&mut self) -> Result<(), EvalError> {
-        let mut errors = self.provider_resources.cleanup_all();
+        let mut errors = self
+            .provider_resources
+            .cleanup_all()
+            .map_err(EvalError::Provider)?;
         if errors.is_empty() {
             Ok(())
         } else {
@@ -77,7 +81,7 @@ impl RegVm {
             provider_trace: std::sync::Arc::new(
                 crate::eval_types::ProviderTraceCollector::default(),
             ),
-            provider_resources: ProviderResourceTable::new(VmLimits::default().resource_limit),
+            provider_resources: ProviderResourceRegistry::new(VmLimits::default().resource_limit),
             #[cfg(feature = "native-jit")]
             native: None,
             noncapturing_closure_cache: Vec::new(),
@@ -107,7 +111,9 @@ impl RegVm {
 
     /// Apply resource limits to this VM before it runs, replacing the bounded
     pub(super) fn set_limits(&mut self, limits: VmLimits) {
-        self.provider_resources.set_limit(limits.resource_limit);
+        self.provider_resources
+            .set_limit(limits.resource_limit)
+            .expect("fresh Provider resource registry must not be poisoned");
         self.limits = limits;
     }
 
@@ -1795,8 +1801,21 @@ impl RegVm {
                             args,
                             mut_args,
                         } => {
-                            let result = self.call_external_symbol(key, args, mut_args, base)?;
-                            self.set_reg(base + *dst, result);
+                            let async_call =
+                                self.external_bindings.get(key).is_some_and(|function| {
+                                    function.call_mode() == ProviderCallMode::Async
+                                });
+                            if async_call {
+                                self.suspension = Some(Suspension {
+                                    wait: self
+                                        .start_async_external_symbol(key, args, mut_args, base)?,
+                                    resume_dst: base + *dst,
+                                });
+                            } else {
+                                let result =
+                                    self.call_external_symbol(key, args, mut_args, base)?;
+                                self.set_reg(base + *dst, result);
+                            }
                         }
                         RegInstr::CallClosure {
                             dst,

@@ -866,9 +866,15 @@ fn linked_provider_contracts_reach_the_invocation_path() {
     assert!(execution.contains("without registering a resource"));
 
     let vm_calls = read(&root.join("crates/rsscript/src/reg_vm/calls.rs"));
-    assert!(vm_calls.contains("blocking_allowed: self.limits.allow_blocking_provider_calls"));
+    assert!(vm_calls.contains("let blocking_allowed = self.limits.allow_blocking_provider_calls"));
     assert!(!vm_calls.contains("blocking_allowed: true"));
     assert!(vm_calls.contains("async_allowed: false"));
+    assert!(vm_calls.contains("AsyncProviderCallContext"));
+    assert!(vm_calls.contains("function.start_async"));
+
+    let scheduler = read(&root.join("crates/rsscript/src/reg_vm/scheduler.rs"));
+    assert!(scheduler.contains("poll_provider_futures"));
+    assert!(scheduler.contains("Wait::Provider"));
 }
 
 #[test]

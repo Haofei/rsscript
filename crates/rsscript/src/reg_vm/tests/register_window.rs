@@ -366,6 +366,84 @@ mod register_window_tests {
         assert_eq!(vm.reg(0), &VmValue::Int(7));
     }
 
+    #[test]
+    fn async_provider_future_suspends_and_resumes_through_scheduler() {
+        let symbol = crate::eval_types::ExternalSymbol::new("host.test.async_value").unwrap();
+        let signature = crate::eval_types::FunctionSignature {
+            parameters: Vec::new(),
+            result: "Int".into(),
+            asynchronous: true,
+        };
+        let descriptor = crate::eval_types::ProviderDescriptor {
+            provider_id: "test.async".into(),
+            provider_version: "1.0.0".into(),
+            supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            functions: vec![crate::eval_types::ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                entry: "async_value".into(),
+                call_mode: ProviderCallMode::Async,
+                blocking: crate::eval_types::BlockingBehavior::NonBlocking,
+                cancellation: crate::eval_types::CancellationBehavior::Cooperative,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup: crate::eval_types::ResourceCleanupContract::None,
+                error_mapping: crate::eval_types::ProviderErrorMapping::StructuredV1,
+            }],
+        };
+        let callable = crate::eval_types::AsyncInterpreterFn::new(|_, _| async {
+            let mut first_poll = true;
+            std::future::poll_fn(move |context| {
+                if first_poll {
+                    first_poll = false;
+                    context.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                } else {
+                    std::task::Poll::Ready(Ok(NativeValue::Int(42)))
+                }
+            })
+            .await
+        });
+        let mut registry = crate::eval_types::ExternalFunctionRegistry::new();
+        registry
+            .register_provider(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol,
+                    crate::eval_types::ProviderFunction {
+                        signature,
+                        callable,
+                    },
+                )]),
+            )
+            .unwrap();
+
+        let mut main = RegFunction::placeholder("main".into());
+        main.regs = 1;
+        main.code = vec![
+            RegInstr::CallExternal {
+                dst: 0,
+                key: "host.test.async_value".into(),
+                args: Vec::new(),
+                mut_args: Vec::new(),
+            },
+            RegInstr::Return { src: 0 },
+        ];
+        let main = Rc::new(main);
+        let unit = Rc::new(RegUnit {
+            functions: vec![Rc::clone(&main)],
+            function_ids: [("main".to_string(), 0)].into_iter().collect(),
+            resource_drop_functions: HashMap::new(),
+            types: HashMap::new(),
+            native_signatures: HashMap::new(),
+            closure_identity_observable: true,
+        });
+        let bindings = registry.into_bindings().collect();
+        let mut vm = RegVm::new(unit, Vec::new(), bindings);
+        assert_eq!(vm.run_program("main").unwrap(), VmValue::Int(42));
+        assert_eq!(vm.provider_calls, 1);
+    }
+
     #[cfg(feature = "native-jit")]
     fn native_test_function(
         name: &str,

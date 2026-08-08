@@ -34,7 +34,9 @@ called until this preflight succeeds.
    field truthfully; `MayBlock` work must not be described as non-blocking, and
    cancellation/cleanup promises are part of the provider contract.
 3. Return a `BTreeMap<ExternalSymbol, ProviderFunction<NativeInterpreterFn>>`
-   containing exactly the declared symbols and the same semantic signatures.
+   for synchronous entries or `ProviderFunction<AsyncInterpreterFn>` for
+   asynchronous entries, containing exactly the declared symbols and the same
+   semantic signatures.
 4. Register descriptor and implementations at the host composition root.
 5. Call `Runtime::link`, then run the resulting `LinkedPackage`.
 6. Run `rsscript_provider_conformance::assert_provider_conforms` in the
@@ -57,17 +59,23 @@ The descriptor fields are:
 | `resource_cleanup` | Structured ownership/cleanup mode on success, error, and cancellation |
 | `error_mapping` | Versioned structured host-to-RSScript error mapping |
 
-Provider callables return `ProviderError { code, message, retryable, details }`
-and may use `NativeInterpreterFn::new_contextual` to receive a
-`ProviderCallContext`. The context carries the monotonic deadline, cancellation
-flag, call id, and remaining byte/output budgets from the VM. Providers should
-check cancellation around potentially blocking work; the runtime checks it once
-before entering every callable.
+Provider callables return `ProviderError { code, message, retryable, details }`.
+Synchronous functions may use `NativeInterpreterFn::new_contextual` to receive
+a borrowed `ProviderCallContext`. Asynchronous functions use
+`AsyncInterpreterFn::new` and receive an owned `AsyncProviderCallContext` that
+is safe to retain across suspension. Both contexts carry the monotonic
+deadline, cancellation token, call id, remaining byte/output budgets, authority,
+trace sink, and VM-owned resource registry. Providers should check cancellation
+around potentially blocking or long-running work; the runtime checks it before
+entry and after cooperative async completion.
 
-The synchronous VM rejects `MayBlock` functions by default. A host that has
+The synchronous dispatcher rejects `MayBlock` functions by default. A host that has
 placed execution on an appropriate blocking lane must opt in with
-`RunLimits::allow_blocking_provider_calls = true`. Async Provider descriptors
-remain rejected by the synchronous dispatcher.
+`RunLimits::allow_blocking_provider_calls = true`. Async Provider futures are
+polled by the VM task scheduler and never execute `MayBlock` work on that lane;
+blocking work must be moved to a host executor before its result is awaited.
+Descriptor call mode, semantic async signature, and callable kind are checked
+during registration, before bytecode can execute.
 
 Providers that create retained host resources register a `ProviderResource`
 through the context and expose the returned generation-safe `ResourceHandle`.

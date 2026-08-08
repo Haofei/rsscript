@@ -44,8 +44,9 @@ use sha3::{
 
 use self::calls::PureClosurePlan;
 use crate::eval_types::{
-    EvalError, EvalExecutionReport, EvalOutput, ExternalFunction, NativeValue, ProviderCallContext,
-    ProviderResourceTable,
+    AsyncProviderCallContext, EvalError, EvalExecutionReport, EvalOutput, ExternalFunction,
+    NativeValue, ProviderCallContext, ProviderCallMode, ProviderError, ProviderFuture,
+    ProviderResourceRegistry,
 };
 #[cfg(test)]
 use crate::syntax::parse_source;
@@ -1719,6 +1720,16 @@ enum Wait {
         winner_dst: usize,
         value_dst: usize,
     },
+    /// An asynchronous Provider call. The future is polled by the cooperative
+    /// scheduler; it never blocks the VM thread. Mutation targets are absolute
+    /// registers in the parked task and are written only after a successful
+    /// completion envelope has been validated.
+    Provider {
+        future: ProviderFuture,
+        result: Option<Result<NativeValue, ProviderError>>,
+        key: String,
+        mutation_targets: Vec<usize>,
+    },
 }
 
 struct Suspension {
@@ -1927,7 +1938,7 @@ struct RegVm {
     /// Structured trace of calls crossing the Provider boundary.
     provider_trace: std::sync::Arc<crate::eval_types::ProviderTraceCollector>,
     /// VM-owned, generation-checked Provider resource slots.
-    provider_resources: ProviderResourceTable,
+    provider_resources: ProviderResourceRegistry,
     /// Native (Cranelift) JIT state, `Some` when the native tier is enabled. The
     /// native tier compiles the integer/control core to machine code and is tried
     /// before the tier-0 executor; anything it can't compile (or bails on) falls

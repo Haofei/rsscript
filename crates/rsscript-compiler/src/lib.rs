@@ -33,7 +33,7 @@ pub use rsscript_operation::{
 pub use rsscript_provider_api as provider;
 
 #[cfg(feature = "execution")]
-use provider::{NativeInterpreterFn, ProviderDescriptor, ProviderFunction, ProviderLoadError};
+use provider::{ProviderDescriptor, ProviderFunction, ProviderLoadError};
 #[cfg(feature = "execution")]
 use rsscript_compiler_core::{
     EvalError, ExecutionFailureKind, ExternalFunctionRegistry, NativeValue, PackageAnalysis,
@@ -296,10 +296,10 @@ impl ProviderRegistry {
         self.inner.set_authority(authority);
     }
 
-    pub fn register(
+    pub fn register<T: Into<provider::ProviderCallable>>(
         &mut self,
         descriptor: &ProviderDescriptor,
-        functions: BTreeMap<provider::ExternalSymbol, ProviderFunction<NativeInterpreterFn>>,
+        functions: BTreeMap<provider::ExternalSymbol, ProviderFunction<T>>,
     ) -> Result<(), ProviderLoadError> {
         self.inner.register_provider(descriptor, functions)
     }

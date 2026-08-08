@@ -1,4 +1,19 @@
 use super::*;
+use std::sync::Arc;
+use std::task::{Context, Poll, Wake, Waker};
+use std::time::Duration;
+
+struct SchedulerWake(std::thread::Thread);
+
+impl Wake for SchedulerWake {
+    fn wake(self: Arc<Self>) {
+        self.0.unpark();
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.unpark();
+    }
+}
 
 impl RegVm {
     /// Run `name` (the program entry, usually `main`) as the root task under the
@@ -112,7 +127,18 @@ impl RegVm {
         root: TaskId,
     ) -> Result<VmValue, EvalError> {
         loop {
+            if self.ready_queue.is_empty() {
+                self.satisfy_waiters()?;
+            }
             let Some(tid) = self.ready_queue.pop_front() else {
+                if self.has_pending_provider_future() {
+                    // Futures arrange an unpark through their waker. The short
+                    // timeout also lets cancellation/deadline state be observed
+                    // when a broken Provider fails to wake the scheduler.
+                    self.charge_work(0)?;
+                    std::thread::park_timeout(Duration::from_millis(1));
+                    continue;
+                }
                 return Err(EvalError::Runtime(
                     "reg VM async scheduler stalled: every task is blocked (deadlock).".to_string(),
                 ));
@@ -156,6 +182,7 @@ impl RegVm {
     /// further progress (a fixpoint), so a single send can cascade-wake a chain.
     pub(super) fn satisfy_waiters(&mut self) -> Result<(), EvalError> {
         loop {
+            self.poll_provider_futures();
             let ready: Vec<TaskId> = self
                 .tasks
                 .iter()
@@ -169,6 +196,7 @@ impl RegVm {
                     Some(Wait::Select { handles, .. }) => handles
                         .iter()
                         .any(|h| self.tasks.get(h).is_some_and(|s| s.done.is_some())),
+                    Some(Wait::Provider { result, .. }) => result.is_some(),
                     None => false,
                 })
                 .map(|(id, _)| *id)
@@ -180,6 +208,25 @@ impl RegVm {
                 self.resolve_wait(tid)?;
             }
         }
+    }
+
+    fn poll_provider_futures(&mut self) {
+        let waker = Waker::from(Arc::new(SchedulerWake(std::thread::current())));
+        let mut context = Context::from_waker(&waker);
+        for slot in self.tasks.values_mut() {
+            if let Some(Wait::Provider { future, result, .. }) = slot.wait.as_mut()
+                && result.is_none()
+                && let Poll::Ready(value) = future.as_mut().poll(&mut context)
+            {
+                *result = Some(value);
+            }
+        }
+    }
+
+    fn has_pending_provider_future(&self) -> bool {
+        self.tasks
+            .values()
+            .any(|slot| matches!(slot.wait, Some(Wait::Provider { result: None, .. })))
     }
 
     /// Cancel every losing `select` arm task once a winner is chosen. A resolved
@@ -256,6 +303,22 @@ impl RegVm {
                 self.cancel_select_losers(&handles, task);
                 self.write_saved_reg(tid, winner_dst, VmValue::Int(index as i64));
                 self.complete_wait_at(tid, value_dst, value);
+            }
+            Wait::Provider {
+                result,
+                key,
+                mutation_targets,
+                ..
+            } => {
+                let raw = result
+                    .expect("Provider future was ready")
+                    .map_err(EvalError::Provider)?;
+                let (value, mutated) =
+                    self.decode_external_result(&key, raw, mutation_targets.len())?;
+                for (register, mutated_value) in mutation_targets.into_iter().zip(mutated) {
+                    self.write_saved_reg(tid, register, mutated_value);
+                }
+                self.complete_wait(tid, value);
             }
         }
         Ok(())

@@ -315,8 +315,75 @@ impl RegVm {
             .map(|reg| native_value_from_vm_value(self.reg(base + *reg).clone()))
             .collect::<Result<Vec<_>, _>>()?;
         let cancellation = self.limits.cancel.clone();
-        let mut context = ProviderCallContext {
-            cancellation: cancellation.as_ref(),
+        let deadline = self.limits.deadline;
+        let remaining_byte_budget = self
+            .limits
+            .allocation_budget
+            .map(|limit| limit.saturating_sub(self.allocated_bytes));
+        let remaining_output_budget = self
+            .limits
+            .stdout_budget
+            .map(|limit| limit.saturating_sub(self.stdout.len()));
+        let call_id = rsscript_operation::OperationId(self.provider_calls);
+        let trace = std::sync::Arc::clone(&self.provider_trace);
+        let blocking_allowed = self.limits.allow_blocking_provider_calls;
+        let raw = self
+            .provider_resources
+            .with_table(|resources| {
+                let mut context = ProviderCallContext {
+                    cancellation: cancellation.as_ref(),
+                    deadline,
+                    remaining_byte_budget,
+                    remaining_output_budget,
+                    call_id,
+                    provider_id: String::new(),
+                    provider_version: String::new(),
+                    symbol: key.to_string(),
+                    authority: function.authority(),
+                    trace: Some(trace.as_ref()),
+                    resources: Some(resources),
+                    blocking_allowed,
+                    async_allowed: false,
+                };
+                function.call_with_context(&mut context, arg_values)
+            })
+            .map_err(EvalError::Provider)?;
+
+        let mutation_targets = mut_args
+            .iter()
+            .map(|position| base + args[*position])
+            .collect::<Vec<_>>();
+        let (result, mutated) = self.decode_external_result(key, raw, mutation_targets.len())?;
+        for (register, value) in mutation_targets.into_iter().zip(mutated) {
+            self.set_reg(register, value);
+        }
+        Ok(result)
+    }
+
+    pub(super) fn start_async_external_symbol(
+        &mut self,
+        key: &str,
+        args: &[Reg],
+        mut_args: &[usize],
+        base: usize,
+    ) -> Result<Wait, EvalError> {
+        self.charge_provider_call()?;
+        let Some(function) = self.external_bindings.get(key).cloned() else {
+            return Err(EvalError::Runtime(format!(
+                "reg VM native function `{key}` has no host binding."
+            )));
+        };
+        if function.call_mode() != ProviderCallMode::Async {
+            return Err(EvalError::Runtime(format!(
+                "provider function `{key}` is not linked as async."
+            )));
+        }
+        let arg_values = args
+            .iter()
+            .map(|reg| native_value_from_vm_value(self.reg(base + *reg).clone()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let context = AsyncProviderCallContext {
+            cancellation: self.limits.cancel.clone(),
             deadline: self.limits.deadline,
             remaining_byte_budget: self
                 .limits
@@ -330,18 +397,29 @@ impl RegVm {
             provider_id: String::new(),
             provider_version: String::new(),
             symbol: key.to_string(),
-            authority: function.authority(),
-            trace: Some(self.provider_trace.as_ref()),
-            resources: Some(&mut self.provider_resources),
-            blocking_allowed: self.limits.allow_blocking_provider_calls,
-            async_allowed: false,
+            authority: function.authority_arc(),
+            trace: Some(std::sync::Arc::clone(&self.provider_trace) as _),
+            resources: Some(self.provider_resources.clone()),
         };
-        let mut raw = function
-            .call_with_context(&mut context, arg_values)
-            .map_err(EvalError::Provider)?;
+        Ok(Wait::Provider {
+            future: function.start_async(context, arg_values),
+            result: None,
+            key: key.to_string(),
+            mutation_targets: mut_args
+                .iter()
+                .map(|position| base + args[*position])
+                .collect(),
+        })
+    }
 
+    pub(super) fn decode_external_result(
+        &mut self,
+        key: &str,
+        mut raw: NativeValue,
+        mutation_count: usize,
+    ) -> Result<(VmValue, Vec<VmValue>), EvalError> {
         // No `mut` params: the binding returns its result directly.
-        if mut_args.is_empty() {
+        if mutation_count == 0 {
             let source_bytes = native_value_storage_estimate(&raw)?;
             self.ensure_memory_available(source_bytes)?;
             compact_native_json_values(&mut raw);
@@ -351,7 +429,7 @@ impl RegVm {
             let bytes = source_bytes.max(retained_bytes);
             self.ensure_memory_available(bytes)?;
             self.account_bytes(bytes)?;
-            return Ok(value);
+            return Ok((value, Vec::new()));
         }
 
         // With `mut` params the shim returns an envelope `List[result, mutated...]`
@@ -362,11 +440,11 @@ impl RegVm {
                 "native binding `{key}` was expected to return a mutation envelope."
             )));
         };
-        if envelope.len() != mut_args.len() + 1 {
+        if envelope.len() != mutation_count + 1 {
             return Err(EvalError::Runtime(format!(
                 "native binding `{key}` returned {} envelope entries, expected {}.",
                 envelope.len(),
-                mut_args.len() + 1
+                mutation_count + 1
             )));
         }
         let mut mutated: Vec<NativeValue> = envelope.split_off(1);
@@ -397,11 +475,7 @@ impl RegVm {
         let bytes = source_bytes.max(retained_bytes);
         self.ensure_memory_available(bytes)?;
         self.account_bytes(bytes)?;
-        for (position, value) in mut_args.iter().zip(mutated) {
-            let reg = base + args[*position];
-            self.set_reg(reg, value);
-        }
-        Ok(result)
+        Ok((result, mutated))
     }
 
     pub(super) fn call_closure_from_regs(

@@ -3,7 +3,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
-use std::sync::Arc;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 pub use rsscript_abi_model::{
@@ -497,6 +499,134 @@ impl Drop for ProviderResourceTable {
     }
 }
 
+/// Cloneable runtime-owned resource registrar for Provider futures.
+///
+/// Async Provider calls may outlive the stack frame that started them, so they
+/// cannot borrow the VM's table through `ProviderCallContext`. The registry
+/// keeps the same generation-safe table behind a short critical section while
+/// preserving one owner for final cleanup and telemetry.
+#[derive(Clone)]
+pub struct ProviderResourceRegistry {
+    inner: Arc<Mutex<ProviderResourceTable>>,
+}
+
+impl ProviderResourceRegistry {
+    pub fn new(limit: Option<usize>) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(ProviderResourceTable::new(limit))),
+        }
+    }
+
+    pub fn set_limit(&self, limit: Option<usize>) -> Result<(), ProviderError> {
+        self.with_table(|table| {
+            table.set_limit(limit);
+            Ok(())
+        })
+    }
+
+    pub fn register(
+        &self,
+        resource: impl ProviderResource + 'static,
+    ) -> Result<ResourceHandle, ProviderError> {
+        self.with_table(|table| table.register(Box::new(resource)))
+    }
+
+    pub fn cleanup(&self, handle: ResourceHandle) -> Result<(), ProviderError> {
+        self.with_table(|table| table.cleanup(handle))
+    }
+
+    pub fn cleanup_all(&self) -> Result<Vec<ProviderError>, ProviderError> {
+        self.with_table(|table| Ok(table.cleanup_all()))
+    }
+
+    pub fn snapshot(&self) -> Result<ProviderResourceUsage, ProviderError> {
+        self.with_table(|table| {
+            Ok(ProviderResourceUsage {
+                live: table.live(),
+                peak_live: table.peak_live(),
+                created: table.created(),
+                cleaned: table.cleaned(),
+                cleanup_failures: table.cleanup_failures(),
+            })
+        })
+    }
+
+    pub fn with_table<T>(
+        &self,
+        action: impl FnOnce(&mut ProviderResourceTable) -> Result<T, ProviderError>,
+    ) -> Result<T, ProviderError> {
+        let mut table = self
+            .inner
+            .lock()
+            .map_err(|_| ProviderError::internal("provider resource table lock poisoned"))?;
+        action(&mut table)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct ProviderResourceUsage {
+    pub live: usize,
+    pub peak_live: usize,
+    pub created: u64,
+    pub cleaned: u64,
+    pub cleanup_failures: u64,
+}
+
+/// Owned context passed to an asynchronous Provider callable.
+#[derive(Clone)]
+pub struct AsyncProviderCallContext {
+    pub cancellation: Option<CancellationToken>,
+    pub deadline: Option<MonotonicDeadline>,
+    pub remaining_byte_budget: Option<usize>,
+    pub remaining_output_budget: Option<usize>,
+    pub call_id: OperationId,
+    pub provider_id: String,
+    pub provider_version: String,
+    pub symbol: String,
+    pub authority: Arc<ProviderAuthority>,
+    pub trace: Option<Arc<dyn ProviderTraceSink>>,
+    pub resources: Option<ProviderResourceRegistry>,
+}
+
+impl AsyncProviderCallContext {
+    pub fn check_cancelled(&self) -> Result<(), ProviderError> {
+        if self
+            .cancellation
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+        {
+            return Err(ProviderError::new(
+                ProviderErrorCode::Cancelled,
+                "provider call cancelled",
+            ));
+        }
+        if self.deadline.is_some_and(MonotonicDeadline::is_expired) {
+            return Err(ProviderError::new(
+                ProviderErrorCode::DeadlineExceeded,
+                "provider call deadline exceeded",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn register_resource(
+        &self,
+        resource: impl ProviderResource + 'static,
+    ) -> Result<ResourceHandle, ProviderError> {
+        self.resources
+            .as_ref()
+            .ok_or_else(|| ProviderError::internal("runtime resource table is unavailable"))?
+            .register(resource)
+    }
+
+    pub fn cleanup_resource(&self, handle: ResourceHandle) -> Result<(), ProviderError> {
+        self.resources
+            .as_ref()
+            .ok_or_else(|| ProviderError::internal("runtime resource table is unavailable"))?
+            .cleanup(handle)
+    }
+}
+
 pub type NativeHostFn = fn(Vec<NativeValue>) -> Result<NativeValue, ProviderError>;
 
 /// Cloneable provider callable used by the runtime registry.
@@ -553,6 +683,64 @@ impl NativeInterpreterFn {
 impl From<NativeHostFn> for NativeInterpreterFn {
     fn from(function: NativeHostFn) -> Self {
         Self::from_fn(function)
+    }
+}
+
+pub type ProviderFuture =
+    Pin<Box<dyn Future<Output = Result<NativeValue, ProviderError>> + Send + 'static>>;
+
+type AsyncContextualProviderFn =
+    dyn Fn(AsyncProviderCallContext, Vec<NativeValue>) -> ProviderFuture + Send + Sync;
+
+#[derive(Clone)]
+pub struct AsyncInterpreterFn {
+    inner: Arc<AsyncContextualProviderFn>,
+}
+
+impl AsyncInterpreterFn {
+    pub fn new<F, Fut>(function: F) -> Self
+    where
+        F: Fn(AsyncProviderCallContext, Vec<NativeValue>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<NativeValue, ProviderError>> + Send + 'static,
+    {
+        Self {
+            inner: Arc::new(move |context, args| Box::pin(function(context, args))),
+        }
+    }
+
+    pub fn call(
+        &self,
+        context: AsyncProviderCallContext,
+        args: Vec<NativeValue>,
+    ) -> ProviderFuture {
+        (self.inner)(context, args)
+    }
+}
+
+#[derive(Clone)]
+pub enum ProviderCallable {
+    Sync(NativeInterpreterFn),
+    Async(AsyncInterpreterFn),
+}
+
+impl ProviderCallable {
+    pub const fn call_mode(&self) -> ProviderCallMode {
+        match self {
+            Self::Sync(_) => ProviderCallMode::Sync,
+            Self::Async(_) => ProviderCallMode::Async,
+        }
+    }
+}
+
+impl From<NativeInterpreterFn> for ProviderCallable {
+    fn from(value: NativeInterpreterFn) -> Self {
+        Self::Sync(value)
+    }
+}
+
+impl From<AsyncInterpreterFn> for ProviderCallable {
+    fn from(value: AsyncInterpreterFn) -> Self {
+        Self::Async(value)
     }
 }
 

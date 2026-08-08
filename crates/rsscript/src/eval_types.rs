@@ -5,11 +5,13 @@ use std::time::Instant;
 
 pub use rsscript_abi_model::{ExternalImport, ExternalSymbol, FunctionSignature, SignatureHash};
 pub use rsscript_provider_api::{
-    BlockingBehavior, CancellationBehavior, NativeInterpreterFn, NativeValue, ProviderAuthority,
-    ProviderCallContext, ProviderCallMode, ProviderCallTrace, ProviderDescriptor, ProviderError,
-    ProviderErrorCode, ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor,
-    ProviderInvocationContract, ProviderLoadError, ProviderResource, ProviderResourceTable,
-    ProviderTraceSink, ResolvedProviderFunction, ResourceCleanupContract, ResourceHandle,
+    AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior, CancellationBehavior,
+    NativeInterpreterFn, NativeValue, ProviderAuthority, ProviderCallContext, ProviderCallMode,
+    ProviderCallTrace, ProviderCallable, ProviderDescriptor, ProviderError, ProviderErrorCode,
+    ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, ProviderFuture,
+    ProviderInvocationContract, ProviderLoadError, ProviderResource, ProviderResourceRegistry,
+    ProviderResourceTable, ProviderTraceSink, ResolvedProviderFunction, ResourceCleanupContract,
+    ResourceHandle,
 };
 
 #[derive(Default)]
@@ -39,7 +41,7 @@ impl ProviderTraceCollector {
 /// provider contract so invocation cannot silently discard descriptor metadata.
 #[derive(Clone)]
 pub struct ExternalFunction {
-    callable: NativeInterpreterFn,
+    callable: ProviderCallable,
     contract: Option<ProviderInvocationContract>,
     authority: Arc<ProviderAuthority>,
 }
@@ -70,12 +72,28 @@ impl ExternalFunction {
         NativeInterpreterFn::new_contextual(function).into()
     }
 
+    pub fn new_async<F, Fut>(function: F) -> Self
+    where
+        F: Fn(AsyncProviderCallContext, Vec<NativeValue>) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Result<NativeValue, ProviderError>> + Send + 'static,
+    {
+        AsyncInterpreterFn::new(function).into()
+    }
+
     pub fn contract(&self) -> Option<&ProviderInvocationContract> {
         self.contract.as_ref()
     }
 
     pub fn authority(&self) -> &ProviderAuthority {
         &self.authority
+    }
+
+    pub(crate) fn authority_arc(&self) -> Arc<ProviderAuthority> {
+        Arc::clone(&self.authority)
+    }
+
+    pub fn call_mode(&self) -> ProviderCallMode {
+        self.callable.call_mode()
     }
 
     pub fn call_with_context(
@@ -116,7 +134,12 @@ impl ExternalFunction {
                 .resources
                 .as_deref()
                 .map(ProviderResourceTable::created);
-            let result = self.callable.call_with_context(context, args);
+            let result = match &self.callable {
+                ProviderCallable::Sync(callable) => callable.call_with_context(context, args),
+                ProviderCallable::Async(_) => Err(ProviderError::unavailable(
+                    "async provider function requires the VM async dispatcher",
+                )),
+            };
             if self.contract().is_some_and(|contract| {
                 matches!(
                     contract.descriptor.cancellation,
@@ -166,8 +189,104 @@ impl ExternalFunction {
         result
     }
 
+    pub fn start_async(
+        &self,
+        mut context: AsyncProviderCallContext,
+        args: Vec<NativeValue>,
+    ) -> ProviderFuture {
+        let Some(contract) = self.contract.clone() else {
+            return Box::pin(async {
+                Err(ProviderError::unavailable(
+                    "async provider function requires a linked descriptor",
+                ))
+            });
+        };
+        context.provider_id.clone_from(&contract.provider_id);
+        context
+            .provider_version
+            .clone_from(&contract.provider_version);
+        context.symbol = contract.descriptor.symbol.as_str().to_string();
+        let ProviderCallable::Async(callable) = &self.callable else {
+            return Box::pin(async {
+                Err(ProviderError::unavailable(
+                    "sync provider function cannot enter the async dispatcher",
+                ))
+            });
+        };
+        let callable = callable.clone();
+        let request_bytes = rsscript_provider_api::estimated_payload_bytes(&args);
+        let trace = context.trace.clone();
+        let trace_context = context.clone();
+        let resources_before = context
+            .resources
+            .as_ref()
+            .and_then(|resources| resources.snapshot().ok())
+            .map(|usage| usage.created);
+        let started = Instant::now();
+        Box::pin(async move {
+            let result = async {
+                context.check_cancelled()?;
+                if contract.descriptor.call_mode != ProviderCallMode::Async {
+                    return Err(ProviderError::unavailable(
+                        "async callable has a synchronous Provider descriptor",
+                    ));
+                }
+                if contract.descriptor.blocking == BlockingBehavior::MayBlock {
+                    return Err(ProviderError::unavailable(
+                        "blocking work must not run inside an async Provider future",
+                    ));
+                }
+                let result = callable.call(context, args).await;
+                if matches!(
+                    contract.descriptor.cancellation,
+                    CancellationBehavior::Cooperative | CancellationBehavior::AbortSafe
+                ) {
+                    trace_context.check_cancelled()?;
+                }
+                if result.is_ok()
+                    && contract.descriptor.resource_cleanup
+                        == ResourceCleanupContract::RuntimeRegistered
+                    && resources_before
+                        == trace_context
+                            .resources
+                            .as_ref()
+                            .and_then(|resources| resources.snapshot().ok())
+                            .map(|usage| usage.created)
+                {
+                    return Err(ProviderError::internal(
+                        "runtime-registered provider call returned without registering a resource",
+                    ));
+                }
+                result
+            }
+            .await;
+            let response_bytes = match &result {
+                Ok(value) => value.estimated_payload_bytes(),
+                Err(error) => error.message.len().saturating_add(
+                    error
+                        .details
+                        .as_ref()
+                        .map_or(0, |details| details.to_string().len()),
+                ),
+            };
+            if let Some(trace) = trace {
+                trace.record(ProviderCallTrace {
+                    call_id: trace_context.call_id,
+                    provider_id: trace_context.provider_id.clone(),
+                    provider_version: trace_context.provider_version.clone(),
+                    symbol: trace_context.symbol.clone(),
+                    request_bytes,
+                    response_bytes,
+                    elapsed: started.elapsed(),
+                    result: result.as_ref().map(|_| ()).map_err(|error| error.code),
+                });
+            }
+            result
+        })
+    }
+
     fn from_resolved(
-        function: ResolvedProviderFunction<NativeInterpreterFn>,
+        function: ResolvedProviderFunction<ProviderCallable>,
         authority: Arc<ProviderAuthority>,
     ) -> Self {
         Self {
@@ -191,7 +310,17 @@ impl From<rsscript_provider_api::NativeHostFn> for ExternalFunction {
 impl From<NativeInterpreterFn> for ExternalFunction {
     fn from(callable: NativeInterpreterFn) -> Self {
         Self {
-            callable,
+            callable: callable.into(),
+            contract: None,
+            authority: Arc::new(ProviderAuthority::default()),
+        }
+    }
+}
+
+impl From<AsyncInterpreterFn> for ExternalFunction {
+    fn from(callable: AsyncInterpreterFn) -> Self {
+        Self {
+            callable: callable.into(),
             contract: None,
             authority: Arc::new(ProviderAuthority::default()),
         }
@@ -200,7 +329,14 @@ impl From<NativeInterpreterFn> for ExternalFunction {
 
 impl From<ExternalFunction> for NativeInterpreterFn {
     fn from(function: ExternalFunction) -> Self {
-        function.callable
+        match function.callable {
+            ProviderCallable::Sync(callable) => callable,
+            ProviderCallable::Async(_) => NativeInterpreterFn::new(|_| {
+                Err(ProviderError::unavailable(
+                    "async Provider callable cannot be converted to a sync callable",
+                ))
+            }),
+        }
     }
 }
 
@@ -208,7 +344,7 @@ impl From<ExternalFunction> for NativeInterpreterFn {
 /// Compilation and lowering only record the symbol name; provider selection is
 /// deliberately deferred until execution.
 pub struct ExternalFunctionRegistry {
-    registry: rsscript_provider_api::ProviderRegistry<NativeInterpreterFn>,
+    registry: rsscript_provider_api::ProviderRegistry<ProviderCallable>,
     authority: Arc<ProviderAuthority>,
 }
 
@@ -226,7 +362,7 @@ impl ExternalFunctionRegistry {
         self.authority = Arc::new(authority);
     }
 
-    pub fn register_provider<T: Into<NativeInterpreterFn>>(
+    pub fn register_provider<T: Into<ProviderCallable>>(
         &mut self,
         descriptor: &ProviderDescriptor,
         functions: BTreeMap<ExternalSymbol, ProviderFunction<T>>,
@@ -242,14 +378,21 @@ impl ExternalFunctionRegistry {
                     },
                 )
             })
-            .collect();
+            .collect::<BTreeMap<_, _>>();
+        for declared in &descriptor.functions {
+            if let Some(implementation) = functions.get(&declared.symbol)
+                && implementation.callable.call_mode() != declared.call_mode
+            {
+                return Err(ProviderLoadError::CallModeMismatch(declared.symbol.clone()));
+            }
+        }
         self.registry.register_provider(descriptor, functions)
     }
 
     pub fn resolve(
         &self,
         import: &ExternalImport,
-    ) -> Result<&ResolvedProviderFunction<NativeInterpreterFn>, ProviderLoadError> {
+    ) -> Result<&ResolvedProviderFunction<ProviderCallable>, ProviderLoadError> {
         self.registry.resolve(import)
     }
 
@@ -478,5 +621,45 @@ mod provider_contract_tests {
             .unwrap_err();
         assert_eq!(error.code, ProviderErrorCode::Internal);
         assert!(error.message.contains("without registering a resource"));
+    }
+
+    #[test]
+    fn callable_mode_mismatch_fails_during_provider_registration() {
+        let symbol = ExternalSymbol::new("host.test.async_run").unwrap();
+        let signature = FunctionSignature {
+            parameters: vec![],
+            result: "Unit".into(),
+            asynchronous: true,
+        };
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.provider".into(),
+            provider_version: "1.0.0".into(),
+            supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            functions: vec![ProviderFunctionDescriptor {
+                symbol: symbol.clone(),
+                signature: signature.clone(),
+                entry: "async_run".into(),
+                call_mode: ProviderCallMode::Async,
+                blocking: BlockingBehavior::NonBlocking,
+                cancellation: CancellationBehavior::Cooperative,
+                thread_safe: true,
+                reentrant: true,
+                resource_cleanup: ResourceCleanupContract::None,
+                error_mapping: ProviderErrorMapping::StructuredV1,
+            }],
+        };
+        let error = ExternalFunctionRegistry::new()
+            .register_provider(
+                &descriptor,
+                BTreeMap::from([(
+                    symbol.clone(),
+                    ProviderFunction {
+                        signature,
+                        callable: NativeInterpreterFn::new(|_| Ok(NativeValue::Unit)),
+                    },
+                )]),
+            )
+            .unwrap_err();
+        assert_eq!(error, ProviderLoadError::CallModeMismatch(symbol));
     }
 }
