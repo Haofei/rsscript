@@ -219,11 +219,11 @@ impl<'a> RustLowerer<'a> {
 
     pub(super) fn new_validated(
         program: &'a Program,
-        executable: &'a rsscript_lowering::ExecutableIr,
+        _executable: &'a rsscript_lowering::ExecutableIr,
+        semantic_types: &'a rsscript_semantics::SemanticTypeFacts,
         external_bindings: BTreeMap<String, String>,
         interface_programs: &[Program],
     ) -> Self {
-        let semantic_types = executable.semantic_types();
         let mut lowerer = Self::new(program, external_bindings, interface_programs);
         let span = Span {
             file: "<semantic-type>".to_string(),

@@ -1,0 +1,39 @@
+[package]
+name = "rsscript-vm"
+version = "0.1.0"
+edition = "2024"
+description = "Verified bytecode VM for owned RSScript executable IR"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+rsscript-abi-model = { path = "../rsscript-abi-model" }
+rsscript-bytecode = { path = "../rsscript-bytecode" }
+rsscript-diagnostics = { path = "../rsscript-diagnostics" }
+rsscript-exec-ir = { path = "../rsscript-exec-ir" }
+rsscript-operation = { path = "../rsscript-operation" }
+rsscript-provider-api = { path = "../rsscript-provider-api" }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml_ng = "0.10"
+sha2 = "0.10"
+sha3 = "0.10"
+regex = "1"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
+flate2 = "1"
+hex = "0.4"
+hmac = "0.12"
+percent-encoding = "2"
+vm-jit = { path = "../vm-jit", optional = true }
+
+[features]
+default = ["execution"]
+execution = []
+native-jit = ["dep:vm-jit"]
+
+[build-dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+toml = "0.8"

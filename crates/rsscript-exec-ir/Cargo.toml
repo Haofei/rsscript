@@ -1,0 +1,9 @@
+[package]
+name = "rsscript-exec-ir"
+version = "0.1.0"
+edition = "2024"
+description = "Owned provider-neutral executable IR model for RSScript backends"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rsscript-abi-model = { path = "../rsscript-abi-model" }

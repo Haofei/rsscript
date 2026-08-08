@@ -21,10 +21,14 @@ use common::{
     reg_vm_eval_source_main_with_interfaces_and_external_bindings,
 };
 use rsscript::{
-    EvalError, ExternalFunction, NativeRustDependency, NativeValue, ProviderError, VmLimits,
+    BlockingBehavior, CancellationBehavior, EvalError, ExternalFunction, ExternalFunctionRegistry,
+    ExternalSymbol, FunctionSignature, NativeRustDependency, NativeValue, ProviderCallMode,
+    ProviderDescriptor, ProviderError, ProviderErrorMapping, ProviderFunction,
+    ProviderFunctionDescriptor, ResourceCleanupContract, VmLimits,
     lower_sources_to_rust_package_with_options, reg_vm_eval_package_main_with_args,
     write_generated_rust_package,
 };
+use rsscript_provider_api::AsyncInterpreterFn;
 
 #[test]
 fn eval_runs_pure_arithmetic_main() {
@@ -436,6 +440,73 @@ fn main(args: read List<String>) -> Unit {
     assert_eq!(eval.value, "Unit");
     assert_eq!(eval.stdout, "host:hello\ntag:7\n");
     assert_eq!(eval.stderr, "");
+}
+
+#[test]
+fn eval_suspends_and_resumes_an_async_provider_call() {
+    let symbol = ExternalSymbol::new("Host.async_value").unwrap();
+    let signature = FunctionSignature {
+        parameters: Vec::new(),
+        result: "Int".into(),
+        asynchronous: true,
+    };
+    let descriptor = ProviderDescriptor {
+        provider_id: "test.async".into(),
+        provider_version: "1.0.0".into(),
+        supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+        functions: vec![ProviderFunctionDescriptor {
+            symbol: symbol.clone(),
+            signature: signature.clone(),
+            entry: "async_value".into(),
+            call_mode: ProviderCallMode::Async,
+            blocking: BlockingBehavior::NonBlocking,
+            cancellation: CancellationBehavior::Cooperative,
+            thread_safe: true,
+            reentrant: true,
+            resource_cleanup: ResourceCleanupContract::None,
+            error_mapping: ProviderErrorMapping::StructuredV1,
+        }],
+    };
+    let callable = AsyncInterpreterFn::new(|_, _| async {
+        let mut first_poll = true;
+        std::future::poll_fn(move |context| {
+            if first_poll {
+                first_poll = false;
+                context.waker().wake_by_ref();
+                std::task::Poll::Pending
+            } else {
+                std::task::Poll::Ready(Ok(NativeValue::Int(42)))
+            }
+        })
+        .await
+    });
+    let mut registry = ExternalFunctionRegistry::new();
+    registry
+        .register_provider(
+            &descriptor,
+            BTreeMap::from([(
+                symbol,
+                ProviderFunction {
+                    signature,
+                    callable,
+                },
+            )]),
+        )
+        .unwrap();
+
+    let output = reg_vm_eval_source_main_with_interfaces_and_external_bindings(
+        "eval-async-provider.rss",
+        "async fn main() -> Int { return await Host.async_value() }",
+        &[(
+            "host-async.rssi",
+            "pub async fn Host.async_value() -> Int\n",
+        )],
+        registry.into_bindings(),
+    )
+    .expect("async provider should resume the suspended VM task");
+
+    assert_eq!(output.native_value, Some(NativeValue::Int(42)));
+    assert_eq!(output.usage.provider_calls, 1);
 }
 
 #[test]

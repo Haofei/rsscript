@@ -110,6 +110,7 @@ fn cargo_metadata_enforces_composition_dependency_direction() {
     let compiler = metadata_normal_dependencies(&metadata, "rsscript-compiler");
     assert!(compiler.contains("rsscript-syntax"));
     assert!(compiler.contains("rsscript-semantics"));
+    assert!(metadata_direct_dependencies(&metadata, "rsscript-compiler").contains("rsscript-vm"));
     assert!(!compiler.contains("rsscript-sdk"));
     let sdk = metadata_normal_dependencies(&metadata, "rsscript-sdk");
     assert!(
@@ -391,17 +392,17 @@ fn hir_signatures_store_structural_types() {
 #[test]
 fn native_tier_state_machines_have_explicit_module_boundaries() {
     let root = workspace_root();
-    let tier = read(&root.join("crates/rsscript/src/reg_vm/tier.rs"));
+    let tier = read(&root.join("crates/rsscript-vm/src/reg_vm/tier.rs"));
     assert!(tier.contains("mod deopt_resume;"));
     assert!(tier.contains("mod jit_entry;"));
     assert!(!tier.contains("fn restore_native_deopt_live_regs("));
     assert!(!tier.contains("fn run_jit_pure_leaf("));
 
-    let deopt = read(&root.join("crates/rsscript/src/reg_vm/tier/deopt_resume.rs"));
+    let deopt = read(&root.join("crates/rsscript-vm/src/reg_vm/tier/deopt_resume.rs"));
     assert!(deopt.contains("fn try_resume_native_child_deopt_chain("));
     assert!(deopt.contains("fn restore_native_deopt_live_regs("));
 
-    let entry = read(&root.join("crates/rsscript/src/reg_vm/tier/jit_entry.rs"));
+    let entry = read(&root.join("crates/rsscript-vm/src/reg_vm/tier/jit_entry.rs"));
     assert!(entry.contains("fn run_jit("));
     assert!(entry.contains("fn run_jit_self_recursive_int("));
 }
@@ -409,12 +410,12 @@ fn native_tier_state_machines_have_explicit_module_boundaries() {
 #[test]
 fn register_vm_execution_policy_is_snapshotted_before_running() {
     let root = workspace_root();
-    let vm = read(&root.join("crates/rsscript/src/reg_vm/mod.rs"));
+    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
     assert!(vm.contains("mod execution_plan;"));
     assert!(vm.contains("NativeExecutionPlan::from_environment("));
     assert!(vm.contains("NativeState::new_with_plan(native)"));
 
-    let plan = read(&root.join("crates/rsscript/src/reg_vm/execution_plan.rs"));
+    let plan = read(&root.join("crates/rsscript-vm/src/reg_vm/execution_plan.rs"));
     assert!(plan.contains("struct ExecutionPlan"));
     assert!(plan.contains("enum TierPlan"));
     assert!(plan.contains("struct NativeAdmissionPolicy"));
@@ -544,7 +545,7 @@ fn function_source<'a>(source: &'a str, signature: &str) -> &'a str {
 #[test]
 fn register_vm_test_domains_remain_separate_modules() {
     let root = workspace_root();
-    let aggregator = root.join("crates/rsscript/src/reg_vm/tests.rs");
+    let aggregator = root.join("crates/rsscript-vm/src/reg_vm/tests.rs");
     let source = read(&aggregator);
     let expected = [
         "intrinsic_registry",
@@ -563,13 +564,14 @@ fn register_vm_test_domains_remain_separate_modules() {
             "reg_vm test composition root is missing `{domain}`"
         );
         assert!(
-            root.join(format!("crates/rsscript/src/reg_vm/tests/{domain}.rs"))
+            root.join(format!("crates/rsscript-vm/src/reg_vm/tests/{domain}.rs"))
                 .is_file(),
             "reg_vm test domain `{domain}` must have its own module"
         );
     }
 
-    let register_window = read(&root.join("crates/rsscript/src/reg_vm/tests/register_window.rs"));
+    let register_window =
+        read(&root.join("crates/rsscript-vm/src/reg_vm/tests/register_window.rs"));
     let register_window_domains = [
         "lowering",
         "translation",
@@ -590,7 +592,7 @@ fn register_vm_test_domains_remain_separate_modules() {
         );
         assert!(
             root.join(format!(
-                "crates/rsscript/src/reg_vm/tests/register_window/{domain}.rs"
+                "crates/rsscript-vm/src/reg_vm/tests/register_window/{domain}.rs"
             ))
             .is_file(),
             "register-window test domain `{domain}` must have its own module"
@@ -762,7 +764,7 @@ fn cancellation_and_deadlines_share_one_operation_contract() {
     assert!(language_service.contains("Option<&'a CancellationToken>"));
     assert!(language_service.contains("Option<MonotonicDeadline>"));
 
-    let vm = read(&root.join("crates/rsscript/src/reg_vm/mod.rs"));
+    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
     assert!(vm.contains("Option<rsscript_operation::CancellationToken>"));
     assert!(vm.contains("Option<rsscript_operation::MonotonicDeadline>"));
 }
@@ -870,20 +872,20 @@ fn linked_provider_contracts_reach_the_invocation_path() {
         !provider_api.contains("pub fn functions(&self)"),
         "provider registry must not expose descriptor-free registered entries"
     );
-    let execution = read(&root.join("crates/rsscript/src/eval_types.rs"));
+    let execution = read(&root.join("crates/rsscript-vm/src/eval_types.rs"));
     assert!(execution.contains("ExternalFunction::from_resolved"));
     assert!(execution.contains("requires a blocking execution lane"));
     assert!(execution.contains("requires an async execution lane"));
     assert!(execution.contains("without registering a resource"));
 
-    let vm_calls = read(&root.join("crates/rsscript/src/reg_vm/calls.rs"));
+    let vm_calls = read(&root.join("crates/rsscript-vm/src/reg_vm/calls.rs"));
     assert!(vm_calls.contains("let blocking_allowed = self.limits.allow_blocking_provider_calls"));
     assert!(!vm_calls.contains("blocking_allowed: true"));
     assert!(vm_calls.contains("async_allowed: false"));
     assert!(vm_calls.contains("AsyncProviderCallContext"));
     assert!(vm_calls.contains("function.start_async"));
 
-    let scheduler = read(&root.join("crates/rsscript/src/reg_vm/scheduler.rs"));
+    let scheduler = read(&root.join("crates/rsscript-vm/src/reg_vm/scheduler.rs"));
     assert!(scheduler.contains("poll_provider_futures"));
     assert!(scheduler.contains("Wait::Provider"));
 }
@@ -897,7 +899,7 @@ fn execution_termination_does_not_classify_message_text() {
     assert!(facade.contains("EvalError::Execution { kind, message }"));
     assert!(facade.contains("EvalError::Provider(error)"));
 
-    let eval = read(&root.join("crates/rsscript/src/eval_types.rs"));
+    let eval = read(&root.join("crates/rsscript-vm/src/eval_types.rs"));
     assert!(eval.contains("pub enum ExecutionFailureKind"));
     assert!(eval.contains("Provider(ProviderError)"));
 }
@@ -905,14 +907,14 @@ fn execution_termination_does_not_classify_message_text() {
 #[test]
 fn allocation_budget_is_not_mislabeled_as_live_memory() {
     let root = workspace_root();
-    let vm = read(&root.join("crates/rsscript/src/reg_vm/mod.rs"));
+    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
     assert!(vm.contains("pub allocation_budget: Option<usize>"));
     assert!(vm.contains("allocated_bytes: usize"));
     assert!(vm.contains("This is not a live-memory measurement"));
     assert!(!vm.contains("pub mem_budget"));
     assert!(vm.contains("pub live_memory_limit: Option<usize>"));
     assert!(vm.contains("live_memory_bytes: usize"));
-    let storage = read(&root.join("crates/rsscript/src/reg_vm/exec/storage_accounting.rs"));
+    let storage = read(&root.join("crates/rsscript-vm/src/reg_vm/exec/storage_accounting.rs"));
     assert!(storage.contains("refresh_live_memory_usage"));
     assert!(storage.contains("visited: &mut HashSet<usize>"));
 
@@ -925,7 +927,7 @@ fn allocation_budget_is_not_mislabeled_as_live_memory() {
 #[test]
 fn public_execution_defaults_are_bounded_without_compatibility_aliases() {
     let root = workspace_root();
-    let vm = read(&root.join("crates/rsscript/src/reg_vm/mod.rs"));
+    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
     let sdk = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
     assert!(!vm.contains("pub fn safe_default"));
     for bounded in [
@@ -1095,7 +1097,7 @@ fn lsp_dependency_closure_selects_frontend_only() {
         "rsscript-bytecode",
         "rsscript-lowering",
         "rsscript-provider-api",
-        "vm-jit",
+        "rsscript-vm",
     ] {
         assert_eq!(
             compiler_manifest["dependencies"][dependency]["optional"].as_bool(),
@@ -1138,7 +1140,8 @@ fn embedding_facade_exposes_only_product_level_objects() {
 
 #[test]
 fn vm_core_consumes_owned_ir_not_frontend_internals() {
-    let root = workspace_root().join("crates/rsscript/src/reg_vm");
+    let workspace = workspace_root();
+    let root = workspace.join("crates/rsscript-vm/src/reg_vm");
     for relative in [
         "bytecode.rs",
         "calls.rs",
@@ -1160,6 +1163,40 @@ fn vm_core_consumes_owned_ir_not_frontend_internals() {
             );
         }
     }
+
+    let vm_manifest: toml::Value =
+        toml::from_str(&read(&workspace.join("crates/rsscript-vm/Cargo.toml"))).unwrap();
+    let vm_dependencies = dependency_packages(&vm_manifest);
+    for required in [
+        "rsscript-bytecode",
+        "rsscript-exec-ir",
+        "rsscript-provider-api",
+    ] {
+        assert!(
+            vm_dependencies.contains(required),
+            "VM must depend on `{required}`"
+        );
+    }
+    for forbidden in [
+        "rsscript",
+        "rsscript-compiler",
+        "rsscript-lowering",
+        "rsscript-semantics",
+        "rsscript-syntax",
+    ] {
+        assert!(
+            !vm_dependencies.contains(forbidden),
+            "VM must not depend on frontend package `{forbidden}`"
+        );
+    }
+
+    let ir_manifest: toml::Value =
+        toml::from_str(&read(&workspace.join("crates/rsscript-exec-ir/Cargo.toml"))).unwrap();
+    assert_eq!(
+        dependency_packages(&ir_manifest),
+        BTreeSet::from(["rsscript-abi-model".to_string()]),
+        "owned executable IR must remain independent of frontend and runtime crates"
+    );
 }
 
 #[test]
@@ -1209,10 +1246,11 @@ fn compiler_default_dependency_closure_is_host_neutral() {
         manifest["dependencies"].get("rss-process-guard").is_none(),
         "compiler must not own child-process execution"
     );
+    assert!(manifest["dependencies"].get("vm-jit").is_none());
     assert_eq!(
-        manifest["dependencies"]["vm-jit"]["optional"].as_bool(),
+        manifest["dependencies"]["rsscript-vm"]["optional"].as_bool(),
         Some(true),
-        "host dependency `vm-jit` must be opt-in"
+        "VM dependency must remain behind the execution feature"
     );
 }
 
@@ -1564,7 +1602,7 @@ fn unsafe_boundary_crates_are_explicit_dependencies() {
 #[test]
 fn executable_backends_consume_validated_frontend_results() {
     let root = workspace_root();
-    let compile_adapter = read(&root.join("crates/rsscript/src/reg_vm/compile.rs"));
+    let compile_adapter = read(&root.join("crates/rsscript/src/vm_adapter.rs"));
     let compile_source = function_source(&compile_adapter, "pub fn reg_vm_compile_source");
     assert!(
         compile_source.contains("validate_source(file, source)")
@@ -1573,15 +1611,15 @@ fn executable_backends_consume_validated_frontend_results() {
     );
     let compile_validated = function_source(&compile_adapter, "pub fn reg_vm_compile_validated");
     assert!(
-        compile_validated.contains("ExecutableIr::from_validated_hir")
-            && compile_validated.contains("RegUnit::lower"),
+        compile_validated.contains("lower_validated_hir")
+            && compile_validated.contains("rsscript_vm::compile_executable_ir"),
         "register VM lowering must consume checked executable IR"
     );
     let vm_sources = [
-        read(&root.join("crates/rsscript/src/reg_vm/mod.rs")),
-        read(&root.join("crates/rsscript/src/reg_vm/lower.rs")),
-        read(&root.join("crates/rsscript/src/reg_vm/model.rs")),
-        read(&root.join("crates/rsscript/src/reg_vm/bytecode.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/lower.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/model.rs")),
+        read(&root.join("crates/rsscript-vm/src/reg_vm/bytecode.rs")),
     ]
     .join("\n");
     for forbidden in ["crate::hir", "crate::syntax::ast", "typed_hir()"] {
@@ -1590,9 +1628,9 @@ fn executable_backends_consume_validated_frontend_results() {
             "VM instruction lowering must not consume frontend representation `{forbidden}`"
         );
     }
-    let lowering = read(&root.join("crates/rsscript-lowering/src/lib.rs"));
-    assert!(lowering.contains("program: ExecutableProgram"));
-    assert!(!lowering.contains("pub fn typed_hir"));
+    let executable_ir = read(&root.join("crates/rsscript-exec-ir/src/lib.rs"));
+    assert!(executable_ir.contains("program: ExecutableProgram"));
+    assert!(!executable_ir.contains("pub fn typed_hir"));
 
     let rust_lower = read(&root.join("crates/rsscript/src/rust_lower/mod.rs"));
     let lower_source = function_source(&rust_lower, "pub fn lower_source_to_rust_with_map");
@@ -1608,7 +1646,7 @@ fn executable_backends_consume_validated_frontend_results() {
         "lowering declaration projections must reuse parsed semantic inputs"
     );
     assert!(
-        rust_lower.contains("ExecutableIr::from_validated_hir")
+        rust_lower.contains("lower_validated_hir")
             && rust_lower.contains("RustLowerer::new_validated"),
         "Rust AOT lowering must consume the same checked executable IR"
     );
@@ -1638,25 +1676,25 @@ fn executable_backends_consume_validated_frontend_results() {
 #[test]
 fn compiler_and_vm_do_not_embed_execution_authority() {
     let root = workspace_root();
-    let vm_model = read(&root.join("crates/rsscript/src/reg_vm/model.rs"));
+    let vm_model = read(&root.join("crates/rsscript-vm/src/reg_vm/model.rs"));
     assert!(
         !vm_model.contains("host_authority"),
         "VM instructions must not carry runner authority policy"
     );
 
-    let vm = read(&root.join("crates/rsscript/src/reg_vm/mod.rs"));
+    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
     assert!(
         !vm.contains("execution_context"),
         "VM core must not own an execution policy context"
     );
-    let intrinsics = read(&root.join("crates/rsscript/src/reg_vm/intrinsics/mod.rs"));
+    let intrinsics = read(&root.join("crates/rsscript-vm/src/reg_vm/intrinsics/mod.rs"));
     assert!(
         !intrinsics.contains("authorize_intrinsic_host_access"),
         "intrinsic dispatch must be independent of runner policy"
     );
     assert!(
         !root
-            .join("crates/rsscript/src/reg_vm/host_adapters.rs")
+            .join("crates/rsscript-vm/src/reg_vm/host_adapters.rs")
             .exists()
     );
 }
@@ -1682,7 +1720,7 @@ fn vm_core_does_not_embed_filesystem_intrinsics() {
         );
     }
 
-    let vm_root = root.join("crates/rsscript/src/reg_vm");
+    let vm_root = root.join("crates/rsscript-vm/src/reg_vm");
     for path in rust_files_below(&vm_root) {
         if path
             .components()
@@ -1706,7 +1744,7 @@ fn vm_core_does_not_embed_process_intrinsics() {
     assert!(!catalog.contains("{ id = \"Process"));
     assert!(!catalog.contains("{ namespace = \"Process\""));
 
-    let vm_root = root.join("crates/rsscript/src/reg_vm");
+    let vm_root = root.join("crates/rsscript-vm/src/reg_vm");
     for path in rust_files_below(&vm_root) {
         if path
             .components()
@@ -1734,7 +1772,7 @@ fn vm_core_does_not_embed_network_intrinsics() {
         assert!(!catalog.contains(&format!("{{ namespace = \"{prefix}")));
     }
 
-    let vm_root = root.join("crates/rsscript/src/reg_vm");
+    let vm_root = root.join("crates/rsscript-vm/src/reg_vm");
     for path in rust_files_below(&vm_root) {
         if path
             .components()
@@ -1772,7 +1810,7 @@ fn vm_core_does_not_embed_time_logging_or_os_intrinsics() {
         assert!(!catalog.contains(&format!("{{ namespace = \"{namespace}\"")));
     }
 
-    let vm_root = root.join("crates/rsscript/src/reg_vm");
+    let vm_root = root.join("crates/rsscript-vm/src/reg_vm");
     for path in rust_files_below(&vm_root) {
         if path
             .components()
@@ -1863,7 +1901,7 @@ fn program_arguments_enter_through_the_explicit_main_abi() {
     assert!(!catalog.contains("{ id = \"Args"));
     assert!(!catalog.contains("{ namespace = \"Args\""));
 
-    let vm_root = root.join("crates/rsscript/src/reg_vm");
+    let vm_root = root.join("crates/rsscript-vm/src/reg_vm");
     for path in rust_files_below(&vm_root) {
         if path
             .components()
@@ -1881,7 +1919,7 @@ fn program_arguments_enter_through_the_explicit_main_abi() {
         }
     }
 
-    let scheduler = read(&root.join("crates/rsscript/src/reg_vm/scheduler.rs"));
+    let scheduler = read(&root.join("crates/rsscript-vm/src/reg_vm/scheduler.rs"));
     assert!(scheduler.contains("List<String>"));
     assert!(scheduler.contains("self.entry_args"));
 }
@@ -1892,9 +1930,9 @@ fn high_risk_state_machines_keep_dedicated_module_owners() {
     let required = [
         "crates/rsscript/src/analyzer/task_group.rs",
         "crates/rsscript/src/package/native/bindings.rs",
-        "crates/rsscript/src/reg_vm/tier/admission.rs",
-        "crates/rsscript/src/reg_vm/tier/call_scratch.rs",
-        "crates/rsscript/src/reg_vm/tier/recursion.rs",
+        "crates/rsscript-vm/src/reg_vm/tier/admission.rs",
+        "crates/rsscript-vm/src/reg_vm/tier/call_scratch.rs",
+        "crates/rsscript-vm/src/reg_vm/tier/recursion.rs",
         "crates/rsscript/src/rust_lower/helpers/executable_declarations.rs",
         "crates/rsscript/src/rust_lower/helpers/semantic_projection.rs",
         "crates/runtime/src/json.rs",

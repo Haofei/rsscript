@@ -9,12 +9,10 @@ mod analyzer;
 mod call_binding;
 mod checks;
 mod core_index;
-mod diagnostic;
+mod diagnostic {
+    pub use rsscript_diagnostics::*;
+}
 mod editor_grammar;
-#[cfg(feature = "execution")]
-mod eval_types;
-#[cfg(feature = "execution")]
-mod fnv;
 mod formatter;
 mod generate;
 mod hir;
@@ -28,8 +26,6 @@ mod lint;
 #[cfg(feature = "execution")]
 mod package;
 #[cfg(feature = "execution")]
-mod reg_vm;
-#[cfg(feature = "execution")]
 mod review;
 #[cfg(feature = "execution")]
 mod runtime_abi;
@@ -42,9 +38,10 @@ mod symbols;
 pub mod syntax;
 #[cfg(all(test, feature = "execution"))]
 mod test_interfaces;
+#[allow(dead_code)]
 mod text_util;
 #[cfg(feature = "execution")]
-mod vm_value;
+mod vm_adapter;
 
 pub use analyzer::{
     analyze_source, analyze_source_result, analyze_source_result_with_operation,
@@ -65,15 +62,6 @@ pub use diagnostic::{
     format_diagnostics_json_with_source,
 };
 pub use editor_grammar::{VSCODE_GRAMMAR_PATH, vscode_tmlanguage_json};
-#[cfg(feature = "execution")]
-pub use eval_types::{
-    BlockingBehavior, CancellationBehavior, CoverageBucket, EvalError, EvalExecutionReport,
-    EvalOutput, ExecutionFailureKind, ExecutionUsage, ExternalFunction, ExternalFunctionRegistry,
-    ExternalImport, ExternalSymbol, FunctionSignature, NativeValue, ProviderCallContext,
-    ProviderCallMode, ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderErrorMapping,
-    ProviderFunction, ProviderFunctionDescriptor, ProviderLoadError, ProviderResource,
-    ProviderResourceTable, ResourceCleanupContract, ResourceHandle, SignatureHash,
-};
 pub use formatter::{format_program, format_source};
 pub use generate::{
     CommitBehavior, Completion, CompletionKind, ContinuationOptions, Continuations, Effect,
@@ -107,26 +95,6 @@ pub use package::{
     prepare_package_for_execution, review_package_dir, write_package_artifact_atomic,
 };
 #[cfg(feature = "execution")]
-pub use reg_vm::{
-    JitPlan, RegVmExecutable, VmLimits, reg_vm_compile_package, reg_vm_compile_package_input,
-    reg_vm_compile_source, reg_vm_compile_validated, reg_vm_eval_package_main_with_args,
-    reg_vm_eval_package_main_with_args_and_external_bindings,
-    reg_vm_eval_package_main_with_args_and_external_bindings_and_limits,
-    reg_vm_eval_package_main_with_args_and_external_bindings_streaming_stdout,
-    reg_vm_eval_source_main, reg_vm_eval_source_main_jit, reg_vm_eval_source_main_with_args,
-    reg_vm_eval_source_main_with_args_and_external_bindings,
-    reg_vm_eval_source_main_with_args_and_external_bindings_and_limits,
-    reg_vm_eval_source_main_with_args_streaming_stdout, reg_vm_eval_source_main_with_limits,
-};
-#[cfg(feature = "native-jit")]
-pub use reg_vm::{
-    NativeStats, reg_vm_eval_source_main_native,
-    reg_vm_eval_source_main_native_force_all_safepoints,
-    reg_vm_eval_source_main_native_force_deopt, reg_vm_eval_source_main_native_force_safepoint,
-    reg_vm_eval_source_main_native_osr, reg_vm_eval_source_main_native_osr_report,
-    reg_vm_eval_source_main_native_precise, with_native_cost_model_disabled,
-};
-#[cfg(feature = "execution")]
 pub use review::{
     ReviewFinding, ReviewFix, ReviewMap, ReviewMapCategorySummary, ReviewMapClassification,
     ReviewMapFile, ReviewMapFileRisk, ReviewMapRegion, ReviewMapSummary, ReviewRisk,
@@ -140,6 +108,17 @@ pub use rsscript_bytecode::{
 };
 #[cfg(feature = "execution")]
 pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
+#[cfg(feature = "native-jit")]
+pub use rsscript_vm::NativeStats;
+#[cfg(feature = "execution")]
+pub use rsscript_vm::{
+    BlockingBehavior, CancellationBehavior, CoverageBucket, EvalError, EvalExecutionReport,
+    EvalOutput, ExecutionFailureKind, ExecutionUsage, ExternalFunction, ExternalFunctionRegistry,
+    ExternalImport, ExternalSymbol, FunctionSignature, NativeValue, ProviderCallContext,
+    ProviderCallMode, ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderErrorMapping,
+    ProviderFunction, ProviderFunctionDescriptor, ProviderLoadError, ProviderResource,
+    ProviderResourceTable, ResourceCleanupContract, ResourceHandle, SignatureHash,
+};
 #[cfg(feature = "execution")]
 pub use rust_lower::lowered_symbol_name;
 #[cfg(feature = "execution")]
@@ -162,3 +141,22 @@ pub use symbols::{
 };
 #[cfg(feature = "execution")]
 pub use symbols::{SymbolInventoryEntry, symbol_inventory};
+#[cfg(feature = "execution")]
+pub use vm_adapter::{
+    JitPlan, RegVmExecutable, VmLimits, reg_vm_compile_package, reg_vm_compile_package_input,
+    reg_vm_compile_source, reg_vm_compile_validated, reg_vm_eval_package_main_with_args,
+    reg_vm_eval_package_main_with_args_and_external_bindings,
+    reg_vm_eval_package_main_with_args_and_external_bindings_and_limits,
+    reg_vm_eval_package_main_with_args_and_external_bindings_streaming_stdout,
+    reg_vm_eval_source_main, reg_vm_eval_source_main_jit, reg_vm_eval_source_main_with_args,
+    reg_vm_eval_source_main_with_args_and_external_bindings,
+    reg_vm_eval_source_main_with_args_and_external_bindings_and_limits,
+    reg_vm_eval_source_main_with_args_streaming_stdout, reg_vm_eval_source_main_with_limits,
+};
+#[cfg(feature = "native-jit")]
+pub use vm_adapter::{
+    reg_vm_eval_source_main_native, reg_vm_eval_source_main_native_force_all_safepoints,
+    reg_vm_eval_source_main_native_force_deopt, reg_vm_eval_source_main_native_force_safepoint,
+    reg_vm_eval_source_main_native_osr, reg_vm_eval_source_main_native_osr_report,
+    reg_vm_eval_source_main_native_precise, with_native_cost_model_disabled,
+};

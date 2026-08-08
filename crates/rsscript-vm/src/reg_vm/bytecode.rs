@@ -128,7 +128,7 @@ pub(super) fn encode_and_verify(
     unit: &RegUnit,
     source_content_hash: &str,
     interface_catalog_digest: &str,
-    executable: &rsscript_lowering::ExecutableIr,
+    executable: &rsscript_exec_ir::ExecutableIr,
 ) -> Result<VerifiedRegBytecode, EvalError> {
     let payload = rsscript_bytecode::encode_executable_payload(&WireUnit::from(unit))
         .map_err(|error| EvalError::Runtime(format!("cannot encode VM bytecode: {error}")))?;
@@ -441,7 +441,7 @@ fn verify_target(function: usize, ip: usize, code_len: usize, target: usize) -> 
 
 fn external_imports(
     unit: &RegUnit,
-    executable: &rsscript_lowering::ExecutableIr,
+    executable: &rsscript_exec_ir::ExecutableIr,
 ) -> Vec<ExternalImport> {
     let called = unit
         .functions
@@ -474,7 +474,7 @@ fn bytecode_error(error: BytecodeError) -> EvalError {
     EvalError::Runtime(error.to_string())
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
 

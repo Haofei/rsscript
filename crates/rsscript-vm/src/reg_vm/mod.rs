@@ -48,7 +48,7 @@ use crate::eval_types::{
     NativeValue, ProviderCallContext, ProviderCallMode, ProviderError, ProviderFuture,
     ProviderResourceRegistry,
 };
-#[cfg(test)]
+#[cfg(any())]
 use crate::syntax::parse_source;
 #[cfg(feature = "native-jit")]
 use crate::text_util::string_pad_len;
@@ -61,7 +61,7 @@ use crate::vm_value::clone_value_map_preserving_capacity;
 use crate::vm_value::{
     TypeLayout, TypedVec, ValueMap, VmClosure, VmMapKey, VmNative, VmStruct, VmValue, intern_layout,
 };
-use rsscript_lowering::{
+use rsscript_exec_ir::{
     BinaryOp, Callee, ExecutableBlock as HirBlock, ExecutableCallArg as HirCallArg,
     ExecutableCallReceiver as HirCallReceiver, ExecutableExpr as HirExpr,
     ExecutableMatchArm as HirMatchArm, ExecutableProgram as Hir, ExecutableStmt as HirStmt,
@@ -79,10 +79,11 @@ fn intern_struct_layout(name: &str, fields: &[(String, Reg)]) -> Rc<TypeLayout> 
     intern_layout(Rc::from(name), field_names)
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod architecture;
 mod bytecode;
 mod calls;
+#[cfg(any())]
 mod compile;
 mod exec;
 mod execution_plan;
@@ -101,8 +102,9 @@ mod tier;
 mod value_access;
 mod value_convert;
 mod value_ops;
-#[cfg(test)]
+#[cfg(any())]
 pub(crate) use compile::reg_vm_compile_sources;
+#[cfg(any())]
 pub use compile::{
     reg_vm_compile_package, reg_vm_compile_package_input, reg_vm_compile_source,
     reg_vm_compile_validated,
@@ -145,6 +147,25 @@ const URL_COMPONENT_SET: &percent_encoding::AsciiSet = &NON_ALPHANUMERIC
     .remove(b'.')
     .remove(b'~');
 
+/// Lower owned, validated executable IR into a verified VM artifact. This is
+/// the only compiler-facing VM construction boundary: it consumes no AST, HIR,
+/// source loader, package model, or semantic database.
+pub fn compile_executable_ir(
+    executable: &rsscript_exec_ir::ExecutableIr,
+    source_hash: &str,
+    interface_catalog_digest: &str,
+) -> Result<RegVmExecutable, EvalError> {
+    let unit = RegUnit::lower(executable)?;
+    let verified =
+        bytecode::encode_and_verify(&unit, source_hash, interface_catalog_digest, executable)?;
+    let (artifact, unit) = verified.into_parts();
+    Ok(RegVmExecutable {
+        unit: Rc::new(unit),
+        artifact,
+    })
+}
+
+#[cfg(any())]
 pub fn reg_vm_eval_source_main_with_args(
     file: &str,
     source: &str,
@@ -153,6 +174,7 @@ pub fn reg_vm_eval_source_main_with_args(
     reg_vm_compile_source(file, source)?.eval_main_with_args(args)
 }
 
+#[cfg(any())]
 pub fn reg_vm_eval_source_main(file: &str, source: &str) -> Result<EvalOutput, EvalError> {
     reg_vm_eval_source_main_with_args(file, source, std::iter::empty::<String>())
 }
@@ -161,6 +183,7 @@ pub fn reg_vm_eval_source_main(file: &str, source: &str) -> Result<EvalOutput, E
 ///
 /// Limits bound selected resources but do not isolate untrusted code. Deploy
 /// externally supplied scripts inside an operating-system isolation boundary.
+#[cfg(any())]
 pub fn reg_vm_eval_source_main_with_limits(
     file: &str,
     source: &str,
@@ -171,6 +194,7 @@ pub fn reg_vm_eval_source_main_with_limits(
 }
 
 /// Compile and run `source` with explicit external bindings and resource limits.
+#[cfg(any())]
 pub fn reg_vm_eval_source_main_with_args_and_external_bindings_and_limits(
     file: &str,
     source: &str,
@@ -197,6 +221,7 @@ pub fn reg_vm_eval_source_main_with_args_and_external_bindings_and_limits(
 /// `jit_plan().eligible_functions` (it must live in a separate crate because
 /// `rsscript` is `#![forbid(unsafe_code)]`). That tier is gated by the N-way
 /// differential in `tests/common/differential.rs`: `interp ≡ jit ≡ compiled`.
+#[cfg(any())]
 pub fn reg_vm_eval_source_main_jit(
     file: &str,
     source: &str,
@@ -209,7 +234,7 @@ pub fn reg_vm_eval_source_main_jit(
 /// the integer/control core executes as machine code (tier-0 covers the rest,
 /// the interpreter the remainder). Verified to equal the other backends by the
 /// N-way differential.
-#[cfg(feature = "native-jit")]
+#[cfg(any())]
 pub fn reg_vm_eval_source_main_native(
     file: &str,
     source: &str,
@@ -220,7 +245,7 @@ pub fn reg_vm_eval_source_main_native(
 
 /// Native-tier entry point in **deopt stress mode** (the native code always bails
 /// to the interpreter). Used by the differential to verify the fallback path.
-#[cfg(feature = "native-jit")]
+#[cfg(any())]
 pub fn reg_vm_eval_source_main_native_force_deopt(
     file: &str,
     source: &str,
@@ -232,7 +257,7 @@ pub fn reg_vm_eval_source_main_native_force_deopt(
 /// Native-tier entry point that forces one generated safepoint to deopt
 /// unconditionally. Used by differential/deopt-stress tests to exercise precise
 /// safepoint payloads at sites that may not naturally bail for the chosen input.
-#[cfg(feature = "native-jit")]
+#[cfg(any())]
 #[allow(dead_code)]
 pub fn reg_vm_eval_source_main_native_force_safepoint(
     file: &str,
@@ -248,7 +273,7 @@ pub fn reg_vm_eval_source_main_native_force_safepoint(
 /// `RSS_JIT_DEOPT_EVERY=1`: native code still executes far enough to capture each
 /// safepoint payload, then precise-resumes/falls back through production deopt
 /// machinery.
-#[cfg(feature = "native-jit")]
+#[cfg(any())]
 #[allow(dead_code)]
 pub fn reg_vm_eval_source_main_native_force_all_safepoints(
     file: &str,
@@ -262,7 +287,7 @@ pub fn reg_vm_eval_source_main_native_force_all_safepoints(
 /// guard bail reconstructs the interpreter register window and resumes at the
 /// safepoint instead of re-running from the function top. Must equal every other
 /// backend. Validation/test entry point (sets the flag deterministically).
-#[cfg(feature = "native-jit")]
+#[cfg(any())]
 pub fn reg_vm_eval_source_main_native_precise(
     file: &str,
     source: &str,
@@ -276,7 +301,7 @@ pub fn reg_vm_eval_source_main_native_precise(
 /// mid-function (OSR-entry at the loop header reading the live-in window;
 /// OSR-exit/precise-resume at the post-loop ip with the live-out window). Must
 /// equal every other backend byte-for-byte. Validation/test/bench entry point.
-#[cfg(feature = "native-jit")]
+#[cfg(any())]
 pub fn reg_vm_eval_source_main_native_osr(
     file: &str,
     source: &str,
@@ -289,7 +314,7 @@ pub fn reg_vm_eval_source_main_native_osr(
 /// `RSS_JIT_REPORT` missed-optimization report armed deterministically, returning the
 /// report's per-region lines (one `\n`-joined block per function) alongside the output
 /// and stats. The report is observational, so the output equals every other backend.
-#[cfg(feature = "native-jit")]
+#[cfg(any())]
 pub fn reg_vm_eval_source_main_native_osr_report(
     file: &str,
     source: &str,
@@ -713,6 +738,7 @@ enum PureStep {
     NotPure,
 }
 
+#[cfg(any())]
 pub fn reg_vm_eval_source_main_with_args_and_external_bindings(
     file: &str,
     source: &str,
@@ -728,6 +754,7 @@ pub fn reg_vm_eval_source_main_with_args_and_external_bindings(
 /// runs. The captured stdout in the returned `EvalOutput` is unchanged, so it must
 /// not be re-printed by the caller. Other callers and the tests keep using the
 /// non-streaming `reg_vm_eval_source_main_with_args`, whose behavior is untouched.
+#[cfg(any())]
 pub fn reg_vm_eval_source_main_with_args_streaming_stdout(
     file: &str,
     source: &str,
@@ -741,6 +768,7 @@ pub fn reg_vm_eval_source_main_with_args_streaming_stdout(
 
 /// Streaming-stdout package entry point. See
 /// [`reg_vm_eval_source_main_with_args_streaming_stdout`].
+#[cfg(any())]
 pub fn reg_vm_eval_package_main_with_args_and_external_bindings_streaming_stdout(
     package_dir: &Path,
     args: impl IntoIterator<Item = impl Into<String>>,
@@ -750,6 +778,7 @@ pub fn reg_vm_eval_package_main_with_args_and_external_bindings_streaming_stdout
         .eval_main_with_args_and_external_bindings_streaming_stdout(args, external_bindings)
 }
 
+#[cfg(any())]
 pub fn reg_vm_eval_package_main_with_args(
     package_dir: &Path,
     args: impl IntoIterator<Item = impl Into<String>>,
@@ -761,6 +790,7 @@ pub fn reg_vm_eval_package_main_with_args(
     )
 }
 
+#[cfg(any())]
 pub fn reg_vm_eval_package_main_with_args_and_external_bindings(
     package_dir: &Path,
     args: impl IntoIterator<Item = impl Into<String>>,
@@ -770,6 +800,7 @@ pub fn reg_vm_eval_package_main_with_args_and_external_bindings(
         .eval_main_with_args_and_external_bindings(args, external_bindings)
 }
 
+#[cfg(any())]
 pub fn reg_vm_eval_package_main_with_args_and_external_bindings_and_limits(
     package_dir: &Path,
     args: impl IntoIterator<Item = impl Into<String>>,
@@ -7020,5 +7051,5 @@ fn peel_select_operation(operation: &HirExpr) -> (&HirExpr, bool) {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests;

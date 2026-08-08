@@ -311,7 +311,12 @@ fn write_core_package_index() -> Result<(), String> {
 fn write_reg_vm_runtime_intrinsics() -> Result<(), String> {
     println!("cargo:rerun-if-changed=intrinsics.toml");
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("manifest dir"));
-    let catalog_path = manifest_dir.join("intrinsics.toml");
+    let local_catalog = manifest_dir.join("intrinsics.toml");
+    let catalog_path = if local_catalog.exists() {
+        local_catalog
+    } else {
+        manifest_dir.join("../rsscript/intrinsics.toml")
+    };
     let source = fs::read_to_string(&catalog_path)
         .map_err(|error| format!("failed to read {}: {error}", catalog_path.display()))?;
     let catalog: IntrinsicCatalog = toml::from_str(&source)

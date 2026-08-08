@@ -2,7 +2,7 @@ use super::super::*;
 pub(super) fn closure_capture_names(
     body: &HirBlock,
     params: &[String],
-    explicit_captures: &[rsscript_lowering::ExecutableClosureCapture],
+    explicit_captures: &[rsscript_exec_ir::ExecutableClosureCapture],
     outer_locals: &HashMap<String, Reg>,
 ) -> Vec<String> {
     let mut names = explicit_captures

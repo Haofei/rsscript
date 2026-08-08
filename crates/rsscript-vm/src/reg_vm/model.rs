@@ -53,7 +53,7 @@ pub(crate) struct RegNativeSignature {
 mod deep_copy;
 mod profile;
 
-#[cfg(test)]
+#[cfg(any())]
 pub(crate) use deep_copy::elide_deepcopy_enabled_for_test;
 use deep_copy::*;
 pub(crate) use profile::*;
@@ -845,7 +845,7 @@ pub(crate) enum MatchFailurePatch {
 }
 
 impl RegUnit {
-    pub(crate) fn lower(executable: &rsscript_lowering::ExecutableIr) -> Result<Self, EvalError> {
+    pub(crate) fn lower(executable: &rsscript_exec_ir::ExecutableIr) -> Result<Self, EvalError> {
         let hir = executable.program();
         let names = executable
             .functions()

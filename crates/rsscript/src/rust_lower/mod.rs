@@ -31,11 +31,11 @@ use std::path::Path;
 
 use crate::analyzer::{validate_source, validate_sources_with_interfaces_without_core};
 use crate::diagnostic::Diagnostic;
-use crate::eval_types::CoverageBucket;
 use crate::interfaces::{builtin_interfaces, default_interfaces, standard_package_interfaces};
 use crate::runtime_abi;
 use crate::syntax::ast::Program;
 use crate::syntax::parse_source;
+use rsscript_vm::CoverageBucket;
 
 mod helpers;
 mod intrinsics;
@@ -465,10 +465,11 @@ fn lower_validated_program_to_rust_with_map(
     database: &crate::semantic::SemanticDatabase,
     external_bindings: BTreeMap<String, String>,
 ) -> LoweredRust {
-    let executable = rsscript_lowering::ExecutableIr::from_validated_hir(database.hir());
+    let executable = rsscript_lowering::lower_validated_hir(database.hir());
     RustLowerer::new_validated(
         database.program(),
         &executable,
+        database.hir().semantic_types(),
         external_bindings,
         database.interface_programs(),
     )

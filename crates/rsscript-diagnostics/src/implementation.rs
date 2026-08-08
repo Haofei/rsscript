@@ -3,7 +3,7 @@ use std::fs;
 
 use serde::Serialize;
 
-pub use rsscript_syntax::Span;
+pub use rsscript_source_model::Span;
 
 #[cfg_attr(not(feature = "execution"), allow(dead_code))]
 pub mod code {
@@ -115,8 +115,8 @@ pub mod code {
     pub const REVIEW_TYPE_ALIAS_CHANGED: &str = "RSR020";
 }
 
-#[cfg(test)]
-pub(crate) const SELFHOST_CHECKER_TARGET_CODES: &[&str] = &[
+#[doc(hidden)]
+pub const SELFHOST_CHECKER_TARGET_CODES: &[&str] = &[
     code::MISSING_RETURN_TYPE,
     code::MISSING_PARAMETER_TYPE,
     code::DUPLICATE_DECLARATION,

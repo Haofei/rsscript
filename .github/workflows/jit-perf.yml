@@ -7,7 +7,7 @@ on:
     paths:
       - ".github/workflows/jit-perf.yml"
       - "benchmarks/vm-jit/**"
-      - "crates/rsscript/src/reg_vm/**"
+      - "crates/rsscript-vm/src/reg_vm/**"
       - "crates/rsscript/tests/jit_acceptance.rs"
       - "crates/vm-jit/**"
   push:
@@ -15,7 +15,7 @@ on:
     paths:
       - ".github/workflows/jit-perf.yml"
       - "benchmarks/vm-jit/**"
-      - "crates/rsscript/src/reg_vm/**"
+      - "crates/rsscript-vm/src/reg_vm/**"
       - "crates/rsscript/tests/jit_acceptance.rs"
       - "crates/vm-jit/**"
 

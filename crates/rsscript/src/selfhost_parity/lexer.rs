@@ -10,7 +10,7 @@ use crate::interface_metadata::{
 };
 use crate::interfaces::default_interfaces;
 use crate::lexer::{TokenKind, lex};
-use crate::reg_vm::reg_vm_compile_sources;
+use crate::vm_adapter::reg_vm_compile_sources;
 use crate::syntax::ast::{Expr, Item, Stmt};
 use crate::syntax::parse_source_raw;
 use crate::{RegVmExecutable, Severity, analyze_source, review_package_dir};

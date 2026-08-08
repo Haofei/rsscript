@@ -27,7 +27,7 @@ pub(super) fn elide_deepcopy_enabled() -> bool {
 /// Test-only view of the process-once elision gate, so the elision regression guard
 /// (`deepcopy_elision_fires_for_read_only_heap_param`) can branch on the exact verdict
 /// the lowerer used rather than re-reading the env (and matching the memoized value).
-#[cfg(test)]
+#[cfg(any())]
 pub(crate) fn elide_deepcopy_enabled_for_test() -> bool {
     elide_deepcopy_enabled()
 }

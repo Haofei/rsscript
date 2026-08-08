@@ -17,9 +17,13 @@ The platform-neutral language cut is active:
   snapshots now derive analysis directly from captured semantic inputs instead
   of converting a risk-oriented package review.
 
-The `rsscript-compiler` implementation still contains analyzer orchestration,
-package tooling, VM, and AOT lowering while those
-remaining boundaries are migrated. Stable embedders use the small
+The `rsscript-compiler` implementation contains analyzer orchestration, package
+tooling, and the optional Rust AOT projection. The reference VM is physically
+owned by `rsscript-vm`, consumes the frontend-independent owned model from
+`rsscript-exec-ir`, and has no Cargo dependency on compiler, syntax, semantics,
+or HIR lowering crates. `rsscript-lowering` is now the one-way projection from
+validated HIR into that owned execution model; `vm_adapter` is the compiler's
+single optional composition point for source-to-VM convenience APIs. Stable embedders use the small
 `rsscript-sdk` façade instead of those implementation modules; the compiler
 does not depend back on that façade.
 Native plugin loading and guarded child-process execution have been removed
@@ -56,9 +60,10 @@ parameter effects, package-wide semantic type facts, Typed HIR, call binding, an
 HIR construction are now owned by `rsscript-semantics`. The platform-neutral core
 and standard-package interface sources are owned by the data-only
 `rsscript-interface-catalog`. These are re-exported through the compatibility
-façade while the remaining checks are migrated. `rsscript-lowering` now owns the
-provider-neutral `ExecutableIr` gate; the VM and Rust AOT path both receive this
-checked representation, and JIT remains downstream of the VM unit. Runtime-core
+façade while the remaining checks are migrated. `rsscript-exec-ir` owns the
+provider-neutral, lifetime-independent `ExecutableIr`; the VM and Rust AOT path
+both receive this checked representation, and JIT remains downstream of the VM
+unit. Runtime-core
 now compiles without filesystem, environment, process, network, entropy, or
 temporary-directory modules and its default feature set is network-free. The
 concrete filesystem, environment, process, HTTP, time, entropy, logging, and CLI
