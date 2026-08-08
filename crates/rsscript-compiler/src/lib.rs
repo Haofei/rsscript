@@ -32,6 +32,8 @@ pub use rsscript_operation::{
 #[cfg(feature = "execution")]
 pub use rsscript_provider_api as provider;
 
+#[cfg(all(test, feature = "execution"))]
+use provider::NativeInterpreterFn;
 #[cfg(feature = "execution")]
 use provider::{ProviderDescriptor, ProviderFunction, ProviderLoadError};
 #[cfg(feature = "execution")]
@@ -311,6 +313,7 @@ pub struct RunLimits {
     pub max_depth: usize,
     pub step_budget: Option<u64>,
     pub allocation_budget: Option<usize>,
+    pub live_memory_limit: Option<usize>,
     pub cancellation: Option<CancellationToken>,
     pub deadline: Option<MonotonicDeadline>,
     pub output_budget: Option<usize>,
@@ -350,6 +353,7 @@ impl From<VmLimits> for RunLimits {
             max_depth: limits.max_depth,
             step_budget: limits.step_budget,
             allocation_budget: limits.allocation_budget,
+            live_memory_limit: limits.live_memory_limit,
             cancellation: limits.cancel,
             deadline: limits.deadline,
             output_budget: limits.stdout_budget,
@@ -368,6 +372,7 @@ impl From<RunLimits> for VmLimits {
             max_depth: limits.max_depth,
             step_budget: limits.step_budget,
             allocation_budget: limits.allocation_budget,
+            live_memory_limit: limits.live_memory_limit,
             cancel: limits.cancellation,
             deadline: limits.deadline,
             stdout_budget: limits.output_budget,
@@ -750,6 +755,7 @@ pub enum TerminationReason {
     DeadlineExceeded,
     StepBudgetExceeded,
     AllocationBudgetExceeded,
+    LiveMemoryLimitExceeded,
     OutputLimitExceeded,
     ProviderError,
     ProviderBudgetExceeded,
@@ -769,6 +775,7 @@ impl TerminationReason {
             Self::DeadlineExceeded => "deadline_exceeded",
             Self::StepBudgetExceeded => "step_budget_exceeded",
             Self::AllocationBudgetExceeded => "allocation_budget_exceeded",
+            Self::LiveMemoryLimitExceeded => "live_memory_limit_exceeded",
             Self::OutputLimitExceeded => "output_limit_exceeded",
             Self::ProviderError => "provider_error",
             Self::ProviderBudgetExceeded => "provider_budget_exceeded",
@@ -811,6 +818,9 @@ impl From<EvalError> for RuntimeError {
                     }
                     ExecutionFailureKind::AllocationBudgetExceeded => {
                         TerminationReason::AllocationBudgetExceeded
+                    }
+                    ExecutionFailureKind::LiveMemoryLimitExceeded => {
+                        TerminationReason::LiveMemoryLimitExceeded
                     }
                     ExecutionFailureKind::OutputLimitExceeded => {
                         TerminationReason::OutputLimitExceeded

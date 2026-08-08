@@ -5,6 +5,8 @@
   "usage": {
     "steps_consumed": 8,
     "allocation_bytes_consumed": 0,
+    "live_memory_bytes_at_return": 0,
+    "peak_live_memory_bytes": 0,
     "output_bytes": 0,
     "intrinsic_calls": 0,
     "provider_calls": 1,

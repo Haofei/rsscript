@@ -9,9 +9,12 @@ mutation write-back positions. An unresolved symbol is a link/execution error.
 Provider choice must not alter parsing, validation, HIR, lowering, or the compiled
 artifact.
 
-Execution control includes cancellation, deadline, step budget, allocation budget,
-external-call budget, output bounds, and recursion bounds. It does not include a
-language authority model. Resource slots are opaque and provider-owned at the
+Execution control includes cancellation, deadline, cumulative allocation budget,
+exact reachable-value live-memory limit, external-call budget, output bounds,
+and recursion bounds. The live metric deduplicates shared heap nodes and subtracts
+unreachable values at instruction boundaries; it excludes allocator metadata,
+generated code, and Provider-owned memory, so it is deterministic across hosts.
+Execution control does not include a language authority model. Resource slots are opaque and provider-owned at the
 external boundary; cleanup occurs on normal return, error, cancellation, and
 deadline exit.
 

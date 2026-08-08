@@ -13,6 +13,8 @@ impl RegVm {
         crate::ExecutionUsage {
             steps_consumed: self.steps,
             allocation_bytes_consumed: self.allocated_bytes,
+            live_memory_bytes_at_return: self.live_memory_bytes,
+            peak_live_memory_bytes: self.peak_live_memory_bytes,
             output_bytes: self.stdout.len().saturating_add(self.stderr.len()),
             intrinsic_calls: self.intrinsic_calls,
             provider_calls: self.provider_calls,
@@ -71,6 +73,9 @@ impl RegVm {
             limits: VmLimits::default(),
             steps: 0,
             allocated_bytes: 0,
+            live_memory_bytes: 0,
+            peak_live_memory_bytes: 0,
+            live_memory_dirty: true,
             intrinsic_calls: 0,
             provider_calls: 0,
             tasks_created: 0,
@@ -106,6 +111,7 @@ impl RegVm {
             captures: Vec::new(),
         });
         self.noncapturing_closure_cache[function] = Some(Rc::clone(&closure));
+        self.live_memory_dirty = true;
         closure
     }
 
@@ -115,6 +121,7 @@ impl RegVm {
             .set_limit(limits.resource_limit)
             .expect("fresh Provider resource registry must not be poisoned");
         self.limits = limits;
+        self.live_memory_dirty = true;
     }
 
     /// Push a call frame, enforcing the recursion-depth cap first. `frames.len()`
@@ -144,6 +151,7 @@ impl RegVm {
             && self.limits.cancel.is_none()
             && self.limits.deadline.is_none()
             && self.limits.allocation_budget.is_none()
+            && self.limits.live_memory_limit.is_none()
             // Native code runs whole-function without routing intrinsic dispatch
             // through `charge_intrinsic_call`, so an armed intrinsic budget must also
             // force the interpreter/tier-0 path — otherwise the host-call cap is
@@ -175,6 +183,7 @@ impl RegVm {
     /// preempts at await points); this ambient flag is the blunt host-level kill.
     #[inline]
     pub(super) fn tick(&mut self) -> Result<(), EvalError> {
+        self.refresh_live_memory_usage()?;
         self.steps += 1;
         if let Some(limit) = self.limits.step_budget
             && self.steps > limit

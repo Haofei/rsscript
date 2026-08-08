@@ -1,12 +1,114 @@
 use super::super::*;
 
 impl RegVm {
+    /// Recompute the exact reachable value-storage set defined by the VM model.
+    /// Shared heap nodes are counted once; register/channel slot capacity is
+    /// counted while it remains owned by a live task or channel. VM metadata,
+    /// allocator headers, generated code, and Provider-owned memory are outside
+    /// this deliberately deterministic metric.
+    pub(in crate::reg_vm) fn refresh_live_memory_usage(&mut self) -> Result<(), EvalError> {
+        if !self.live_memory_dirty {
+            return Ok(());
+        }
+        self.refresh_live_memory_usage_with(None)
+    }
+
+    pub(in crate::reg_vm) fn refresh_live_memory_usage_with(
+        &mut self,
+        extra_root: Option<&VmValue>,
+    ) -> Result<(), EvalError> {
+        if self.limits.live_memory_limit.is_none() && self.peak_live_memory_bytes == 0 {
+            return Ok(());
+        }
+
+        fn value_bytes(value: &VmValue, visited: &mut HashSet<usize>) -> usize {
+            RegVm::retained_storage_bytes_inner(value, &HashSet::new(), visited)
+        }
+
+        let mut visited = HashSet::new();
+        let mut bytes = self
+            .stack
+            .capacity()
+            .saturating_mul(std::mem::size_of::<VmValue>());
+        for (index, value) in self.stack.iter().enumerate() {
+            if self.written.get(index).copied().unwrap_or(false) {
+                bytes = bytes.saturating_add(value_bytes(value, &mut visited));
+            }
+        }
+
+        for slot in self.tasks.values() {
+            if let Some(saved) = &slot.saved {
+                bytes = bytes.saturating_add(
+                    saved
+                        .stack
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<VmValue>()),
+                );
+                for (index, value) in saved.stack.iter().enumerate() {
+                    if saved.written.get(index).copied().unwrap_or(false) {
+                        bytes = bytes.saturating_add(value_bytes(value, &mut visited));
+                    }
+                }
+            }
+            if let Some(value) = &slot.done {
+                bytes = bytes.saturating_add(value_bytes(value, &mut visited));
+            }
+            if let Some(Wait::Send { value, .. }) = &slot.wait {
+                bytes = bytes.saturating_add(value_bytes(value, &mut visited));
+            }
+        }
+
+        if let Some(Suspension {
+            wait: Wait::Send { value, .. },
+            ..
+        }) = &self.suspension
+        {
+            bytes = bytes.saturating_add(value_bytes(value, &mut visited));
+        }
+        for channel in self.channels.values() {
+            bytes = bytes.saturating_add(
+                channel
+                    .queue
+                    .capacity()
+                    .saturating_mul(std::mem::size_of::<VmValue>()),
+            );
+            for value in &channel.queue {
+                bytes = bytes.saturating_add(value_bytes(value, &mut visited));
+            }
+        }
+        for closure in self.noncapturing_closure_cache.iter().flatten() {
+            bytes = bytes.saturating_add(value_bytes(
+                &VmValue::Closure(Rc::clone(closure)),
+                &mut visited,
+            ));
+        }
+        if let Some(value) = extra_root {
+            bytes = bytes.saturating_add(value_bytes(value, &mut visited));
+        }
+
+        self.live_memory_bytes = bytes;
+        self.peak_live_memory_bytes = self.peak_live_memory_bytes.max(bytes);
+        self.live_memory_dirty = false;
+        if let Some(limit) = self.limits.live_memory_limit
+            && bytes > limit
+        {
+            return Err(EvalError::execution(
+                crate::ExecutionFailureKind::LiveMemoryLimitExceeded,
+                format!("live memory limit exceeded ({limit} bytes)"),
+            ));
+        }
+        Ok(())
+    }
+
     /// Account `bytes` of container growth against the memory ceiling. A no-op
     /// (no add, no check) when `limits.allocation_budget` is `None`, so the off path is
     /// near-free. When a budget is set and the cumulative estimate exceeds it,
     /// returns the memory-limit error. Best-effort: see [`RegVm::allocated_bytes`].
     #[inline]
     pub(in crate::reg_vm) fn account_bytes(&mut self, bytes: usize) -> Result<(), EvalError> {
+        if self.limits.live_memory_limit.is_some() && bytes != 0 {
+            self.live_memory_dirty = true;
+        }
         if self.limits.allocation_budget.is_some() {
             self.ensure_memory_available(bytes)?;
             self.allocated_bytes = self.allocated_bytes.saturating_add(bytes);

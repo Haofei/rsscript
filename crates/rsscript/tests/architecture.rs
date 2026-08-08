@@ -899,10 +899,15 @@ fn allocation_budget_is_not_mislabeled_as_live_memory() {
     assert!(vm.contains("allocated_bytes: usize"));
     assert!(vm.contains("This is not a live-memory measurement"));
     assert!(!vm.contains("pub mem_budget"));
-    assert!(!vm.contains("live_bytes:"));
+    assert!(vm.contains("pub live_memory_limit: Option<usize>"));
+    assert!(vm.contains("live_memory_bytes: usize"));
+    let storage = read(&root.join("crates/rsscript/src/reg_vm/exec/storage_accounting.rs"));
+    assert!(storage.contains("refresh_live_memory_usage"));
+    assert!(storage.contains("visited: &mut HashSet<usize>"));
 
     let facade = read(&root.join("crates/rsscript-compiler/src/lib.rs"));
     assert!(facade.contains("pub allocation_budget: Option<usize>"));
+    assert!(facade.contains("pub live_memory_limit: Option<usize>"));
     assert!(!facade.contains("pub memory_budget"));
 }
 
@@ -915,6 +920,7 @@ fn public_execution_defaults_are_bounded_without_compatibility_aliases() {
     for bounded in [
         "step_budget: Some(",
         "allocation_budget: Some(",
+        "live_memory_limit: Some(",
         "stdout_budget: Some(",
         "intrinsic_call_budget: Some(",
         "provider_call_budget: Some(",

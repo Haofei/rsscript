@@ -1783,6 +1783,11 @@ pub struct VmLimits {
     /// capacity growth. `None` disables accounting (near-zero overhead).
     /// This is not a live-memory measurement or an operating-system sandbox.
     pub allocation_budget: Option<usize>,
+    /// Maximum reachable RSScript value storage at an instruction boundary.
+    /// Unlike `allocation_budget`, this counter subtracts unreachable values and
+    /// deduplicates shared `Rc` nodes. The metric is a deterministic VM storage
+    /// model, not allocator RSS and not memory owned inside Provider futures.
+    pub live_memory_limit: Option<usize>,
     /// Host-level preemption hook. `None` means no polling (the off path is
     /// near-free: `tick()` never touches the atomic). When `Some`, the host can
     /// set the flag to `true` from anywhere (e.g. a watchdog thread on timeout or
@@ -1841,6 +1846,7 @@ impl Default for VmLimits {
             max_depth: 4_096,
             step_budget: Some(50_000_000),
             allocation_budget: Some(256 * 1024 * 1024),
+            live_memory_limit: Some(128 * 1024 * 1024),
             cancel: None,
             deadline: None,
             stdout_budget: Some(4 * 1024 * 1024),
@@ -1863,6 +1869,7 @@ impl VmLimits {
             max_depth: DEFAULT_MAX_DEPTH,
             step_budget: None,
             allocation_budget: None,
+            live_memory_limit: None,
             cancel: None,
             deadline: None,
             stdout_budget: None,
@@ -1923,6 +1930,15 @@ struct RegVm {
     /// growth, collection construction and capacity growth, and bounded intrinsic
     /// outputs such as SHAKE digests.
     allocated_bytes: usize,
+    /// Current and peak reachable RSScript value storage. These are refreshed
+    /// at instruction boundaries when the limit is armed and once before an
+    /// execution report is built.
+    live_memory_bytes: usize,
+    peak_live_memory_bytes: usize,
+    /// Set by VM-owned allocation/capacity-growth sites. The next instruction
+    /// boundary performs one root-set walk; pure scalar instructions pay only
+    /// this branch instead of rescanning the heap.
+    live_memory_dirty: bool,
     /// Number of stdlib/runtime intrinsic calls dispatched so far (the
     /// `intrinsic_call_budget` fuel gauge). Only consulted when that budget is `Some`;
     /// the unconditional increment is the entire overhead when it is off.

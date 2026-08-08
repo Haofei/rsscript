@@ -59,6 +59,7 @@
         "deadline_exceeded",
         "step_budget_exceeded",
         "allocation_budget_exceeded",
+        "live_memory_limit_exceeded",
         "output_limit_exceeded",
         "provider_error",
         "provider_budget_exceeded",
@@ -74,6 +75,8 @@
       "required": [
         "steps_consumed",
         "allocation_bytes_consumed",
+        "live_memory_bytes_at_return",
+        "peak_live_memory_bytes",
         "output_bytes",
         "intrinsic_calls",
         "provider_calls",
@@ -91,6 +94,8 @@
       "properties": {
         "steps_consumed": { "type": "integer", "minimum": 0 },
         "allocation_bytes_consumed": { "type": "integer", "minimum": 0 },
+        "live_memory_bytes_at_return": { "type": "integer", "minimum": 0 },
+        "peak_live_memory_bytes": { "type": "integer", "minimum": 0 },
         "output_bytes": { "type": "integer", "minimum": 0 },
         "intrinsic_calls": { "type": "integer", "minimum": 0 },
         "provider_calls": { "type": "integer", "minimum": 0 },

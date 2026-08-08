@@ -78,10 +78,11 @@ SLO. Raw Artifact, binding, and execution-report consumers have bounded fuzz
 targets, while ownership/retention/resource transitions have property coverage.
 Execution reports also carry measured Provider payload and duration summaries,
 structured-task lifecycle counters, peak live Provider resources, total runtime,
-and request-to-cancellation-observation latency. Core metrics exercise 1,000
+exact current/peak reachable VM value storage, and request-to-cancellation-observation latency. Core metrics exercise 1,000
 real Provider boundary calls and keep Provider-internal time separate from
-end-to-end VM time. Cumulative allocation remains explicitly named as such; it
-is not mislabeled as exact live-memory telemetry.
+end-to-end VM time. Cumulative allocation and exact reachable live storage remain
+separate metrics: the former limits allocation churn, while the latter subtracts
+frees and deduplicates shared values.
 The release workflow now performs an artifact-identical dry-run across Linux
 x86_64, Apple Silicon macOS, and Windows x86_64, with per-target checksums and
 provenance. During the alpha architecture window `rsscript-sdk` is distributed

@@ -457,6 +457,8 @@ pub struct EvalExecutionReport {
 pub struct ExecutionUsage {
     pub steps_consumed: u64,
     pub allocation_bytes_consumed: usize,
+    pub live_memory_bytes_at_return: usize,
+    pub peak_live_memory_bytes: usize,
     pub output_bytes: usize,
     pub intrinsic_calls: u64,
     pub provider_calls: u64,
@@ -489,6 +491,7 @@ pub enum ExecutionFailureKind {
     DeadlineExceeded,
     StepBudgetExceeded,
     AllocationBudgetExceeded,
+    LiveMemoryLimitExceeded,
     OutputLimitExceeded,
     IntrinsicBudgetExceeded,
     ProviderBudgetExceeded,

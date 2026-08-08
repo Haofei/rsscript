@@ -28,9 +28,9 @@ language specification and tests remain authoritative for existing behavior.
 1. Continue reducing compatibility-crate API and crate-wide lint exceptions.
 2. Complete query-level invalidation in the language service; its current
    revision cache is intentionally a document-level boundary.
-3. Add exact peak-live-memory accounting only when VM ownership can report it
-   without sampling or cumulative-allocation estimates. Provider duration,
-   payload, resource, task, and cancellation telemetry are complete.
+3. Use the exact reachable-value live-memory metric and cumulative allocation
+   quota together in workload tuning; extend the model only when a new VM-owned
+   value kind is introduced. Provider-owned memory remains Provider telemetry.
 4. Promote a feature only through the maturity matrix; do not add syntax while a
    Core row remains partial.
 

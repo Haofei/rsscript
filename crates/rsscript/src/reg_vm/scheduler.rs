@@ -59,6 +59,7 @@ impl RegVm {
     /// Register a new ready task running `func` with `args` placed in its first
     /// registers (its own private register stack, base 0).
     pub(super) fn create_task(&mut self, func: Rc<RegFunction>, args: Vec<VmValue>) -> TaskId {
+        self.live_memory_dirty = true;
         let tid = self.next_task_id;
         self.next_task_id += 1;
         let regs = func.regs.max(args.len());
@@ -159,6 +160,7 @@ impl RegVm {
                     self.stack = Vec::new();
                     self.written = Vec::new();
                     if tid == root {
+                        self.refresh_live_memory_usage_with(Some(&value))?;
                         return Ok(value);
                     }
                     self.tasks.get_mut(&tid).expect("task slot").done = Some(value);

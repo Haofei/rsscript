@@ -31,6 +31,16 @@ mod register_window_tests {
         )
     }
 
+    fn is_live_memory_failure(error: &EvalError) -> bool {
+        matches!(
+            error,
+            EvalError::Execution {
+                kind: ExecutionFailureKind::LiveMemoryLimitExceeded,
+                ..
+            }
+        )
+    }
+
     fn run_budgeted_instruction(
         code: Vec<RegInstr>,
         args: Vec<VmValue>,
@@ -260,6 +270,45 @@ mod register_window_tests {
             assert!(matches!(vm.stack[index], VmValue::Unit));
             assert!(!vm.written[index]);
         }
+    }
+
+    #[test]
+    fn live_memory_meter_deduplicates_shared_nodes_and_subtracts_frees() {
+        let mut vm = empty_vm();
+        vm.set_limits(VmLimits {
+            allocation_budget: None,
+            live_memory_limit: Some(1 << 20),
+            ..VmLimits::default()
+        });
+        vm.ensure_regs(2).unwrap();
+        let shared = VmValue::string("x".repeat(128));
+        vm.set_reg(0, shared.clone());
+        vm.set_reg(1, shared);
+        vm.refresh_live_memory_usage_with(None).unwrap();
+        let slot_bytes = vm.stack.capacity() * std::mem::size_of::<VmValue>();
+        assert_eq!(vm.live_memory_bytes, slot_bytes + 128);
+        let peak = vm.peak_live_memory_bytes;
+
+        vm.set_reg(0, VmValue::Unit);
+        vm.set_reg(1, VmValue::Unit);
+        vm.refresh_live_memory_usage_with(None).unwrap();
+        assert_eq!(vm.live_memory_bytes, slot_bytes);
+        assert_eq!(vm.peak_live_memory_bytes, peak);
+    }
+
+    #[test]
+    fn live_memory_limit_fails_independently_of_cumulative_allocation_budget() {
+        let mut vm = empty_vm();
+        vm.set_limits(VmLimits {
+            allocation_budget: None,
+            live_memory_limit: Some(32),
+            ..VmLimits::default()
+        });
+        vm.ensure_regs(1).unwrap();
+        vm.set_reg(0, VmValue::string("x".repeat(64)));
+        let error = vm.refresh_live_memory_usage().unwrap_err();
+        assert!(is_live_memory_failure(&error));
+        assert!(vm.live_memory_bytes > 32);
     }
 
     #[test]

@@ -1412,6 +1412,7 @@ impl RegVm {
         if self.limits.step_budget.is_some()
             || self.limits.cancel.is_some()
             || self.limits.allocation_budget.is_some()
+            || self.limits.live_memory_limit.is_some()
             || self.limits.intrinsic_call_budget.is_some()
             || self.limits.provider_call_budget.is_some()
         {

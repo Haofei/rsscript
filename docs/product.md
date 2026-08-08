@@ -29,7 +29,8 @@ source + interfaces
 ```
 
 Successful reports identify the artifact, use a structured termination reason,
-and record steps, cumulative allocation bytes, output bytes, intrinsic calls,
+and record steps, cumulative allocation bytes, current/peak reachable VM value
+storage, output bytes, intrinsic calls,
 and Provider calls, including resources created, successfully cleaned, and
 failed during cleanup. Low-overhead runtime telemetry adds execution and
 cancellation latency, structured-task/resource peaks, and per-Provider-symbol
