@@ -9,6 +9,7 @@
     "artifact_digest",
     "termination_reason",
     "usage",
+    "telemetry",
     "value",
     "display_value",
     "native_value",
@@ -23,6 +24,7 @@
     "artifact_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
     "termination_reason": { "$ref": "#/$defs/termination_reason" },
     "usage": { "$ref": "#/$defs/usage" },
+    "telemetry": { "$ref": "#/$defs/telemetry" },
     "value": { "type": "string" },
     "display_value": { "type": "string" },
     "native_value": {
@@ -78,7 +80,13 @@
         "resources_created",
         "resources_cleaned",
         "resource_cleanup_failures",
-        "resources_live_at_return"
+        "resources_peak_live",
+        "resources_live_at_return",
+        "tasks_created",
+        "tasks_completed",
+        "tasks_cancelled",
+        "tasks_peak_live",
+        "tasks_live_at_return"
       ],
       "properties": {
         "steps_consumed": { "type": "integer", "minimum": 0 },
@@ -89,7 +97,57 @@
         "resources_created": { "type": "integer", "minimum": 0 },
         "resources_cleaned": { "type": "integer", "minimum": 0 },
         "resource_cleanup_failures": { "type": "integer", "minimum": 0 },
-        "resources_live_at_return": { "type": "integer", "minimum": 0 }
+        "resources_peak_live": { "type": "integer", "minimum": 0 },
+        "resources_live_at_return": { "type": "integer", "minimum": 0 },
+        "tasks_created": { "type": "integer", "minimum": 0 },
+        "tasks_completed": { "type": "integer", "minimum": 0 },
+        "tasks_cancelled": { "type": "integer", "minimum": 0 },
+        "tasks_peak_live": { "type": "integer", "minimum": 0 },
+        "tasks_live_at_return": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["execution_duration_ns", "cancellation_latency_ns", "provider_functions"],
+      "properties": {
+        "execution_duration_ns": { "type": "integer", "minimum": 0 },
+        "cancellation_latency_ns": {
+          "oneOf": [
+            { "type": "null" },
+            { "type": "integer", "minimum": 0 }
+          ]
+        },
+        "provider_functions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/provider_function_telemetry" }
+        }
+      }
+    },
+    "provider_function_telemetry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider_id",
+        "provider_version",
+        "symbol",
+        "calls",
+        "failures",
+        "request_bytes",
+        "response_bytes",
+        "total_duration_ns",
+        "max_duration_ns"
+      ],
+      "properties": {
+        "provider_id": { "type": "string" },
+        "provider_version": { "type": "string" },
+        "symbol": { "type": "string" },
+        "calls": { "type": "integer", "minimum": 0 },
+        "failures": { "type": "integer", "minimum": 0 },
+        "request_bytes": { "type": "integer", "minimum": 0 },
+        "response_bytes": { "type": "integer", "minimum": 0 },
+        "total_duration_ns": { "type": "integer", "minimum": 0 },
+        "max_duration_ns": { "type": "integer", "minimum": 0 }
       }
     },
     "native_value": {
@@ -241,12 +299,23 @@
     "provider_call_trace": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["call_id", "provider_id", "provider_version", "symbol", "elapsed", "result"],
+      "required": [
+        "call_id",
+        "provider_id",
+        "provider_version",
+        "symbol",
+        "request_bytes",
+        "response_bytes",
+        "elapsed",
+        "result"
+      ],
       "properties": {
         "call_id": { "type": "integer", "minimum": 0 },
         "provider_id": { "type": "string" },
         "provider_version": { "type": "string" },
         "symbol": { "type": "string" },
+        "request_bytes": { "type": "integer", "minimum": 0 },
+        "response_bytes": { "type": "integer", "minimum": 0 },
         "elapsed": {
           "type": "object",
           "additionalProperties": false,

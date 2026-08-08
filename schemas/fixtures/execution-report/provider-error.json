@@ -11,7 +11,30 @@
     "resources_created": 0,
     "resources_cleaned": 0,
     "resource_cleanup_failures": 0,
-    "resources_live_at_return": 0
+    "resources_peak_live": 0,
+    "resources_live_at_return": 0,
+    "tasks_created": 1,
+    "tasks_completed": 0,
+    "tasks_cancelled": 0,
+    "tasks_peak_live": 1,
+    "tasks_live_at_return": 1
+  },
+  "telemetry": {
+    "execution_duration_ns": 25000,
+    "cancellation_latency_ns": null,
+    "provider_functions": [
+      {
+        "provider_id": "fixture.provider",
+        "provider_version": "1.0.0",
+        "symbol": "host.fixture.call",
+        "calls": 1,
+        "failures": 1,
+        "request_bytes": 4,
+        "response_bytes": 20,
+        "total_duration_ns": 1000,
+        "max_duration_ns": 1000
+      }
+    ]
   },
   "value": "",
   "display_value": "",
@@ -24,6 +47,8 @@
       "provider_id": "fixture.provider",
       "provider_version": "1.0.0",
       "symbol": "host.fixture.call",
+      "request_bytes": 4,
+      "response_bytes": 20,
       "elapsed": { "secs": 0, "nanos": 1000 },
       "result": { "Err": "invalid_argument" }
     }

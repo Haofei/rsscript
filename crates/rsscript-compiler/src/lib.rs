@@ -7,6 +7,8 @@ use std::error::Error;
 use std::fmt;
 #[cfg(feature = "execution")]
 use std::path::Path;
+#[cfg(feature = "execution")]
+use std::time::{Duration, Instant};
 
 /// Frontend-only editor API consumed by `rsscript-language-service`.
 /// Runtime and Provider types are deliberately excluded.
@@ -428,6 +430,7 @@ impl LinkedPackage<'_> {
     /// Execute and always return an audit report, including partial evidence
     /// for cancellation, budget exhaustion, and Provider failures.
     pub fn execute(&self, args: impl IntoIterator<Item = impl Into<String>>) -> ExecutionReport {
+        let started = Instant::now();
         let output = match self
             .package
             .executable
@@ -446,6 +449,8 @@ impl LinkedPackage<'_> {
                     self.package.module_digest(),
                     RuntimeError::from(error),
                     diagnostics,
+                    started.elapsed(),
+                    self.limits.cancel.as_ref(),
                 );
             }
         };
@@ -454,13 +459,21 @@ impl LinkedPackage<'_> {
             _ => Vec::new(),
         };
         let failure = output.failure.map(RuntimeError::from);
+        let termination_reason = failure
+            .as_ref()
+            .map_or(TerminationReason::Completed, |error| error.reason);
+        let telemetry = ExecutionTelemetry::from_traces(
+            started.elapsed(),
+            termination_reason,
+            self.limits.cancel.as_ref(),
+            &output.provider_call_traces,
+        );
         ExecutionReport {
             schema: EXECUTION_REPORT_SCHEMA,
             artifact_digest: self.package.module_digest().to_string(),
-            termination_reason: failure
-                .as_ref()
-                .map_or(TerminationReason::Completed, |error| error.reason),
+            termination_reason,
             usage: output.usage,
+            telemetry,
             value: output.value.unwrap_or_default(),
             display_value: output.display_value.unwrap_or_default(),
             native_value: output.native_value,
@@ -497,12 +510,85 @@ impl Default for Runtime {
 pub const EXECUTION_REPORT_SCHEMA: &str = "rsscript.execution_report.v1";
 
 #[cfg(feature = "execution")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ExecutionTelemetry {
+    pub execution_duration_ns: u64,
+    pub cancellation_latency_ns: Option<u64>,
+    pub provider_functions: Vec<ProviderFunctionTelemetry>,
+}
+
+#[cfg(feature = "execution")]
+impl ExecutionTelemetry {
+    fn from_traces(
+        elapsed: Duration,
+        termination_reason: TerminationReason,
+        cancellation: Option<&CancellationToken>,
+        traces: &[provider::ProviderCallTrace],
+    ) -> Self {
+        let mut summaries = BTreeMap::<(String, String, String), ProviderFunctionTelemetry>::new();
+        for trace in traces {
+            let key = (
+                trace.provider_id.clone(),
+                trace.provider_version.clone(),
+                trace.symbol.clone(),
+            );
+            let summary = summaries
+                .entry(key)
+                .or_insert_with(|| ProviderFunctionTelemetry {
+                    provider_id: trace.provider_id.clone(),
+                    provider_version: trace.provider_version.clone(),
+                    symbol: trace.symbol.clone(),
+                    ..ProviderFunctionTelemetry::default()
+                });
+            summary.calls = summary.calls.saturating_add(1);
+            summary.failures = summary
+                .failures
+                .saturating_add(u64::from(trace.result.is_err()));
+            summary.request_bytes = summary.request_bytes.saturating_add(trace.request_bytes);
+            summary.response_bytes = summary.response_bytes.saturating_add(trace.response_bytes);
+            let elapsed_ns = duration_ns(trace.elapsed);
+            summary.total_duration_ns = summary.total_duration_ns.saturating_add(elapsed_ns);
+            summary.max_duration_ns = summary.max_duration_ns.max(elapsed_ns);
+        }
+        let cancellation_latency_ns = (termination_reason == TerminationReason::Cancelled)
+            .then(|| cancellation.and_then(CancellationToken::cancelled_at))
+            .flatten()
+            .map(|cancelled_at| duration_ns(cancelled_at.elapsed()));
+        Self {
+            execution_duration_ns: duration_ns(elapsed),
+            cancellation_latency_ns,
+            provider_functions: summaries.into_values().collect(),
+        }
+    }
+}
+
+#[cfg(feature = "execution")]
+fn duration_ns(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
+}
+
+#[cfg(feature = "execution")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize)]
+pub struct ProviderFunctionTelemetry {
+    pub provider_id: String,
+    pub provider_version: String,
+    pub symbol: String,
+    pub calls: u64,
+    pub failures: u64,
+    pub request_bytes: usize,
+    pub response_bytes: usize,
+    pub total_duration_ns: u64,
+    pub max_duration_ns: u64,
+}
+
+#[cfg(feature = "execution")]
 #[derive(Debug, Clone, PartialEq, serde::Serialize)]
 pub struct ExecutionReport {
     pub schema: &'static str,
     pub artifact_digest: String,
     pub termination_reason: TerminationReason,
     pub usage: ExecutionUsage,
+    pub telemetry: ExecutionTelemetry,
     pub value: String,
     pub display_value: String,
     pub native_value: Option<NativeValue>,
@@ -519,12 +605,21 @@ impl ExecutionReport {
         artifact_digest: impl Into<String>,
         failure: RuntimeError,
         diagnostics: Vec<Diagnostic>,
+        elapsed: Duration,
+        cancellation: Option<&CancellationToken>,
     ) -> Self {
+        let termination_reason = failure.reason;
         Self {
             schema: EXECUTION_REPORT_SCHEMA,
             artifact_digest: artifact_digest.into(),
-            termination_reason: failure.reason,
+            termination_reason,
             usage: ExecutionUsage::default(),
+            telemetry: ExecutionTelemetry::from_traces(
+                elapsed,
+                termination_reason,
+                cancellation,
+                &[],
+            ),
             value: String::new(),
             display_value: String::new(),
             native_value: None,
@@ -733,7 +828,13 @@ impl From<EvalError> for RuntimeError {
                 message,
             },
             EvalError::Provider(error) => Self {
-                reason: TerminationReason::ProviderError,
+                reason: match error.code {
+                    provider::ProviderErrorCode::Cancelled => TerminationReason::Cancelled,
+                    provider::ProviderErrorCode::DeadlineExceeded => {
+                        TerminationReason::DeadlineExceeded
+                    }
+                    _ => TerminationReason::ProviderError,
+                },
                 message: error.to_string(),
             },
         }
@@ -878,6 +979,32 @@ fn main() -> Result<Unit, String> {
         assert_eq!(report.usage.tasks_cancelled, 0);
         assert_eq!(report.usage.tasks_peak_live, 3);
         assert_eq!(report.usage.tasks_live_at_return, 0);
+    }
+
+    #[test]
+    fn cancelled_execution_reports_request_to_observation_latency() {
+        let package = Compiler
+            .compile(
+                "cancel.rss",
+                "fn main() -> Unit { while true {} return Unit }",
+            )
+            .expect("compile");
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let runtime = Runtime::new(
+            ProviderRegistry::default(),
+            RunLimits {
+                cancellation: Some(cancellation),
+                ..RunLimits::bounded()
+            },
+        );
+        let report = runtime
+            .link(&package)
+            .expect("link")
+            .execute(Vec::<String>::new());
+        assert_eq!(report.termination_reason, TerminationReason::Cancelled);
+        assert!(report.telemetry.cancellation_latency_ns.is_some());
+        assert!(report.telemetry.execution_duration_ns > 0);
     }
 
     #[test]
@@ -1191,6 +1318,17 @@ fn main() -> Result<Unit, String> {
         assert_eq!(trace.provider_id, "test.log");
         assert_eq!(trace.provider_version, "1");
         assert_eq!(trace.symbol, "host.log.emit");
+        assert_eq!(trace.request_bytes, 2);
+        assert_eq!(trace.response_bytes, 0);
         assert_eq!(trace.result, Ok(()));
+        assert_eq!(report.telemetry.provider_functions.len(), 1);
+        let summary = &report.telemetry.provider_functions[0];
+        assert_eq!(summary.provider_id, "test.log");
+        assert_eq!(summary.symbol, "host.log.emit");
+        assert_eq!(summary.calls, 1);
+        assert_eq!(summary.failures, 0);
+        assert_eq!(summary.request_bytes, 2);
+        assert_eq!(summary.response_bytes, 0);
+        assert_eq!(summary.total_duration_ns, summary.max_duration_ns);
     }
 }

@@ -11,7 +11,18 @@
     "resources_created": 0,
     "resources_cleaned": 0,
     "resource_cleanup_failures": 0,
-    "resources_live_at_return": 0
+    "resources_peak_live": 0,
+    "resources_live_at_return": 0,
+    "tasks_created": 1,
+    "tasks_completed": 0,
+    "tasks_cancelled": 0,
+    "tasks_peak_live": 1,
+    "tasks_live_at_return": 1
+  },
+  "telemetry": {
+    "execution_duration_ns": 50000,
+    "cancellation_latency_ns": 40000,
+    "provider_functions": []
   },
   "value": "",
   "display_value": "",
