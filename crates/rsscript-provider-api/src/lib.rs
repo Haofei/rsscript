@@ -42,6 +42,72 @@ pub enum NativeValue {
     },
 }
 
+impl NativeValue {
+    /// Return a deterministic estimate of the logical payload bytes crossing a
+    /// Provider boundary. This intentionally excludes allocator capacity and
+    /// transport framing, which vary by Provider implementation.
+    pub fn estimated_payload_bytes(&self) -> usize {
+        let mut total = 0usize;
+        let mut values = vec![self];
+        while let Some(value) = values.pop() {
+            match value {
+                Self::Unit => {}
+                Self::Int(_) | Self::Float(_) => total = total.saturating_add(8),
+                Self::Bool(_) => total = total.saturating_add(1),
+                Self::Char(value) => total = total.saturating_add(value.len_utf8()),
+                Self::String(value) => total = total.saturating_add(value.len()),
+                Self::Bytes(value) => total = total.saturating_add(value.len()),
+                Self::List(items) => values.extend(items),
+                Self::Map(entries) => {
+                    for (key, value) in entries {
+                        values.push(key);
+                        values.push(value);
+                    }
+                }
+                Self::Json(value) => total = total.saturating_add(json_payload_bytes(value)),
+                Self::Struct { name, fields } | Self::Variant { name, fields } => {
+                    total = total.saturating_add(name.len());
+                    for (name, value) in fields {
+                        total = total.saturating_add(name.len());
+                        values.push(value);
+                    }
+                }
+                Self::Native { type_name, .. } => {
+                    total = total.saturating_add(type_name.len()).saturating_add(8);
+                }
+            }
+        }
+        total
+    }
+}
+
+fn json_payload_bytes(root: &serde_json::Value) -> usize {
+    let mut total = 0usize;
+    let mut values = vec![root];
+    while let Some(value) = values.pop() {
+        match value {
+            serde_json::Value::Null => {}
+            serde_json::Value::Bool(_) => total = total.saturating_add(1),
+            serde_json::Value::Number(_) => total = total.saturating_add(8),
+            serde_json::Value::String(value) => total = total.saturating_add(value.len()),
+            serde_json::Value::Array(items) => values.extend(items),
+            serde_json::Value::Object(fields) => {
+                for (name, value) in fields {
+                    total = total.saturating_add(name.len());
+                    values.push(value);
+                }
+            }
+        }
+    }
+    total
+}
+
+pub fn estimated_payload_bytes(values: &[NativeValue]) -> usize {
+    values.iter().fold(0usize, |total, value| {
+        total.saturating_add(value.estimated_payload_bytes())
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderErrorCode {
@@ -172,6 +238,8 @@ pub struct ProviderCallTrace {
     pub provider_id: String,
     pub provider_version: String,
     pub symbol: String,
+    pub request_bytes: usize,
+    pub response_bytes: usize,
     pub elapsed: Duration,
     pub result: Result<(), ProviderErrorCode>,
 }
@@ -734,6 +802,19 @@ impl Error for ProviderLoadError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn payload_estimate_is_structural_and_deterministic() {
+        let value = NativeValue::Struct {
+            name: "Reply".into(),
+            fields: BTreeMap::from([
+                ("body".into(), NativeValue::Bytes(vec![1, 2, 3, 4])),
+                ("ok".into(), NativeValue::Bool(true)),
+            ]),
+        };
+        assert_eq!(value.estimated_payload_bytes(), 5 + 4 + 4 + 2 + 1);
+        assert_eq!(estimated_payload_bytes(&[value.clone(), value]), 32);
+    }
     use proptest::prelude::*;
     use rsscript_abi_model::{DataEffect, ParameterSignature};
     use std::sync::atomic::{AtomicBool, Ordering};

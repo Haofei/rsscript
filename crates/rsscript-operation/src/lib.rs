@@ -1,12 +1,14 @@
 #![forbid(unsafe_code)]
 
 use std::sync::Arc;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Default)]
 pub struct CancellationToken {
     cancelled: Arc<AtomicBool>,
+    cancelled_at: Arc<OnceLock<Instant>>,
 }
 
 impl CancellationToken {
@@ -15,11 +17,20 @@ impl CancellationToken {
     }
 
     pub fn cancel(&self) {
+        let _ = self.cancelled_at.set(Instant::now());
         self.cancelled.store(true, Ordering::Release);
     }
 
     pub fn is_cancelled(&self) -> bool {
         self.cancelled.load(Ordering::Acquire)
+    }
+
+    /// Return the monotonic instant at which cancellation was first requested.
+    ///
+    /// Recording the first request makes end-to-end cancellation latency
+    /// measurable without changing the lock-free polling path used by the VM.
+    pub fn cancelled_at(&self) -> Option<Instant> {
+        self.cancelled_at.get().copied()
     }
 
     /// Atomic storage used by the optional native tier's polling ABI.
@@ -92,6 +103,16 @@ mod tests {
         let clone = token.clone();
         token.cancel();
         assert!(clone.is_cancelled());
+        assert_eq!(clone.cancelled_at(), token.cancelled_at());
+    }
+
+    #[test]
+    fn cancellation_timestamp_is_first_writer_wins() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let first = token.cancelled_at().expect("cancellation timestamp");
+        token.cancel();
+        assert_eq!(token.cancelled_at(), Some(first));
     }
 
     #[test]

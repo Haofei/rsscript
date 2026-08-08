@@ -90,6 +90,7 @@ impl ExternalFunction {
                 .clone_from(&contract.provider_version);
             context.symbol = contract.descriptor.symbol.as_str().to_string();
         }
+        let request_bytes = rsscript_provider_api::estimated_payload_bytes(&args);
         let started = Instant::now();
         let result = (|| {
             context.check_cancelled()?;
@@ -141,12 +142,23 @@ impl ExternalFunction {
             }
             result
         })();
+        let response_bytes = match &result {
+            Ok(value) => value.estimated_payload_bytes(),
+            Err(error) => error.message.len().saturating_add(
+                error
+                    .details
+                    .as_ref()
+                    .map_or(0, |details| details.to_string().len()),
+            ),
+        };
         if let Some(trace) = context.trace {
             trace.record(ProviderCallTrace {
                 call_id: context.call_id,
                 provider_id: context.provider_id.clone(),
                 provider_version: context.provider_version.clone(),
                 symbol: context.symbol.clone(),
+                request_bytes,
+                response_bytes,
                 elapsed: started.elapsed(),
                 result: result.as_ref().map(|_| ()).map_err(|error| error.code),
             });
