@@ -12,10 +12,16 @@
     "compile",
     "artifact_verify",
     "vm_execute",
+    "provider_execute",
     "pre_cancel_rejection",
     "artifact_bytes",
     "execution_steps",
-    "execution_allocated_bytes"
+    "execution_allocated_bytes",
+    "provider_calls",
+    "provider_request_bytes",
+    "provider_response_bytes",
+    "provider_total_duration_ns",
+    "provider_max_duration_ns"
   ],
   "properties": {
     "schema": { "const": "rsscript.core_metrics.v1" },
@@ -35,10 +41,16 @@
     "compile": { "$ref": "#/$defs/distribution" },
     "artifact_verify": { "$ref": "#/$defs/distribution" },
     "vm_execute": { "$ref": "#/$defs/distribution" },
+    "provider_execute": { "$ref": "#/$defs/distribution" },
     "pre_cancel_rejection": { "$ref": "#/$defs/distribution" },
     "artifact_bytes": { "type": "integer", "minimum": 1 },
     "execution_steps": { "type": "integer", "minimum": 1 },
-    "execution_allocated_bytes": { "type": "integer", "minimum": 0 }
+    "execution_allocated_bytes": { "type": "integer", "minimum": 0 },
+    "provider_calls": { "type": "integer", "minimum": 1 },
+    "provider_request_bytes": { "type": "integer", "minimum": 0 },
+    "provider_response_bytes": { "type": "integer", "minimum": 0 },
+    "provider_total_duration_ns": { "type": "integer", "minimum": 0 },
+    "provider_max_duration_ns": { "type": "integer", "minimum": 0 }
   },
   "$defs": {
     "distribution": {

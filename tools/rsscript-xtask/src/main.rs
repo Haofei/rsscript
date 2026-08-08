@@ -1,10 +1,17 @@
 #![forbid(unsafe_code)]
 
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
+use rsscript_sdk::provider::{
+    BlockingBehavior, CancellationBehavior, DataEffect, ExternalSymbol, FunctionSignature,
+    NativeInterpreterFn, ParameterSignature, ProviderCallMode, ProviderDescriptor,
+    ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, RUNTIME_ABI_VERSION,
+    ResourceCleanupContract,
+};
 use rsscript_sdk::{CancellationToken, Compiler, ProviderRegistry, RunLimits, Runtime};
 use serde::{Deserialize, Serialize};
 
@@ -30,6 +37,21 @@ fn main() -> Int {
     return value
 }
 "#;
+const PROVIDER_WORKLOAD: &str = r#"
+module metrics
+use host.metrics.*
+
+fn main() -> Int {
+    let mut index = 0
+    let mut total = 0
+    while index < 1000 {
+        total = echo(value: index)
+        index = index + 1
+    }
+    return total
+}
+"#;
+const PROVIDER_INTERFACE: &str = "module host.metrics\npub fn echo(value: read Int) -> Int\n";
 
 #[derive(Debug, Serialize)]
 struct MetricDistribution {
@@ -47,10 +69,16 @@ struct CoreMetrics {
     compile: MetricDistribution,
     artifact_verify: MetricDistribution,
     vm_execute: MetricDistribution,
+    provider_execute: MetricDistribution,
     pre_cancel_rejection: MetricDistribution,
     artifact_bytes: usize,
     execution_steps: u64,
     execution_allocated_bytes: usize,
+    provider_calls: u64,
+    provider_request_bytes: usize,
+    provider_response_bytes: usize,
+    provider_total_duration_ns: u64,
+    provider_max_duration_ns: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -77,6 +105,7 @@ struct LatencySlo {
     compile: f64,
     artifact_verify: f64,
     vm_execute: f64,
+    provider_execute: f64,
     pre_cancel_rejection: f64,
 }
 
@@ -132,6 +161,11 @@ fn parse_arguments(
 
 fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
     let compiler = Compiler;
+    let provider_package = compiler.compile_with_interfaces(
+        &[("provider-metrics.rss", PROVIDER_WORKLOAD)],
+        &[("provider-metrics.rssi", PROVIDER_INTERFACE)],
+    )?;
+    let provider_runtime = metrics_provider_runtime()?;
 
     // Warm each path before collecting distributions so the report measures
     // steady Core behavior rather than one-time process and allocator setup.
@@ -143,16 +177,25 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
         Runtime::default()
             .link(&loaded)?
             .run(Vec::<String>::new())?;
+        provider_runtime
+            .link(&provider_package)?
+            .run(Vec::<String>::new())?;
     }
 
     let mut check = Vec::with_capacity(arguments.iterations);
     let mut compile = Vec::with_capacity(arguments.iterations);
     let mut verify = Vec::with_capacity(arguments.iterations);
     let mut execute = Vec::with_capacity(arguments.iterations);
+    let mut provider_execute = Vec::with_capacity(arguments.iterations);
     let mut cancel = Vec::with_capacity(arguments.iterations);
     let mut artifact_bytes = 0;
     let mut execution_steps = 0;
     let mut execution_allocated_bytes = 0;
+    let mut provider_calls = 0;
+    let mut provider_request_bytes = 0;
+    let mut provider_response_bytes = 0;
+    let mut provider_total_duration_ns = 0;
+    let mut provider_max_duration_ns = 0;
 
     let cancellation_package = compiler.compile("cancel.rss", CANCELLATION_WORKLOAD)?;
     for _ in 0..arguments.iterations {
@@ -181,6 +224,21 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
         execute.push(elapsed_ms(started));
         execution_steps = report.usage.steps_consumed;
         execution_allocated_bytes = report.usage.allocation_bytes_consumed;
+
+        let linked = provider_runtime.link(&provider_package)?;
+        let started = Instant::now();
+        let report = linked.run(Vec::<String>::new())?;
+        provider_execute.push(elapsed_ms(started));
+        let summary = report
+            .telemetry
+            .provider_functions
+            .first()
+            .ok_or("Provider metric workload did not record its external call")?;
+        provider_calls = summary.calls;
+        provider_request_bytes = summary.request_bytes;
+        provider_response_bytes = summary.response_bytes;
+        provider_total_duration_ns = summary.total_duration_ns;
+        provider_max_duration_ns = summary.max_duration_ns;
 
         let cancellation = CancellationToken::new();
         cancellation.cancel();
@@ -221,10 +279,16 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
         compile: distribution(compile),
         artifact_verify: distribution(verify),
         vm_execute: distribution(execute),
+        provider_execute: distribution(provider_execute),
         pre_cancel_rejection: distribution(cancel),
         artifact_bytes,
         execution_steps,
         execution_allocated_bytes,
+        provider_calls,
+        provider_request_bytes,
+        provider_response_bytes,
+        provider_total_duration_ns,
+        provider_max_duration_ns,
     };
     let json = serde_json::to_string_pretty(&metrics)?;
     println!("{json}");
@@ -238,6 +302,56 @@ fn run_core_metrics(arguments: Arguments) -> Result<(), Box<dyn Error>> {
         check_slo(&metrics, &slo_path)?;
     }
     Ok(())
+}
+
+fn metrics_provider_runtime() -> Result<Runtime, Box<dyn Error>> {
+    let symbol = ExternalSymbol::new("host.metrics.echo")
+        .map_err(|_| "invalid built-in metrics provider symbol")?;
+    let signature = FunctionSignature {
+        parameters: vec![ParameterSignature {
+            name: "value".into(),
+            effect: DataEffect::Read,
+            ty: "Int".into(),
+            retained: false,
+        }],
+        result: "Int".into(),
+        asynchronous: false,
+    };
+    let descriptor = ProviderDescriptor {
+        provider_id: "rsscript.metrics".into(),
+        provider_version: "1.0.0".into(),
+        supported_abi: vec![RUNTIME_ABI_VERSION],
+        functions: vec![ProviderFunctionDescriptor {
+            symbol: symbol.clone(),
+            signature: signature.clone(),
+            entry: "echo".into(),
+            call_mode: ProviderCallMode::Sync,
+            blocking: BlockingBehavior::NonBlocking,
+            cancellation: CancellationBehavior::NotApplicable,
+            thread_safe: true,
+            reentrant: true,
+            resource_cleanup: ResourceCleanupContract::None,
+            error_mapping: ProviderErrorMapping::StructuredV1,
+        }],
+    };
+    let mut providers = ProviderRegistry::default();
+    providers.register(
+        &descriptor,
+        BTreeMap::from([(
+            symbol,
+            ProviderFunction {
+                signature,
+                callable: NativeInterpreterFn::new(|mut values| {
+                    values.pop().filter(|_| values.is_empty()).ok_or_else(|| {
+                        rsscript_sdk::provider::ProviderError::invalid_argument(
+                            "metrics echo expects one argument",
+                        )
+                    })
+                }),
+            },
+        )]),
+    )?;
+    Ok(Runtime::new(providers, RunLimits::bounded()))
 }
 
 fn measure(action: impl FnOnce()) -> f64 {
@@ -281,6 +395,11 @@ fn check_slo(metrics: &CoreMetrics, path: &PathBuf) -> Result<(), Box<dyn Error>
             "vm_execute",
             metrics.vm_execute.p95_ms,
             slo.max_p95_ms.vm_execute,
+        ),
+        (
+            "provider_execute",
+            metrics.provider_execute.p95_ms,
+            slo.max_p95_ms.provider_execute,
         ),
         (
             "pre_cancel_rejection",
@@ -353,10 +472,16 @@ mod tests {
             compile: distribution(),
             artifact_verify: distribution(),
             vm_execute: distribution(),
+            provider_execute: distribution(),
             pre_cancel_rejection: distribution(),
             artifact_bytes: 1,
             execution_steps: 1,
             execution_allocated_bytes: 0,
+            provider_calls: 1000,
+            provider_request_bytes: 8000,
+            provider_response_bytes: 8000,
+            provider_total_duration_ns: 1000,
+            provider_max_duration_ns: 1,
         };
         let schema: serde_json::Value = serde_json::from_str(include_str!(
             "../../../schemas/rsscript.core_metrics.v1.schema.json"

@@ -5,6 +5,7 @@
     "compile": 250.0,
     "artifact_verify": 100.0,
     "vm_execute": 100.0,
+    "provider_execute": 250.0,
     "pre_cancel_rejection": 25.0
   },
   "max_artifact_bytes": 1048576,

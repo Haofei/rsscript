@@ -31,7 +31,11 @@ source + interfaces
 Successful reports identify the artifact, use a structured termination reason,
 and record steps, cumulative allocation bytes, output bytes, intrinsic calls,
 and Provider calls, including resources created, successfully cleaned, and
-failed during cleanup. Reports serialize as the versioned
+failed during cleanup. Low-overhead runtime telemetry adds execution and
+cancellation latency, structured-task/resource peaks, and per-Provider-symbol
+call, failure, logical payload-byte, total-duration, and maximum-duration
+summaries. The logical payload estimate deliberately excludes allocator
+capacity and Provider-specific transport framing. Reports serialize as the versioned
 `rsscript.execution_report.v1` schema. Failed executions return a
 machine-readable termination reason plus a diagnostic message instead of a bare
 string error.

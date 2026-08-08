@@ -75,6 +75,13 @@ The VM owns the table, rejects stale/reused handles, enforces `resource_limit`,
 and invokes cleanup exactly once on explicit close or execution exit.
 `ExecutionUsage` distinguishes `resources_cleaned` from
 `resource_cleanup_failures`; a failed cleanup is never reported as successful.
+It also reports peak live Provider resources and the structured-task lifecycle.
+Each Provider call trace records deterministic logical request/response bytes
+and elapsed time. `ExecutionTelemetry::provider_functions` aggregates those
+traces by Provider identity, version, and symbol so a host can compare external
+work with total execution time without parsing logs. Payload bytes describe
+RSScript values only; transport framing and allocator capacity remain
+Provider-specific and are intentionally excluded.
 
 Use `rsscript-provider-api` for the safe value and descriptor types. Dynamic
 library or native-plugin ABI concerns belong in a separate adapter and must not

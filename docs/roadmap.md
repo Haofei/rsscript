@@ -25,15 +25,13 @@ language specification and tests remain authoritative for existing behavior.
 
 ## Current priority: conformance and boundary hardening
 
-1. Run and calibrate the Core SLO and multi-platform release dry-run on hosted
-   runners before creating the first alpha tag.
-2. Add real-workload peak-live-memory and Provider-call overhead telemetry to
-   the existing Core metrics schema when the VM can report those values without
-   estimates.
-3. Continue reducing compatibility-crate API and crate-wide lint exceptions.
-4. Complete query-level invalidation in the language service; its current
+1. Continue reducing compatibility-crate API and crate-wide lint exceptions.
+2. Complete query-level invalidation in the language service; its current
    revision cache is intentionally a document-level boundary.
-5. Promote a feature only through the maturity matrix; do not add syntax while a
+3. Add exact peak-live-memory accounting only when VM ownership can report it
+   without sampling or cumulative-allocation estimates. Provider duration,
+   payload, resource, task, and cancellation telemetry are complete.
+4. Promote a feature only through the maturity matrix; do not add syntax while a
    Core row remains partial.
 
 ## Frozen scope
