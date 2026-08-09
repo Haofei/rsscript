@@ -4,9 +4,10 @@
   "title": "RSScript runner request v1 header",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "args", "limits", "metadata_only_trace"],
+  "required": ["schema", "profile", "args", "limits", "metadata_only_trace"],
   "properties": {
     "schema": { "const": "rsscript.runner_request.v1" },
+    "profile": { "enum": ["no_providers"] },
     "args": { "type": "array", "maxItems": 256, "items": { "type": "string", "maxLength": 65536 } },
     "limits": {
       "type": "object",

@@ -557,6 +557,10 @@ mechanical acceptance condition holds.
   - [ ] **A09.1 — Introduce explicit runner profiles.** Profiles preinstall
     allowlisted Providers and their host-owned roots/endpoints; requests cannot
     supply Provider code, library paths, credentials, or authorities.
+    - [x] **A09.1a — Ship the fail-closed reference profile.** The versioned
+      protocol carries only the `no_providers` profile; runner selection maps it
+      to a host-owned empty registry, and the schema rejects provider code,
+      library paths, credentials, roots, and authority injection fields.
   - [ ] **A09.2 — Add Linux isolation adapters.** Implement optional namespace,
     syscall, filesystem, network, and cgroup controls with capability detection
     and fail-closed profile requirements.

@@ -23,6 +23,16 @@ pub const MAX_INTRINSIC_CALL_BUDGET: u64 = 10_000_000;
 pub const MAX_PROVIDER_CALL_BUDGET: u64 = 100_000;
 pub const MAX_RESOURCE_LIMIT: usize = 16_384;
 
+/// Host-selected, preinstalled Provider profile. The protocol deliberately has
+/// no field for Provider code, library paths, credentials, roots, or authority.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunnerProfileV1 {
+    /// Reference fail-closed profile: no external Provider is linkable.
+    #[default]
+    NoProviders,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RunnerLimitsV1 {
@@ -57,6 +67,7 @@ impl Default for RunnerLimitsV1 {
 #[serde(deny_unknown_fields)]
 pub struct RunnerRequestV1 {
     pub schema: String,
+    pub profile: RunnerProfileV1,
     pub args: Vec<String>,
     pub limits: RunnerLimitsV1,
     pub metadata_only_trace: bool,
@@ -67,6 +78,7 @@ impl RunnerRequestV1 {
         validate_args(&args)?;
         Ok(Self {
             schema: RUNNER_REQUEST_SCHEMA.to_string(),
+            profile: RunnerProfileV1::default(),
             args,
             limits: RunnerLimitsV1::default(),
             metadata_only_trace: true,
@@ -322,6 +334,20 @@ mod tests {
             read_response(bytes.as_slice()).expect("decode response"),
             response
         );
+    }
+
+    #[test]
+    fn request_uses_an_explicit_fail_closed_profile() {
+        let request = RunnerRequestV1::new(Vec::new()).expect("request");
+        assert_eq!(request.profile, RunnerProfileV1::NoProviders);
+        let json = serde_json::to_value(request).expect("request JSON");
+        assert_eq!(json["profile"], "no_providers");
+        for forbidden in ["provider", "library", "credential", "authority", "root"] {
+            assert!(
+                json.get(forbidden).is_none(),
+                "protocol must not inject {forbidden}"
+            );
+        }
     }
 
     #[test]

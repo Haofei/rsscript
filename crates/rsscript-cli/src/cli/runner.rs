@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 
 use rss_process_guard::{GuardedChild, ProcessLimits};
 use rsscript_runner_protocol::{
-    MAX_RESPONSE_BYTES, RunnerLimitsV1, RunnerRequestV1, RunnerResponseV1, RunnerTerminationV1,
-    read_request, read_response, write_request, write_response,
+    MAX_RESPONSE_BYTES, RunnerLimitsV1, RunnerProfileV1, RunnerRequestV1, RunnerResponseV1,
+    RunnerTerminationV1, read_request, read_response, write_request, write_response,
 };
 use rsscript_sdk::{
     ArtifactBundle, ArtifactVerifier, Compiler, ExecutionRequest, MonotonicDeadline,
@@ -236,7 +236,7 @@ fn execute_request(request: RunnerRequestV1, bundle: Vec<u8>) -> RunnerResponseV
             );
         }
     };
-    let runtime = Runtime::new(ProviderRegistry::default());
+    let runtime = Runtime::new(profiled_registry(request.profile));
     let linked = match runtime.link(&verified) {
         Ok(linked) => linked,
         Err(error) => {
@@ -278,6 +278,14 @@ fn runner_limits(limits: &RunnerLimitsV1) -> RunLimits {
         .with_deadline(MonotonicDeadline::after(Duration::from_millis(
             limits.wall_time_ms,
         )))
+}
+
+fn profiled_registry(profile: RunnerProfileV1) -> ProviderRegistry {
+    match profile {
+        // Provider implementations and all authority remain host-owned. The
+        // reference profile intentionally fails closed for external imports.
+        RunnerProfileV1::NoProviders => ProviderRegistry::default(),
+    }
 }
 
 fn finish_response(response: RunnerResponseV1, json: bool) -> ExitCode {
