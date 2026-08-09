@@ -25,7 +25,9 @@ pub struct BuildProvenanceV1 {
     pub runtime_abi_version: u32,
     pub interface_catalog_digest: String,
     pub source_content_hash: String,
-    pub snapshot_digest: Option<String>,
+    /// Digest of the immutable source/interface input captured for this
+    /// bundle. A deployable bundle never has an identity-less build phase.
+    pub snapshot_digest: String,
     pub module_digest: String,
 }
 
@@ -84,7 +86,11 @@ impl ArtifactBundle {
                 runtime_abi_version: envelope.header.runtime_abi_version,
                 interface_catalog_digest: envelope.header.interface_catalog_digest.clone(),
                 source_content_hash: envelope.header.source_content_hash.clone(),
-                snapshot_digest: envelope.header.snapshot_digest.clone(),
+                snapshot_digest: envelope
+                    .header
+                    .snapshot_digest
+                    .clone()
+                    .ok_or(ArtifactBundleError::MissingSnapshotDigest)?,
                 module_digest: envelope.header.executable_hash.clone(),
             },
             required_interfaces: envelope
@@ -153,7 +159,8 @@ impl ArtifactBundle {
             || manifest.provenance.interface_catalog_digest
                 != envelope.header.interface_catalog_digest
             || manifest.provenance.source_content_hash != envelope.header.source_content_hash
-            || manifest.provenance.snapshot_digest != envelope.header.snapshot_digest
+            || envelope.header.snapshot_digest.as_deref()
+                != Some(manifest.provenance.snapshot_digest.as_str())
             || manifest.required_interfaces != expected_requirements
         {
             return Err(ArtifactBundleError::ManifestArtifactMismatch);
@@ -276,6 +283,7 @@ pub enum ArtifactBundleError {
     SectionTooLarge { length: usize, maximum: usize },
     UnsupportedSchema(String),
     MissingAnalysisSchema,
+    MissingSnapshotDigest,
     UnsupportedAnalysisSchema(String),
     Manifest(String),
     Analysis(String),
@@ -303,6 +311,9 @@ impl fmt::Display for ArtifactBundleError {
             Self::MissingAnalysisSchema => {
                 formatter.write_str("bundle analysis has no declared schema")
             }
+            Self::MissingSnapshotDigest => {
+                formatter.write_str("bundle artifact has no immutable snapshot digest")
+            }
             Self::UnsupportedAnalysisSchema(schema) => {
                 write!(formatter, "unsupported bundle analysis schema `{schema}`")
             }
@@ -328,8 +339,11 @@ mod tests {
     use super::*;
     use rsscript_bytecode::BytecodeArtifact;
 
+    const SNAPSHOT_DIGEST: &str =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
     fn bundle() -> ArtifactBundle {
-        let artifact = BytecodeArtifact::new(
+        let mut artifact = BytecodeArtifact::new(
             "0.1.0",
             "0.1.0",
             "sha256:catalog",
@@ -338,9 +352,9 @@ mod tests {
             vec![],
             vec![1, 2, 3],
         )
-        .unwrap()
-        .to_bytes()
         .unwrap();
+        artifact.bind_snapshot_digest(SNAPSHOT_DIGEST).unwrap();
+        let artifact = artifact.to_bytes().unwrap();
         ArtifactBundle::new(
             artifact,
             serde_json::json!({"$schema": SOURCE_ANALYSIS_SCHEMA}),
@@ -368,6 +382,26 @@ mod tests {
 
     #[test]
     fn analysis_schema_is_an_explicit_fail_closed_compatibility_boundary() {
+        let mut artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            "sha256:catalog",
+            2,
+            "sha256:source",
+            vec![],
+            vec![1, 2, 3],
+        )
+        .unwrap();
+        artifact.bind_snapshot_digest(SNAPSHOT_DIGEST).unwrap();
+        let artifact = artifact.to_bytes().unwrap();
+        assert!(matches!(
+            ArtifactBundle::new(artifact, serde_json::json!({"$schema": "future.analysis.v1"})),
+            Err(ArtifactBundleError::UnsupportedAnalysisSchema(schema)) if schema == "future.analysis.v1"
+        ));
+    }
+
+    #[test]
+    fn deployable_bundle_rejects_bytecode_without_a_snapshot_identity() {
         let artifact = BytecodeArtifact::new(
             "0.1.0",
             "0.1.0",
@@ -381,8 +415,11 @@ mod tests {
         .to_bytes()
         .unwrap();
         assert!(matches!(
-            ArtifactBundle::new(artifact, serde_json::json!({"$schema": "future.analysis.v1"})),
-            Err(ArtifactBundleError::UnsupportedAnalysisSchema(schema)) if schema == "future.analysis.v1"
+            ArtifactBundle::new(
+                artifact,
+                serde_json::json!({"$schema": SOURCE_ANALYSIS_SCHEMA}),
+            ),
+            Err(ArtifactBundleError::MissingSnapshotDigest)
         ));
     }
 }

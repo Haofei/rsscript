@@ -570,7 +570,10 @@ mechanical acceptance condition holds.
   do not use optional fields to represent incompatible phases; script,
   Provider, cancellation, deadline, and budget termination always return a full
   execution report. Only host/protocol/internal-invariant failures use outer
-  errors.
+  errors. Deployable `ArtifactBundle`s now reject bytecode without an immutable
+  snapshot digest, and in-memory SDK builds derive that digest from the complete
+  source/interface input; the remaining phase-type and report-path audit stays
+  open.
   - [ ] **A04.1 — Audit all public phase types.** Replace optional phase fields
     and cross-phase enums with built/verified/linked/report-specific types.
   - [ ] **A04.2 — Audit every execution convenience API.** Script and Provider

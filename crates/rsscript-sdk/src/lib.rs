@@ -119,6 +119,8 @@ pub use semantic_diff::{
     SEMANTIC_DIFF_SCHEMA, SemanticDiffV1,
 };
 #[cfg(feature = "execution")]
+use sha2::{Digest, Sha256};
+#[cfg(feature = "execution")]
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
@@ -260,8 +262,10 @@ impl Compiler {
 
     #[cfg(feature = "execution")]
     pub fn compile(&self, file: &str, source: &str) -> Result<BuiltArtifact, CompileError> {
-        let executable = reg_vm_compile_source(file, source).map_err(CompileError::from)?;
-        BuiltArtifact::from_executable(executable, source_analysis(file))
+        let snapshot_digest = in_memory_snapshot_digest(&[(file, source)], &[]);
+        let mut executable = reg_vm_compile_source(file, source).map_err(CompileError::from)?;
+        executable.bind_snapshot_digest(&snapshot_digest)?;
+        BuiltArtifact::from_executable(executable, source_analysis(file, &snapshot_digest))
     }
 
     #[cfg(feature = "execution")]
@@ -279,9 +283,12 @@ impl Compiler {
                 }
             })?;
         operation.check().map_err(CompileError::from)?;
-        let executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
+        let snapshot_digest = in_memory_snapshot_digest(&[(file, source)], &[]);
+        let mut executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
+        executable.bind_snapshot_digest(&snapshot_digest)?;
         operation.check().map_err(CompileError::from)?;
-        let built = BuiltArtifact::from_executable(executable, source_analysis(file))?;
+        let built =
+            BuiltArtifact::from_executable(executable, source_analysis(file, &snapshot_digest))?;
         operation.check().map_err(CompileError::from)?;
         Ok(built)
     }
@@ -297,8 +304,10 @@ impl Compiler {
     ) -> Result<BuiltArtifact, CompileError> {
         let validated = validate_sources_with_interfaces(sources, interfaces)
             .map_err(CompileError::Diagnostics)?;
-        let executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
-        BuiltArtifact::from_executable(executable, source_set_analysis(sources))
+        let snapshot_digest = in_memory_snapshot_digest(sources, interfaces);
+        let mut executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
+        executable.bind_snapshot_digest(&snapshot_digest)?;
+        BuiltArtifact::from_executable(executable, source_set_analysis(sources, &snapshot_digest))
     }
 
     #[cfg(feature = "execution")]
@@ -315,9 +324,14 @@ impl Compiler {
                     Err(abort) => CompileError::from(abort),
                 })?;
         operation.check().map_err(CompileError::from)?;
-        let executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
+        let snapshot_digest = in_memory_snapshot_digest(sources, interfaces);
+        let mut executable = reg_vm_compile_validated(&validated).map_err(CompileError::from)?;
+        executable.bind_snapshot_digest(&snapshot_digest)?;
         operation.check().map_err(CompileError::from)?;
-        let built = BuiltArtifact::from_executable(executable, source_set_analysis(sources))?;
+        let built = BuiltArtifact::from_executable(
+            executable,
+            source_set_analysis(sources, &snapshot_digest),
+        )?;
         operation.check().map_err(CompileError::from)?;
         Ok(built)
     }
@@ -439,8 +453,8 @@ impl BuiltArtifact {
         self.bundle.analysis()
     }
 
-    pub fn snapshot_digest(&self) -> Option<&str> {
-        self.bundle.provenance().snapshot_digest.as_deref()
+    pub fn snapshot_digest(&self) -> &str {
+        &self.bundle.provenance().snapshot_digest
     }
 
     pub fn module_digest(&self) -> &str {
@@ -453,17 +467,44 @@ impl BuiltArtifact {
 }
 
 #[cfg(feature = "execution")]
-fn source_analysis(file: &str) -> serde_json::Value {
-    source_set_analysis(&[(file, "")])
+fn source_analysis(file: &str, snapshot_digest: &str) -> serde_json::Value {
+    source_set_analysis(&[(file, "")], snapshot_digest)
 }
 
 #[cfg(feature = "execution")]
-fn source_set_analysis(sources: &[(&str, &str)]) -> serde_json::Value {
+fn source_set_analysis(sources: &[(&str, &str)], snapshot_digest: &str) -> serde_json::Value {
     serde_json::json!({
         "$schema": "rsscript.source_analysis.v1",
         "language_version": rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION,
+        "snapshot_digest": snapshot_digest,
         "sources": sources.iter().map(|(path, _)| *path).collect::<Vec<_>>(),
     })
+}
+
+#[cfg(feature = "execution")]
+fn in_memory_snapshot_digest(sources: &[(&str, &str)], interfaces: &[(&str, &str)]) -> String {
+    // Direct SDK compilation has no filesystem workspace, but it still needs
+    // the same immutable identity guarantee as package compilation. Domain
+    // separation and role/path/byte lengths prevent ambiguous concatenations.
+    let mut entries = sources
+        .iter()
+        .map(|(path, text)| ("source", *path, *text))
+        .chain(
+            interfaces
+                .iter()
+                .map(|(path, text)| ("interface", *path, *text)),
+        )
+        .collect::<Vec<_>>();
+    entries.sort_unstable();
+    let mut hasher = Sha256::new();
+    hasher.update(b"rsscript.in_memory_snapshot.v1\0");
+    for (role, path, text) in entries {
+        for value in [role.as_bytes(), path.as_bytes(), text.as_bytes()] {
+            hasher.update((value.len() as u64).to_be_bytes());
+            hasher.update(value);
+        }
+    }
+    format!("sha256:{:x}", hasher.finalize())
 }
 
 #[cfg(feature = "execution")]
@@ -1319,7 +1360,7 @@ mod tests {
         let first = compiler.build(&snapshot).expect("first build");
         let second = compiler.build(&snapshot).expect("repeat build");
         assert_eq!(first.artifact_bytes(), second.artifact_bytes());
-        assert_eq!(first.snapshot_digest(), Some(snapshot.digest()));
+        assert_eq!(first.snapshot_digest(), snapshot.digest());
         let analysis = first.analysis();
         assert_eq!(analysis["snapshot_digest"], snapshot.digest());
         assert_eq!(analysis["module_digest"], first.module_digest());

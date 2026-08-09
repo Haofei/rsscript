@@ -11,7 +11,7 @@ pub const SEMANTIC_DIFF_SCHEMA: &str = "rsscript.semantic_diff.v2";
 pub struct ArtifactIdentityV1 {
     pub bundle_digest: String,
     pub module_digest: String,
-    pub snapshot_digest: Option<String>,
+    pub snapshot_digest: String,
     pub source_content_hash: String,
     pub interface_catalog_digest: String,
 }
