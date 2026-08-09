@@ -154,3 +154,25 @@ fn type_name(ty: &TypeRef) -> String {
         qualified
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn descriptor_canonicalizes_interface_contracts_once() {
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
+            "host.rssi",
+            "module host.log\npub async fn emit(value: take owned String) -> fresh Unit retains(value)\n",
+        )
+        .expect("valid interface");
+        assert_eq!(descriptor.schema, INTERFACE_DESCRIPTOR_SCHEMA);
+        assert_eq!(descriptor.functions[0].symbol.as_str(), "host.log.emit");
+        assert!(descriptor.functions[0].signature.asynchronous);
+        assert!(descriptor.functions[0].signature.parameters[0].retained);
+        assert_eq!(
+            descriptor.functions[0].signature.parameters[0].effect,
+            DataEffect::Take
+        );
+    }
+}
