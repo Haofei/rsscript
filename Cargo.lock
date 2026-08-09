@@ -1769,6 +1769,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rsscript-codegen-vm"
+version = "0.1.0"
+dependencies = [
+ "rsscript-abi-model",
+ "rsscript-bytecode",
+ "rsscript-mir",
+ "serde_json",
+]
+
+[[package]]
 name = "rsscript-compiler"
 version = "0.1.0"
 dependencies = [
@@ -2013,6 +2023,7 @@ dependencies = [
  "rsscript-abi-model",
  "rsscript-build-support",
  "rsscript-bytecode",
+ "rsscript-codegen-vm",
  "rsscript-compiler",
  "rsscript-interface-catalog",
  "rsscript-lowering",
@@ -2076,7 +2087,6 @@ dependencies = [
  "rsscript-bytecode",
  "rsscript-diagnostics",
  "rsscript-exec-ir",
- "rsscript-mir",
  "rsscript-operation",
  "rsscript-provider-api",
  "rsscript-text",

@@ -1390,7 +1390,6 @@ fn vm_core_consumes_owned_ir_not_frontend_internals() {
         "calls.rs",
         "exec.rs",
         "lower.rs",
-        "mir_codegen.rs",
         "model.rs",
         "scheduler.rs",
     ] {
@@ -1414,7 +1413,6 @@ fn vm_core_consumes_owned_ir_not_frontend_internals() {
     for required in [
         "rsscript-bytecode",
         "rsscript-exec-ir",
-        "rsscript-mir",
         "rsscript-provider-api",
     ] {
         assert!(
@@ -1426,6 +1424,7 @@ fn vm_core_consumes_owned_ir_not_frontend_internals() {
         "rsscript",
         "rsscript-compiler",
         "rsscript-lowering",
+        "rsscript-mir",
         "rsscript-semantics",
         "rsscript-syntax",
     ] {
