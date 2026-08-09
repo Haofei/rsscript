@@ -8,8 +8,8 @@
 use rsscript_compiler::{compile_source_to_ir, compile_validated_to_ir};
 use rsscript_mir::conformance::{MigrationCase, MigrationStage, execute_named};
 use rsscript_sdk::{
-    ExternalFunction, NativeValue, analyze_source_with_interfaces_result, reg_vm_compile_mir,
-    reg_vm_compile_validated, reg_vm_eval_source_main,
+    Compiler, ExternalFunction, NativeValue, analyze_source_with_interfaces_result,
+    reg_vm_compile_mir, reg_vm_compile_validated, reg_vm_eval_source_main,
 };
 
 const CASES: &[MigrationCase] = &[
@@ -183,6 +183,33 @@ fn dual_path_cases_match_the_legacy_vm() {
             case.name, case.capability
         );
     }
+}
+
+#[test]
+fn supported_sdk_builds_use_the_mir_codegen_artifact() {
+    let case = CASES
+        .iter()
+        .find(|case| case.name == "loop_and_assignment")
+        .expect("scalar CFG migration fixture");
+    let file = format!("{}.rss", case.name);
+    let compiled = compile_source_to_ir(&file, case.source).expect("fixture compiles");
+    let expected = rsscript_codegen_vm::emit_artifact(
+        &compiled.mir().expect("fixture lowers to MIR"),
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+        env!("CARGO_PKG_VERSION"),
+    )
+    .expect("fixture emits with independent MIR codegen")
+    .to_bytes()
+    .expect("Artifact serializes");
+    let built = Compiler
+        .compile(&file, case.source)
+        .expect("SDK build succeeds");
+    assert_eq!(
+        built.artifact_bytes(),
+        expected,
+        "supported SDK compilation must use the MIR codegen Artifact rather than the legacy VM encoder"
+    );
 }
 
 #[test]
