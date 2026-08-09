@@ -1151,6 +1151,20 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
     }
     assert!(compiler_projection.contains("pub use rsscript_semantics"));
 
+    assert!(
+        !root
+            .join("crates/rsscript-compiler/src/call_binding.rs")
+            .exists(),
+        "compiler must not retain a call-binding compatibility module"
+    );
+    for path in rust_files_below(&root.join("crates/rsscript-compiler/src")) {
+        assert!(
+            !read(&path).contains("crate::call_binding::"),
+            "{} must consume canonical call binding directly from semantics",
+            path.display()
+        );
+    }
+
     let mut constructor_users = Vec::new();
     for path in rust_files_below(&root.join("crates")) {
         let source = read(&path);

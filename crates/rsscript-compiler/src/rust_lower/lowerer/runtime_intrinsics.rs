@@ -1,5 +1,7 @@
 //! Runtime intrinsic, constructor, receiver, and native-boundary call emission.
 
+use rsscript_semantics::{BoundArgumentSource, CallBinding};
+
 use super::*;
 
 impl<'a> RustLowerer<'a> {
@@ -83,7 +85,7 @@ impl<'a> RustLowerer<'a> {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            let binding = crate::call_binding::CallBinding::bind(
+            let binding = CallBinding::bind(
                 &field_names,
                 &field_has_default,
                 &field_allows_shorthand,
@@ -99,12 +101,12 @@ impl<'a> RustLowerer<'a> {
             for bound in binding.evaluation_order() {
                 let field_decl = &declared_fields[bound.parameter_index];
                 let (value, value_span, is_default) = match bound.source {
-                    crate::call_binding::BoundArgumentSource::Receiver => unreachable!(),
-                    crate::call_binding::BoundArgumentSource::Explicit(source_index) => {
+                    BoundArgumentSource::Receiver => unreachable!(),
+                    BoundArgumentSource::Explicit(source_index) => {
                         let argument = &args[source_index];
                         (&argument.value, &argument.span, false)
                     }
-                    crate::call_binding::BoundArgumentSource::Default => (
+                    BoundArgumentSource::Default => (
                         field_decl
                             .default
                             .as_ref()
@@ -195,7 +197,7 @@ impl<'a> RustLowerer<'a> {
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            let binding = crate::call_binding::CallBinding::bind(
+            let binding = CallBinding::bind(
                 &field_names,
                 &field_has_default,
                 &field_allows_shorthand,
@@ -211,11 +213,11 @@ impl<'a> RustLowerer<'a> {
             for bound in binding.evaluation_order() {
                 let field = &declared_fields[bound.parameter_index];
                 let (value, is_default) = match bound.source {
-                    crate::call_binding::BoundArgumentSource::Receiver => unreachable!(),
-                    crate::call_binding::BoundArgumentSource::Explicit(source_index) => {
+                    BoundArgumentSource::Receiver => unreachable!(),
+                    BoundArgumentSource::Explicit(source_index) => {
                         (&args[source_index].value, false)
                     }
-                    crate::call_binding::BoundArgumentSource::Default => (
+                    BoundArgumentSource::Default => (
                         field
                             .default
                             .as_ref()
@@ -331,7 +333,7 @@ impl<'a> RustLowerer<'a> {
                 _ => None,
             })
             .collect::<Vec<_>>();
-        let binding = crate::call_binding::CallBinding::bind(
+        let binding = CallBinding::bind(
             &parameter_names,
             &parameter_has_default,
             &parameter_allows_shorthand,
@@ -364,8 +366,8 @@ impl<'a> RustLowerer<'a> {
         let mut evaluations = Vec::with_capacity(params.len());
         for bound in binding.evaluation_order() {
             let argument = match bound.source {
-                crate::call_binding::BoundArgumentSource::Receiver => continue,
-                crate::call_binding::BoundArgumentSource::Explicit(source_index) => {
+                BoundArgumentSource::Receiver => continue,
+                BoundArgumentSource::Explicit(source_index) => {
                     let mut argument = args[source_index].clone();
                     if argument.name.is_none()
                         && matches!(
@@ -377,7 +379,7 @@ impl<'a> RustLowerer<'a> {
                     }
                     argument
                 }
-                crate::call_binding::BoundArgumentSource::Default => {
+                BoundArgumentSource::Default => {
                     let helper = helpers
                         .get(bound.parameter_index)
                         .and_then(Option::as_ref)?;

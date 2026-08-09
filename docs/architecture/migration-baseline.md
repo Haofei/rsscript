@@ -131,6 +131,13 @@ mechanical acceptance condition holds.
   - [ ] **S02.3 — Move call binding and effect checks.** Relocate positional and
     named argument binding, `read`/`mut`/`take`, external signature matching,
     and retention facts.
+    - [x] **S02.3.1 — Remove compiler call-binding compatibility ownership.**
+      `CallBinding` and its source/evaluation-order contract are owned and
+      consumed directly from `rsscript-semantics`; architecture tests reject the
+      old compiler module and re-export path.
+    - [ ] **S02.3.2 — Move effect and signature diagnostics.** Relocate call-site
+      `read`/`mut`/`take`, external signature, retention, and argument-shape
+      validation from compiler checks into semantic queries.
   - [ ] **S02.4 — Move ownership and resource checks.** Relocate moves, escapes,
     borrows, `fresh`/`owned`/`noescape`, resource declarations, and cleanup
     validation with property and hostile-corpus coverage.
