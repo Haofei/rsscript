@@ -515,11 +515,13 @@ mechanical acceptance condition holds.
   verification and link errors kept distinct.
 - [x] **A02 — Remove SDK root glob re-exports.** Implementation crates cannot
   silently add SDK public symbols.
-- [ ] **A03 — Shrink the SDK to reviewed façade modules.** Default public API is
+- [x] **A03 — Shrink the SDK to reviewed façade modules.** Default public API is
   limited to compiler/check, Artifact/verification, Provider registration,
   runtime/linking, execution request/limits/report, diagnostics, and operation
   control. Package review/risk, AOT, JIT/OSR, register VM, opcode, and legacy
-  convenience APIs are not re-exported.
+  convenience APIs are not re-exported. Explicit façade modules, feature-gated
+  compatibility exports, a reviewed inventory, and a default-path export
+  snapshot now guard the complete supported SDK surface.
   - [x] **A03.1 — Inventory the existing SDK surface.** Classify each export as
     stable façade, compatibility-only, experimental, or internal.
   - [ ] **A03.2 — Create explicit façade modules.** Expose only compile,
