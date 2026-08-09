@@ -348,8 +348,8 @@ impl MirModule {
             verify_function(
                 function,
                 self.types.len(),
-                self.functions.len(),
-                self.external_imports.len(),
+                &self.functions,
+                &self.external_imports,
             )?;
         }
         for (index, import) in self.external_imports.iter().enumerate() {
@@ -367,8 +367,8 @@ impl MirModule {
 fn verify_function(
     function: &MirFunction,
     type_count: usize,
-    function_count: usize,
-    external_import_count: usize,
+    functions: &[MirFunction],
+    external_imports: &[MirExternalImport],
 ) -> Result<(), MirValidationError> {
     if function.blocks.is_empty() {
         return Err(MirValidationError::EmptyFunction {
@@ -406,8 +406,8 @@ fn verify_function(
                 instruction,
                 &mut defined,
                 &mut used,
-                function_count,
-                external_import_count,
+                functions,
+                external_imports,
             )?;
         }
         verify_terminator(function, block.terminator(), &mut used)?;
@@ -428,8 +428,8 @@ fn verify_instruction(
     instruction: &MirInstruction,
     defined: &mut BTreeSet<ValueId>,
     used: &mut Vec<ValueId>,
-    function_count: usize,
-    external_import_count: usize,
+    functions: &[MirFunction],
+    external_imports: &[MirExternalImport],
 ) -> Result<(), MirValidationError> {
     let define = |value: ValueId, defined: &mut BTreeSet<ValueId>| {
         if value.index() >= function.value_count as usize || !defined.insert(value) {
@@ -479,21 +479,32 @@ fn verify_instruction(
             arguments,
         } => {
             define(*destination, defined)?;
-            match target {
-                MirCallTarget::Function(target) if target.index() < function_count => {}
+            let expected_arguments = match target {
+                MirCallTarget::Function(target) if target.index() < functions.len() => {
+                    functions[target.index()].signature.parameter_types().len()
+                }
                 MirCallTarget::Function(target) => {
                     return Err(MirValidationError::InvalidFunctionTarget {
                         function: function.id,
                         target: *target,
                     });
                 }
-                MirCallTarget::External(target) if target.index() < external_import_count => {}
+                MirCallTarget::External(target) if target.index() < external_imports.len() => {
+                    external_imports[target.index()].signature.parameters.len()
+                }
                 MirCallTarget::External(target) => {
                     return Err(MirValidationError::InvalidExternalTarget {
                         function: function.id,
                         target: *target,
                     });
                 }
+            };
+            if arguments.len() != expected_arguments {
+                return Err(MirValidationError::CallArityMismatch {
+                    function: function.id,
+                    expected: expected_arguments,
+                    actual: arguments.len(),
+                });
             }
             used.extend(arguments.iter().copied());
             Ok(())
@@ -582,6 +593,11 @@ pub enum MirValidationError {
     InvalidExternalTarget {
         function: FunctionId,
         target: ExternalSymbolId,
+    },
+    CallArityMismatch {
+        function: FunctionId,
+        expected: usize,
+        actual: usize,
     },
     InvalidValueDefinition {
         function: FunctionId,
@@ -733,6 +749,53 @@ mod tests {
         assert!(matches!(
             MirModule::new(vec![WireType::Unit], vec![function], debug(), Vec::new()),
             Err(MirValidationError::InvalidFunctionTarget { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_direct_calls_with_the_wrong_arity() {
+        let callee = MirFunction::new(
+            FunctionId::new(0),
+            MirFunctionSignature::new(vec![TypeId::new(0)], TypeId::new(0), false),
+            1,
+            0,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                Vec::new(),
+                MirTerminator::Return(None),
+            )],
+        );
+        let caller = MirFunction::new(
+            FunctionId::new(1),
+            signature(),
+            0,
+            1,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![MirInstruction::Call {
+                    destination: ValueId::new(0),
+                    target: MirCallTarget::Function(FunctionId::new(0)),
+                    arguments: Vec::new(),
+                }],
+                MirTerminator::Return(Some(ValueId::new(0))),
+            )],
+        );
+        let debug = vec![
+            MirFunctionDebug::new("callee", vec!["input".into()]),
+            MirFunctionDebug::new("caller", Vec::new()),
+        ];
+        assert!(matches!(
+            MirModule::new(
+                vec![WireType::Unit],
+                vec![callee, caller],
+                debug,
+                Vec::new()
+            ),
+            Err(MirValidationError::CallArityMismatch {
+                expected: 1,
+                actual: 0,
+                ..
+            })
         ));
     }
 }
