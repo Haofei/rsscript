@@ -1567,14 +1567,13 @@ fn provider_contracts_can_be_generated_without_the_engine_or_runtime() {
     .expect("Provider bindgen manifest should parse");
     let dependencies = dependency_packages(&manifest);
     assert!(dependencies.contains("rsscript-abi-model"));
-    assert!(dependencies.contains("rsscript-syntax"));
+    assert!(dependencies.contains("rsscript-semantics"));
     for forbidden in [
         "rsscript-compiler",
         "rsscript-sdk",
         "rsscript-runtime",
         "rsscript-aot-runtime",
         "rsscript-provider-api",
-        "rsscript-semantics",
         "vm-jit",
     ] {
         assert!(
@@ -1609,6 +1608,21 @@ fn provider_contracts_can_be_generated_without_the_engine_or_runtime() {
             Some("../../crates/rsscript-provider-bindgen")
         );
     }
+}
+
+#[test]
+fn provider_bindgen_consumes_semantic_descriptors_not_syntax() {
+    let root = workspace_root();
+    let manifest: toml::Value = toml::from_str(&read(
+        &root.join("crates/rsscript-provider-bindgen/Cargo.toml"),
+    ))
+    .expect("provider bindgen manifest should parse");
+    let dependencies = dependency_packages(&manifest);
+    assert!(dependencies.contains("rsscript-semantics"));
+    assert!(!dependencies.contains("rsscript-syntax"));
+    let source = read(&root.join("crates/rsscript-provider-bindgen/src/lib.rs"));
+    assert!(source.contains("from_descriptor"));
+    assert!(!source.contains("parse_source("));
 }
 
 #[test]

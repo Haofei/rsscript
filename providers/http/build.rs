@@ -2,12 +2,17 @@ use rsscript_provider_bindgen::{
     GeneratedBlocking, GeneratedCancellation, GeneratedCleanup, ProviderInterface,
     RustProviderOptions,
 };
+use rsscript_semantics::InterfaceDescriptorV1;
 use std::{env, fs, path::PathBuf};
 fn main() {
     println!("cargo:rerun-if-changed=interface/lib.rssi");
+    let descriptor = InterfaceDescriptorV1::from_interface_source(
+        "interface/lib.rssi",
+        include_str!("interface/lib.rssi"),
+    )
+    .expect("valid HTTP Provider interface");
     let interface =
-        ProviderInterface::parse("interface/lib.rssi", include_str!("interface/lib.rssi"))
-            .expect("valid HTTP Provider interface");
+        ProviderInterface::from_descriptor(descriptor).expect("supported HTTP descriptor");
     let generated = interface.render_rust(&RustProviderOptions {
         provider_id: "rsscript.http",
         blocking: GeneratedBlocking::MayBlock,

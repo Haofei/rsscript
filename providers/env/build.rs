@@ -6,12 +6,17 @@ use rsscript_provider_bindgen::{
     GeneratedBlocking, GeneratedCancellation, GeneratedCleanup, ProviderInterface,
     RustProviderOptions,
 };
+use rsscript_semantics::InterfaceDescriptorV1;
 
 fn main() {
     println!("cargo:rerun-if-changed=interface/lib.rssi");
+    let descriptor = InterfaceDescriptorV1::from_interface_source(
+        "interface/lib.rssi",
+        include_str!("interface/lib.rssi"),
+    )
+    .expect("valid environment Provider interface");
     let interface =
-        ProviderInterface::parse("interface/lib.rssi", include_str!("interface/lib.rssi"))
-            .expect("valid environment Provider interface");
+        ProviderInterface::from_descriptor(descriptor).expect("supported environment descriptor");
     let generated = interface.render_rust(&RustProviderOptions {
         provider_id: "rsscript.env",
         blocking: GeneratedBlocking::NonBlocking,

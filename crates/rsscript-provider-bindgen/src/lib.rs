@@ -67,10 +67,6 @@ impl From<InterfaceDescriptorError> for BindgenError {
 }
 
 impl ProviderInterface {
-    pub fn parse(path: &str, source: &str) -> Result<Self, BindgenError> {
-        Self::from_descriptor(InterfaceDescriptorV1::from_interface_source(path, source)?)
-    }
-
     pub fn from_descriptor(descriptor: InterfaceDescriptorV1) -> Result<Self, BindgenError> {
         if descriptor.schema != rsscript_semantics::INTERFACE_DESCRIPTOR_SCHEMA {
             return Err(BindgenError::Descriptor(
@@ -237,11 +233,12 @@ mod tests {
 
     #[test]
     fn interface_is_the_signature_source_for_generated_provider_code() {
-        let interface = ProviderInterface::parse(
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
             "env.rssi",
             "module host.env\n\npub fn get(name: read String) -> Option<String>\n",
         )
         .unwrap();
+        let interface = ProviderInterface::from_descriptor(descriptor).unwrap();
         assert_eq!(interface.functions[0].symbol.as_str(), "host.env.get");
         assert_eq!(interface.functions[0].signature.parameters[0].name, "name");
         let rust = interface.render_rust(&RustProviderOptions {

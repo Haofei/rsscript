@@ -434,6 +434,10 @@ mechanical acceptance condition holds.
     bytes and ensure source aliases cannot alter canonical ABI facts.
   - [ ] **P04.3 — Replace bindgen source parsing.** Bindgen accepts only the
     descriptor and rejects unsupported descriptor versions.
+    - [x] **P04.3a — Remove bindgen syntax ownership.** All official Provider
+      build scripts derive an `InterfaceDescriptorV1` in semantics and pass it
+      to `ProviderInterface::from_descriptor`; bindgen no longer depends on
+      `rsscript-syntax` or exposes a source-parsing entry point.
 - [ ] **P05 — Generate typed Rust Provider APIs.** Generate sync/async traits,
   typed parameters/results, resource wrappers, descriptor/signature constants,
   registration glue, mocks, completeness checks, and conformance skeletons.
