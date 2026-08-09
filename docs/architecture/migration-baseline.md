@@ -499,12 +499,13 @@ mechanical acceptance condition holds.
     generated wrappers, including nested aggregate positions, while only each
     wrapper's explicit `from_native`/`into_native` adapter touches the legacy
     dynamic representation.
-  - [ ] **P05.4 — Generate registration, mock, and completeness tests.** Provider
+  - [x] **P05.4 — Generate registration, mock, and completeness tests.** Provider
     implementations fail to compile or conformance-test when symbols drift.
-    Generated contracts now include registry registration glue, so the existing
-    fail-closed descriptor/implementation completeness check is available to
-    every bindgen consumer; generated mocks and per-provider skeletons remain
-    follow-up work.
+    Generated contracts now include registry registration glue, a call-recording
+    sync/async mock that builds a descriptor-complete implementation map, and a
+    `#[cfg(test)]` registration skeleton. The same fail-closed registry path
+    rejects missing, undeclared, or signature-mismatched symbols for real and
+    generated mock Providers.
 - [ ] **P06 — Tighten the canonical wire value model.** Replace JSON, string
   type/field identity, and generic `Native { type_name, id }` escape hatches
   with typed records, variants, lists, resources, and generation-safe handles;

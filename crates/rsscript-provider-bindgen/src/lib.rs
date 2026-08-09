@@ -154,8 +154,37 @@ impl ProviderInterface {
         output.push_str(
             "\n/// Register generated descriptor contracts and fail closed when an implementation is missing, undeclared, or has a mismatched signature.\npub fn register<T>(\n    registry: &mut rsscript_provider_api::ProviderRegistry<T>,\n    implementations: std::collections::BTreeMap<rsscript_abi_model::ExternalSymbol, rsscript_provider_api::ProviderFunction<T>>,\n) -> Result<(), rsscript_provider_api::ProviderLoadError> {\n    registry.register_provider(&descriptor(), implementations)\n}\n",
         );
+        render_mock_support(&mut output, &self.functions);
         output
     }
+}
+
+fn render_mock_support(output: &mut String, functions: &[InterfaceFunction]) {
+    output.push_str(
+        "\n/// One call observed by the generated contract mock. The mock deliberately\n/// records dynamic boundary values; typed conversion remains in the generated\n/// adapter owned by the real Provider implementation.\n#[derive(Debug, Clone)]\npub struct MockCall {\n    pub symbol: rsscript_abi_model::ExternalSymbol,\n    pub args: Vec<rsscript_provider_api::NativeValue>,\n}\n\n#[derive(Clone, Default)]\npub struct MockProvider {\n    calls: std::sync::Arc<std::sync::Mutex<Vec<MockCall>>>,\n}\n\nimpl MockProvider {\n    pub fn calls(&self) -> Vec<MockCall> {\n        self.calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).clone()\n    }\n\n    pub fn implementations(&self) -> std::collections::BTreeMap<rsscript_abi_model::ExternalSymbol, rsscript_provider_api::ProviderFunction<rsscript_provider_api::ProviderCallable>> {\n        let mut implementations = std::collections::BTreeMap::new();\n",
+    );
+    for function in functions {
+        let symbol = format!(
+            "rsscript_abi_model::ExternalSymbol::new({:?}).expect(\"generated symbol is valid\")",
+            function.symbol.as_str()
+        );
+        let signature = render_signature(&function.signature);
+        let callable = if function.signature.asynchronous {
+            format!(
+                "rsscript_provider_api::ProviderCallable::Async(rsscript_provider_api::AsyncInterpreterFn::new({{ let calls = std::sync::Arc::clone(&self.calls); move |_context, args| {{ let calls = std::sync::Arc::clone(&calls); async move {{ calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(MockCall {{ symbol: {symbol}, args }}); Err(rsscript_provider_api::ProviderError::unavailable(\"generated mock has no configured response\")) }} }} }}))"
+            )
+        } else {
+            format!(
+                "rsscript_provider_api::ProviderCallable::Sync(rsscript_provider_api::NativeInterpreterFn::new_contextual({{ let calls = std::sync::Arc::clone(&self.calls); move |_context, args| {{ calls.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).push(MockCall {{ symbol: {symbol}, args }}); Err(rsscript_provider_api::ProviderError::unavailable(\"generated mock has no configured response\")) }} }}))"
+            )
+        };
+        output.push_str(&format!(
+            "        implementations.insert({symbol}, rsscript_provider_api::ProviderFunction {{ signature: {signature}, callable: {callable} }});\n"
+        ));
+    }
+    output.push_str(
+        "        implementations\n    }\n\n    /// Register every descriptor-declared symbol through the same fail-closed\n    /// path as a real Provider. This is useful for integration tests that only\n    /// need contract completeness.\n    pub fn register(&self, registry: &mut rsscript_provider_api::ProviderRegistry<rsscript_provider_api::ProviderCallable>) -> Result<(), rsscript_provider_api::ProviderLoadError> {\n        register(registry, self.implementations())\n    }\n}\n\n/// Generated contract test skeleton. Provider crates can call this from a unit\n/// test before adding behavior-specific mock responses.\n#[cfg(test)]\npub fn assert_generated_mock_contract() {\n    let mock = MockProvider::default();\n    let mut registry = rsscript_provider_api::ProviderRegistry::new(rsscript_abi_model::RUNTIME_ABI_VERSION);\n    mock.register(&mut registry).expect(\"generated mock must cover every descriptor symbol\");\n}\n",
+    );
 }
 
 fn render_resource_wrapper(output: &mut String, resource: &InterfaceDescriptorResourceV1) {
@@ -369,6 +398,9 @@ mod tests {
         assert!(rust.contains("WireType::String"));
         assert!(rust.contains("pub fn register<T>("));
         assert!(rust.contains("registry.register_provider(&descriptor(), implementations)"));
+        assert!(rust.contains("pub struct MockProvider"));
+        assert!(rust.contains("pub fn implementations(&self)"));
+        assert!(rust.contains("assert_generated_mock_contract"));
     }
 
     #[test]
@@ -416,5 +448,6 @@ mod tests {
         assert!(rust.contains("ProviderCallMode::Async"));
         assert!(rust.contains("DataEffect::Take"));
         assert!(rust.contains("retained: true"));
+        assert!(rust.contains("ProviderCallable::Async"));
     }
 }
