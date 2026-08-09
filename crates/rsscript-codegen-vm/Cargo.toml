@@ -1,0 +1,13 @@
+[package]
+name = "rsscript-codegen-vm"
+version = "0.1.0"
+edition = "2024"
+description = "MIR-only bytecode emission for the RSScript reference VM"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[dependencies]
+rsscript-abi-model = { path = "../rsscript-abi-model" }
+rsscript-bytecode = { path = "../rsscript-bytecode" }
+rsscript-mir = { path = "../rsscript-mir" }
+serde_json = "1"
