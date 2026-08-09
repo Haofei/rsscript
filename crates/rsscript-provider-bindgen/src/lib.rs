@@ -151,6 +151,9 @@ impl ProviderInterface {
             output.push_str("        },\n");
         }
         output.push_str("    ] }\n}\n");
+        output.push_str(
+            "\n/// Register generated descriptor contracts and fail closed when an implementation is missing, undeclared, or has a mismatched signature.\npub fn register<T>(\n    registry: &mut rsscript_provider_api::ProviderRegistry<T>,\n    implementations: std::collections::BTreeMap<rsscript_abi_model::ExternalSymbol, rsscript_provider_api::ProviderFunction<T>>,\n) -> Result<(), rsscript_provider_api::ProviderLoadError> {\n    registry.register_provider(&descriptor(), implementations)\n}\n",
+        );
         output
     }
 }
@@ -364,6 +367,8 @@ mod tests {
         assert!(rust.contains("host.env.get"));
         assert!(rust.contains("WireType::Option"));
         assert!(rust.contains("WireType::String"));
+        assert!(rust.contains("pub fn register<T>("));
+        assert!(rust.contains("registry.register_provider(&descriptor(), implementations)"));
     }
 
     #[test]

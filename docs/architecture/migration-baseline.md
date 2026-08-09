@@ -495,6 +495,10 @@ mechanical acceptance condition holds.
     dynamic representation.
   - [ ] **P05.4 — Generate registration, mock, and completeness tests.** Provider
     implementations fail to compile or conformance-test when symbols drift.
+    Generated contracts now include registry registration glue, so the existing
+    fail-closed descriptor/implementation completeness check is available to
+    every bindgen consumer; generated mocks and per-provider skeletons remain
+    follow-up work.
 - [ ] **P06 — Tighten the canonical wire value model.** Replace JSON, string
   type/field identity, and generic `Native { type_name, id }` escape hatches
   with typed records, variants, lists, resources, and generation-safe handles;
