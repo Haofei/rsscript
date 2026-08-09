@@ -26,8 +26,9 @@ use super::dependency::{
 use super::source_set::{PackageSource, load_package};
 use super::{
     PACKAGE_ANALYSIS_SCHEMA, PackageAnalysis, PackageAnalysisAwaitSite, PackageAnalysisExport,
-    PackageAnalysisExternalImport, PackageAnalysisFile, PackageAnalysisProducer,
-    PackageAnalysisSummary, PackageReviewFileKind, dedup_diagnostics, package_identity,
+    PackageAnalysisExternalImport, PackageAnalysisFile, PackageAnalysisParameter,
+    PackageAnalysisProducer, PackageAnalysisSummary, PackageReviewFileKind, dedup_diagnostics,
+    package_identity,
 };
 
 /// Analyze one already-captured package graph without consulting review policy,
@@ -138,6 +139,8 @@ pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<Package
                 name: export.name,
                 kind: export.kind,
                 function_kind: export.function_kind,
+                parameters: Vec::new(),
+                return_type: None,
                 retained_params: export.retained_params,
                 semantic_facts: export.reasons,
             }),
@@ -235,6 +238,8 @@ fn package_analysis_exports(sources: &[PackageSource]) -> Vec<PackageAnalysisExp
                 name: contract.name.clone(),
                 kind: "type".to_string(),
                 function_kind: None,
+                parameters: Vec::new(),
+                return_type: None,
                 retained_params: Vec::new(),
                 semantic_facts,
             }
@@ -273,6 +278,17 @@ fn package_analysis_exports(sources: &[PackageSource]) -> Vec<PackageAnalysisExp
             name: contract.name.clone(),
             kind: "function".to_string(),
             function_kind: Some(if contract.is_async { "async" } else { "sync" }.to_string()),
+            parameters: contract
+                .params
+                .iter()
+                .map(|parameter| PackageAnalysisParameter {
+                    name: parameter.name.clone(),
+                    effect: parameter.effect.unwrap_or("read").to_string(),
+                    ty: parameter.type_name.clone(),
+                    retained: contract.retained_params.contains(&parameter.name),
+                })
+                .collect(),
+            return_type: contract.return_type.clone(),
             retained_params,
             semantic_facts,
         }
@@ -327,6 +343,8 @@ fn public_contract_names<T>(
             name,
             kind: kind.to_string(),
             function_kind: None,
+            parameters: Vec::new(),
+            return_type: None,
             retained_params: Vec::new(),
             semantic_facts: Vec::new(),
         })

@@ -593,13 +593,14 @@ mechanical acceptance condition holds.
   escape, resource acquire/transfer/cleanup, structured-task fan-out and
   cancellation, call graph/recursion, Provider requirements, and diagnostic
   additions/removals while remaining policy-neutral.
-  - [ ] **A07.1 — Diff ownership and call contracts.** Report effect, parameter,
+  - [x] **A07.1 — Diff ownership and call contracts.** Report effect, parameter,
     retention, escape, and external signature changes. Semantic diff now carries
     canonical Artifact import contracts (parameter names/effects/retention and
     structured types, result, async shape, ABI and signature hash), so a changed
     `read`/`mut`/`take` or retention contract is evidence rather than an opaque
-    hash transition. Local function-contract facts and broader escape evidence
-    remain to be normalized before this planning unit can close.
+    hash transition. Neutral package analysis likewise emits explicit local
+    parameter effects/types/retention plus return contracts, including source
+    escape qualifiers, for every public function.
   - [ ] **A07.2 — Diff resources and concurrency.** Report acquire/transfer/close,
     task fan-out, await/select, cancellation, and cleanup-path changes.
   - [ ] **A07.3 — Diff graph and diagnostic facts.** Report call graph/recursion,

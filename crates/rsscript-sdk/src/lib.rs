@@ -116,7 +116,8 @@ pub use artifact_bundle::{
 #[cfg(feature = "execution")]
 pub use semantic_diff::{
     AwaitFactV1, ChangedFactV1, CountChangeV1, ExportFactV1, ExternalCallFactV1,
-    ExternalContractFactV1, FactSetDiffV1, SEMANTIC_DIFF_SCHEMA, SemanticDiffV1,
+    ExternalContractFactV1, FactSetDiffV1, FunctionParameterFactV1, SEMANTIC_DIFF_SCHEMA,
+    SemanticDiffV1,
 };
 #[cfg(feature = "execution")]
 use sha2::{Digest, Sha256};
@@ -224,7 +225,9 @@ pub mod report {
 #[cfg(feature = "execution")]
 /// Reviewed neutral Artifact analysis and semantic-diff data.
 pub mod analysis {
-    pub use super::{ExternalContractFactV1, SEMANTIC_DIFF_SCHEMA, SemanticDiffV1};
+    pub use super::{
+        ExternalContractFactV1, FunctionParameterFactV1, SEMANTIC_DIFF_SCHEMA, SemanticDiffV1,
+    };
 }
 #[cfg(not(feature = "compatibility"))]
 #[allow(unused_imports)]

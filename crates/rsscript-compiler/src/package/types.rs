@@ -81,9 +81,24 @@ pub struct PackageAnalysisExport {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub function_kind: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub parameters: Vec<PackageAnalysisParameter>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub return_type: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub retained_params: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub semantic_facts: Vec<String>,
+}
+
+/// Source-level public function parameter contract captured in neutral package
+/// analysis. `effect` is explicit even for ordinary `read` parameters so a
+/// semantic diff never has to infer ownership behavior from omitted syntax.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PackageAnalysisParameter {
+    pub name: String,
+    pub effect: String,
+    pub ty: String,
+    pub retained: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

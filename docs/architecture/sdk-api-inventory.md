@@ -19,7 +19,7 @@ not part of the default or `execution` SDK surface.
 - Artifact lifecycle: `BuiltArtifact`, `VerifiedArtifact`, `ArtifactBundle`,
   `ArtifactVerifier`, provenance, interface requirements, the versioned source
   and package analysis schema identifiers, and neutral semantic diff data,
-  including structural external-call contracts.
+  including structural external-call and public function ownership contracts.
 - Provider lifecycle: `ProviderRegistry`, provider descriptors, structured
   signatures, registration errors, and typed execution context contracts.
 - Runtime lifecycle: `Runtime`, `LinkedArtifact`, `ExecutionRequest`, bounded

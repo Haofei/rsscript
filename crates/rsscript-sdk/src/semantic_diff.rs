@@ -39,8 +39,19 @@ pub struct ExportFactV1 {
     pub name: String,
     pub kind: String,
     pub function_kind: Option<String>,
+    pub parameters: Vec<FunctionParameterFactV1>,
+    pub return_type: Option<String>,
     pub retained_params: Vec<String>,
     pub semantic_facts: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FunctionParameterFactV1 {
+    pub name: String,
+    pub effect: String,
+    pub ty: String,
+    pub retained: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -249,8 +260,26 @@ fn analysis_exports(analysis: &serde_json::Value) -> Vec<ExportFactV1> {
                 name: item["name"].as_str()?.to_string(),
                 kind: item["kind"].as_str()?.to_string(),
                 function_kind: item["function_kind"].as_str().map(str::to_string),
+                parameters: analysis_parameters(&item["parameters"]),
+                return_type: item["return_type"].as_str().map(str::to_string),
                 retained_params: strings(&item["retained_params"]),
                 semantic_facts: strings(&item["semantic_facts"]),
+            })
+        })
+        .collect()
+}
+
+fn analysis_parameters(value: &serde_json::Value) -> Vec<FunctionParameterFactV1> {
+    value
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some(FunctionParameterFactV1 {
+                name: item["name"].as_str()?.to_string(),
+                effect: item["effect"].as_str()?.to_string(),
+                ty: item["ty"].as_str()?.to_string(),
+                retained: item["retained"].as_bool()?,
             })
         })
         .collect()
@@ -471,5 +500,24 @@ mod tests {
             DataEffect::Take
         );
         assert!(diff.changed[0].new.signature.parameters[0].retained);
+    }
+
+    #[test]
+    fn export_facts_keep_explicit_local_ownership_contracts() {
+        let facts = analysis_exports(&serde_json::json!({
+            "exports": [{
+                "name": "publish", "kind": "function", "function_kind": "sync",
+                "parameters": [{
+                    "name": "payload", "effect": "take", "ty": "Payload", "retained": true
+                }],
+                "return_type": "noescape Unit",
+                "retained_params": ["payload"],
+                "semantic_facts": ["take parameter `payload`", "retains(payload)"]
+            }]
+        }));
+        assert_eq!(facts.len(), 1);
+        assert_eq!(facts[0].parameters[0].effect, "take");
+        assert!(facts[0].parameters[0].retained);
+        assert_eq!(facts[0].return_type.as_deref(), Some("noescape Unit"));
     }
 }
