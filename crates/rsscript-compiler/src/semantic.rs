@@ -1,8 +1,8 @@
+pub(crate) use rsscript_semantics::ResolvedType;
 pub use rsscript_semantics::{
     AnalysisResult, FrontendCompletion, FrontendStopReason, SemanticDatabase, SourceFileSnapshot,
     SourceSnapshot, ValidatedProgram,
 };
-pub(crate) use rsscript_semantics::{ResolvedType, SemanticTypeFacts};
 
 #[cfg(test)]
 mod tests {

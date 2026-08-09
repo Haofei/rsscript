@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::diagnostic::Span;
-use crate::semantic::{ResolvedType, SemanticTypeFacts};
+use crate::semantic::ResolvedType;
 use crate::syntax::ast::{
     BinaryOp, Block, CallArg, Callee, DataEffect, Expr, FieldDecl, ForStmt, GenericParam, Item,
     LetStmt, MatchPattern, MatchStmt, Param, Program, Stmt, TypeKind, TypeRef,
 };
+use rsscript_semantics::SemanticTypeFacts;
 
 use super::helpers::*;
 use super::intrinsics::*;

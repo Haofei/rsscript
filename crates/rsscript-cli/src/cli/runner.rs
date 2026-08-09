@@ -163,21 +163,25 @@ fn invoke_runner(
             child
                 .terminate()
                 .map_err(|error| format!("cannot terminate expired runner: {error}"))?;
-            return Err("runner process deadline exceeded".to_string());
+            // A termination request alone is not containment: retain ownership
+            // until the guarded child is reaped and both pipe readers have
+            // observed EOF. Otherwise a timed-out CLI invocation could leave
+            // detached reader threads behind (and make a failed runner harder
+            // to distinguish from a still-running one).
+            let status = child
+                .wait()
+                .map_err(|error| format!("cannot reap expired runner: {error}"))?;
+            let stdout = join_runner_output(stdout_reader, "stdout")?;
+            let stderr = join_runner_output(stderr_reader, "stderr")?;
+            return Err(format_runner_deadline_error(status, &stdout, &stderr));
         }
         thread::sleep(Duration::from_millis(10));
     }
     let status = child
         .wait()
         .map_err(|error| format!("runner wait failed: {error}"))?;
-    let stdout = stdout_reader
-        .join()
-        .map_err(|_| "runner stdout reader panicked".to_string())?
-        .map_err(|error| format!("runner stdout failed: {error}"))?;
-    let stderr = stderr_reader
-        .join()
-        .map_err(|_| "runner stderr reader panicked".to_string())?
-        .map_err(|error| format!("runner stderr failed: {error}"))?;
+    let stdout = join_runner_output(stdout_reader, "stdout")?;
+    let stderr = join_runner_output(stderr_reader, "stderr")?;
     if !status.success() {
         return Err(format!(
             "runner exited with {status}: {}",
@@ -185,6 +189,32 @@ fn invoke_runner(
         ));
     }
     read_response(stdout.as_slice()).map_err(|error| error.to_string())
+}
+
+fn join_runner_output(
+    reader: thread::JoinHandle<io::Result<Vec<u8>>>,
+    stream: &str,
+) -> Result<Vec<u8>, String> {
+    reader
+        .join()
+        .map_err(|_| format!("runner {stream} reader panicked"))?
+        .map_err(|error| format!("runner {stream} failed: {error}"))
+}
+
+fn format_runner_deadline_error(
+    status: std::process::ExitStatus,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> String {
+    let stderr = String::from_utf8_lossy(stderr).trim().to_string();
+    let stdout_bytes = stdout.len();
+    if stderr.is_empty() {
+        format!(
+            "runner process deadline exceeded; terminated and reaped with {status} (discarded {stdout_bytes} stdout bytes)"
+        )
+    } else {
+        format!("runner process deadline exceeded; terminated and reaped with {status}: {stderr}")
+    }
 }
 
 fn spawn_runner(command: &mut Command, limits: ProcessLimits) -> io::Result<GuardedChild> {
@@ -331,6 +361,7 @@ fn finish_report(report: serde_json::Value, json: bool) -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn request_protocol_has_no_provider_or_dynamic_library_injection_field() {
@@ -340,6 +371,32 @@ mod tests {
         assert!(!json.contains("provider_path"));
         assert!(!json.contains("library"));
         assert!(!json.contains("path"));
+    }
+
+    #[test]
+    fn bounded_reader_rejects_runner_output_over_the_configured_limit() {
+        let error = read_bounded(Cursor::new(vec![0_u8; 5]), 4).expect_err("must reject");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert!(error.to_string().contains("byte limit"));
+    }
+
+    #[test]
+    fn deadline_error_records_reap_without_treating_child_output_as_a_report() {
+        let status = if cfg!(windows) {
+            Command::new("cmd")
+                .args(["/C", "exit", "1"])
+                .status()
+                .expect("status")
+        } else {
+            Command::new("sh")
+                .args(["-c", "exit 1"])
+                .status()
+                .expect("status")
+        };
+        let error = format_runner_deadline_error(status, b"not a report", b"child diagnostics\n");
+        assert!(error.contains("terminated and reaped"));
+        assert!(error.contains("child diagnostics"));
+        assert!(!error.contains("not a report"));
     }
 
     #[test]
