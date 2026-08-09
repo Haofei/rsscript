@@ -42,6 +42,7 @@ jsonschema = { version = "0.49", default-features = false }
 reir = { path = "../reir" }
 rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-review-reir = { path = "../../integrations/rsscript-review-reir" }
+rsscript-mir = { path = "../rsscript-mir", features = ["conformance"] }
 rss-testgen = { path = "../rss-testgen" }
 sha1 = "0.10"
 proptest = "1"
@@ -96,4 +97,9 @@ required-features = ["execution"]
 [[test]]
 name = "migration_baseline"
 path = "tests/migration_baseline.rs"
+required-features = ["execution"]
+
+[[test]]
+name = "mir_migration"
+path = "tests/mir_migration.rs"
 required-features = ["execution"]

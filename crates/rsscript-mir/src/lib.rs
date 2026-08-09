@@ -12,6 +12,9 @@ use std::fmt;
 
 use rsscript_abi_model::{ExternalSymbol, FunctionSignature, WireType};
 
+#[cfg(feature = "conformance")]
+pub mod conformance;
+
 macro_rules! mir_id {
     ($name:ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

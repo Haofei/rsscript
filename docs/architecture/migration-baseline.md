@@ -264,6 +264,10 @@ mechanical acceptance condition holds.
   values, cleanup behavior, and deterministic usage reports.
   - [ ] **M05.1 — Add pure-control-flow differential fixtures.** Compare return
     values, errors, and usage reports.
+    - [x] **M05.1a — Establish the dual-path harness.** Declarative capability
+      stages and pure-control-flow fixtures compile, verify, execute through the
+      test-only MIR reference interpreter, and compare return values with the
+      legacy VM. Error, usage, and report parity remain follow-up work.
   - [ ] **M05.2 — Add ownership/resource differential fixtures.** Compare move
     failures, retain behavior, cleanup counts, and resource limits.
   - [ ] **M05.3 — Add async/provider differential fixtures.** Compare task

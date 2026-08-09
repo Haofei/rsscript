@@ -9,5 +9,11 @@ publish = false
 [lib]
 doctest = false
 
+[features]
+default = []
+# Test/conformance-only reference interpreter used to keep legacy and MIR
+# migration paths behaviorally aligned. It is not a production runtime.
+conformance = []
+
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }

@@ -1,0 +1,296 @@
+//! Test-only migration support for the typed MIR rollout.
+//!
+//! This deliberately small interpreter is an oracle for the currently
+//! migrated pure subset. It is not a production VM and is only compiled with
+//! the `conformance` feature. Migration tests use it to compare the legacy VM
+//! path with the typed MIR path before a capability can become MIR-only.
+
+use std::fmt;
+
+use crate::{
+    FunctionId, MirBinaryOp, MirCallTarget, MirInstruction, MirLiteral, MirModule, MirTerminator,
+    ValueId,
+};
+
+/// Lifecycle of a language capability during the MIR migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MigrationStage {
+    /// The feature remains only on the legacy executable-IR path.
+    LegacyOnly,
+    /// Both paths execute it and are required to agree in the conformance
+    /// corpus.
+    DualPath,
+    /// The feature has a MIR execution path and may no longer add legacy-only
+    /// behavior.
+    MirOnly,
+}
+
+/// Declarative entry used by the migration corpus.
+#[derive(Debug, Clone, Copy)]
+pub struct MigrationCase {
+    pub name: &'static str,
+    pub capability: &'static str,
+    pub stage: MigrationStage,
+    pub source: &'static str,
+}
+
+/// Scalar value model used only by the reference interpreter.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MirValue {
+    Unit,
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    String(String),
+    Char(char),
+}
+
+impl MirValue {
+    /// Render using the legacy VM's scalar result convention.
+    pub fn render(&self) -> String {
+        match self {
+            Self::Unit => "Unit".into(),
+            Self::Int(value) => value.to_string(),
+            Self::Float(value) => value.to_string(),
+            Self::Bool(value) => value.to_string(),
+            Self::String(value) => value.clone(),
+            Self::Char(value) => value.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MirExecutionError {
+    MissingEntrypoint(String),
+    InvalidArgumentCount {
+        function: FunctionId,
+        expected: usize,
+        actual: usize,
+    },
+    UninitializedValue(ValueId),
+    UninitializedPlace(usize),
+    InvalidBranchCondition,
+    InvalidOperation(&'static str),
+    DivisionByZero,
+    UnsupportedExternalCall,
+    RecursionLimit,
+    StepLimit,
+}
+
+impl fmt::Display for MirExecutionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "MIR conformance execution failed: {self:?}")
+    }
+}
+
+impl std::error::Error for MirExecutionError {}
+
+/// Execute a pure MIR module from its debug-name entry point.
+pub fn execute_named(
+    module: &MirModule,
+    entry: &str,
+    arguments: Vec<MirValue>,
+) -> Result<MirValue, MirExecutionError> {
+    let function = module
+        .functions()
+        .iter()
+        .find(|function| {
+            module
+                .function_debug(function.id())
+                .is_some_and(|debug| debug.name() == entry)
+        })
+        .map(|function| function.id())
+        .ok_or_else(|| MirExecutionError::MissingEntrypoint(entry.into()))?;
+    let mut interpreter = Interpreter {
+        module,
+        steps_remaining: 100_000,
+        recursion_remaining: 128,
+    };
+    interpreter.call(function, arguments)
+}
+
+struct Interpreter<'a> {
+    module: &'a MirModule,
+    steps_remaining: u64,
+    recursion_remaining: u32,
+}
+
+impl<'a> Interpreter<'a> {
+    fn call(
+        &mut self,
+        function_id: FunctionId,
+        arguments: Vec<MirValue>,
+    ) -> Result<MirValue, MirExecutionError> {
+        if self.recursion_remaining == 0 {
+            return Err(MirExecutionError::RecursionLimit);
+        }
+        self.recursion_remaining -= 1;
+        let result = self.call_inner(function_id, arguments);
+        self.recursion_remaining += 1;
+        result
+    }
+
+    fn call_inner(
+        &mut self,
+        function_id: FunctionId,
+        arguments: Vec<MirValue>,
+    ) -> Result<MirValue, MirExecutionError> {
+        let function = self
+            .module
+            .function(function_id)
+            .expect("verified MIR function target must exist");
+        if arguments.len() != function.signature().parameter_types().len() {
+            return Err(MirExecutionError::InvalidArgumentCount {
+                function: function_id,
+                expected: function.signature().parameter_types().len(),
+                actual: arguments.len(),
+            });
+        }
+        let mut places = vec![None; function.place_count() as usize];
+        for (index, value) in arguments.into_iter().enumerate() {
+            places[index] = Some(value);
+        }
+        let mut values = vec![None; function.value_count() as usize];
+        let mut block = 0usize;
+        loop {
+            let current = &function.blocks()[block];
+            for instruction in current.instructions() {
+                self.step()?;
+                match instruction {
+                    MirInstruction::LoadLiteral { destination, value } => {
+                        values[destination.index()] = Some(literal(value));
+                    }
+                    MirInstruction::ReadPlace { destination, place } => {
+                        values[destination.index()] = Some(
+                            places[place.index()]
+                                .clone()
+                                .ok_or(MirExecutionError::UninitializedPlace(place.index()))?,
+                        );
+                    }
+                    MirInstruction::WritePlace { place, value } => {
+                        places[place.index()] = Some(value_at(&values, *value)?);
+                    }
+                    MirInstruction::Binary {
+                        destination,
+                        op,
+                        left,
+                        right,
+                    } => {
+                        values[destination.index()] = Some(binary(
+                            *op,
+                            value_at(&values, *left)?,
+                            value_at(&values, *right)?,
+                        )?);
+                    }
+                    MirInstruction::Call {
+                        destination,
+                        target,
+                        arguments,
+                    } => {
+                        let arguments = arguments
+                            .iter()
+                            .map(|value| value_at(&values, *value))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let value = match target {
+                            MirCallTarget::Function(function) => self.call(*function, arguments)?,
+                            MirCallTarget::External(_) => {
+                                return Err(MirExecutionError::UnsupportedExternalCall);
+                            }
+                        };
+                        values[destination.index()] = Some(value);
+                    }
+                    MirInstruction::Discard { value } => {
+                        let _ = value_at(&values, *value)?;
+                    }
+                }
+            }
+            self.step()?;
+            match current.terminator() {
+                MirTerminator::Return(value) => {
+                    return value
+                        .map(|value| value_at(&values, value))
+                        .transpose()
+                        .map(|value| value.unwrap_or(MirValue::Unit));
+                }
+                MirTerminator::Jump(target) => block = target.index(),
+                MirTerminator::Branch {
+                    condition,
+                    then_target,
+                    else_target,
+                } => match value_at(&values, *condition)? {
+                    MirValue::Bool(true) => block = then_target.index(),
+                    MirValue::Bool(false) => block = else_target.index(),
+                    _ => return Err(MirExecutionError::InvalidBranchCondition),
+                },
+                MirTerminator::Unreachable => {
+                    return Err(MirExecutionError::InvalidOperation("unreachable"));
+                }
+            }
+        }
+    }
+
+    fn step(&mut self) -> Result<(), MirExecutionError> {
+        self.steps_remaining = self
+            .steps_remaining
+            .checked_sub(1)
+            .ok_or(MirExecutionError::StepLimit)?;
+        Ok(())
+    }
+}
+
+fn value_at(values: &[Option<MirValue>], id: ValueId) -> Result<MirValue, MirExecutionError> {
+    values[id.index()]
+        .clone()
+        .ok_or(MirExecutionError::UninitializedValue(id))
+}
+
+fn literal(value: &MirLiteral) -> MirValue {
+    match value {
+        MirLiteral::Unit => MirValue::Unit,
+        MirLiteral::Int(value) => MirValue::Int(*value),
+        MirLiteral::Float(value) => MirValue::Float(*value),
+        MirLiteral::Bool(value) => MirValue::Bool(*value),
+        MirLiteral::String(value) => MirValue::String(value.clone()),
+        MirLiteral::Char(value) => MirValue::Char(*value),
+    }
+}
+
+fn binary(op: MirBinaryOp, left: MirValue, right: MirValue) -> Result<MirValue, MirExecutionError> {
+    use MirBinaryOp as Op;
+    use MirValue as Value;
+    match (op, left, right) {
+        (Op::Add, Value::Int(left), Value::Int(right)) => Ok(Value::Int(left + right)),
+        (Op::Subtract, Value::Int(left), Value::Int(right)) => Ok(Value::Int(left - right)),
+        (Op::Multiply, Value::Int(left), Value::Int(right)) => Ok(Value::Int(left * right)),
+        (Op::Divide, Value::Int(_), Value::Int(0)) | (Op::Modulo, Value::Int(_), Value::Int(0)) => {
+            Err(MirExecutionError::DivisionByZero)
+        }
+        (Op::Divide, Value::Int(left), Value::Int(right)) => Ok(Value::Int(left / right)),
+        (Op::Modulo, Value::Int(left), Value::Int(right)) => Ok(Value::Int(left % right)),
+        (Op::BitAnd, Value::Int(left), Value::Int(right)) => Ok(Value::Int(left & right)),
+        (Op::BitOr, Value::Int(left), Value::Int(right)) => Ok(Value::Int(left | right)),
+        (Op::BitXor, Value::Int(left), Value::Int(right)) => Ok(Value::Int(left ^ right)),
+        (Op::ShiftLeft, Value::Int(left), Value::Int(right)) => Ok(Value::Int(left << right)),
+        (Op::ShiftRight, Value::Int(left), Value::Int(right)) => Ok(Value::Int(left >> right)),
+        (Op::Add, Value::Float(left), Value::Float(right)) => Ok(Value::Float(left + right)),
+        (Op::Subtract, Value::Float(left), Value::Float(right)) => Ok(Value::Float(left - right)),
+        (Op::Multiply, Value::Float(left), Value::Float(right)) => Ok(Value::Float(left * right)),
+        (Op::Divide, Value::Float(_), Value::Float(0.0)) => Err(MirExecutionError::DivisionByZero),
+        (Op::Divide, Value::Float(left), Value::Float(right)) => Ok(Value::Float(left / right)),
+        (Op::Equal, left, right) => Ok(Value::Bool(left == right)),
+        (Op::NotEqual, left, right) => Ok(Value::Bool(left != right)),
+        (Op::Less, Value::Int(left), Value::Int(right)) => Ok(Value::Bool(left < right)),
+        (Op::LessEqual, Value::Int(left), Value::Int(right)) => Ok(Value::Bool(left <= right)),
+        (Op::Greater, Value::Int(left), Value::Int(right)) => Ok(Value::Bool(left > right)),
+        (Op::GreaterEqual, Value::Int(left), Value::Int(right)) => Ok(Value::Bool(left >= right)),
+        (Op::Less, Value::Float(left), Value::Float(right)) => Ok(Value::Bool(left < right)),
+        (Op::LessEqual, Value::Float(left), Value::Float(right)) => Ok(Value::Bool(left <= right)),
+        (Op::Greater, Value::Float(left), Value::Float(right)) => Ok(Value::Bool(left > right)),
+        (Op::GreaterEqual, Value::Float(left), Value::Float(right)) => {
+            Ok(Value::Bool(left >= right))
+        }
+        (Op::LogicalAnd, Value::Bool(left), Value::Bool(right)) => Ok(Value::Bool(left && right)),
+        (Op::LogicalOr, Value::Bool(left), Value::Bool(right)) => Ok(Value::Bool(left || right)),
+        _ => Err(MirExecutionError::InvalidOperation("binary operand types")),
+    }
+}
