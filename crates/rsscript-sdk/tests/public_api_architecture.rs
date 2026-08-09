@@ -73,6 +73,21 @@ fn public_api_inventory_covers_the_current_migration_surface() {
     }
 
     let source = library_source();
+    for module in [
+        "pub mod compile",
+        "pub mod operation",
+        "pub mod artifact",
+        "pub mod provider_api",
+        "pub mod runtime",
+        "pub mod report",
+        "pub mod analysis",
+    ] {
+        assert!(
+            source.contains(module),
+            "stable façade module `{module}` is missing"
+        );
+    }
+
     for forbidden in [
         "pub use rsscript_vm::JitPlan",
         "pub use rsscript_vm::RegInstr",

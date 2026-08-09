@@ -140,6 +140,63 @@ pub mod language {
         lint_source, symbol_index,
     };
 }
+
+/// Reviewed compilation entry points and diagnostics.
+pub mod compile {
+    pub use super::{CompileError, CompileErrorCode, Compiler};
+    #[cfg(feature = "execution")]
+    pub use rsscript_compiler::WorkspaceSnapshot;
+    pub use rsscript_compiler::{Diagnostic, Severity};
+}
+
+/// Reviewed operation-control types shared by compile, verification, and run.
+pub mod operation {
+    pub use rsscript_operation::{
+        CancellationToken, MonotonicDeadline, OperationAbort, OperationContext, OperationId,
+    };
+}
+
+#[cfg(feature = "execution")]
+/// Reviewed Artifact construction and verification entry points.
+pub mod artifact {
+    pub use super::{
+        ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, ArtifactBundle, ArtifactBundleError,
+        ArtifactVerifier, BuildProvenanceV1, BuiltArtifact, InterfaceRequirementV1,
+        VerifiedArtifact, VerifyError,
+    };
+}
+
+#[cfg(feature = "execution")]
+/// Reviewed Provider registration and host-call contract types.
+pub mod provider_api {
+    pub use super::{
+        BlockingBehavior, CancellationBehavior, ExternalSymbol, FunctionSignature, HostCallContext,
+        NativeInterpreterFn, NativeValue, ProviderCallContext, ProviderCallMode,
+        ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderFunction,
+        ProviderFunctionDescriptor, ProviderLoadError, ProviderRegistry, ResourceHandle,
+    };
+}
+
+#[cfg(feature = "execution")]
+/// Reviewed linking and bounded execution entry points.
+pub mod runtime {
+    pub use super::{ExecutionRequest, LinkError, LinkedArtifact, RunLimits, Runtime, TracePolicy};
+}
+
+#[cfg(feature = "execution")]
+/// Reviewed machine-readable execution-report types.
+pub mod report {
+    pub use super::{
+        EXECUTION_REPORT_SCHEMA, ExecutionReport, ExecutionTelemetry, ProviderFunctionTelemetry,
+        RuntimeError, TerminationReason,
+    };
+}
+
+#[cfg(feature = "execution")]
+/// Reviewed neutral Artifact analysis and semantic-diff data.
+pub mod analysis {
+    pub use super::{SEMANTIC_DIFF_SCHEMA, SemanticDiffV1};
+}
 pub use rsscript_operation::{
     CancellationToken, MonotonicDeadline, OperationAbort, OperationContext, OperationId,
 };

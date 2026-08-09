@@ -7,6 +7,12 @@ same change.
 
 ## Stable façade
 
+The stable façade is exposed through the explicit `compile`, `artifact`,
+`provider_api`, `runtime`, `report`, `analysis`, and `operation` modules.
+New embedding documentation and first-party applications use these modules;
+the transitional root exports are removed only by A03.3 after compatibility
+callers have migrated.
+
 - Compilation and diagnostics: `Compiler`, `CompileError`, checked source and
   language-service query types.
 - Artifact lifecycle: `BuiltArtifact`, `VerifiedArtifact`, `ArtifactBundle`,

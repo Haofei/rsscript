@@ -487,6 +487,10 @@ mechanical acceptance condition holds.
     stable façade, compatibility-only, experimental, or internal.
   - [ ] **A03.2 — Create explicit façade modules.** Expose only compile,
     artifact, provider, runtime, report, diagnostics, and operation APIs.
+    - [x] **A03.2a — Publish reviewed module paths.** `compile`, `artifact`,
+      `provider_api`, `runtime`, `report`, `analysis`, and `operation` now
+      provide the reviewed embedding surface; root compatibility exports remain
+      until A03.3 migrates legacy callers behind opt-in modules.
   - [ ] **A03.3 — Move compatibility and experimental APIs behind opt-in modules.**
     JIT, AOT, review/risk, register VM, and opcode APIs disappear from defaults.
   - [ ] **A03.4 — Add public API snapshots.** CI rejects unreviewed stable-surface
