@@ -339,8 +339,11 @@ mechanical acceptance condition holds.
       Artifact verification now constructs `VerifiedBytecode` first and VM
       decoding accepts that opaque verifier output. VM-internal typed program
       ownership remains follow-up work.
-  - [ ] **V03.2 — Move instruction/data-flow verification into bytecode.** VM no
-    longer independently validates decoded program structure.
+  - [x] **V03.2 — Move instruction/data-flow verification into bytecode.** VM no
+    longer independently validates decoded program structure. The register-VM
+    decoder now accepts only `VerifiedBytecode`; duplicate payload, control-flow,
+    register, and import-table validation was deleted and is mechanically
+    rejected from returning.
   - [ ] **V03.3 — Restrict VM constructors.** Delete constructors accepting raw
     bytecode, executable IR, or decoded mutable instruction vectors.
     - [x] **V03.3a — Delete raw bytecode VM constructors.** The public VM loader

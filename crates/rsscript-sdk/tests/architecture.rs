@@ -1500,6 +1500,25 @@ fn vm_public_loader_requires_a_verifier_token() {
 }
 
 #[test]
+fn bytecode_verifier_is_the_only_payload_validation_owner() {
+    let root = workspace_root();
+    let vm_bytecode = read(&root.join("crates/rsscript-vm/src/reg_vm/bytecode.rs"));
+    for duplicate in [
+        "fn verify_payload(",
+        "fn verify_wire_unit(",
+        "fn verify_instruction(",
+        "fn verify_register_field(",
+    ] {
+        assert!(
+            !vm_bytecode.contains(duplicate),
+            "VM must not restore duplicate bytecode validation `{duplicate}`"
+        );
+    }
+    assert!(vm_bytecode.contains("VerifiedBytecode"));
+    assert!(vm_bytecode.contains("decode_executable_payload"));
+}
+
+#[test]
 fn compiler_default_dependency_closure_is_host_neutral() {
     let root = workspace_root();
     let facade: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-sdk/Cargo.toml")))
