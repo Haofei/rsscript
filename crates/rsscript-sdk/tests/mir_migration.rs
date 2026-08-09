@@ -5,9 +5,12 @@
 //! the legacy VM, the feature-gated MIR reference interpreter, and the
 //! verified-bytecode VM emitted directly from MIR.
 
-use rsscript_compiler::compile_source_to_ir;
+use rsscript_compiler::{compile_source_to_ir, compile_validated_to_ir};
 use rsscript_mir::conformance::{MigrationCase, MigrationStage, execute_named};
-use rsscript_sdk::{reg_vm_compile_mir, reg_vm_eval_source_main};
+use rsscript_sdk::{
+    ExternalFunction, NativeValue, analyze_source_with_interfaces_result, reg_vm_compile_mir,
+    reg_vm_compile_validated, reg_vm_eval_source_main,
+};
 
 const CASES: &[MigrationCase] = &[
     MigrationCase {
@@ -196,4 +199,50 @@ fn capability_stages_stay_explicit() {
             case.name
         );
     }
+}
+
+#[test]
+fn resolved_external_call_reaches_verified_mir_bytecode() {
+    let interface = "pub fn Host.increment(value: read Int) -> Int\n";
+    let source = r#"
+fn main() -> Int {
+    let value = 41
+    return Host.increment(value: read value)
+}
+"#;
+    let validated = analyze_source_with_interfaces_result(
+        "mir-external.rss",
+        source,
+        &[("host.rssi", interface)],
+    )
+    .into_validated()
+    .expect("external call source should validate");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .mir()
+        .expect("resolved external call should lower to MIR");
+    assert_eq!(mir.external_imports().len(), 1);
+
+    let host = ExternalFunction::new(|arguments| match arguments.as_slice() {
+        [NativeValue::Int(value)] => Ok(NativeValue::Int(value + 1)),
+        _ => Err(rsscript_sdk::ProviderError::internal(
+            "unexpected host arguments",
+        )),
+    });
+    let bindings = [("Host.increment", host.clone())];
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy VM must compile the checked external call")
+        .eval_main_with_args_and_external_bindings(std::iter::empty::<String>(), bindings.clone())
+        .expect("legacy VM external call should execute");
+    let mir_vm = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("MIR external call must emit verified bytecode")
+    .eval_main_with_args_and_external_bindings(std::iter::empty::<String>(), bindings)
+    .expect("MIR-produced bytecode external call should execute");
+
+    assert_eq!(legacy.value, "42");
+    assert_eq!(mir_vm.value, legacy.value);
 }

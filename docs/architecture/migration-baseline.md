@@ -266,6 +266,11 @@ mechanical acceptance condition holds.
     join, cancel, and select with lexical task-group ownership.
   - [ ] **M03.4 — Add resolved builtin and external-call instructions.** Include
     signature/effect/retention identity and no unresolved callee text.
+    - [x] **M03.4a — Execute resolved external calls through MIR bytecode.** A
+      checked `.rssi` symbol is represented by `ExternalSymbolId`, emitted into
+      the Artifact import table, verified against the bytecode call table, and
+      dispatched through the same Provider binding as the legacy VM. Builtin
+      identity and the remaining effect/retention facts stay open.
 - [ ] **M04 — Lower checked HIR to MIR exactly once.** Backend code cannot
   inspect syntax AST or reconstruct semantic facts. MIR verification rejects
   unresolved calls, invalid ownership state, incomplete cleanup, and malformed
