@@ -1473,10 +1473,12 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
     );
     let adapter = read(&root.join("crates/rsscript-sdk/src/vm_adapter.rs"));
     let compile_mir = function_source(&adapter, "pub fn reg_vm_compile_mir");
+    let emit_mir = function_source(&adapter, "fn emit_mir");
     assert!(
-        compile_mir.contains("rsscript_codegen_vm::emit_artifact")
-            && compile_mir.contains("BytecodeVerifier::default")
-            && compile_mir.contains("RegVmExecutable::from_verified_bytecode"),
+        compile_mir.contains("emit_mir")
+            && emit_mir.contains("rsscript_codegen_vm::emit_artifact")
+            && emit_mir.contains("BytecodeVerifier::default")
+            && emit_mir.contains("RegVmExecutable::from_verified_bytecode"),
         "SDK MIR compilation must pass through codegen, verifier, then the VM token boundary"
     );
 }

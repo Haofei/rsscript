@@ -50,29 +50,50 @@ pub fn reg_vm_compile_mir(
     source_hash: &str,
     interface_catalog_digest: &str,
 ) -> Result<RegVmExecutable, EvalError> {
-    let artifact = rsscript_codegen_vm::emit_artifact(
-        mir,
-        source_hash,
-        interface_catalog_digest,
-        env!("CARGO_PKG_VERSION"),
-    )
-    .map_err(|error| EvalError::Runtime(error.to_string()))?;
-    let verified = rsscript_bytecode::BytecodeVerifier::default()
-        .verify(
-            &artifact
-                .to_bytes()
-                .map_err(|error| EvalError::Runtime(error.to_string()))?,
-        )
-        .map_err(|error| EvalError::Runtime(error.to_string()))?;
-    RegVmExecutable::from_verified_bytecode(verified)
+    emit_mir(mir, source_hash, interface_catalog_digest)
+        .map_err(|error| EvalError::Runtime(error.to_string()))
 }
 
 fn emit_ir(compiled: &CompiledIr) -> Result<RegVmExecutable, EvalError> {
+    match compiled.mir() {
+        Ok(mir) => match emit_mir(
+            &mir,
+            compiled.source_hash(),
+            compiled.interface_catalog_digest(),
+        ) {
+            Ok(executable) => return Ok(executable),
+            Err(rsscript_codegen_vm::CodegenError::Unsupported(_)) => {}
+            Err(error) => return Err(EvalError::Runtime(error.to_string())),
+        },
+        Err(rsscript_lowering::MirLoweringError::Unsupported { .. }) => {}
+        Err(error) => return Err(EvalError::Runtime(error.to_string())),
+    }
     rsscript_vm::compile_executable_ir(
         compiled.executable(),
         compiled.source_hash(),
         compiled.interface_catalog_digest(),
     )
+}
+
+fn emit_mir(
+    mir: &rsscript_mir::MirModule,
+    source_hash: &str,
+    interface_catalog_digest: &str,
+) -> Result<RegVmExecutable, rsscript_codegen_vm::CodegenError> {
+    let artifact = rsscript_codegen_vm::emit_artifact(
+        mir,
+        source_hash,
+        interface_catalog_digest,
+        env!("CARGO_PKG_VERSION"),
+    )?;
+    let bytes = artifact
+        .to_bytes()
+        .map_err(|error| rsscript_codegen_vm::CodegenError::Bytecode(error.to_string()))?;
+    let verified = rsscript_bytecode::BytecodeVerifier::default()
+        .verify(&bytes)
+        .map_err(|error| rsscript_codegen_vm::CodegenError::Bytecode(error.to_string()))?;
+    RegVmExecutable::from_verified_bytecode(verified)
+        .map_err(|error| rsscript_codegen_vm::CodegenError::Bytecode(format!("{error:?}")))
 }
 
 pub fn reg_vm_eval_source_main_with_args(
