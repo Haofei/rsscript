@@ -397,7 +397,8 @@ mechanical acceptance condition holds.
       explicit `SUPPORTED_LANGUAGE_SEMANTICS` range, while the compiler package
       version remains provenance only. Neutral package analysis consumes the
       same ABI-model language constant. Container and `BYTECODE_ISA_VERSION`
-      are now explicit;
+      are now explicit, and the ISA is serialized in each Artifact header and
+      rejected by the verifier before payload validation;
       Core-library and analysis-schema compatibility remain follow-up work.
   - [ ] **B04.2 — Validate each version at its owning boundary.** Verify container
     at decode, language/ISA at program verification, Core library at load, and
