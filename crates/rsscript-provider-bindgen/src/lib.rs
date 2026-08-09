@@ -374,4 +374,26 @@ mod tests {
         assert!(rust.contains("ResourceHandle::from_native_id"));
         assert!(rust.contains("pub const TYPE_NAME: &'static str = \"host.fs.File\""));
     }
+
+    #[test]
+    fn generated_async_methods_and_descriptor_call_modes_share_one_contract() {
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
+            "log.rssi",
+            "module host.log\n\npub async fn emit(value: take String) -> Unit retains(value)\n",
+        )
+        .unwrap();
+        let interface = ProviderInterface::from_descriptor(descriptor).unwrap();
+        let rust = interface.render_rust(&RustProviderOptions {
+            provider_id: "rsscript.log",
+            blocking: GeneratedBlocking::NonBlocking,
+            cancellation: GeneratedCancellation::Cooperative,
+            thread_safe: true,
+            reentrant: true,
+            cleanup: GeneratedCleanup::None,
+        });
+        assert!(rust.contains("async fn emit(&self, value: String) -> Result<(),"));
+        assert!(rust.contains("ProviderCallMode::Async"));
+        assert!(rust.contains("DataEffect::Take"));
+        assert!(rust.contains("retained: true"));
+    }
 }

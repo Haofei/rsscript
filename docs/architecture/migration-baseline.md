@@ -482,8 +482,11 @@ mechanical acceptance condition holds.
       Provider traits now map unit, bool, numeric, string, bytes, lists,
       options, results, tuples, and qualifiers to Rust types. Named records,
       variants, and resources remain adapter-layer values until P05.3.
-  - [ ] **P05.2 — Generate sync and async Provider traits.** Method signatures
-    reflect descriptor parameters, results, effects, and async shape.
+  - [x] **P05.2 — Generate sync and async Provider traits.** Method signatures
+    reflect descriptor parameters, results, effects, and async shape. Bindgen
+    emits Rust `async fn` methods and matching `ProviderCallMode::Async` from
+    the same semantic descriptor; regression coverage also proves take and
+    retention contract facts remain present in generated registration metadata.
   - [ ] **P05.3 — Generate resource wrappers and adapter glue.** Resource values
     use typed generation-safe handles; adapters isolate `NativeValue` conversion.
   - [ ] **P05.4 — Generate registration, mock, and completeness tests.** Provider
