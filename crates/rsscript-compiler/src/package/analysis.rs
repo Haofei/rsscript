@@ -152,7 +152,7 @@ pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<Package
     Ok(PackageAnalysis {
         schema: PACKAGE_ANALYSIS_SCHEMA.to_string(),
         producer: PackageAnalysisProducer::current(),
-        language_version: env!("CARGO_PKG_VERSION").to_string(),
+        language_version: rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION.to_string(),
         interface_catalog_digest: crate::interfaces::interface_catalog_digest(),
         snapshot_digest: String::new(),
         module_digest: None,

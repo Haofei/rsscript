@@ -427,6 +427,7 @@ fn source_analysis(file: &str) -> serde_json::Value {
 fn source_set_analysis(sources: &[(&str, &str)]) -> serde_json::Value {
     serde_json::json!({
         "$schema": "rsscript.source_analysis.v1",
+        "language_version": rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION,
         "sources": sources.iter().map(|(path, _)| *path).collect::<Vec<_>>(),
     })
 }

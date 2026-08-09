@@ -7,6 +7,9 @@ use sha2::{Digest, Sha256};
 
 /// Version of the provider/runtime semantic call ABI.
 pub const RUNTIME_ABI_VERSION: u32 = 2;
+/// Language semantics carried by compiled artifacts and neutral analysis.
+/// This deliberately does not track any crate/package release version.
+pub const LANGUAGE_SEMANTICS_VERSION: &str = "0.1.0";
 
 /// Canonical, serializable type representation used by artifacts and Providers.
 /// Semantic arenas may use local IDs internally; those IDs never cross the ABI.

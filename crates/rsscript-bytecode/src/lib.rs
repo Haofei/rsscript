@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 
+pub use rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION;
 use rsscript_abi_model::{ExternalImport, RUNTIME_ABI_VERSION};
 use rsscript_operation::{CancellationToken, MonotonicDeadline};
 use semver::{Version, VersionReq};
@@ -12,9 +13,6 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const BYTECODE_SCHEMA: &str = "rsscript.bytecode.v1";
-/// Language semantics carried by artifacts. This is intentionally independent
-/// from the crate/package version used only for compiler provenance.
-pub const LANGUAGE_SEMANTICS_VERSION: &str = "0.1.0";
 /// Accepted language-semantics range for the v1 verifier.
 pub const SUPPORTED_LANGUAGE_SEMANTICS: &str = ">=0.1.0, <0.2.0";
 /// Version of the executable instruction-set encoding inside the v1 envelope.
