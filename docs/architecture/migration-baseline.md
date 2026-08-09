@@ -242,6 +242,9 @@ mechanical acceptance condition holds.
   - [ ] **M03.1 — Add explicit ownership instructions.** Model move, read borrow,
     mutable borrow, retain, and drop, then test use-after-move rejection on CFG
     joins.
+    - [x] **M03.1a — Lower direct-call read borrows.** A checked `read` of a
+      local argument becomes verifier-visible `BorrowRead`; mutable borrow,
+      move, retain, and drop remain follow-up work.
   - [ ] **M03.2 — Add resource lifetime instructions and cleanup edges.** Model
     acquire/manage/release and verify cleanup for normal return, branch exit,
     error, and cancellation.

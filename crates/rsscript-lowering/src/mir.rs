@@ -11,7 +11,7 @@ use std::fmt;
 
 use rsscript_abi_model::WireType;
 use rsscript_exec_ir::{
-    BinaryOp, Callee, ExecutableExpr, ExecutableFunction, ExecutableIr, ExecutableStmt,
+    BinaryOp, Callee, ExecutableExpr, ExecutableFunction, ExecutableIr, ExecutableStmt, ParamEffect,
 };
 use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirBinaryOp, MirCallTarget, MirExternalImport, MirFunction,
@@ -455,7 +455,11 @@ impl<'a> FunctionLowerer<'a> {
                 args,
                 ..
             } => self.lower_call(callee, receiver.is_some(), args),
-            ExecutableExpr::Effect { .. } => self.unsupported("data effect"),
+            ExecutableExpr::Effect { effect, value, .. } => match effect {
+                ParamEffect::Read => self.lower_read_borrow(value),
+                ParamEffect::Mut => self.unsupported("mutable borrow"),
+                ParamEffect::Take => self.unsupported("move"),
+            },
             ExecutableExpr::Manage { .. } => self.unsupported("managed resource"),
             ExecutableExpr::Spawn { .. } => self.unsupported("spawn"),
             ExecutableExpr::Await { .. } => self.unsupported("await"),
@@ -515,6 +519,16 @@ impl<'a> FunctionLowerer<'a> {
             target,
             arguments,
         });
+        Ok(destination)
+    }
+
+    fn lower_read_borrow(&mut self, value: &ExecutableExpr) -> Result<ValueId, MirLoweringError> {
+        let ExecutableExpr::Ident { name, .. } = value else {
+            return self.unsupported("read borrow of non-local value");
+        };
+        let destination = self.value();
+        let place = self.lookup_place(name)?;
+        self.emit(MirInstruction::BorrowRead { destination, place });
         Ok(destination)
     }
 

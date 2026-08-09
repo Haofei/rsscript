@@ -85,6 +85,13 @@ pub enum MirInstruction {
         destination: ValueId,
         place: PlaceId,
     },
+    /// A checked `read` borrow at a call boundary. This is intentionally
+    /// distinct from an ordinary local read so later retain/escape validation
+    /// has a concrete operation to inspect.
+    BorrowRead {
+        destination: ValueId,
+        place: PlaceId,
+    },
     WritePlace {
         place: PlaceId,
         value: ValueId,
@@ -457,6 +464,10 @@ fn verify_instruction(
     match instruction {
         MirInstruction::LoadLiteral { destination, .. } => define(*destination, defined),
         MirInstruction::ReadPlace { destination, place } => {
+            check_place(*place)?;
+            define(*destination, defined)
+        }
+        MirInstruction::BorrowRead { destination, place } => {
             check_place(*place)?;
             define(*destination, defined)
         }

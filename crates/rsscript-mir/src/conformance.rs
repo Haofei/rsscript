@@ -167,6 +167,13 @@ impl<'a> Interpreter<'a> {
                                 .ok_or(MirExecutionError::UninitializedPlace(place.index()))?,
                         );
                     }
+                    MirInstruction::BorrowRead { destination, place } => {
+                        values[destination.index()] = Some(
+                            places[place.index()]
+                                .clone()
+                                .ok_or(MirExecutionError::UninitializedPlace(place.index()))?,
+                        );
+                    }
                     MirInstruction::WritePlace { place, value } => {
                         places[place.index()] = Some(value_at(&values, *value)?);
                     }

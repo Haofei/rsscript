@@ -64,6 +64,21 @@ fn main() -> Int {
 }
 "#,
     },
+    MigrationCase {
+        name: "direct_call_arguments",
+        capability: "direct call arguments",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn increment(value: Int) -> Int {
+    return value + 1
+}
+
+fn main() -> Int {
+    let seed = 41
+    return increment(value: seed)
+}
+"#,
+    },
 ];
 
 #[test]
