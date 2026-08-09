@@ -1,3 +1,6 @@
+use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
 use std::sync::Arc;
 
 use rsscript_diagnostics::Diagnostic;
@@ -37,6 +40,20 @@ pub struct SourceFileSnapshot {
 }
 
 impl SourceFileSnapshot {
+    pub(crate) fn new(
+        file_id: FileId,
+        revision: SourceRevision,
+        path: impl Into<Arc<str>>,
+        text: impl Into<Arc<str>>,
+    ) -> Self {
+        Self {
+            file_id,
+            revision,
+            path: path.into(),
+            text: text.into(),
+        }
+    }
+
     pub fn file_id(&self) -> FileId {
         self.file_id
     }
@@ -70,15 +87,23 @@ impl SourceSnapshot {
             files: sources
                 .into_iter()
                 .enumerate()
-                .map(|(index, (path, text))| SourceFileSnapshot {
-                    file_id: FileId::new(
-                        u32::try_from(index).expect("source snapshot exceeds u32 file IDs"),
-                    ),
-                    revision: SourceRevision::INITIAL,
-                    path: Arc::from(path),
-                    text: Arc::from(text),
+                .map(|(index, (path, text))| {
+                    SourceFileSnapshot::new(
+                        FileId::new(
+                            u32::try_from(index).expect("source snapshot exceeds u32 file IDs"),
+                        ),
+                        SourceRevision::INITIAL,
+                        Arc::from(path),
+                        Arc::from(text),
+                    )
                 })
                 .collect(),
+        }
+    }
+
+    pub(crate) fn from_files(files: impl IntoIterator<Item = SourceFileSnapshot>) -> Self {
+        Self {
+            files: files.into_iter().collect(),
         }
     }
 
@@ -87,13 +112,181 @@ impl SourceSnapshot {
     }
 
     pub fn file(&self, id: FileId) -> Option<&SourceFileSnapshot> {
-        self.files
-            .get(id.get() as usize)
-            .filter(|file| file.file_id == id)
+        self.files.iter().find(|file| file.file_id == id)
     }
 
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()
+    }
+}
+
+/// The outcome of adding or replacing one session-owned source file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceUpdate {
+    pub file_id: FileId,
+    pub revision: SourceRevision,
+    pub changed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SourceStoreError {
+    EmptyPath,
+    FileIdExhausted,
+    RevisionExhausted { file_id: FileId },
+}
+
+impl fmt::Display for SourceStoreError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyPath => formatter.write_str("source path must not be empty"),
+            Self::FileIdExhausted => formatter.write_str("source session exhausted file IDs"),
+            Self::RevisionExhausted { file_id } => {
+                write!(
+                    formatter,
+                    "source file {} exhausted revisions",
+                    file_id.get()
+                )
+            }
+        }
+    }
+}
+
+impl Error for SourceStoreError {}
+
+#[derive(Debug, Clone)]
+struct SessionFile {
+    file_id: FileId,
+    revision: SourceRevision,
+    text: Arc<str>,
+}
+
+/// Immutable-revision source store used by one compilation session.
+///
+/// Paths are ordered in the snapshot, while identity is allocated once and is
+/// never reused after deletion. Replacing unchanged bytes is deliberately a
+/// no-op so editor refreshes do not invalidate dependent queries later.
+#[derive(Debug, Clone, Default)]
+pub struct SessionSourceStore {
+    files: BTreeMap<String, SessionFile>,
+    next_file_id: u32,
+}
+
+impl SessionSourceStore {
+    pub fn set_file(
+        &mut self,
+        path: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Result<SourceUpdate, SourceStoreError> {
+        let path = path.into();
+        if path.is_empty() {
+            return Err(SourceStoreError::EmptyPath);
+        }
+        let text: Arc<str> = Arc::from(text.into());
+        if let Some(file) = self.files.get_mut(&path) {
+            if file.text == text {
+                return Ok(SourceUpdate {
+                    file_id: file.file_id,
+                    revision: file.revision,
+                    changed: false,
+                });
+            }
+            let revision = file
+                .revision
+                .next()
+                .ok_or(SourceStoreError::RevisionExhausted {
+                    file_id: file.file_id,
+                })?;
+            file.revision = revision;
+            file.text = text;
+            return Ok(SourceUpdate {
+                file_id: file.file_id,
+                revision,
+                changed: true,
+            });
+        }
+        let file_id = FileId::new(self.next_file_id);
+        self.next_file_id = self
+            .next_file_id
+            .checked_add(1)
+            .ok_or(SourceStoreError::FileIdExhausted)?;
+        self.files.insert(
+            path,
+            SessionFile {
+                file_id,
+                revision: SourceRevision::INITIAL,
+                text,
+            },
+        );
+        Ok(SourceUpdate {
+            file_id,
+            revision: SourceRevision::INITIAL,
+            changed: true,
+        })
+    }
+
+    pub fn remove_file(&mut self, path: &str) -> Option<SourceUpdate> {
+        self.files.remove(path).map(|file| SourceUpdate {
+            file_id: file.file_id,
+            revision: file.revision,
+            changed: true,
+        })
+    }
+
+    pub fn snapshot(&self) -> SourceSnapshot {
+        SourceSnapshot::from_files(self.files.iter().map(|(path, file)| {
+            SourceFileSnapshot::new(
+                file.file_id,
+                file.revision,
+                Arc::from(path.as_str()),
+                file.text.clone(),
+            )
+        }))
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+}
+
+/// The shared frontend input boundary. Query caching is layered on top of this
+/// revisioned store; callers cannot mutate a snapshot after it is captured.
+#[derive(Debug, Clone, Default)]
+pub struct CompilationSession {
+    sources: SessionSourceStore,
+    interfaces: SessionSourceStore,
+}
+
+impl CompilationSession {
+    pub fn set_file(
+        &mut self,
+        path: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Result<SourceUpdate, SourceStoreError> {
+        self.sources.set_file(path, text)
+    }
+
+    pub fn remove_file(&mut self, path: &str) -> Option<SourceUpdate> {
+        self.sources.remove_file(path)
+    }
+
+    pub fn set_interface(
+        &mut self,
+        path: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Result<SourceUpdate, SourceStoreError> {
+        self.interfaces.set_file(path, text)
+    }
+
+    pub fn remove_interface(&mut self, path: &str) -> Option<SourceUpdate> {
+        self.interfaces.remove_file(path)
+    }
+
+    pub fn source_snapshot(&self) -> SourceSnapshot {
+        self.sources.snapshot()
+    }
+
+    pub fn interface_snapshot(&self) -> SourceSnapshot {
+        self.interfaces.snapshot()
     }
 }
 
@@ -281,5 +474,45 @@ mod tests {
         assert_eq!(first.revision(), SourceRevision::INITIAL);
         assert_eq!(snapshot.file(FileId::new(1)).unwrap().path(), "b.rss");
         assert!(snapshot.file(FileId::new(2)).is_none());
+    }
+
+    #[test]
+    fn compilation_session_tracks_replacements_removals_and_deterministic_snapshots() {
+        let mut session = CompilationSession::default();
+        let beta = session.set_file("b.rss", "one").unwrap();
+        let alpha = session.set_file("a.rss", "two").unwrap();
+        assert_eq!(beta.file_id, FileId::new(0));
+        assert_eq!(alpha.file_id, FileId::new(1));
+
+        let first = session.source_snapshot();
+        assert_eq!(
+            first
+                .files()
+                .iter()
+                .map(SourceFileSnapshot::path)
+                .collect::<Vec<_>>(),
+            ["a.rss", "b.rss"]
+        );
+        assert_eq!(first.file(beta.file_id).unwrap().text(), "one");
+
+        let unchanged = session.set_file("b.rss", "one").unwrap();
+        assert_eq!(
+            unchanged,
+            SourceUpdate {
+                changed: false,
+                ..beta
+            }
+        );
+        let replacement = session.set_file("b.rss", "three").unwrap();
+        assert_eq!(replacement.file_id, beta.file_id);
+        assert_eq!(replacement.revision, SourceRevision::new(1));
+        assert!(replacement.changed);
+
+        assert_eq!(session.remove_file("a.rss").unwrap(), alpha);
+        assert!(session.remove_file("a.rss").is_none());
+        assert_eq!(session.source_snapshot().files().len(), 1);
+        let interface = session.set_interface("host.rssi", "module host").unwrap();
+        assert_eq!(interface.file_id, FileId::new(0));
+        assert_eq!(session.interface_snapshot().files()[0].path(), "host.rssi");
     }
 }

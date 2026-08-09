@@ -164,9 +164,12 @@ mechanical acceptance condition holds.
     ordinal file IDs and initial revisions, expose lookup by ID, and have
     construction/serialization tests. Session mutation and dependency tracking
     remain follow-up work.
-  - [ ] **S03.2 — Capture revisions in a session-owned source store.** Replace
-    ad-hoc frontend inputs with immutable revisions and explicit replacement or
-    removal operations.
+  - [x] **S03.2 — Capture revisions in a session-owned source store.**
+    `CompilationSession` owns separate deterministic source and interface
+    stores with explicit set/replace/remove operations. Snapshots are immutable,
+    path-ordered, retain non-reused file IDs, and advance revisions only when
+    bytes change; focused tests cover replacement, deletion, and interface
+    capture. Query migration remains follow-up work.
   - [ ] **S03.3 — Cache parse, resolve, type, HIR, and diagnostic queries.**
     Record dependencies so unrelated file changes do not invalidate a workspace.
   - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add
