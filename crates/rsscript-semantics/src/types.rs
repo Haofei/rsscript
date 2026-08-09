@@ -3,6 +3,7 @@ use std::fmt;
 
 use rsscript_syntax::Span;
 use rsscript_syntax::ast::{DataEffect, Item, Program, TypeRef};
+use serde::{Deserialize, Serialize};
 
 pub(crate) fn type_root_name(name: &str) -> &str {
     let trimmed = name.trim();
@@ -70,7 +71,8 @@ pub(crate) fn builtin_generic_type_params(root: &str) -> Option<Vec<&'static str
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
 pub struct TypeId(u32);
 
 impl TypeId {
@@ -712,6 +714,14 @@ mod tests {
         let second = arena.intern(ResolvedType::from_display("Map<String, Int>"));
         assert_eq!(first, second);
         assert_eq!(arena.len(), 1);
+    }
+
+    #[test]
+    fn interned_type_id_has_a_stable_wire_form() {
+        let mut arena = TypeArena::default();
+        let id = arena.intern(ResolvedType::from_display("Int"));
+        assert_eq!(serde_json::to_string(&id).unwrap(), "0");
+        assert_eq!(serde_json::from_str::<TypeId>("0").unwrap(), id);
     }
 
     #[test]

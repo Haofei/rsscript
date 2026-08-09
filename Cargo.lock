@@ -2047,6 +2047,7 @@ dependencies = [
  "rsscript-abi-model",
  "rsscript-diagnostics",
  "rsscript-interface-catalog",
+ "rsscript-source-model",
  "rsscript-syntax",
  "serde",
  "serde_json",
@@ -2057,6 +2058,7 @@ name = "rsscript-source-model"
 version = "0.1.0"
 dependencies = [
  "serde",
+ "serde_json",
 ]
 
 [[package]]

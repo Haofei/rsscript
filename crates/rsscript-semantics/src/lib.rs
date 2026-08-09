@@ -13,6 +13,7 @@ pub use rsscript_abi_model::{
 mod call_binding;
 mod database;
 pub mod hir;
+mod identities;
 mod interface_descriptor;
 mod types;
 pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
@@ -20,10 +21,12 @@ pub use database::{
     AnalysisResult, FrontendCompletion, FrontendStopReason, SemanticDatabase, SourceFileSnapshot,
     SourceSnapshot, ValidatedProgram,
 };
+pub use identities::DefinitionId;
 pub use interface_descriptor::{
     INTERFACE_DESCRIPTOR_SCHEMA, InterfaceDescriptorError, InterfaceDescriptorFunctionV1,
     InterfaceDescriptorResourceV1, InterfaceDescriptorV1,
 };
+pub use rsscript_source_model::{FileId, InterfaceId, ModuleId, SourceRevision};
 pub use types::{
     ResolvedParamEffect, ResolvedType, ResolvedTypeKind, SemanticTypeFacts, TypeArena, TypeId,
     TypeQualifiers,

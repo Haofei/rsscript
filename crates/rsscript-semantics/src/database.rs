@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use rsscript_diagnostics::Diagnostic;
+use rsscript_source_model::{FileId, SourceRevision};
 use rsscript_syntax::ast::Program;
 
 use crate::SemanticTypeFacts;
@@ -29,11 +30,21 @@ pub enum FrontendCompletion {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceFileSnapshot {
+    file_id: FileId,
+    revision: SourceRevision,
     path: Arc<str>,
     text: Arc<str>,
 }
 
 impl SourceFileSnapshot {
+    pub fn file_id(&self) -> FileId {
+        self.file_id
+    }
+
+    pub fn revision(&self) -> SourceRevision {
+        self.revision
+    }
+
     pub fn path(&self) -> &str {
         &self.path
     }
@@ -58,7 +69,12 @@ impl SourceSnapshot {
         Self {
             files: sources
                 .into_iter()
-                .map(|(path, text)| SourceFileSnapshot {
+                .enumerate()
+                .map(|(index, (path, text))| SourceFileSnapshot {
+                    file_id: FileId::new(
+                        u32::try_from(index).expect("source snapshot exceeds u32 file IDs"),
+                    ),
+                    revision: SourceRevision::INITIAL,
                     path: Arc::from(path),
                     text: Arc::from(text),
                 })
@@ -68,6 +84,12 @@ impl SourceSnapshot {
 
     pub fn files(&self) -> &[SourceFileSnapshot] {
         &self.files
+    }
+
+    pub fn file(&self, id: FileId) -> Option<&SourceFileSnapshot> {
+        self.files
+            .get(id.get() as usize)
+            .filter(|file| file.file_id == id)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -247,5 +269,17 @@ mod tests {
             snapshot.files()[0].text(),
             "fn main() -> Unit { return Unit }\n"
         );
+    }
+
+    #[test]
+    fn snapshot_assigns_repeatable_file_identity_and_initial_revision() {
+        let snapshot = SourceSnapshot::from_sources([("a.rss", "a"), ("b.rss", "b")]);
+        let first = &snapshot.files()[0];
+        let second = &snapshot.files()[1];
+        assert_eq!(first.file_id(), FileId::new(0));
+        assert_eq!(second.file_id(), FileId::new(1));
+        assert_eq!(first.revision(), SourceRevision::INITIAL);
+        assert_eq!(snapshot.file(FileId::new(1)).unwrap().path(), "b.rss");
+        assert!(snapshot.file(FileId::new(2)).is_none());
     }
 }

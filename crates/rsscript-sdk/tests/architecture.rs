@@ -882,15 +882,17 @@ fn syntax_model_is_owned_by_the_boundary_crate() {
 fn source_coordinates_are_not_owned_by_budget_accounting() {
     let root = workspace_root();
     let source_model = read(&root.join("crates/rsscript-source-model/src/lib.rs"));
-    for source_type in [
-        "pub struct FileId",
-        "pub struct SourceRevision",
-        "pub struct TextRange",
-        "pub struct Span",
-    ] {
+    for source_type in ["FileId", "SourceRevision", "ModuleId", "InterfaceId"] {
+        assert!(
+            source_model.contains("stable_id!(")
+                && source_model.contains(&format!("{source_type},")),
+            "source model must own `{source_type}`"
+        );
+    }
+    for source_type in ["pub struct TextRange", "pub struct Span"] {
         assert!(
             source_model.contains(source_type),
-            "source model must own `{source_type}`"
+            "source model must own `{source_type}"
         );
     }
 

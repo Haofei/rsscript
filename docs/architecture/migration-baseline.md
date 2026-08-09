@@ -157,9 +157,13 @@ mechanical acceptance condition holds.
   source/module/interface/definition/type identities, dependency tracking,
   cancellation, deadlines, and cached HIR/MIR queries shared by CLI, package
   compilation, tests, and editor tooling.
-  - [ ] **S03.1 — Define source and semantic identities.** Add stable source,
-    revision, module, interface, definition, and type IDs with deterministic
-    construction and serialization tests.
+  - [x] **S03.1 — Define source and semantic identities.**
+    `rsscript-source-model` now owns serializable `FileId`, `SourceRevision`,
+    `ModuleId`, and `InterfaceId`; `rsscript-semantics` owns serializable
+    `DefinitionId` and `TypeId`. Immutable source snapshots assign stable
+    ordinal file IDs and initial revisions, expose lookup by ID, and have
+    construction/serialization tests. Session mutation and dependency tracking
+    remain follow-up work.
   - [ ] **S03.2 — Capture revisions in a session-owned source store.** Replace
     ad-hoc frontend inputs with immutable revisions and explicit replacement or
     removal operations.
