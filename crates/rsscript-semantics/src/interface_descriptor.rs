@@ -119,6 +119,13 @@ impl InterfaceDescriptorV1 {
             functions,
         })
     }
+
+    /// Canonical descriptor bytes for snapshots, generated bindings, and ABI
+    /// drift checks. Every field is ordered structurally and functions are
+    /// sorted by canonical external symbol before this is produced.
+    pub fn to_json_bytes(&self) -> Result<Vec<u8>, serde_json::Error> {
+        serde_json::to_vec(self)
+    }
 }
 
 fn type_name(ty: &TypeRef) -> String {
@@ -180,6 +187,10 @@ mod tests {
         assert_eq!(
             descriptor.functions[0].signature_hash,
             descriptor.functions[0].signature.hash()
+        );
+        assert_eq!(
+            descriptor.to_json_bytes().unwrap(),
+            descriptor.to_json_bytes().unwrap()
         );
     }
 }

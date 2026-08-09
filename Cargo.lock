@@ -2038,6 +2038,7 @@ dependencies = [
  "rsscript-interface-catalog",
  "rsscript-syntax",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
