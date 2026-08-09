@@ -6,7 +6,7 @@
 //! Providers, or a runtime. Human-readable names are retained only in debug
 //! tables; instructions use typed local identities.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::error::Error;
 use std::fmt;
 
@@ -413,7 +413,6 @@ fn verify_function(
 
     let mut defined = BTreeSet::new();
     let mut used = Vec::new();
-    let mut moved_places = BTreeSet::new();
     for (index, block) in function.blocks.iter().enumerate() {
         if block.id.index() != index {
             return Err(MirValidationError::BlockIdMismatch {
@@ -422,19 +421,21 @@ fn verify_function(
                 actual: block.id.index(),
             });
         }
+        let mut block_moved_places = BTreeSet::new();
         for instruction in &block.instructions {
             verify_instruction(
                 function,
                 instruction,
                 &mut defined,
                 &mut used,
-                &mut moved_places,
+                &mut block_moved_places,
                 functions,
                 external_imports,
             )?;
         }
         verify_terminator(function, block.terminator(), &mut used)?;
     }
+    verify_move_dataflow(function)?;
     for value in used {
         if value.index() >= function.value_count as usize || !defined.contains(&value) {
             return Err(MirValidationError::UndefinedValue {
@@ -444,6 +445,99 @@ fn verify_function(
         }
     }
     Ok(())
+}
+
+/// A place is considered moved at a join when any reachable predecessor moves
+/// it. This is deliberately conservative: a later read must be valid on every
+/// control-flow path. Assigning the place reinitializes it on that path.
+fn verify_move_dataflow(function: &MirFunction) -> Result<(), MirValidationError> {
+    let mut entries = vec![BTreeSet::new(); function.blocks.len()];
+    let mut queued = vec![false; function.blocks.len()];
+    let mut visited = vec![false; function.blocks.len()];
+    let mut worklist = VecDeque::from([BlockId::new(0)]);
+    queued[0] = true;
+
+    while let Some(block_id) = worklist.pop_front() {
+        queued[block_id.index()] = false;
+        visited[block_id.index()] = true;
+        let block = &function.blocks[block_id.index()];
+        let mut moved_places = entries[block_id.index()].clone();
+        for instruction in &block.instructions {
+            transfer_move_state(function, instruction, &mut moved_places)?;
+        }
+        for successor in successors(block.terminator()) {
+            let entry = &mut entries[successor.index()];
+            let before = entry.len();
+            entry.extend(moved_places.iter().copied());
+            if (!visited[successor.index()] || entry.len() != before) && !queued[successor.index()]
+            {
+                worklist.push_back(successor);
+                queued[successor.index()] = true;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn successors(terminator: &MirTerminator) -> impl Iterator<Item = BlockId> {
+    let mut successors = [None; 2];
+    match terminator {
+        MirTerminator::Jump(target) => successors[0] = Some(*target),
+        MirTerminator::Branch {
+            then_target,
+            else_target,
+            ..
+        } => {
+            successors[0] = Some(*then_target);
+            successors[1] = Some(*else_target);
+        }
+        MirTerminator::Return(_) | MirTerminator::Unreachable => {}
+    }
+    successors.into_iter().flatten()
+}
+
+fn transfer_move_state(
+    function: &MirFunction,
+    instruction: &MirInstruction,
+    moved_places: &mut BTreeSet<PlaceId>,
+) -> Result<(), MirValidationError> {
+    let check_live = |place: PlaceId, moved_places: &BTreeSet<PlaceId>| {
+        if moved_places.contains(&place) {
+            Err(MirValidationError::UseAfterMove {
+                function: function.id,
+                place,
+            })
+        } else {
+            Ok(())
+        }
+    };
+    match instruction {
+        MirInstruction::ReadPlace { place, .. } | MirInstruction::BorrowRead { place, .. } => {
+            check_live(*place, moved_places)
+        }
+        MirInstruction::WritePlace { place, .. } => {
+            moved_places.remove(place);
+            Ok(())
+        }
+        MirInstruction::Call { arguments, .. } => {
+            for argument in arguments {
+                match argument {
+                    MirCallArgument::Value(_) => {}
+                    MirCallArgument::BorrowRead(place) | MirCallArgument::BorrowMut(place) => {
+                        check_live(*place, moved_places)?;
+                    }
+                    MirCallArgument::Take(place) => {
+                        check_live(*place, moved_places)?;
+                        moved_places.insert(*place);
+                    }
+                }
+            }
+            Ok(())
+        }
+        MirInstruction::LoadLiteral { .. }
+        | MirInstruction::Binary { .. }
+        | MirInstruction::Discard { .. } => Ok(()),
+    }
 }
 
 fn verify_instruction(
@@ -901,5 +995,145 @@ mod tests {
             ),
             Err(MirValidationError::UseAfterMove { .. })
         ));
+    }
+
+    fn unit_taking_callee() -> MirFunction {
+        MirFunction::new(
+            FunctionId::new(0),
+            MirFunctionSignature::new(vec![TypeId::new(0)], TypeId::new(0), false),
+            1,
+            0,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                Vec::new(),
+                MirTerminator::Return(None),
+            )],
+        )
+    }
+
+    #[test]
+    fn rejects_a_read_after_take_on_one_branch_at_a_join() {
+        let caller = MirFunction::new(
+            FunctionId::new(1),
+            signature(),
+            1,
+            3,
+            vec![
+                BasicBlock::new(
+                    BlockId::new(0),
+                    vec![MirInstruction::LoadLiteral {
+                        destination: ValueId::new(0),
+                        value: MirLiteral::Bool(true),
+                    }],
+                    MirTerminator::Branch {
+                        condition: ValueId::new(0),
+                        then_target: BlockId::new(1),
+                        else_target: BlockId::new(2),
+                    },
+                ),
+                BasicBlock::new(
+                    BlockId::new(1),
+                    vec![MirInstruction::Call {
+                        destination: ValueId::new(1),
+                        target: MirCallTarget::Function(FunctionId::new(0)),
+                        arguments: vec![MirCallArgument::Take(PlaceId::new(0))],
+                    }],
+                    MirTerminator::Jump(BlockId::new(3)),
+                ),
+                BasicBlock::new(
+                    BlockId::new(2),
+                    Vec::new(),
+                    MirTerminator::Jump(BlockId::new(3)),
+                ),
+                BasicBlock::new(
+                    BlockId::new(3),
+                    vec![MirInstruction::ReadPlace {
+                        destination: ValueId::new(2),
+                        place: PlaceId::new(0),
+                    }],
+                    MirTerminator::Return(Some(ValueId::new(2))),
+                ),
+            ],
+        );
+        let debug = vec![
+            MirFunctionDebug::new("callee", vec!["value".into()]),
+            MirFunctionDebug::new("caller", vec!["value".into()]),
+        ];
+        assert!(matches!(
+            MirModule::new(
+                vec![WireType::Unit],
+                vec![unit_taking_callee(), caller],
+                debug,
+                Vec::new()
+            ),
+            Err(MirValidationError::UseAfterMove { .. })
+        ));
+    }
+
+    #[test]
+    fn permits_reinitialization_after_a_branch_local_take() {
+        let caller = MirFunction::new(
+            FunctionId::new(1),
+            signature(),
+            1,
+            4,
+            vec![
+                BasicBlock::new(
+                    BlockId::new(0),
+                    vec![MirInstruction::LoadLiteral {
+                        destination: ValueId::new(0),
+                        value: MirLiteral::Bool(true),
+                    }],
+                    MirTerminator::Branch {
+                        condition: ValueId::new(0),
+                        then_target: BlockId::new(1),
+                        else_target: BlockId::new(2),
+                    },
+                ),
+                BasicBlock::new(
+                    BlockId::new(1),
+                    vec![MirInstruction::Call {
+                        destination: ValueId::new(1),
+                        target: MirCallTarget::Function(FunctionId::new(0)),
+                        arguments: vec![MirCallArgument::Take(PlaceId::new(0))],
+                    }],
+                    MirTerminator::Jump(BlockId::new(3)),
+                ),
+                BasicBlock::new(
+                    BlockId::new(2),
+                    Vec::new(),
+                    MirTerminator::Jump(BlockId::new(3)),
+                ),
+                BasicBlock::new(
+                    BlockId::new(3),
+                    vec![
+                        MirInstruction::LoadLiteral {
+                            destination: ValueId::new(2),
+                            value: MirLiteral::Int(42),
+                        },
+                        MirInstruction::WritePlace {
+                            place: PlaceId::new(0),
+                            value: ValueId::new(2),
+                        },
+                        MirInstruction::ReadPlace {
+                            destination: ValueId::new(3),
+                            place: PlaceId::new(0),
+                        },
+                    ],
+                    MirTerminator::Return(Some(ValueId::new(3))),
+                ),
+            ],
+        );
+        let debug = vec![
+            MirFunctionDebug::new("callee", vec!["value".into()]),
+            MirFunctionDebug::new("caller", vec!["value".into()]),
+        ];
+        MirModule::new(
+            vec![WireType::Unit],
+            vec![unit_taking_callee(), caller],
+            debug,
+            Vec::new(),
+        )
+        .expect("write reinitializes a place on every path after the join");
     }
 }
