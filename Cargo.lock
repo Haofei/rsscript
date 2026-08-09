@@ -2110,6 +2110,7 @@ dependencies = [
  "rsscript-compiler",
  "rsscript-interface-catalog",
  "rsscript-lowering",
+ "rsscript-mir",
  "rsscript-operation",
  "rsscript-provider-api",
  "rsscript-review-reir",
