@@ -410,6 +410,9 @@ mechanical acceptance condition holds.
     Provider ABI at link.
   - [ ] **B04.3 — Add supported-range fixtures.** Cover accepted N/N-1 inputs and
     unknown major versions that must fail closed.
+    - [x] **B04.3a — Exercise declared language ranges and container rejection.**
+      The bytecode suite verifies an explicit N-1 compatibility range and
+      rejects an unknown container major before decoding sections.
 - [ ] **B05 — Preserve a versioned compatibility corpus.** Keep read-only v1
   fixtures, malformed v1/v2 inputs, N-1 schema fixtures, deterministic
   cross-platform bytes, and explicit unknown-version/section fail-closed tests.

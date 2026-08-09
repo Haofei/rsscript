@@ -1995,6 +1995,34 @@ mod tests {
     }
 
     #[test]
+    fn compatibility_ranges_and_unknown_container_majors_are_explicit() {
+        let previous_minor = BytecodeArtifact::new(
+            "0.0.9",
+            "0.1.0",
+            TEST_CATALOG_DIGEST,
+            RUNTIME_ABI_VERSION,
+            TEST_SOURCE_DIGEST,
+            vec![],
+            minimal_payload(),
+        )
+        .unwrap();
+        let compatibility = BytecodeCompatibility {
+            language: VersionReq::parse(">=0.0.0, <0.2.0").unwrap(),
+            ..BytecodeCompatibility::default()
+        };
+        BytecodeVerifier::with_compatibility(BytecodeLimits::default(), compatibility)
+            .verify(&previous_minor.to_bytes().unwrap())
+            .expect("declared N-1 language range accepts a compatible artifact");
+
+        let mut unknown_container = previous_minor.to_bytes().unwrap();
+        unknown_container[6] = BYTECODE_CONTAINER_FORMAT_VERSION.saturating_add(1) as u8;
+        assert!(matches!(
+            BytecodeArtifact::from_bytes(&unknown_container),
+            Err(BytecodeError::InvalidMagic)
+        ));
+    }
+
+    #[test]
     fn artifact_sections_and_instruction_payload_use_binary_cbor() {
         let payload = minimal_payload();
         assert_ne!(payload.first(), Some(&b'{'));
