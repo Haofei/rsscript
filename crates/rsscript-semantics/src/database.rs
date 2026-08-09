@@ -4,6 +4,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use rsscript_diagnostics::Diagnostic;
+use rsscript_operation::{OperationAbort, OperationContext};
 use rsscript_source_model::{FileId, SourceRevision};
 use rsscript_syntax::{ast::Program, parse_source};
 
@@ -329,12 +330,40 @@ impl CompilationSession {
         self.parse_snapshot_file(SessionFileRole::Source, file)
     }
 
+    /// Parse a source revision while honoring the shared frontend operation
+    /// boundary. The post-query check is deliberate: a cached result must not
+    /// escape after a caller has cancelled or timed out the request.
+    pub fn parse_file_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<Program>>, OperationAbort> {
+        operation.check()?;
+        let program = self.parse_file(path);
+        operation.check()?;
+        Ok(program)
+    }
+
     /// Parse one interface revision through the same cache. File IDs are
     /// session-local across both stores, so the query key also records its role.
     pub fn parse_interface(&mut self, path: &str) -> Option<Arc<Program>> {
         let snapshot = self.interface_snapshot();
         let file = snapshot.files().iter().find(|file| file.path() == path)?;
         self.parse_snapshot_file(SessionFileRole::Interface, file)
+    }
+
+    /// Interface parsing uses the same cancellation/deadline contract as
+    /// source parsing; callers cannot accidentally bypass it through the
+    /// separate interface store.
+    pub fn parse_interface_with_operation(
+        &mut self,
+        path: &str,
+        operation: &OperationContext,
+    ) -> Result<Option<Arc<Program>>, OperationAbort> {
+        operation.check()?;
+        let program = self.parse_interface(path);
+        operation.check()?;
+        Ok(program)
     }
 
     /// Return source parse trees in canonical snapshot path order.
@@ -344,6 +373,27 @@ impl CompilationSession {
             .iter()
             .filter_map(|file| self.parse_snapshot_file(SessionFileRole::Source, file))
             .collect()
+    }
+
+    /// Return canonical source parse trees while polling the shared operation
+    /// context between individual file queries.
+    pub fn parsed_sources_with_operation(
+        &mut self,
+        operation: &OperationContext,
+    ) -> Result<Vec<Arc<Program>>, OperationAbort> {
+        let paths = self
+            .source_snapshot()
+            .files()
+            .iter()
+            .map(|file| file.path().to_string())
+            .collect::<Vec<_>>();
+        let mut programs = Vec::with_capacity(paths.len());
+        for path in paths {
+            if let Some(program) = self.parse_file_with_operation(&path, operation)? {
+                programs.push(program);
+            }
+        }
+        Ok(programs)
     }
 
     pub fn stats(&self) -> CompilationSessionStats {
@@ -538,6 +588,8 @@ impl ValidatedProgram {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rsscript_operation::{CancellationToken, MonotonicDeadline};
+    use std::time::{Duration, Instant};
 
     #[test]
     fn source_snapshot_owns_the_captured_text() {
@@ -652,5 +704,44 @@ mod tests {
         let interface = session.parse_interface("shared.rssi").unwrap();
         assert!(!Arc::ptr_eq(&source, &interface));
         assert_eq!(session.stats().parse_cache_misses, 2);
+    }
+
+    #[test]
+    fn session_parse_queries_reject_cancelled_and_expired_requests_before_cache_access() {
+        let mut session = CompilationSession::default();
+        session
+            .set_file("main.rss", "fn main() -> Unit { return Unit }")
+            .unwrap();
+        let cached = session.parse_file("main.rss").unwrap();
+
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let cancelled = OperationContext {
+            cancellation: Some(cancellation),
+            ..OperationContext::default()
+        };
+        assert_eq!(
+            session.parse_file_with_operation("main.rss", &cancelled),
+            Err(OperationAbort::Cancelled)
+        );
+
+        let expired = OperationContext {
+            deadline: Some(MonotonicDeadline::at(
+                Instant::now() - Duration::from_millis(1),
+            )),
+            ..OperationContext::default()
+        };
+        assert_eq!(
+            session.parse_file_with_operation("main.rss", &expired),
+            Err(OperationAbort::DeadlineExceeded)
+        );
+
+        let live = OperationContext::default();
+        let reused = session
+            .parse_file_with_operation("main.rss", &live)
+            .unwrap()
+            .unwrap();
+        assert!(Arc::ptr_eq(&cached, &reused));
+        assert_eq!(session.stats().parse_cache_hits, 1);
     }
 }
