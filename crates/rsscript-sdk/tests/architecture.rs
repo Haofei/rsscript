@@ -1483,6 +1483,22 @@ fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
 }
 
 #[test]
+fn vm_public_loader_requires_a_verifier_token() {
+    let root = workspace_root();
+    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+    assert!(vm.contains("pub fn from_verified_bytecode("));
+    for forbidden in [
+        "pub fn from_bytecode(",
+        "pub fn from_bytecode_with_operation(",
+    ] {
+        assert!(
+            !vm.contains(forbidden),
+            "VM must not expose raw-byte constructor `{forbidden}`"
+        );
+    }
+}
+
+#[test]
 fn compiler_default_dependency_closure_is_host_neutral() {
     let root = workspace_root();
     let facade: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-sdk/Cargo.toml")))

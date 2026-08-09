@@ -637,32 +637,6 @@ impl RegVmExecutable {
 }
 
 impl RegVmExecutable {
-    /// Load a serialized `rsscript.bytecode.v1` artifact. The returned
-    /// executable exists only after checksum, ABI, import-table, control-flow,
-    /// function and register verification succeeds.
-    pub fn from_bytecode(bytes: &[u8]) -> Result<Self, EvalError> {
-        let verified = rsscript_bytecode::BytecodeVerifier::default()
-            .verify(bytes)
-            .map_err(bytecode::bytecode_error)?;
-        Self::from_verified_bytecode(verified)
-    }
-
-    pub fn from_bytecode_with_operation(
-        bytes: &[u8],
-        operation: &rsscript_operation::OperationContext,
-    ) -> Result<Self, EvalError> {
-        let verified = rsscript_bytecode::BytecodeVerifier::default()
-            .verify_with_context(
-                bytes,
-                rsscript_bytecode::VerificationContext {
-                    cancellation: operation.cancellation.as_ref(),
-                    deadline: operation.deadline,
-                },
-            )
-            .map_err(bytecode::bytecode_error)?;
-        Self::from_verified_bytecode(verified)
-    }
-
     /// Serialize this already-verified executable as `rsscript.bytecode.v1`.
     pub fn to_bytecode(&self) -> Result<Vec<u8>, EvalError> {
         self.artifact

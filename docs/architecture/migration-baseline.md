@@ -343,6 +343,8 @@ mechanical acceptance condition holds.
     longer independently validates decoded program structure.
   - [ ] **V03.3 — Restrict VM constructors.** Delete constructors accepting raw
     bytecode, executable IR, or decoded mutable instruction vectors.
+    - [x] **V03.3a — Delete raw bytecode VM constructors.** The public VM loader
+      accepts only `VerifiedBytecode`; SDK and CLI verification own byte input.
 - [ ] **V04 — Make the VM execution-only.** Remove MIR/executable-IR lowering,
   bytecode encoding, Artifact packaging, compiler/source helpers, and duplicate
   payload verification from `rsscript-vm`.
