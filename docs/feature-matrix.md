@@ -13,7 +13,7 @@ regression value and does not drive the release roadmap.
 | External semantic symbols | Core | On | Interface and binding schemas |
 | Register VM | Core | On | Reference execution semantics |
 | Package snapshot and neutral analysis | Core | On | Versioned artifact schemas |
-| Artifact Bundle and semantic diff | Core | On | Bundle and `rsscript.semantic_diff.v1` schemas |
+| Artifact Bundle and semantic diff | Core | On | Bundle and `rsscript.semantic_diff.v2` schemas |
 | Reference isolated runner | Experimental | On in CLI | Runner protocol v1 and process limits |
 | Host providers | Experimental | Explicit | Provider ABI and runner configuration |
 | Rust AOT backend | Experimental | Off | Differential parity with reference VM |

@@ -560,6 +560,10 @@ mechanical acceptance condition holds.
     Provider requirements, and diagnostic additions/removals.
   - [ ] **A07.4 — Version and fixture the neutral schema.** Add JSON/Markdown
     goldens and prove no policy verdict or risk score enters the output.
+    - [x] **A07.4a — Version diagnostic evidence explicitly.**
+      `rsscript.semantic_diff.v2` adds coordinate-free diagnostic fact sets;
+      v1 remains available as the prior schema, while v2 is validated in the
+      SDK and CLI workflow tests and contains no policy verdict fields.
 - [x] **A08 — Run scripts out of process by default.** `rss run` uses the
   versioned child protocol; trusted in-process execution is explicit.
 - [ ] **A09 — Harden the reference Linux runner profile.** Add allowlisted

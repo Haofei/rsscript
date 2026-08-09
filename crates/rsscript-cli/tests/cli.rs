@@ -193,6 +193,6 @@ fn artifact_bundle_verify_run_and_semantic_diff_form_one_cli_workflow() {
         String::from_utf8_lossy(&diff.stderr)
     );
     let diff: serde_json::Value = serde_json::from_slice(&diff.stdout).expect("diff JSON");
-    assert_eq!(diff["schema"], "rsscript.semantic_diff.v1");
+    assert_eq!(diff["schema"], "rsscript.semantic_diff.v2");
     assert_ne!(diff["old"]["module_digest"], diff["new"]["module_digest"]);
 }

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{ArtifactBundle, InterfaceRequirementV1};
 
-pub const SEMANTIC_DIFF_SCHEMA: &str = "rsscript.semantic_diff.v1";
+pub const SEMANTIC_DIFF_SCHEMA: &str = "rsscript.semantic_diff.v2";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -58,6 +58,17 @@ pub struct AwaitFactV1 {
     pub live_across_await: Vec<String>,
 }
 
+/// Coordinate-free diagnostic identity. Moving source text without changing a
+/// diagnostic must not create a semantic diff entry.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DiagnosticFactV1 {
+    pub code: String,
+    pub severity: String,
+    pub summary: String,
+    pub label: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CountChangeV1 {
@@ -77,6 +88,7 @@ pub struct SemanticDiffV1 {
     pub exports: FactSetDiffV1<ExportFactV1>,
     pub external_calls: FactSetDiffV1<ExternalCallFactV1>,
     pub await_sites: FactSetDiffV1<AwaitFactV1>,
+    pub diagnostics: FactSetDiffV1<DiagnosticFactV1>,
     pub summary: BTreeMap<String, CountChangeV1>,
 }
 
@@ -104,6 +116,10 @@ impl SemanticDiffV1 {
                 &analysis_await_sites(old.analysis()),
                 &analysis_await_sites(new.analysis()),
             ),
+            diagnostics: set_diff(
+                &analysis_diagnostics(old.analysis()),
+                &analysis_diagnostics(new.analysis()),
+            ),
             summary: summary_diff(old.analysis(), new.analysis()),
         }
     }
@@ -121,6 +137,9 @@ impl SemanticDiffV1 {
             && self.await_sites.added.is_empty()
             && self.await_sites.removed.is_empty()
             && self.await_sites.changed.is_empty()
+            && self.diagnostics.added.is_empty()
+            && self.diagnostics.removed.is_empty()
+            && self.diagnostics.changed.is_empty()
             && self.summary.is_empty()
     }
 
@@ -132,6 +151,7 @@ impl SemanticDiffV1 {
         append_counts(&mut output, "Exports", &self.exports);
         append_counts(&mut output, "External calls", &self.external_calls);
         append_counts(&mut output, "Await sites", &self.await_sites);
+        append_counts(&mut output, "Diagnostics", &self.diagnostics);
         if !self.summary.is_empty() {
             output.push_str("\n### Summary counters\n\n");
             for (name, change) in &self.summary {
@@ -243,6 +263,22 @@ fn analysis_await_sites(analysis: &serde_json::Value) -> Vec<AwaitFactV1> {
         .collect()
 }
 
+fn analysis_diagnostics(analysis: &serde_json::Value) -> Vec<DiagnosticFactV1> {
+    analysis["diagnostics"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some(DiagnosticFactV1 {
+                code: item["code"].as_str()?.to_string(),
+                severity: item["severity"].as_str()?.to_string(),
+                summary: item["summary"].as_str()?.to_string(),
+                label: item["label"].as_str()?.to_string(),
+            })
+        })
+        .collect()
+}
+
 fn strings(value: &serde_json::Value) -> Vec<String> {
     value
         .as_array()
@@ -326,5 +362,24 @@ mod tests {
         assert!(!json.contains("risk"));
         assert!(!json.contains("allow"));
         assert!(!json.contains("deny"));
+    }
+
+    #[test]
+    fn diagnostic_facts_ignore_coordinates_and_remain_policy_neutral() {
+        let analysis = serde_json::json!({
+            "diagnostics": [{
+                "code": "E1001", "severity": "error", "summary": "bad call",
+                "label": "argument", "span": { "start": 1, "end": 2 }
+            }]
+        });
+        assert_eq!(
+            analysis_diagnostics(&analysis),
+            vec![DiagnosticFactV1 {
+                code: "E1001".into(),
+                severity: "error".into(),
+                summary: "bad call".into(),
+                label: "argument".into(),
+            }]
+        );
     }
 }

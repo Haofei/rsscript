@@ -78,7 +78,7 @@ fn execution_report_schema_is_fail_closed() {
 #[test]
 fn semantic_diff_schema_accepts_live_policy_neutral_output() {
     let root = workspace_root();
-    let schema = load_json(&root.join("schemas/rsscript.semantic_diff.v1.schema.json"));
+    let schema = load_json(&root.join("schemas/rsscript.semantic_diff.v2.schema.json"));
     let validator = jsonschema::validator_for(&schema).expect("semantic diff schema");
     let compiler = rsscript_sdk::Compiler;
     let old = compiler
