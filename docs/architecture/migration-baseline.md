@@ -245,6 +245,11 @@ mechanical acceptance condition holds.
     - [x] **M03.1a — Lower direct-call read borrows.** A checked `read` of a
       local argument becomes verifier-visible `BorrowRead`; mutable borrow,
       move, retain, and drop remain follow-up work.
+    - [x] **M03.1b — Model mutable borrows and direct moves.** Call arguments
+      retain `BorrowMut`/`Take` place identity; the verifier rejects reads after
+      a direct move and the conformance interpreter writes mutable parameters
+      back to their caller places. Retain/drop and CFG join dataflow remain
+      follow-up work.
   - [ ] **M03.2 — Add resource lifetime instructions and cleanup edges.** Model
     acquire/manage/release and verify cleanup for normal return, branch exit,
     error, and cancellation.

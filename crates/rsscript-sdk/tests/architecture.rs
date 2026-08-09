@@ -1919,6 +1919,7 @@ fn typed_mir_has_a_frontend_free_dependency_boundary() {
         "pub enum MirInstruction",
         "pub enum MirTerminator",
         "BorrowRead",
+        "pub enum MirCallArgument",
         "pub enum MirCallTarget",
         "pub struct MirFunctionSignature",
         "pub struct MirModule",

@@ -8,8 +8,8 @@
 use std::fmt;
 
 use crate::{
-    FunctionId, MirBinaryOp, MirCallTarget, MirInstruction, MirLiteral, MirModule, MirTerminator,
-    ValueId,
+    FunctionId, MirBinaryOp, MirCallArgument, MirCallTarget, MirInstruction, MirLiteral, MirModule,
+    MirTerminator, ValueId,
 };
 
 /// Lifecycle of a language capability during the MIR migration.
@@ -106,7 +106,14 @@ pub fn execute_named(
         steps_remaining: 100_000,
         recursion_remaining: 128,
     };
-    interpreter.call(function, arguments)
+    interpreter
+        .call(function, arguments)
+        .map(|outcome| outcome.value)
+}
+
+struct FrameOutcome {
+    value: MirValue,
+    places: Vec<Option<MirValue>>,
 }
 
 struct Interpreter<'a> {
@@ -120,7 +127,7 @@ impl<'a> Interpreter<'a> {
         &mut self,
         function_id: FunctionId,
         arguments: Vec<MirValue>,
-    ) -> Result<MirValue, MirExecutionError> {
+    ) -> Result<FrameOutcome, MirExecutionError> {
         if self.recursion_remaining == 0 {
             return Err(MirExecutionError::RecursionLimit);
         }
@@ -134,7 +141,7 @@ impl<'a> Interpreter<'a> {
         &mut self,
         function_id: FunctionId,
         arguments: Vec<MirValue>,
-    ) -> Result<MirValue, MirExecutionError> {
+    ) -> Result<FrameOutcome, MirExecutionError> {
         let function = self
             .module
             .function(function_id)
@@ -194,17 +201,39 @@ impl<'a> Interpreter<'a> {
                         target,
                         arguments,
                     } => {
-                        let arguments = arguments
-                            .iter()
-                            .map(|value| value_at(&values, *value))
-                            .collect::<Result<Vec<_>, _>>()?;
-                        let value = match target {
-                            MirCallTarget::Function(function) => self.call(*function, arguments)?,
+                        let mut call_arguments = Vec::with_capacity(arguments.len());
+                        let mut writebacks = Vec::new();
+                        for (index, argument) in arguments.iter().enumerate() {
+                            match argument {
+                                MirCallArgument::Value(value) => {
+                                    call_arguments.push(value_at(&values, *value)?);
+                                }
+                                MirCallArgument::BorrowRead(place) => {
+                                    call_arguments.push(place_value(&places, place.index())?);
+                                }
+                                MirCallArgument::BorrowMut(place) => {
+                                    call_arguments.push(place_value(&places, place.index())?);
+                                    writebacks.push((place.index(), index));
+                                }
+                                MirCallArgument::Take(place) => {
+                                    call_arguments.push(places[place.index()].take().ok_or(
+                                        MirExecutionError::UninitializedPlace(place.index()),
+                                    )?);
+                                }
+                            }
+                        }
+                        let outcome = match target {
+                            MirCallTarget::Function(function) => {
+                                self.call(*function, call_arguments)?
+                            }
                             MirCallTarget::External(_) => {
                                 return Err(MirExecutionError::UnsupportedExternalCall);
                             }
                         };
-                        values[destination.index()] = Some(value);
+                        for (caller_place, callee_parameter) in writebacks {
+                            places[caller_place] = outcome.places[callee_parameter].clone();
+                        }
+                        values[destination.index()] = Some(outcome.value);
                     }
                     MirInstruction::Discard { value } => {
                         let _ = value_at(&values, *value)?;
@@ -214,10 +243,11 @@ impl<'a> Interpreter<'a> {
             self.step()?;
             match current.terminator() {
                 MirTerminator::Return(value) => {
-                    return value
+                    let value = value
                         .map(|value| value_at(&values, value))
                         .transpose()
-                        .map(|value| value.unwrap_or(MirValue::Unit));
+                        .map(|value| value.unwrap_or(MirValue::Unit))?;
+                    return Ok(FrameOutcome { value, places });
                 }
                 MirTerminator::Jump(target) => block = target.index(),
                 MirTerminator::Branch {
@@ -249,6 +279,12 @@ fn value_at(values: &[Option<MirValue>], id: ValueId) -> Result<MirValue, MirExe
     values[id.index()]
         .clone()
         .ok_or(MirExecutionError::UninitializedValue(id))
+}
+
+fn place_value(places: &[Option<MirValue>], index: usize) -> Result<MirValue, MirExecutionError> {
+    places[index]
+        .clone()
+        .ok_or(MirExecutionError::UninitializedPlace(index))
 }
 
 fn literal(value: &MirLiteral) -> MirValue {

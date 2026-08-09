@@ -27,7 +27,7 @@ fn main() -> Int {
         stage: MigrationStage::DualPath,
         source: r#"
 fn main() -> Int {
-    let value = 41
+    local value = 41
     if value < 42 {
         return value + 1
     } else {
@@ -76,6 +76,38 @@ fn increment(value: Int) -> Int {
 fn main() -> Int {
     let seed = 41
     return increment(value: seed)
+}
+"#,
+    },
+    MigrationCase {
+        name: "mutable_borrow_writeback",
+        capability: "mutable call borrows",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn increment_in_place(value: mut Int) -> Int {
+    value = value + 1
+    return value
+}
+
+fn main() -> Int {
+    let mut value = 41
+    increment_in_place(value: mut value)
+    return value
+}
+"#,
+    },
+    MigrationCase {
+        name: "take_moves_local",
+        capability: "take call moves",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn consume(value: take Int) -> Int {
+    return value + 1
+}
+
+fn main() -> Int {
+    local value = 41
+    return consume(value: take value)
 }
 "#,
     },

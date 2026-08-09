@@ -14,9 +14,9 @@ use rsscript_exec_ir::{
     BinaryOp, Callee, ExecutableExpr, ExecutableFunction, ExecutableIr, ExecutableStmt, ParamEffect,
 };
 use rsscript_mir::{
-    BasicBlock, BlockId, FunctionId, MirBinaryOp, MirCallTarget, MirExternalImport, MirFunction,
-    MirFunctionDebug, MirFunctionSignature, MirInstruction, MirLiteral, MirModule, MirTerminator,
-    PlaceId, TypeId, ValueId,
+    BasicBlock, BlockId, FunctionId, MirBinaryOp, MirCallArgument, MirCallTarget,
+    MirExternalImport, MirFunction, MirFunctionDebug, MirFunctionSignature, MirInstruction,
+    MirLiteral, MirModule, MirTerminator, PlaceId, TypeId, ValueId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -511,7 +511,7 @@ impl<'a> FunctionLowerer<'a> {
         ordered.sort_by_key(|argument| argument.evaluation_index);
         let arguments = ordered
             .into_iter()
-            .map(|argument| self.lower_expression(&argument.value))
+            .map(|argument| self.lower_call_argument(&argument.value))
             .collect::<Result<Vec<_>, _>>()?;
         let destination = self.value();
         self.emit(MirInstruction::Call {
@@ -520,6 +520,24 @@ impl<'a> FunctionLowerer<'a> {
             arguments,
         });
         Ok(destination)
+    }
+
+    fn lower_call_argument(
+        &mut self,
+        argument: &ExecutableExpr,
+    ) -> Result<MirCallArgument, MirLoweringError> {
+        let ExecutableExpr::Effect { effect, value, .. } = argument else {
+            return self.lower_expression(argument).map(MirCallArgument::Value);
+        };
+        let ExecutableExpr::Ident { name, .. } = value.as_ref() else {
+            return self.unsupported("data effect on non-local value");
+        };
+        let place = self.lookup_place(name)?;
+        Ok(match effect {
+            ParamEffect::Read => MirCallArgument::BorrowRead(place),
+            ParamEffect::Mut => MirCallArgument::BorrowMut(place),
+            ParamEffect::Take => MirCallArgument::Take(place),
+        })
     }
 
     fn lower_read_borrow(&mut self, value: &ExecutableExpr) -> Result<ValueId, MirLoweringError> {

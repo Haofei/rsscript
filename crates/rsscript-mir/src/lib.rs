@@ -105,7 +105,7 @@ pub enum MirInstruction {
     Call {
         destination: ValueId,
         target: MirCallTarget,
-        arguments: Vec<ValueId>,
+        arguments: Vec<MirCallArgument>,
     },
     Discard {
         value: ValueId,
@@ -119,6 +119,17 @@ pub enum MirInstruction {
 pub enum MirCallTarget {
     Function(FunctionId),
     External(ExternalSymbolId),
+}
+
+/// Resolved call argument mode. Borrow and move operations name a local place
+/// directly so they remain visible to the verifier and cannot be accidentally
+/// erased into an ordinary copied value by a backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MirCallArgument {
+    Value(ValueId),
+    BorrowRead(PlaceId),
+    BorrowMut(PlaceId),
+    Take(PlaceId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -402,6 +413,7 @@ fn verify_function(
 
     let mut defined = BTreeSet::new();
     let mut used = Vec::new();
+    let mut moved_places = BTreeSet::new();
     for (index, block) in function.blocks.iter().enumerate() {
         if block.id.index() != index {
             return Err(MirValidationError::BlockIdMismatch {
@@ -416,6 +428,7 @@ fn verify_function(
                 instruction,
                 &mut defined,
                 &mut used,
+                &mut moved_places,
                 functions,
                 external_imports,
             )?;
@@ -438,6 +451,7 @@ fn verify_instruction(
     instruction: &MirInstruction,
     defined: &mut BTreeSet<ValueId>,
     used: &mut Vec<ValueId>,
+    moved_places: &mut BTreeSet<PlaceId>,
     functions: &[MirFunction],
     external_imports: &[MirExternalImport],
 ) -> Result<(), MirValidationError> {
@@ -461,18 +475,30 @@ fn verify_instruction(
             Ok(())
         }
     };
+    let check_live_place = |place: PlaceId, moved_places: &BTreeSet<PlaceId>| {
+        check_place(place)?;
+        if moved_places.contains(&place) {
+            Err(MirValidationError::UseAfterMove {
+                function: function.id,
+                place,
+            })
+        } else {
+            Ok(())
+        }
+    };
     match instruction {
         MirInstruction::LoadLiteral { destination, .. } => define(*destination, defined),
         MirInstruction::ReadPlace { destination, place } => {
-            check_place(*place)?;
+            check_live_place(*place, moved_places)?;
             define(*destination, defined)
         }
         MirInstruction::BorrowRead { destination, place } => {
-            check_place(*place)?;
+            check_live_place(*place, moved_places)?;
             define(*destination, defined)
         }
         MirInstruction::WritePlace { place, value } => {
             check_place(*place)?;
+            moved_places.remove(place);
             used.push(*value);
             Ok(())
         }
@@ -520,7 +546,18 @@ fn verify_instruction(
                     actual: arguments.len(),
                 });
             }
-            used.extend(arguments.iter().copied());
+            for argument in arguments {
+                match argument {
+                    MirCallArgument::Value(value) => used.push(*value),
+                    MirCallArgument::BorrowRead(place) | MirCallArgument::BorrowMut(place) => {
+                        check_live_place(*place, moved_places)?;
+                    }
+                    MirCallArgument::Take(place) => {
+                        check_live_place(*place, moved_places)?;
+                        moved_places.insert(*place);
+                    }
+                }
+            }
             Ok(())
         }
         MirInstruction::Discard { value } => {
@@ -612,6 +649,10 @@ pub enum MirValidationError {
         function: FunctionId,
         expected: usize,
         actual: usize,
+    },
+    UseAfterMove {
+        function: FunctionId,
+        place: PlaceId,
     },
     InvalidValueDefinition {
         function: FunctionId,
@@ -810,6 +851,55 @@ mod tests {
                 actual: 0,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn rejects_reading_a_place_after_it_is_taken() {
+        let callee = MirFunction::new(
+            FunctionId::new(0),
+            MirFunctionSignature::new(vec![TypeId::new(0)], TypeId::new(0), false),
+            1,
+            0,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                Vec::new(),
+                MirTerminator::Return(None),
+            )],
+        );
+        let caller = MirFunction::new(
+            FunctionId::new(1),
+            signature(),
+            1,
+            2,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![
+                    MirInstruction::Call {
+                        destination: ValueId::new(0),
+                        target: MirCallTarget::Function(FunctionId::new(0)),
+                        arguments: vec![MirCallArgument::Take(PlaceId::new(0))],
+                    },
+                    MirInstruction::ReadPlace {
+                        destination: ValueId::new(1),
+                        place: PlaceId::new(0),
+                    },
+                ],
+                MirTerminator::Return(Some(ValueId::new(1))),
+            )],
+        );
+        let debug = vec![
+            MirFunctionDebug::new("callee", vec!["value".into()]),
+            MirFunctionDebug::new("caller", vec!["value".into()]),
+        ];
+        assert!(matches!(
+            MirModule::new(
+                vec![WireType::Unit],
+                vec![callee, caller],
+                debug,
+                Vec::new()
+            ),
+            Err(MirValidationError::UseAfterMove { .. })
         ));
     }
 }
