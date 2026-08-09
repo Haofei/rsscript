@@ -17,6 +17,7 @@ const MAX_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
 pub struct BuildProvenanceV1 {
     pub compiler_version: String,
     pub language_version: String,
+    pub core_library_abi_version: u32,
     pub runtime_abi_version: u32,
     pub interface_catalog_digest: String,
     pub source_content_hash: String,
@@ -75,6 +76,7 @@ impl ArtifactBundle {
             provenance: BuildProvenanceV1 {
                 compiler_version: envelope.header.compiler_version.clone(),
                 language_version: envelope.header.language_version.clone(),
+                core_library_abi_version: envelope.header.core_library_abi_version,
                 runtime_abi_version: envelope.header.runtime_abi_version,
                 interface_catalog_digest: envelope.header.interface_catalog_digest.clone(),
                 source_content_hash: envelope.header.source_content_hash.clone(),
@@ -140,6 +142,8 @@ impl ArtifactBundle {
         if manifest.provenance.module_digest != envelope.header.executable_hash
             || manifest.provenance.compiler_version != envelope.header.compiler_version
             || manifest.provenance.language_version != envelope.header.language_version
+            || manifest.provenance.core_library_abi_version
+                != envelope.header.core_library_abi_version
             || manifest.provenance.runtime_abi_version != envelope.header.runtime_abi_version
             || manifest.provenance.interface_catalog_digest
                 != envelope.header.interface_catalog_digest

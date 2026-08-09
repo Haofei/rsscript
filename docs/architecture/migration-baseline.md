@@ -415,7 +415,9 @@ mechanical acceptance condition holds.
       same ABI-model language constant. Container and `BYTECODE_ISA_VERSION`
       are now explicit, and the ISA is serialized in each Artifact header and
       rejected by the verifier before payload validation;
-      Core-library and analysis-schema compatibility remain follow-up work.
+      Core-library ABI is now explicit in the Artifact header and verified
+      independently before payload validation; analysis-schema compatibility
+      remains follow-up work.
   - [ ] **B04.2 — Validate each version at its owning boundary.** Verify container
     at decode, language/ISA at program verification, Core library at load, and
     Provider ABI at link.

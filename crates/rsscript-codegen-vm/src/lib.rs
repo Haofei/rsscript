@@ -372,7 +372,7 @@ fn value_reg(function: &MirFunction, value: ValueId) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rsscript_abi_model::{RUNTIME_ABI_VERSION, WireType};
+    use rsscript_abi_model::{CORE_LIBRARY_ABI_VERSION, RUNTIME_ABI_VERSION, WireType};
     use rsscript_bytecode::BytecodeVerifier;
     use rsscript_mir::{BasicBlock, FunctionId, MirFunctionDebug, MirFunctionSignature, TypeId};
 
@@ -421,6 +421,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(artifact.header.runtime_abi_version, RUNTIME_ABI_VERSION);
+        assert_eq!(
+            artifact.header.core_library_abi_version,
+            CORE_LIBRARY_ABI_VERSION
+        );
         BytecodeVerifier::default()
             .verify(&artifact.to_bytes().unwrap())
             .unwrap();

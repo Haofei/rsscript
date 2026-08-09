@@ -7,6 +7,12 @@ use sha2::{Digest, Sha256};
 
 /// Version of the provider/runtime semantic call ABI.
 pub const RUNTIME_ABI_VERSION: u32 = 2;
+/// Version of the deterministic Core library contract used by bytecode.
+///
+/// This deliberately changes independently from the Provider/runtime ABI:
+/// moving a pure builtin or changing its observable semantics must not be
+/// mistaken for a host-call compatibility change.
+pub const CORE_LIBRARY_ABI_VERSION: u32 = 1;
 /// Language semantics carried by compiled artifacts and neutral analysis.
 /// This deliberately does not track any crate/package release version.
 pub const LANGUAGE_SEMANTICS_VERSION: &str = "0.1.0";

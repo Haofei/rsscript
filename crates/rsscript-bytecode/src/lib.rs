@@ -5,7 +5,7 @@ use std::error::Error;
 use std::fmt;
 
 pub use rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION;
-use rsscript_abi_model::{ExternalImport, RUNTIME_ABI_VERSION};
+use rsscript_abi_model::{CORE_LIBRARY_ABI_VERSION, ExternalImport, RUNTIME_ABI_VERSION};
 use rsscript_operation::{CancellationToken, MonotonicDeadline};
 use semver::{Version, VersionReq};
 use serde::de::DeserializeOwned;
@@ -37,6 +37,9 @@ pub struct BytecodeHeader {
     /// Instruction-set contract for the executable payload. This is separate
     /// from source-language semantics and the runtime/provider ABI.
     pub bytecode_isa_version: u32,
+    /// Deterministic Core-library contract used by builtin bytecode operations.
+    /// This is separate from both the instruction set and Provider ABI.
+    pub core_library_abi_version: u32,
     pub compiler_version: String,
     pub interface_catalog_digest: String,
     pub runtime_abi_version: u32,
@@ -72,6 +75,7 @@ impl BytecodeArtifact {
                 schema: BYTECODE_SCHEMA.to_string(),
                 language_version: language_version.into(),
                 bytecode_isa_version: BYTECODE_ISA_VERSION,
+                core_library_abi_version: CORE_LIBRARY_ABI_VERSION,
                 compiler_version: compiler_version.into(),
                 interface_catalog_digest: interface_catalog_digest.into(),
                 runtime_abi_version,
@@ -260,6 +264,7 @@ pub struct BytecodeVerifier {
 pub struct BytecodeCompatibility {
     pub language: VersionReq,
     pub bytecode_isa_version: u32,
+    pub core_library_abi_version: u32,
     pub runtime_abi_version: u32,
 }
 
@@ -269,6 +274,7 @@ impl Default for BytecodeCompatibility {
             language: VersionReq::parse(SUPPORTED_LANGUAGE_SEMANTICS)
                 .expect("declared language compatibility requirement"),
             bytecode_isa_version: BYTECODE_ISA_VERSION,
+            core_library_abi_version: CORE_LIBRARY_ABI_VERSION,
             runtime_abi_version: RUNTIME_ABI_VERSION,
         }
     }
@@ -367,6 +373,12 @@ impl BytecodeVerifier {
             return Err(BytecodeError::UnsupportedBytecodeIsa {
                 artifact: artifact.header.bytecode_isa_version,
                 verifier: self.compatibility.bytecode_isa_version,
+            });
+        }
+        if artifact.header.core_library_abi_version != self.compatibility.core_library_abi_version {
+            return Err(BytecodeError::UnsupportedCoreLibraryAbi {
+                artifact: artifact.header.core_library_abi_version,
+                runtime: self.compatibility.core_library_abi_version,
             });
         }
         if artifact.header.runtime_abi_version != self.compatibility.runtime_abi_version {
@@ -1666,6 +1678,7 @@ pub enum BytecodeError {
     UnsupportedSchema(String),
     UnsupportedLanguageVersion(String),
     UnsupportedBytecodeIsa { artifact: u32, verifier: u32 },
+    UnsupportedCoreLibraryAbi { artifact: u32, runtime: u32 },
     UnsupportedRuntimeAbi { artifact: u32, runtime: u32 },
     InvalidProvenance(&'static str),
     LimitExceeded(&'static str),
@@ -1697,6 +1710,7 @@ pub enum BytecodeErrorCode {
     UnsupportedSchema,
     UnsupportedLanguageVersion,
     UnsupportedBytecodeIsa,
+    UnsupportedCoreLibraryAbi,
     UnsupportedRuntimeAbi,
     InvalidProvenance,
     LimitExceeded,
@@ -1728,6 +1742,7 @@ impl BytecodeError {
             Self::UnsupportedSchema(_) => BytecodeErrorCode::UnsupportedSchema,
             Self::UnsupportedLanguageVersion(_) => BytecodeErrorCode::UnsupportedLanguageVersion,
             Self::UnsupportedBytecodeIsa { .. } => BytecodeErrorCode::UnsupportedBytecodeIsa,
+            Self::UnsupportedCoreLibraryAbi { .. } => BytecodeErrorCode::UnsupportedCoreLibraryAbi,
             Self::UnsupportedRuntimeAbi { .. } => BytecodeErrorCode::UnsupportedRuntimeAbi,
             Self::InvalidProvenance(_) => BytecodeErrorCode::InvalidProvenance,
             Self::LimitExceeded(_) => BytecodeErrorCode::LimitExceeded,
@@ -1772,6 +1787,10 @@ impl fmt::Display for BytecodeError {
             Self::UnsupportedBytecodeIsa { artifact, verifier } => write!(
                 formatter,
                 "bytecode ISA {artifact} is incompatible with verifier ISA {verifier}"
+            ),
+            Self::UnsupportedCoreLibraryAbi { artifact, runtime } => write!(
+                formatter,
+                "bytecode Core library ABI {artifact} is incompatible with runtime ABI {runtime}"
             ),
             Self::UnsupportedRuntimeAbi { artifact, runtime } => write!(
                 formatter,
@@ -1893,6 +1912,7 @@ mod tests {
             BYTECODE_CONTAINER_FORMAT_VERSION
         );
         assert_eq!(BYTECODE_ISA_VERSION, 1);
+        assert_eq!(CORE_LIBRARY_ABI_VERSION, 1);
     }
 
     #[test]
@@ -1949,6 +1969,14 @@ mod tests {
             .code(),
             BytecodeErrorCode::UnsupportedRuntimeAbi
         );
+        assert_eq!(
+            BytecodeError::UnsupportedCoreLibraryAbi {
+                artifact: 9,
+                runtime: 1,
+            }
+            .code(),
+            BytecodeErrorCode::UnsupportedCoreLibraryAbi
+        );
     }
 
     #[test]
@@ -1991,6 +2019,15 @@ mod tests {
             BytecodeVerifier::default().verify(&future_isa.to_bytes().unwrap()),
             Err(BytecodeError::UnsupportedBytecodeIsa { artifact, verifier })
                 if artifact == BYTECODE_ISA_VERSION + 1 && verifier == BYTECODE_ISA_VERSION
+        ));
+
+        let mut future_corelib = future_abi;
+        future_corelib.header.core_library_abi_version = CORE_LIBRARY_ABI_VERSION + 1;
+        future_corelib.checksum = future_corelib.compute_checksum().unwrap();
+        assert!(matches!(
+            BytecodeVerifier::default().verify(&future_corelib.to_bytes().unwrap()),
+            Err(BytecodeError::UnsupportedCoreLibraryAbi { artifact, runtime })
+                if artifact == CORE_LIBRARY_ABI_VERSION + 1 && runtime == CORE_LIBRARY_ABI_VERSION
         ));
     }
 
