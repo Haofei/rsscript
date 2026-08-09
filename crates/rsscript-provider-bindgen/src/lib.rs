@@ -10,6 +10,7 @@ pub struct InterfaceFunction {
     pub symbol: ExternalSymbol,
     pub entry: String,
     pub signature: FunctionSignature,
+    pub signature_hash: rsscript_abi_model::SignatureHash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +82,7 @@ impl ProviderInterface {
                     symbol: function.symbol,
                     entry: function.entry,
                     signature: function.signature,
+                    signature_hash: function.signature_hash,
                 })
                 .collect(),
         })

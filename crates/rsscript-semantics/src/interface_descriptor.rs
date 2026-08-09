@@ -2,7 +2,7 @@ use rsscript_syntax::ast::{DataEffect as SyntaxEffect, Item, TypeRef};
 use rsscript_syntax::parse_source;
 use serde::Serialize;
 
-use crate::{DataEffect, ExternalSymbol, FunctionSignature, ParameterSignature};
+use crate::{DataEffect, ExternalSymbol, FunctionSignature, ParameterSignature, SignatureHash};
 
 pub const INTERFACE_DESCRIPTOR_SCHEMA: &str = "rsscript.interface_descriptor.v1";
 
@@ -11,6 +11,7 @@ pub struct InterfaceDescriptorFunctionV1 {
     pub symbol: ExternalSymbol,
     pub entry: String,
     pub signature: FunctionSignature,
+    pub signature_hash: SignatureHash,
 }
 
 /// Canonical semantic description of bodyless `.rssi` function contracts.
@@ -92,14 +93,16 @@ impl InterfaceDescriptorV1 {
             if function.returns_fresh && !result.starts_with("fresh ") {
                 result = format!("fresh {result}");
             }
+            let signature = FunctionSignature {
+                parameters,
+                result: result.into(),
+                asynchronous: function.is_async,
+            };
             functions.push(InterfaceDescriptorFunctionV1 {
                 symbol,
                 entry,
-                signature: FunctionSignature {
-                    parameters,
-                    result: result.into(),
-                    asynchronous: function.is_async,
-                },
+                signature_hash: signature.hash(),
+                signature,
             });
         }
         functions.sort_by(|left, right| left.symbol.cmp(&right.symbol));
@@ -173,6 +176,10 @@ mod tests {
         assert_eq!(
             descriptor.functions[0].signature.parameters[0].effect,
             DataEffect::Take
+        );
+        assert_eq!(
+            descriptor.functions[0].signature_hash,
+            descriptor.functions[0].signature.hash()
         );
     }
 }
