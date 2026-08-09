@@ -1858,6 +1858,7 @@ fn bytecode_language_compatibility_is_not_inferred_from_compiler_version() {
     let emitter = read(&root.join("crates/rsscript-vm/src/reg_vm/bytecode.rs"));
     assert!(emitter.contains("LANGUAGE_SEMANTICS_VERSION"));
     assert!(emitter.contains("env!(\"CARGO_PKG_VERSION\")"));
+    assert!(verifier.contains("BYTECODE_CONTAINER_FORMAT_VERSION"));
 
     let analysis = read(&root.join("crates/rsscript-compiler/src/package/analysis.rs"));
     assert!(analysis.contains("rsscript_abi_model::LANGUAGE_SEMANTICS_VERSION"));

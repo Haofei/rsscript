@@ -27,10 +27,10 @@ pub use rsscript_compiler::{
 
 #[cfg(feature = "execution")]
 pub use rsscript_bytecode::{
-    BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA, BytecodeArtifact, BytecodeCompatibility,
-    BytecodeError, BytecodeErrorCode, BytecodeHeader, BytecodeLimits, BytecodeVerifier,
-    LANGUAGE_SEMANTICS_VERSION, SUPPORTED_LANGUAGE_SEMANTICS, VerificationContext,
-    VerifiedBytecode, decode_executable_payload, encode_executable_payload,
+    BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,
+    BytecodeArtifact, BytecodeCompatibility, BytecodeError, BytecodeErrorCode, BytecodeHeader,
+    BytecodeLimits, BytecodeVerifier, LANGUAGE_SEMANTICS_VERSION, SUPPORTED_LANGUAGE_SEMANTICS,
+    VerificationContext, VerifiedBytecode, decode_executable_payload, encode_executable_payload,
 };
 #[cfg(feature = "execution")]
 pub use rsscript_compiler::{

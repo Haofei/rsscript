@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const BYTECODE_SCHEMA: &str = "rsscript.bytecode.v1";
+/// Version of the binary Artifact container envelope, independent of language
+/// semantics and instruction-set compatibility.
+pub const BYTECODE_CONTAINER_FORMAT_VERSION: u16 = 1;
 /// Accepted language-semantics range for the v1 verifier.
 pub const SUPPORTED_LANGUAGE_SEMANTICS: &str = ">=0.1.0, <0.2.0";
 /// Version of the executable instruction-set encoding inside the v1 envelope.
@@ -1865,6 +1868,11 @@ mod tests {
                 .matches(&Version::parse("0.2.0").expect("test version"))
         );
         assert_eq!(BYTECODE_SCHEMA, "rsscript.bytecode.v1");
+        assert_eq!(BYTECODE_CONTAINER_FORMAT_VERSION, 1);
+        assert_eq!(
+            u16::from_le_bytes([BYTECODE_MAGIC[6], BYTECODE_MAGIC[7]]),
+            BYTECODE_CONTAINER_FORMAT_VERSION
+        );
         assert_eq!(BYTECODE_ISA_VERSION, 1);
     }
 
