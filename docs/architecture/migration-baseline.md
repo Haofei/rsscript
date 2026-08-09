@@ -198,26 +198,41 @@ mechanical acceptance condition holds.
 - [ ] **M01 — Define typed stable identities.** Add `FunctionId`, `TypeId`,
   `BlockId`, `ValueId`, `PlaceId`, `BuiltinId`, `ExternalSymbolId`, and
   `ResourceTypeId` without string identity at backend boundaries.
-  - [ ] **M01.1 — Define index/newtype IDs and ownership tables.** IDs are local
-    to one MIR module, non-string, deterministic, and cannot be mixed by type.
+  - [x] **M01.1 — Define index/newtype IDs and ownership tables.** Initial
+    frontend-free IDs are owned by `rsscript-mir`; they are local to one MIR
+    module, non-string, deterministic, and cannot be mixed by type.
   - [ ] **M01.2 — Lower semantic names and `WireType` references into IDs.**
     Backend inputs contain resolved function, external symbol, builtin, and
     resource identities only.
   - [ ] **M01.3 — Add stable display/debug/source-map side tables.** Human names
     remain available without becoming executable identity.
+    - [x] **M01.3a — Add initial debug names.** Function/place debug names are
+      present without becoming executable identity. Constants and source spans
+      remain follow-up work.
 - [ ] **M02 — Define an owned CFG MIR.** Functions contain basic blocks,
   instructions, and terminators; MIR does not depend on syntax and contains no
   unresolved or `Unknown` execution node.
   - [ ] **M02.1 — Introduce `MirModule`, `MirFunction`, `BasicBlock`,
     `Instruction`, and `Terminator`.** Only the lowerer and verifier may
     construct valid modules.
+    - [x] **M02.1a — Add the initial owned model.** The model has private fields
+      and construction runs structural verification. Serialization and a more
+      restricted construction boundary remain follow-up work.
   - [ ] **M02.2 — Lower the pure scalar subset.** Cover constants, locals,
     arithmetic, calls, returns, branches, loops, and explicit block edges.
+    - [x] **M02.2a — Bridge the initial scalar subset.** The executable-IR
+      bridge lowers literals, local bindings, assignment, binary expressions,
+      returns, branches, loops, break, and continue; unsupported operations
+      fail closed.
   - [ ] **M02.3 — Lower aggregate and pattern operations.** Cover records,
     variants, collections, field/index operations, and match dispatch without
     source AST nodes in MIR.
   - [ ] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
+    - [x] **M02.4a — Verify the initial structural subset.** The verifier
+      rejects empty functions, invalid block/place/value references, duplicate
+      definitions, undefined values, and invalid CFG targets. Dominance and
+      cleanup-path validation remain follow-up work.
 - [ ] **M03 — Make semantic operations explicit.** MIR represents move,
   read/mut borrow, retain, drop, resource acquire/release, spawn, await, join,
   cancellation, selection, external calls, and every cleanup/unwind edge.

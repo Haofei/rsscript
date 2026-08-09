@@ -1,0 +1,558 @@
+//! Transitional lowering from owned executable IR to typed CFG MIR.
+//!
+//! This bridge deliberately supports only the pure control-flow subset. It
+//! gives the new backend boundary an executable-independent, verified model
+//! without pretending that resources, structured async, or external calls have
+//! already migrated. Unsupported nodes fail closed and stay on the legacy path.
+
+use std::collections::HashMap;
+use std::error::Error;
+use std::fmt;
+
+use rsscript_exec_ir::{
+    BinaryOp, ExecutableExpr, ExecutableFunction, ExecutableIr, ExecutableStmt,
+};
+use rsscript_mir::{
+    BasicBlock, BlockId, FunctionId, MirBinaryOp, MirExternalImport, MirFunction, MirFunctionDebug,
+    MirInstruction, MirLiteral, MirModule, MirTerminator, PlaceId, ValueId,
+};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MirLoweringError {
+    Unsupported {
+        function: String,
+        construct: &'static str,
+    },
+    Invalid(rsscript_mir::MirValidationError),
+}
+
+impl fmt::Display for MirLoweringError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Unsupported {
+                function,
+                construct,
+            } => write!(
+                formatter,
+                "cannot lower `{function}` to the typed MIR control-flow subset: {construct}"
+            ),
+            Self::Invalid(error) => error.fmt(formatter),
+        }
+    }
+}
+
+impl Error for MirLoweringError {}
+
+impl From<rsscript_mir::MirValidationError> for MirLoweringError {
+    fn from(value: rsscript_mir::MirValidationError) -> Self {
+        Self::Invalid(value)
+    }
+}
+
+/// Lower the currently supported pure subset of owned executable IR into typed
+/// CFG MIR. This is intentionally a transitional entry point; the final path
+/// will consume checked HIR directly once all semantic facts are owned by the
+/// semantics query boundary.
+pub fn lower_executable_ir_to_mir(
+    executable: &ExecutableIr,
+) -> Result<MirModule, MirLoweringError> {
+    let functions = executable.functions().collect::<Vec<_>>();
+    let mut lowered = Vec::with_capacity(functions.len());
+    let mut debug = Vec::with_capacity(functions.len());
+    for (index, function) in functions.iter().enumerate() {
+        let output = FunctionLowerer::new(FunctionId::new(index as u32), function).lower()?;
+        lowered.push(output.function);
+        debug.push(output.debug);
+    }
+    let imports = executable
+        .external_imports()
+        .iter()
+        .enumerate()
+        .map(|(index, import)| {
+            MirExternalImport::new(
+                rsscript_mir::ExternalSymbolId::new(index as u32),
+                import.symbol.clone(),
+                import.signature.clone(),
+            )
+        })
+        .collect();
+    Ok(MirModule::new(lowered, debug, imports)?)
+}
+
+struct LoweredFunction {
+    function: MirFunction,
+    debug: MirFunctionDebug,
+}
+
+struct BlockDraft {
+    instructions: Vec<MirInstruction>,
+    terminator: Option<MirTerminator>,
+}
+
+impl BlockDraft {
+    fn new() -> Self {
+        Self {
+            instructions: Vec::new(),
+            terminator: None,
+        }
+    }
+}
+
+struct LoopTargets {
+    continue_target: BlockId,
+    break_target: BlockId,
+}
+
+struct FunctionLowerer<'a> {
+    id: FunctionId,
+    source: &'a ExecutableFunction,
+    blocks: Vec<BlockDraft>,
+    current: BlockId,
+    places: HashMap<String, PlaceId>,
+    place_names: Vec<String>,
+    next_value: u32,
+    loops: Vec<LoopTargets>,
+}
+
+impl<'a> FunctionLowerer<'a> {
+    fn new(id: FunctionId, source: &'a ExecutableFunction) -> Self {
+        let mut lowerer = Self {
+            id,
+            source,
+            blocks: vec![BlockDraft::new()],
+            current: BlockId::new(0),
+            places: HashMap::new(),
+            place_names: Vec::new(),
+            next_value: 0,
+            loops: Vec::new(),
+        };
+        for parameter in &source.signature.params {
+            lowerer.place(&parameter.name);
+        }
+        lowerer
+    }
+
+    fn lower(mut self) -> Result<LoweredFunction, MirLoweringError> {
+        self.lower_statements(&self.source.body.statements)?;
+        if self.current_block().terminator.is_none() {
+            self.terminate(MirTerminator::Return(None));
+        }
+        let blocks = self
+            .blocks
+            .into_iter()
+            .enumerate()
+            .map(|(index, block)| {
+                BasicBlock::new(
+                    BlockId::new(index as u32),
+                    block.instructions,
+                    block.terminator.unwrap_or(MirTerminator::Unreachable),
+                )
+            })
+            .collect();
+        Ok(LoweredFunction {
+            function: MirFunction::new(
+                self.id,
+                self.place_names.len() as u32,
+                self.next_value,
+                blocks,
+            ),
+            debug: MirFunctionDebug::new(self.source.name.clone(), self.place_names),
+        })
+    }
+
+    fn lower_statements(&mut self, statements: &[ExecutableStmt]) -> Result<(), MirLoweringError> {
+        for statement in statements {
+            self.lower_statement(statement)?;
+        }
+        Ok(())
+    }
+
+    fn lower_statement(&mut self, statement: &ExecutableStmt) -> Result<(), MirLoweringError> {
+        match statement {
+            ExecutableStmt::Let {
+                name,
+                value,
+                is_async,
+            } => {
+                if *is_async {
+                    return self.unsupported("async binding");
+                }
+                let place = self.place(name);
+                if let Some(value) = value {
+                    let value = self.lower_expression(value)?;
+                    self.emit(MirInstruction::WritePlace { place, value });
+                }
+            }
+            ExecutableStmt::Return { value } => {
+                let value = value
+                    .as_ref()
+                    .map(|value| self.lower_expression(value))
+                    .transpose()?;
+                self.terminate(MirTerminator::Return(value));
+                self.start_detached_block();
+            }
+            ExecutableStmt::If {
+                condition,
+                then_body,
+                else_body,
+            } => self.lower_if(condition, then_body, else_body.as_ref())?,
+            ExecutableStmt::Loop { condition, body } => {
+                self.lower_loop(condition.as_ref(), body)?
+            }
+            ExecutableStmt::Assign { target, value } => {
+                let ExecutableExpr::Ident { name, .. } = target else {
+                    return self.unsupported("non-local assignment");
+                };
+                let place = self.lookup_place(name)?;
+                let value = self.lower_expression(value)?;
+                self.emit(MirInstruction::WritePlace { place, value });
+            }
+            ExecutableStmt::Break => {
+                let Some(targets) = self.loops.last() else {
+                    return self.unsupported("break outside loop");
+                };
+                self.terminate(MirTerminator::Jump(targets.break_target));
+                self.start_detached_block();
+            }
+            ExecutableStmt::Continue => {
+                let Some(targets) = self.loops.last() else {
+                    return self.unsupported("continue outside loop");
+                };
+                self.terminate(MirTerminator::Jump(targets.continue_target));
+                self.start_detached_block();
+            }
+            ExecutableStmt::Expr(expression) => {
+                let value = self.lower_expression(expression)?;
+                self.emit(MirInstruction::Discard { value });
+            }
+            ExecutableStmt::With { .. } => return self.unsupported("resource scope"),
+            ExecutableStmt::For { .. } => return self.unsupported("for loop"),
+            ExecutableStmt::Match { .. } => return self.unsupported("match"),
+            ExecutableStmt::Select { .. } => return self.unsupported("select"),
+            ExecutableStmt::Unknown => return self.unsupported("unknown statement"),
+        }
+        Ok(())
+    }
+
+    fn lower_if(
+        &mut self,
+        condition: &ExecutableExpr,
+        then_body: &rsscript_exec_ir::ExecutableBlock,
+        else_body: Option<&rsscript_exec_ir::ExecutableBlock>,
+    ) -> Result<(), MirLoweringError> {
+        let condition = self.lower_expression(condition)?;
+        let then_block = self.new_block();
+        let else_block = self.new_block();
+        let join_block = self.new_block();
+        self.terminate(MirTerminator::Branch {
+            condition,
+            then_target: then_block,
+            else_target: else_block,
+        });
+
+        self.current = then_block;
+        self.lower_statements(&then_body.statements)?;
+        if self.current_block().terminator.is_none() {
+            self.terminate(MirTerminator::Jump(join_block));
+        }
+
+        self.current = else_block;
+        if let Some(else_body) = else_body {
+            self.lower_statements(&else_body.statements)?;
+        }
+        if self.current_block().terminator.is_none() {
+            self.terminate(MirTerminator::Jump(join_block));
+        }
+
+        self.current = join_block;
+        Ok(())
+    }
+
+    fn lower_loop(
+        &mut self,
+        condition: Option<&ExecutableExpr>,
+        body: &rsscript_exec_ir::ExecutableBlock,
+    ) -> Result<(), MirLoweringError> {
+        let header = self.new_block();
+        let body_block = self.new_block();
+        let exit = self.new_block();
+        self.terminate(MirTerminator::Jump(header));
+
+        self.current = header;
+        if let Some(condition) = condition {
+            let condition = self.lower_expression(condition)?;
+            self.terminate(MirTerminator::Branch {
+                condition,
+                then_target: body_block,
+                else_target: exit,
+            });
+        } else {
+            self.terminate(MirTerminator::Jump(body_block));
+        }
+
+        self.current = body_block;
+        self.loops.push(LoopTargets {
+            continue_target: header,
+            break_target: exit,
+        });
+        self.lower_statements(&body.statements)?;
+        self.loops.pop();
+        if self.current_block().terminator.is_none() {
+            self.terminate(MirTerminator::Jump(header));
+        }
+        self.current = exit;
+        Ok(())
+    }
+
+    fn lower_expression(
+        &mut self,
+        expression: &ExecutableExpr,
+    ) -> Result<ValueId, MirLoweringError> {
+        match expression {
+            ExecutableExpr::Ident { name, .. } => {
+                let destination = self.value();
+                let place = self.lookup_place(name)?;
+                self.emit(MirInstruction::ReadPlace { destination, place });
+                Ok(destination)
+            }
+            ExecutableExpr::Number { value } => {
+                let literal = value
+                    .parse::<i64>()
+                    .map(MirLiteral::Int)
+                    .or_else(|_| value.parse::<f64>().map(MirLiteral::Float))
+                    .map_err(|_| MirLoweringError::Unsupported {
+                        function: self.source.name.clone(),
+                        construct: "non-numeric literal",
+                    })?;
+                let destination = self.value();
+                self.emit(MirInstruction::LoadLiteral {
+                    destination,
+                    value: literal,
+                });
+                Ok(destination)
+            }
+            ExecutableExpr::String { value } => self.literal(MirLiteral::String(value.clone())),
+            ExecutableExpr::Char { value } => {
+                let mut chars = value.chars();
+                let Some(character) = chars.next() else {
+                    return self.unsupported("empty char literal");
+                };
+                if chars.next().is_some() {
+                    return self.unsupported("multi-character char literal");
+                }
+                self.literal(MirLiteral::Char(character))
+            }
+            ExecutableExpr::Binary { op, left, right } => {
+                let left = self.lower_expression(left)?;
+                let right = self.lower_expression(right)?;
+                let destination = self.value();
+                self.emit(MirInstruction::Binary {
+                    destination,
+                    op: binary_op(*op),
+                    left,
+                    right,
+                });
+                Ok(destination)
+            }
+            ExecutableExpr::ObjectLiteral { .. } => self.unsupported("object literal"),
+            ExecutableExpr::MapLiteral { .. } => self.unsupported("map literal"),
+            ExecutableExpr::ArrayLiteral { .. } => self.unsupported("array literal"),
+            ExecutableExpr::Field { .. } => self.unsupported("field access"),
+            ExecutableExpr::Index { .. } => self.unsupported("index access"),
+            ExecutableExpr::Call { .. } => self.unsupported("call"),
+            ExecutableExpr::Effect { .. } => self.unsupported("data effect"),
+            ExecutableExpr::Manage { .. } => self.unsupported("managed resource"),
+            ExecutableExpr::Spawn { .. } => self.unsupported("spawn"),
+            ExecutableExpr::Await { .. } => self.unsupported("await"),
+            ExecutableExpr::Try { .. } => self.unsupported("try"),
+            ExecutableExpr::Closure { .. } => self.unsupported("closure"),
+            ExecutableExpr::Match { .. } => self.unsupported("match expression"),
+            ExecutableExpr::Unknown => self.unsupported("unknown expression"),
+        }
+    }
+
+    fn literal(&mut self, value: MirLiteral) -> Result<ValueId, MirLoweringError> {
+        let destination = self.value();
+        self.emit(MirInstruction::LoadLiteral { destination, value });
+        Ok(destination)
+    }
+
+    fn place(&mut self, name: &str) -> PlaceId {
+        if let Some(place) = self.places.get(name) {
+            return *place;
+        }
+        let place = PlaceId::new(self.place_names.len() as u32);
+        self.places.insert(name.to_owned(), place);
+        self.place_names.push(name.to_owned());
+        place
+    }
+
+    fn lookup_place(&self, name: &str) -> Result<PlaceId, MirLoweringError> {
+        self.places
+            .get(name)
+            .copied()
+            .ok_or_else(|| MirLoweringError::Unsupported {
+                function: self.source.name.clone(),
+                construct: "unresolved local",
+            })
+    }
+
+    fn value(&mut self) -> ValueId {
+        let value = ValueId::new(self.next_value);
+        self.next_value += 1;
+        value
+    }
+
+    fn emit(&mut self, instruction: MirInstruction) {
+        self.current_block_mut().instructions.push(instruction);
+    }
+
+    fn terminate(&mut self, terminator: MirTerminator) {
+        debug_assert!(self.current_block().terminator.is_none());
+        self.current_block_mut().terminator = Some(terminator);
+    }
+
+    fn new_block(&mut self) -> BlockId {
+        let id = BlockId::new(self.blocks.len() as u32);
+        self.blocks.push(BlockDraft::new());
+        id
+    }
+
+    fn start_detached_block(&mut self) {
+        self.current = self.new_block();
+    }
+
+    fn current_block(&self) -> &BlockDraft {
+        &self.blocks[self.current.index()]
+    }
+
+    fn current_block_mut(&mut self) -> &mut BlockDraft {
+        &mut self.blocks[self.current.index()]
+    }
+
+    fn unsupported<T>(&self, construct: &'static str) -> Result<T, MirLoweringError> {
+        Err(MirLoweringError::Unsupported {
+            function: self.source.name.clone(),
+            construct,
+        })
+    }
+}
+
+fn binary_op(op: BinaryOp) -> MirBinaryOp {
+    match op {
+        BinaryOp::Add => MirBinaryOp::Add,
+        BinaryOp::Subtract => MirBinaryOp::Subtract,
+        BinaryOp::Multiply => MirBinaryOp::Multiply,
+        BinaryOp::Divide => MirBinaryOp::Divide,
+        BinaryOp::Modulo => MirBinaryOp::Modulo,
+        BinaryOp::BitAnd => MirBinaryOp::BitAnd,
+        BinaryOp::BitOr => MirBinaryOp::BitOr,
+        BinaryOp::BitXor => MirBinaryOp::BitXor,
+        BinaryOp::ShiftLeft => MirBinaryOp::ShiftLeft,
+        BinaryOp::ShiftRight => MirBinaryOp::ShiftRight,
+        BinaryOp::Equal => MirBinaryOp::Equal,
+        BinaryOp::NotEqual => MirBinaryOp::NotEqual,
+        BinaryOp::Less => MirBinaryOp::Less,
+        BinaryOp::LessEqual => MirBinaryOp::LessEqual,
+        BinaryOp::Greater => MirBinaryOp::Greater,
+        BinaryOp::GreaterEqual => MirBinaryOp::GreaterEqual,
+        BinaryOp::LogicalAnd => MirBinaryOp::LogicalAnd,
+        BinaryOp::LogicalOr => MirBinaryOp::LogicalOr,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rsscript_exec_ir::{
+        ExecutableBlock, ExecutableFunction, ExecutableProgram, ExecutableSignature,
+    };
+
+    use super::*;
+
+    fn module(function: ExecutableFunction) -> ExecutableIr {
+        let mut program = ExecutableProgram::default();
+        program.insert_function(function.name.clone(), function);
+        ExecutableIr::new(program, Box::new([]))
+    }
+
+    fn signature() -> ExecutableSignature {
+        ExecutableSignature {
+            namespace: None,
+            name: "main".into(),
+            is_async: false,
+            params: Vec::new(),
+            return_type: Some("Int".into()),
+            is_external: false,
+        }
+    }
+
+    #[test]
+    fn lowers_scalar_branching_to_verified_cfg() {
+        let executable = module(ExecutableFunction {
+            name: "main".into(),
+            is_async: false,
+            signature: signature(),
+            body: ExecutableBlock {
+                statements: vec![
+                    ExecutableStmt::Let {
+                        name: "value".into(),
+                        value: Some(ExecutableExpr::Number { value: "1".into() }),
+                        is_async: false,
+                    },
+                    ExecutableStmt::If {
+                        condition: ExecutableExpr::Binary {
+                            op: BinaryOp::Less,
+                            left: Box::new(ExecutableExpr::Ident {
+                                name: "value".into(),
+                                type_name: Some("Int".into()),
+                            }),
+                            right: Box::new(ExecutableExpr::Number { value: "2".into() }),
+                        },
+                        then_body: ExecutableBlock {
+                            statements: vec![ExecutableStmt::Return {
+                                value: Some(ExecutableExpr::Ident {
+                                    name: "value".into(),
+                                    type_name: Some("Int".into()),
+                                }),
+                            }],
+                        },
+                        else_body: Some(ExecutableBlock {
+                            statements: vec![ExecutableStmt::Return {
+                                value: Some(ExecutableExpr::Number { value: "0".into() }),
+                            }],
+                        }),
+                    },
+                ],
+            },
+        });
+
+        let mir = lower_executable_ir_to_mir(&executable).unwrap();
+        assert_eq!(mir.functions().len(), 1);
+        assert!(mir.functions()[0].blocks().len() >= 4);
+        mir.verify().unwrap();
+    }
+
+    #[test]
+    fn rejects_resource_and_async_nodes_until_their_mir_ops_exist() {
+        let executable = module(ExecutableFunction {
+            name: "main".into(),
+            is_async: false,
+            signature: signature(),
+            body: ExecutableBlock {
+                statements: vec![ExecutableStmt::With {
+                    resource: ExecutableExpr::Number { value: "1".into() },
+                    binding: "resource".into(),
+                    body: ExecutableBlock { statements: vec![] },
+                }],
+            },
+        });
+
+        assert!(matches!(
+            lower_executable_ir_to_mir(&executable),
+            Err(MirLoweringError::Unsupported {
+                construct: "resource scope",
+                ..
+            })
+        ));
+    }
+}

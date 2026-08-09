@@ -1866,6 +1866,7 @@ fn executable_backends_consume_validated_frontend_results() {
             .expect("lowering manifest should parse");
     let dependencies = dependency_packages(&lowering_manifest);
     assert!(dependencies.contains("rsscript-semantics"));
+    assert!(dependencies.contains("rsscript-mir"));
     for forbidden in [
         "rsscript",
         "rsscript-runtime",
@@ -1879,6 +1880,53 @@ fn executable_backends_consume_validated_frontend_results() {
         assert!(
             !dependencies.contains(forbidden),
             "executable IR must not depend on `{forbidden}`"
+        );
+    }
+}
+
+#[test]
+fn typed_mir_has_a_frontend_free_dependency_boundary() {
+    let root = workspace_root();
+    let manifest: toml::Value = toml::from_str(&read(&root.join("crates/rsscript-mir/Cargo.toml")))
+        .expect("MIR manifest should parse");
+    let dependencies = dependency_packages(&manifest);
+
+    for forbidden in [
+        "rsscript",
+        "rsscript-compiler",
+        "rsscript-syntax",
+        "rsscript-semantics",
+        "rsscript-lowering",
+        "rsscript-vm",
+        "rsscript-provider-api",
+        "rsscript-runtime",
+        "reir",
+        "vm-jit",
+    ] {
+        assert!(
+            !dependencies.contains(forbidden),
+            "rsscript-mir must not depend on {forbidden}"
+        );
+    }
+
+    let mir = read(&root.join("crates/rsscript-mir/src/lib.rs"));
+    for required in [
+        "mir_id!(FunctionId)",
+        "mir_id!(BlockId)",
+        "mir_id!(ValueId)",
+        "mir_id!(PlaceId)",
+        "pub struct BasicBlock",
+        "pub enum MirInstruction",
+        "pub enum MirTerminator",
+        "pub struct MirModule",
+        "pub fn verify",
+    ] {
+        assert!(mir.contains(required), "MIR is missing {required}");
+    }
+    for forbidden in ["rsscript_syntax", "rsscript_semantics", "Unknown"] {
+        assert!(
+            !mir.contains(forbidden),
+            "MIR must not expose source-shaped escape hatch {forbidden}"
         );
     }
 }

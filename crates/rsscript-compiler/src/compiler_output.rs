@@ -14,6 +14,16 @@ pub struct CompiledIr {
 }
 
 impl CompiledIr {
+    /// Lowers the checked executable representation into the frontend-free
+    /// typed CFG MIR migration boundary.
+    ///
+    /// The initial bridge intentionally supports only pure control flow. It
+    /// rejects resource, async, and call operations until those operations
+    /// have explicit MIR representations.
+    pub fn mir(&self) -> Result<rsscript_mir::MirModule, rsscript_lowering::MirLoweringError> {
+        rsscript_lowering::lower_executable_ir_to_mir(&self.executable)
+    }
+
     pub fn executable(&self) -> &rsscript_lowering::ExecutableIr {
         &self.executable
     }
@@ -80,4 +90,32 @@ fn source_hash(validated: &ValidatedProgram) -> String {
         }
     }
     format!("sha256:{:x}", Sha256::digest(input))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compile_source_to_ir;
+
+    #[test]
+    fn pure_control_flow_compiles_to_verified_mir() {
+        let compiled = compile_source_to_ir(
+            "mir-test.rss",
+            r#"
+fn main() -> Int {
+    let value = 1
+    if value < 2 {
+        return value + 1
+    } else {
+        return 0
+    }
+}
+"#,
+        )
+        .expect("source should compile");
+
+        let mir = compiled.mir().expect("pure control flow lowers to MIR");
+        assert_eq!(mir.functions().len(), 1);
+        assert!(mir.functions()[0].blocks().len() >= 4);
+        mir.verify().expect("MIR remains structurally valid");
+    }
 }

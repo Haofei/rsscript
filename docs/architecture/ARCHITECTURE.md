@@ -50,6 +50,10 @@ transition. The compiler analyzer is currently the sole integration point that
 assembles those facts while the remaining semantic passes migrate.
 `rsscript-exec-ir` owns the complete, lifetime-independent backend input, while
 `rsscript-lowering` contains only the validated-HIR projection into that model.
+`rsscript-mir` owns the frontend-free typed CFG model and its structural
+verifier. During the migration, `rsscript-lowering` projects the supported
+pure-control-flow subset of owned executable IR into MIR. Resource, async, and
+call operations fail closed until they have explicit MIR instructions.
 `rsscript-sdk` is the stable embedding façade; embedders do not depend on the
 compiler's analyzer database, register VM, Rust AOT, JIT, package review, or
 source-map types directly. `rsscript-cli` is the composition root.

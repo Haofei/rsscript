@@ -15,6 +15,7 @@ rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog" }
 rsscript-lowering = { path = "../rsscript-lowering", optional = true }
+rsscript-mir = { path = "../rsscript-mir", optional = true }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
 rsscript-semantics = { path = "../rsscript-semantics" }
@@ -47,7 +48,7 @@ tempfile = "3"
 # Frontend-only by default so `rss check`, formatting, and language tooling do
 # not compile the VM/runtime/provider closure. Hosts opt into execution.
 default = []
-execution = ["dep:rsscript-lowering", "dep:rsscript-provider-api"]
+execution = ["dep:rsscript-lowering", "dep:rsscript-mir", "dep:rsscript-provider-api"]
 language-service = []
 # Native (Cranelift) baseline JIT for the integer/control core. Off by default so
 # normal builds/tests don't pull in the codegen dependency; enable for the Rust

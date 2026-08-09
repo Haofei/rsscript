@@ -14,6 +14,7 @@ core = [
   "rsscript-interface-catalog",
   "rsscript-language-service",
   "rsscript-lowering",
+  "rsscript-mir",
   "rsscript-operation",
   "rsscript-provider-api",
   "rsscript-provider-bindgen",
