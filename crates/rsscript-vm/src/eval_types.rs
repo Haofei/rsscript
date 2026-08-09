@@ -6,7 +6,7 @@ use std::time::Instant;
 pub use rsscript_abi_model::{ExternalImport, ExternalSymbol, FunctionSignature, SignatureHash};
 pub use rsscript_provider_api::{
     AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior, CancellationBehavior,
-    NativeInterpreterFn, NativeValue, ProviderAuthority, ProviderCallContext, ProviderCallMode,
+    HostCallContext, NativeInterpreterFn, NativeValue, ProviderCallContext, ProviderCallMode,
     ProviderCallTrace, ProviderCallable, ProviderDescriptor, ProviderError, ProviderErrorCode,
     ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor, ProviderFuture,
     ProviderInvocationContract, ProviderLoadError, ProviderResource, ProviderResourceRegistry,
@@ -43,7 +43,7 @@ impl ProviderTraceCollector {
 pub struct ExternalFunction {
     callable: ProviderCallable,
     contract: Option<ProviderInvocationContract>,
-    authority: Arc<ProviderAuthority>,
+    host_context: Arc<HostCallContext>,
 }
 
 impl ExternalFunction {
@@ -84,12 +84,12 @@ impl ExternalFunction {
         self.contract.as_ref()
     }
 
-    pub fn authority(&self) -> &ProviderAuthority {
-        &self.authority
+    pub fn host_context(&self) -> &HostCallContext {
+        &self.host_context
     }
 
-    pub(crate) fn authority_arc(&self) -> Arc<ProviderAuthority> {
-        Arc::clone(&self.authority)
+    pub(crate) fn host_context_arc(&self) -> Arc<HostCallContext> {
+        Arc::clone(&self.host_context)
     }
 
     pub fn call_mode(&self) -> ProviderCallMode {
@@ -287,7 +287,7 @@ impl ExternalFunction {
 
     fn from_resolved(
         function: ResolvedProviderFunction<ProviderCallable>,
-        authority: Arc<ProviderAuthority>,
+        host_context: Arc<HostCallContext>,
     ) -> Self {
         Self {
             callable: function.callable,
@@ -296,7 +296,7 @@ impl ExternalFunction {
                 provider_version: function.provider_version,
                 descriptor: function.descriptor,
             }),
-            authority,
+            host_context,
         }
     }
 }
@@ -312,7 +312,7 @@ impl From<NativeInterpreterFn> for ExternalFunction {
         Self {
             callable: callable.into(),
             contract: None,
-            authority: Arc::new(ProviderAuthority::default()),
+            host_context: Arc::new(HostCallContext::default()),
         }
     }
 }
@@ -322,7 +322,7 @@ impl From<AsyncInterpreterFn> for ExternalFunction {
         Self {
             callable: callable.into(),
             contract: None,
-            authority: Arc::new(ProviderAuthority::default()),
+            host_context: Arc::new(HostCallContext::default()),
         }
     }
 }
@@ -345,7 +345,7 @@ impl From<ExternalFunction> for NativeInterpreterFn {
 /// deliberately deferred until execution.
 pub struct ExternalFunctionRegistry {
     registry: rsscript_provider_api::ProviderRegistry<ProviderCallable>,
-    authority: Arc<ProviderAuthority>,
+    host_context: Arc<HostCallContext>,
 }
 
 impl ExternalFunctionRegistry {
@@ -354,12 +354,12 @@ impl ExternalFunctionRegistry {
             registry: rsscript_provider_api::ProviderRegistry::new(
                 rsscript_abi_model::RUNTIME_ABI_VERSION,
             ),
-            authority: Arc::new(ProviderAuthority::default()),
+            host_context: Arc::new(HostCallContext::default()),
         }
     }
 
-    pub fn set_authority(&mut self, authority: ProviderAuthority) {
-        self.authority = Arc::new(authority);
+    pub fn set_host_call_context(&mut self, host_context: HostCallContext) {
+        self.host_context = Arc::new(host_context);
     }
 
     pub fn register_provider<T: Into<ProviderCallable>>(
@@ -397,25 +397,25 @@ impl ExternalFunctionRegistry {
     }
 
     pub fn into_bindings(self) -> impl Iterator<Item = (String, ExternalFunction)> {
-        let authority = self.authority;
+        let host_context = self.host_context;
         self.registry
             .into_resolved_functions()
             .map(move |(symbol, function)| {
                 (
                     symbol.as_str().to_string(),
-                    ExternalFunction::from_resolved(function, Arc::clone(&authority)),
+                    ExternalFunction::from_resolved(function, Arc::clone(&host_context)),
                 )
             })
     }
 
     pub fn bindings(&self) -> impl Iterator<Item = (String, ExternalFunction)> + '_ {
-        let authority = Arc::clone(&self.authority);
+        let host_context = Arc::clone(&self.host_context);
         self.registry
             .resolved_functions()
             .map(move |(symbol, function)| {
                 (
                     symbol.as_str().to_string(),
-                    ExternalFunction::from_resolved(function.clone(), Arc::clone(&authority)),
+                    ExternalFunction::from_resolved(function.clone(), Arc::clone(&host_context)),
                 )
             })
     }

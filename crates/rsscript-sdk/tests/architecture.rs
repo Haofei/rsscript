@@ -2043,6 +2043,18 @@ fn compiler_and_vm_do_not_embed_execution_authority() {
 }
 
 #[test]
+fn provider_contract_uses_a_neutral_host_call_context() {
+    let root = workspace_root();
+    let provider_api = read(&root.join("crates/rsscript-provider-api/src/lib.rs"));
+    assert!(provider_api.contains("pub struct HostCallContext"));
+    assert!(provider_api.contains("pub host_context: &'a HostCallContext"));
+    assert!(
+        !provider_api.contains("ProviderAuthority"),
+        "Core Provider ABI must not restore policy-shaped authority types"
+    );
+}
+
+#[test]
 fn vm_core_does_not_embed_filesystem_intrinsics() {
     let root = workspace_root();
     let catalog = read(&root.join("crates/rsscript-compiler/intrinsics.toml"));

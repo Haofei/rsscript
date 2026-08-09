@@ -339,7 +339,7 @@ impl RegVm {
                     provider_id: String::new(),
                     provider_version: String::new(),
                     symbol: key.to_string(),
-                    authority: function.authority(),
+                    host_context: function.host_context(),
                     trace: Some(trace.as_ref()),
                     resources: Some(resources),
                     blocking_allowed,
@@ -397,7 +397,7 @@ impl RegVm {
             provider_id: String::new(),
             provider_version: String::new(),
             symbol: key.to_string(),
-            authority: function.authority_arc(),
+            host_context: function.host_context_arc(),
             trace: Some(std::sync::Arc::clone(&self.provider_trace) as _),
             resources: Some(self.provider_resources.clone()),
         };

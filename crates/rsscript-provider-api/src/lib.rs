@@ -208,29 +208,29 @@ impl fmt::Display for ProviderError {
 
 impl Error for ProviderError {}
 
-/// Host-constructed, instance-local authority presented to Provider calls.
+/// Host-constructed, instance-local context presented to Provider calls.
 ///
-/// RSScript does not interpret these scopes as a language policy. A Provider
-/// may use them to narrow an already configured host capability (for example,
-/// selecting one of several rooted filesystem views).
+/// RSScript does not interpret these labels as an authorization policy. A
+/// Provider may use them to select one of its already configured host views
+/// (for example, one of several rooted filesystem views).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct ProviderAuthority {
-    scopes: BTreeSet<String>,
+pub struct HostCallContext {
+    labels: BTreeSet<String>,
 }
 
-impl ProviderAuthority {
-    pub fn scoped(scopes: impl IntoIterator<Item = impl Into<String>>) -> Self {
+impl HostCallContext {
+    pub fn with_labels(labels: impl IntoIterator<Item = impl Into<String>>) -> Self {
         Self {
-            scopes: scopes.into_iter().map(Into::into).collect(),
+            labels: labels.into_iter().map(Into::into).collect(),
         }
     }
 
-    pub fn allows(&self, scope: &str) -> bool {
-        self.scopes.contains(scope)
+    pub fn has_label(&self, label: &str) -> bool {
+        self.labels.contains(label)
     }
 
-    pub fn scopes(&self) -> impl Iterator<Item = &str> {
-        self.scopes.iter().map(String::as_str)
+    pub fn labels(&self) -> impl Iterator<Item = &str> {
+        self.labels.iter().map(String::as_str)
     }
 }
 
@@ -259,7 +259,7 @@ pub struct ProviderCallContext<'a> {
     pub provider_id: String,
     pub provider_version: String,
     pub symbol: String,
-    pub authority: &'a ProviderAuthority,
+    pub host_context: &'a HostCallContext,
     pub trace: Option<&'a dyn ProviderTraceSink>,
     pub resources: Option<&'a mut ProviderResourceTable>,
     /// Set only by a runtime lane that is prepared for a synchronous provider
@@ -293,8 +293,8 @@ impl ProviderCallContext<'_> {
 
 impl Default for ProviderCallContext<'static> {
     fn default() -> Self {
-        static EMPTY_AUTHORITY: std::sync::LazyLock<ProviderAuthority> =
-            std::sync::LazyLock::new(ProviderAuthority::default);
+        static EMPTY_HOST_CONTEXT: std::sync::LazyLock<HostCallContext> =
+            std::sync::LazyLock::new(HostCallContext::default);
         Self {
             cancellation: None,
             deadline: None,
@@ -304,7 +304,7 @@ impl Default for ProviderCallContext<'static> {
             provider_id: String::new(),
             provider_version: String::new(),
             symbol: String::new(),
-            authority: &EMPTY_AUTHORITY,
+            host_context: &EMPTY_HOST_CONTEXT,
             trace: None,
             resources: None,
             blocking_allowed: false,
@@ -583,7 +583,7 @@ pub struct AsyncProviderCallContext {
     pub provider_id: String,
     pub provider_version: String,
     pub symbol: String,
-    pub authority: Arc<ProviderAuthority>,
+    pub host_context: Arc<HostCallContext>,
     pub trace: Option<Arc<dyn ProviderTraceSink>>,
     pub resources: Option<ProviderResourceRegistry>,
 }

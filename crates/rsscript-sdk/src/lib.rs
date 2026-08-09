@@ -76,7 +76,7 @@ pub use rsscript_vm::{
     AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior, CancellationBehavior,
     CoverageBucket, EvalError, EvalExecutionReport, EvalOutput, ExecutionFailureKind,
     ExecutionUsage, ExternalFunction, ExternalFunctionRegistry, ExternalImport, ExternalSymbol,
-    FunctionSignature, NativeInterpreterFn, NativeValue, ProviderAuthority, ProviderCallContext,
+    FunctionSignature, HostCallContext, NativeInterpreterFn, NativeValue, ProviderCallContext,
     ProviderCallMode, ProviderCallTrace, ProviderCallable, ProviderDescriptor, ProviderError,
     ProviderErrorCode, ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor,
     ProviderFuture, ProviderInvocationContract, ProviderLoadError, ProviderResource,
@@ -445,10 +445,10 @@ pub struct ProviderRegistry {
 
 #[cfg(feature = "execution")]
 impl ProviderRegistry {
-    /// Attach host-defined, instance-local authority to every resolved call.
-    /// Providers decide how to interpret these scopes; the language does not.
-    pub fn set_authority(&mut self, authority: provider::ProviderAuthority) {
-        self.inner.set_authority(authority);
+    /// Attach host-defined, instance-local context to every resolved call.
+    /// Providers decide how to interpret its labels; the language does not.
+    pub fn set_host_call_context(&mut self, context: provider::HostCallContext) {
+        self.inner.set_host_call_context(context);
     }
 
     pub fn register<T: Into<provider::ProviderCallable>>(
@@ -1563,7 +1563,7 @@ fn main() -> Result<Unit, String> {
     }
 
     #[test]
-    fn provider_authority_and_trace_reach_the_execution_report() {
+    fn provider_host_context_and_trace_reach_the_execution_report() {
         let compiler = Compiler;
         let package = compiler
             .compile_with_interfaces(
@@ -1606,7 +1606,7 @@ fn main() -> Result<Unit, String> {
             }],
         };
         let mut providers = ProviderRegistry::default();
-        providers.set_authority(provider::ProviderAuthority::scoped(["log.emit"]));
+        providers.set_host_call_context(provider::HostCallContext::with_labels(["log.emit"]));
         providers
             .register(
                 &descriptor,
@@ -1615,7 +1615,7 @@ fn main() -> Result<Unit, String> {
                     ProviderFunction {
                         signature,
                         callable: NativeInterpreterFn::new_contextual(|context, _| {
-                            assert!(context.authority.allows("log.emit"));
+                            assert!(context.host_context.has_label("log.emit"));
                             assert_eq!(context.provider_id, "test.log");
                             assert_eq!(context.symbol, "host.log.emit");
                             Ok(NativeValue::Unit)

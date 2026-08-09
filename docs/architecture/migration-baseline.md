@@ -454,9 +454,10 @@ mechanical acceptance condition holds.
     signature, error, resource, and payload-budget conformance fixtures green.
   - [ ] **P06.4 — Remove legacy escape variants from canonical APIs.** JSON stays
     only behind a named extension codec with explicit interface declaration.
-- [ ] **P07 — Remove policy-shaped authority from Core ABI.** Rename it to a
-  neutral host-call context or move authority scopes to runner/provider profiles;
-  Core reports required symbols but does not interpret authorization policy.
+- [x] **P07 — Remove policy-shaped authority from Core ABI.** `HostCallContext`
+  carries host-defined labels to Provider calls without Core interpreting an
+  authorization policy. The runtime reports required symbols; provider profiles
+  remain responsible for any authority narrowing.
 - [ ] **P08 — Complete async/resource conformance.** Test cancellation during
   suspension, deadline expiry, blocking-lane enforcement, cleanup exactly once
   on success/error/cancel/deadline, reentrancy, panic containment, redaction, and

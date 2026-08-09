@@ -42,7 +42,7 @@ called until this preflight succeeds.
    `ExecutionRequest`.
 6. Run `rsscript_provider_conformance::assert_provider_conforms` in the
    Provider's test suite, then add Provider-specific tests for every advertised
-   cancellation, cleanup, authority, budget, and error-mapping behavior.
+   cancellation, cleanup, host-context, budget, and error-mapping behavior.
 
 The descriptor fields are:
 
@@ -65,7 +65,7 @@ Synchronous functions may use `NativeInterpreterFn::new_contextual` to receive
 a borrowed `ProviderCallContext`. Asynchronous functions use
 `AsyncInterpreterFn::new` and receive an owned `AsyncProviderCallContext` that
 is safe to retain across suspension. Both contexts carry the monotonic
-deadline, cancellation token, call id, remaining byte/output budgets, authority,
+deadline, cancellation token, call id, remaining byte/output budgets, host-call context,
 trace sink, and VM-owned resource registry. Providers should check cancellation
 around potentially blocking or long-running work; the runtime checks it before
 entry and after cooperative async completion.
@@ -108,7 +108,7 @@ contexts stop the call before Provider code receives arguments. The returned
 resource-producing functions for test assertions and release evidence.
 
 This generic kit complements rather than replaces behavior tests. A Provider
-that advertises cooperative cancellation, rooted authority, byte limits, or
+that advertises cooperative cancellation, rooted host configuration, byte limits, or
 resource cleanup must still demonstrate those semantics with its real call.
 
 - Changing providers leaves `BuiltArtifact::bundle_bytes()` byte-for-byte equal.
@@ -124,7 +124,8 @@ See `providers/fs` for a minimal concrete implementation and
 `examples/embedded-report-pipeline` for memory and real-filesystem providers
 running the same compiled artifact.
 
-Host authority belongs to Provider instances. For example,
+Host authority belongs to Provider instances and profiles, not to the Core ABI.
+For example,
 `RootedFsProvider::new(root)` resolves every script path below `root` and
 rejects traversal and symlink escapes without changing the process current
 directory. This is authority narrowing, not a language permission system.
