@@ -92,9 +92,23 @@ pub enum MirInstruction {
         left: ValueId,
         right: ValueId,
     },
+    Call {
+        destination: ValueId,
+        target: MirCallTarget,
+        arguments: Vec<ValueId>,
+    },
     Discard {
         value: ValueId,
     },
+}
+
+/// Fully resolved direct call target. Dynamic protocol dispatch deliberately
+/// has no representation until its semantic and cancellation contracts can be
+/// made explicit in MIR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MirCallTarget {
+    Function(FunctionId),
+    External(ExternalSymbolId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -414,8 +428,8 @@ fn verify_instruction(
     instruction: &MirInstruction,
     defined: &mut BTreeSet<ValueId>,
     used: &mut Vec<ValueId>,
-    _function_count: usize,
-    _external_import_count: usize,
+    function_count: usize,
+    external_import_count: usize,
 ) -> Result<(), MirValidationError> {
     let define = |value: ValueId, defined: &mut BTreeSet<ValueId>| {
         if value.index() >= function.value_count as usize || !defined.insert(value) {
@@ -457,6 +471,31 @@ fn verify_instruction(
             define(*destination, defined)?;
             used.push(*left);
             used.push(*right);
+            Ok(())
+        }
+        MirInstruction::Call {
+            destination,
+            target,
+            arguments,
+        } => {
+            define(*destination, defined)?;
+            match target {
+                MirCallTarget::Function(target) if target.index() < function_count => {}
+                MirCallTarget::Function(target) => {
+                    return Err(MirValidationError::InvalidFunctionTarget {
+                        function: function.id,
+                        target: *target,
+                    });
+                }
+                MirCallTarget::External(target) if target.index() < external_import_count => {}
+                MirCallTarget::External(target) => {
+                    return Err(MirValidationError::InvalidExternalTarget {
+                        function: function.id,
+                        target: *target,
+                    });
+                }
+            }
+            used.extend(arguments.iter().copied());
             Ok(())
         }
         MirInstruction::Discard { value } => {
@@ -535,6 +574,14 @@ pub enum MirValidationError {
     InvalidType {
         function: FunctionId,
         ty: TypeId,
+    },
+    InvalidFunctionTarget {
+        function: FunctionId,
+        target: FunctionId,
+    },
+    InvalidExternalTarget {
+        function: FunctionId,
+        target: ExternalSymbolId,
     },
     InvalidValueDefinition {
         function: FunctionId,
@@ -663,6 +710,29 @@ mod tests {
         assert!(matches!(
             MirModule::new(vec![WireType::Unit], vec![function], debug(), Vec::new()),
             Err(MirValidationError::InvalidType { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_calls_to_unknown_function_ids() {
+        let function = MirFunction::new(
+            FunctionId::new(0),
+            signature(),
+            0,
+            1,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![MirInstruction::Call {
+                    destination: ValueId::new(0),
+                    target: MirCallTarget::Function(FunctionId::new(1)),
+                    arguments: Vec::new(),
+                }],
+                MirTerminator::Return(Some(ValueId::new(0))),
+            )],
+        );
+        assert!(matches!(
+            MirModule::new(vec![WireType::Unit], vec![function], debug(), Vec::new()),
+            Err(MirValidationError::InvalidFunctionTarget { .. })
         ));
     }
 }

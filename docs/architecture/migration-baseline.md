@@ -225,8 +225,8 @@ mechanical acceptance condition holds.
     arithmetic, calls, returns, branches, loops, and explicit block edges.
     - [x] **M02.2a — Bridge the initial scalar subset.** The executable-IR
       bridge lowers literals, local bindings, assignment, binary expressions,
-      returns, branches, loops, break, and continue; unsupported operations
-      fail closed.
+      direct internal calls, returns, branches, loops, break, and continue;
+      unsupported operations fail closed.
   - [ ] **M02.3 — Lower aggregate and pattern operations.** Cover records,
     variants, collections, field/index operations, and match dispatch without
     source AST nodes in MIR.

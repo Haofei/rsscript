@@ -11,12 +11,12 @@ use std::fmt;
 
 use rsscript_abi_model::WireType;
 use rsscript_exec_ir::{
-    BinaryOp, ExecutableExpr, ExecutableFunction, ExecutableIr, ExecutableStmt,
+    BinaryOp, Callee, ExecutableExpr, ExecutableFunction, ExecutableIr, ExecutableStmt,
 };
 use rsscript_mir::{
-    BasicBlock, BlockId, FunctionId, MirBinaryOp, MirExternalImport, MirFunction, MirFunctionDebug,
-    MirFunctionSignature, MirInstruction, MirLiteral, MirModule, MirTerminator, PlaceId, TypeId,
-    ValueId,
+    BasicBlock, BlockId, FunctionId, MirBinaryOp, MirCallTarget, MirExternalImport, MirFunction,
+    MirFunctionDebug, MirFunctionSignature, MirInstruction, MirLiteral, MirModule, MirTerminator,
+    PlaceId, TypeId, ValueId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,11 +64,34 @@ pub fn lower_executable_ir_to_mir(
         .iter()
         .map(|function| types.function_signature(&function.signature))
         .collect::<Vec<_>>();
+    let targets = CallTargets {
+        functions: functions
+            .iter()
+            .enumerate()
+            .map(|(index, function)| (function.name.clone(), FunctionId::new(index as u32)))
+            .collect(),
+        external_imports: executable
+            .external_imports()
+            .iter()
+            .enumerate()
+            .map(|(index, import)| {
+                (
+                    import.symbol.as_str().to_owned(),
+                    rsscript_mir::ExternalSymbolId::new(index as u32),
+                )
+            })
+            .collect(),
+    };
     let mut lowered = Vec::with_capacity(functions.len());
     let mut debug = Vec::with_capacity(functions.len());
     for ((index, function), signature) in functions.iter().enumerate().zip(signatures) {
-        let output =
-            FunctionLowerer::new(FunctionId::new(index as u32), function, signature).lower()?;
+        let output = FunctionLowerer::new(
+            FunctionId::new(index as u32),
+            function,
+            signature,
+            targets.clone(),
+        )
+        .lower()?;
         lowered.push(output.function);
         debug.push(output.debug);
     }
@@ -85,6 +108,12 @@ pub fn lower_executable_ir_to_mir(
         })
         .collect();
     Ok(MirModule::new(types.into_types(), lowered, debug, imports)?)
+}
+
+#[derive(Clone)]
+struct CallTargets {
+    functions: BTreeMap<String, FunctionId>,
+    external_imports: BTreeMap<String, rsscript_mir::ExternalSymbolId>,
 }
 
 #[derive(Default)]
@@ -158,6 +187,7 @@ struct FunctionLowerer<'a> {
     id: FunctionId,
     source: &'a ExecutableFunction,
     signature: MirFunctionSignature,
+    targets: CallTargets,
     blocks: Vec<BlockDraft>,
     current: BlockId,
     places: HashMap<String, PlaceId>,
@@ -171,11 +201,13 @@ impl<'a> FunctionLowerer<'a> {
         id: FunctionId,
         source: &'a ExecutableFunction,
         signature: MirFunctionSignature,
+        targets: CallTargets,
     ) -> Self {
         let mut lowerer = Self {
             id,
             source,
             signature,
+            targets,
             blocks: vec![BlockDraft::new()],
             current: BlockId::new(0),
             places: HashMap::new(),
@@ -417,7 +449,12 @@ impl<'a> FunctionLowerer<'a> {
             ExecutableExpr::ArrayLiteral { .. } => self.unsupported("array literal"),
             ExecutableExpr::Field { .. } => self.unsupported("field access"),
             ExecutableExpr::Index { .. } => self.unsupported("index access"),
-            ExecutableExpr::Call { .. } => self.unsupported("call"),
+            ExecutableExpr::Call {
+                callee,
+                receiver,
+                args,
+                ..
+            } => self.lower_call(callee, receiver.is_some(), args),
             ExecutableExpr::Effect { .. } => self.unsupported("data effect"),
             ExecutableExpr::Manage { .. } => self.unsupported("managed resource"),
             ExecutableExpr::Spawn { .. } => self.unsupported("spawn"),
@@ -432,6 +469,52 @@ impl<'a> FunctionLowerer<'a> {
     fn literal(&mut self, value: MirLiteral) -> Result<ValueId, MirLoweringError> {
         let destination = self.value();
         self.emit(MirInstruction::LoadLiteral { destination, value });
+        Ok(destination)
+    }
+
+    fn lower_call(
+        &mut self,
+        callee: &Callee,
+        has_receiver: bool,
+        args: &[rsscript_exec_ir::ExecutableCallArg],
+    ) -> Result<ValueId, MirLoweringError> {
+        if has_receiver {
+            return self.unsupported("receiver call");
+        }
+        let name = match callee {
+            Callee::Name(name) => name.clone(),
+            Callee::Qualified { namespace, name } => format!("{namespace}.{name}"),
+            Callee::ReceiverCall { .. } => return self.unsupported("receiver call"),
+        };
+        let target = self
+            .targets
+            .functions
+            .get(&name)
+            .copied()
+            .map(MirCallTarget::Function)
+            .or_else(|| {
+                self.targets
+                    .external_imports
+                    .get(&name)
+                    .copied()
+                    .map(MirCallTarget::External)
+            })
+            .ok_or_else(|| MirLoweringError::Unsupported {
+                function: self.source.name.clone(),
+                construct: "unresolved direct call",
+            })?;
+        let mut ordered = args.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|argument| argument.evaluation_index);
+        let arguments = ordered
+            .into_iter()
+            .map(|argument| self.lower_expression(&argument.value))
+            .collect::<Result<Vec<_>, _>>()?;
+        let destination = self.value();
+        self.emit(MirInstruction::Call {
+            destination,
+            target,
+            arguments,
+        });
         Ok(destination)
     }
 
@@ -528,8 +611,14 @@ mod tests {
     use super::*;
 
     fn module(function: ExecutableFunction) -> ExecutableIr {
+        module_with_functions(vec![function])
+    }
+
+    fn module_with_functions(functions: Vec<ExecutableFunction>) -> ExecutableIr {
         let mut program = ExecutableProgram::default();
-        program.insert_function(function.name.clone(), function);
+        for function in functions {
+            program.insert_function(function.name.clone(), function);
+        }
         ExecutableIr::new(program, Box::new([]))
     }
 
@@ -619,6 +708,47 @@ mod tests {
                 construct: "resource scope",
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn lowers_direct_calls_to_function_ids() {
+        let executable = module_with_functions(vec![
+            ExecutableFunction {
+                name: "main".into(),
+                is_async: false,
+                signature: signature(),
+                body: ExecutableBlock {
+                    statements: vec![ExecutableStmt::Return {
+                        value: Some(ExecutableExpr::Call {
+                            callee: Callee::Name("helper".into()),
+                            receiver: None,
+                            args: Vec::new(),
+                            type_name: Some("Int".into()),
+                        }),
+                    }],
+                },
+            },
+            ExecutableFunction {
+                name: "helper".into(),
+                is_async: false,
+                signature: signature(),
+                body: ExecutableBlock {
+                    statements: vec![ExecutableStmt::Return {
+                        value: Some(ExecutableExpr::Number { value: "1".into() }),
+                    }],
+                },
+            },
+        ]);
+
+        let mir = lower_executable_ir_to_mir(&executable).unwrap();
+        let instructions = mir.functions()[1].blocks()[0].instructions();
+        assert!(matches!(
+            instructions,
+            [MirInstruction::Call {
+                target: MirCallTarget::Function(target),
+                ..
+            }] if *target == FunctionId::new(0)
         ));
     }
 }
