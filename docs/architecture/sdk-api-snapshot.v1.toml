@@ -1,0 +1,17 @@
+# Reviewed public façade snapshot for `rsscript-sdk`.
+#
+# Each value is the SHA-256 digest of the normalized `pub use` statements in
+# the named façade module. The architecture test recomputes these values from
+# `crates/rsscript-sdk/src/lib.rs`; changing a reviewed export therefore
+# requires an intentional snapshot and inventory review in the same change.
+schema = "rsscript.sdk_api_snapshot.v1"
+
+[facade]
+language = "b8bade348b748071b0c64a9ae3391599904d1bad5def0cee1140841167184516"
+compile = "3c1c83c2b2f040b7bd209307cdd410d469310c13d18f80f1f5e6237608b131d7"
+operation = "a699fabe9b55f4eab2247615982e88c47f8ecf81b3db799387a38b3833c95787"
+artifact = "af3bf08070ebebbcc87a80cb114d228d5104a7f940b8f27f5e29faeebf9ef4b4"
+provider_api = "ea89b46fea465e0872d74d825dd32630deb842e2fb6fc74d9418e540dedc1c0f"
+runtime = "1874968b45716b2d891de127c10067a0ab209591a3f375b9676e29b29b2402ed"
+report = "41e7c99aec65db1a5c2232b920514ffee0bd7c552467788f730de1b80fa7ba0f"
+analysis = "171a7ac82a25475857c4fd023480529d614568701a19db0c3fad194dbc722d2c"

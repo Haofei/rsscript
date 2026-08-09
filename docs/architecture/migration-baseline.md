@@ -114,8 +114,9 @@ mechanical acceptance condition holds.
 - [ ] **G07 — Establish public API compatibility gates.** Check in a reviewed
   SDK API inventory, run semver/API-diff checks in CI, and reject experimental
   symbols from default SDK features. The reviewed inventory and default-feature
-  architecture gate are now present; a generated semver baseline remains
-  blocked on completing the explicit façade modules in A03.
+  architecture gate are now present; a checked v1 façade-export snapshot runs
+  in the default Core test path. A generated semver baseline remains blocked on
+  completing the explicit façade modules in A03.
 
 ### 1. Semantic ownership and query boundary
 
@@ -519,7 +520,7 @@ mechanical acceptance condition holds.
   runtime/linking, execution request/limits/report, diagnostics, and operation
   control. Package review/risk, AOT, JIT/OSR, register VM, opcode, and legacy
   convenience APIs are not re-exported.
-  - [ ] **A03.1 — Inventory the existing SDK surface.** Classify each export as
+  - [x] **A03.1 — Inventory the existing SDK surface.** Classify each export as
     stable façade, compatibility-only, experimental, or internal.
   - [ ] **A03.2 — Create explicit façade modules.** Expose only compile,
     artifact, provider, runtime, report, diagnostics, and operation APIs.
@@ -532,8 +533,11 @@ mechanical acceptance condition holds.
     The transitional root surface is now gated by the explicit `compatibility`
     feature; the default and `execution` builds expose the reviewed façade
     modules only, while the migration corpus opts in deliberately.
-  - [ ] **A03.4 — Add public API snapshots.** CI rejects unreviewed stable-surface
-    growth and validates feature combinations.
+  - [x] **A03.4 — Add public API snapshots.**
+    `sdk-api-snapshot.v1.toml` records the normalized export surface of every
+    reviewed façade module. The default SDK test recomputes its SHA-256 digests,
+    so CI rejects unreviewed stable-surface growth or removal; compatibility and
+    execution feature builds retain their dedicated architecture gates.
 - [ ] **A04 — Remove invalid phase states and report-losing paths.** Public types
   do not use optional fields to represent incompatible phases; script,
   Provider, cancellation, deadline, and budget termination always return a full

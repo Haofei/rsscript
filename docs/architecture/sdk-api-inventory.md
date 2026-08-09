@@ -44,7 +44,10 @@ not part of this inventory.
 ## Compatibility check
 
 The Core architecture suite verifies this inventory and scans the explicit SDK
-exports. CI runs that suite for the default product path and for `execution`;
-the native JIT suite is maintained in the experiments workflow. Before a
-public API promise is made, this inventory will be replaced by a semver
-baseline generated from the completed explicit façade modules.
+exports. [`sdk-api-snapshot.v1.toml`](sdk-api-snapshot.v1.toml) records a
+SHA-256 snapshot of each reviewed façade module's normalized `pub use` surface;
+CI rejects additions, removals, and reexports that are not accompanied by an
+intentional inventory and snapshot update. CI runs that suite for the default
+product path and for `execution`; the native JIT suite is maintained in the
+experiments workflow. Before a public API promise is made, this source-level
+snapshot will be complemented by a generated semver baseline.

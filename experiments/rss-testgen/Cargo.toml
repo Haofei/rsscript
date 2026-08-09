@@ -14,7 +14,11 @@ name = "rss-testgen"
 path = "src/bin/repro.rs"
 
 [dependencies]
-rsscript-sdk = { path = "../../crates/rsscript-sdk", features = ["execution"] }
+# Test generation exercises legacy VM/AOT differential helpers. Those helpers
+# are intentionally outside the reviewed embedding façade, so the experiment
+# must opt into the compatibility surface explicitly rather than widening the
+# default SDK API.
+rsscript-sdk = { path = "../../crates/rsscript-sdk", features = ["compatibility"] }
 
 [features]
 # Pull the native (Cranelift) tier into the in-process backend set so the

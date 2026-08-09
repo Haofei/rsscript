@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::Path;
 
+use sha2::{Digest, Sha256};
+
 const REMOVED_ROOT_ALIASES: &[&str] = &[
     "VmExecutable",
     "vm_compile_source",
@@ -25,6 +27,73 @@ fn inventory() -> String {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/architecture/sdk-api-inventory.md"),
     )
     .expect("SDK public API inventory should be readable")
+}
+
+fn api_snapshot() -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/architecture/sdk-api-snapshot.v1.toml"),
+    )
+    .expect("SDK public API snapshot should be readable")
+}
+
+fn module_body<'a>(source: &'a str, module: &str) -> &'a str {
+    let marker = format!("pub mod {module}");
+    let start = source
+        .find(&marker)
+        .unwrap_or_else(|| panic!("facade module `{module}` is missing"));
+    let open = source[start..]
+        .find('{')
+        .map(|offset| start + offset)
+        .unwrap_or_else(|| panic!("facade module `{module}` has no body"));
+    let mut depth = 0usize;
+    for (offset, character) in source[open..].char_indices() {
+        match character {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return &source[open + 1..open + offset];
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("facade module `{module}` has an unclosed body");
+}
+
+fn normalized_public_uses(source: &str, module: &str) -> String {
+    let body = module_body(source, module);
+    let mut statements = Vec::new();
+    let mut rest = body;
+    while let Some(start) = rest.find("pub use ") {
+        let statement = &rest[start..];
+        let end = statement
+            .find(';')
+            .unwrap_or_else(|| panic!("public use in `{module}` is not terminated"));
+        statements.push(
+            statement[..=end]
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+        rest = &statement[end + 1..];
+    }
+    format!("{}\n", statements.join("\n"))
+}
+
+fn snapshot_digest(source: &str, module: &str) -> String {
+    format!(
+        "{:x}",
+        Sha256::digest(normalized_public_uses(source, module).as_bytes())
+    )
+}
+
+fn snapshot_value<'a>(snapshot: &'a str, module: &str) -> Option<&'a str> {
+    snapshot.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == module).then(|| value.trim().trim_matches('"'))
+    })
 }
 
 #[test]
@@ -115,6 +184,36 @@ fn public_api_inventory_covers_the_current_migration_surface() {
         assert!(
             source.contains(&gated),
             "legacy root export must require the compatibility feature: {legacy_export}"
+        );
+    }
+}
+
+#[test]
+fn reviewed_facade_exports_match_the_checked_api_snapshot() {
+    let source = library_source();
+    let snapshot = api_snapshot();
+    assert!(
+        snapshot.contains("schema = \"rsscript.sdk_api_snapshot.v1\""),
+        "SDK API snapshot must declare its versioned schema"
+    );
+
+    let modules = [
+        "language",
+        "compile",
+        "operation",
+        "artifact",
+        "provider_api",
+        "runtime",
+        "report",
+        "analysis",
+    ];
+    for module in modules {
+        let expected = snapshot_value(&snapshot, module)
+            .unwrap_or_else(|| panic!("SDK API snapshot is missing façade module `{module}`"));
+        let actual = snapshot_digest(&source, module);
+        assert_eq!(
+            actual, expected,
+            "reviewed façade `{module}` changed; update sdk-api-inventory.md and the checked snapshot deliberately"
         );
     }
 }
