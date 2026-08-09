@@ -388,6 +388,11 @@ mechanical acceptance condition holds.
   must not be inferred from `CARGO_PKG_VERSION`.
   - [ ] **B04.1 — Declare independent compatibility constants.** Define container,
     language, ISA, Core library, Provider, analysis, and provenance versions.
+    - [x] **B04.1a — Separate language semantics from compiler provenance.** v1
+      artifacts emit `LANGUAGE_SEMANTICS_VERSION`; the verifier accepts the
+      explicit `SUPPORTED_LANGUAGE_SEMANTICS` range, while the compiler package
+      version remains provenance only. `BYTECODE_ISA_VERSION` is now explicit;
+      Core-library and analysis-schema compatibility remain follow-up work.
   - [ ] **B04.2 — Validate each version at its owning boundary.** Verify container
     at decode, language/ISA at program verification, Core library at load, and
     Provider ABI at link.

@@ -12,6 +12,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const BYTECODE_SCHEMA: &str = "rsscript.bytecode.v1";
+/// Language semantics carried by artifacts. This is intentionally independent
+/// from the crate/package version used only for compiler provenance.
+pub const LANGUAGE_SEMANTICS_VERSION: &str = "0.1.0";
+/// Accepted language-semantics range for the v1 verifier.
+pub const SUPPORTED_LANGUAGE_SEMANTICS: &str = ">=0.1.0, <0.2.0";
+/// Version of the executable instruction-set encoding inside the v1 envelope.
+pub const BYTECODE_ISA_VERSION: u32 = 1;
 pub const BYTECODE_MAGIC: &[u8; 8] = b"RSSBC\0\x01\0";
 const SECTION_HEADER: u8 = 1;
 const SECTION_IMPORTS: u8 = 2;
@@ -252,22 +259,9 @@ pub struct BytecodeCompatibility {
 
 impl Default for BytecodeCompatibility {
     fn default() -> Self {
-        let current = Version::parse(env!("CARGO_PKG_VERSION"))
-            .expect("workspace package version must be semantic");
-        let requirement = if current.major == 0 {
-            format!(
-                ">={}.{}.{}, <0.{}.0",
-                current.major,
-                current.minor,
-                current.patch,
-                current.minor + 1
-            )
-        } else {
-            format!(">={current}, <{}.0.0", current.major + 1)
-        };
         Self {
-            language: VersionReq::parse(&requirement)
-                .expect("generated language compatibility requirement"),
+            language: VersionReq::parse(SUPPORTED_LANGUAGE_SEMANTICS)
+                .expect("declared language compatibility requirement"),
             runtime_abi_version: RUNTIME_ABI_VERSION,
         }
     }
@@ -1856,6 +1850,24 @@ mod tests {
         let mut corrupt = bytes;
         *corrupt.last_mut().expect("non-empty") ^= 1;
         assert!(BytecodeVerifier::default().verify(&corrupt).is_err());
+    }
+
+    #[test]
+    fn language_compatibility_is_independent_from_compiler_provenance() {
+        let compatibility = BytecodeCompatibility::default();
+        assert!(
+            compatibility.language.matches(
+                &Version::parse(LANGUAGE_SEMANTICS_VERSION)
+                    .expect("declared language semantics version")
+            )
+        );
+        assert!(
+            !compatibility
+                .language
+                .matches(&Version::parse("0.2.0").expect("test version"))
+        );
+        assert_eq!(BYTECODE_SCHEMA, "rsscript.bytecode.v1");
+        assert_eq!(BYTECODE_ISA_VERSION, 1);
     }
 
     #[test]

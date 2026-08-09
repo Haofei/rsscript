@@ -147,7 +147,7 @@ pub(super) fn encode_and_verify_with_imports(
     let payload = rsscript_bytecode::encode_executable_payload(&WireUnit::from(unit))
         .map_err(|error| EvalError::Runtime(format!("cannot encode VM bytecode: {error}")))?;
     let artifact = BytecodeArtifact::new(
-        env!("CARGO_PKG_VERSION"),
+        rsscript_bytecode::LANGUAGE_SEMANTICS_VERSION,
         env!("CARGO_PKG_VERSION"),
         interface_catalog_digest,
         RUNTIME_ABI_VERSION,

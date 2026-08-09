@@ -1817,6 +1817,26 @@ fn artifact_verifier_owns_instruction_validation() {
 }
 
 #[test]
+fn bytecode_language_compatibility_is_not_inferred_from_compiler_version() {
+    let root = workspace_root();
+    let verifier = read(&root.join("crates/rsscript-bytecode/src/lib.rs"));
+    let compatibility = verifier
+        .split("impl Default for BytecodeCompatibility")
+        .nth(1)
+        .and_then(|source| source.split("impl BytecodeVerifier").next())
+        .expect("bytecode compatibility default");
+    assert!(compatibility.contains("SUPPORTED_LANGUAGE_SEMANTICS"));
+    assert!(
+        !compatibility.contains("CARGO_PKG_VERSION"),
+        "language compatibility must not be derived from compiler provenance"
+    );
+
+    let emitter = read(&root.join("crates/rsscript-vm/src/reg_vm/bytecode.rs"));
+    assert!(emitter.contains("LANGUAGE_SEMANTICS_VERSION"));
+    assert!(emitter.contains("env!(\"CARGO_PKG_VERSION\")"));
+}
+
+#[test]
 fn unsafe_boundary_crates_are_explicit_dependencies() {
     let root = workspace_root();
     let mut violations = Vec::new();
