@@ -50,7 +50,21 @@ pub fn reg_vm_compile_mir(
     source_hash: &str,
     interface_catalog_digest: &str,
 ) -> Result<RegVmExecutable, EvalError> {
-    rsscript_vm::compile_mir(mir, source_hash, interface_catalog_digest)
+    let artifact = rsscript_codegen_vm::emit_artifact(
+        mir,
+        source_hash,
+        interface_catalog_digest,
+        env!("CARGO_PKG_VERSION"),
+    )
+    .map_err(|error| EvalError::Runtime(error.to_string()))?;
+    let verified = rsscript_bytecode::BytecodeVerifier::default()
+        .verify(
+            &artifact
+                .to_bytes()
+                .map_err(|error| EvalError::Runtime(error.to_string()))?,
+        )
+        .map_err(|error| EvalError::Runtime(error.to_string()))?;
+    RegVmExecutable::from_verified_bytecode(verified)
 }
 
 fn emit_ir(compiled: &CompiledIr) -> Result<RegVmExecutable, EvalError> {

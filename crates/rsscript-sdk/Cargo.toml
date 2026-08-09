@@ -18,6 +18,7 @@ execution = [
     "dep:rsscript-abi-model",
     "rsscript_compiler/execution",
     "dep:rsscript-bytecode",
+    "dep:rsscript-codegen-vm",
     "dep:rsscript-interface-catalog",
     "dep:rsscript-lowering",
     "dep:rsscript-mir",
@@ -31,6 +32,7 @@ rsscript-abi-model = { path = "../rsscript-abi-model", optional = true }
 rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compiler", default-features = false, features = ["language-service"] }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
+rsscript-codegen-vm = { path = "../rsscript-codegen-vm", optional = true }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog", optional = true }
 rsscript-lowering = { path = "../rsscript-lowering", optional = true }
 rsscript-mir = { path = "../rsscript-mir", optional = true }

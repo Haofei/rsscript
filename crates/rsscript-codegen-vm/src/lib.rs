@@ -198,18 +198,20 @@ fn lower_instruction(
             target,
             arguments,
         } => {
-            let (args, mut_args) = arguments
-                .iter()
-                .map(|argument| match argument {
-                    MirCallArgument::Value(value) => Ok((value_reg(function, *value), false)),
+            let mut args = Vec::with_capacity(arguments.len());
+            let mut mut_args = Vec::new();
+            for (index, argument) in arguments.iter().enumerate() {
+                match argument {
+                    MirCallArgument::Value(value) => args.push(value_reg(function, *value)),
                     MirCallArgument::BorrowRead(place) | MirCallArgument::Take(place) => {
-                        Ok((place_reg(*place), false))
+                        args.push(place_reg(*place));
                     }
-                    MirCallArgument::BorrowMut(place) => Ok((place_reg(*place), true)),
-                })
-                .collect::<Result<Vec<_>, CodegenError>>()?
-                .into_iter()
-                .unzip::<_, _, Vec<_>, Vec<_>>();
+                    MirCallArgument::BorrowMut(place) => {
+                        args.push(place_reg(*place));
+                        mut_args.push(index);
+                    }
+                }
+            }
             let dst = value_reg(function, *destination);
             match target {
                 MirCallTarget::Function(id) => code.push(instr(
@@ -252,10 +254,17 @@ fn lower_terminator(
     patches: &mut Vec<(usize, BlockId, &'static str)>,
 ) -> Result<(), CodegenError> {
     match term {
-        MirTerminator::Return(value) => code.push(instr(
-            "Return",
-            [("src", json!(value.map(|value| value_reg(function, value))))],
-        )),
+        MirTerminator::Return(value) => {
+            let src = value.map_or_else(
+                || {
+                    let scratch = function.place_count() as usize + function.value_count() as usize;
+                    code.push(instr("LoadUnit", [("dst", json!(scratch))]));
+                    scratch
+                },
+                |value| value_reg(function, value),
+            );
+            code.push(instr("Return", [("src", json!(src))]));
+        }
         MirTerminator::Jump(target) => {
             let index = code.len();
             code.push(instr("Jump", [("target", json!(0))]));
