@@ -20,6 +20,13 @@ fn library_source() -> String {
         .expect("rsscript library source should be readable")
 }
 
+fn inventory() -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/architecture/sdk-api-inventory.md"),
+    )
+    .expect("SDK public API inventory should be readable")
+}
+
 #[test]
 fn versioned_facade_is_deleted() {
     let source = library_source();
@@ -46,5 +53,41 @@ fn removed_root_aliases_cannot_return() {
         violations.is_empty(),
         "removed compatibility aliases were reintroduced at the crate root: {}",
         violations.join(", ")
+    );
+}
+
+#[test]
+fn public_api_inventory_covers_the_current_migration_surface() {
+    let inventory = inventory();
+    for required in [
+        "## Stable façade",
+        "## Compatibility-only APIs",
+        "## Feature-gated experimental APIs",
+        "`reg_vm_*`",
+        "`native-jit`",
+    ] {
+        assert!(
+            inventory.contains(required),
+            "SDK API inventory must classify `{required}`"
+        );
+    }
+
+    let source = library_source();
+    for forbidden in [
+        "pub use rsscript_vm::JitPlan",
+        "pub use rsscript_vm::RegInstr",
+    ] {
+        assert!(
+            !source.contains(forbidden),
+            "experimental VM detail must not enter the default SDK surface: `{forbidden}`"
+        );
+    }
+    assert!(
+        source.contains("#[cfg(feature = \"native-jit\")]\npub use rsscript_vm::NativeStats"),
+        "native JIT statistics must remain feature-gated"
+    );
+    assert!(
+        source.contains("#[cfg(feature = \"native-jit\")]\npub use vm_adapter"),
+        "native JIT execution helpers must remain feature-gated"
     );
 }

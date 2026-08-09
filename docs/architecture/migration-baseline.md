@@ -113,7 +113,9 @@ mechanical acceptance condition holds.
   open until those assets have an explicit external maintenance boundary.
 - [ ] **G07 — Establish public API compatibility gates.** Check in a reviewed
   SDK API inventory, run semver/API-diff checks in CI, and reject experimental
-  symbols from default SDK features.
+  symbols from default SDK features. The reviewed inventory and default-feature
+  architecture gate are now present; a generated semver baseline remains
+  blocked on completing the explicit façade modules in A03.
 
 ### 1. Semantic ownership and query boundary
 
