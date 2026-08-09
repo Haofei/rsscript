@@ -27,7 +27,7 @@ flate2 = "1"
 hex = "0.4"
 hmac = "0.12"
 percent-encoding = "2"
-vm-jit = { path = "../vm-jit", optional = true }
+vm-jit = { path = "../../experiments/vm-jit", optional = true }
 
 [features]
 default = []

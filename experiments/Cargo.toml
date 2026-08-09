@@ -1,0 +1,12 @@
+[workspace]
+resolver = "3"
+members = [
+    "aot-runtime",
+    "native-abi",
+    "reir",
+    "rss-testgen",
+    "rsscript-review-reir",
+    "vm-jit",
+]
+
+default-members = []

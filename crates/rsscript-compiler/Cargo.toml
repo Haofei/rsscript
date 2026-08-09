@@ -63,9 +63,9 @@ toml = "0.8"
 
 [dev-dependencies]
 jsonschema = { version = "0.49", default-features = false }
-reir = { path = "../reir" }
-rsscript-review-reir = { path = "../../integrations/rsscript-review-reir" }
+reir = { path = "../../experiments/reir" }
+rsscript-review-reir = { path = "../../experiments/rsscript-review-reir" }
 sha1 = "0.10"
 proptest = "1"
-rss-testgen = { path = "../rss-testgen" }
+rss-testgen = { path = "../../experiments/rss-testgen" }
 rsscript-vm = { path = "../rsscript-vm", default-features = false }

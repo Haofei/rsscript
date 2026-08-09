@@ -21,7 +21,7 @@ name = "sync_upload_client"
 path = "src/bin/sync_upload_client.rs"
 
 [dependencies]
-rsscript-runtime = { package = "rsscript-aot-runtime", path = "../../../../../crates/runtime" }
+rsscript-runtime = { package = "rsscript-aot-runtime", path = "../../../../../experiments/aot-runtime" }
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }

@@ -294,7 +294,7 @@ fn compiled_output_cache_key_with_tag(
     hash_tree_if_exists(&mut hasher, &crate_root.join("src/package"));
     hash_tree_if_exists(&mut hasher, &crate_root.join("src/rust_lower"));
     hash_tree_if_exists(&mut hasher, &crate_root.join("src/syntax"));
-    hash_tree_if_exists(&mut hasher, &workspace_root.join("crates/runtime"));
+    hash_tree_if_exists(&mut hasher, &workspace_root.join("experiments/aot-runtime"));
     format!("{:x}", hasher.finalize())
 }
 

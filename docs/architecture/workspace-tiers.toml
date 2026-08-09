@@ -51,19 +51,12 @@ providers = [
 ]
 
 integrations = [
-  "reir",
-  "rsscript-review-reir",
 ]
 
 experimental = [
-  "rss-native-abi",
-  "rsscript-aot-runtime",
-  "vm-jit",
 ]
 
 research = [
-  "rss-testgen",
-  "rss_native_abi_fixture_bridge",
 ]
 
 tooling = [

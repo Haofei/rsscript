@@ -41,11 +41,11 @@ rsscript-build-support = { path = "../rsscript-build-support" }
 [dev-dependencies]
 base64 = "0.22"
 jsonschema = { version = "0.49", default-features = false }
-reir = { path = "../reir" }
+reir = { path = "../../experiments/reir" }
 rsscript-abi-model = { path = "../rsscript-abi-model" }
-rsscript-review-reir = { path = "../../integrations/rsscript-review-reir" }
+rsscript-review-reir = { path = "../../experiments/rsscript-review-reir" }
 rsscript-mir = { path = "../rsscript-mir", features = ["conformance"] }
-rss-testgen = { path = "../rss-testgen" }
+rss-testgen = { path = "../../experiments/rss-testgen" }
 sha1 = "0.10"
 proptest = "1"
 tempfile = "3"

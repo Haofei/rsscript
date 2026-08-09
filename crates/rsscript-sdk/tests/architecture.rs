@@ -265,6 +265,39 @@ fn workspace_tiers_are_exhaustive_and_define_default_members() {
 }
 
 #[test]
+fn root_workspace_excludes_experimental_packages() {
+    let root = workspace_root();
+    let metadata = cargo_metadata(&root);
+    let packages = metadata["packages"].as_array().expect("metadata packages");
+    let root_members = metadata["workspace_members"]
+        .as_array()
+        .expect("workspace members")
+        .iter()
+        .map(|member| member.as_str().expect("workspace member id"))
+        .collect::<BTreeSet<_>>();
+
+    for experimental in [
+        "rsscript-aot-runtime",
+        "rss-native-abi",
+        "reir",
+        "rss-testgen",
+        "rsscript-review-reir",
+        "vm-jit",
+    ] {
+        assert!(
+            !root_members.iter().any(|member| {
+                packages
+                    .iter()
+                    .find(|package| package["id"].as_str() == Some(*member))
+                    .and_then(|package| package["name"].as_str())
+                    == Some(experimental)
+            }),
+            "Core workspace must not own experimental package `{experimental}`"
+        );
+    }
+}
+
+#[test]
 fn migration_boundary_rejects_disabled_cemetery_code_and_root_glob_exports() {
     let root = workspace_root();
     let mut sources = Vec::new();
@@ -1218,7 +1251,7 @@ fn reir_is_a_one_way_optional_integration() {
     );
 
     let integration_manifest: toml::Value = toml::from_str(&read(
-        &root.join("integrations/rsscript-review-reir/Cargo.toml"),
+        &root.join("experiments/rsscript-review-reir/Cargo.toml"),
     ))
     .expect("REIR integration manifest should parse");
     let integration_dependencies = normal_dependency_packages(&integration_manifest);
@@ -1226,7 +1259,7 @@ fn reir_is_a_one_way_optional_integration() {
         integration_dependencies,
         BTreeSet::from(["reir".to_string(), "serde_json".to_string(),])
     );
-    let integration_library = read(&root.join("integrations/rsscript-review-reir/src/lib.rs"));
+    let integration_library = read(&root.join("experiments/rsscript-review-reir/src/lib.rs"));
     assert!(integration_library.contains("package_analysis"));
     assert!(!integration_library.contains("PackageReview"));
     assert!(!integration_library.contains("format_package_review"));
@@ -1624,7 +1657,7 @@ fn interface_catalog_is_platform_neutral() {
 #[test]
 fn runtime_does_not_depend_on_the_compiler_package() {
     let root = workspace_root();
-    let manifest_path = root.join("crates/runtime/Cargo.toml");
+    let manifest_path = root.join("experiments/aot-runtime/Cargo.toml");
     let manifest: toml::Value =
         toml::from_str(&read(&manifest_path)).expect("runtime Cargo.toml should parse");
     let dependencies = dependency_packages(&manifest);
@@ -1646,7 +1679,7 @@ fn runtime_does_not_depend_on_the_compiler_package() {
         "the default runtime must not enable concrete network services"
     );
 
-    let runtime_source_dir = root.join("crates/runtime/src");
+    let runtime_source_dir = root.join("experiments/aot-runtime/src");
     for host_module in [
         "domain.rs",
         "env.rs",
@@ -1693,7 +1726,7 @@ fn runtime_does_not_depend_on_the_compiler_package() {
         manifest_path.strip_prefix(&root).unwrap().display()
     );
 
-    for path in rust_files_below(&root.join("crates/runtime/src")) {
+    for path in rust_files_below(&root.join("experiments/aot-runtime/src")) {
         let source = read(&path);
         assert!(
             !source.contains("rsscript_sdk::"),
@@ -1740,7 +1773,7 @@ fn abi_and_provider_crates_keep_one_way_dependencies() {
     let provider_source = read(&root.join("crates/rsscript-provider-api/src/lib.rs"));
     assert!(provider_source.contains("pub enum NativeValue"));
     assert!(provider_source.contains("pub struct NativeInterpreterFn"));
-    let native_source = read(&root.join("crates/native-abi/src/lib.rs"));
+    let native_source = read(&root.join("experiments/native-abi/src/lib.rs"));
     assert!(
         native_source.contains("pub use rsscript_provider_api"),
         "the native adapter must reuse provider runtime values rather than own them"
@@ -2155,7 +2188,7 @@ fn rust_aot_lowering_does_not_restore_removed_host_abi_types() {
 #[test]
 fn generated_aot_abi_does_not_expose_wall_clock_or_timer_services() {
     let root = workspace_root();
-    let runtime = read(&root.join("crates/runtime/src/lib.rs"));
+    let runtime = read(&root.join("experiments/aot-runtime/src/lib.rs"));
     let abi_macro = runtime
         .split("macro_rules! runtime_abi_exports")
         .nth(1)
@@ -2225,11 +2258,11 @@ fn high_risk_state_machines_keep_dedicated_module_owners() {
         "crates/rsscript-vm/src/reg_vm/tier/recursion.rs",
         "crates/rsscript-compiler/src/rust_lower/helpers/executable_declarations.rs",
         "crates/rsscript-compiler/src/rust_lower/helpers/semantic_projection.rs",
-        "crates/runtime/src/json.rs",
-        "crates/vm-jit/src/analysis.rs",
-        "crates/vm-jit/src/executable_memory.rs",
-        "crates/reir/src/reconciliation/engine.rs",
-        "crates/reir/src/cli/safe_io.rs",
+        "experiments/aot-runtime/src/json.rs",
+        "experiments/vm-jit/src/analysis.rs",
+        "experiments/vm-jit/src/executable_memory.rs",
+        "experiments/reir/src/reconciliation/engine.rs",
+        "experiments/reir/src/cli/safe_io.rs",
     ];
     let missing = required
         .iter()

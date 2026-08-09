@@ -43,7 +43,7 @@ The compiler now consumes runtime `core` only; filesystem, environment, process,
 network, wall-clock, and entropy intrinsics are absent from the VM core and must
 be supplied as explicit external symbols by Providers. Disabled hosts fail before
 build, spawn, or dynamic loading when those integrations are requested.
-REIR conversion lives in the one-way `integrations/rsscript-review-reir`
+REIR conversion lives in the one-way `experiments/rsscript-review-reir`
 adapter and is absent from normal compiler dependencies, public compiler APIs,
 CLI package output, and package metadata writes. The retired policy-oriented
 examples and action have been removed. The LSP now consumes the document-oriented

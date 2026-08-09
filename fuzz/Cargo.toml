@@ -41,7 +41,7 @@ path = "../crates/rsscript-bytecode"
 path = "../crates/rsscript-sdk"
 
 [dependencies.rss-testgen]
-path = "../crates/rss-testgen"
+path = "../experiments/rss-testgen"
 
 [features]
 # Enable the native Cranelift tier in the generative differential. This pulls the

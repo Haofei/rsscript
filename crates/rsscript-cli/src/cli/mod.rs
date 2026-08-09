@@ -237,10 +237,13 @@ pub(crate) fn default_runtime_path() -> Result<PathBuf, String> {
     if let Some(path) = env::var_os("RSSCRIPT_AOT_RUNTIME_PATH") {
         candidates.push(("RSSCRIPT_AOT_RUNTIME_PATH", PathBuf::from(path)));
     }
-    candidates.push(("current directory", current_dir.join("crates/runtime")));
+    candidates.push((
+        "current directory",
+        current_dir.join("experiments/aot-runtime"),
+    ));
     candidates.push((
         "compiled manifest directory",
-        manifest_dir.join("../runtime"),
+        manifest_dir.join("../../experiments/aot-runtime"),
     ));
     select_runtime_path(candidates)
 }

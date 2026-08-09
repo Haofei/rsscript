@@ -95,7 +95,7 @@ fn find_versioned_doc(prefix: &str, suffix: &str) -> PathBuf {
 
 pub fn runtime_path() -> String {
     workspace_root()
-        .join("crates/runtime")
+        .join("experiments/aot-runtime")
         .display()
         .to_string()
 }

@@ -729,7 +729,8 @@ fn snapshot_native_build_inputs(
         snapshotted.push(dependency);
     }
 
-    let native_abi_source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../native-abi");
+    let native_abi_source =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../experiments/native-abi");
     let native_abi_path = directory.path().join("native-abi");
     snapshot_tree(&native_abi_source, &native_abi_path)?;
     let digest = snapshot_tree_digest(directory.path())?;

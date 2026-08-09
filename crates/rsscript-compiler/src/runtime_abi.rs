@@ -48,7 +48,8 @@ pub(crate) fn runtime_intrinsic_supported_signatures() -> Vec<String> {
 }
 
 fn runtime_public_function_names() -> std::collections::HashSet<String> {
-    let runtime_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../runtime/src");
+    let runtime_src =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../experiments/aot-runtime/src");
     let mut functions = std::collections::HashSet::new();
     for entry in std::fs::read_dir(&runtime_src).expect("runtime/src should be readable") {
         let path = entry.expect("runtime/src entry should be readable").path();
@@ -196,7 +197,8 @@ mod tests {
     }
 
     fn runtime_public_functions() -> HashSet<String> {
-        let runtime_src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../runtime/src");
+        let runtime_src =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../experiments/aot-runtime/src");
         let mut functions = HashSet::new();
         for entry in fs::read_dir(&runtime_src).expect("runtime/src should be readable") {
             let path = entry.expect("runtime/src entry should be readable").path();

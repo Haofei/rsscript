@@ -24,7 +24,6 @@ members = [
     "crates/rsscript-workspace-loader",
     "crates/rsscript-vm",
     "crates/rsscript-cli",
-    "integrations/rsscript-review-reir",
     "providers/fs",
     "providers/env",
     "providers/process",
@@ -37,21 +36,26 @@ members = [
     "tools/rsscript-xtask",
     "crates/rsscript-compiler",
     "crates/lsp",
-    "crates/runtime",
-    "crates/reir",
-    "crates/native-abi",
     "crates/process-guard",
-    "crates/vm-jit",
-    "crates/rss-testgen",
+]
+
+# Integration, experimental, and research packages are physically maintained
+# below `experiments/` and deliberately excluded from the Core workspace.
+# Native package source remains a test fixture, but its Rust bridge is no
+# longer a workspace member.
+exclude = [
+    "experiments/aot-runtime",
+    "experiments/native-abi",
+    "experiments/reir",
+    "experiments/rss-testgen",
+    "experiments/rsscript-review-reir",
+    "experiments/vm-jit",
     "packages/native-abi-fixture/native/rust",
 ]
 
-# The root workspace also contains providers, integrations, compatibility
-# packages, and research backends so the full maintenance gate can still test
-# them together. Normal `cargo check`, `cargo test`, and `cargo clippy` commands
-# intentionally select only the supported product path below. Experimental and
-# research packages have path-triggered/nightly workflows and remain available
-# through explicit `-p` or `--workspace` commands.
+# The root workspace owns only Core, applications, the runner, and supported
+# providers. The separate `experiments/` workspace consumes Core by path but
+# cannot widen root dependency resolution or release metadata.
 default-members = [
     "crates/rsscript-abi-model",
     "crates/rsscript-bytecode",
