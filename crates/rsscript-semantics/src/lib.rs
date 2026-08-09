@@ -13,11 +13,16 @@ pub use rsscript_abi_model::{
 mod call_binding;
 mod database;
 pub mod hir;
+mod interface_descriptor;
 mod types;
 pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
 pub use database::{
     AnalysisResult, FrontendCompletion, FrontendStopReason, SemanticDatabase, SourceFileSnapshot,
     SourceSnapshot, ValidatedProgram,
+};
+pub use interface_descriptor::{
+    INTERFACE_DESCRIPTOR_SCHEMA, InterfaceDescriptorError, InterfaceDescriptorFunctionV1,
+    InterfaceDescriptorV1,
 };
 pub use types::{
     ResolvedParamEffect, ResolvedType, ResolvedTypeKind, SemanticTypeFacts, TypeArena, TypeId,

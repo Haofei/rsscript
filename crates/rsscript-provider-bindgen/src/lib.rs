@@ -1,10 +1,7 @@
 #![forbid(unsafe_code)]
 
-use rsscript_abi_model::{
-    DataEffect, ExternalSymbol, FunctionSignature, ParameterSignature, WireQualifier, WireType,
-};
-use rsscript_syntax::ast::{DataEffect as SyntaxEffect, Item, TypeRef};
-use rsscript_syntax::parse_source;
+use rsscript_abi_model::{ExternalSymbol, FunctionSignature, WireQualifier, WireType};
+use rsscript_semantics::{InterfaceDescriptorError, InterfaceDescriptorV1};
 use std::error::Error;
 use std::fmt;
 
@@ -52,10 +49,7 @@ pub struct RustProviderOptions<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BindgenError {
-    MalformedInterface,
-    MissingModule,
-    InvalidSymbol(String),
-    DuplicateSymbol(String),
+    Descriptor(InterfaceDescriptorError),
 }
 
 impl fmt::Display for BindgenError {
@@ -66,83 +60,34 @@ impl fmt::Display for BindgenError {
 
 impl Error for BindgenError {}
 
+impl From<InterfaceDescriptorError> for BindgenError {
+    fn from(error: InterfaceDescriptorError) -> Self {
+        Self::Descriptor(error)
+    }
+}
+
 impl ProviderInterface {
     pub fn parse(path: &str, source: &str) -> Result<Self, BindgenError> {
-        let program = parse_source(path, source);
-        if !program.unknown_top_level_spans.is_empty()
-            || !program.malformed_declaration_spans.is_empty()
-        {
-            return Err(BindgenError::MalformedInterface);
-        }
-        let module = program.items.iter().find_map(|item| match item {
-            Item::Module(module) => Some(module.path.join(".")),
-            _ => None,
-        });
-        let mut functions = Vec::new();
-        for item in program.items {
-            let Item::Function(function) = item else {
-                continue;
-            };
-            if function.has_body || !function.malformed_param_spans.is_empty() {
-                return Err(BindgenError::MalformedInterface);
-            }
-            let symbol = if function.name.contains('.') {
-                function.name.clone()
-            } else {
-                format!(
-                    "{}.{}",
-                    module.as_deref().ok_or(BindgenError::MissingModule)?,
-                    function.name
-                )
-            };
-            let symbol = ExternalSymbol::new(symbol.clone())
-                .map_err(|_| BindgenError::InvalidSymbol(symbol))?;
-            let entry = function
-                .lower_name
-                .clone()
-                .unwrap_or_else(|| function.name.rsplit('.').next().unwrap().to_string());
-            let parameters = function
-                .params
-                .iter()
-                .map(|parameter| ParameterSignature {
-                    name: parameter.name.clone(),
-                    effect: match parameter.effective_effect().unwrap_or(SyntaxEffect::Read) {
-                        SyntaxEffect::Read => DataEffect::Read,
-                        SyntaxEffect::Mut => DataEffect::Mut,
-                        SyntaxEffect::Take => DataEffect::Take,
-                    },
-                    ty: type_name(&parameter.ty).into(),
-                    retained: function.retained_params.contains(&parameter.name),
-                })
-                .collect();
-            let mut result = function
-                .return_ty
-                .as_ref()
-                .map(type_name)
-                .unwrap_or_else(|| "Unit".to_string());
-            if function.returns_fresh && !result.starts_with("fresh ") {
-                result = format!("fresh {result}");
-            }
-            functions.push(InterfaceFunction {
-                symbol,
-                entry,
-                signature: FunctionSignature {
-                    parameters,
-                    result: result.into(),
-                    asynchronous: function.is_async,
-                },
-            });
-        }
-        functions.sort_by(|left, right| left.symbol.cmp(&right.symbol));
-        if let Some(pair) = functions
-            .windows(2)
-            .find(|pair| pair[0].symbol == pair[1].symbol)
-        {
-            return Err(BindgenError::DuplicateSymbol(
-                pair[0].symbol.as_str().to_string(),
+        Self::from_descriptor(InterfaceDescriptorV1::from_interface_source(path, source)?)
+    }
+
+    pub fn from_descriptor(descriptor: InterfaceDescriptorV1) -> Result<Self, BindgenError> {
+        if descriptor.schema != rsscript_semantics::INTERFACE_DESCRIPTOR_SCHEMA {
+            return Err(BindgenError::Descriptor(
+                InterfaceDescriptorError::MalformedInterface,
             ));
         }
-        Ok(Self { functions })
+        Ok(Self {
+            functions: descriptor
+                .functions
+                .into_iter()
+                .map(|function| InterfaceFunction {
+                    symbol: function.symbol,
+                    entry: function.entry,
+                    signature: function.signature,
+                })
+                .collect(),
+        })
     }
 
     pub fn render_rust(&self, options: &RustProviderOptions<'_>) -> String {
@@ -271,43 +216,6 @@ fn render_wire_type(ty: &WireType) -> String {
             },
             render_wire_type(value)
         ),
-    }
-}
-
-fn type_name(ty: &TypeRef) -> String {
-    let base = if ty.name == "Fn" {
-        let parameters = ty
-            .fn_params
-            .iter()
-            .map(type_name)
-            .collect::<Vec<_>>()
-            .join(", ");
-        let result = ty
-            .fn_return
-            .as_ref()
-            .map(|result| format!(" -> {}", type_name(result)))
-            .unwrap_or_default();
-        format!("Fn({parameters}){result}")
-    } else if ty.args.is_empty() {
-        ty.name.clone()
-    } else {
-        format!(
-            "{}<{}>",
-            ty.name,
-            ty.args.iter().map(type_name).collect::<Vec<_>>().join(", ")
-        )
-    };
-    let qualified = if ty.is_noescape {
-        format!("noescape {base}")
-    } else if ty.is_owned {
-        format!("owned {base}")
-    } else {
-        base
-    };
-    if ty.is_fresh {
-        format!("fresh {qualified}")
-    } else {
-        qualified
     }
 }
 

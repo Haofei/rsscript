@@ -1883,7 +1883,7 @@ name = "rsscript-provider-bindgen"
 version = "0.1.0"
 dependencies = [
  "rsscript-abi-model",
- "rsscript-syntax",
+ "rsscript-semantics",
 ]
 
 [[package]]
@@ -2029,6 +2029,7 @@ dependencies = [
  "rsscript-diagnostics",
  "rsscript-interface-catalog",
  "rsscript-syntax",
+ "serde",
 ]
 
 [[package]]

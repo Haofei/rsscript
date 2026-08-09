@@ -426,6 +426,10 @@ mechanical acceptance condition holds.
   `InterfaceDescriptor`; bindgen must not duplicate syntax/type normalization.
   - [ ] **P04.1 — Define `InterfaceDescriptorV1`.** Include canonical symbols,
     `WireType`, effects, retention, async shape, resources, and signature hashes.
+    - [x] **P04.1a — Introduce the versioned semantic function descriptor.**
+      `rsscript-semantics` owns `InterfaceDescriptorV1` with canonical external
+      symbols, structured signatures (WireType/effects/retention/async), and a
+      schema id. Resource descriptors and serialized snapshots follow in P04.2.
   - [ ] **P04.2 — Emit descriptors from semantic checking.** Snapshot descriptor
     bytes and ensure source aliases cannot alter canonical ABI facts.
   - [ ] **P04.3 — Replace bindgen source parsing.** Bindgen accepts only the

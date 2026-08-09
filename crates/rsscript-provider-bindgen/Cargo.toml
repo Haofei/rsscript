@@ -7,4 +7,4 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model" }
-rsscript-syntax = { path = "../rsscript-syntax" }
+rsscript-semantics = { path = "../rsscript-semantics" }
