@@ -487,8 +487,12 @@ mechanical acceptance condition holds.
     emits Rust `async fn` methods and matching `ProviderCallMode::Async` from
     the same semantic descriptor; regression coverage also proves take and
     retention contract facts remain present in generated registration metadata.
-  - [ ] **P05.3 — Generate resource wrappers and adapter glue.** Resource values
+  - [x] **P05.3 — Generate resource wrappers and adapter glue.** Resource values
     use typed generation-safe handles; adapters isolate `NativeValue` conversion.
+    Descriptor-declared resource names now map function parameters/results to
+    generated wrappers, including nested aggregate positions, while only each
+    wrapper's explicit `from_native`/`into_native` adapter touches the legacy
+    dynamic representation.
   - [ ] **P05.4 — Generate registration, mock, and completeness tests.** Provider
     implementations fail to compile or conformance-test when symbols drift.
 - [ ] **P06 — Tighten the canonical wire value model.** Replace JSON, string

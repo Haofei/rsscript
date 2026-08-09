@@ -107,7 +107,7 @@ impl ProviderInterface {
                     format!(
                         "{}: {}",
                         rust_identifier(&parameter.name),
-                        render_rust_type(&parameter.ty)
+                        render_rust_type(&parameter.ty, &self.resources)
                     )
                 })
                 .collect::<Vec<_>>()
@@ -122,7 +122,7 @@ impl ProviderInterface {
                 rust_identifier(&function.entry),
                 if parameters.is_empty() { "" } else { ", " },
                 parameters,
-                render_rust_type(&function.signature.result),
+                render_rust_type(&function.signature.result, &self.resources),
             ));
         }
         output
@@ -188,7 +188,7 @@ fn resource_wrapper_name(resource: &str) -> String {
     output
 }
 
-fn render_rust_type(ty: &WireType) -> String {
+fn render_rust_type(ty: &WireType, resources: &[InterfaceDescriptorResourceV1]) -> String {
     match ty {
         WireType::Unit => "()".into(),
         WireType::Bool => "bool".into(),
@@ -196,28 +196,43 @@ fn render_rust_type(ty: &WireType) -> String {
         WireType::Float { .. } => "f64".into(),
         WireType::String => "String".into(),
         WireType::Bytes => "Vec<u8>".into(),
-        WireType::List { element } => format!("Vec<{}>", render_rust_type(element)),
-        WireType::Option { value } => format!("Option<{}>", render_rust_type(value)),
+        WireType::List { element } => format!("Vec<{}>", render_rust_type(element, resources)),
+        WireType::Option { value } => format!("Option<{}>", render_rust_type(value, resources)),
         WireType::Result { ok, error } => format!(
             "Result<{}, {}>",
-            render_rust_type(ok),
-            render_rust_type(error)
+            render_rust_type(ok, resources),
+            render_rust_type(error, resources)
         ),
         WireType::Tuple { elements } => format!(
             "({})",
             elements
                 .iter()
-                .map(render_rust_type)
+                .map(|element| render_rust_type(element, resources))
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
-        WireType::Qualified { value, .. } => render_rust_type(value),
-        // Named data and resource handles require generated package-local
-        // wrappers; keep them in the adapter layer until P05.3 adds those.
-        WireType::Named { .. } | WireType::Resource { .. } | WireType::Handle { .. } => {
-            "rsscript_provider_api::NativeValue".into()
+        WireType::Qualified { value, .. } => render_rust_type(value, resources),
+        WireType::Named { name, .. } | WireType::Resource { name } | WireType::Handle { name } => {
+            resource_wrapper_for(name, resources)
+                .unwrap_or_else(|| "rsscript_provider_api::NativeValue".into())
         }
     }
+}
+
+fn resource_wrapper_for(
+    type_name: &str,
+    resources: &[InterfaceDescriptorResourceV1],
+) -> Option<String> {
+    resources
+        .iter()
+        .find(|resource| {
+            resource.name == type_name
+                || resource
+                    .name
+                    .rsplit_once('.')
+                    .is_some_and(|(_, local)| local == type_name)
+        })
+        .map(|resource| resource_wrapper_name(&resource.name))
 }
 
 fn render_signature(signature: &FunctionSignature) -> String {
@@ -373,6 +388,7 @@ mod tests {
         );
         assert!(rust.contains("ResourceHandle::from_native_id"));
         assert!(rust.contains("pub const TYPE_NAME: &'static str = \"host.fs.File\""));
+        assert!(rust.contains("fn open(&self, path: String) -> Result<hostfsFileHandle"));
     }
 
     #[test]
