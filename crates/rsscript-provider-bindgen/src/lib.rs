@@ -92,9 +92,30 @@ impl ProviderInterface {
         let mut output = String::from("// @generated from .rssi; do not edit.\n");
         output.push_str("pub trait GeneratedProviderContract {\n");
         for function in &self.functions {
+            let parameters = function
+                .signature
+                .parameters
+                .iter()
+                .map(|parameter| {
+                    format!(
+                        "{}: {}",
+                        rust_identifier(&parameter.name),
+                        render_rust_type(&parameter.ty)
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
             output.push_str(&format!(
-                "    fn {}(&self, args: Vec<rsscript_provider_api::NativeValue>) -> Result<rsscript_provider_api::NativeValue, rsscript_provider_api::ProviderError>;\n",
-                rust_identifier(&function.entry)
+                "    {}fn {}(&self{}{}) -> Result<{}, rsscript_provider_api::ProviderError>;\n",
+                if function.signature.asynchronous {
+                    "async "
+                } else {
+                    ""
+                },
+                rust_identifier(&function.entry),
+                if parameters.is_empty() { "" } else { ", " },
+                parameters,
+                render_rust_type(&function.signature.result),
             ));
         }
         output
@@ -124,6 +145,38 @@ impl ProviderInterface {
         }
         output.push_str("    ] }\n}\n");
         output
+    }
+}
+
+fn render_rust_type(ty: &WireType) -> String {
+    match ty {
+        WireType::Unit => "()".into(),
+        WireType::Bool => "bool".into(),
+        WireType::Int { .. } => "i64".into(),
+        WireType::Float { .. } => "f64".into(),
+        WireType::String => "String".into(),
+        WireType::Bytes => "Vec<u8>".into(),
+        WireType::List { element } => format!("Vec<{}>", render_rust_type(element)),
+        WireType::Option { value } => format!("Option<{}>", render_rust_type(value)),
+        WireType::Result { ok, error } => format!(
+            "Result<{}, {}>",
+            render_rust_type(ok),
+            render_rust_type(error)
+        ),
+        WireType::Tuple { elements } => format!(
+            "({})",
+            elements
+                .iter()
+                .map(render_rust_type)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        WireType::Qualified { value, .. } => render_rust_type(value),
+        // Named data and resource handles require generated package-local
+        // wrappers; keep them in the adapter layer until P05.3 adds those.
+        WireType::Named { .. } | WireType::Resource { .. } | WireType::Handle { .. } => {
+            "rsscript_provider_api::NativeValue".into()
+        }
     }
 }
 
@@ -252,6 +305,7 @@ mod tests {
             cleanup: GeneratedCleanup::None,
         });
         assert!(rust.contains("pub trait GeneratedProviderContract"));
+        assert!(rust.contains("fn get(&self, name: String) -> Result<Option<String>"));
         assert!(rust.contains("host.env.get"));
         assert!(rust.contains("WireType::Option"));
         assert!(rust.contains("WireType::String"));
