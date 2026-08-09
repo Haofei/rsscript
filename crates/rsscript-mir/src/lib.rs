@@ -10,7 +10,7 @@ use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt;
 
-use rsscript_abi_model::{ExternalSymbol, FunctionSignature};
+use rsscript_abi_model::{ExternalSymbol, FunctionSignature, WireType};
 
 macro_rules! mir_id {
     ($name:ident) => {
@@ -144,6 +144,37 @@ pub struct MirFunctionDebug {
     places: Vec<String>,
 }
 
+/// Resolved function ABI for backend consumption. Type identity is local to the
+/// MIR module; human-readable type spelling is deliberately absent here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MirFunctionSignature {
+    parameter_types: Vec<TypeId>,
+    result: TypeId,
+    asynchronous: bool,
+}
+
+impl MirFunctionSignature {
+    pub fn new(parameter_types: Vec<TypeId>, result: TypeId, asynchronous: bool) -> Self {
+        Self {
+            parameter_types,
+            result,
+            asynchronous,
+        }
+    }
+
+    pub fn parameter_types(&self) -> &[TypeId] {
+        &self.parameter_types
+    }
+
+    pub fn result(&self) -> TypeId {
+        self.result
+    }
+
+    pub fn is_async(&self) -> bool {
+        self.asynchronous
+    }
+}
+
 impl MirFunctionDebug {
     pub fn new(name: impl Into<String>, places: Vec<String>) -> Self {
         Self {
@@ -164,6 +195,7 @@ impl MirFunctionDebug {
 #[derive(Debug, Clone, PartialEq)]
 pub struct MirFunction {
     id: FunctionId,
+    signature: MirFunctionSignature,
     place_count: u32,
     value_count: u32,
     blocks: Vec<BasicBlock>,
@@ -172,12 +204,14 @@ pub struct MirFunction {
 impl MirFunction {
     pub fn new(
         id: FunctionId,
+        signature: MirFunctionSignature,
         place_count: u32,
         value_count: u32,
         blocks: Vec<BasicBlock>,
     ) -> Self {
         Self {
             id,
+            signature,
             place_count,
             value_count,
             blocks,
@@ -186,6 +220,10 @@ impl MirFunction {
 
     pub fn id(&self) -> FunctionId {
         self.id
+    }
+
+    pub fn signature(&self) -> &MirFunctionSignature {
+        &self.signature
     }
 
     pub fn place_count(&self) -> u32 {
@@ -232,6 +270,7 @@ impl MirExternalImport {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MirModule {
+    types: Vec<WireType>,
     functions: Vec<MirFunction>,
     function_debug: Vec<MirFunctionDebug>,
     external_imports: Vec<MirExternalImport>,
@@ -239,11 +278,13 @@ pub struct MirModule {
 
 impl MirModule {
     pub fn new(
+        types: Vec<WireType>,
         functions: Vec<MirFunction>,
         function_debug: Vec<MirFunctionDebug>,
         external_imports: Vec<MirExternalImport>,
     ) -> Result<Self, MirValidationError> {
         let module = Self {
+            types,
             functions,
             function_debug,
             external_imports,
@@ -254,6 +295,14 @@ impl MirModule {
 
     pub fn functions(&self) -> &[MirFunction] {
         &self.functions
+    }
+
+    pub fn types(&self) -> &[WireType] {
+        &self.types
+    }
+
+    pub fn ty(&self, id: TypeId) -> Option<&WireType> {
+        self.types.get(id.index())
     }
 
     pub fn function(&self, id: FunctionId) -> Option<&MirFunction> {
@@ -282,7 +331,12 @@ impl MirModule {
                     actual: function.id.index(),
                 });
             }
-            verify_function(function, self.functions.len(), self.external_imports.len())?;
+            verify_function(
+                function,
+                self.types.len(),
+                self.functions.len(),
+                self.external_imports.len(),
+            )?;
         }
         for (index, import) in self.external_imports.iter().enumerate() {
             if import.id.index() != index {
@@ -298,6 +352,7 @@ impl MirModule {
 
 fn verify_function(
     function: &MirFunction,
+    type_count: usize,
     function_count: usize,
     external_import_count: usize,
 ) -> Result<(), MirValidationError> {
@@ -305,6 +360,20 @@ fn verify_function(
         return Err(MirValidationError::EmptyFunction {
             function: function.id,
         });
+    }
+    for ty in function
+        .signature
+        .parameter_types()
+        .iter()
+        .copied()
+        .chain(std::iter::once(function.signature.result()))
+    {
+        if ty.index() >= type_count {
+            return Err(MirValidationError::InvalidType {
+                function: function.id,
+                ty,
+            });
+        }
     }
 
     let mut defined = BTreeSet::new();
@@ -463,6 +532,10 @@ pub enum MirValidationError {
         function: FunctionId,
         place: PlaceId,
     },
+    InvalidType {
+        function: FunctionId,
+        ty: TypeId,
+    },
     InvalidValueDefinition {
         function: FunctionId,
         value: ValueId,
@@ -489,10 +562,15 @@ mod tests {
         vec![MirFunctionDebug::new("main", vec!["value".into()])]
     }
 
+    fn signature() -> MirFunctionSignature {
+        MirFunctionSignature::new(Vec::new(), TypeId::new(0), false)
+    }
+
     #[test]
     fn accepts_a_typed_branching_function() {
         let function = MirFunction::new(
             FunctionId::new(0),
+            signature(),
             1,
             3,
             vec![
@@ -526,14 +604,31 @@ mod tests {
                 ),
             ],
         );
-        let module = MirModule::new(vec![function], debug(), Vec::new()).unwrap();
+        let module = MirModule::new(
+            vec![WireType::Int {
+                bits: 64,
+                signed: true,
+            }],
+            vec![function],
+            debug(),
+            Vec::new(),
+        )
+        .unwrap();
         assert_eq!(module.functions().len(), 1);
+        assert_eq!(
+            module.ty(TypeId::new(0)),
+            Some(&WireType::Int {
+                bits: 64,
+                signed: true
+            })
+        );
     }
 
     #[test]
     fn rejects_undefined_values_and_targets() {
         let function = MirFunction::new(
             FunctionId::new(0),
+            signature(),
             0,
             1,
             vec![BasicBlock::new(
@@ -547,8 +642,27 @@ mod tests {
             )],
         );
         assert!(matches!(
-            MirModule::new(vec![function], debug(), Vec::new()),
+            MirModule::new(vec![WireType::Unit], vec![function], debug(), Vec::new()),
             Err(MirValidationError::InvalidBlockTarget { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_function_signatures_that_reference_unknown_types() {
+        let function = MirFunction::new(
+            FunctionId::new(0),
+            MirFunctionSignature::new(Vec::new(), TypeId::new(1), false),
+            0,
+            0,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                Vec::new(),
+                MirTerminator::Return(None),
+            )],
+        );
+        assert!(matches!(
+            MirModule::new(vec![WireType::Unit], vec![function], debug(), Vec::new()),
+            Err(MirValidationError::InvalidType { .. })
         ));
     }
 }

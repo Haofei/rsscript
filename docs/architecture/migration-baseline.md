@@ -204,6 +204,9 @@ mechanical acceptance condition holds.
   - [ ] **M01.2 — Lower semantic names and `WireType` references into IDs.**
     Backend inputs contain resolved function, external symbol, builtin, and
     resource identities only.
+    - [x] **M01.2a — Add the initial module type table.** Function parameter and
+      result types are interned as `TypeId` values during the executable-IR
+      bridge; builtin and resource identities remain follow-up work.
   - [ ] **M01.3 — Add stable display/debug/source-map side tables.** Human names
     remain available without becoming executable identity.
     - [x] **M01.3a — Add initial debug names.** Function/place debug names are

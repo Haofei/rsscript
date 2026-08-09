@@ -5,16 +5,18 @@
 //! without pretending that resources, structured async, or external calls have
 //! already migrated. Unsupported nodes fail closed and stay on the legacy path.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt;
 
+use rsscript_abi_model::WireType;
 use rsscript_exec_ir::{
     BinaryOp, ExecutableExpr, ExecutableFunction, ExecutableIr, ExecutableStmt,
 };
 use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirBinaryOp, MirExternalImport, MirFunction, MirFunctionDebug,
-    MirInstruction, MirLiteral, MirModule, MirTerminator, PlaceId, ValueId,
+    MirFunctionSignature, MirInstruction, MirLiteral, MirModule, MirTerminator, PlaceId, TypeId,
+    ValueId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,10 +59,16 @@ pub fn lower_executable_ir_to_mir(
     executable: &ExecutableIr,
 ) -> Result<MirModule, MirLoweringError> {
     let functions = executable.functions().collect::<Vec<_>>();
+    let mut types = TypeTable::default();
+    let signatures = functions
+        .iter()
+        .map(|function| types.function_signature(&function.signature))
+        .collect::<Vec<_>>();
     let mut lowered = Vec::with_capacity(functions.len());
     let mut debug = Vec::with_capacity(functions.len());
-    for (index, function) in functions.iter().enumerate() {
-        let output = FunctionLowerer::new(FunctionId::new(index as u32), function).lower()?;
+    for ((index, function), signature) in functions.iter().enumerate().zip(signatures) {
+        let output =
+            FunctionLowerer::new(FunctionId::new(index as u32), function, signature).lower()?;
         lowered.push(output.function);
         debug.push(output.debug);
     }
@@ -76,7 +84,50 @@ pub fn lower_executable_ir_to_mir(
             )
         })
         .collect();
-    Ok(MirModule::new(lowered, debug, imports)?)
+    Ok(MirModule::new(types.into_types(), lowered, debug, imports)?)
+}
+
+#[derive(Default)]
+struct TypeTable {
+    ids: BTreeMap<WireType, TypeId>,
+    types: Vec<WireType>,
+}
+
+impl TypeTable {
+    fn function_signature(
+        &mut self,
+        signature: &rsscript_exec_ir::ExecutableSignature,
+    ) -> MirFunctionSignature {
+        MirFunctionSignature::new(
+            signature
+                .params
+                .iter()
+                .map(|parameter| self.intern(WireType::parse(&parameter.type_name)))
+                .collect(),
+            self.intern(
+                signature
+                    .return_type
+                    .as_deref()
+                    .map(WireType::parse)
+                    .unwrap_or(WireType::Unit),
+            ),
+            signature.is_async,
+        )
+    }
+
+    fn intern(&mut self, ty: WireType) -> TypeId {
+        if let Some(id) = self.ids.get(&ty) {
+            return *id;
+        }
+        let id = TypeId::new(self.types.len() as u32);
+        self.types.push(ty.clone());
+        self.ids.insert(ty, id);
+        id
+    }
+
+    fn into_types(self) -> Vec<WireType> {
+        self.types
+    }
 }
 
 struct LoweredFunction {
@@ -106,6 +157,7 @@ struct LoopTargets {
 struct FunctionLowerer<'a> {
     id: FunctionId,
     source: &'a ExecutableFunction,
+    signature: MirFunctionSignature,
     blocks: Vec<BlockDraft>,
     current: BlockId,
     places: HashMap<String, PlaceId>,
@@ -115,10 +167,15 @@ struct FunctionLowerer<'a> {
 }
 
 impl<'a> FunctionLowerer<'a> {
-    fn new(id: FunctionId, source: &'a ExecutableFunction) -> Self {
+    fn new(
+        id: FunctionId,
+        source: &'a ExecutableFunction,
+        signature: MirFunctionSignature,
+    ) -> Self {
         let mut lowerer = Self {
             id,
             source,
+            signature,
             blocks: vec![BlockDraft::new()],
             current: BlockId::new(0),
             places: HashMap::new(),
@@ -152,6 +209,7 @@ impl<'a> FunctionLowerer<'a> {
         Ok(LoweredFunction {
             function: MirFunction::new(
                 self.id,
+                self.signature,
                 self.place_names.len() as u32,
                 self.next_value,
                 blocks,
@@ -528,6 +586,14 @@ mod tests {
 
         let mir = lower_executable_ir_to_mir(&executable).unwrap();
         assert_eq!(mir.functions().len(), 1);
+        assert_eq!(
+            mir.types(),
+            &[WireType::Int {
+                bits: 64,
+                signed: true
+            }]
+        );
+        assert_eq!(mir.functions()[0].signature().result(), TypeId::new(0));
         assert!(mir.functions()[0].blocks().len() >= 4);
         mir.verify().unwrap();
     }
