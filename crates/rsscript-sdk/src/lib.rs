@@ -2,7 +2,12 @@
 
 // Public exports are deliberately explicit so adding a compiler, bytecode, or
 // VM symbol cannot silently expand the embedding contract.
+#[cfg(feature = "compatibility")]
 pub use rsscript_compiler::syntax;
+#[cfg(not(feature = "compatibility"))]
+#[allow(unused_imports)]
+use rsscript_compiler::*;
+#[cfg(feature = "compatibility")]
 pub use rsscript_compiler::{
     AnalysisResult, CommitBehavior, Completion, CompletionKind, ContinuationOptions, Continuations,
     Definition, Diagnostic, DiagnosticExplanation, Effect, ExpectedType, Fix, FixEdit,
@@ -26,6 +31,10 @@ pub use rsscript_compiler::{
 };
 
 #[cfg(feature = "execution")]
+#[cfg(not(feature = "compatibility"))]
+#[allow(unused_imports)]
+use rsscript_bytecode::*;
+#[cfg(feature = "compatibility")]
 pub use rsscript_bytecode::{
     BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,
     BytecodeArtifact, BytecodeCompatibility, BytecodeError, BytecodeErrorCode, BytecodeHeader,
@@ -33,6 +42,10 @@ pub use rsscript_bytecode::{
     VerificationContext, VerifiedBytecode, decode_executable_payload, encode_executable_payload,
 };
 #[cfg(feature = "execution")]
+#[cfg(not(feature = "compatibility"))]
+#[allow(unused_imports)]
+use rsscript_compiler::*;
+#[cfg(feature = "compatibility")]
 pub use rsscript_compiler::{
     ArtifactStore, CompiledIr, ExecutablePackageSnapshot, GeneratedRustPackage,
     LowerCoverageReport, LoweredRust, NativeRustDependency, PackageAnalysis,
@@ -72,6 +85,10 @@ pub use rsscript_compiler::{
 #[cfg(feature = "native-jit")]
 pub use rsscript_vm::NativeStats;
 #[cfg(feature = "execution")]
+#[cfg(not(feature = "compatibility"))]
+#[allow(unused_imports)]
+use rsscript_vm::*;
+#[cfg(feature = "compatibility")]
 pub use rsscript_vm::{
     AsyncInterpreterFn, AsyncProviderCallContext, BlockingBehavior, CancellationBehavior,
     CoverageBucket, EvalError, EvalExecutionReport, EvalOutput, ExecutionFailureKind,
@@ -89,6 +106,7 @@ mod artifact_bundle;
 #[cfg(feature = "execution")]
 mod semantic_diff;
 #[cfg(feature = "execution")]
+#[allow(dead_code)]
 mod vm_adapter;
 #[cfg(feature = "execution")]
 pub use artifact_bundle::{
@@ -109,6 +127,10 @@ use std::path::Path;
 #[cfg(feature = "execution")]
 use std::time::{Duration, Instant};
 #[cfg(feature = "execution")]
+#[cfg(not(feature = "compatibility"))]
+#[allow(unused_imports)]
+use vm_adapter::*;
+#[cfg(feature = "compatibility")]
 pub use vm_adapter::{
     reg_vm_compile_mir, reg_vm_compile_package, reg_vm_compile_package_input,
     reg_vm_compile_source, reg_vm_compile_validated, reg_vm_eval_package_main_with_args,
@@ -164,16 +186,21 @@ pub mod artifact {
         ArtifactVerifier, BuildProvenanceV1, BuiltArtifact, InterfaceRequirementV1,
         VerifiedArtifact, VerifyError,
     };
+    pub use rsscript_bytecode::{
+        BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,
+        BytecodeArtifact, BytecodeHeader, BytecodeVerifier,
+    };
 }
 
 #[cfg(feature = "execution")]
 /// Reviewed Provider registration and host-call contract types.
 pub mod provider_api {
-    pub use super::{
+    pub use super::ProviderRegistry;
+    pub use rsscript_provider_api::{
         BlockingBehavior, CancellationBehavior, ExternalSymbol, FunctionSignature, HostCallContext,
         NativeInterpreterFn, NativeValue, ProviderCallContext, ProviderCallMode,
         ProviderDescriptor, ProviderError, ProviderErrorCode, ProviderFunction,
-        ProviderFunctionDescriptor, ProviderLoadError, ProviderRegistry, ResourceHandle,
+        ProviderFunctionDescriptor, ProviderLoadError, ResourceHandle,
     };
 }
 
@@ -197,11 +224,18 @@ pub mod report {
 pub mod analysis {
     pub use super::{SEMANTIC_DIFF_SCHEMA, SemanticDiffV1};
 }
+#[cfg(not(feature = "compatibility"))]
+#[allow(unused_imports)]
+use rsscript_operation::*;
+#[cfg(feature = "compatibility")]
 pub use rsscript_operation::{
     CancellationToken, MonotonicDeadline, OperationAbort, OperationContext, OperationId,
 };
 #[cfg(feature = "execution")]
+#[cfg(feature = "compatibility")]
 pub use rsscript_provider_api as provider;
+#[cfg(all(feature = "execution", not(feature = "compatibility")))]
+use rsscript_provider_api as provider;
 
 #[derive(Default)]
 pub struct Compiler;
@@ -503,6 +537,12 @@ impl VerifiedArtifact {
 
     pub fn external_imports(&self) -> &[ExternalImport] {
         &self.executable.bytecode_artifact().imports
+    }
+
+    /// Verified bytecode metadata for inspection tools. Execution remains
+    /// available only through the linked runtime stage.
+    pub fn bytecode_artifact(&self) -> &BytecodeArtifact {
+        self.executable.bytecode_artifact()
     }
 }
 

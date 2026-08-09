@@ -9,9 +9,10 @@ same change.
 
 The stable façade is exposed through the explicit `compile`, `artifact`,
 `provider_api`, `runtime`, `report`, `analysis`, and `operation` modules.
-New embedding documentation and first-party applications use these modules;
-the transitional root exports are removed only by A03.3 after compatibility
-callers have migrated.
+New embedding documentation and first-party applications use these modules.
+The transitional root exports are available only through the explicit
+`compatibility` feature while the MIR differential corpus migrates; they are
+not part of the default or `execution` SDK surface.
 
 - Compilation and diagnostics: `Compiler`, `CompileError`, checked source and
   language-service query types.
@@ -27,9 +28,11 @@ callers have migrated.
 
 ## Compatibility-only APIs
 
-The `reg_vm_*` helpers and `RegVmExecutable` are retained only while the MIR
+The `reg_vm_*` helpers, `RegVmExecutable`, package review/risk types, and raw
+bytecode helpers are retained only behind `compatibility` while the MIR
 migration runs its old/new differential corpus. They are deliberately hidden
-from rustdoc and must not be used as new embedding entry points.
+from the reviewed default surface and must not be used as new embedding entry
+points.
 
 ## Feature-gated experimental APIs
 

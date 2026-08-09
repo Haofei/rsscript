@@ -105,4 +105,16 @@ fn public_api_inventory_covers_the_current_migration_surface() {
         source.contains("#[cfg(feature = \"native-jit\")]\npub use vm_adapter"),
         "native JIT execution helpers must remain feature-gated"
     );
+    for legacy_export in [
+        "pub use rsscript_compiler::{",
+        "pub use rsscript_bytecode::{",
+        "pub use rsscript_vm::{",
+        "pub use vm_adapter::{",
+    ] {
+        let gated = format!("#[cfg(feature = \"compatibility\")]\n{legacy_export}");
+        assert!(
+            source.contains(&gated),
+            "legacy root export must require the compatibility feature: {legacy_export}"
+        );
+    }
 }

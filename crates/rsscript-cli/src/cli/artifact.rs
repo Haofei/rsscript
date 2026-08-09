@@ -4,8 +4,12 @@ use std::process::ExitCode;
 
 use rsscript_compiler::{PackageAnalysis, analyze_package_dir, format_package_analysis_json};
 use rsscript_sdk::{
-    ARTIFACT_BUNDLE_MAGIC, ArtifactBundle, ArtifactVerifier, BYTECODE_MAGIC, BuiltArtifact,
-    Compiler, RegVmExecutable, SemanticDiffV1,
+    analysis::SemanticDiffV1,
+    artifact::{
+        ARTIFACT_BUNDLE_MAGIC, ArtifactBundle, ArtifactVerifier, BYTECODE_MAGIC, BuiltArtifact,
+        BytecodeArtifact, BytecodeVerifier,
+    },
+    compile::Compiler,
 };
 use serde_json::json;
 
@@ -192,14 +196,13 @@ pub(crate) fn run_inspect(args: &[String]) -> ExitCode {
 }
 
 fn inspect_bytecode(view: &str, json_output: bool, input: &str) -> ExitCode {
-    let executable = match load_or_compile(input) {
-        Ok(executable) => executable,
+    let artifact = match load_or_compile(input) {
+        Ok(artifact) => artifact,
         Err(error) => {
             eprintln!("{error}");
             return ExitCode::from(1);
         }
     };
-    let artifact = executable.bytecode_artifact();
     if view == "imports" {
         if json_output {
             println!(
@@ -352,21 +355,29 @@ fn resource_json(analysis: &PackageAnalysis) -> serde_json::Value {
     })
 }
 
-fn load_or_compile(input: &str) -> Result<RegVmExecutable, String> {
+fn load_or_compile(input: &str) -> Result<BytecodeArtifact, String> {
     let path = Path::new(input);
     if path.is_file() {
         let bytes = fs::read(path).map_err(|error| format!("cannot read {input}: {error}"))?;
         if bytes.starts_with(ARTIFACT_BUNDLE_MAGIC) {
             let bundle = ArtifactBundle::from_bytes(&bytes).map_err(|error| error.to_string())?;
-            return RegVmExecutable::from_bytecode(bundle.artifact_bytes())
-                .map_err(|error| format!("{error:?}"));
+            return ArtifactVerifier
+                .verify_bundle(bundle)
+                .map(|verified| verified.bytecode_artifact().clone())
+                .map_err(|error| error.to_string());
         }
         if bytes.starts_with(BYTECODE_MAGIC) {
-            return RegVmExecutable::from_bytecode(&bytes).map_err(|error| format!("{error:?}"));
+            return BytecodeVerifier::default()
+                .verify(&bytes)
+                .map(|verified| verified.into_artifact())
+                .map_err(|error| error.to_string());
         }
     }
     let built = build_input(input)?;
-    RegVmExecutable::from_bytecode(built.artifact_bytes()).map_err(|error| format!("{error:?}"))
+    ArtifactVerifier
+        .verify(built)
+        .map(|verified| verified.bytecode_artifact().clone())
+        .map_err(|error| error.to_string())
 }
 
 fn parse_build_args(args: &[String]) -> Result<(&str, Option<&str>, Option<&str>), String> {

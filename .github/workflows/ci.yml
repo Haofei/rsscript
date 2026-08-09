@@ -49,7 +49,9 @@ jobs:
           cargo clippy --locked -p rsscript-sdk --all-targets --features execution -- -D warnings
           cargo clippy --locked -p rsscript-cli --all-targets --features execution -- -D warnings
           cargo test --locked
-          cargo test --locked -p rsscript-sdk --features execution
+          # `execution` is the reviewed façade build; the migration corpus
+          # additionally enables its explicit legacy-compatibility feature.
+          cargo test --locked -p rsscript-sdk --features compatibility
           cargo test --locked -p rsscript-cli --features execution
 
   core-platform-security:

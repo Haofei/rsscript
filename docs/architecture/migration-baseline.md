@@ -515,8 +515,11 @@ mechanical acceptance condition holds.
       `provider_api`, `runtime`, `report`, `analysis`, and `operation` now
       provide the reviewed embedding surface; root compatibility exports remain
       until A03.3 migrates legacy callers behind opt-in modules.
-  - [ ] **A03.3 — Move compatibility and experimental APIs behind opt-in modules.**
+  - [x] **A03.3 — Move compatibility and experimental APIs behind opt-in modules.**
     JIT, AOT, review/risk, register VM, and opcode APIs disappear from defaults.
+    The transitional root surface is now gated by the explicit `compatibility`
+    feature; the default and `execution` builds expose the reviewed façade
+    modules only, while the migration corpus opts in deliberately.
   - [ ] **A03.4 — Add public API snapshots.** CI rejects unreviewed stable-surface
     growth and validates feature combinations.
 - [ ] **A04 — Remove invalid phase states and report-losing paths.** Public types

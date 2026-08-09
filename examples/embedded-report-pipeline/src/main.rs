@@ -4,12 +4,15 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::sync::{Arc, Mutex};
 
-use rsscript_compiler::provider::{
+use rsscript_compiler::provider_api::{
     ExternalSymbol, NativeInterpreterFn, NativeValue, ProviderError, ProviderErrorCode,
     ProviderFunction,
 };
 use rsscript_compiler::{
-    ArtifactVerifier, Compiler, ExecutionRequest, ProviderRegistry, RunLimits, Runtime, TracePolicy,
+    artifact::ArtifactVerifier,
+    compile::Compiler,
+    provider_api::ProviderRegistry,
+    runtime::{ExecutionRequest, RunLimits, Runtime, TracePolicy},
 };
 use sha2::{Digest, Sha256};
 

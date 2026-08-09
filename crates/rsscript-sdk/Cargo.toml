@@ -9,6 +9,11 @@ autotests = false
 
 [features]
 default = []
+# Transitional root-level exports for the migration corpus and downstream
+# callers that have not yet moved to the reviewed façade modules. New embeds
+# must use `compile`, `artifact`, `provider_api`, `runtime`, `report`, and
+# `operation` instead.
+compatibility = ["execution"]
 execution = [
     "dep:rsscript-abi-model",
     "rsscript_compiler/execution",
@@ -19,7 +24,7 @@ execution = [
     "dep:rsscript-provider-api",
     "dep:rsscript-vm",
 ]
-native-jit = ["execution", "rsscript-vm/native-jit"]
+native-jit = ["compatibility", "rsscript-vm/native-jit"]
 
 [dependencies]
 rsscript-abi-model = { path = "../rsscript-abi-model", optional = true }
@@ -54,32 +59,32 @@ toml = "0.8"
 [[test]]
 name = "static"
 path = "tests/static.rs"
-required-features = ["execution"]
+required-features = ["compatibility"]
 
 [[test]]
 name = "architecture"
 path = "tests/architecture.rs"
-required-features = ["execution"]
+required-features = ["compatibility"]
 
 [[test]]
 name = "runtime"
 path = "tests/runtime.rs"
-required-features = ["execution"]
+required-features = ["compatibility"]
 
 [[test]]
 name = "schema_contracts"
 path = "tests/schema_contracts.rs"
-required-features = ["execution"]
+required-features = ["compatibility"]
 
 [[test]]
 name = "differential"
 path = "tests/differential.rs"
-required-features = ["execution"]
+required-features = ["compatibility"]
 
 [[test]]
 name = "soak"
 path = "tests/soak.rs"
-required-features = ["execution"]
+required-features = ["compatibility"]
 
 [[test]]
 name = "jit_cost_model"
@@ -94,14 +99,14 @@ required-features = ["native-jit"]
 [[test]]
 name = "execution_report_schema"
 path = "tests/execution_report_schema.rs"
-required-features = ["execution"]
+required-features = ["compatibility"]
 
 [[test]]
 name = "migration_baseline"
 path = "tests/migration_baseline.rs"
-required-features = ["execution"]
+required-features = ["compatibility"]
 
 [[test]]
 name = "mir_migration"
 path = "tests/mir_migration.rs"
-required-features = ["execution"]
+required-features = ["compatibility"]

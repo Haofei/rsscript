@@ -11,8 +11,11 @@ use rsscript_runner_protocol::{
     RunnerTerminationV1, read_request, read_response, write_request, write_response,
 };
 use rsscript_sdk::{
-    ArtifactBundle, ArtifactVerifier, Compiler, ExecutionRequest, MonotonicDeadline,
-    ProviderRegistry, RunLimits, Runtime, TracePolicy,
+    artifact::{ARTIFACT_BUNDLE_MAGIC, ArtifactBundle, ArtifactVerifier},
+    compile::Compiler,
+    operation::MonotonicDeadline,
+    provider_api::ProviderRegistry,
+    runtime::{ExecutionRequest, RunLimits, Runtime, TracePolicy},
 };
 
 use super::{is_package_directory, read_cli_source};
@@ -85,7 +88,7 @@ pub(crate) fn run_trusted_in_process(path: &str, program_args: &[&str], json: bo
 fn build_bundle(path: &str) -> Result<ArtifactBundle, String> {
     if Path::new(path).is_file() {
         let bytes = fs::read(path).map_err(|error| format!("cannot read {path}: {error}"))?;
-        if bytes.starts_with(rsscript_sdk::ARTIFACT_BUNDLE_MAGIC) {
+        if bytes.starts_with(ARTIFACT_BUNDLE_MAGIC) {
             return ArtifactBundle::from_bytes(&bytes).map_err(|error| error.to_string());
         }
     }
