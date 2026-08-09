@@ -553,7 +553,7 @@ mechanical acceptance condition holds.
   snapshot now guard the complete supported SDK surface.
   - [x] **A03.1 — Inventory the existing SDK surface.** Classify each export as
     stable façade, compatibility-only, experimental, or internal.
-  - [ ] **A03.2 — Create explicit façade modules.** Expose only compile,
+  - [x] **A03.2 — Create explicit façade modules.** Expose only compile,
     artifact, provider, runtime, report, diagnostics, and operation APIs.
     - [x] **A03.2a — Publish reviewed module paths.** `compile`, `artifact`,
       `provider_api`, `runtime`, `report`, `analysis`, and `operation` now
