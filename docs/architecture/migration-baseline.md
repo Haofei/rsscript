@@ -406,7 +406,7 @@ mechanical acceptance condition holds.
   semantics, bytecode ISA, Core library ABI, Provider ABI, analysis schema, and
   compiler provenance have explicit independent values. Language compatibility
   must not be inferred from `CARGO_PKG_VERSION`.
-  - [ ] **B04.1 — Declare independent compatibility constants.** Define container,
+  - [x] **B04.1 — Declare independent compatibility constants.** Define container,
     language, ISA, Core library, Provider, analysis, and provenance versions.
     - [x] **B04.1a — Separate language semantics from compiler provenance.** v1
       artifacts emit `LANGUAGE_SEMANTICS_VERSION`; the verifier accepts the
@@ -419,9 +419,11 @@ mechanical acceptance condition holds.
       independently before payload validation. Artifact bundles also accept
       only explicit source/package analysis schema IDs at their owning
       boundary; compiler provenance remains provenance-only.
-  - [ ] **B04.2 — Validate each version at its owning boundary.** Verify container
-    at decode, language/ISA at program verification, Core library at load, and
-    Provider ABI at link.
+  - [x] **B04.2 — Validate each version at its owning boundary.** Container
+    magic/sections validate at decode; bundle loading validates the analysis
+    schema allowlist; the bytecode verifier validates language, ISA, and Core
+    library ABI before payload loading; Provider ABI continues to validate at
+    link. Focused malformed/unknown-version tests exercise fail-closed paths.
   - [ ] **B04.3 — Add supported-range fixtures.** Cover accepted N/N-1 inputs and
     unknown major versions that must fail closed.
     - [x] **B04.3a — Exercise declared language ranges and container rejection.**
