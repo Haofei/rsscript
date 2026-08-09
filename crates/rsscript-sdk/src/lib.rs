@@ -109,8 +109,8 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 #[cfg(feature = "execution")]
 pub use vm_adapter::{
-    reg_vm_compile_package, reg_vm_compile_package_input, reg_vm_compile_source,
-    reg_vm_compile_validated, reg_vm_eval_package_main_with_args,
+    reg_vm_compile_mir, reg_vm_compile_package, reg_vm_compile_package_input,
+    reg_vm_compile_source, reg_vm_compile_validated, reg_vm_eval_package_main_with_args,
     reg_vm_eval_package_main_with_args_and_external_bindings,
     reg_vm_eval_package_main_with_args_and_external_bindings_and_limits,
     reg_vm_eval_package_main_with_args_and_external_bindings_streaming_stdout,

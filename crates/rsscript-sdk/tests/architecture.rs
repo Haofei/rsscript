@@ -1357,6 +1357,7 @@ fn vm_core_consumes_owned_ir_not_frontend_internals() {
         "calls.rs",
         "exec.rs",
         "lower.rs",
+        "mir_codegen.rs",
         "model.rs",
         "scheduler.rs",
     ] {
@@ -1380,6 +1381,7 @@ fn vm_core_consumes_owned_ir_not_frontend_internals() {
     for required in [
         "rsscript-bytecode",
         "rsscript-exec-ir",
+        "rsscript-mir",
         "rsscript-provider-api",
     ] {
         assert!(
@@ -1406,6 +1408,31 @@ fn vm_core_consumes_owned_ir_not_frontend_internals() {
         dependency_packages(&ir_manifest),
         BTreeSet::from(["rsscript-abi-model".to_string()]),
         "owned executable IR must remain independent of frontend and runtime crates"
+    );
+}
+
+#[test]
+fn mir_codegen_reaches_the_verified_vm_without_executable_ir() {
+    let root = workspace_root();
+    let codegen = read(&root.join("crates/rsscript-vm/src/reg_vm/mir_codegen.rs"));
+    for forbidden in ["rsscript_exec_ir", "ExecutableIr", "ExecutableStmt", "Hir"] {
+        assert!(
+            !codegen.contains(forbidden),
+            "MIR codegen must not reconstruct legacy frontend/executable state `{forbidden}`"
+        );
+    }
+    for required in ["MirModule", "MirInstruction", "MirTerminator", "CallKnown"] {
+        assert!(
+            codegen.contains(required),
+            "MIR codegen must lower verified MIR fact `{required}`"
+        );
+    }
+    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+    let compile_mir = function_source(&vm, "pub fn compile_mir");
+    assert!(
+        compile_mir.contains("mir_codegen::lower")
+            && compile_mir.contains("encode_and_verify_with_imports"),
+        "MIR compilation must pass through codegen and the ordinary bytecode verifier"
     );
 }
 

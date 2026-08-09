@@ -11,6 +11,7 @@ rsscript-abi-model = { path = "../rsscript-abi-model" }
 rsscript-bytecode = { path = "../rsscript-bytecode" }
 rsscript-diagnostics = { path = "../rsscript-diagnostics" }
 rsscript-exec-ir = { path = "../rsscript-exec-ir" }
+rsscript-mir = { path = "../rsscript-mir" }
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-provider-api = { path = "../rsscript-provider-api" }
 rsscript-text = { path = "../rsscript-text" }

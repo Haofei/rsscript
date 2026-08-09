@@ -279,7 +279,13 @@ mechanical acceptance condition holds.
     - [x] **M05.1a — Establish the dual-path harness.** Declarative capability
       stages and pure-control-flow fixtures compile, verify, execute through the
       test-only MIR reference interpreter, and compare return values with the
-      legacy VM. Error, usage, and report parity remain follow-up work.
+      legacy VM.
+    - [x] **M05.1b — Close the initial MIR/VM bytecode loop.** The same scalar,
+      CFG, direct-call, `read`, `mut`, and `take` fixtures now compile MIR
+      directly to a bytecode artifact, pass the ordinary bytecode verifier, and
+      execute in the existing VM before their values are compared with both
+      older paths. Error, usage, cleanup, and async/provider report parity
+      remain follow-up work.
   - [ ] **M05.2 — Add ownership/resource differential fixtures.** Compare move
     failures, retain behavior, cleanup counts, and resource limits.
   - [ ] **M05.3 — Add async/provider differential fixtures.** Compare task
@@ -302,6 +308,11 @@ mechanical acceptance condition holds.
     MIR, ABI, and bytecode model but not VM, compiler, syntax, package, or SDK.
   - [ ] **V02.2 — Lower the scalar MIR subset to bytecode.** Preserve source maps
     and deterministic module ordering.
+    - [x] **V02.2a — Prove the transitional VM-local adapter.** The current
+      MIR-only adapter emits the scalar CFG and direct-call subset through the
+      existing verified bytecode envelope. It is deliberately housed in the VM
+      only until `rsscript-codegen-vm` can own the wire model without exposing
+      VM-private register structures.
   - [ ] **V02.3 — Lower resources, async, builtins, and external calls.** Add
     codegen fixtures for every Core MIR instruction.
   - [ ] **V02.4 — Switch SDK build to codegen-vm.** Remove VM compile helpers

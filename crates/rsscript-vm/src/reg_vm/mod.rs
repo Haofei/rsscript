@@ -83,6 +83,7 @@ mod exec;
 mod execution_plan;
 mod intrinsics;
 mod lower;
+mod mir_codegen;
 mod model;
 #[cfg(feature = "native-jit")]
 mod native;
@@ -145,6 +146,42 @@ pub fn compile_executable_ir(
     let unit = RegUnit::lower(executable)?;
     let verified =
         bytecode::encode_and_verify(&unit, source_hash, interface_catalog_digest, executable)?;
+    let (artifact, unit) = verified.into_parts();
+    Ok(RegVmExecutable {
+        unit: Rc::new(unit),
+        artifact,
+    })
+}
+
+/// Compile the currently supported typed MIR subset into a verified VM
+/// artifact. Unlike [`compile_executable_ir`], this path consumes no
+/// executable IR, AST, HIR, or semantic database.
+///
+/// The MIR code generator deliberately rejects constructs whose VM lowering
+/// contract has not migrated yet. Its output is always encoded and reloaded
+/// through the normal bytecode verifier before it becomes executable.
+pub fn compile_mir(
+    mir: &rsscript_mir::MirModule,
+    source_hash: &str,
+    interface_catalog_digest: &str,
+) -> Result<RegVmExecutable, EvalError> {
+    let unit = mir_codegen::lower(mir)?;
+    let imports = mir
+        .external_imports()
+        .iter()
+        .map(|import| rsscript_abi_model::ExternalImport {
+            symbol: import.symbol().clone(),
+            signature: import.signature().clone(),
+            signature_hash: import.signature().hash(),
+            abi_version: rsscript_abi_model::RUNTIME_ABI_VERSION,
+        })
+        .collect();
+    let verified = bytecode::encode_and_verify_with_imports(
+        &unit,
+        source_hash,
+        interface_catalog_digest,
+        imports,
+    )?;
     let (artifact, unit) = verified.into_parts();
     Ok(RegVmExecutable {
         unit: Rc::new(unit),

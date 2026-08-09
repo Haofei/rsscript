@@ -2,11 +2,12 @@
 //!
 //! Add a capability by declaring its stage and a small source case. A
 //! `DualPath` case must compile to verified MIR and produce the same result in
-//! the legacy VM and the feature-gated MIR reference interpreter.
+//! the legacy VM, the feature-gated MIR reference interpreter, and the
+//! verified-bytecode VM emitted directly from MIR.
 
 use rsscript_compiler::compile_source_to_ir;
 use rsscript_mir::conformance::{MigrationCase, MigrationStage, execute_named};
-use rsscript_sdk::reg_vm_eval_source_main;
+use rsscript_sdk::{reg_vm_compile_mir, reg_vm_eval_source_main};
 
 const CASES: &[MigrationCase] = &[
     MigrationCase {
@@ -148,12 +149,35 @@ fn dual_path_cases_match_the_legacy_vm() {
             .unwrap_or_else(|error| {
                 panic!("{} must execute in the legacy VM: {error:?}", case.name)
             });
+        let mir_vm = reg_vm_compile_mir(
+            &mir,
+            compiled.source_hash(),
+            compiled.interface_catalog_digest(),
+        )
+        .unwrap_or_else(|error| {
+            panic!(
+                "{} must emit verified bytecode directly from MIR: {error:?}",
+                case.name
+            )
+        })
+        .eval_main_with_args(std::iter::empty::<String>())
+        .unwrap_or_else(|error| {
+            panic!(
+                "{} MIR-produced bytecode must execute in the VM: {error:?}",
+                case.name
+            )
+        });
         assert_eq!(
             legacy.value,
             mir_value.render(),
             "legacy/MIR divergence for {} ({})",
             case.name,
             case.capability
+        );
+        assert_eq!(
+            legacy.value, mir_vm.value,
+            "legacy/MIR-bytecode VM divergence for {} ({})",
+            case.name, case.capability
         );
     }
 }

@@ -15,6 +15,7 @@ execution = [
     "dep:rsscript-bytecode",
     "dep:rsscript-interface-catalog",
     "dep:rsscript-lowering",
+    "dep:rsscript-mir",
     "dep:rsscript-provider-api",
     "dep:rsscript-vm",
 ]
@@ -27,6 +28,7 @@ rsscript-operation = { path = "../rsscript-operation" }
 rsscript-bytecode = { path = "../rsscript-bytecode", optional = true }
 rsscript-interface-catalog = { path = "../rsscript-interface-catalog", optional = true }
 rsscript-lowering = { path = "../rsscript-lowering", optional = true }
+rsscript-mir = { path = "../rsscript-mir", optional = true }
 rsscript-provider-api = { path = "../rsscript-provider-api", optional = true }
 rsscript-vm = { path = "../rsscript-vm", optional = true, default-features = false }
 serde = { version = "1", features = ["derive"] }

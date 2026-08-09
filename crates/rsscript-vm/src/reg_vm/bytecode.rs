@@ -130,9 +130,22 @@ pub(super) fn encode_and_verify(
     interface_catalog_digest: &str,
     executable: &rsscript_exec_ir::ExecutableIr,
 ) -> Result<VerifiedRegBytecode, EvalError> {
+    encode_and_verify_with_imports(
+        unit,
+        source_content_hash,
+        interface_catalog_digest,
+        external_imports(unit, executable),
+    )
+}
+
+pub(super) fn encode_and_verify_with_imports(
+    unit: &RegUnit,
+    source_content_hash: &str,
+    interface_catalog_digest: &str,
+    imports: Vec<ExternalImport>,
+) -> Result<VerifiedRegBytecode, EvalError> {
     let payload = rsscript_bytecode::encode_executable_payload(&WireUnit::from(unit))
         .map_err(|error| EvalError::Runtime(format!("cannot encode VM bytecode: {error}")))?;
-    let imports = external_imports(unit, executable);
     let artifact = BytecodeArtifact::new(
         env!("CARGO_PKG_VERSION"),
         env!("CARGO_PKG_VERSION"),

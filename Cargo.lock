@@ -2168,6 +2168,7 @@ dependencies = [
  "rsscript-bytecode",
  "rsscript-diagnostics",
  "rsscript-exec-ir",
+ "rsscript-mir",
  "rsscript-operation",
  "rsscript-provider-api",
  "rsscript-text",

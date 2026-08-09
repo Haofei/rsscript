@@ -42,6 +42,17 @@ pub fn reg_vm_compile_validated(
     emit_ir(&compiled)
 }
 
+/// Emit typed MIR through the verified bytecode path. This adapter is used by
+/// the MIR migration gate and does not pass executable IR into the VM.
+#[doc(hidden)]
+pub fn reg_vm_compile_mir(
+    mir: &rsscript_mir::MirModule,
+    source_hash: &str,
+    interface_catalog_digest: &str,
+) -> Result<RegVmExecutable, EvalError> {
+    rsscript_vm::compile_mir(mir, source_hash, interface_catalog_digest)
+}
+
 fn emit_ir(compiled: &CompiledIr) -> Result<RegVmExecutable, EvalError> {
     rsscript_vm::compile_executable_ir(
         compiled.executable(),
