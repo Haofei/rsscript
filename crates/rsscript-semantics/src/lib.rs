@@ -22,7 +22,7 @@ pub use database::{
 };
 pub use interface_descriptor::{
     INTERFACE_DESCRIPTOR_SCHEMA, InterfaceDescriptorError, InterfaceDescriptorFunctionV1,
-    InterfaceDescriptorV1,
+    InterfaceDescriptorResourceV1, InterfaceDescriptorV1,
 };
 pub use types::{
     ResolvedParamEffect, ResolvedType, ResolvedTypeKind, SemanticTypeFacts, TypeArena, TypeId,

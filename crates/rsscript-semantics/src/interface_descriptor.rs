@@ -1,4 +1,4 @@
-use rsscript_syntax::ast::{DataEffect as SyntaxEffect, Item, TypeRef};
+use rsscript_syntax::ast::{DataEffect as SyntaxEffect, Item, TypeKind, TypeRef};
 use rsscript_syntax::parse_source;
 use serde::Serialize;
 
@@ -14,6 +14,15 @@ pub struct InterfaceDescriptorFunctionV1 {
     pub signature_hash: SignatureHash,
 }
 
+/// Public resource type exposed by an interface. Cleanup implementation stays
+/// provider-owned; this descriptor records only the language-visible contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct InterfaceDescriptorResourceV1 {
+    pub name: String,
+    pub opaque: bool,
+    pub type_parameters: Vec<String>,
+}
+
 /// Canonical semantic description of bodyless `.rssi` function contracts.
 /// Provider bindgen consumes this descriptor rather than reparsing source.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -21,6 +30,7 @@ pub struct InterfaceDescriptorV1 {
     #[serde(rename = "$schema")]
     pub schema: String,
     pub functions: Vec<InterfaceDescriptorFunctionV1>,
+    pub resources: Vec<InterfaceDescriptorResourceV1>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,8 +57,23 @@ impl InterfaceDescriptorV1 {
             _ => None,
         });
         let mut functions = Vec::new();
+        let mut resources = Vec::new();
         for item in program.items {
             let Item::Function(function) = item else {
+                if let Item::Type(resource) = item
+                    && resource.kind == TypeKind::Resource
+                    && resource.is_public
+                {
+                    resources.push(InterfaceDescriptorResourceV1 {
+                        name: resource.name,
+                        opaque: resource.is_opaque,
+                        type_parameters: resource
+                            .type_params
+                            .into_iter()
+                            .map(|parameter| parameter.name)
+                            .collect(),
+                    });
+                }
                 continue;
             };
             if function.has_body || !function.malformed_param_spans.is_empty() {
@@ -106,6 +131,7 @@ impl InterfaceDescriptorV1 {
             });
         }
         functions.sort_by(|left, right| left.symbol.cmp(&right.symbol));
+        resources.sort_by(|left, right| left.name.cmp(&right.name));
         if let Some(pair) = functions
             .windows(2)
             .find(|pair| pair[0].symbol == pair[1].symbol)
@@ -117,6 +143,7 @@ impl InterfaceDescriptorV1 {
         Ok(Self {
             schema: INTERFACE_DESCRIPTOR_SCHEMA.to_string(),
             functions,
+            resources,
         })
     }
 
@@ -173,11 +200,12 @@ mod tests {
     fn descriptor_canonicalizes_interface_contracts_once() {
         let descriptor = InterfaceDescriptorV1::from_interface_source(
             "host.rssi",
-            "module host.log\npub async fn emit(value: take owned String) -> fresh Unit retains(value)\n",
+            "module host.log\npub resource Stream\npub async fn emit(value: take owned String) -> fresh Unit retains(value)\n",
         )
         .expect("valid interface");
         assert_eq!(descriptor.schema, INTERFACE_DESCRIPTOR_SCHEMA);
         assert_eq!(descriptor.functions[0].symbol.as_str(), "host.log.emit");
+        assert_eq!(descriptor.resources[0].name, "Stream");
         assert!(descriptor.functions[0].signature.asynchronous);
         assert!(descriptor.functions[0].signature.parameters[0].retained);
         assert_eq!(
