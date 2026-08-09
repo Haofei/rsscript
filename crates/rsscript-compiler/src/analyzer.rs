@@ -588,8 +588,9 @@ mod entrypoint_tests {
     use super::{
         AnalysisFlavor, AnalysisInput, AnalysisSources, PreparedAnalysis, analyze_input_result,
         analyze_input_with_budget, analyze_source_with_interfaces,
-        analyze_source_with_interfaces_without_core, analyze_sources_with_interfaces,
-        analyze_sources_with_interfaces_without_core, prepare_analysis, render_type_ref,
+        analyze_source_with_interfaces_result, analyze_source_with_interfaces_without_core,
+        analyze_sources_with_interfaces, analyze_sources_with_interfaces_without_core,
+        prepare_analysis, render_type_ref,
     };
     use crate::checks::budget::{FrontendBudget, FrontendBudgetLimits};
     use crate::diagnostic::code;
@@ -634,6 +635,30 @@ mod entrypoint_tests {
             analyze_source_with_interfaces_without_core("main.rss", SOURCE, &interfaces),
             analyze_sources_with_interfaces_without_core(&sources, &interfaces),
         );
+    }
+
+    #[test]
+    fn semantic_database_derives_provider_descriptors_from_its_interface_snapshot() {
+        let result = analyze_source_with_interfaces_result(
+            "main.rss",
+            "fn main() -> Unit { return Unit }",
+            &[(
+                "host.rssi",
+                "module host.log\npub resource Stream\npub fn emit(value: read String) -> Unit\n",
+            )],
+        );
+        let descriptors = result
+            .database()
+            .interface_descriptors()
+            .expect("interface descriptor");
+        let direct = rsscript_semantics::InterfaceDescriptorV1::from_interface_source(
+            "host.rssi",
+            "module host.log\npub resource Stream\npub fn emit(value: read String) -> Unit\n",
+        )
+        .expect("direct descriptor");
+        assert_eq!(descriptors[0], direct);
+        assert_eq!(descriptors[0].functions[0].symbol.as_str(), "host.log.emit");
+        assert_eq!(descriptors[0].resources[0].name, "host.log.Stream");
     }
 
     #[test]

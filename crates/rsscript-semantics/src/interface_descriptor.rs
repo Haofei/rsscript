@@ -1,4 +1,4 @@
-use rsscript_syntax::ast::{DataEffect as SyntaxEffect, Item, TypeKind, TypeRef};
+use rsscript_syntax::ast::{DataEffect as SyntaxEffect, Item, Program, TypeKind, TypeRef};
 use rsscript_syntax::parse_source;
 use serde::Serialize;
 
@@ -47,6 +47,13 @@ impl InterfaceDescriptorV1 {
         source: &str,
     ) -> Result<Self, InterfaceDescriptorError> {
         let program = parse_source(path, source);
+        Self::from_interface_program(&program)
+    }
+
+    /// Derive a descriptor from the parser output retained by a semantic
+    /// snapshot. This keeps bindgen and package tooling from reparsing files.
+    pub fn from_interface_program(program: &Program) -> Result<Self, InterfaceDescriptorError> {
+        let program = program.clone();
         if !program.unknown_top_level_spans.is_empty()
             || !program.malformed_declaration_spans.is_empty()
         {
@@ -65,7 +72,7 @@ impl InterfaceDescriptorV1 {
                     && resource.is_public
                 {
                     resources.push(InterfaceDescriptorResourceV1 {
-                        name: resource.name,
+                        name: canonical_resource_name(module.as_deref(), &resource.name),
                         opaque: resource.is_opaque,
                         type_parameters: resource
                             .type_params
@@ -192,6 +199,15 @@ fn type_name(ty: &TypeRef) -> String {
     }
 }
 
+fn canonical_resource_name(module: Option<&str>, name: &str) -> String {
+    let Some(module) = module else {
+        return name.to_string();
+    };
+    let mangled_prefix = format!("{}__", module.replace('.', "_"));
+    let local = name.strip_prefix(&mangled_prefix).unwrap_or(name);
+    format!("{module}.{local}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,7 +221,7 @@ mod tests {
         .expect("valid interface");
         assert_eq!(descriptor.schema, INTERFACE_DESCRIPTOR_SCHEMA);
         assert_eq!(descriptor.functions[0].symbol.as_str(), "host.log.emit");
-        assert_eq!(descriptor.resources[0].name, "Stream");
+        assert_eq!(descriptor.resources[0].name, "host.log.Stream");
         assert!(descriptor.functions[0].signature.asynchronous);
         assert!(descriptor.functions[0].signature.parameters[0].retained);
         assert_eq!(

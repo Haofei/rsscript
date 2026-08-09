@@ -434,6 +434,10 @@ mechanical acceptance condition holds.
       produced deterministically for binding and snapshot consumers.
   - [ ] **P04.2 — Emit descriptors from semantic checking.** Snapshot descriptor
     bytes and ensure source aliases cannot alter canonical ABI facts.
+    - [x] **P04.2a — Derive descriptors from immutable semantic snapshots.**
+      `SemanticDatabase::interface_descriptors()` derives contracts from the
+      checked interface programs; tests prove it agrees with direct interface
+      derivation, including canonical namespace-qualified resource identity.
   - [ ] **P04.3 — Replace bindgen source parsing.** Bindgen accepts only the
     descriptor and rejects unsupported descriptor versions.
     - [x] **P04.3a — Remove bindgen syntax ownership.** All official Provider

@@ -5,6 +5,7 @@ use rsscript_syntax::ast::Program;
 
 use crate::SemanticTypeFacts;
 use crate::hir::Hir;
+use crate::{InterfaceDescriptorError, InterfaceDescriptorV1};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FrontendStopReason {
@@ -136,6 +137,17 @@ impl SemanticDatabase {
 
     pub fn interface_programs(&self) -> &[Program] {
         &self.interface_programs
+    }
+
+    /// Versioned Provider-facing contracts derived from the same immutable
+    /// parsed interface snapshot used by semantic analysis.
+    pub fn interface_descriptors(
+        &self,
+    ) -> Result<Vec<InterfaceDescriptorV1>, InterfaceDescriptorError> {
+        self.interface_programs
+            .iter()
+            .map(InterfaceDescriptorV1::from_interface_program)
+            .collect()
     }
 
     pub fn hir(&self) -> &Hir {
