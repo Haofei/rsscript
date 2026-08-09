@@ -594,7 +594,12 @@ mechanical acceptance condition holds.
   cancellation, call graph/recursion, Provider requirements, and diagnostic
   additions/removals while remaining policy-neutral.
   - [ ] **A07.1 — Diff ownership and call contracts.** Report effect, parameter,
-    retention, escape, and external signature changes.
+    retention, escape, and external signature changes. Semantic diff now carries
+    canonical Artifact import contracts (parameter names/effects/retention and
+    structured types, result, async shape, ABI and signature hash), so a changed
+    `read`/`mut`/`take` or retention contract is evidence rather than an opaque
+    hash transition. Local function-contract facts and broader escape evidence
+    remain to be normalized before this planning unit can close.
   - [ ] **A07.2 — Diff resources and concurrency.** Report acquire/transfer/close,
     task fan-out, await/select, cancellation, and cleanup-path changes.
   - [ ] **A07.3 — Diff graph and diagnostic facts.** Report call graph/recursion,

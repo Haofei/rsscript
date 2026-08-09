@@ -18,7 +18,8 @@ not part of the default or `execution` SDK surface.
   language-service query types.
 - Artifact lifecycle: `BuiltArtifact`, `VerifiedArtifact`, `ArtifactBundle`,
   `ArtifactVerifier`, provenance, interface requirements, the versioned source
-  and package analysis schema identifiers, and neutral semantic diff data.
+  and package analysis schema identifiers, and neutral semantic diff data,
+  including structural external-call contracts.
 - Provider lifecycle: `ProviderRegistry`, provider descriptors, structured
   signatures, registration errors, and typed execution context contracts.
 - Runtime lifecycle: `Runtime`, `LinkedArtifact`, `ExecutionRequest`, bounded

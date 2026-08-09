@@ -66,6 +66,7 @@ pub struct ArtifactBundle {
     manifest: BundleManifestV1,
     artifact: Vec<u8>,
     analysis: serde_json::Value,
+    external_contracts: Vec<ExternalImport>,
     digest: String,
 }
 
@@ -171,6 +172,7 @@ impl ArtifactBundle {
             manifest,
             artifact,
             analysis,
+            external_contracts: envelope.imports,
             digest,
         })
     }
@@ -209,6 +211,13 @@ impl ArtifactBundle {
 
     pub fn required_interfaces(&self) -> &[InterfaceRequirementV1] {
         &self.manifest.required_interfaces
+    }
+
+    /// Complete structural import contracts captured in the verified Artifact
+    /// envelope. This supplements the compact manifest requirements for
+    /// inspection and semantic diffing; it is not Provider metadata.
+    pub(crate) fn external_contracts(&self) -> &[ExternalImport] {
+        &self.external_contracts
     }
 
     pub fn digest(&self) -> &str {

@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{ArtifactBundle, InterfaceRequirementV1};
+use rsscript_abi_model::FunctionSignature;
 
 pub const SEMANTIC_DIFF_SCHEMA: &str = "rsscript.semantic_diff.v2";
 
@@ -50,6 +51,18 @@ pub struct ExternalCallFactV1 {
     pub call_chain: Vec<String>,
 }
 
+/// A complete Artifact import contract. Unlike the compact bundle manifest
+/// requirement, this keeps the canonical parameter effects, retention, types,
+/// result and async shape that explain a signature-hash change.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExternalContractFactV1 {
+    pub symbol: String,
+    pub abi_version: u32,
+    pub signature_hash: String,
+    pub signature: FunctionSignature,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AwaitFactV1 {
@@ -85,6 +98,7 @@ pub struct SemanticDiffV1 {
     pub old: ArtifactIdentityV1,
     pub new: ArtifactIdentityV1,
     pub imports: FactSetDiffV1<InterfaceRequirementV1>,
+    pub external_contracts: FactSetDiffV1<ExternalContractFactV1>,
     pub exports: FactSetDiffV1<ExportFactV1>,
     pub external_calls: FactSetDiffV1<ExternalCallFactV1>,
     pub await_sites: FactSetDiffV1<AwaitFactV1>,
@@ -101,6 +115,11 @@ impl SemanticDiffV1 {
             imports: keyed_diff(
                 old.required_interfaces(),
                 new.required_interfaces(),
+                |item| item.symbol.clone(),
+            ),
+            external_contracts: keyed_diff(
+                &external_contracts(old),
+                &external_contracts(new),
                 |item| item.symbol.clone(),
             ),
             exports: keyed_diff(
@@ -128,6 +147,9 @@ impl SemanticDiffV1 {
         self.imports.added.is_empty()
             && self.imports.removed.is_empty()
             && self.imports.changed.is_empty()
+            && self.external_contracts.added.is_empty()
+            && self.external_contracts.removed.is_empty()
+            && self.external_contracts.changed.is_empty()
             && self.exports.added.is_empty()
             && self.exports.removed.is_empty()
             && self.exports.changed.is_empty()
@@ -148,6 +170,7 @@ impl SemanticDiffV1 {
         output.push_str(&format!("- Old module: `{}`\n", self.old.module_digest));
         output.push_str(&format!("- New module: `{}`\n", self.new.module_digest));
         append_counts(&mut output, "Imports", &self.imports);
+        append_counts(&mut output, "External contracts", &self.external_contracts);
         append_counts(&mut output, "Exports", &self.exports);
         append_counts(&mut output, "External calls", &self.external_calls);
         append_counts(&mut output, "Await sites", &self.await_sites);
@@ -244,6 +267,19 @@ fn analysis_external_calls(analysis: &serde_json::Value) -> Vec<ExternalCallFact
                 symbol: item["symbol"].as_str()?.to_string(),
                 call_chain: strings(&item["call_chain"]),
             })
+        })
+        .collect()
+}
+
+fn external_contracts(bundle: &ArtifactBundle) -> Vec<ExternalContractFactV1> {
+    bundle
+        .external_contracts()
+        .iter()
+        .map(|import| ExternalContractFactV1 {
+            symbol: import.symbol.as_str().to_string(),
+            abi_version: import.abi_version,
+            signature_hash: import.signature_hash.as_str().to_string(),
+            signature: import.signature.clone(),
         })
         .collect()
 }
@@ -381,5 +417,59 @@ mod tests {
                 label: "argument".into(),
             }]
         );
+    }
+
+    #[test]
+    fn external_contract_diff_explains_effect_and_retention_changes() {
+        use rsscript_abi_model::{DataEffect, ExternalImport, ExternalSymbol, ParameterSignature};
+
+        let read = FunctionSignature {
+            parameters: vec![ParameterSignature {
+                name: "value".into(),
+                effect: DataEffect::Read,
+                ty: "String".into(),
+                retained: false,
+            }],
+            result: "Unit".into(),
+            asynchronous: false,
+        };
+        let mut take_and_retain = read.clone();
+        take_and_retain.parameters[0].effect = DataEffect::Take;
+        take_and_retain.parameters[0].retained = true;
+        let old = ExternalImport {
+            symbol: ExternalSymbol::new("host.test.send").unwrap(),
+            signature_hash: read.hash(),
+            signature: read,
+            abi_version: 2,
+        };
+        let new = ExternalImport {
+            symbol: old.symbol.clone(),
+            signature_hash: take_and_retain.hash(),
+            signature: take_and_retain,
+            abi_version: 2,
+        };
+        let old = ExternalContractFactV1 {
+            symbol: old.symbol.to_string(),
+            abi_version: old.abi_version,
+            signature_hash: old.signature_hash.as_str().to_string(),
+            signature: old.signature,
+        };
+        let new = ExternalContractFactV1 {
+            symbol: new.symbol.to_string(),
+            abi_version: new.abi_version,
+            signature_hash: new.signature_hash.as_str().to_string(),
+            signature: new.signature,
+        };
+        let diff = keyed_diff(&[old], &[new], |item| item.symbol.clone());
+        assert_eq!(diff.changed.len(), 1);
+        assert_eq!(
+            diff.changed[0].old.signature.parameters[0].effect,
+            DataEffect::Read
+        );
+        assert_eq!(
+            diff.changed[0].new.signature.parameters[0].effect,
+            DataEffect::Take
+        );
+        assert!(diff.changed[0].new.signature.parameters[0].retained);
     }
 }
