@@ -18,9 +18,9 @@ mod interface_descriptor;
 mod types;
 pub use call_binding::{BoundArgument, BoundArgumentSource, CallBinding, CallBindingIssue};
 pub use database::{
-    AnalysisResult, CompilationSession, FrontendCompletion, FrontendStopReason, SemanticDatabase,
-    SessionSourceStore, SourceFileSnapshot, SourceSnapshot, SourceStoreError, SourceUpdate,
-    ValidatedProgram,
+    AnalysisResult, CompilationSession, CompilationSessionStats, FrontendCompletion,
+    FrontendStopReason, SemanticDatabase, SessionSourceStore, SourceFileSnapshot, SourceSnapshot,
+    SourceStoreError, SourceUpdate, ValidatedProgram,
 };
 pub use identities::DefinitionId;
 pub use interface_descriptor::{

@@ -172,6 +172,9 @@ mechanical acceptance condition holds.
     capture. Query migration remains follow-up work.
   - [ ] **S03.3 — Cache parse, resolve, type, HIR, and diagnostic queries.**
     Record dependencies so unrelated file changes do not invalidate a workspace.
+    `CompilationSession` now owns parse-tree caching keyed by immutable file
+    revision, including replacement/deletion invalidation and deterministic
+    source iteration. Resolve/type/HIR/diagnostic query migration remains open.
   - [ ] **S03.4 — Thread cancellation and deadlines through every query.** Add
     cancellation, deadline, and diagnostic-budget tests for cold and cached
     paths.

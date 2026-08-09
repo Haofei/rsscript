@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use rsscript_diagnostics::Diagnostic;
 use rsscript_source_model::{FileId, SourceRevision};
-use rsscript_syntax::ast::Program;
+use rsscript_syntax::{ast::Program, parse_source};
 
 use crate::SemanticTypeFacts;
 use crate::hir::Hir;
@@ -254,6 +254,21 @@ impl SessionSourceStore {
 pub struct CompilationSession {
     sources: SessionSourceStore,
     interfaces: SessionSourceStore,
+    parse_cache: BTreeMap<(SessionFileRole, FileId, SourceRevision), Arc<Program>>,
+    parse_cache_hits: u64,
+    parse_cache_misses: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CompilationSessionStats {
+    pub parse_cache_hits: u64,
+    pub parse_cache_misses: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum SessionFileRole {
+    Source,
+    Interface,
 }
 
 impl CompilationSession {
@@ -262,11 +277,19 @@ impl CompilationSession {
         path: impl Into<String>,
         text: impl Into<String>,
     ) -> Result<SourceUpdate, SourceStoreError> {
-        self.sources.set_file(path, text)
+        let update = self.sources.set_file(path, text)?;
+        if update.changed {
+            self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
+        }
+        Ok(update)
     }
 
     pub fn remove_file(&mut self, path: &str) -> Option<SourceUpdate> {
-        self.sources.remove_file(path)
+        let update = self.sources.remove_file(path);
+        if let Some(update) = update {
+            self.invalidate_parse_cache(SessionFileRole::Source, update.file_id);
+        }
+        update
     }
 
     pub fn set_interface(
@@ -274,11 +297,19 @@ impl CompilationSession {
         path: impl Into<String>,
         text: impl Into<String>,
     ) -> Result<SourceUpdate, SourceStoreError> {
-        self.interfaces.set_file(path, text)
+        let update = self.interfaces.set_file(path, text)?;
+        if update.changed {
+            self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
+        }
+        Ok(update)
     }
 
     pub fn remove_interface(&mut self, path: &str) -> Option<SourceUpdate> {
-        self.interfaces.remove_file(path)
+        let update = self.interfaces.remove_file(path);
+        if let Some(update) = update {
+            self.invalidate_parse_cache(SessionFileRole::Interface, update.file_id);
+        }
+        update
     }
 
     pub fn source_snapshot(&self) -> SourceSnapshot {
@@ -287,6 +318,62 @@ impl CompilationSession {
 
     pub fn interface_snapshot(&self) -> SourceSnapshot {
         self.interfaces.snapshot()
+    }
+
+    /// Parse one source revision exactly once. Replacing or removing a file
+    /// evicts its cached syntax tree; identical writes preserve the cached
+    /// query result because the revision is unchanged.
+    pub fn parse_file(&mut self, path: &str) -> Option<Arc<Program>> {
+        let snapshot = self.source_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.parse_snapshot_file(SessionFileRole::Source, file)
+    }
+
+    /// Parse one interface revision through the same cache. File IDs are
+    /// session-local across both stores, so the query key also records its role.
+    pub fn parse_interface(&mut self, path: &str) -> Option<Arc<Program>> {
+        let snapshot = self.interface_snapshot();
+        let file = snapshot.files().iter().find(|file| file.path() == path)?;
+        self.parse_snapshot_file(SessionFileRole::Interface, file)
+    }
+
+    /// Return source parse trees in canonical snapshot path order.
+    pub fn parsed_sources(&mut self) -> Vec<Arc<Program>> {
+        self.source_snapshot()
+            .files()
+            .iter()
+            .filter_map(|file| self.parse_snapshot_file(SessionFileRole::Source, file))
+            .collect()
+    }
+
+    pub fn stats(&self) -> CompilationSessionStats {
+        CompilationSessionStats {
+            parse_cache_hits: self.parse_cache_hits,
+            parse_cache_misses: self.parse_cache_misses,
+        }
+    }
+
+    fn parse_snapshot_file(
+        &mut self,
+        role: SessionFileRole,
+        file: &SourceFileSnapshot,
+    ) -> Option<Arc<Program>> {
+        // Source and interface stores allocate FileId independently, so role
+        // is part of the private cache key.
+        let key = (role, file.file_id(), file.revision());
+        if let Some(program) = self.parse_cache.get(&key) {
+            self.parse_cache_hits = self.parse_cache_hits.saturating_add(1);
+            return Some(Arc::clone(program));
+        }
+        let program = Arc::new(parse_source(file.path(), file.text()));
+        self.parse_cache.insert(key, Arc::clone(&program));
+        self.parse_cache_misses = self.parse_cache_misses.saturating_add(1);
+        Some(program)
+    }
+
+    fn invalidate_parse_cache(&mut self, role: SessionFileRole, file_id: FileId) {
+        self.parse_cache
+            .retain(|(cached_role, cached_id, _), _| *cached_role != role || *cached_id != file_id);
     }
 }
 
@@ -514,5 +601,56 @@ mod tests {
         let interface = session.set_interface("host.rssi", "module host").unwrap();
         assert_eq!(interface.file_id, FileId::new(0));
         assert_eq!(session.interface_snapshot().files()[0].path(), "host.rssi");
+    }
+
+    #[test]
+    fn compilation_session_caches_parse_queries_by_immutable_revision() {
+        let mut session = CompilationSession::default();
+        let source = session
+            .set_file("main.rss", "fn main() -> Unit { return Unit }")
+            .unwrap();
+        let first = session.parse_file("main.rss").unwrap();
+        let second = session.parse_file("main.rss").unwrap();
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(
+            session.stats(),
+            CompilationSessionStats {
+                parse_cache_hits: 1,
+                parse_cache_misses: 1,
+            }
+        );
+
+        let unchanged = session
+            .set_file("main.rss", "fn main() -> Unit { return Unit }")
+            .unwrap();
+        assert_eq!(unchanged.file_id, source.file_id);
+        assert!(!unchanged.changed);
+        assert!(Arc::ptr_eq(
+            &first,
+            &session.parse_file("main.rss").unwrap()
+        ));
+
+        session
+            .set_file("main.rss", "fn main() -> Unit { let x = Unit return x }")
+            .unwrap();
+        let replacement = session.parse_file("main.rss").unwrap();
+        assert!(!Arc::ptr_eq(&first, &replacement));
+        session.remove_file("main.rss");
+        assert!(session.parse_file("main.rss").is_none());
+    }
+
+    #[test]
+    fn source_and_interface_parse_caches_do_not_alias_the_same_file_id() {
+        let mut session = CompilationSession::default();
+        session
+            .set_file("shared.rss", "fn main() -> Unit { return Unit }")
+            .unwrap();
+        session
+            .set_interface("shared.rssi", "module host.shared\npub fn value() -> Int\n")
+            .unwrap();
+        let source = session.parse_file("shared.rss").unwrap();
+        let interface = session.parse_interface("shared.rssi").unwrap();
+        assert!(!Arc::ptr_eq(&source, &interface));
+        assert_eq!(session.stats().parse_cache_misses, 2);
     }
 }
