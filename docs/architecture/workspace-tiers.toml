@@ -8,6 +8,7 @@ core = [
   "rsscript-abi-model",
   "rsscript-build-support",
   "rsscript-bytecode",
+  "rsscript-codegen-vm",
   "rsscript-compiler",
   "rsscript-diagnostics",
   "rsscript-exec-ir",

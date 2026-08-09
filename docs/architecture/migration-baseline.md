@@ -314,8 +314,11 @@ mechanical acceptance condition holds.
 - [ ] **V02 — Extract `rsscript-codegen-vm`.** The sole bytecode-emission path is
   `VerifiedMir -> BytecodeModule`; source, HIR, package, and SDK entry points are
   forbidden in the codegen crate.
-  - [ ] **V02.1 — Create a MIR-only codegen crate.** Its manifest may depend on
+  - [x] **V02.1 — Create a MIR-only codegen crate.** Its manifest may depend on
     MIR, ABI, and bytecode model but not VM, compiler, syntax, package, or SDK.
+    `rsscript-codegen-vm` now owns scalar-CFG Artifact emission; architecture
+    tests enforce its dependency closure and verify SDK MIR builds use
+    codegen → verifier → VM-token loading.
   - [ ] **V02.2 — Lower the scalar MIR subset to bytecode.** Preserve source maps
     and deterministic module ordering.
     - [x] **V02.2a — Prove the transitional VM-local adapter.** The current

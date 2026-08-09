@@ -1445,9 +1445,9 @@ fn vm_core_consumes_owned_ir_not_frontend_internals() {
 }
 
 #[test]
-fn mir_codegen_reaches_the_verified_vm_without_executable_ir() {
+fn mir_codegen_is_a_vm_independent_verified_bytecode_boundary() {
     let root = workspace_root();
-    let codegen = read(&root.join("crates/rsscript-vm/src/reg_vm/mir_codegen.rs"));
+    let codegen = read(&root.join("crates/rsscript-codegen-vm/src/lib.rs"));
     for forbidden in ["rsscript_exec_ir", "ExecutableIr", "ExecutableStmt", "Hir"] {
         assert!(
             !codegen.contains(forbidden),
@@ -1460,12 +1460,25 @@ fn mir_codegen_reaches_the_verified_vm_without_executable_ir() {
             "MIR codegen must lower verified MIR fact `{required}`"
         );
     }
-    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
-    let compile_mir = function_source(&vm, "pub fn compile_mir");
+    let manifest: toml::Value =
+        toml::from_str(&read(&root.join("crates/rsscript-codegen-vm/Cargo.toml"))).unwrap();
+    assert_eq!(
+        normal_dependency_packages(&manifest),
+        BTreeSet::from([
+            "rsscript-abi-model".to_string(),
+            "rsscript-bytecode".to_string(),
+            "rsscript-mir".to_string(),
+            "serde_json".to_string(),
+        ]),
+        "MIR codegen must stay independent from VM, compiler, syntax, package, and SDK"
+    );
+    let adapter = read(&root.join("crates/rsscript-sdk/src/vm_adapter.rs"));
+    let compile_mir = function_source(&adapter, "pub fn reg_vm_compile_mir");
     assert!(
-        compile_mir.contains("mir_codegen::lower")
-            && compile_mir.contains("encode_and_verify_with_imports"),
-        "MIR compilation must pass through codegen and the ordinary bytecode verifier"
+        compile_mir.contains("rsscript_codegen_vm::emit_artifact")
+            && compile_mir.contains("BytecodeVerifier::default")
+            && compile_mir.contains("RegVmExecutable::from_verified_bytecode"),
+        "SDK MIR compilation must pass through codegen, verifier, then the VM token boundary"
     );
 }
 
