@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 
 use rsscript_abi_model::{ExternalSymbol, FunctionSignature, WireQualifier, WireType};
-use rsscript_semantics::{InterfaceDescriptorError, InterfaceDescriptorV1};
+use rsscript_semantics::{
+    InterfaceDescriptorError, InterfaceDescriptorResourceV1, InterfaceDescriptorV1,
+};
 use std::error::Error;
 use std::fmt;
 
@@ -16,6 +18,7 @@ pub struct InterfaceFunction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderInterface {
     pub functions: Vec<InterfaceFunction>,
+    pub resources: Vec<InterfaceDescriptorResourceV1>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -85,11 +88,15 @@ impl ProviderInterface {
                     signature_hash: function.signature_hash,
                 })
                 .collect(),
+            resources: descriptor.resources,
         })
     }
 
     pub fn render_rust(&self, options: &RustProviderOptions<'_>) -> String {
         let mut output = String::from("// @generated from .rssi; do not edit.\n");
+        for resource in &self.resources {
+            render_resource_wrapper(&mut output, resource);
+        }
         output.push_str("pub trait GeneratedProviderContract {\n");
         for function in &self.functions {
             let parameters = function
@@ -146,6 +153,39 @@ impl ProviderInterface {
         output.push_str("    ] }\n}\n");
         output
     }
+}
+
+fn render_resource_wrapper(output: &mut String, resource: &InterfaceDescriptorResourceV1) {
+    let type_name = resource_wrapper_name(&resource.name);
+    output.push_str(&format!(
+        "/// Generated handle wrapper for the `{}` resource.\n#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]\npub struct {type_name}(pub rsscript_provider_api::ResourceHandle);\n\nimpl {type_name} {{\n    pub const TYPE_NAME: &'static str = {:?};\n\n    pub fn from_native(value: rsscript_provider_api::NativeValue) -> Result<Self, rsscript_provider_api::ProviderError> {{\n        match value {{\n            rsscript_provider_api::NativeValue::Native {{ type_name, id }} if type_name == Self::TYPE_NAME => Ok(Self(rsscript_provider_api::ResourceHandle::from_native_id(id))),\n            _ => Err(rsscript_provider_api::ProviderError::invalid_argument(\"resource handle type mismatch\")),\n        }}\n    }}\n\n    pub fn into_native(self) -> rsscript_provider_api::NativeValue {{\n        rsscript_provider_api::NativeValue::Native {{ type_name: Self::TYPE_NAME.into(), id: self.0.to_native_id() }}\n    }}\n}}\n\n",
+        resource.name,
+        resource.name,
+    ));
+}
+
+fn resource_wrapper_name(resource: &str) -> String {
+    let mut output = resource
+        .split('.')
+        .flat_map(str::chars)
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>();
+    if output.is_empty()
+        || output
+            .chars()
+            .next()
+            .is_some_and(|character| character.is_ascii_digit())
+    {
+        output.insert(0, '_');
+    }
+    output.push_str("Handle");
+    output
 }
 
 fn render_rust_type(ty: &WireType) -> String {
@@ -309,5 +349,29 @@ mod tests {
         assert!(rust.contains("host.env.get"));
         assert!(rust.contains("WireType::Option"));
         assert!(rust.contains("WireType::String"));
+    }
+
+    #[test]
+    fn generated_resources_use_typed_generation_safe_handle_wrappers() {
+        let descriptor = InterfaceDescriptorV1::from_interface_source(
+            "fs.rssi",
+            "module host.fs\n\npub resource File\npub fn open(path: read String) -> File\n",
+        )
+        .unwrap();
+        let interface = ProviderInterface::from_descriptor(descriptor).unwrap();
+        assert_eq!(interface.resources[0].name, "host.fs.File");
+        let rust = interface.render_rust(&RustProviderOptions {
+            provider_id: "rsscript.fs",
+            blocking: GeneratedBlocking::MayBlock,
+            cancellation: GeneratedCancellation::Cooperative,
+            thread_safe: true,
+            reentrant: false,
+            cleanup: GeneratedCleanup::RuntimeRegistered,
+        });
+        assert!(
+            rust.contains("pub struct hostfsFileHandle(pub rsscript_provider_api::ResourceHandle)")
+        );
+        assert!(rust.contains("ResourceHandle::from_native_id"));
+        assert!(rust.contains("pub const TYPE_NAME: &'static str = \"host.fs.File\""));
     }
 }
