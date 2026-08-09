@@ -424,7 +424,7 @@ mechanical acceptance condition holds.
 - [ ] **P04 — Make semantic interface descriptors the bindgen input.** `.rssi`
   is parsed and canonicalized once by the semantic compiler into a versioned
   `InterfaceDescriptor`; bindgen must not duplicate syntax/type normalization.
-  - [ ] **P04.1 — Define `InterfaceDescriptorV1`.** Include canonical symbols,
+  - [x] **P04.1 — Define `InterfaceDescriptorV1`.** Include canonical symbols,
     `WireType`, effects, retention, async shape, resources, and signature hashes.
     - [x] **P04.1a — Introduce the versioned semantic function descriptor.**
       `rsscript-semantics` owns `InterfaceDescriptorV1` with canonical external
