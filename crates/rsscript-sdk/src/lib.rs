@@ -111,7 +111,7 @@ mod vm_adapter;
 #[cfg(feature = "execution")]
 pub use artifact_bundle::{
     ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, ArtifactBundle, ArtifactBundleError,
-    BuildProvenanceV1, InterfaceRequirementV1,
+    BuildProvenanceV1, InterfaceRequirementV1, PACKAGE_ANALYSIS_SCHEMA, SOURCE_ANALYSIS_SCHEMA,
 };
 #[cfg(feature = "execution")]
 pub use semantic_diff::{
@@ -184,7 +184,7 @@ pub mod artifact {
     pub use super::{
         ARTIFACT_BUNDLE_MAGIC, ARTIFACT_BUNDLE_SCHEMA, ArtifactBundle, ArtifactBundleError,
         ArtifactVerifier, BuildProvenanceV1, BuiltArtifact, InterfaceRequirementV1,
-        VerifiedArtifact, VerifyError,
+        PACKAGE_ANALYSIS_SCHEMA, SOURCE_ANALYSIS_SCHEMA, VerifiedArtifact, VerifyError,
     };
     pub use rsscript_bytecode::{
         BYTECODE_CONTAINER_FORMAT_VERSION, BYTECODE_ISA_VERSION, BYTECODE_MAGIC, BYTECODE_SCHEMA,

@@ -8,6 +8,10 @@ use sha2::{Digest, Sha256};
 
 pub const ARTIFACT_BUNDLE_SCHEMA: &str = "rsscript.artifact_bundle.v1";
 pub const ARTIFACT_BUNDLE_MAGIC: &[u8; 8] = b"RSSBND\0\x01";
+/// Analysis schemas accepted as provider-neutral evidence by this bundle
+/// format. New schemas require an explicit compatibility decision here.
+pub const SOURCE_ANALYSIS_SCHEMA: &str = "rsscript.source_analysis.v1";
+pub const PACKAGE_ANALYSIS_SCHEMA: &str = "rsscript.package_analysis.v1";
 const MAX_MANIFEST_BYTES: usize = 1024 * 1024;
 const MAX_ANALYSIS_BYTES: usize = 16 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
@@ -126,6 +130,7 @@ impl ArtifactBundle {
         if manifest.schema != ARTIFACT_BUNDLE_SCHEMA {
             return Err(ArtifactBundleError::UnsupportedSchema(manifest.schema));
         }
+        verify_analysis_schema(&analysis)?;
         if manifest.artifact_digest != digest(&artifact) {
             return Err(ArtifactBundleError::ArtifactDigestMismatch);
         }
@@ -204,6 +209,20 @@ impl ArtifactBundle {
     }
 }
 
+fn verify_analysis_schema(analysis: &serde_json::Value) -> Result<(), ArtifactBundleError> {
+    let schema = analysis
+        .get("$schema")
+        .and_then(serde_json::Value::as_str)
+        .ok_or(ArtifactBundleError::MissingAnalysisSchema)?;
+    if [SOURCE_ANALYSIS_SCHEMA, PACKAGE_ANALYSIS_SCHEMA].contains(&schema) {
+        Ok(())
+    } else {
+        Err(ArtifactBundleError::UnsupportedAnalysisSchema(
+            schema.to_string(),
+        ))
+    }
+}
+
 fn canonical_json(value: &impl Serialize) -> Result<Vec<u8>, ArtifactBundleError> {
     serde_json::to_vec(value).map_err(|error| ArtifactBundleError::Manifest(error.to_string()))
 }
@@ -256,6 +275,8 @@ pub enum ArtifactBundleError {
     LengthOverflow,
     SectionTooLarge { length: usize, maximum: usize },
     UnsupportedSchema(String),
+    MissingAnalysisSchema,
+    UnsupportedAnalysisSchema(String),
     Manifest(String),
     Analysis(String),
     Artifact(String),
@@ -278,6 +299,12 @@ impl fmt::Display for ArtifactBundleError {
             ),
             Self::UnsupportedSchema(schema) => {
                 write!(formatter, "unsupported Artifact Bundle schema `{schema}`")
+            }
+            Self::MissingAnalysisSchema => {
+                formatter.write_str("bundle analysis has no declared schema")
+            }
+            Self::UnsupportedAnalysisSchema(schema) => {
+                write!(formatter, "unsupported bundle analysis schema `{schema}`")
             }
             Self::Manifest(message) => write!(formatter, "invalid bundle manifest: {message}"),
             Self::Analysis(message) => write!(formatter, "invalid bundle analysis: {message}"),
@@ -314,7 +341,11 @@ mod tests {
         .unwrap()
         .to_bytes()
         .unwrap();
-        ArtifactBundle::new(artifact, serde_json::json!({"schema": "analysis.test.v1"})).unwrap()
+        ArtifactBundle::new(
+            artifact,
+            serde_json::json!({"$schema": SOURCE_ANALYSIS_SCHEMA}),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -333,5 +364,25 @@ mod tests {
         let last = bytes.last_mut().unwrap();
         *last ^= 1;
         assert!(ArtifactBundle::from_bytes(&bytes).is_err());
+    }
+
+    #[test]
+    fn analysis_schema_is_an_explicit_fail_closed_compatibility_boundary() {
+        let artifact = BytecodeArtifact::new(
+            "0.1.0",
+            "0.1.0",
+            "sha256:catalog",
+            2,
+            "sha256:source",
+            vec![],
+            vec![1, 2, 3],
+        )
+        .unwrap()
+        .to_bytes()
+        .unwrap();
+        assert!(matches!(
+            ArtifactBundle::new(artifact, serde_json::json!({"$schema": "future.analysis.v1"})),
+            Err(ArtifactBundleError::UnsupportedAnalysisSchema(schema)) if schema == "future.analysis.v1"
+        ));
     }
 }
