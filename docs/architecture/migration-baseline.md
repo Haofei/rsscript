@@ -251,6 +251,9 @@ mechanical acceptance condition holds.
       back to their caller places. CFG join dataflow treats a place as moved when
       any predecessor moves it, while assignment reinitializes it. Retain/drop
       remain follow-up work.
+    - [x] **M03.1c — Verify call ownership contracts.** Function signatures own
+      `read`/`mut`/`take` parameter modes and verifier checks each direct or
+      external call argument against that contract before execution.
   - [ ] **M03.2 — Add resource lifetime instructions and cleanup edges.** Model
     acquire/manage/release and verify cleanup for normal return, branch exit,
     error, and cancellation.

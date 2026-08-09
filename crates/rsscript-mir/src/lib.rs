@@ -132,6 +132,25 @@ pub enum MirCallArgument {
     Take(PlaceId),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MirCallArgumentMode {
+    Value,
+    Read,
+    Mut,
+    Take,
+}
+
+impl MirCallArgument {
+    fn mode(self) -> MirCallArgumentMode {
+        match self {
+            Self::Value(_) => MirCallArgumentMode::Value,
+            Self::BorrowRead(_) => MirCallArgumentMode::Read,
+            Self::BorrowMut(_) => MirCallArgumentMode::Mut,
+            Self::Take(_) => MirCallArgumentMode::Take,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MirTerminator {
     Return(Option<ValueId>),
@@ -184,14 +203,26 @@ pub struct MirFunctionDebug {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MirFunctionSignature {
     parameter_types: Vec<TypeId>,
+    parameter_modes: Vec<MirParameterMode>,
     result: TypeId,
     asynchronous: bool,
 }
 
 impl MirFunctionSignature {
     pub fn new(parameter_types: Vec<TypeId>, result: TypeId, asynchronous: bool) -> Self {
+        let parameter_modes = vec![MirParameterMode::Read; parameter_types.len()];
+        Self::with_modes(parameter_types, parameter_modes, result, asynchronous)
+    }
+
+    pub fn with_modes(
+        parameter_types: Vec<TypeId>,
+        parameter_modes: Vec<MirParameterMode>,
+        result: TypeId,
+        asynchronous: bool,
+    ) -> Self {
         Self {
             parameter_types,
+            parameter_modes,
             result,
             asynchronous,
         }
@@ -201,6 +232,10 @@ impl MirFunctionSignature {
         &self.parameter_types
     }
 
+    pub fn parameter_modes(&self) -> &[MirParameterMode] {
+        &self.parameter_modes
+    }
+
     pub fn result(&self) -> TypeId {
         self.result
     }
@@ -208,6 +243,14 @@ impl MirFunctionSignature {
     pub fn is_async(&self) -> bool {
         self.asynchronous
     }
+}
+
+/// Required ownership mode for a direct function parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MirParameterMode {
+    Read,
+    Mut,
+    Take,
 }
 
 impl MirFunctionDebug {
@@ -409,6 +452,13 @@ fn verify_function(
                 ty,
             });
         }
+    }
+    if function.signature.parameter_types().len() != function.signature.parameter_modes().len() {
+        return Err(MirValidationError::FunctionParameterModeCount {
+            function: function.id,
+            types: function.signature.parameter_types().len(),
+            modes: function.signature.parameter_modes().len(),
+        });
     }
 
     let mut defined = BTreeSet::new();
@@ -613,10 +663,12 @@ fn verify_instruction(
             arguments,
         } => {
             define(*destination, defined)?;
-            let expected_arguments = match target {
-                MirCallTarget::Function(target) if target.index() < functions.len() => {
-                    functions[target.index()].signature.parameter_types().len()
-                }
+            let expected_modes = match target {
+                MirCallTarget::Function(target) if target.index() < functions.len() => functions
+                    [target.index()]
+                .signature
+                .parameter_modes()
+                .to_vec(),
                 MirCallTarget::Function(target) => {
                     return Err(MirValidationError::InvalidFunctionTarget {
                         function: function.id,
@@ -624,7 +676,16 @@ fn verify_instruction(
                     });
                 }
                 MirCallTarget::External(target) if target.index() < external_imports.len() => {
-                    external_imports[target.index()].signature.parameters.len()
+                    external_imports[target.index()]
+                        .signature
+                        .parameters
+                        .iter()
+                        .map(|parameter| match parameter.effect {
+                            rsscript_abi_model::DataEffect::Read => MirParameterMode::Read,
+                            rsscript_abi_model::DataEffect::Mut => MirParameterMode::Mut,
+                            rsscript_abi_model::DataEffect::Take => MirParameterMode::Take,
+                        })
+                        .collect()
                 }
                 MirCallTarget::External(target) => {
                     return Err(MirValidationError::InvalidExternalTarget {
@@ -633,14 +694,25 @@ fn verify_instruction(
                     });
                 }
             };
-            if arguments.len() != expected_arguments {
+            if arguments.len() != expected_modes.len() {
                 return Err(MirValidationError::CallArityMismatch {
                     function: function.id,
-                    expected: expected_arguments,
+                    expected: expected_modes.len(),
                     actual: arguments.len(),
                 });
             }
-            for argument in arguments {
+            for (parameter, (argument, expected)) in
+                arguments.iter().zip(expected_modes).enumerate()
+            {
+                let actual = argument.mode();
+                if !call_argument_compatible(actual, expected) {
+                    return Err(MirValidationError::CallArgumentModeMismatch {
+                        function: function.id,
+                        parameter,
+                        expected,
+                        actual,
+                    });
+                }
                 match argument {
                     MirCallArgument::Value(value) => used.push(*value),
                     MirCallArgument::BorrowRead(place) | MirCallArgument::BorrowMut(place) => {
@@ -659,6 +731,17 @@ fn verify_instruction(
             Ok(())
         }
     }
+}
+
+fn call_argument_compatible(actual: MirCallArgumentMode, expected: MirParameterMode) -> bool {
+    matches!(
+        (actual, expected),
+        (
+            MirCallArgumentMode::Value | MirCallArgumentMode::Read,
+            MirParameterMode::Read
+        ) | (MirCallArgumentMode::Mut, MirParameterMode::Mut)
+            | (MirCallArgumentMode::Take, MirParameterMode::Take)
+    )
 }
 
 fn verify_terminator(
@@ -703,6 +786,11 @@ pub enum MirValidationError {
         functions: usize,
         debug: usize,
     },
+    FunctionParameterModeCount {
+        function: FunctionId,
+        types: usize,
+        modes: usize,
+    },
     FunctionIdMismatch {
         expected: usize,
         actual: usize,
@@ -744,6 +832,12 @@ pub enum MirValidationError {
         expected: usize,
         actual: usize,
     },
+    CallArgumentModeMismatch {
+        function: FunctionId,
+        parameter: usize,
+        expected: MirParameterMode,
+        actual: MirCallArgumentMode,
+    },
     UseAfterMove {
         function: FunctionId,
         place: PlaceId,
@@ -776,6 +870,15 @@ mod tests {
 
     fn signature() -> MirFunctionSignature {
         MirFunctionSignature::new(Vec::new(), TypeId::new(0), false)
+    }
+
+    fn taking_signature() -> MirFunctionSignature {
+        MirFunctionSignature::with_modes(
+            vec![TypeId::new(0)],
+            vec![MirParameterMode::Take],
+            TypeId::new(0),
+            false,
+        )
     }
 
     #[test]
@@ -905,7 +1008,7 @@ mod tests {
     fn rejects_direct_calls_with_the_wrong_arity() {
         let callee = MirFunction::new(
             FunctionId::new(0),
-            MirFunctionSignature::new(vec![TypeId::new(0)], TypeId::new(0), false),
+            taking_signature(),
             1,
             0,
             vec![BasicBlock::new(
@@ -949,10 +1052,62 @@ mod tests {
     }
 
     #[test]
+    fn rejects_call_arguments_with_the_wrong_ownership_mode() {
+        let callee = MirFunction::new(
+            FunctionId::new(0),
+            MirFunctionSignature::with_modes(
+                vec![TypeId::new(0)],
+                vec![MirParameterMode::Mut],
+                TypeId::new(0),
+                false,
+            ),
+            1,
+            0,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                Vec::new(),
+                MirTerminator::Return(None),
+            )],
+        );
+        let caller = MirFunction::new(
+            FunctionId::new(1),
+            signature(),
+            1,
+            1,
+            vec![BasicBlock::new(
+                BlockId::new(0),
+                vec![MirInstruction::Call {
+                    destination: ValueId::new(0),
+                    target: MirCallTarget::Function(FunctionId::new(0)),
+                    arguments: vec![MirCallArgument::BorrowRead(PlaceId::new(0))],
+                }],
+                MirTerminator::Return(Some(ValueId::new(0))),
+            )],
+        );
+        let debug = vec![
+            MirFunctionDebug::new("callee", vec!["value".into()]),
+            MirFunctionDebug::new("caller", vec!["value".into()]),
+        ];
+        assert!(matches!(
+            MirModule::new(
+                vec![WireType::Unit],
+                vec![callee, caller],
+                debug,
+                Vec::new()
+            ),
+            Err(MirValidationError::CallArgumentModeMismatch {
+                expected: MirParameterMode::Mut,
+                actual: MirCallArgumentMode::Read,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn rejects_reading_a_place_after_it_is_taken() {
         let callee = MirFunction::new(
             FunctionId::new(0),
-            MirFunctionSignature::new(vec![TypeId::new(0)], TypeId::new(0), false),
+            taking_signature(),
             1,
             0,
             vec![BasicBlock::new(
@@ -1000,7 +1155,7 @@ mod tests {
     fn unit_taking_callee() -> MirFunction {
         MirFunction::new(
             FunctionId::new(0),
-            MirFunctionSignature::new(vec![TypeId::new(0)], TypeId::new(0), false),
+            taking_signature(),
             1,
             0,
             vec![BasicBlock::new(

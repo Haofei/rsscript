@@ -16,7 +16,7 @@ use rsscript_exec_ir::{
 use rsscript_mir::{
     BasicBlock, BlockId, FunctionId, MirBinaryOp, MirCallArgument, MirCallTarget,
     MirExternalImport, MirFunction, MirFunctionDebug, MirFunctionSignature, MirInstruction,
-    MirLiteral, MirModule, MirTerminator, PlaceId, TypeId, ValueId,
+    MirLiteral, MirModule, MirParameterMode, MirTerminator, PlaceId, TypeId, ValueId,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,11 +127,22 @@ impl TypeTable {
         &mut self,
         signature: &rsscript_exec_ir::ExecutableSignature,
     ) -> MirFunctionSignature {
-        MirFunctionSignature::new(
+        MirFunctionSignature::with_modes(
             signature
                 .params
                 .iter()
                 .map(|parameter| self.intern(WireType::parse(&parameter.type_name)))
+                .collect(),
+            signature
+                .params
+                .iter()
+                .map(
+                    |parameter| match parameter.effect.unwrap_or(ParamEffect::Read) {
+                        ParamEffect::Read => MirParameterMode::Read,
+                        ParamEffect::Mut => MirParameterMode::Mut,
+                        ParamEffect::Take => MirParameterMode::Take,
+                    },
+                )
                 .collect(),
             self.intern(
                 signature
