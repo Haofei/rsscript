@@ -611,6 +611,23 @@ pub struct RegVmExecutable {
 }
 
 impl RegVmExecutable {
+    /// Decode a bytecode envelope already accepted by `BytecodeVerifier`.
+    /// Callers cannot manufacture `VerifiedBytecode`, so public construction
+    /// keeps the generic Artifact verification phase explicit.
+    pub fn from_verified_bytecode(
+        verified: rsscript_bytecode::VerifiedBytecode,
+    ) -> Result<Self, EvalError> {
+        let (artifact, unit) = bytecode::decode_verified_bytecode(
+            verified,
+            rsscript_bytecode::VerificationContext::default(),
+        )?
+        .into_parts();
+        Ok(Self {
+            unit: Rc::new(unit),
+            artifact,
+        })
+    }
+
     /// Bind this verified executable to its immutable workspace input.
     pub fn bind_snapshot_digest(&mut self, digest: impl Into<String>) -> Result<(), EvalError> {
         self.artifact
@@ -624,30 +641,26 @@ impl RegVmExecutable {
     /// executable exists only after checksum, ABI, import-table, control-flow,
     /// function and register verification succeeds.
     pub fn from_bytecode(bytes: &[u8]) -> Result<Self, EvalError> {
-        let verified = bytecode::verify_bytes(bytes)?;
-        let (artifact, unit) = verified.into_parts();
-        Ok(Self {
-            unit: Rc::new(unit),
-            artifact,
-        })
+        let verified = rsscript_bytecode::BytecodeVerifier::default()
+            .verify(bytes)
+            .map_err(bytecode::bytecode_error)?;
+        Self::from_verified_bytecode(verified)
     }
 
     pub fn from_bytecode_with_operation(
         bytes: &[u8],
         operation: &rsscript_operation::OperationContext,
     ) -> Result<Self, EvalError> {
-        let verified = bytecode::verify_bytes_with_context(
-            bytes,
-            rsscript_bytecode::VerificationContext {
-                cancellation: operation.cancellation.as_ref(),
-                deadline: operation.deadline,
-            },
-        )?;
-        let (artifact, unit) = verified.into_parts();
-        Ok(Self {
-            unit: Rc::new(unit),
-            artifact,
-        })
+        let verified = rsscript_bytecode::BytecodeVerifier::default()
+            .verify_with_context(
+                bytes,
+                rsscript_bytecode::VerificationContext {
+                    cancellation: operation.cancellation.as_ref(),
+                    deadline: operation.deadline,
+                },
+            )
+            .map_err(bytecode::bytecode_error)?;
+        Self::from_verified_bytecode(verified)
     }
 
     /// Serialize this already-verified executable as `rsscript.bytecode.v1`.

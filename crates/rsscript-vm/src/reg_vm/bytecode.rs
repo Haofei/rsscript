@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
 
 use rsscript_abi_model::{ExternalImport, RUNTIME_ABI_VERSION};
-use rsscript_bytecode::{BytecodeArtifact, BytecodeError, BytecodeVerifier};
+use rsscript_bytecode::{BytecodeArtifact, BytecodeError, BytecodeVerifier, VerifiedBytecode};
 use serde::{Deserialize, Serialize};
 
 use super::*;
@@ -167,10 +167,17 @@ pub(super) fn verify_bytes_with_context(
     bytes: &[u8],
     context: rsscript_bytecode::VerificationContext<'_>,
 ) -> Result<VerifiedRegBytecode, EvalError> {
-    let artifact = BytecodeVerifier::default()
+    let verified = BytecodeVerifier::default()
         .verify_with_context(bytes, context)
-        .map_err(bytecode_error)?
-        .into_artifact();
+        .map_err(bytecode_error)?;
+    decode_verified_bytecode(verified, context)
+}
+
+pub(super) fn decode_verified_bytecode(
+    verified: VerifiedBytecode,
+    context: rsscript_bytecode::VerificationContext<'_>,
+) -> Result<VerifiedRegBytecode, EvalError> {
+    let artifact = verified.into_artifact();
     context.check().map_err(bytecode_error)?;
     let executable = verify_payload(&artifact.payload, &artifact.imports)
         .map_err(|message| bytecode_error(BytecodeError::InvalidPayload(message)))?;
@@ -483,6 +490,6 @@ fn external_imports(
         .collect()
 }
 
-fn bytecode_error(error: BytecodeError) -> EvalError {
+pub(super) fn bytecode_error(error: BytecodeError) -> EvalError {
     EvalError::Runtime(error.to_string())
 }

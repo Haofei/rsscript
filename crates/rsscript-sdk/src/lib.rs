@@ -448,7 +448,10 @@ impl ArtifactVerifier {
     }
 
     pub fn verify_bundle(&self, bundle: ArtifactBundle) -> Result<VerifiedArtifact, VerifyError> {
-        let executable = RegVmExecutable::from_bytecode(bundle.artifact_bytes())
+        let verified_bytecode = BytecodeVerifier::default()
+            .verify(bundle.artifact_bytes())
+            .map_err(|error| VerifyError::Bytecode(EvalError::Runtime(error.to_string())))?;
+        let executable = RegVmExecutable::from_verified_bytecode(verified_bytecode)
             .map_err(VerifyError::Bytecode)?;
         if executable.bytecode_artifact().header.executable_hash
             != bundle.provenance().module_digest
@@ -465,9 +468,17 @@ impl ArtifactVerifier {
     ) -> Result<VerifiedArtifact, VerifyError> {
         operation.check().map_err(VerifyError::Operation)?;
         let bundle = ArtifactBundle::from_bytes(bytes).map_err(VerifyError::Bundle)?;
-        let executable =
-            RegVmExecutable::from_bytecode_with_operation(bundle.artifact_bytes(), operation)
-                .map_err(VerifyError::Bytecode)?;
+        let verified_bytecode = BytecodeVerifier::default()
+            .verify_with_context(
+                bundle.artifact_bytes(),
+                VerificationContext {
+                    cancellation: operation.cancellation.as_ref(),
+                    deadline: operation.deadline,
+                },
+            )
+            .map_err(|error| VerifyError::Bytecode(EvalError::Runtime(error.to_string())))?;
+        let executable = RegVmExecutable::from_verified_bytecode(verified_bytecode)
+            .map_err(VerifyError::Bytecode)?;
         operation.check().map_err(VerifyError::Operation)?;
         Ok(VerifiedArtifact { bundle, executable })
     }

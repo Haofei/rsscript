@@ -1831,6 +1831,16 @@ fn artifact_verifier_owns_instruction_validation() {
 }
 
 #[test]
+fn sdk_passes_verified_bytecode_to_the_vm_loader() {
+    let root = workspace_root();
+    let sdk = read(&root.join("crates/rsscript-sdk/src/lib.rs"));
+    assert!(sdk.contains("BytecodeVerifier::default()"));
+    assert!(sdk.contains("RegVmExecutable::from_verified_bytecode"));
+    let vm = read(&root.join("crates/rsscript-vm/src/reg_vm/mod.rs"));
+    assert!(vm.contains("pub fn from_verified_bytecode"));
+}
+
+#[test]
 fn bytecode_language_compatibility_is_not_inferred_from_compiler_version() {
     let root = workspace_root();
     let verifier = read(&root.join("crates/rsscript-bytecode/src/lib.rs"));
