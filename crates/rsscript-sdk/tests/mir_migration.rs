@@ -13,11 +13,14 @@ use rsscript_mir::{
     MirInstruction, MirLiteral, MirModule, MirTerminator, TaskGroupId, TaskId, TypeId, ValueId,
 };
 use rsscript_sdk::{
-    CancellationToken, Compiler, EvalError, ExternalFunction, MonotonicDeadline, NativeValue,
-    ProviderError, ProviderErrorCode, ProviderResource, VmLimits,
-    analyze_source_with_interfaces_result, reg_vm_compile_mir, reg_vm_compile_validated,
-    reg_vm_eval_source_main,
+    AsyncInterpreterFn, BlockingBehavior, CancellationBehavior, CancellationToken, Compiler,
+    EvalError, ExternalFunction, ExternalFunctionRegistry, ExternalSymbol, FunctionSignature,
+    MonotonicDeadline, NativeValue, ProviderCallMode, ProviderDescriptor, ProviderError,
+    ProviderErrorCode, ProviderErrorMapping, ProviderFunction, ProviderFunctionDescriptor,
+    ProviderResource, ResourceCleanupContract, VmLimits, analyze_source_with_interfaces_result,
+    reg_vm_compile_mir, reg_vm_compile_validated, reg_vm_eval_source_main,
 };
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -850,6 +853,104 @@ fn main() -> Int {
         ));
     }
     assert_eq!(legacy_exhausted.usage, direct_exhausted.usage);
+}
+
+#[test]
+fn direct_checked_hir_awaited_external_provider_matches_legacy_vm() {
+    let source = "async fn main() -> Int { return await Host.async_value() }";
+    let interface = "pub async fn Host.async_value() -> Int\n";
+    let validated = analyze_source_with_interfaces_result(
+        "direct-hir-async-provider.rss",
+        source,
+        &[("host-async.rssi", interface)],
+    )
+    .into_validated()
+    .expect("async external fixture should validate");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("awaited checked external calls lower directly to MIR");
+    assert!(mir.functions().iter().any(|function| {
+        function.blocks().iter().any(|block| {
+            block.instructions().iter().any(|instruction| {
+                matches!(
+                    instruction,
+                    MirInstruction::Call {
+                        target: rsscript_mir::MirCallTarget::External(_),
+                        ..
+                    }
+                )
+            })
+        })
+    }));
+
+    let symbol = ExternalSymbol::new("Host.async_value").expect("valid test symbol");
+    let signature = FunctionSignature {
+        parameters: Vec::new(),
+        result: "Int".into(),
+        asynchronous: true,
+    };
+    let descriptor = ProviderDescriptor {
+        provider_id: "test.direct-async".into(),
+        provider_version: "1.0.0".into(),
+        supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+        functions: vec![ProviderFunctionDescriptor {
+            symbol: symbol.clone(),
+            signature: signature.clone(),
+            entry: "async_value".into(),
+            call_mode: ProviderCallMode::Async,
+            blocking: BlockingBehavior::NonBlocking,
+            cancellation: CancellationBehavior::Cooperative,
+            thread_safe: true,
+            reentrant: true,
+            resource_cleanup: ResourceCleanupContract::None,
+            error_mapping: ProviderErrorMapping::StructuredV1,
+        }],
+    };
+    let callable = AsyncInterpreterFn::new(|_, _| async {
+        let mut first_poll = true;
+        std::future::poll_fn(move |context| {
+            if first_poll {
+                first_poll = false;
+                context.waker().wake_by_ref();
+                std::task::Poll::Pending
+            } else {
+                std::task::Poll::Ready(Ok(NativeValue::Int(42)))
+            }
+        })
+        .await
+    });
+    let mut registry = ExternalFunctionRegistry::new();
+    registry
+        .register_provider(
+            &descriptor,
+            BTreeMap::from([(
+                symbol,
+                ProviderFunction {
+                    signature,
+                    callable,
+                },
+            )]),
+        )
+        .expect("async Provider registration should succeed");
+    let bindings = registry.into_bindings().collect::<Vec<_>>();
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy async external fixture compiles")
+        .eval_main_with_args_and_external_bindings(std::iter::empty::<String>(), bindings.clone())
+        .expect("legacy async external fixture executes");
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct async external MIR emits verified bytecode")
+    .eval_main_with_args_and_external_bindings(std::iter::empty::<String>(), bindings)
+    .expect("direct async external MIR executes");
+
+    assert_eq!(legacy.value, direct.value);
+    assert_eq!(legacy.usage.provider_calls, 1);
+    assert_eq!(legacy.usage.provider_calls, direct.usage.provider_calls);
+    assert_eq!(legacy.usage, direct.usage);
 }
 
 #[test]

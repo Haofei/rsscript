@@ -358,8 +358,9 @@ mechanical acceptance condition holds.
     - [x] **M03.3b — Lower direct async bindings and awaits.** A checked direct
       internal async binding lowers to `Spawn`, and awaiting its local task
       lowers to `Await`; the lifecycle verifier rejects any unclosed child.
-      External async calls, join/cancel syntax, and select remain fail-closed
-      follow-up work.
+      Awaited external Provider calls lower through resolved external `Call`,
+      whose VM dispatch owns future suspension/resumption; async bindings to
+      external calls, join/cancel syntax, and select remain fail-closed.
     - [x] **M03.3c — Execute lexical task-group drain.** `Join` lowers to the
       v1 `JoinTasks` instruction over its resolved child handles. The scheduler
       resumes the parent only after every still-live child completes and reaps
@@ -386,8 +387,10 @@ mechanical acceptance condition holds.
       constructing `ExecutableIr`; compiler output prefers that route and uses
       the explicit compatibility bridge only when a capability is not yet
       direct-lowerable. Internal task-group `async let`/`await` also lower to
-      explicit MIR `Spawn`/`Await`; async external calls and cancellation remain
-      follow-up direct-lowering work.
+      explicit MIR `Spawn`/`Await`; direct `await Host.call()` lowers to the
+      resolved external `Call` and uses the VM's Provider-future suspension
+      path. Async bindings to external calls and cancellation remain follow-up
+      direct-lowering work.
   - [x] **M04.2 — Verify MIR ownership, resources, and task scopes.** The
     construction verifier runs ownership-mode, move/drop, resource-lifetime,
     resource-cleanup-over-CFG, and structured-task-close passes. Targeted
@@ -428,6 +431,12 @@ mechanical acceptance condition holds.
       remains follow-up work.
   - [ ] **M05.3 — Add async/provider differential fixtures.** Compare task
     cancellation, external-call order, deadlines, and Provider traces.
+    - [x] **M05.3a — Compare awaited async Provider calls.** A cooperative
+      Provider future that deliberately yields once executes through both the
+      legacy executable-IR path and direct checked-HIR MIR bytecode. Both paths
+      return the same value and record the same Provider-call usage.
+      Cancellation, call ordering, deadlines, and trace comparison remain
+      follow-up work.
   - [ ] **M05.4 — Gate replacement on corpus parity.** New lowering cannot become
     default until all supported Core fixtures agree.
 - [ ] **M06 — Delete the source-shaped executable IR.** Remove nested
@@ -465,8 +474,10 @@ mechanical acceptance condition holds.
       to dedicated registers and direct async functions emit `SpawnTask` and
       `AwaitJoin`; lexical group join emits `JoinTasks`. The ordinary verifier
       validates task-handle definitions and call shapes, and the migration suite
-      executes spawned, awaited, and drained children in the VM. Cancellation,
-      select, and external async calls remain fail-closed follow-up work.
+      executes spawned, awaited, and drained children in the VM. Awaited async
+      external calls use the existing verifier-checked `CallExternal`, whose VM
+      dispatch parks and resumes the current task around the Provider future;
+      async bindings, cancellation, and select remain follow-up work.
     - [x] **V02.3c — Emit explicit retain/drop ownership boundaries.** Retain
       remains a verifier-visible semantic fact with no implicit VM copy, while
       drop clears its proven-dead register before frame teardown. Codegen tests

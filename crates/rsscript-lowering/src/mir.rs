@@ -854,6 +854,25 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
     }
 
     fn lower_await(&mut self, value: &checked::HirExpr) -> Result<ValueId, MirLoweringError> {
+        // A checked async external call is already a suspension-capable MIR
+        // `CallExternal`: the VM parks the current task while its linked
+        // Provider future is pending, then writes the result to the call
+        // destination. Do not fabricate an internal task merely to represent
+        // `await Host.call()`.
+        if let checked::HirExpr::Call {
+            receiver,
+            args,
+            resolution,
+            ..
+        } = value
+        {
+            let checked::CallResolution::Resolved { signature, .. } = resolution else {
+                return self.unsupported("unresolved awaited checked HIR call");
+            };
+            if signature.is_external && signature.is_async {
+                return self.lower_direct_call(receiver.as_ref(), args, resolution);
+            }
+        }
         let checked::HirExpr::Ident { name, .. } = value else {
             return self.unsupported("await of non-task checked HIR local");
         };
