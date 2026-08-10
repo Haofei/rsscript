@@ -522,6 +522,50 @@ fn main() -> Int {
 }
 
 #[test]
+fn direct_checked_hir_resource_scope_emits_cleanup_before_return() {
+    let interface = r#"
+module Host
+pub resource File
+pub fn open() -> File
+"#;
+    let source = r#"
+fn main() -> Int {
+    with Host.open() as file {
+        return 42
+    }
+}
+"#;
+    let validated = analyze_source_with_interfaces_result(
+        "mir-resource.rss",
+        source,
+        &[("host.rssi", interface)],
+    )
+    .into_validated()
+    .expect("resource scope source should validate");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("resource scope lowers directly from checked HIR");
+    let instructions = mir.functions()[0]
+        .blocks()
+        .iter()
+        .flat_map(|block| block.instructions())
+        .collect::<Vec<_>>();
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| { matches!(instruction, MirInstruction::AcquireResource { .. }) })
+    );
+    assert!(
+        instructions
+            .iter()
+            .any(|instruction| { matches!(instruction, MirInstruction::ReleaseResource { .. }) })
+    );
+    mir.verify()
+        .expect("resource scope MIR retains its cleanup proof");
+}
+
+#[test]
 fn spawned_mir_task_executes_through_verified_bytecode_vm() {
     let mir = MirModule::new(
         vec![WireType::Int {

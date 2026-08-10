@@ -169,6 +169,7 @@ pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<MirModule, MirLowe
             signature,
             mir_signature,
             targets.clone(),
+            &mut types,
         )
         .lower()?;
         lowered.push(output.function);
@@ -349,22 +350,24 @@ struct LoweredFunction {
 /// Direct checked-HIR lowering for the initial subset. Keeping this
 /// separate from `FunctionLowerer` makes the temporary compatibility boundary
 /// auditable: this implementation never constructs or reads `ExecutableIr`.
-struct CheckedHirLowerer<'source> {
+struct CheckedHirLowerer<'source, 'types> {
     id: FunctionId,
     function_name: &'source str,
     body: &'source checked::HirBlock,
     signature: &'source checked::FunctionSig,
     mir_signature: MirFunctionSignature,
     targets: CallTargets,
+    types: &'types mut TypeTable,
     blocks: Vec<BlockDraft>,
     current: BlockId,
     places: HashMap<String, PlaceId>,
     place_names: Vec<String>,
     next_value: u32,
     loops: Vec<LoopTargets>,
+    resource_scopes: Vec<PlaceId>,
 }
 
-impl<'source> CheckedHirLowerer<'source> {
+impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
     fn new(
         id: FunctionId,
         function_name: &'source str,
@@ -372,6 +375,7 @@ impl<'source> CheckedHirLowerer<'source> {
         signature: &'source checked::FunctionSig,
         mir_signature: MirFunctionSignature,
         targets: CallTargets,
+        types: &'types mut TypeTable,
     ) -> Self {
         let mut lowerer = Self {
             id,
@@ -380,12 +384,14 @@ impl<'source> CheckedHirLowerer<'source> {
             signature,
             mir_signature,
             targets,
+            types,
             blocks: vec![BlockDraft::new()],
             current: BlockId::new(0),
             places: HashMap::new(),
             place_names: Vec::new(),
             next_value: 0,
             loops: Vec::new(),
+            resource_scopes: Vec::new(),
         };
         for parameter in &lowerer.signature.params {
             lowerer.place(&parameter.name);
@@ -450,6 +456,7 @@ impl<'source> CheckedHirLowerer<'source> {
                     .as_ref()
                     .map(|value| self.lower_expression(value))
                     .transpose()?;
+                self.emit_resource_cleanup_from(0);
                 self.terminate(MirTerminator::Return(value));
                 Ok(())
             }
@@ -479,7 +486,12 @@ impl<'source> CheckedHirLowerer<'source> {
             checked::HirStmt::Loop {
                 condition, body, ..
             } => self.lower_loop(condition.as_ref(), body),
-            checked::HirStmt::With { .. } => self.unsupported("checked HIR resource scope"),
+            checked::HirStmt::With {
+                resource,
+                binding,
+                body,
+                ..
+            } => self.lower_with(resource, binding, body),
             checked::HirStmt::For { .. } => self.unsupported("checked HIR for loop"),
             checked::HirStmt::Match { .. } => self.unsupported("checked HIR match"),
             checked::HirStmt::Select { .. } => self.unsupported("checked HIR select"),
@@ -487,7 +499,9 @@ impl<'source> CheckedHirLowerer<'source> {
                 let Some(targets) = self.loops.last() else {
                     return self.unsupported("checked HIR break outside loop");
                 };
-                self.terminate(MirTerminator::Jump(targets.break_target));
+                let (cleanup_depth, target) = (targets.cleanup_depth, targets.break_target);
+                self.emit_resource_cleanup_from(cleanup_depth);
+                self.terminate(MirTerminator::Jump(target));
                 self.start_detached_block();
                 Ok(())
             }
@@ -495,7 +509,9 @@ impl<'source> CheckedHirLowerer<'source> {
                 let Some(targets) = self.loops.last() else {
                     return self.unsupported("checked HIR continue outside loop");
                 };
-                self.terminate(MirTerminator::Jump(targets.continue_target));
+                let (cleanup_depth, target) = (targets.cleanup_depth, targets.continue_target);
+                self.emit_resource_cleanup_from(cleanup_depth);
+                self.terminate(MirTerminator::Jump(target));
                 self.start_detached_block();
                 Ok(())
             }
@@ -771,7 +787,7 @@ impl<'source> CheckedHirLowerer<'source> {
         self.loops.push(LoopTargets {
             continue_target: header,
             break_target: exit,
-            cleanup_depth: 0,
+            cleanup_depth: self.resource_scopes.len(),
         });
         self.lower_checked_block(body)?;
         self.loops.pop();
@@ -780,6 +796,54 @@ impl<'source> CheckedHirLowerer<'source> {
         }
         self.current = exit;
         Ok(())
+    }
+
+    fn lower_with(
+        &mut self,
+        resource: &checked::HirExpr,
+        binding: &str,
+        body: &checked::HirBlock,
+    ) -> Result<(), MirLoweringError> {
+        let (source_expression, type_name) = match resource {
+            checked::HirExpr::Manage {
+                value, type_name, ..
+            } => (value.as_ref(), type_name.as_deref()),
+            other => (other, checked_hir_expression_type_name(other)),
+        };
+        let Some(type_name) = type_name else {
+            return self.unsupported("checked HIR resource scope without canonical type");
+        };
+        let source = self.lower_expression(source_expression)?;
+        let place = self.place(binding);
+        let resource_type = self.intern_resource_type(type_name);
+        self.emit(MirInstruction::AcquireResource {
+            place,
+            resource_type,
+            source,
+        });
+        self.resource_scopes.push(place);
+        self.lower_checked_block(body)?;
+        if self.current_block().terminator.is_none() {
+            self.emit(MirInstruction::ReleaseResource { place });
+        }
+        let released = self.resource_scopes.pop();
+        debug_assert_eq!(released, Some(place));
+        Ok(())
+    }
+
+    fn intern_resource_type(&mut self, type_name: &str) -> ResourceTypeId {
+        let wire = match WireType::parse(type_name) {
+            WireType::Resource { name } => WireType::Resource { name },
+            WireType::Qualified { value, .. }
+                if matches!(value.as_ref(), WireType::Resource { .. }) =>
+            {
+                *value
+            }
+            _ => WireType::Resource {
+                name: type_name.to_owned(),
+            },
+        };
+        ResourceTypeId::new(self.types.intern(wire).index() as u32)
     }
 
     fn lower_checked_block(&mut self, block: &checked::HirBlock) -> Result<(), MirLoweringError> {
@@ -817,6 +881,17 @@ impl<'source> CheckedHirLowerer<'source> {
 
     fn start_detached_block(&mut self) {
         self.current = self.new_block();
+    }
+
+    fn emit_resource_cleanup_from(&mut self, depth: usize) {
+        let places = self.resource_scopes[depth..]
+            .iter()
+            .rev()
+            .copied()
+            .collect::<Vec<_>>();
+        for place in places {
+            self.emit(MirInstruction::ReleaseResource { place });
+        }
     }
 
     fn place(&mut self, name: &str) -> PlaceId {

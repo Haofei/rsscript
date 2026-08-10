@@ -20,9 +20,9 @@ impl CompiledIr {
     /// Lowers the checked executable representation into the frontend-free
     /// typed CFG MIR migration boundary.
     ///
-    /// The migration subset covers resolved internal calls and structured
-    /// control flow and external calls, while resources, async, and other
-    /// unsupported semantic forms still fail closed.
+    /// The migration subset covers resolved calls, structured control flow,
+    /// and lexical resource scopes, while async and other unsupported semantic
+    /// forms still fail closed.
     pub fn mir(&self) -> Result<rsscript_mir::MirModule, rsscript_lowering::MirLoweringError> {
         self.checked_hir_mir()
             .or_else(|_| rsscript_lowering::lower_executable_ir_to_mir(&self.executable))
