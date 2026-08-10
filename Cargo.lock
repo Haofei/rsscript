@@ -456,6 +456,7 @@ dependencies = [
  "rsscript-provider-fs",
  "rsscript-provider-log",
  "rsscript-sdk",
+ "rsscript-semantics",
  "sha2",
 ]
 
