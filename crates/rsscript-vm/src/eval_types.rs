@@ -1,6 +1,10 @@
 use crate::diagnostic::Diagnostic;
 use std::collections::BTreeMap;
+use std::future::Future;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::task::{Context, Poll};
 use std::time::Instant;
 
 pub use rsscript_abi_model::{ExternalImport, ExternalSymbol, FunctionSignature, SignatureHash};
@@ -35,6 +39,38 @@ impl ProviderTraceCollector {
             .expect("provider trace mutex poisoned")
             .clone()
     }
+}
+
+/// A Provider future boundary that turns an unwind from an in-process host
+/// callback into the same structured error path as other Provider failures.
+///
+/// This protects the reference VM when the host uses unwind panics. It is not
+/// a process-isolation guarantee: abort panics and native faults still require
+/// the isolated runner boundary.
+struct PanicContainedProviderFuture {
+    inner: ProviderFuture,
+}
+
+impl PanicContainedProviderFuture {
+    fn new(inner: ProviderFuture) -> Self {
+        Self { inner }
+    }
+}
+
+impl Future for PanicContainedProviderFuture {
+    type Output = Result<NativeValue, ProviderError>;
+
+    fn poll(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
+        match catch_unwind(AssertUnwindSafe(|| this.inner.as_mut().poll(context))) {
+            Ok(result) => result,
+            Err(_) => Poll::Ready(Err(provider_panic_error())),
+        }
+    }
+}
+
+fn provider_panic_error() -> ProviderError {
+    ProviderError::internal("provider callable panicked")
 }
 
 /// A linked provider callable. Registry resolution attaches the complete
@@ -134,12 +170,13 @@ impl ExternalFunction {
                 .resources
                 .as_deref()
                 .map(ProviderResourceTable::created);
-            let result = match &self.callable {
+            let result = catch_unwind(AssertUnwindSafe(|| match &self.callable {
                 ProviderCallable::Sync(callable) => callable.call_with_context(context, args),
                 ProviderCallable::Async(_) => Err(ProviderError::unavailable(
                     "async provider function requires the VM async dispatcher",
                 )),
-            };
+            }))
+            .unwrap_or_else(|_| Err(provider_panic_error()));
             if self.contract().is_some_and(|contract| {
                 matches!(
                     contract.descriptor.cancellation,
@@ -236,7 +273,10 @@ impl ExternalFunction {
                         "blocking work must not run inside an async Provider future",
                     ));
                 }
-                let result = callable.call(context, args).await;
+                let result = match catch_unwind(AssertUnwindSafe(|| callable.call(context, args))) {
+                    Ok(future) => PanicContainedProviderFuture::new(future).await,
+                    Err(_) => Err(provider_panic_error()),
+                };
                 if matches!(
                     contract.descriptor.cancellation,
                     CancellationBehavior::Cooperative | CancellationBehavior::AbortSafe
@@ -553,6 +593,18 @@ mod provider_contract_tests {
         blocking: BlockingBehavior,
         cleanup: ResourceCleanupContract,
     ) -> ExternalFunction {
+        registered_sync_function(
+            blocking,
+            cleanup,
+            NativeInterpreterFn::new(|_| Ok(NativeValue::Unit)),
+        )
+    }
+
+    fn registered_sync_function(
+        blocking: BlockingBehavior,
+        cleanup: ResourceCleanupContract,
+        callable: NativeInterpreterFn,
+    ) -> ExternalFunction {
         let symbol = ExternalSymbol::new("host.test.run").unwrap();
         let signature = FunctionSignature {
             parameters: vec![],
@@ -584,7 +636,7 @@ mod provider_contract_tests {
                     symbol,
                     ProviderFunction {
                         signature,
-                        callable: NativeInterpreterFn::new(|_| Ok(NativeValue::Unit)),
+                        callable,
                     },
                 )]),
             )
@@ -736,6 +788,25 @@ mod provider_contract_tests {
     }
 
     #[test]
+    fn sync_dispatcher_contains_provider_panics() {
+        let function = registered_sync_function(
+            BlockingBehavior::NonBlocking,
+            ResourceCleanupContract::None,
+            NativeInterpreterFn::new(|_| -> Result<NativeValue, ProviderError> {
+                panic!("test Provider panic");
+            }),
+        );
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            function.call_with_context(&mut ProviderCallContext::default(), vec![])
+        }));
+        let error = result
+            .expect("dispatcher must contain a Provider unwind")
+            .expect_err("contained panic must become a Provider error");
+        assert_eq!(error.code, ProviderErrorCode::Internal);
+        assert_eq!(error.message, "provider callable panicked");
+    }
+
+    #[test]
     fn async_dispatcher_observes_cancellation_while_provider_is_suspended() {
         let started = Arc::new(AtomicBool::new(false));
         let started_by_provider = Arc::clone(&started);
@@ -792,5 +863,23 @@ mod provider_contract_tests {
             result => panic!("expected deadline after pending provider future, got {result:?}"),
         };
         assert_eq!(error.code, ProviderErrorCode::DeadlineExceeded);
+    }
+
+    #[test]
+    fn async_dispatcher_contains_provider_future_panics() {
+        let function = registered_async_function(AsyncInterpreterFn::new(|_, _| async move {
+            panic!("test Provider future panic");
+            #[allow(unreachable_code)]
+            Ok(NativeValue::Unit)
+        }));
+        let mut future = function.start_async(async_context(None, None), vec![]);
+
+        let result = std::panic::catch_unwind(AssertUnwindSafe(|| poll_once(&mut future)));
+        let error = match result.expect("dispatcher must contain a Provider future unwind") {
+            Poll::Ready(Err(error)) => error,
+            outcome => panic!("expected contained Provider panic, got {outcome:?}"),
+        };
+        assert_eq!(error.code, ProviderErrorCode::Internal);
+        assert_eq!(error.message, "provider callable panicked");
     }
 }

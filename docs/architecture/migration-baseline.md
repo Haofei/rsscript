@@ -576,6 +576,10 @@ mechanical acceptance condition holds.
     script error, Provider error, cancellation, deadline, and drop failure.
   - [ ] **P08.3 — Add lane, reentrancy, and panic boundary fixtures.** Validate
     blocking policy and host failure containment.
+    - [x] **P08.3a — Contain unwind-style Provider failures.** Both synchronous
+      callables and asynchronous future polls are caught by the VM dispatcher and
+      converted to structured internal Provider errors. Abort panics and native
+      faults remain isolated-runner concerns; reentrancy fixtures remain open.
   - [ ] **P08.4 — Add redaction and payload-limit fixtures.** Reports and traces
     remain bounded and do not expose sensitive Provider payloads by default.
 
