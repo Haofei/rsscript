@@ -10,3 +10,4 @@ rsscript_compiler = { package = "rsscript-compiler", path = "../rsscript-compile
 rsscript-operation = { path = "../rsscript-operation" }
 rsscript-semantics = { path = "../rsscript-semantics" }
 rsscript-syntax = { path = "../rsscript-syntax" }
+rsscript-diagnostics = { path = "../rsscript-diagnostics" }

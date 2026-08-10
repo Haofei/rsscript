@@ -15,10 +15,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 pub use rsscript_compiler::{
-    Diagnostic, DiagnosticExplanation, Severity, Span, analyze_source_result_with_operation,
-    analyze_source_with_core, analyze_source_with_interfaces,
+    analyze_source_result_with_operation, analyze_source_with_core, analyze_source_with_interfaces,
     analyze_source_with_interfaces_result_with_operation, analyze_sources_with_interfaces,
-    explain_diagnostic_code,
+};
+pub use rsscript_diagnostics::{
+    Diagnostic, DiagnosticExplanation, Severity, Span, explain_diagnostic_code,
 };
 pub use rsscript_semantics::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,

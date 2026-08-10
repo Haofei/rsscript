@@ -1850,6 +1850,7 @@ name = "rsscript-language-service"
 version = "0.1.0"
 dependencies = [
  "rsscript-compiler",
+ "rsscript-diagnostics",
  "rsscript-operation",
  "rsscript-semantics",
  "rsscript-syntax",
