@@ -396,6 +396,11 @@ mechanical acceptance condition holds.
       call shapes, and the migration suite executes the resulting Artifact in
       the VM. Cancellation, group join, select, and external async calls remain
       fail-closed follow-up work.
+    - [x] **V02.3c — Emit explicit retain/drop ownership boundaries.** Retain
+      remains a verifier-visible semantic fact with no implicit VM copy, while
+      drop clears its proven-dead register before frame teardown. Codegen tests
+      assert the emitted cleanup sequence and verify the ordinary Artifact;
+      source-level retain/drop lowering remains follow-up work.
   - [x] **V02.4 — Switch SDK build to codegen-vm.** Reviewed SDK source,
     interface, and package builds now emit their supported MIR capability
     directly through `codegen-vm` into a provider-neutral Artifact, without

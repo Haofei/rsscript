@@ -235,8 +235,17 @@ fn lower_instruction(
                 ("src", json!(place_reg(*place))),
             ],
         )),
-        MirInstruction::Retain { .. } => return Err(CodegenError::Unsupported("retain")),
-        MirInstruction::Drop { .. } => return Err(CodegenError::Unsupported("drop")),
+        // Retention is a verified ownership fact. It does not copy or destroy
+        // a VM value by itself, so the v1 register payload has no runtime
+        // instruction to emit; keeping it in MIR still prevents backends from
+        // silently erasing the semantic boundary.
+        MirInstruction::Retain { .. } => {}
+        // MIR validates that no later read can observe the dropped place. Clear
+        // the register as well, promptly releasing the VM reference instead of
+        // retaining an otherwise-dead heap value until frame teardown.
+        MirInstruction::Drop { place } => {
+            code.push(instr("LoadUnit", [("dst", json!(place_reg(*place)))]))
+        }
         MirInstruction::AcquireResource { place, source, .. } => code.push(instr(
             "Move",
             [
@@ -689,5 +698,71 @@ mod tests {
         BytecodeVerifier::default()
             .verify(&artifact.to_bytes().expect("encode task bytecode"))
             .expect("verify task bytecode");
+    }
+
+    #[test]
+    fn ownership_retain_and_drop_emit_a_verifiable_cleanup_boundary() {
+        let module = MirModule::new(
+            vec![WireType::Unit],
+            vec![MirFunction::new(
+                FunctionId::new(0),
+                MirFunctionSignature::new(vec![], TypeId::new(0), false),
+                1,
+                1,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![
+                        MirInstruction::LoadLiteral {
+                            destination: ValueId::new(0),
+                            value: MirLiteral::Unit,
+                        },
+                        MirInstruction::WritePlace {
+                            place: PlaceId::new(0),
+                            value: ValueId::new(0),
+                        },
+                        MirInstruction::Retain {
+                            place: PlaceId::new(0),
+                        },
+                        MirInstruction::Drop {
+                            place: PlaceId::new(0),
+                        },
+                    ],
+                    MirTerminator::Return(None),
+                )],
+            )],
+            vec![MirFunctionDebug::new("main", vec!["owned".into()])],
+            vec![],
+        )
+        .expect("ownership MIR verifies");
+        let artifact = emit_artifact(
+            &module,
+            &format!("sha256:{}", "a".repeat(64)),
+            &format!("sha256:{}", "b".repeat(64)),
+            "0.1.0",
+        )
+        .expect("emit ownership bytecode");
+        let payload: serde_json::Value =
+            rsscript_bytecode::decode_executable_payload(&artifact.payload)
+                .expect("decode ownership payload");
+        let opcodes = payload["functions"][0]["code"]
+            .as_array()
+            .expect("ownership code")
+            .iter()
+            .map(|instruction| {
+                instruction
+                    .as_object()
+                    .and_then(|instruction| instruction.keys().next())
+                    .expect("single opcode")
+                    .as_str()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            opcodes,
+            ["LoadUnit", "Move", "LoadUnit", "LoadUnit", "Return"],
+            "retain has no VM side effect while drop clears its place before the unit return"
+        );
+        BytecodeVerifier::default()
+            .verify(&artifact.to_bytes().expect("encode ownership bytecode"))
+            .expect("verify ownership bytecode");
     }
 }
