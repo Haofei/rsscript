@@ -264,6 +264,11 @@ mechanical acceptance condition holds.
       participate in dominance validation and codegen emits the existing
       verifier-checked `MakeList` bytecode instruction. Records, variants,
       maps, field/index operations, and match dispatch remain fail-closed.
+    - [x] **M02.3b — Lower owned map construction.** Source map literals lower
+      to `MakeMap { destination, entries }`, preserving resolved key/value
+      `ValueId` pairs for dominance validation. Codegen emits verifier-checked
+      v1 map entries and the dual-path corpus compares map results; records,
+      variants, field/index operations, and match dispatch remain fail-closed.
   - [ ] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
     - [x] **M02.4a — Verify the initial structural subset.** The verifier
@@ -415,6 +420,11 @@ mechanical acceptance condition holds.
       value IDs to verifier-checked v1 item registers. Lowering and SDK
       migration fixtures prove source list literals reach a verified Artifact;
       non-list aggregate and pattern instructions remain fail-closed.
+    - [x] **V02.3e — Emit owned map construction.** `MakeMap` maps ordered
+      resolved key/value value-ID pairs to verifier-checked v1 map entries.
+      Lowering and dual-path migration fixtures prove map literals reach and
+      execute through verified bytecode; non-map aggregate and pattern
+      instructions remain fail-closed.
   - [x] **V02.4 — Switch SDK build to codegen-vm.** Reviewed SDK source,
     interface, and package builds now emit their supported MIR capability
     directly through `codegen-vm` into a provider-neutral Artifact, without

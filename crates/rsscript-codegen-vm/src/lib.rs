@@ -241,6 +241,27 @@ fn lower_instruction(
                 ),
             ],
         )),
+        MirInstruction::MakeMap {
+            destination,
+            entries,
+        } => code.push(instr(
+            "MakeMap",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                (
+                    "entries",
+                    json!(
+                        entries
+                            .iter()
+                            .map(|(key, value)| [
+                                value_reg(function, *key),
+                                value_reg(function, *value),
+                            ])
+                            .collect::<Vec<_>>()
+                    ),
+                ),
+            ],
+        )),
         MirInstruction::ReadPlace { destination, place }
         | MirInstruction::BorrowRead { destination, place }
         | MirInstruction::TakePlace { destination, place } => code.push(instr(

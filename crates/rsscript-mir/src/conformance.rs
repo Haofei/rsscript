@@ -44,6 +44,7 @@ pub enum MirValue {
     String(String),
     Char(char),
     List(Vec<MirValue>),
+    Map(Vec<(MirValue, MirValue)>),
 }
 
 impl MirValue {
@@ -64,6 +65,14 @@ impl MirValue {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            Self::Map(entries) => {
+                let mut rendered = entries
+                    .iter()
+                    .map(|(key, value)| format!("{}: {}", key.render(), value.render()))
+                    .collect::<Vec<_>>();
+                rendered.sort();
+                format!("{{{}}}", rendered.join(", "))
+            }
         }
     }
 }
@@ -183,6 +192,19 @@ impl<'a> Interpreter<'a> {
                                 .iter()
                                 .map(|item| value_at(&values, *item))
                                 .collect::<Result<Vec<_>, _>>()?,
+                        ));
+                    }
+                    MirInstruction::MakeMap {
+                        destination,
+                        entries,
+                    } => {
+                        values[destination.index()] = Some(MirValue::Map(
+                            entries
+                                .iter()
+                                .map(|(key, value)| {
+                                    Ok((value_at(&values, *key)?, value_at(&values, *value)?))
+                                })
+                                .collect::<Result<Vec<_>, MirExecutionError>>()?,
                         ));
                     }
                     MirInstruction::ReadPlace { destination, place } => {

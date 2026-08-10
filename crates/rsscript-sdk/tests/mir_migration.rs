@@ -134,6 +134,16 @@ fn main() -> List<Int> {
 }
 "#,
     },
+    MigrationCase {
+        name: "map_literal",
+        capability: "owned map literals",
+        stage: MigrationStage::DualPath,
+        source: r#"
+fn main() -> Map<Int, Int> {
+    return {1 => 2}
+}
+"#,
+    },
 ];
 
 #[test]

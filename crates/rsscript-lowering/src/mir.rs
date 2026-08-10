@@ -529,7 +529,23 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
                 Ok(destination)
             }
             ExecutableExpr::ObjectLiteral { .. } => self.unsupported("object literal"),
-            ExecutableExpr::MapLiteral { .. } => self.unsupported("map literal"),
+            ExecutableExpr::MapLiteral { entries, .. } => {
+                let entries = entries
+                    .iter()
+                    .map(|entry| -> Result<(ValueId, ValueId), MirLoweringError> {
+                        Ok((
+                            self.lower_expression(&entry.key)?,
+                            self.lower_expression(&entry.value)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let destination = self.value();
+                self.emit(MirInstruction::MakeMap {
+                    destination,
+                    entries,
+                });
+                Ok(destination)
+            }
             ExecutableExpr::ArrayLiteral { items, .. } => {
                 let items = items
                     .iter()
@@ -812,7 +828,8 @@ fn binary_op(op: BinaryOp) -> MirBinaryOp {
 #[cfg(test)]
 mod tests {
     use rsscript_exec_ir::{
-        ExecutableBlock, ExecutableFunction, ExecutableProgram, ExecutableSignature,
+        ExecutableBlock, ExecutableFunction, ExecutableMapLiteralEntry, ExecutableProgram,
+        ExecutableSignature,
     };
 
     use super::*;
@@ -962,6 +979,37 @@ mod tests {
             ] if items.len() == 2
         ));
         mir.verify().expect("verify list construction");
+    }
+
+    #[test]
+    fn lowers_map_literals_to_owned_mir_map_construction() {
+        let executable = module(ExecutableFunction {
+            name: "main".into(),
+            is_async: false,
+            signature: signature(),
+            body: ExecutableBlock {
+                statements: vec![ExecutableStmt::Return {
+                    value: Some(ExecutableExpr::MapLiteral {
+                        entries: vec![ExecutableMapLiteralEntry {
+                            key: ExecutableExpr::Number { value: "1".into() },
+                            value: ExecutableExpr::Number { value: "2".into() },
+                        }],
+                        type_name: Some("Map<Int, Int>".into()),
+                    }),
+                }],
+            },
+        });
+
+        let mir = lower_executable_ir_to_mir(&executable).expect("lower map literal");
+        assert!(matches!(
+            mir.functions()[0].blocks()[0].instructions(),
+            [
+                MirInstruction::LoadLiteral { .. },
+                MirInstruction::LoadLiteral { .. },
+                MirInstruction::MakeMap { entries, .. },
+            ] if entries.len() == 1
+        ));
+        mir.verify().expect("verify map construction");
     }
 
     #[test]
