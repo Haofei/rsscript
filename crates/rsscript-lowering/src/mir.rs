@@ -194,6 +194,7 @@ impl BlockDraft {
 struct LoopTargets {
     continue_target: BlockId,
     break_target: BlockId,
+    cleanup_depth: usize,
 }
 
 struct FunctionLowerer<'source, 'types> {
@@ -210,6 +211,7 @@ struct FunctionLowerer<'source, 'types> {
     tasks: HashMap<String, TaskId>,
     next_task: u32,
     loops: Vec<LoopTargets>,
+    resource_scopes: Vec<PlaceId>,
 }
 
 impl<'source, 'types> FunctionLowerer<'source, 'types> {
@@ -234,6 +236,7 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
             tasks: HashMap::new(),
             next_task: 0,
             loops: Vec::new(),
+            resource_scopes: Vec::new(),
         };
         for parameter in &source.signature.params {
             lowerer.place(&parameter.name);
@@ -298,6 +301,7 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
                     .as_ref()
                     .map(|value| self.lower_expression(value))
                     .transpose()?;
+                self.emit_resource_cleanup_from(0);
                 self.terminate(MirTerminator::Return(value));
                 self.start_detached_block();
             }
@@ -321,14 +325,18 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
                 let Some(targets) = self.loops.last() else {
                     return self.unsupported("break outside loop");
                 };
-                self.terminate(MirTerminator::Jump(targets.break_target));
+                let (cleanup_depth, target) = (targets.cleanup_depth, targets.break_target);
+                self.emit_resource_cleanup_from(cleanup_depth);
+                self.terminate(MirTerminator::Jump(target));
                 self.start_detached_block();
             }
             ExecutableStmt::Continue => {
                 let Some(targets) = self.loops.last() else {
                     return self.unsupported("continue outside loop");
                 };
-                self.terminate(MirTerminator::Jump(targets.continue_target));
+                let (cleanup_depth, target) = (targets.cleanup_depth, targets.continue_target);
+                self.emit_resource_cleanup_from(cleanup_depth);
+                self.terminate(MirTerminator::Jump(target));
                 self.start_detached_block();
             }
             ExecutableStmt::Expr(expression) => {
@@ -408,10 +416,13 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
             resource_type,
             source,
         });
+        self.resource_scopes.push(place);
         self.lower_statements(&body.statements)?;
         if self.current_block().terminator.is_none() {
             self.emit(MirInstruction::ReleaseResource { place });
         }
+        let released = self.resource_scopes.pop();
+        debug_assert_eq!(released, Some(place));
         Ok(())
     }
 
@@ -456,6 +467,7 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
         self.loops.push(LoopTargets {
             continue_target: header,
             break_target: exit,
+            cleanup_depth: self.resource_scopes.len(),
         });
         self.lower_statements(&body.statements)?;
         self.loops.pop();
@@ -720,6 +732,17 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
         task
     }
 
+    fn emit_resource_cleanup_from(&mut self, depth: usize) {
+        let resources = self.resource_scopes[depth..]
+            .iter()
+            .copied()
+            .rev()
+            .collect::<Vec<_>>();
+        for place in resources {
+            self.emit(MirInstruction::ReleaseResource { place });
+        }
+    }
+
     fn emit(&mut self, instruction: MirInstruction) {
         self.current_block_mut().instructions.push(instruction);
     }
@@ -927,7 +950,7 @@ mod tests {
     }
 
     #[test]
-    fn lowers_a_managed_linear_resource_scope_to_explicit_lifetime_ops() {
+    fn lowers_managed_resource_scope_cleanup_before_return() {
         let executable = module(ExecutableFunction {
             name: "main".into(),
             is_async: false,
@@ -944,7 +967,11 @@ mod tests {
                         type_name: Some("host.fs.File".into()),
                     },
                     binding: "file".into(),
-                    body: ExecutableBlock { statements: vec![] },
+                    body: ExecutableBlock {
+                        statements: vec![ExecutableStmt::Return {
+                            value: Some(ExecutableExpr::Number { value: "9".into() }),
+                        }],
+                    },
                 }],
             },
         });
@@ -984,6 +1011,7 @@ mod tests {
             [
                 MirInstruction::Call { .. },
                 MirInstruction::AcquireResource { .. },
+                MirInstruction::LoadLiteral { .. },
                 MirInstruction::ReleaseResource { .. }
             ]
         ));
