@@ -400,12 +400,13 @@ impl<'source, 'types> FunctionLowerer<'source, 'types> {
         // Evaluate the managed source before entering the lifetime. The current
         // MIR acquire primitive represents ownership of the resulting host
         // resource; bytecode execution remains intentionally unsupported.
-        let _source = self.lower_expression(value)?;
+        let source = self.lower_expression(value)?;
         let place = self.place(binding);
         let resource_type = self.intern_resource_type(type_name);
         self.emit(MirInstruction::AcquireResource {
             place,
             resource_type,
+            source,
         });
         self.lower_statements(&body.statements)?;
         if self.current_block().terminator.is_none() {

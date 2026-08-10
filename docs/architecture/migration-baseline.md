@@ -377,6 +377,11 @@ mechanical acceptance condition holds.
       VM-private register structures.
   - [ ] **V02.3 — Lower resources, async, builtins, and external calls.** Add
     codegen fixtures for every Core MIR instruction.
+    - [x] **V02.3a — Emit the linear resource lifetime subset.** Resource
+      acquisition carries its defined source value and emits `Manage`; release
+      emits `ResourceDrop`, with the ordinary bytecode verifier covering the
+      resulting Artifact. Async scheduling, builtins, and non-normal cleanup
+      remain follow-up work.
   - [ ] **V02.4 — Switch SDK build to codegen-vm.** Remove VM compile helpers
     from the supported compilation path and add dependency tests.
 - [ ] **V03 — Make the verifier construct the only executable program type.**

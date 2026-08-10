@@ -178,12 +178,17 @@ fn lower_instruction(
         )),
         MirInstruction::Retain { .. } => return Err(CodegenError::Unsupported("retain")),
         MirInstruction::Drop { .. } => return Err(CodegenError::Unsupported("drop")),
-        MirInstruction::AcquireResource { .. } => {
-            return Err(CodegenError::Unsupported("resource acquire"));
-        }
-        MirInstruction::ReleaseResource { .. } => {
-            return Err(CodegenError::Unsupported("resource release"));
-        }
+        MirInstruction::AcquireResource { place, source, .. } => code.push(instr(
+            "Manage",
+            [
+                ("dst", json!(place_reg(*place))),
+                ("src", json!(value_reg(function, *source))),
+            ],
+        )),
+        MirInstruction::ReleaseResource { place } => code.push(instr(
+            "ResourceDrop",
+            [("resource", json!(place_reg(*place)))],
+        )),
         MirInstruction::Spawn { .. }
         | MirInstruction::Await { .. }
         | MirInstruction::Cancel { .. }
@@ -389,7 +394,9 @@ mod tests {
     use super::*;
     use rsscript_abi_model::{CORE_LIBRARY_ABI_VERSION, RUNTIME_ABI_VERSION, WireType};
     use rsscript_bytecode::BytecodeVerifier;
-    use rsscript_mir::{BasicBlock, FunctionId, MirFunctionDebug, MirFunctionSignature, TypeId};
+    use rsscript_mir::{
+        BasicBlock, FunctionId, MirFunctionDebug, MirFunctionSignature, ResourceTypeId, TypeId,
+    };
 
     #[test]
     fn scalar_cfg_emits_a_verifiable_vm_artifact_without_the_vm() {
@@ -443,5 +450,54 @@ mod tests {
         BytecodeVerifier::default()
             .verify(&artifact.to_bytes().unwrap())
             .unwrap();
+    }
+
+    #[test]
+    fn resource_lifetime_ops_emit_manage_and_drop_bytecode() {
+        let module = MirModule::new(
+            vec![
+                WireType::Unit,
+                WireType::Resource {
+                    name: "host.test.Resource".into(),
+                },
+            ],
+            vec![MirFunction::new(
+                FunctionId::new(0),
+                MirFunctionSignature::new(vec![], TypeId::new(0), false),
+                1,
+                1,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    vec![
+                        MirInstruction::LoadLiteral {
+                            destination: ValueId::new(0),
+                            value: MirLiteral::Unit,
+                        },
+                        MirInstruction::AcquireResource {
+                            place: PlaceId::new(0),
+                            resource_type: ResourceTypeId::new(1),
+                            source: ValueId::new(0),
+                        },
+                        MirInstruction::ReleaseResource {
+                            place: PlaceId::new(0),
+                        },
+                    ],
+                    MirTerminator::Return(None),
+                )],
+            )],
+            vec![MirFunctionDebug::new("main", vec!["resource".into()])],
+            vec![],
+        )
+        .unwrap();
+        let artifact = emit_artifact(
+            &module,
+            &format!("sha256:{}", "a".repeat(64)),
+            &format!("sha256:{}", "b".repeat(64)),
+            "0.1.0",
+        )
+        .expect("emit resource bytecode");
+        BytecodeVerifier::default()
+            .verify(&artifact.to_bytes().expect("encode resource bytecode"))
+            .expect("verify resource bytecode");
     }
 }

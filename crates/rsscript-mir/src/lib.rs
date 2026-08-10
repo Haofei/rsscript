@@ -115,6 +115,7 @@ pub enum MirInstruction {
     AcquireResource {
         place: PlaceId,
         resource_type: ResourceTypeId,
+        source: ValueId,
     },
     /// End a resource lifetime explicitly. Every reachable return edge must
     /// have released all acquired resources.
@@ -800,6 +801,7 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         MirInstruction::WritePlace { value, .. } | MirInstruction::Discard { value } => {
             vec![*value]
         }
+        MirInstruction::AcquireResource { source, .. } => vec![*source],
         MirInstruction::Binary { left, right, .. } => vec![*left, *right],
         MirInstruction::Call { arguments, .. } => arguments
             .iter()
@@ -825,7 +827,6 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         | MirInstruction::TakePlace { .. }
         | MirInstruction::Retain { .. }
         | MirInstruction::Drop { .. }
-        | MirInstruction::AcquireResource { .. }
         | MirInstruction::ReleaseResource { .. }
         | MirInstruction::Await { .. }
         | MirInstruction::Cancel { .. }
@@ -1035,9 +1036,10 @@ fn verify_instruction(
             moved_places.insert(*place);
             Ok(())
         }
-        MirInstruction::AcquireResource { place, .. } => {
+        MirInstruction::AcquireResource { place, source, .. } => {
             check_place(*place)?;
             moved_places.remove(place);
+            used.push(*source);
             Ok(())
         }
         MirInstruction::ReleaseResource { place } => {
@@ -1393,13 +1395,18 @@ mod tests {
                 FunctionId::new(0),
                 MirFunctionSignature::new(vec![], TypeId::new(0), false),
                 1,
-                0,
+                1,
                 vec![BasicBlock::new(
                     BlockId::new(0),
                     vec![
+                        MirInstruction::LoadLiteral {
+                            destination: ValueId::new(0),
+                            value: MirLiteral::Unit,
+                        },
                         MirInstruction::AcquireResource {
                             place: PlaceId::new(0),
                             resource_type: ResourceTypeId::new(1),
+                            source: ValueId::new(0),
                         },
                         MirInstruction::ReleaseResource {
                             place: PlaceId::new(0),
@@ -1419,13 +1426,20 @@ mod tests {
                 FunctionId::new(0),
                 MirFunctionSignature::new(vec![], TypeId::new(0), false),
                 1,
-                0,
+                1,
                 vec![BasicBlock::new(
                     BlockId::new(0),
-                    vec![MirInstruction::AcquireResource {
-                        place: PlaceId::new(0),
-                        resource_type: ResourceTypeId::new(1),
-                    }],
+                    vec![
+                        MirInstruction::LoadLiteral {
+                            destination: ValueId::new(0),
+                            value: MirLiteral::Unit,
+                        },
+                        MirInstruction::AcquireResource {
+                            place: PlaceId::new(0),
+                            resource_type: ResourceTypeId::new(1),
+                            source: ValueId::new(0),
+                        },
+                    ],
                     MirTerminator::Return(None),
                 )],
             )],
@@ -1443,7 +1457,7 @@ mod tests {
         let worker = MirFunction::new(
             FunctionId::new(1),
             MirFunctionSignature::new(vec![], TypeId::new(0), true),
-            0,
+            1,
             0,
             vec![BasicBlock::new(
                 BlockId::new(0),

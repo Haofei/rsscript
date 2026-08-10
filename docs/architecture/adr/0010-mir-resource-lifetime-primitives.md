@@ -14,14 +14,15 @@ resource.
 ## Decision and non-goals
 
 `rsscript-mir` now represents `AcquireResource` and `ReleaseResource` with a
-canonical `ResourceTypeId`. MIR validation verifies that the ID resolves to a
+canonical `ResourceTypeId`; acquisition also names the already-defined source
+value being placed under runtime resource ownership. MIR validation verifies that the ID resolves to a
 `WireType::Resource`, rejects duplicate acquire and release-without-acquire,
 and requires every reachable return path to release all live resources.
 
-This establishes the verifier primitive only. Source lowering for `resource` /
-`with`, transfer/manage semantics, and cleanup edges for errors and
-cancellation remain separate milestones. VM bytecode codegen deliberately
-rejects these new instructions until it can implement the same lifecycle.
+This establishes the normal-exit primitive only. Explicitly managed linear
+`with` scopes lower to it, and VM bytecode codegen maps it to existing
+`Manage`/`ResourceDrop` instructions. Transfer semantics and cleanup edges for
+errors and cancellation remain separate milestones.
 
 ## Compatibility and migration
 
@@ -38,13 +39,13 @@ on provider errors or cancellation.
 
 ## Provider and backend impact
 
-The conformance interpreter models a live placeholder for control-flow tests.
-The VM code generator returns an explicit unsupported error for either resource
-instruction; providers and experimental backends are unaffected until lowering
-is added.
+The conformance interpreter preserves the acquired source value for
+control-flow tests. The VM code generator maps the linear resource subset to
+`Manage` and `ResourceDrop`; scheduler/error/cancellation cleanup and providers
+remain follow-up work.
 
 ## Evidence
 
 `rsscript-mir` unit and conformance tests cover valid release and leaked
-resource rejection. `rsscript-codegen-vm` and `rsscript-lowering` tests verify
-the current fail-closed backend boundary.
+resource rejection. `rsscript-lowering` tests cover managed `with` lowering,
+and `rsscript-codegen-vm` verifies the emitted resource Artifact.
