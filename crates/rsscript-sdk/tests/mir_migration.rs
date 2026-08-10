@@ -293,6 +293,34 @@ fn main() -> Int {
 }
 
 #[test]
+fn direct_checked_hir_branch_reaches_verified_bytecode() {
+    let source = r#"
+fn main() -> Int {
+    let value = 41
+    if value < 42 {
+        return value + 1
+    } else {
+        return 0
+    }
+}
+"#;
+    let compiled =
+        compile_source_to_ir("direct-hir-branch.rss", source).expect("direct-HIR branch compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("checked HIR branch uses direct lowering");
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct HIR branch emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("direct HIR branch bytecode executes");
+    assert_eq!(output.value, "42");
+}
+
+#[test]
 fn direct_checked_hir_internal_calls_reach_verified_bytecode() {
     let source = r#"
 fn helper() -> Int {

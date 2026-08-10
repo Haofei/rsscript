@@ -113,13 +113,13 @@ pub fn lower_executable_ir_to_mir(
     Ok(MirModule::new(types.into_types(), lowered, debug, imports)?)
 }
 
-/// Lower the deliberately small, linear checked-HIR subset without projecting
+/// Lower the deliberately small checked-HIR subset without projecting
 /// through `ExecutableIr`. This is the first replacement path for the
 /// transitional source-shaped bridge: it consumes checked HIR nodes and their
-/// type facts directly, while unsupported control flow, calls, resources, and
-/// async constructs continue to fail closed so callers can choose the explicit
-/// compatibility path during migration.
-pub fn lower_checked_hir_linear_to_mir(hir: &checked::Hir) -> Result<MirModule, MirLoweringError> {
+/// type facts directly. Unsupported resources and async constructs continue to
+/// fail closed so callers can choose the explicit compatibility path during
+/// migration.
+pub fn lower_checked_hir_to_mir(hir: &checked::Hir) -> Result<MirModule, MirLoweringError> {
     let mut functions = hir
         .function_bodies()
         .filter_map(|(name, body)| {
@@ -147,7 +147,7 @@ pub fn lower_checked_hir_linear_to_mir(hir: &checked::Hir) -> Result<MirModule, 
     for ((index, (name, block, signature)), mir_signature) in
         functions.iter().enumerate().zip(signatures)
     {
-        let output = CheckedHirLinearLowerer::new(
+        let output = CheckedHirLowerer::new(
             FunctionId::new(index as u32),
             name,
             block,
@@ -259,24 +259,24 @@ struct LoweredFunction {
     debug: MirFunctionDebug,
 }
 
-/// Direct checked-HIR lowering for the initial linear subset. Keeping this
+/// Direct checked-HIR lowering for the initial subset. Keeping this
 /// separate from `FunctionLowerer` makes the temporary compatibility boundary
 /// auditable: this implementation never constructs or reads `ExecutableIr`.
-struct CheckedHirLinearLowerer<'source> {
+struct CheckedHirLowerer<'source> {
     id: FunctionId,
     function_name: &'source str,
     body: &'source checked::HirBlock,
     signature: &'source checked::FunctionSig,
     mir_signature: MirFunctionSignature,
     targets: BTreeMap<String, FunctionId>,
-    instructions: Vec<MirInstruction>,
+    blocks: Vec<BlockDraft>,
+    current: BlockId,
     places: HashMap<String, PlaceId>,
     place_names: Vec<String>,
     next_value: u32,
-    returned: bool,
 }
 
-impl<'source> CheckedHirLinearLowerer<'source> {
+impl<'source> CheckedHirLowerer<'source> {
     fn new(
         id: FunctionId,
         function_name: &'source str,
@@ -292,11 +292,11 @@ impl<'source> CheckedHirLinearLowerer<'source> {
             signature,
             mir_signature,
             targets,
-            instructions: Vec::new(),
+            blocks: vec![BlockDraft::new()],
+            current: BlockId::new(0),
             places: HashMap::new(),
             place_names: Vec::new(),
             next_value: 0,
-            returned: false,
         };
         for parameter in &lowerer.signature.params {
             lowerer.place(&parameter.name);
@@ -309,36 +309,33 @@ impl<'source> CheckedHirLinearLowerer<'source> {
             return self.unsupported("async checked HIR function");
         }
         for statement in &self.body.statements {
-            if self.returned {
+            if self.current_block().terminator.is_some() {
                 return self.unsupported("statement after return");
             }
             self.lower_statement(statement)?;
         }
-        let terminator = if self.returned {
-            self.instructions
-                .pop()
-                .and_then(|instruction| match instruction {
-                    MirInstruction::Discard { value } => Some(MirTerminator::Return(Some(value))),
-                    _ => None,
-                })
-                .ok_or_else(|| MirLoweringError::Unsupported {
-                    function: self.function_name.to_owned(),
-                    construct: "direct HIR return representation",
-                })?
-        } else {
-            MirTerminator::Return(None)
-        };
+        if self.current_block().terminator.is_none() {
+            self.terminate(MirTerminator::Return(None));
+        }
+        let blocks = self
+            .blocks
+            .into_iter()
+            .enumerate()
+            .map(|(index, block)| {
+                BasicBlock::new(
+                    BlockId::new(index as u32),
+                    block.instructions,
+                    block.terminator.unwrap_or(MirTerminator::Unreachable),
+                )
+            })
+            .collect();
         Ok(LoweredFunction {
             function: MirFunction::new(
                 self.id,
                 self.mir_signature,
                 self.place_names.len() as u32,
                 self.next_value,
-                vec![BasicBlock::new(
-                    BlockId::new(0),
-                    self.instructions,
-                    terminator,
-                )],
+                blocks,
             ),
             debug: MirFunctionDebug::new(self.function_name.to_owned(), self.place_names),
         })
@@ -355,8 +352,7 @@ impl<'source> CheckedHirLinearLowerer<'source> {
                 let place = self.place(name);
                 if let Some(value) = value {
                     let value = self.lower_expression(value)?;
-                    self.instructions
-                        .push(MirInstruction::WritePlace { place, value });
+                    self.emit(MirInstruction::WritePlace { place, value });
                 }
                 Ok(())
             }
@@ -365,11 +361,7 @@ impl<'source> CheckedHirLinearLowerer<'source> {
                     .as_ref()
                     .map(|value| self.lower_expression(value))
                     .transpose()?;
-                // The final value is held in a marker instruction until this
-                // linear lowerer constructs the sole block terminator.
-                let value = value.unwrap_or_else(|| self.unit_value());
-                self.instructions.push(MirInstruction::Discard { value });
-                self.returned = true;
+                self.terminate(MirTerminator::Return(value));
                 Ok(())
             }
             checked::HirStmt::Assign { target, value, .. } => {
@@ -378,19 +370,23 @@ impl<'source> CheckedHirLinearLowerer<'source> {
                 };
                 let place = self.lookup_place(name)?;
                 let value = self.lower_expression(value)?;
-                self.instructions
-                    .push(MirInstruction::WritePlace { place, value });
+                self.emit(MirInstruction::WritePlace { place, value });
                 Ok(())
             }
             checked::HirStmt::Expr(expression) => {
                 let value = self.lower_expression(expression)?;
-                self.instructions.push(MirInstruction::Discard { value });
+                self.emit(MirInstruction::Discard { value });
                 Ok(())
             }
             checked::HirStmt::Let { is_async: true, .. } => {
                 self.unsupported("async checked HIR binding")
             }
-            checked::HirStmt::If { .. } => self.unsupported("checked HIR branch"),
+            checked::HirStmt::If {
+                condition,
+                then_body,
+                else_body,
+                ..
+            } => self.lower_if(condition, then_body, else_body.as_ref()),
             checked::HirStmt::Loop { .. } => self.unsupported("checked HIR loop"),
             checked::HirStmt::With { .. } => self.unsupported("checked HIR resource scope"),
             checked::HirStmt::For { .. } => self.unsupported("checked HIR for loop"),
@@ -410,8 +406,7 @@ impl<'source> CheckedHirLinearLowerer<'source> {
             checked::HirExpr::Ident { name, .. } => {
                 let destination = self.value();
                 let place = self.lookup_place(name)?;
-                self.instructions
-                    .push(MirInstruction::ReadPlace { destination, place });
+                self.emit(MirInstruction::ReadPlace { destination, place });
                 Ok(destination)
             }
             checked::HirExpr::Number { value, .. } => {
@@ -441,7 +436,7 @@ impl<'source> CheckedHirLinearLowerer<'source> {
                 let left = self.lower_expression(left)?;
                 let right = self.lower_expression(right)?;
                 let destination = self.value();
-                self.instructions.push(MirInstruction::Binary {
+                self.emit(MirInstruction::Binary {
                     destination,
                     op: checked_binary_op(*op),
                     left,
@@ -455,8 +450,7 @@ impl<'source> CheckedHirLinearLowerer<'source> {
                     .map(|item| self.lower_expression(item))
                     .collect::<Result<Vec<_>, _>>()?;
                 let destination = self.value();
-                self.instructions
-                    .push(MirInstruction::MakeList { destination, items });
+                self.emit(MirInstruction::MakeList { destination, items });
                 Ok(destination)
             }
             checked::HirExpr::MapLiteral { entries, .. } => {
@@ -470,7 +464,7 @@ impl<'source> CheckedHirLinearLowerer<'source> {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let destination = self.value();
-                self.instructions.push(MirInstruction::MakeMap {
+                self.emit(MirInstruction::MakeMap {
                     destination,
                     entries,
                 });
@@ -484,7 +478,7 @@ impl<'source> CheckedHirLinearLowerer<'source> {
                     })
                     .collect::<Result<Vec<_>, _>>()?;
                 let destination = self.value();
-                self.instructions.push(MirInstruction::MakeObject {
+                self.emit(MirInstruction::MakeObject {
                     destination,
                     fields,
                 });
@@ -496,7 +490,7 @@ impl<'source> CheckedHirLinearLowerer<'source> {
                 let list = self.lower_expression(base)?;
                 let index = self.lower_expression(index)?;
                 let destination = self.value();
-                self.instructions.push(MirInstruction::ListGet {
+                self.emit(MirInstruction::ListGet {
                     destination,
                     list,
                     index,
@@ -529,8 +523,7 @@ impl<'source> CheckedHirLinearLowerer<'source> {
 
     fn literal(&mut self, value: MirLiteral) -> Result<ValueId, MirLoweringError> {
         let destination = self.value();
-        self.instructions
-            .push(MirInstruction::LoadLiteral { destination, value });
+        self.emit(MirInstruction::LoadLiteral { destination, value });
         Ok(destination)
     }
 
@@ -572,7 +565,7 @@ impl<'source> CheckedHirLinearLowerer<'source> {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let destination = self.value();
-        self.instructions.push(MirInstruction::Call {
+        self.emit(MirInstruction::Call {
             destination,
             target: MirCallTarget::Function(target),
             arguments,
@@ -580,13 +573,71 @@ impl<'source> CheckedHirLinearLowerer<'source> {
         Ok(destination)
     }
 
-    fn unit_value(&mut self) -> ValueId {
-        let destination = self.value();
-        self.instructions.push(MirInstruction::LoadLiteral {
-            destination,
-            value: MirLiteral::Unit,
+    fn lower_if(
+        &mut self,
+        condition: &checked::HirExpr,
+        then_body: &checked::HirBlock,
+        else_body: Option<&checked::HirBlock>,
+    ) -> Result<(), MirLoweringError> {
+        let condition = self.lower_expression(condition)?;
+        let then_block = self.new_block();
+        let else_block = self.new_block();
+        let join_block = self.new_block();
+        self.terminate(MirTerminator::Branch {
+            condition,
+            then_target: then_block,
+            else_target: else_block,
         });
-        destination
+
+        self.current = then_block;
+        self.lower_checked_block(then_body)?;
+        if self.current_block().terminator.is_none() {
+            self.terminate(MirTerminator::Jump(join_block));
+        }
+
+        self.current = else_block;
+        if let Some(else_body) = else_body {
+            self.lower_checked_block(else_body)?;
+        }
+        if self.current_block().terminator.is_none() {
+            self.terminate(MirTerminator::Jump(join_block));
+        }
+
+        self.current = join_block;
+        Ok(())
+    }
+
+    fn lower_checked_block(&mut self, block: &checked::HirBlock) -> Result<(), MirLoweringError> {
+        for statement in &block.statements {
+            if self.current_block().terminator.is_some() {
+                return self.unsupported("statement after checked HIR return");
+            }
+            self.lower_statement(statement)?;
+        }
+        Ok(())
+    }
+
+    fn new_block(&mut self) -> BlockId {
+        let id = BlockId::new(self.blocks.len() as u32);
+        self.blocks.push(BlockDraft::new());
+        id
+    }
+
+    fn current_block(&self) -> &BlockDraft {
+        &self.blocks[self.current.index()]
+    }
+
+    fn current_block_mut(&mut self) -> &mut BlockDraft {
+        &mut self.blocks[self.current.index()]
+    }
+
+    fn emit(&mut self, instruction: MirInstruction) {
+        self.current_block_mut().instructions.push(instruction);
+    }
+
+    fn terminate(&mut self, terminator: MirTerminator) {
+        debug_assert!(self.current_block().terminator.is_none());
+        self.current_block_mut().terminator = Some(terminator);
     }
 
     fn place(&mut self, name: &str) -> PlaceId {

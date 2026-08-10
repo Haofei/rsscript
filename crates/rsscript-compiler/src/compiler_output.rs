@@ -34,7 +34,7 @@ impl CompiledIr {
     pub fn checked_hir_mir(
         &self,
     ) -> Result<rsscript_mir::MirModule, rsscript_lowering::MirLoweringError> {
-        rsscript_lowering::lower_checked_hir_linear_to_mir(&self.checked_hir)
+        rsscript_lowering::lower_checked_hir_to_mir(&self.checked_hir)
     }
 
     pub fn executable(&self) -> &rsscript_lowering::ExecutableIr {
@@ -164,6 +164,35 @@ fn main() -> Int {
             ]
         ));
         mir.verify().expect("direct HIR MIR verifies");
+    }
+
+    #[test]
+    fn direct_checked_hir_path_lowers_branches_to_cfg() {
+        let compiled = compile_source_to_ir(
+            "direct-hir-branch.rss",
+            r#"
+fn main() -> Int {
+    let value = 41
+    if value < 42 {
+        return value + 1
+    } else {
+        return 0
+    }
+}
+"#,
+        )
+        .expect("source should compile");
+        let mir = compiled
+            .checked_hir_mir()
+            .expect("checked HIR branch lowers without executable IR");
+        assert!(mir.functions()[0].blocks().iter().any(|block| {
+            matches!(
+                block.terminator(),
+                rsscript_mir::MirTerminator::Branch { .. }
+            )
+        }));
+        assert!(mir.functions()[0].blocks().len() >= 4);
+        mir.verify().expect("direct HIR branch MIR verifies");
     }
 
     #[test]

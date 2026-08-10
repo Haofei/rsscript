@@ -8,7 +8,7 @@
 mod mir;
 mod projection;
 
-pub use mir::{MirLoweringError, lower_checked_hir_linear_to_mir, lower_executable_ir_to_mir};
+pub use mir::{MirLoweringError, lower_checked_hir_to_mir, lower_executable_ir_to_mir};
 pub use rsscript_exec_ir::*;
 
 pub fn lower_validated_hir(typed_hir: &rsscript_semantics::hir::Hir) -> ExecutableIr {
