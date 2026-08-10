@@ -2069,6 +2069,7 @@ dependencies = [
 name = "rsscript-syntax"
 version = "0.1.0"
 dependencies = [
+ "rsscript-diagnostics",
  "rsscript-source-model",
  "rsscript-work-budget",
 ]

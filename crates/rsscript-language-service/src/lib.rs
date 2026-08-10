@@ -18,13 +18,13 @@ pub use rsscript_compiler::{
     Diagnostic, DiagnosticExplanation, Severity, Span, analyze_source_result_with_operation,
     analyze_source_with_core, analyze_source_with_interfaces,
     analyze_source_with_interfaces_result_with_operation, analyze_sources_with_interfaces,
-    explain_diagnostic_code, lint_source,
+    explain_diagnostic_code,
 };
 pub use rsscript_semantics::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
     document_symbols, symbol_index,
 };
-pub use rsscript_syntax::format_source;
+pub use rsscript_syntax::{format_source, lint_source};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DocumentKind {
