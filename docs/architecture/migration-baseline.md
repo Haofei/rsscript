@@ -422,8 +422,10 @@ mechanical acceptance condition holds.
       resource scope now executes through both the legacy and direct-MIR
       bytecode paths against a counted Provider resource. Both paths must
       return the same value, report the same Provider/resource usage, and
-      finalize exactly once per run. Move-failure and resource-limit comparison
-      remain follow-up work.
+      finalize exactly once per run. The same fixture also exhausts a zero
+      resource budget and requires both paths to retain a report with the same
+      `ResourceExhausted` Provider failure and usage. Move-failure comparison
+      remains follow-up work.
   - [ ] **M05.3 — Add async/provider differential fixtures.** Compare task
     cancellation, external-call order, deadlines, and Provider traces.
   - [ ] **M05.4 — Gate replacement on corpus parity.** New lowering cannot become

@@ -13,9 +13,10 @@ use rsscript_mir::{
     MirInstruction, MirLiteral, MirModule, MirTerminator, TaskGroupId, TaskId, TypeId, ValueId,
 };
 use rsscript_sdk::{
-    CancellationToken, Compiler, ExternalFunction, MonotonicDeadline, NativeValue, ProviderError,
-    ProviderResource, VmLimits, analyze_source_with_interfaces_result, reg_vm_compile_mir,
-    reg_vm_compile_validated, reg_vm_eval_source_main,
+    CancellationToken, Compiler, EvalError, ExternalFunction, MonotonicDeadline, NativeValue,
+    ProviderError, ProviderErrorCode, ProviderResource, VmLimits,
+    analyze_source_with_interfaces_result, reg_vm_compile_mir, reg_vm_compile_validated,
+    reg_vm_eval_source_main,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -800,7 +801,7 @@ fn main() -> Int {
     .expect("direct resource MIR emits verified bytecode")
     .eval_main_with_args_and_external_bindings(
         std::iter::empty::<String>(),
-        [("Host.open", provider)],
+        [("Host.open", provider.clone())],
     )
     .expect("direct resource MIR executes");
     assert_eq!(legacy.value, direct.value);
@@ -814,6 +815,41 @@ fn main() -> Int {
         direct.usage.resources_cleaned
     );
     assert_eq!(cleanups.load(Ordering::SeqCst), 2);
+
+    let exhausted_limits = VmLimits {
+        resource_limit: Some(0),
+        ..VmLimits::default()
+    };
+    let legacy_exhausted = reg_vm_compile_validated(&validated)
+        .expect("legacy resource-limit fixture compiles")
+        .execute_main_with_args_and_external_bindings_and_limits(
+            std::iter::empty::<String>(),
+            [("Host.open", provider.clone())],
+            exhausted_limits.clone(),
+        )
+        .expect("legacy resource-limit fixture retains its report");
+    let direct_exhausted = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct resource-limit MIR emits verified bytecode")
+    .execute_main_with_args_and_external_bindings_and_limits(
+        std::iter::empty::<String>(),
+        [("Host.open", provider)],
+        exhausted_limits,
+    )
+    .expect("direct resource-limit fixture retains its report");
+    for report in [&legacy_exhausted, &direct_exhausted] {
+        assert!(matches!(
+            report.failure,
+            Some(EvalError::Provider(ProviderError {
+                code: ProviderErrorCode::ResourceExhausted,
+                ..
+            }))
+        ));
+    }
+    assert_eq!(legacy_exhausted.usage, direct_exhausted.usage);
 }
 
 #[test]
