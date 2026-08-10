@@ -239,7 +239,7 @@ pub fn encode_program(program: &WireProgramV2) -> Result<Vec<u8>, BytecodeError>
 pub fn decode_program(
     payload: &[u8],
     limits: BytecodeLimits,
-) -> Result<WireProgramV2, BytecodeError> {
+) -> Result<VerifiedProgramV2, BytecodeError> {
     if payload.len() > limits.max_payload_bytes {
         return Err(BytecodeError::LimitExceeded("v2 payload bytes"));
     }
@@ -249,7 +249,48 @@ pub fn decode_program(
     }
     let program = WireProgramV2::try_from(raw)?;
     program.verify(limits)?;
-    Ok(program)
+    Ok(VerifiedProgramV2 { program })
+}
+
+/// Opaque result of bounded v2 payload decoding. Its program fields stay
+/// private so execution backends cannot accidentally receive a caller-built
+/// decoded instruction vector through this path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedProgramV2 {
+    program: WireProgramV2,
+}
+
+impl VerifiedProgramV2 {
+    pub fn program(&self) -> &WireProgramV2 {
+        &self.program
+    }
+
+    pub fn functions(&self) -> &[WireFunctionV2] {
+        self.program.functions()
+    }
+}
+
+/// V2 verification owner. A future Artifact v2 verifier will compose this
+/// after envelope/version/import validation and pass only `VerifiedProgramV2`
+/// to the VM decoder.
+pub struct BytecodeV2Verifier {
+    limits: BytecodeLimits,
+}
+
+impl BytecodeV2Verifier {
+    pub const fn new(limits: BytecodeLimits) -> Self {
+        Self { limits }
+    }
+
+    pub fn verify_payload(&self, payload: &[u8]) -> Result<VerifiedProgramV2, BytecodeError> {
+        decode_program(payload, self.limits)
+    }
+}
+
+impl Default for BytecodeV2Verifier {
+    fn default() -> Self {
+        Self::new(BytecodeLimits::default())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -496,9 +537,10 @@ mod tests {
             WireInstructionV2::new(WireOpcodeV2::Return, vec![0]),
         ]);
         let bytes = encode_program(&original).expect("v2 program encodes");
-        let decoded = decode_program(&bytes, BytecodeLimits::default())
+        let decoded = BytecodeV2Verifier::default()
+            .verify_payload(&bytes)
             .expect("canonical v2 payload decodes");
-        assert_eq!(decoded, original);
+        assert_eq!(decoded.program(), &original);
 
         let raw = RawProgramV2 {
             types: vec![WireType::Unit],

@@ -349,10 +349,14 @@ mechanical acceptance condition holds.
   APIs cannot construct or mutate it and VM constructors accept nothing else.
   - [ ] **V03.1 — Define private-field `VerifiedModule`.** Only bytecode verifier
     code can create it from bounded decoded bytes.
-    - [x] **V03.1a — Require the verifier token at the SDK/VM boundary.** SDK
+  - [x] **V03.1a — Require the verifier token at the SDK/VM boundary.** SDK
       Artifact verification now constructs `VerifiedBytecode` first and VM
-      decoding accepts that opaque verifier output. VM-internal typed program
-      ownership remains follow-up work.
+    decoding accepts that opaque verifier output. VM-internal typed program
+    ownership remains follow-up work.
+  - [x] **V03.1b — Establish the v2 verifier-owned program phase.** The v2
+    canonical decoder returns private-field `VerifiedProgramV2` only through
+    `BytecodeV2Verifier`; the future VM integration can consume that phase
+    object without exposing caller-built decoded instruction vectors.
   - [x] **V03.2 — Move instruction/data-flow verification into bytecode.** VM no
     longer independently validates decoded program structure. The register-VM
     decoder now accepts only `VerifiedBytecode`; duplicate payload, control-flow,
