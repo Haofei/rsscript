@@ -530,14 +530,7 @@ impl ArtifactVerifier {
         let verified_bytecode = BytecodeVerifier::default()
             .verify(bundle.artifact_bytes())
             .map_err(|error| VerifyError::Bytecode(EvalError::Runtime(error.to_string())))?;
-        let executable = RegVmExecutable::from_verified_bytecode(verified_bytecode)
-            .map_err(VerifyError::Bytecode)?;
-        if executable.bytecode_artifact().header.executable_hash
-            != bundle.provenance().module_digest
-        {
-            return Err(VerifyError::DigestMismatch);
-        }
-        Ok(VerifiedArtifact { bundle, executable })
+        verified_artifact(bundle, verified_bytecode)
     }
 
     pub fn verify_bytes_with_operation(
@@ -556,11 +549,27 @@ impl ArtifactVerifier {
                 },
             )
             .map_err(|error| VerifyError::Bytecode(EvalError::Runtime(error.to_string())))?;
-        let executable = RegVmExecutable::from_verified_bytecode(verified_bytecode)
-            .map_err(VerifyError::Bytecode)?;
+        let artifact = verified_artifact(bundle, verified_bytecode)?;
         operation.check().map_err(VerifyError::Operation)?;
-        Ok(VerifiedArtifact { bundle, executable })
+        Ok(artifact)
     }
+}
+
+/// The operation-aware and ordinary verifier entry points must produce the
+/// exact same phase object. Keeping this conversion in one place prevents a
+/// cancellation/deadline convenience API from accidentally skipping a bundle
+/// provenance invariant.
+#[cfg(feature = "execution")]
+fn verified_artifact(
+    bundle: ArtifactBundle,
+    verified_bytecode: VerifiedBytecode,
+) -> Result<VerifiedArtifact, VerifyError> {
+    let executable = RegVmExecutable::from_verified_bytecode(verified_bytecode)
+        .map_err(VerifyError::Bytecode)?;
+    if executable.bytecode_artifact().header.executable_hash != bundle.provenance().module_digest {
+        return Err(VerifyError::DigestMismatch);
+    }
+    Ok(VerifiedArtifact { bundle, executable })
 }
 
 #[cfg(feature = "execution")]
@@ -1523,6 +1532,19 @@ fn main() -> Result<Unit, String> {
             VerifyError::Operation(OperationAbort::DeadlineExceeded)
         ));
         assert!(error.to_string().contains("deadline exceeded"));
+
+        let bytes = package.bundle_bytes().expect("bundle bytes");
+        let ordinary = ArtifactVerifier
+            .verify_bytes(&bytes)
+            .expect("ordinary verification");
+        let operation_aware = ArtifactVerifier
+            .verify_bytes_with_operation(&bytes, &OperationContext::default())
+            .expect("operation-aware verification");
+        assert_eq!(ordinary.module_digest(), operation_aware.module_digest());
+        assert_eq!(
+            ordinary.bytecode_artifact().header.executable_hash,
+            operation_aware.bytecode_artifact().header.executable_hash
+        );
     }
 
     #[test]
