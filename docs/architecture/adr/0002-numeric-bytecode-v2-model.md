@@ -18,9 +18,12 @@ Functions, constants, imports, registers, and instruction targets are all
 numeric identities. The model contains resource and structured-async opcode
 slots so those contracts do not require a future source-language string opcode.
 
-This decision does not enable a v2 Artifact writer, replace the v1 verifier, or
-freeze every future opcode. Export/debug table codec design and data-flow/type
-verification remain separate follow-up decisions.
+The initial codec uses canonical CBOR arrays shaped as `[numeric_opcode,
+operands]`; decoding re-encodes for canonical-byte equality, rejects unknown
+opcodes, and invokes the typed structural verifier. This decision does not
+enable a v2 Artifact writer, replace the v1 verifier, or freeze every future
+opcode. Export/debug table design and data-flow/type verification remain
+separate follow-up decisions.
 
 ## Compatibility and migration
 

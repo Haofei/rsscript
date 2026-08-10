@@ -6,6 +6,7 @@
 //! the only deployed artifact reader/writer during this migration.
 
 use rsscript_abi_model::WireType;
+use serde::{Deserialize, Serialize};
 
 use crate::{BytecodeError, BytecodeLimits};
 
@@ -69,6 +70,24 @@ impl WireOpcodeV2 {
             Self::Await => 2,        // dst, task register
             Self::Cancel => 1,       // task register
         }
+    }
+
+    fn from_raw(value: u8) -> Option<Self> {
+        Some(match value {
+            1 => Self::LoadConstant,
+            2 => Self::Move,
+            3 => Self::AddInt,
+            4 => Self::Call,
+            5 => Self::CallExternal,
+            6 => Self::Jump,
+            7 => Self::JumpIfTrue,
+            8 => Self::Return,
+            9 => Self::ResourceDrop,
+            10 => Self::Spawn,
+            11 => Self::Await,
+            12 => Self::Cancel,
+            _ => return None,
+        })
     }
 }
 
@@ -201,6 +220,111 @@ impl WireProgramV2 {
             }
         }
         Ok(())
+    }
+}
+
+/// Encode a v2 executable payload with array-shaped numeric instruction
+/// records. No source names or field-map opcode keys participate in the wire
+/// representation.
+pub fn encode_program(program: &WireProgramV2) -> Result<Vec<u8>, BytecodeError> {
+    program.verify(BytecodeLimits::default())?;
+    let raw = RawProgramV2::from(program);
+    crate::encode_executable_payload(&raw)
+}
+
+/// Decode, canonicalize, and structurally verify a v2 executable payload.
+/// This is deliberately independent from the v1 `serde_json::Value` verifier;
+/// callers receive a typed program only after the canonical-byte check and all
+/// numeric ID bounds succeed.
+pub fn decode_program(
+    payload: &[u8],
+    limits: BytecodeLimits,
+) -> Result<WireProgramV2, BytecodeError> {
+    if payload.len() > limits.max_payload_bytes {
+        return Err(BytecodeError::LimitExceeded("v2 payload bytes"));
+    }
+    let raw: RawProgramV2 = crate::decode_executable_payload(payload)?;
+    if crate::encode_executable_payload(&raw)? != payload {
+        return Err(invalid("v2 executable CBOR is not canonical".to_owned()));
+    }
+    let program = WireProgramV2::try_from(raw)?;
+    program.verify(limits)?;
+    Ok(program)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RawProgramV2 {
+    types: Vec<WireType>,
+    constants: Vec<Vec<u8>>,
+    import_count: u32,
+    functions: Vec<RawFunctionV2>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RawFunctionV2 {
+    parameter_count: u32,
+    register_count: u32,
+    instructions: Vec<RawInstructionV2>,
+}
+
+/// Tuple serialization fixes the executable layout to `[opcode, operands]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct RawInstructionV2(u8, Vec<u32>);
+
+impl From<&WireProgramV2> for RawProgramV2 {
+    fn from(program: &WireProgramV2) -> Self {
+        Self {
+            types: program.types.clone(),
+            constants: program.constants.clone(),
+            import_count: program.import_count,
+            functions: program
+                .functions
+                .iter()
+                .map(|function| RawFunctionV2 {
+                    parameter_count: function.parameter_count,
+                    register_count: function.register_count,
+                    instructions: function
+                        .instructions
+                        .iter()
+                        .map(|instruction| {
+                            RawInstructionV2(instruction.opcode as u8, instruction.operands.clone())
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+impl TryFrom<RawProgramV2> for WireProgramV2 {
+    type Error = BytecodeError;
+
+    fn try_from(raw: RawProgramV2) -> Result<Self, Self::Error> {
+        let mut functions = Vec::with_capacity(raw.functions.len());
+        for (function, raw_function) in raw.functions.into_iter().enumerate() {
+            let mut instructions = Vec::with_capacity(raw_function.instructions.len());
+            for (offset, RawInstructionV2(opcode, operands)) in
+                raw_function.instructions.into_iter().enumerate()
+            {
+                let opcode = WireOpcodeV2::from_raw(opcode).ok_or_else(|| {
+                    invalid(format!(
+                        "v2 function {function} instruction {offset} has unknown opcode {opcode}"
+                    ))
+                })?;
+                instructions.push(WireInstructionV2 { opcode, operands });
+            }
+            functions.push(WireFunctionV2 {
+                parameter_count: raw_function.parameter_count,
+                register_count: raw_function.register_count,
+                instructions,
+            });
+        }
+        Ok(Self {
+            types: raw.types,
+            constants: raw.constants,
+            import_count: raw.import_count,
+            functions,
+        })
     }
 }
 
@@ -362,6 +486,34 @@ mod tests {
         assert!(matches!(
             invalid_import.verify(BytecodeLimits::default()),
             Err(BytecodeError::InvalidPayload(_))
+        ));
+    }
+
+    #[test]
+    fn v2_codec_round_trips_only_canonical_numeric_instructions() {
+        let original = program(vec![
+            WireInstructionV2::new(WireOpcodeV2::LoadConstant, vec![0, 0]),
+            WireInstructionV2::new(WireOpcodeV2::Return, vec![0]),
+        ]);
+        let bytes = encode_program(&original).expect("v2 program encodes");
+        let decoded = decode_program(&bytes, BytecodeLimits::default())
+            .expect("canonical v2 payload decodes");
+        assert_eq!(decoded, original);
+
+        let raw = RawProgramV2 {
+            types: vec![WireType::Unit],
+            constants: vec![vec![0]],
+            import_count: 0,
+            functions: vec![RawFunctionV2 {
+                parameter_count: 0,
+                register_count: 1,
+                instructions: vec![RawInstructionV2(255, vec![])],
+            }],
+        };
+        let unknown = crate::encode_executable_payload(&raw).expect("malformed test payload");
+        assert!(matches!(
+            decode_program(&unknown, BytecodeLimits::default()),
+            Err(BytecodeError::InvalidPayload(message)) if message.contains("unknown opcode")
         ));
     }
 }

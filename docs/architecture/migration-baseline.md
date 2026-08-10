@@ -408,8 +408,13 @@ mechanical acceptance condition holds.
     `rsscript-bytecode::v2` now owns typed function/type/constant/import/register
     identities, numeric opcodes with exact operand arity, and independent
     structural checks for register, function, import, constant, and jump IDs.
-    A v2 codec, exports/debug tables, and production writer remain follow-up
-    work; v1 stays the deployed artifact path.
+    Exports/debug tables and a production Artifact writer remain follow-up;
+    v1 stays the deployed artifact path.
+  - [x] **B02.2 — Add a bounded canonical v2 codec.** The v2 codec emits
+    array-shaped `[numeric_opcode, operands]` records, decodes only canonical
+    CBOR, rejects unknown numeric opcodes, and invokes the typed structural
+    verifier before returning a program. Artifact section integration and the
+    remaining tables remain follow-up work.
 - [ ] **B03 — Generate codec and verification rules from one instruction
   schema.** The schema generates Rust instruction types, encoder, bounded
   decoder, operand validation, documentation, and fuzz seeds; string field maps
