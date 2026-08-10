@@ -77,6 +77,13 @@ pub const BUILTIN_TYPE_NAMES: &[&str] = &[
 pub fn is_builtin_type_name(name: &str) -> bool {
     BUILTIN_TYPE_NAMES.contains(&name)
 }
+
+/// Source value identifiers supplied by the language rather than a lexical
+/// declaration. Kept beside builtin type identity so frontend clients share
+/// the same unresolved-binding boundary.
+pub fn is_builtin_value_ident(name: &str) -> bool {
+    matches!(name, "true" | "false" | "Unit" | "None" | "null")
+}
 pub use identities::DefinitionId;
 pub use interface_descriptor::{
     INTERFACE_DESCRIPTOR_SCHEMA, InterfaceDescriptorError, InterfaceDescriptorFunctionV1,

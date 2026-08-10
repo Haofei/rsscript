@@ -166,7 +166,7 @@ impl Analyzer<'_> {
     ) {
         match expr {
             HirExpr::Ident { name, span, .. } => {
-                if !visible.contains(name) && !builtin_value_ident(name) {
+                if !visible.contains(name) && !rsscript_semantics::is_builtin_value_ident(name) {
                     self.unknown_binding_diagnostic(name, span);
                 }
             }

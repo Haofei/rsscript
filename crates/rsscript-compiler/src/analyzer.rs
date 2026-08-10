@@ -2010,10 +2010,6 @@ fn constrained_field_patterns(pattern: &MatchPattern) -> Vec<(String, &MatchPatt
     }
 }
 
-fn builtin_value_ident(name: &str) -> bool {
-    matches!(name, "true" | "false" | "Unit" | "None" | "null")
-}
-
 fn type_ref_contains_name(ty: &TypeRef, name: &str) -> bool {
     ty.name == name
         || ty.args.iter().any(|arg| type_ref_contains_name(arg, name))
