@@ -4,7 +4,7 @@
   "title": "RSScript package analysis v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["$schema", "producer", "language_version", "interface_catalog_digest", "snapshot_digest", "package", "files", "summary", "exports", "external_imports", "call_edges", "recursive_functions", "resource_lifetimes", "task_groups", "await_sites", "diagnostics"],
+  "required": ["$schema", "producer", "language_version", "interface_catalog_digest", "snapshot_digest", "package", "files", "summary", "exports", "external_imports", "call_edges", "recursive_functions", "resource_lifetimes", "resource_transfers", "task_groups", "await_sites", "diagnostics"],
   "properties": {
     "$schema": { "const": "rsscript.package_analysis.v1" },
     "producer": { "$ref": "#/$defs/producer" },
@@ -20,6 +20,7 @@
     "call_edges": { "type": "array", "items": { "$ref": "#/$defs/call_edge" } },
     "recursive_functions": { "type": "array", "items": { "type": "string" } },
     "resource_lifetimes": { "type": "array", "items": { "$ref": "#/$defs/resource_lifetime" } },
+    "resource_transfers": { "type": "array", "items": { "$ref": "#/$defs/resource_transfer" } },
     "task_groups": { "type": "array", "items": { "$ref": "#/$defs/task_group" } },
     "await_sites": { "type": "array", "items": { "type": "object" } },
     "diagnostics": { "type": "array", "items": { "type": "object" } }
@@ -72,6 +73,14 @@
         "function": { "type": "string" }, "binding": { "type": "string" },
         "acquisition": { "type": "string" }, "cleanup": { "type": "string" },
         "cleanup_on_cancellation": { "type": "boolean" }
+      }
+    },
+    "resource_transfer": {
+      "type": "object", "additionalProperties": false,
+      "required": ["function", "binding", "operation"],
+      "properties": {
+        "function": { "type": "string" }, "binding": { "type": "string" },
+        "operation": { "const": "take" }
       }
     },
     "task_group": {

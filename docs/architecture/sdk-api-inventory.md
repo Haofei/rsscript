@@ -20,7 +20,8 @@ not part of the default or `execution` SDK surface.
   `ArtifactVerifier`, provenance, interface requirements, the versioned source
   and package analysis schema identifiers, and neutral semantic diff data,
   including structural external-call, public function ownership, call-graph,
-  recursion, lexical resource-lifetime, and structured task-group contracts.
+  recursion, lexical resource-lifetime and explicit resource-transfer, and
+  structured task-group contracts.
 - Provider lifecycle: `ProviderRegistry`, provider descriptors, structured
   signatures, registration errors, and typed execution context contracts.
 - Runtime lifecycle: `Runtime`, `LinkedArtifact`, `ExecutionRequest`, bounded

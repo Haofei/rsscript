@@ -123,7 +123,8 @@ pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<Package
 
     let database = semantic_analysis.database();
     let review_await_sites = collect_package_await_sites(sources, database);
-    let (resource_lifetimes, task_groups) = collect_execution_facts(sources, database);
+    let (resource_lifetimes, resource_transfers, task_groups) =
+        collect_execution_facts(sources, database);
     let await_sites = review_await_sites
         .iter()
         .map(|site| PackageAnalysisAwaitSite {
@@ -175,6 +176,7 @@ pub(super) fn analyze_package_dir_captured(package_dir: &Path) -> Result<Package
         call_edges: package_call_edges(database),
         recursive_functions: package_recursive_functions(database),
         resource_lifetimes,
+        resource_transfers,
         task_groups,
         await_sites,
         diagnostics,

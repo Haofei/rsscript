@@ -81,6 +81,14 @@ pub struct ResourceLifetimeFactV1 {
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ResourceTransferFactV1 {
+    pub function: String,
+    pub binding: String,
+    pub operation: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TaskGroupFactV1 {
     pub function: String,
     pub spawned_tasks: u32,
@@ -142,6 +150,7 @@ pub struct SemanticDiffV1 {
     pub call_edges: FactSetDiffV1<CallEdgeFactV1>,
     pub recursive_functions: FactSetDiffV1<String>,
     pub resource_lifetimes: FactSetDiffV1<ResourceLifetimeFactV1>,
+    pub resource_transfers: FactSetDiffV1<ResourceTransferFactV1>,
     pub task_groups: FactSetDiffV1<TaskGroupFactV1>,
     pub await_sites: FactSetDiffV1<AwaitFactV1>,
     pub diagnostics: FactSetDiffV1<DiagnosticFactV1>,
@@ -185,6 +194,10 @@ impl SemanticDiffV1 {
                 &analysis_resource_lifetimes(old.analysis()),
                 &analysis_resource_lifetimes(new.analysis()),
             ),
+            resource_transfers: set_diff(
+                &analysis_resource_transfers(old.analysis()),
+                &analysis_resource_transfers(new.analysis()),
+            ),
             task_groups: set_diff(
                 &analysis_task_groups(old.analysis()),
                 &analysis_task_groups(new.analysis()),
@@ -223,6 +236,9 @@ impl SemanticDiffV1 {
             && self.resource_lifetimes.added.is_empty()
             && self.resource_lifetimes.removed.is_empty()
             && self.resource_lifetimes.changed.is_empty()
+            && self.resource_transfers.added.is_empty()
+            && self.resource_transfers.removed.is_empty()
+            && self.resource_transfers.changed.is_empty()
             && self.task_groups.added.is_empty()
             && self.task_groups.removed.is_empty()
             && self.task_groups.changed.is_empty()
@@ -250,6 +266,7 @@ impl SemanticDiffV1 {
             &self.recursive_functions,
         );
         append_counts(&mut output, "Resource lifetimes", &self.resource_lifetimes);
+        append_counts(&mut output, "Resource transfers", &self.resource_transfers);
         append_counts(&mut output, "Task groups", &self.task_groups);
         append_counts(&mut output, "Await sites", &self.await_sites);
         append_counts(&mut output, "Diagnostics", &self.diagnostics);
@@ -393,6 +410,21 @@ fn analysis_resource_lifetimes(analysis: &serde_json::Value) -> Vec<ResourceLife
                 acquisition: item["acquisition"].as_str()?.to_string(),
                 cleanup: item["cleanup"].as_str()?.to_string(),
                 cleanup_on_cancellation: item["cleanup_on_cancellation"].as_bool()?,
+            })
+        })
+        .collect()
+}
+
+fn analysis_resource_transfers(analysis: &serde_json::Value) -> Vec<ResourceTransferFactV1> {
+    analysis["resource_transfers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|item| {
+            Some(ResourceTransferFactV1 {
+                function: item["function"].as_str()?.to_string(),
+                binding: item["binding"].as_str()?.to_string(),
+                operation: item["operation"].as_str()?.to_string(),
             })
         })
         .collect()
@@ -656,6 +688,9 @@ mod tests {
                 "function": "main", "binding": "file", "acquisition": "with",
                 "cleanup": "scope_exit", "cleanup_on_cancellation": true
             }],
+            "resource_transfers": [{
+                "function": "main", "binding": "file", "operation": "take"
+            }],
             "task_groups": [{
                 "function": "main", "spawned_tasks": 2, "select_arms": 3,
                 "drains_on_exit": true, "cleanup_on_cancellation": true
@@ -663,6 +698,7 @@ mod tests {
         });
         assert_eq!(analysis_resource_lifetimes(&analysis)[0].binding, "file");
         assert!(analysis_resource_lifetimes(&analysis)[0].cleanup_on_cancellation);
+        assert_eq!(analysis_resource_transfers(&analysis)[0].operation, "take");
         assert_eq!(analysis_task_groups(&analysis)[0].spawned_tasks, 2);
         assert!(analysis_task_groups(&analysis)[0].drains_on_exit);
     }

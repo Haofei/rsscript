@@ -117,7 +117,7 @@ pub use artifact_bundle::{
 pub use semantic_diff::{
     AwaitFactV1, CallEdgeFactV1, ChangedFactV1, CountChangeV1, ExportFactV1, ExternalCallFactV1,
     ExternalContractFactV1, FactSetDiffV1, FunctionParameterFactV1, ResourceLifetimeFactV1,
-    SEMANTIC_DIFF_SCHEMA, SemanticDiffV1, TaskGroupFactV1,
+    ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SemanticDiffV1, TaskGroupFactV1,
 };
 #[cfg(feature = "execution")]
 use sha2::{Digest, Sha256};
@@ -227,7 +227,7 @@ pub mod report {
 pub mod analysis {
     pub use super::{
         CallEdgeFactV1, ExternalContractFactV1, FunctionParameterFactV1, ResourceLifetimeFactV1,
-        SEMANTIC_DIFF_SCHEMA, SemanticDiffV1, TaskGroupFactV1,
+        ResourceTransferFactV1, SEMANTIC_DIFF_SCHEMA, SemanticDiffV1, TaskGroupFactV1,
     };
 }
 #[cfg(not(feature = "compatibility"))]

@@ -54,6 +54,7 @@ pub struct PackageAnalysis {
     pub call_edges: Vec<PackageAnalysisCallEdge>,
     pub recursive_functions: Vec<String>,
     pub resource_lifetimes: Vec<PackageAnalysisResourceLifetime>,
+    pub resource_transfers: Vec<PackageAnalysisResourceTransfer>,
     pub task_groups: Vec<PackageAnalysisTaskGroup>,
     pub await_sites: Vec<PackageAnalysisAwaitSite>,
     pub diagnostics: Vec<Diagnostic>,
@@ -132,6 +133,16 @@ pub struct PackageAnalysisResourceLifetime {
     pub acquisition: String,
     pub cleanup: String,
     pub cleanup_on_cancellation: bool,
+}
+
+/// An explicit ownership transfer of a lexically managed resource. Only a
+/// `take` applied to a binding introduced by `with` is recorded, so ordinary
+/// value moves cannot be mistaken for a resource hand-off.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct PackageAnalysisResourceTransfer {
+    pub function: String,
+    pub binding: String,
+    pub operation: String,
 }
 
 /// Structured concurrency owned by one lexical task group.

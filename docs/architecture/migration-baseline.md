@@ -601,11 +601,12 @@ mechanical acceptance condition holds.
     hash transition. Neutral package analysis likewise emits explicit local
     parameter effects/types/retention plus return contracts, including source
     escape qualifiers, for every public function.
-  - [ ] **A07.2 — Diff resources and concurrency.** Report acquire/transfer/close,
+  - [x] **A07.2 — Diff resources and concurrency.** Report acquire/transfer/close,
     task fan-out, await/select, cancellation, and cleanup-path changes. Neutral
-    analysis now records lexical `with` acquisition/scope-exit cleanup and
-    cancellation cleanup, plus task-group fan-out/select/drain facts; resource
-    transfer facts remain to be normalized before this planning unit closes.
+    analysis records lexical `with` acquisition/scope-exit cleanup and
+    cancellation cleanup, explicit `take` transfers of those managed bindings,
+    and task-group fan-out/select/drain facts. Ordinary value moves are excluded
+    from resource-transfer evidence.
   - [x] **A07.3 — Diff graph and diagnostic facts.** Report call graph/recursion,
     Provider requirements, and diagnostic additions/removals. Neutral analysis
     now records resolved call edges and recursion participants; semantic diff
