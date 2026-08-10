@@ -634,7 +634,12 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
             {
                 self.lower_expression(value)
             }
-            checked::HirExpr::Effect { .. } => self.unsupported("non-read checked HIR effect"),
+            checked::HirExpr::Effect {
+                effect: checked::ParamEffect::Take,
+                value,
+                ..
+            } => self.lower_take(value),
+            checked::HirExpr::Effect { .. } => self.unsupported("mutable checked HIR effect"),
             checked::HirExpr::Manage { .. } => self.unsupported("checked HIR managed value"),
             checked::HirExpr::Spawn { .. } => self.unsupported("checked HIR spawn"),
             checked::HirExpr::Await { value, .. } => self.lower_await(value),
@@ -724,6 +729,16 @@ impl<'source, 'types> CheckedHirLowerer<'source, 'types> {
         for place in retained_places {
             self.emit(MirInstruction::Retain { place });
         }
+        Ok(destination)
+    }
+
+    fn lower_take(&mut self, value: &checked::HirExpr) -> Result<ValueId, MirLoweringError> {
+        let checked::HirExpr::Ident { name, .. } = value else {
+            return self.unsupported("take checked HIR effect on non-local value");
+        };
+        let place = self.lookup_place(name)?;
+        let destination = self.value();
+        self.emit(MirInstruction::TakePlace { destination, place });
         Ok(destination)
     }
 

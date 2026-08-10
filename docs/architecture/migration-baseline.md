@@ -372,7 +372,7 @@ mechanical acceptance condition holds.
       functions (checked local bindings, scalar/aggregate expressions, list
       indexing, assignments, structured `if`/`else`, conditional loops with
       `break`/`continue`, return, and resolved internal read/`mut`/`take`
-      calls plus lexical resource scopes) now lower from semantic HIR without
+      calls, standalone `take local`, plus lexical resource scopes) now lower from semantic HIR without
       constructing `ExecutableIr`; compiler output prefers that route and uses
       the explicit compatibility bridge only when a capability is not yet
       direct-lowerable. Internal task-group `async let`/`await` also lower to

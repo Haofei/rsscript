@@ -554,6 +554,37 @@ fn main() -> Unit {
 }
 
 #[test]
+fn direct_checked_hir_standalone_take_reaches_verified_bytecode() {
+    let source = r#"
+fn main() -> String {
+    local value = "rss"
+    return take value
+}
+"#;
+    let compiled =
+        compile_source_to_ir("direct-hir-take.rss", source).expect("standalone take compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("standalone take lowers directly from checked HIR");
+    assert!(
+        mir.functions()
+            .iter()
+            .flat_map(|function| function.blocks())
+            .flat_map(|block| block.instructions())
+            .any(|instruction| matches!(instruction, MirInstruction::TakePlace { .. }))
+    );
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("standalone take emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("standalone take bytecode executes");
+    assert_eq!(output.value, "rss");
+}
+
+#[test]
 fn direct_checked_hir_resource_scope_emits_cleanup_before_return() {
     let interface = r#"
 module Host

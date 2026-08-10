@@ -18,7 +18,7 @@ checked-HIR subset: local bindings and assignment, literals, scalar binary
 expressions, lists, maps, JSON objects, resolved list indexing, structured
 `if`/`else` CFG branches, conditional loops with `break`/`continue`, lexical
 resource scopes, return, and resolved internal calls with ordinary/read, `mut`,
-and `take` arguments. Call targets are looked up from checked `CallResolution`
+and `take` arguments, plus standalone `take local`. Call targets are looked up from checked `CallResolution`
 in a deterministic `FunctionId` table. `CompiledIr::mir()` prefers this path.
 Internal `task_group` async-let bindings and direct awaits lower to explicit
 `Spawn`/`Await` operations. Unsupported async external calls, cancellation,
@@ -56,7 +56,8 @@ Compiler coverage asserts direct scalar, branch, and loop programs (including
 explicit CFG terminators and cleanup operations, and that resolved internal and
 external calls preserve their typed target and `read`/`mut`/`take` identity. SDK
 Migration tests also prove a checked-HIR task group emits verifier-approved
-`Spawn`/`Await` bytecode and returns 42. SDK migration tests compile all direct
-HIR MIR shapes to
+`Spawn`/`Await` bytecode and returns 42, and that standalone `take local`
+reaches verified bytecode without the compatibility IR. SDK migration tests
+compile all direct HIR MIR shapes to
 verifier-approved Artifacts and execute them in the VM with their expected
 results.
