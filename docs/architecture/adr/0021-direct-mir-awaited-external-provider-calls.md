@@ -40,4 +40,5 @@ preserve the same structured Provider cancellation failure and usage report.
 Both fixtures compare stable Provider-trace fields while deliberately excluding
 wall-clock elapsed telemetry. A third fixture crosses a shared monotonic
 deadline inside an async Provider and proves both paths retain the same
-structured Provider deadline failure.
+structured Provider deadline failure. A fourth fixture makes two awaited
+external calls and compares their source-order Provider trace sequence.

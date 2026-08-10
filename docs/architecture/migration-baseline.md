@@ -446,8 +446,12 @@ mechanical acceptance condition holds.
     - [x] **M05.3c — Compare Provider deadlines during execution.** Both paths
       run an async Provider whose work crosses a shared monotonic deadline.
       They retain the same `ProviderErrorCode::DeadlineExceeded` failure, usage,
-      and stable Provider trace fields. Call-order comparison remains follow-up
-      work.
+      and stable Provider trace fields.
+    - [x] **M05.3d — Compare sequential external-call ordering.** Two awaited
+      async Provider calls execute in source order through both paths. Their
+      values, usage, and stable traces agree, with the trace symbol sequence
+      fixed as `Host.first`, then `Host.second`. Task-group child cancellation
+      remains follow-up work.
   - [ ] **M05.4 — Gate replacement on corpus parity.** New lowering cannot become
     default until all supported Core fixtures agree.
 - [ ] **M06 — Delete the source-shaped executable IR.** Remove nested

@@ -1170,6 +1170,122 @@ fn direct_checked_hir_awaited_provider_deadline_matches_legacy_vm() {
     assert_matching_provider_trace(&legacy.provider_call_traces, &direct.provider_call_traces);
 }
 
+#[test]
+fn direct_checked_hir_async_provider_call_order_matches_legacy_vm() {
+    let source = r#"
+async fn main() -> Int {
+    let first = await Host.first()
+    let second = await Host.second()
+    return first + second
+}
+"#;
+    let interface = "pub async fn Host.first() -> Int\npub async fn Host.second() -> Int\n";
+    let validated = analyze_source_with_interfaces_result(
+        "direct-hir-async-order.rss",
+        source,
+        &[("host-async.rssi", interface)],
+    )
+    .into_validated()
+    .expect("async call-order fixture should validate");
+    let compiled = compile_validated_to_ir(&validated);
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("sequential awaited external calls lower directly to MIR");
+
+    fn bindings() -> Vec<(String, ExternalFunction)> {
+        let first = ExternalSymbol::new("Host.first").expect("valid first symbol");
+        let second = ExternalSymbol::new("Host.second").expect("valid second symbol");
+        let signature = FunctionSignature {
+            parameters: Vec::new(),
+            result: "Int".into(),
+            asynchronous: true,
+        };
+        let descriptor = ProviderDescriptor {
+            provider_id: "test.direct-async-order".into(),
+            provider_version: "1.0.0".into(),
+            supported_abi: vec![rsscript_abi_model::RUNTIME_ABI_VERSION],
+            functions: vec![
+                ProviderFunctionDescriptor {
+                    symbol: first.clone(),
+                    signature: signature.clone(),
+                    entry: "first".into(),
+                    call_mode: ProviderCallMode::Async,
+                    blocking: BlockingBehavior::NonBlocking,
+                    cancellation: CancellationBehavior::Cooperative,
+                    thread_safe: true,
+                    reentrant: true,
+                    resource_cleanup: ResourceCleanupContract::None,
+                    error_mapping: ProviderErrorMapping::StructuredV1,
+                },
+                ProviderFunctionDescriptor {
+                    symbol: second.clone(),
+                    signature: signature.clone(),
+                    entry: "second".into(),
+                    call_mode: ProviderCallMode::Async,
+                    blocking: BlockingBehavior::NonBlocking,
+                    cancellation: CancellationBehavior::Cooperative,
+                    thread_safe: true,
+                    reentrant: true,
+                    resource_cleanup: ResourceCleanupContract::None,
+                    error_mapping: ProviderErrorMapping::StructuredV1,
+                },
+            ],
+        };
+        let mut registry = ExternalFunctionRegistry::new();
+        registry
+            .register_provider(
+                &descriptor,
+                BTreeMap::from([
+                    (
+                        first,
+                        ProviderFunction {
+                            signature: signature.clone(),
+                            callable: AsyncInterpreterFn::new(|_, _| async {
+                                Ok(NativeValue::Int(40))
+                            }),
+                        },
+                    ),
+                    (
+                        second,
+                        ProviderFunction {
+                            signature,
+                            callable: AsyncInterpreterFn::new(|_, _| async {
+                                Ok(NativeValue::Int(2))
+                            }),
+                        },
+                    ),
+                ]),
+            )
+            .expect("async Provider registration should succeed");
+        registry.into_bindings().collect()
+    }
+
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy async call-order fixture compiles")
+        .eval_main_with_args_and_external_bindings(std::iter::empty::<String>(), bindings())
+        .expect("legacy async call-order fixture executes");
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct async call-order MIR emits verified bytecode")
+    .eval_main_with_args_and_external_bindings(std::iter::empty::<String>(), bindings())
+    .expect("direct async call-order fixture executes");
+
+    assert_eq!(legacy.value, direct.value);
+    assert_eq!(legacy.usage, direct.usage);
+    assert_matching_provider_trace(&legacy.provider_call_traces, &direct.provider_call_traces);
+    assert_eq!(
+        direct
+            .provider_call_traces
+            .iter()
+            .map(|trace| trace.symbol.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Host.first", "Host.second"],
+    );
+}
+
 fn assert_matching_provider_trace(
     legacy: &[rsscript_sdk::ProviderCallTrace],
     direct: &[rsscript_sdk::ProviderCallTrace],
