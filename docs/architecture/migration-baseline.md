@@ -589,7 +589,7 @@ mechanical acceptance condition holds.
   execution request.
 - [x] **A06 — Ship Artifact Bundle, `rss verify`, and neutral `rss diff`.** Both
   single-file and package builds produce analysis/provenance-bound bundles.
-- [ ] **A07 — Complete semantic diff evidence.** Add read/mut/take, retention and
+- [x] **A07 — Complete semantic diff evidence.** Add read/mut/take, retention and
   escape, resource acquire/transfer/cleanup, structured-task fan-out and
   cancellation, call graph/recursion, Provider requirements, and diagnostic
   additions/removals while remaining policy-neutral.
@@ -612,8 +612,10 @@ mechanical acceptance condition holds.
     now records resolved call edges and recursion participants; semantic diff
     compares them alongside versioned Provider import requirements and
     coordinate-free diagnostic fact sets.
-  - [ ] **A07.4 — Version and fixture the neutral schema.** Add JSON/Markdown
-    goldens and prove no policy verdict or risk score enters the output.
+  - [x] **A07.4 — Version and fixture the neutral schema.** JSON and Markdown
+    structural-evidence goldens round-trip through `rsscript.semantic_diff.v2`;
+    the contract test rejects policy/risk/verdict vocabulary in the emitted
+    neutral facts.
     - [x] **A07.4a — Version diagnostic evidence explicitly.**
       `rsscript.semantic_diff.v2` adds coordinate-free diagnostic fact sets;
       v1 remains available as the prior schema, while v2 is validated in the

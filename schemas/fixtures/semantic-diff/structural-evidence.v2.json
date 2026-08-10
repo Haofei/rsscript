@@ -1,0 +1,57 @@
+{
+  "schema": "rsscript.semantic_diff.v2",
+  "old": {
+    "bundle_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "module_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "snapshot_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "source_content_hash": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "interface_catalog_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+  },
+  "new": {
+    "bundle_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "module_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "snapshot_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "source_content_hash": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+    "interface_catalog_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+  },
+  "imports": { "added": [], "removed": [], "changed": [] },
+  "external_contracts": { "added": [], "removed": [], "changed": [] },
+  "exports": { "added": [], "removed": [], "changed": [] },
+  "external_calls": { "added": [], "removed": [], "changed": [] },
+  "call_edges": {
+    "added": [{ "caller": "main", "callee": "publish" }],
+    "removed": [],
+    "changed": []
+  },
+  "recursive_functions": { "added": [], "removed": [], "changed": [] },
+  "resource_lifetimes": {
+    "added": [{
+      "function": "main",
+      "binding": "file",
+      "acquisition": "with",
+      "cleanup": "scope_exit",
+      "cleanup_on_cancellation": true
+    }],
+    "removed": [],
+    "changed": []
+  },
+  "resource_transfers": {
+    "added": [{ "function": "main", "binding": "file", "operation": "take" }],
+    "removed": [],
+    "changed": []
+  },
+  "task_groups": {
+    "added": [{
+      "function": "main",
+      "spawned_tasks": 2,
+      "select_arms": 1,
+      "drains_on_exit": true,
+      "cleanup_on_cancellation": true
+    }],
+    "removed": [],
+    "changed": []
+  },
+  "await_sites": { "added": [], "removed": [], "changed": [] },
+  "diagnostics": { "added": [], "removed": [], "changed": [] },
+  "summary": { "source_files": { "old": 1, "new": 2 } }
+}

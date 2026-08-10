@@ -102,3 +102,43 @@ fn semantic_diff_schema_accepts_live_policy_neutral_output() {
     assert!(!text.contains("allow"));
     assert!(!text.contains("deny"));
 }
+
+#[test]
+fn semantic_diff_json_and_markdown_goldens_remain_policy_neutral() {
+    let root = workspace_root();
+    let json_path = root.join("schemas/fixtures/semantic-diff/structural-evidence.v2.json");
+    let markdown_path = root.join("schemas/fixtures/semantic-diff/structural-evidence.v2.md");
+    let json = fs::read_to_string(&json_path).expect("read semantic diff JSON golden");
+    let diff: rsscript_sdk::SemanticDiffV1 =
+        serde_json::from_str(&json).expect("deserialize semantic diff JSON golden");
+    let normalized = serde_json::to_value(&diff).expect("serialize semantic diff golden");
+    let expected = load_json(&json_path);
+    assert_eq!(
+        normalized, expected,
+        "semantic diff JSON golden must round trip"
+    );
+    let schema = load_json(&root.join("schemas/rsscript.semantic_diff.v2.schema.json"));
+    let validator = jsonschema::validator_for(&schema).expect("semantic diff schema");
+    assert!(
+        validator.is_valid(&normalized),
+        "semantic diff golden must validate"
+    );
+    let mut with_policy = normalized.clone();
+    with_policy["risk"] = serde_json::json!("high");
+    assert!(
+        !validator.is_valid(&with_policy),
+        "neutral semantic diff schema must reject a policy field"
+    );
+    assert_eq!(
+        diff.to_markdown(),
+        fs::read_to_string(markdown_path).expect("read Markdown golden")
+    );
+
+    let text = serde_json::to_string(&normalized).expect("serialize semantic diff output");
+    for forbidden in ["risk", "allow", "deny", "policy", "verdict"] {
+        assert!(
+            !text.contains(forbidden),
+            "semantic diff must only report facts, found forbidden term `{forbidden}`"
+        );
+    }
+}
