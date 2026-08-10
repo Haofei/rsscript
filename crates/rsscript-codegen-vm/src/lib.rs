@@ -15,7 +15,7 @@ use rsscript_abi_model::{ExternalImport, RUNTIME_ABI_VERSION};
 use rsscript_bytecode::{BytecodeArtifact, BytecodeError, LANGUAGE_SEMANTICS_VERSION};
 use rsscript_mir::{
     BlockId, MirBinaryOp, MirCallArgument, MirCallTarget, MirFunction, MirInstruction, MirLiteral,
-    MirModule, MirParameterMode, MirTerminator, PlaceId, ValueId,
+    MirModule, MirParameterMode, MirTerminator, PlaceId, TaskId, ValueId,
 };
 use serde_json::{Map, Value, json};
 
@@ -111,9 +111,6 @@ fn wire_unit(mir: &MirModule) -> Result<Value, CodegenError> {
 }
 
 fn wire_function(mir: &MirModule, function: &MirFunction) -> Result<Value, CodegenError> {
-    if function.signature().is_async() {
-        return Err(CodegenError::Unsupported("async function"));
-    }
     let mut code = Vec::new();
     for (index, mode) in function.signature().parameter_modes().iter().enumerate() {
         if *mode == MirParameterMode::Read {
@@ -152,7 +149,7 @@ fn wire_function(mir: &MirModule, function: &MirFunction) -> Result<Value, Codeg
         .collect::<Map<_, _>>();
     Ok(json!({
         "name": function_name(mir, function)?, "params": function.signature().parameter_types().len(),
-        "captures": 0, "regs": function.place_count() as usize + function.value_count() as usize + 1,
+        "captures": 0, "regs": function.place_count() as usize + function.value_count() as usize + task_count(function) + 1,
         "local_regs": locals, "code": code,
     }))
 }
@@ -189,11 +186,42 @@ fn lower_instruction(
             "ResourceDrop",
             [("resource", json!(place_reg(*place)))],
         )),
-        MirInstruction::Spawn { .. }
-        | MirInstruction::Await { .. }
-        | MirInstruction::Cancel { .. }
-        | MirInstruction::Join { .. } => {
-            return Err(CodegenError::Unsupported("structured concurrency"));
+        MirInstruction::Spawn {
+            task,
+            target,
+            arguments,
+            ..
+        } => {
+            let args = arguments
+                .iter()
+                .map(|argument| match argument {
+                    MirCallArgument::Value(value) => Ok(value_reg(function, *value)),
+                    MirCallArgument::BorrowRead(place) | MirCallArgument::Take(place) => {
+                        Ok(place_reg(*place))
+                    }
+                    MirCallArgument::BorrowMut(_) => {
+                        Err(CodegenError::Unsupported("mutable async argument"))
+                    }
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            code.push(instr(
+                "SpawnTask",
+                [
+                    ("dst", json!(task_reg(function, *task))),
+                    ("function", json!(target.index())),
+                    ("args", json!(args)),
+                ],
+            ));
+        }
+        MirInstruction::Await { destination, task } => code.push(instr(
+            "AwaitJoin",
+            [
+                ("dst", json!(value_reg(function, *destination))),
+                ("src", json!(task_reg(function, *task))),
+            ],
+        )),
+        MirInstruction::Cancel { .. } | MirInstruction::Join { .. } => {
+            return Err(CodegenError::Unsupported("task cancellation or group join"));
         }
         MirInstruction::WritePlace { place, value } => code.push(instr(
             "Move",
@@ -389,13 +417,31 @@ fn value_reg(function: &MirFunction, value: ValueId) -> usize {
     function.place_count() as usize + value.index()
 }
 
+fn task_reg(function: &MirFunction, task: TaskId) -> usize {
+    function.place_count() as usize + function.value_count() as usize + task.index()
+}
+
+fn task_count(function: &MirFunction) -> usize {
+    function
+        .blocks()
+        .iter()
+        .flat_map(|block| block.instructions())
+        .filter_map(|instruction| match instruction {
+            MirInstruction::Spawn { task, .. } => Some(task.index() + 1),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use rsscript_abi_model::{CORE_LIBRARY_ABI_VERSION, RUNTIME_ABI_VERSION, WireType};
     use rsscript_bytecode::BytecodeVerifier;
     use rsscript_mir::{
-        BasicBlock, FunctionId, MirFunctionDebug, MirFunctionSignature, ResourceTypeId, TypeId,
+        BasicBlock, FunctionId, MirFunctionDebug, MirFunctionSignature, ResourceTypeId,
+        TaskGroupId, TypeId,
     };
 
     #[test]
@@ -499,5 +545,70 @@ mod tests {
         BytecodeVerifier::default()
             .verify(&artifact.to_bytes().expect("encode resource bytecode"))
             .expect("verify resource bytecode");
+    }
+
+    #[test]
+    fn spawned_async_mir_emits_verifiable_task_bytecode() {
+        let int = WireType::Int {
+            bits: 64,
+            signed: true,
+        };
+        let module = MirModule::new(
+            vec![int],
+            vec![
+                MirFunction::new(
+                    FunctionId::new(0),
+                    MirFunctionSignature::new(vec![], TypeId::new(0), false),
+                    0,
+                    1,
+                    vec![BasicBlock::new(
+                        BlockId::new(0),
+                        vec![
+                            MirInstruction::Spawn {
+                                task: TaskId::new(0),
+                                group: TaskGroupId::new(0),
+                                target: FunctionId::new(1),
+                                arguments: vec![],
+                            },
+                            MirInstruction::Await {
+                                destination: ValueId::new(0),
+                                task: TaskId::new(0),
+                            },
+                        ],
+                        MirTerminator::Return(Some(ValueId::new(0))),
+                    )],
+                ),
+                MirFunction::new(
+                    FunctionId::new(1),
+                    MirFunctionSignature::new(vec![], TypeId::new(0), true),
+                    0,
+                    1,
+                    vec![BasicBlock::new(
+                        BlockId::new(0),
+                        vec![MirInstruction::LoadLiteral {
+                            destination: ValueId::new(0),
+                            value: MirLiteral::Int(7),
+                        }],
+                        MirTerminator::Return(Some(ValueId::new(0))),
+                    )],
+                ),
+            ],
+            vec![
+                MirFunctionDebug::new("main", vec![]),
+                MirFunctionDebug::new("worker", vec![]),
+            ],
+            vec![],
+        )
+        .unwrap();
+        let artifact = emit_artifact(
+            &module,
+            &format!("sha256:{}", "a".repeat(64)),
+            &format!("sha256:{}", "b".repeat(64)),
+            "0.1.0",
+        )
+        .expect("emit task bytecode");
+        BytecodeVerifier::default()
+            .verify(&artifact.to_bytes().expect("encode task bytecode"))
+            .expect("verify task bytecode");
     }
 }
