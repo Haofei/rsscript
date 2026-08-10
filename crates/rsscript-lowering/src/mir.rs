@@ -1019,6 +1019,59 @@ mod tests {
     }
 
     #[test]
+    fn lowers_managed_resource_scope_cleanup_before_loop_break() {
+        let main = ExecutableFunction {
+            name: "main".into(),
+            is_async: false,
+            signature: signature(),
+            body: ExecutableBlock {
+                statements: vec![
+                    ExecutableStmt::Loop {
+                        condition: None,
+                        body: ExecutableBlock {
+                            statements: vec![ExecutableStmt::With {
+                                resource: ExecutableExpr::Manage {
+                                    value: Box::new(ExecutableExpr::Call {
+                                        callee: Callee::Name("open".into()),
+                                        receiver: None,
+                                        args: Vec::new(),
+                                        type_name: Some("host.fs.File".into()),
+                                    }),
+                                    type_name: Some("host.fs.File".into()),
+                                },
+                                binding: "file".into(),
+                                body: ExecutableBlock {
+                                    statements: vec![ExecutableStmt::Break],
+                                },
+                            }],
+                        },
+                    },
+                    ExecutableStmt::Return {
+                        value: Some(ExecutableExpr::Number { value: "1".into() }),
+                    },
+                ],
+            },
+        };
+        let open = ExecutableFunction {
+            name: "open".into(),
+            is_async: false,
+            signature: ExecutableSignature {
+                namespace: None,
+                name: "open".into(),
+                is_async: false,
+                params: Vec::new(),
+                return_type: Some("host.fs.File".into()),
+                is_external: false,
+            },
+            body: ExecutableBlock { statements: vec![] },
+        };
+        let mir = lower_executable_ir_to_mir(&module_with_functions(vec![main, open]))
+            .expect("lower resource scope in loop");
+        mir.verify()
+            .expect("break path releases the scoped resource before the loop exit");
+    }
+
+    #[test]
     fn lowers_async_binding_and_await_to_structured_task_ops() {
         let worker = ExecutableFunction {
             name: "worker".into(),

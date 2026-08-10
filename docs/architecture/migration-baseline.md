@@ -303,9 +303,9 @@ mechanical acceptance condition holds.
       remain fail-closed until cleanup-edge lowering is implemented.
     - [x] **M03.2c — Emit normal non-local cleanup edges.** The lowerer keeps a
       lexical resource cleanup stack and emits release operations before
-      `return`, `break`, and `continue`; a managed scope with an early return is
-      covered by MIR verification. Provider errors and cancellation still rely
-      on runtime cleanup and remain follow-up work.
+      `return`, `break`, and `continue`; managed early-return and loop-break
+      scopes are covered by MIR verification. Provider errors and cancellation
+      still rely on runtime cleanup and remain follow-up work.
   - [ ] **M03.3 — Add structured-concurrency instructions.** Model spawn, await,
     join, cancel, and select with lexical task-group ownership.
     - [x] **M03.3a — Establish typed task lifecycle primitives.** MIR now owns
