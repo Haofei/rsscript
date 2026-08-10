@@ -284,6 +284,10 @@ mechanical acceptance condition holds.
     rejects empty functions, invalid block/place/value references, duplicate
     definitions, undefined values, invalid CFG targets, and values that do not
     dominate a control-flow use. Cleanup-path validation remains follow-up work.
+    - [x] **M02.4b — Verify resource cleanup over CFG exits.** Resource liveness
+    propagates conservatively over reachable CFG edges and rejects a return
+    branch that omits a release even when sibling branches clean up. Cancellation
+    and Provider-error cleanup edges remain runtime-owned follow-up work.
 - [ ] **M03 — Make semantic operations explicit.** MIR represents move,
   read/mut borrow, retain, drop, resource acquire/release, spawn, await, join,
   cancellation, selection, external calls, and every cleanup/unwind edge.

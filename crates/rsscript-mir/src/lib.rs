@@ -1502,6 +1502,85 @@ mod tests {
     }
 
     #[test]
+    fn resource_cleanup_is_required_on_every_reachable_return_edge() {
+        let types = vec![
+            WireType::Unit,
+            WireType::Bool,
+            WireType::Resource {
+                name: "host.fs.File".into(),
+            },
+        ];
+        let entry = BasicBlock::new(
+            BlockId::new(0),
+            vec![
+                MirInstruction::LoadLiteral {
+                    destination: ValueId::new(0),
+                    value: MirLiteral::Bool(true),
+                },
+                MirInstruction::LoadLiteral {
+                    destination: ValueId::new(1),
+                    value: MirLiteral::Unit,
+                },
+                MirInstruction::AcquireResource {
+                    place: PlaceId::new(0),
+                    resource_type: ResourceTypeId::new(2),
+                    source: ValueId::new(1),
+                },
+            ],
+            MirTerminator::Branch {
+                condition: ValueId::new(0),
+                then_target: BlockId::new(1),
+                else_target: BlockId::new(2),
+            },
+        );
+        let released = BasicBlock::new(
+            BlockId::new(1),
+            vec![MirInstruction::ReleaseResource {
+                place: PlaceId::new(0),
+            }],
+            MirTerminator::Return(None),
+        );
+        let also_released = BasicBlock::new(
+            BlockId::new(2),
+            vec![MirInstruction::ReleaseResource {
+                place: PlaceId::new(0),
+            }],
+            MirTerminator::Return(None),
+        );
+        let valid = MirModule::new(
+            types.clone(),
+            vec![MirFunction::new(
+                FunctionId::new(0),
+                signature(),
+                1,
+                2,
+                vec![entry.clone(), released.clone(), also_released],
+            )],
+            vec![MirFunctionDebug::new("main", vec!["file".into()])],
+            vec![],
+        );
+        assert!(valid.is_ok(), "every branch releases the resource");
+
+        let missing_release = BasicBlock::new(BlockId::new(2), vec![], MirTerminator::Return(None));
+        let leaked = MirModule::new(
+            types,
+            vec![MirFunction::new(
+                FunctionId::new(0),
+                signature(),
+                1,
+                2,
+                vec![entry, released, missing_release],
+            )],
+            vec![MirFunctionDebug::new("main", vec!["file".into()])],
+            vec![],
+        );
+        assert!(matches!(
+            leaked,
+            Err(MirValidationError::ResourceLeak { .. })
+        ));
+    }
+
+    #[test]
     fn structured_tasks_must_be_closed_before_return() {
         let worker = MirFunction::new(
             FunctionId::new(1),
