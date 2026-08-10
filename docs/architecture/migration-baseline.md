@@ -142,6 +142,10 @@ mechanical acceptance condition holds.
       semantic diagnostics. An architecture test rejects local re-interpretation
       of duplicate HIR facts, while backend-only lowered-name validation remains
       in the compiler.
+    - [x] **S02.1b — Move token-local forbidden-surface diagnostics.** Rejection
+      of legacy `own struct`, surface-reference, and cast-style syntax is now
+      derived by `rsscript-semantics` from syntax tokens. Compiler retains only
+      HIR/type-dependent operator validation.
   - [ ] **S02.2 — Move type and generic-constraint checks.** Relocate type
     inference, substitutions, generic constraints, and call result facts behind
     the semantic crate API.

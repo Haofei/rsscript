@@ -16,6 +16,7 @@ mod declarations;
 pub mod hir;
 mod identities;
 mod interface_descriptor;
+mod source_rules;
 mod symbols;
 mod type_aliases;
 mod types;
@@ -32,6 +33,7 @@ pub use interface_descriptor::{
     InterfaceDescriptorResourceV1, InterfaceDescriptorV1,
 };
 pub use rsscript_source_model::{FileId, InterfaceId, ModuleId, SourceRevision};
+pub use source_rules::forbidden_surface_syntax_diagnostics;
 pub use symbols::{
     Definition, Reference, RssDocumentSymbol, SymbolIndex, SymbolInfo, SymbolKind, SymbolLookup,
     document_symbols, symbol_index,

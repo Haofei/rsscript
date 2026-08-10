@@ -1167,6 +1167,7 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         "ValidatedProgram",
         "cyclic_type_alias_diagnostics",
         "duplicate_declaration_diagnostics",
+        "forbidden_surface_syntax_diagnostics",
     ] {
         assert!(
             semantics.contains(exported),
@@ -1228,6 +1229,23 @@ fn structural_semantics_are_owned_by_the_semantics_crate() {
         assert!(
             !compiler_types.contains(forbidden),
             "compiler type checks must not re-own semantic alias-cycle rule `{forbidden}`"
+        );
+    }
+
+    let semantic_source_rules = read(&root.join("crates/rsscript-semantics/src/source_rules.rs"));
+    assert!(semantic_source_rules.contains("pub fn forbidden_surface_syntax_diagnostics"));
+    let compiler_forbidden = read(&root.join("crates/rsscript-compiler/src/checks/forbidden.rs"));
+    assert!(
+        compiler_forbidden.contains("rsscript_semantics::forbidden_surface_syntax_diagnostics")
+    );
+    for forbidden in [
+        "fn check_own_struct_attempts",
+        "fn check_surface_reference_attempts",
+        "fn check_implicit_conversion_attempts",
+    ] {
+        assert!(
+            !compiler_forbidden.contains(forbidden),
+            "compiler must not re-own token-local semantic rule `{forbidden}`"
         );
     }
 
