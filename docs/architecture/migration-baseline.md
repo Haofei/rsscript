@@ -278,6 +278,9 @@ mechanical acceptance condition holds.
       place-state transition; linear/CFG validation rejects reads after an
       explicit drop until a write reinitializes the place. Source lowering and
       bytecode support remain follow-up work.
+    - [x] **M03.1e — Lower standalone local moves.** A checked `take local`
+      expression becomes explicit `TakePlace`, which consumes the source place
+      in MIR and remains visible to the scalar codegen/conformance paths.
   - [ ] **M03.2 — Add resource lifetime instructions and cleanup edges.** Model
     acquire/manage/release and verify cleanup for normal return, branch exit,
     error, and cancellation.

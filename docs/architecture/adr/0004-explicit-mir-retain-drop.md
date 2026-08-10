@@ -18,6 +18,11 @@ place and transitions it to the same unavailable state as a move; assignment
 can reinitialize that state. The existing CFG move dataflow applies this rule
 at joins.
 
+The same ownership model also has `TakePlace { destination, place }` for a
+standalone checked `take local` expression. It defines the moved value while
+transitioning the source place to unavailable, so source lowering cannot erase
+that move before a backend observes it.
+
 This decision does not yet lower source retention/resource syntax or add v1
 bytecode opcodes. The code generator rejects these operations until their
 runtime cleanup and conformance contracts are complete.

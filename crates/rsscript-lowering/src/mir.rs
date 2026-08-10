@@ -469,7 +469,7 @@ impl<'a> FunctionLowerer<'a> {
             ExecutableExpr::Effect { effect, value, .. } => match effect {
                 ParamEffect::Read => self.lower_read_borrow(value),
                 ParamEffect::Mut => self.unsupported("mutable borrow"),
-                ParamEffect::Take => self.unsupported("move"),
+                ParamEffect::Take => self.lower_take(value),
             },
             ExecutableExpr::Manage { .. } => self.unsupported("managed resource"),
             ExecutableExpr::Spawn { .. } => self.unsupported("spawn"),
@@ -558,6 +558,16 @@ impl<'a> FunctionLowerer<'a> {
         let destination = self.value();
         let place = self.lookup_place(name)?;
         self.emit(MirInstruction::BorrowRead { destination, place });
+        Ok(destination)
+    }
+
+    fn lower_take(&mut self, value: &ExecutableExpr) -> Result<ValueId, MirLoweringError> {
+        let ExecutableExpr::Ident { name, .. } = value else {
+            return self.unsupported("move of non-local value");
+        };
+        let destination = self.value();
+        let place = self.lookup_place(name)?;
+        self.emit(MirInstruction::TakePlace { destination, place });
         Ok(destination)
     }
 
@@ -728,6 +738,45 @@ mod tests {
         assert_eq!(mir.functions()[0].signature().result(), TypeId::new(0));
         assert!(mir.functions()[0].blocks().len() >= 4);
         mir.verify().unwrap();
+    }
+
+    #[test]
+    fn lowers_standalone_take_of_a_local_to_explicit_mir_move() {
+        let executable = module(ExecutableFunction {
+            name: "main".into(),
+            is_async: false,
+            signature: signature(),
+            body: ExecutableBlock {
+                statements: vec![
+                    ExecutableStmt::Let {
+                        name: "value".into(),
+                        value: Some(ExecutableExpr::Number { value: "1".into() }),
+                        is_async: false,
+                    },
+                    ExecutableStmt::Return {
+                        value: Some(ExecutableExpr::Effect {
+                            effect: ParamEffect::Take,
+                            value: Box::new(ExecutableExpr::Ident {
+                                name: "value".into(),
+                                type_name: Some("Int".into()),
+                            }),
+                            type_name: Some("Int".into()),
+                        }),
+                    },
+                ],
+            },
+        });
+
+        let mir = lower_executable_ir_to_mir(&executable).expect("lower standalone take");
+        assert!(matches!(
+            mir.functions()[0].blocks()[0].instructions(),
+            [
+                MirInstruction::LoadLiteral { .. },
+                MirInstruction::WritePlace { .. },
+                MirInstruction::TakePlace { .. }
+            ]
+        ));
+        mir.verify().expect("verify explicit move");
     }
 
     #[test]

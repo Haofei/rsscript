@@ -92,6 +92,12 @@ pub enum MirInstruction {
         destination: ValueId,
         place: PlaceId,
     },
+    /// Move a local value out of its place. Unlike a call argument this keeps
+    /// standalone `take value` expressions visible to backends and CFG checks.
+    TakePlace {
+        destination: ValueId,
+        place: PlaceId,
+    },
     /// A checked escape/retention boundary. The place stays live, but a
     /// backend can no longer erase the fact that its value may outlive a call.
     Retain {
@@ -578,6 +584,7 @@ fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
         MirInstruction::LoadLiteral { destination, .. }
         | MirInstruction::ReadPlace { destination, .. }
         | MirInstruction::BorrowRead { destination, .. }
+        | MirInstruction::TakePlace { destination, .. }
         | MirInstruction::Binary { destination, .. }
         | MirInstruction::Call { destination, .. } => Some(*destination),
         MirInstruction::WritePlace { .. }
@@ -605,6 +612,7 @@ fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
         MirInstruction::LoadLiteral { .. }
         | MirInstruction::ReadPlace { .. }
         | MirInstruction::BorrowRead { .. }
+        | MirInstruction::TakePlace { .. }
         | MirInstruction::Retain { .. }
         | MirInstruction::Drop { .. } => Vec::new(),
     }
@@ -688,6 +696,11 @@ fn transfer_move_state(
         MirInstruction::ReadPlace { place, .. } | MirInstruction::BorrowRead { place, .. } => {
             check_live(*place, moved_places)
         }
+        MirInstruction::TakePlace { place, .. } => {
+            check_live(*place, moved_places)?;
+            moved_places.insert(*place);
+            Ok(())
+        }
         MirInstruction::Retain { place } => check_live(*place, moved_places),
         MirInstruction::Drop { place } => {
             check_live(*place, moved_places)?;
@@ -767,6 +780,11 @@ fn verify_instruction(
         }
         MirInstruction::BorrowRead { destination, place } => {
             check_live_place(*place, moved_places)?;
+            define(*destination, defined)
+        }
+        MirInstruction::TakePlace { destination, place } => {
+            check_live_place(*place, moved_places)?;
+            moved_places.insert(*place);
             define(*destination, defined)
         }
         MirInstruction::Retain { place } => check_live_place(*place, moved_places),

@@ -168,7 +168,8 @@ fn lower_instruction(
             code.push(literal(value, value_reg(function, *destination)))
         }
         MirInstruction::ReadPlace { destination, place }
-        | MirInstruction::BorrowRead { destination, place } => code.push(instr(
+        | MirInstruction::BorrowRead { destination, place }
+        | MirInstruction::TakePlace { destination, place } => code.push(instr(
             "Move",
             [
                 ("dst", json!(value_reg(function, *destination))),
