@@ -190,7 +190,10 @@ mechanical acceptance condition holds.
   VM, SDK, or Providers; revision invalidation and request cancellation require
   focused tests.
   - [ ] **S04.1 — Replace the compiler façade dependency with syntax/semantic
-    query dependencies.** Cargo metadata tests reject a language-service edge to
+    query dependencies.** Editor symbols and formatting now come directly from
+    `rsscript-semantics` and `rsscript-syntax`; diagnostics, lint, and workspace
+    semantic queries remain on the compiler transition path. Cargo metadata
+    tests must eventually reject a language-service edge to
     compiler, VM, SDK, package persistence, or concrete Providers.
   - [ ] **S04.2 — Add document revision and invalidation tests.** Verify edits,
     deletes, interface changes, cancellation, and deadlines through the LSP

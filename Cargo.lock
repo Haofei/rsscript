@@ -1852,6 +1852,7 @@ dependencies = [
  "rsscript-compiler",
  "rsscript-operation",
  "rsscript-semantics",
+ "rsscript-syntax",
 ]
 
 [[package]]
