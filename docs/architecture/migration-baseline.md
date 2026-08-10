@@ -435,12 +435,14 @@ mechanical acceptance condition holds.
       Provider future that deliberately yields once executes through both the
       legacy executable-IR path and direct checked-HIR MIR bytecode. Both paths
       return the same value and record the same Provider-call usage.
-      Call ordering, deadlines, and trace comparison remain follow-up work.
+      The stable Provider-trace fields (identity, symbol, byte counts, and
+      result code) also agree; elapsed time remains observational telemetry.
+      Call ordering and deadline comparison remain follow-up work.
     - [x] **M05.3b — Compare Provider cancellation during suspension.** Both
       paths run a cooperative async Provider that cancels the shared execution
       token after its first pending poll. Both retain an execution report with
-      the same structured `ProviderErrorCode::Cancelled` failure and usage.
-      Deadline and trace comparison remain follow-up work.
+      the same structured `ProviderErrorCode::Cancelled` failure, usage, and
+      stable Provider trace fields. Deadline comparison remains follow-up work.
   - [ ] **M05.4 — Gate replacement on corpus parity.** New lowering cannot become
     default until all supported Core fixtures agree.
 - [ ] **M06 — Delete the source-shaped executable IR.** Remove nested

@@ -37,3 +37,5 @@ cooperative asynchronous Provider that yields once before returning. Both paths
 complete with the same value and Provider-call usage. A second fixture cancels
 the shared execution token while the Provider future is pending; both paths
 preserve the same structured Provider cancellation failure and usage report.
+Both fixtures compare stable Provider-trace fields while deliberately excluding
+wall-clock elapsed telemetry.

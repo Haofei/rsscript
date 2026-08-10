@@ -951,6 +951,7 @@ fn direct_checked_hir_awaited_external_provider_matches_legacy_vm() {
     assert_eq!(legacy.usage.provider_calls, 1);
     assert_eq!(legacy.usage.provider_calls, direct.usage.provider_calls);
     assert_eq!(legacy.usage, direct.usage);
+    assert_matching_provider_trace(&legacy.provider_call_traces, &direct.provider_call_traces);
 }
 
 #[test]
@@ -1069,6 +1070,22 @@ fn direct_checked_hir_awaited_provider_cancellation_matches_legacy_vm() {
         );
     }
     assert_eq!(legacy.usage, direct.usage);
+    assert_matching_provider_trace(&legacy.provider_call_traces, &direct.provider_call_traces);
+}
+
+fn assert_matching_provider_trace(
+    legacy: &[rsscript_sdk::ProviderCallTrace],
+    direct: &[rsscript_sdk::ProviderCallTrace],
+) {
+    assert_eq!(legacy.len(), direct.len());
+    for (legacy, direct) in legacy.iter().zip(direct) {
+        assert_eq!(legacy.provider_id, direct.provider_id);
+        assert_eq!(legacy.provider_version, direct.provider_version);
+        assert_eq!(legacy.symbol, direct.symbol);
+        assert_eq!(legacy.request_bytes, direct.request_bytes);
+        assert_eq!(legacy.response_bytes, direct.response_bytes);
+        assert_eq!(legacy.result, direct.result);
+    }
 }
 
 #[test]
