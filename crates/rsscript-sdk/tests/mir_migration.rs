@@ -566,6 +566,41 @@ fn main() -> Unit {
     );
     mir.verify()
         .expect("retention fact remains verifier-visible");
+
+    let calls = Arc::new(AtomicU64::new(0));
+    let provider = ExternalFunction::new({
+        let calls = Arc::clone(&calls);
+        move |arguments| match arguments.as_slice() {
+            [NativeValue::String(value)] if value == "rss" => {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(NativeValue::Unit)
+            }
+            _ => Err(ProviderError::internal(
+                "unexpected retaining-call arguments",
+            )),
+        }
+    });
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy retaining-call fixture compiles")
+        .eval_main_with_args_and_external_bindings(
+            std::iter::empty::<String>(),
+            [("Store.put", provider.clone())],
+        )
+        .expect("legacy retaining-call fixture executes");
+    let mir_vm = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("MIR retaining-call fixture emits verified bytecode")
+    .eval_main_with_args_and_external_bindings(
+        std::iter::empty::<String>(),
+        [("Store.put", provider)],
+    )
+    .expect("MIR retaining-call fixture executes");
+    assert_eq!(legacy.value, mir_vm.value);
+    assert_eq!(legacy.usage.provider_calls, mir_vm.usage.provider_calls);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
 
 #[test]
