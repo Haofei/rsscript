@@ -9,6 +9,9 @@ use crate::{Diagnostic, ValidatedProgram, validate_source};
 #[derive(Debug, Clone)]
 pub struct CompiledIr {
     executable: rsscript_lowering::ExecutableIr,
+    /// Immutable checked semantic input retained only through the migration so
+    /// the preferred MIR path can avoid the source-shaped compatibility IR.
+    checked_hir: rsscript_semantics::hir::Hir,
     source_hash: String,
     interface_catalog_digest: String,
 }
@@ -21,7 +24,17 @@ impl CompiledIr {
     /// rejects resource, async, and call operations until those operations
     /// have explicit MIR representations.
     pub fn mir(&self) -> Result<rsscript_mir::MirModule, rsscript_lowering::MirLoweringError> {
-        rsscript_lowering::lower_executable_ir_to_mir(&self.executable)
+        self.checked_hir_mir()
+            .or_else(|_| rsscript_lowering::lower_executable_ir_to_mir(&self.executable))
+    }
+
+    /// Preferred projection-free checked-HIR path. Unsupported capabilities
+    /// return an explicit lowering error so the caller can make a deliberate
+    /// compatibility decision rather than accidentally rebuilding syntax.
+    pub fn checked_hir_mir(
+        &self,
+    ) -> Result<rsscript_mir::MirModule, rsscript_lowering::MirLoweringError> {
+        rsscript_lowering::lower_checked_hir_linear_to_mir(&self.checked_hir)
     }
 
     pub fn executable(&self) -> &rsscript_lowering::ExecutableIr {
@@ -47,8 +60,10 @@ pub fn compile_source_to_ir(file: &str, source: &str) -> Result<CompiledIr, Vec<
 }
 
 pub fn compile_validated_to_ir(validated: &ValidatedProgram) -> CompiledIr {
+    let checked_hir = validated.database().hir().clone();
     CompiledIr {
-        executable: rsscript_lowering::lower_validated_hir(validated.database().hir()),
+        executable: rsscript_lowering::lower_validated_hir(&checked_hir),
+        checked_hir,
         source_hash: source_hash(validated),
         interface_catalog_digest: crate::interfaces::interface_catalog_digest(),
     }
@@ -117,5 +132,37 @@ fn main() -> Int {
         assert_eq!(mir.functions().len(), 1);
         assert!(mir.functions()[0].blocks().len() >= 4);
         mir.verify().expect("MIR remains structurally valid");
+    }
+
+    #[test]
+    fn linear_scalar_program_uses_the_direct_checked_hir_mir_path() {
+        let compiled = compile_source_to_ir(
+            "direct-hir-mir.rss",
+            r#"
+fn main() -> Int {
+    let left = 40
+    let right = 2
+    return left + right
+}
+"#,
+        )
+        .expect("source should compile");
+        let mir = compiled
+            .checked_hir_mir()
+            .expect("linear scalar HIR lowers without executable IR");
+        assert_eq!(mir.functions().len(), 1);
+        assert!(matches!(
+            mir.functions()[0].blocks()[0].instructions(),
+            [
+                rsscript_mir::MirInstruction::LoadLiteral { .. },
+                rsscript_mir::MirInstruction::WritePlace { .. },
+                rsscript_mir::MirInstruction::LoadLiteral { .. },
+                rsscript_mir::MirInstruction::WritePlace { .. },
+                rsscript_mir::MirInstruction::ReadPlace { .. },
+                rsscript_mir::MirInstruction::ReadPlace { .. },
+                rsscript_mir::MirInstruction::Binary { .. },
+            ]
+        ));
+        mir.verify().expect("direct HIR MIR verifies");
     }
 }

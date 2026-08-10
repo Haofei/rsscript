@@ -19,6 +19,7 @@ use rsscript_mir::{
     MirLiteral, MirModule, MirParameterMode, MirTerminator, PlaceId, ResourceTypeId, TaskGroupId,
     TaskId, TypeId, ValueId,
 };
+use rsscript_semantics::hir as checked;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MirLoweringError {
@@ -112,6 +113,49 @@ pub fn lower_executable_ir_to_mir(
     Ok(MirModule::new(types.into_types(), lowered, debug, imports)?)
 }
 
+/// Lower the deliberately small, linear checked-HIR subset without projecting
+/// through `ExecutableIr`. This is the first replacement path for the
+/// transitional source-shaped bridge: it consumes checked HIR nodes and their
+/// type facts directly, while unsupported control flow, calls, resources, and
+/// async constructs continue to fail closed so callers can choose the explicit
+/// compatibility path during migration.
+pub fn lower_checked_hir_linear_to_mir(hir: &checked::Hir) -> Result<MirModule, MirLoweringError> {
+    let mut functions = hir
+        .function_bodies()
+        .filter_map(|(name, body)| {
+            body.block.as_ref().and_then(|block| {
+                hir.resolve_function(None, name)
+                    .map(|signature| (name, block, signature))
+            })
+        })
+        .filter(|(_, _, signature)| !signature.is_external)
+        .collect::<Vec<_>>();
+    functions.sort_by_key(|(name, _, _)| *name);
+
+    let mut types = TypeTable::default();
+    let signatures = functions
+        .iter()
+        .map(|(_, _, signature)| types.checked_function_signature(signature))
+        .collect::<Vec<_>>();
+    let mut lowered = Vec::with_capacity(functions.len());
+    let mut debug = Vec::with_capacity(functions.len());
+    for ((index, (name, block, signature)), mir_signature) in
+        functions.iter().enumerate().zip(signatures)
+    {
+        let output = CheckedHirLinearLowerer::new(
+            FunctionId::new(index as u32),
+            name,
+            block,
+            signature,
+            mir_signature,
+        )
+        .lower()?;
+        lowered.push(output.function);
+        debug.push(output.debug);
+    }
+    Ok(MirModule::new(types.into_types(), lowered, debug, vec![])?)
+}
+
 #[derive(Clone)]
 struct CallTargets {
     functions: BTreeMap<String, FunctionId>,
@@ -167,6 +211,38 @@ impl TypeTable {
         id
     }
 
+    fn checked_function_signature(
+        &mut self,
+        signature: &checked::FunctionSig,
+    ) -> MirFunctionSignature {
+        MirFunctionSignature::with_modes(
+            signature
+                .params
+                .iter()
+                .map(|parameter| self.intern(WireType::parse(&parameter.ty.to_string())))
+                .collect(),
+            signature
+                .params
+                .iter()
+                .map(
+                    |parameter| match parameter.effect.unwrap_or(checked::ParamEffect::Read) {
+                        checked::ParamEffect::Read => MirParameterMode::Read,
+                        checked::ParamEffect::Mut => MirParameterMode::Mut,
+                        checked::ParamEffect::Take => MirParameterMode::Take,
+                    },
+                )
+                .collect(),
+            self.intern(
+                signature
+                    .return_ty
+                    .as_ref()
+                    .map(|ty| WireType::parse(&ty.to_string()))
+                    .unwrap_or(WireType::Unit),
+            ),
+            signature.is_async,
+        )
+    }
+
     fn into_types(self) -> Vec<WireType> {
         self.types
     }
@@ -175,6 +251,311 @@ impl TypeTable {
 struct LoweredFunction {
     function: MirFunction,
     debug: MirFunctionDebug,
+}
+
+/// Direct checked-HIR lowering for the initial linear subset. Keeping this
+/// separate from `FunctionLowerer` makes the temporary compatibility boundary
+/// auditable: this implementation never constructs or reads `ExecutableIr`.
+struct CheckedHirLinearLowerer<'source> {
+    id: FunctionId,
+    function_name: &'source str,
+    body: &'source checked::HirBlock,
+    signature: &'source checked::FunctionSig,
+    mir_signature: MirFunctionSignature,
+    instructions: Vec<MirInstruction>,
+    places: HashMap<String, PlaceId>,
+    place_names: Vec<String>,
+    next_value: u32,
+    returned: bool,
+}
+
+impl<'source> CheckedHirLinearLowerer<'source> {
+    fn new(
+        id: FunctionId,
+        function_name: &'source str,
+        body: &'source checked::HirBlock,
+        signature: &'source checked::FunctionSig,
+        mir_signature: MirFunctionSignature,
+    ) -> Self {
+        let mut lowerer = Self {
+            id,
+            function_name,
+            body,
+            signature,
+            mir_signature,
+            instructions: Vec::new(),
+            places: HashMap::new(),
+            place_names: Vec::new(),
+            next_value: 0,
+            returned: false,
+        };
+        for parameter in &lowerer.signature.params {
+            lowerer.place(&parameter.name);
+        }
+        lowerer
+    }
+
+    fn lower(mut self) -> Result<LoweredFunction, MirLoweringError> {
+        if self.signature.is_async {
+            return self.unsupported("async checked HIR function");
+        }
+        for statement in &self.body.statements {
+            if self.returned {
+                return self.unsupported("statement after return");
+            }
+            self.lower_statement(statement)?;
+        }
+        let terminator = if self.returned {
+            self.instructions
+                .pop()
+                .and_then(|instruction| match instruction {
+                    MirInstruction::Discard { value } => Some(MirTerminator::Return(Some(value))),
+                    _ => None,
+                })
+                .ok_or_else(|| MirLoweringError::Unsupported {
+                    function: self.function_name.to_owned(),
+                    construct: "direct HIR return representation",
+                })?
+        } else {
+            MirTerminator::Return(None)
+        };
+        Ok(LoweredFunction {
+            function: MirFunction::new(
+                self.id,
+                self.mir_signature,
+                self.place_names.len() as u32,
+                self.next_value,
+                vec![BasicBlock::new(
+                    BlockId::new(0),
+                    self.instructions,
+                    terminator,
+                )],
+            ),
+            debug: MirFunctionDebug::new(self.function_name.to_owned(), self.place_names),
+        })
+    }
+
+    fn lower_statement(&mut self, statement: &checked::HirStmt) -> Result<(), MirLoweringError> {
+        match statement {
+            checked::HirStmt::Let {
+                name,
+                value,
+                is_async: false,
+                ..
+            } => {
+                let place = self.place(name);
+                if let Some(value) = value {
+                    let value = self.lower_expression(value)?;
+                    self.instructions
+                        .push(MirInstruction::WritePlace { place, value });
+                }
+                Ok(())
+            }
+            checked::HirStmt::Return { value, .. } => {
+                let value = value
+                    .as_ref()
+                    .map(|value| self.lower_expression(value))
+                    .transpose()?;
+                // The final value is held in a marker instruction until this
+                // linear lowerer constructs the sole block terminator.
+                let value = value.unwrap_or_else(|| self.unit_value());
+                self.instructions.push(MirInstruction::Discard { value });
+                self.returned = true;
+                Ok(())
+            }
+            checked::HirStmt::Assign { target, value, .. } => {
+                let checked::HirExpr::Ident { name, .. } = target else {
+                    return self.unsupported("non-local checked HIR assignment");
+                };
+                let place = self.lookup_place(name)?;
+                let value = self.lower_expression(value)?;
+                self.instructions
+                    .push(MirInstruction::WritePlace { place, value });
+                Ok(())
+            }
+            checked::HirStmt::Expr(expression) => {
+                let value = self.lower_expression(expression)?;
+                self.instructions.push(MirInstruction::Discard { value });
+                Ok(())
+            }
+            checked::HirStmt::Let { is_async: true, .. } => {
+                self.unsupported("async checked HIR binding")
+            }
+            checked::HirStmt::If { .. } => self.unsupported("checked HIR branch"),
+            checked::HirStmt::Loop { .. } => self.unsupported("checked HIR loop"),
+            checked::HirStmt::With { .. } => self.unsupported("checked HIR resource scope"),
+            checked::HirStmt::For { .. } => self.unsupported("checked HIR for loop"),
+            checked::HirStmt::Match { .. } => self.unsupported("checked HIR match"),
+            checked::HirStmt::Select { .. } => self.unsupported("checked HIR select"),
+            checked::HirStmt::Break(_) => self.unsupported("checked HIR break"),
+            checked::HirStmt::Continue(_) => self.unsupported("checked HIR continue"),
+            checked::HirStmt::Unknown(_) => self.unsupported("unknown checked HIR statement"),
+        }
+    }
+
+    fn lower_expression(
+        &mut self,
+        expression: &checked::HirExpr,
+    ) -> Result<ValueId, MirLoweringError> {
+        match expression {
+            checked::HirExpr::Ident { name, .. } => {
+                let destination = self.value();
+                let place = self.lookup_place(name)?;
+                self.instructions
+                    .push(MirInstruction::ReadPlace { destination, place });
+                Ok(destination)
+            }
+            checked::HirExpr::Number { value, .. } => {
+                let value = value
+                    .parse::<i64>()
+                    .map(MirLiteral::Int)
+                    .or_else(|_| value.parse::<f64>().map(MirLiteral::Float))
+                    .map_err(|_| MirLoweringError::Unsupported {
+                        function: self.function_name.to_owned(),
+                        construct: "non-numeric checked HIR literal",
+                    })?;
+                self.literal(value)
+            }
+            checked::HirExpr::String { value, .. } => {
+                self.literal(MirLiteral::String(value.clone()))
+            }
+            checked::HirExpr::Char { value, .. } => {
+                let mut chars = value.chars();
+                match (chars.next(), chars.next()) {
+                    (Some(value), None) => self.literal(MirLiteral::Char(value)),
+                    _ => self.unsupported("invalid checked HIR char literal"),
+                }
+            }
+            checked::HirExpr::Binary {
+                op, left, right, ..
+            } => {
+                let left = self.lower_expression(left)?;
+                let right = self.lower_expression(right)?;
+                let destination = self.value();
+                self.instructions.push(MirInstruction::Binary {
+                    destination,
+                    op: checked_binary_op(*op),
+                    left,
+                    right,
+                });
+                Ok(destination)
+            }
+            checked::HirExpr::ArrayLiteral { items, .. } => {
+                let items = items
+                    .iter()
+                    .map(|item| self.lower_expression(item))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let destination = self.value();
+                self.instructions
+                    .push(MirInstruction::MakeList { destination, items });
+                Ok(destination)
+            }
+            checked::HirExpr::MapLiteral { entries, .. } => {
+                let entries = entries
+                    .iter()
+                    .map(|entry| -> Result<(ValueId, ValueId), MirLoweringError> {
+                        Ok((
+                            self.lower_expression(&entry.key)?,
+                            self.lower_expression(&entry.value)?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let destination = self.value();
+                self.instructions.push(MirInstruction::MakeMap {
+                    destination,
+                    entries,
+                });
+                Ok(destination)
+            }
+            checked::HirExpr::ObjectLiteral { fields, .. } => {
+                let fields = fields
+                    .iter()
+                    .map(|field| -> Result<(String, ValueId), MirLoweringError> {
+                        Ok((field.name.clone(), self.lower_expression(&field.value)?))
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let destination = self.value();
+                self.instructions.push(MirInstruction::MakeObject {
+                    destination,
+                    fields,
+                });
+                Ok(destination)
+            }
+            checked::HirExpr::Index { base, index, .. }
+                if checked_hir_expression_type_name(base).is_some_and(is_list_type) =>
+            {
+                let list = self.lower_expression(base)?;
+                let index = self.lower_expression(index)?;
+                let destination = self.value();
+                self.instructions.push(MirInstruction::ListGet {
+                    destination,
+                    list,
+                    index,
+                });
+                Ok(destination)
+            }
+            checked::HirExpr::Index { .. } => self.unsupported("non-list checked HIR index"),
+            checked::HirExpr::Call { .. } => self.unsupported("checked HIR call"),
+            checked::HirExpr::Effect { .. } => self.unsupported("checked HIR effect"),
+            checked::HirExpr::Manage { .. } => self.unsupported("checked HIR managed value"),
+            checked::HirExpr::Spawn { .. } => self.unsupported("checked HIR spawn"),
+            checked::HirExpr::Await { .. } => self.unsupported("checked HIR await"),
+            checked::HirExpr::Try { .. } => self.unsupported("checked HIR try"),
+            checked::HirExpr::Closure { .. } => self.unsupported("checked HIR closure"),
+            checked::HirExpr::Field { .. } => self.unsupported("checked HIR field access"),
+            checked::HirExpr::Match { .. } => self.unsupported("checked HIR match expression"),
+            checked::HirExpr::Unknown(_) => self.unsupported("unknown checked HIR expression"),
+        }
+    }
+
+    fn literal(&mut self, value: MirLiteral) -> Result<ValueId, MirLoweringError> {
+        let destination = self.value();
+        self.instructions
+            .push(MirInstruction::LoadLiteral { destination, value });
+        Ok(destination)
+    }
+
+    fn unit_value(&mut self) -> ValueId {
+        let destination = self.value();
+        self.instructions.push(MirInstruction::LoadLiteral {
+            destination,
+            value: MirLiteral::Unit,
+        });
+        destination
+    }
+
+    fn place(&mut self, name: &str) -> PlaceId {
+        if let Some(place) = self.places.get(name) {
+            return *place;
+        }
+        let place = PlaceId::new(self.place_names.len() as u32);
+        self.places.insert(name.to_owned(), place);
+        self.place_names.push(name.to_owned());
+        place
+    }
+
+    fn lookup_place(&self, name: &str) -> Result<PlaceId, MirLoweringError> {
+        self.places
+            .get(name)
+            .copied()
+            .ok_or_else(|| MirLoweringError::Unsupported {
+                function: self.function_name.to_owned(),
+                construct: "unknown checked HIR local",
+            })
+    }
+
+    fn value(&mut self) -> ValueId {
+        let value = ValueId::new(self.next_value);
+        self.next_value += 1;
+        value
+    }
+
+    fn unsupported<T>(&self, construct: &'static str) -> Result<T, MirLoweringError> {
+        Err(MirLoweringError::Unsupported {
+            function: self.function_name.to_owned(),
+            construct,
+        })
+    }
 }
 
 struct BlockDraft {
@@ -852,8 +1233,55 @@ fn expression_type_name(expression: &ExecutableExpr) -> Option<&str> {
     }
 }
 
+fn checked_hir_expression_type_name(expression: &checked::HirExpr) -> Option<&str> {
+    match expression {
+        checked::HirExpr::Ident { type_name, .. }
+        | checked::HirExpr::ObjectLiteral { type_name, .. }
+        | checked::HirExpr::MapLiteral { type_name, .. }
+        | checked::HirExpr::ArrayLiteral { type_name, .. }
+        | checked::HirExpr::Call { type_name, .. }
+        | checked::HirExpr::Effect { type_name, .. }
+        | checked::HirExpr::Manage { type_name, .. }
+        | checked::HirExpr::Spawn { type_name, .. }
+        | checked::HirExpr::Await { type_name, .. }
+        | checked::HirExpr::Try { type_name, .. }
+        | checked::HirExpr::Match { type_name, .. } => type_name.as_deref(),
+        checked::HirExpr::Number { .. }
+        | checked::HirExpr::String { .. }
+        | checked::HirExpr::Char { .. }
+        | checked::HirExpr::Binary { .. }
+        | checked::HirExpr::Field { .. }
+        | checked::HirExpr::Index { .. }
+        | checked::HirExpr::Closure { .. }
+        | checked::HirExpr::Unknown(_) => None,
+    }
+}
+
 fn is_list_type(type_name: &str) -> bool {
     type_name == "List" || type_name.starts_with("List<")
+}
+
+fn checked_binary_op(op: rsscript_syntax::ast::BinaryOp) -> MirBinaryOp {
+    match op {
+        rsscript_syntax::ast::BinaryOp::Add => MirBinaryOp::Add,
+        rsscript_syntax::ast::BinaryOp::Subtract => MirBinaryOp::Subtract,
+        rsscript_syntax::ast::BinaryOp::Multiply => MirBinaryOp::Multiply,
+        rsscript_syntax::ast::BinaryOp::Divide => MirBinaryOp::Divide,
+        rsscript_syntax::ast::BinaryOp::Modulo => MirBinaryOp::Modulo,
+        rsscript_syntax::ast::BinaryOp::BitAnd => MirBinaryOp::BitAnd,
+        rsscript_syntax::ast::BinaryOp::BitOr => MirBinaryOp::BitOr,
+        rsscript_syntax::ast::BinaryOp::BitXor => MirBinaryOp::BitXor,
+        rsscript_syntax::ast::BinaryOp::ShiftLeft => MirBinaryOp::ShiftLeft,
+        rsscript_syntax::ast::BinaryOp::ShiftRight => MirBinaryOp::ShiftRight,
+        rsscript_syntax::ast::BinaryOp::Equal => MirBinaryOp::Equal,
+        rsscript_syntax::ast::BinaryOp::NotEqual => MirBinaryOp::NotEqual,
+        rsscript_syntax::ast::BinaryOp::Less => MirBinaryOp::Less,
+        rsscript_syntax::ast::BinaryOp::LessEqual => MirBinaryOp::LessEqual,
+        rsscript_syntax::ast::BinaryOp::Greater => MirBinaryOp::Greater,
+        rsscript_syntax::ast::BinaryOp::GreaterEqual => MirBinaryOp::GreaterEqual,
+        rsscript_syntax::ast::BinaryOp::LogicalAnd => MirBinaryOp::LogicalAnd,
+        rsscript_syntax::ast::BinaryOp::LogicalOr => MirBinaryOp::LogicalOr,
+    }
 }
 
 fn binary_op(op: BinaryOp) -> MirBinaryOp {

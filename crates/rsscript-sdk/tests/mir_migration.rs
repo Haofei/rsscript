@@ -268,6 +268,31 @@ fn supported_sdk_builds_use_the_mir_codegen_artifact() {
 }
 
 #[test]
+fn linear_scalar_checked_hir_reaches_verified_bytecode_without_executable_ir() {
+    let source = r#"
+fn main() -> Int {
+    let left = 40
+    let right = 2
+    return left + right
+}
+"#;
+    let compiled =
+        compile_source_to_ir("direct-hir-mir.rss", source).expect("direct-HIR fixture compiles");
+    let mir = compiled
+        .checked_hir_mir()
+        .expect("linear scalar fixture uses direct checked-HIR lowering");
+    let output = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct HIR MIR emits verified bytecode")
+    .eval_main_with_args(std::iter::empty::<String>())
+    .expect("direct HIR bytecode executes");
+    assert_eq!(output.value, "42");
+}
+
+#[test]
 fn capability_stages_stay_explicit() {
     for case in CASES {
         assert!(
