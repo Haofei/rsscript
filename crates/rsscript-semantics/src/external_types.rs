@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use crate::{hir::Hir, is_builtin_type_name};
 use rsscript_diagnostics::{Diagnostic, code};
 use rsscript_syntax::ast::TypeRef;
 
@@ -47,6 +48,90 @@ pub fn external_binding_type_diagnostics(
             "manual",
         ),
     ]
+}
+
+/// Validate all source type references in a program against the resolved HIR.
+pub fn unknown_type_diagnostics(
+    hir: &Hir,
+    program: &rsscript_syntax::ast::Program,
+    visible_protocols: &HashSet<String>,
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for item in &program.items {
+        let (params, types): (HashSet<&str>, Vec<&TypeRef>) = match item {
+            rsscript_syntax::ast::Item::Type(decl) => (
+                decl.type_params
+                    .iter()
+                    .map(|param| param.name.as_str())
+                    .collect(),
+                decl.fields.iter().map(|field| &field.ty).collect(),
+            ),
+            rsscript_syntax::ast::Item::Function(function) => {
+                let mut types = function
+                    .params
+                    .iter()
+                    .map(|param| &param.ty)
+                    .collect::<Vec<_>>();
+                if let Some(return_ty) = &function.return_ty {
+                    types.push(return_ty);
+                }
+                (
+                    function
+                        .type_params
+                        .iter()
+                        .map(|param| param.name.as_str())
+                        .collect(),
+                    types,
+                )
+            }
+            _ => continue,
+        };
+        for ty in types {
+            check_type_ref(hir, ty, &params, visible_protocols, &mut diagnostics);
+        }
+    }
+    diagnostics
+}
+
+fn check_type_ref(
+    hir: &Hir,
+    ty: &TypeRef,
+    generic_params: &HashSet<&str>,
+    visible_protocols: &HashSet<String>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if ty.name == "Dyn" {
+        diagnostics.extend(external_binding_type_diagnostics(
+            ty,
+            generic_params,
+            visible_protocols,
+        ));
+    } else if !hir.has_type_alias(&ty.name) && !known_type_ref(hir, ty, generic_params) {
+        diagnostics.push(unknown_type_name(ty));
+    }
+    for arg in &ty.args {
+        check_type_ref(hir, arg, generic_params, visible_protocols, diagnostics);
+    }
+    for param in &ty.fn_params {
+        check_type_ref(hir, param, generic_params, visible_protocols, diagnostics);
+    }
+    if let Some(return_ty) = &ty.fn_return {
+        check_type_ref(
+            hir,
+            return_ty,
+            generic_params,
+            visible_protocols,
+            diagnostics,
+        );
+    }
+}
+
+fn known_type_ref(hir: &Hir, ty: &TypeRef, generic_params: &HashSet<&str>) -> bool {
+    ty.name.is_empty()
+        || ((ty.is_noescape || ty.is_owned) && ty.name == "Fn")
+        || generic_params.contains(ty.name.as_str())
+        || is_builtin_type_name(&ty.name)
+        || hir.type_info(&ty.name).is_some()
 }
 
 fn unknown_type_name(ty: &TypeRef) -> Diagnostic {

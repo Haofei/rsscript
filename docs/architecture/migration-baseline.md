@@ -160,6 +160,9 @@ mechanical acceptance condition holds.
     - [x] **S02.2c — Move `Dyn<Protocol>` validation.** External binding type
       shape and protocol-visibility diagnostics are semantic queries; compiler
       supplies only the already-composed visible protocol set.
+    - [x] **S02.2d — Move unknown source type diagnostics.** Alias, builtin,
+      generic, and declared-type identity now resolve through semantics HIR;
+      compiler supplies source and visible protocol snapshots only.
   - [ ] **S02.3 — Move call binding and effect checks.** Relocate positional and
     named argument binding, `read`/`mut`/`take`, external signature matching,
     and retention facts.

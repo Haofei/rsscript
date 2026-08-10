@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::rc::Rc;
 
 use rsscript_operation::OperationContext;
+pub(crate) use rsscript_semantics::{BUILTIN_TYPE_NAMES, is_builtin_type_name};
 
 use crate::checks;
 use crate::checks::budget::{
@@ -2008,65 +2009,6 @@ fn constrained_field_patterns(pattern: &MatchPattern) -> Vec<(String, &MatchPatt
         | MatchPattern::List { .. }
         | MatchPattern::Wildcard(_) => Vec::new(),
     }
-}
-
-fn known_type_ref(ty: &TypeRef, generic_params: &HashSet<&str>, hir: &Hir) -> bool {
-    if ty.name.is_empty() {
-        return true;
-    }
-    if ty.is_noescape || ty.is_owned {
-        return ty.name == "Fn";
-    }
-    generic_params.contains(ty.name.as_str())
-        || is_builtin_type_name(&ty.name)
-        || hir.type_info(&ty.name).is_some()
-}
-
-pub(crate) const BUILTIN_TYPE_NAMES: &[&str] = &[
-    "Unit",
-    "Bool",
-    "Byte",
-    "Char",
-    "Int",
-    "Int8",
-    "Int16",
-    "Int32",
-    "Int64",
-    "UInt",
-    "UInt8",
-    "UInt16",
-    "UInt32",
-    "UInt64",
-    "Float",
-    "Float32",
-    "Float64",
-    "String",
-    "StringView",
-    "Url",
-    "Fd",
-    "Bytes",
-    "BytesView",
-    "Buffer",
-    "BufferView",
-    "Path",
-    "Result",
-    "Option",
-    "List",
-    "Map",
-    "Set",
-    "Dyn",
-    "Fn",
-    "Closure",
-    "FileError",
-    "IOError",
-    "HttpError",
-    "JsonError",
-    "CsvError",
-    "NetworkError",
-];
-
-pub(crate) fn is_builtin_type_name(name: &str) -> bool {
-    BUILTIN_TYPE_NAMES.contains(&name)
 }
 
 fn builtin_value_ident(name: &str) -> bool {

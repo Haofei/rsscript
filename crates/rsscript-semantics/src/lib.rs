@@ -28,7 +28,55 @@ pub use database::{
     SourceStoreError, SourceUpdate, ValidatedProgram,
 };
 pub use declarations::{duplicate_declaration_diagnostics, unknown_field_diagnostics};
-pub use external_types::external_binding_type_diagnostics;
+pub use external_types::{external_binding_type_diagnostics, unknown_type_diagnostics};
+
+/// Builtin source type roots recognized before backend lowering.
+pub const BUILTIN_TYPE_NAMES: &[&str] = &[
+    "Unit",
+    "Bool",
+    "Byte",
+    "Char",
+    "Int",
+    "Int8",
+    "Int16",
+    "Int32",
+    "Int64",
+    "UInt",
+    "UInt8",
+    "UInt16",
+    "UInt32",
+    "UInt64",
+    "Float",
+    "Float32",
+    "Float64",
+    "String",
+    "StringView",
+    "Url",
+    "Fd",
+    "Bytes",
+    "BytesView",
+    "Buffer",
+    "BufferView",
+    "Path",
+    "Result",
+    "Option",
+    "List",
+    "Map",
+    "Set",
+    "Dyn",
+    "Fn",
+    "Closure",
+    "FileError",
+    "IOError",
+    "HttpError",
+    "JsonError",
+    "CsvError",
+    "NetworkError",
+];
+
+pub fn is_builtin_type_name(name: &str) -> bool {
+    BUILTIN_TYPE_NAMES.contains(&name)
+}
 pub use identities::DefinitionId;
 pub use interface_descriptor::{
     INTERFACE_DESCRIPTOR_SCHEMA, InterfaceDescriptorError, InterfaceDescriptorFunctionV1,

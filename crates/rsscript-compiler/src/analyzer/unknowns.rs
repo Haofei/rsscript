@@ -2,78 +2,10 @@ use super::*;
 
 impl Analyzer<'_> {
     pub(crate) fn check_unknown_types(&mut self) {
-        let items = self.syntax_program.items.clone();
-        for item in &items {
-            match item {
-                Item::Type(decl) => {
-                    let generic_params = decl
-                        .type_params
-                        .iter()
-                        .map(|param| param.name.as_str())
-                        .collect::<HashSet<_>>();
-                    for field in &decl.fields {
-                        self.check_unknown_type_ref(&field.ty, &generic_params);
-                    }
-                }
-                Item::Function(function) => {
-                    let generic_params = function
-                        .type_params
-                        .iter()
-                        .map(|param| param.name.as_str())
-                        .collect::<HashSet<_>>();
-                    for param in &function.params {
-                        self.check_unknown_type_ref(&param.ty, &generic_params);
-                    }
-                    if let Some(return_ty) = &function.return_ty {
-                        self.check_unknown_type_ref(return_ty, &generic_params);
-                    }
-                }
-                Item::Module(_)
-                | Item::Use(_)
-                | Item::SumType(_)
-                | Item::TypeAlias(_)
-                | Item::Const(_) => {}
-            }
-        }
-    }
-
-    pub(super) fn check_unknown_type_ref(&mut self, ty: &TypeRef, generic_params: &HashSet<&str>) {
-        if ty.name == "Dyn" {
-            self.check_external_binding_type_ref(ty, generic_params);
-            for param in &ty.fn_params {
-                self.check_unknown_type_ref(param, generic_params);
-            }
-            if let Some(return_ty) = &ty.fn_return {
-                self.check_unknown_type_ref(return_ty, generic_params);
-            }
-            return;
-        }
-        // Type aliases are known types
-        if self.type_aliases.contains_key(&ty.name) {
-            // Valid - it's a type alias
-        } else if !known_type_ref(ty, generic_params, &self.hir) {
-            self.unknown_type_diagnostic(ty);
-        }
-        for arg in &ty.args {
-            self.check_unknown_type_ref(arg, generic_params);
-        }
-        for param in &ty.fn_params {
-            self.check_unknown_type_ref(param, generic_params);
-        }
-        if let Some(return_ty) = &ty.fn_return {
-            self.check_unknown_type_ref(return_ty, generic_params);
-        }
-    }
-
-    pub(super) fn check_external_binding_type_ref(
-        &mut self,
-        ty: &TypeRef,
-        generic_params: &HashSet<&str>,
-    ) {
         self.diagnostics
-            .extend(rsscript_semantics::external_binding_type_diagnostics(
-                ty,
-                generic_params,
+            .extend(rsscript_semantics::unknown_type_diagnostics(
+                &self.hir,
+                &self.syntax_program,
                 &self.visible_protocol_names(),
             ));
     }

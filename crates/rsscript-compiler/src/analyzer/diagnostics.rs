@@ -21,10 +21,6 @@ impl Analyzer<'_> {
         );
     }
 
-    pub(super) fn unknown_type_diagnostic(&mut self, ty: &TypeRef) {
-        self.unknown_type_name_diagnostic(&type_ref_name(ty), &ty.span);
-    }
-
     pub(crate) fn unknown_type_name_diagnostic(
         &mut self,
         name: &str,

@@ -511,6 +511,11 @@ impl Hir {
         self.expand_type_alias(type_name)
     }
 
+    /// Whether a source-level type root is declared as an alias in this HIR.
+    pub fn has_type_alias(&self, type_name: &str) -> bool {
+        self.type_aliases.contains_key(type_name)
+    }
+
     pub(in crate::hir) fn expand_type_alias(&self, type_name: &str) -> String {
         self.expand_type_alias_inner(type_name, &mut std::collections::BTreeSet::new())
     }
