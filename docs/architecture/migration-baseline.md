@@ -418,6 +418,12 @@ mechanical acceptance condition holds.
       dispatch the same retained value, return the same result, and record the
       same Provider-call usage. Move-failure, cleanup-count, and resource-limit
       comparisons remain follow-up work.
+    - [x] **M05.2b — Compare resource-scope cleanup.** A checked external
+      resource scope now executes through both the legacy and direct-MIR
+      bytecode paths against a counted Provider resource. Both paths must
+      return the same value, report the same Provider/resource usage, and
+      finalize exactly once per run. Move-failure and resource-limit comparison
+      remain follow-up work.
   - [ ] **M05.3 — Add async/provider differential fixtures.** Compare task
     cancellation, external-call order, deadlines, and Provider traces.
   - [ ] **M05.4 — Gate replacement on corpus parity.** New lowering cannot become

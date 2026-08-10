@@ -766,6 +766,54 @@ fn main() -> Int {
     );
     mir.verify()
         .expect("resource scope MIR retains its cleanup proof");
+
+    struct CountedResource(Arc<AtomicU64>);
+    impl ProviderResource for CountedResource {
+        fn cleanup(&mut self) -> Result<(), ProviderError> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    let cleanups = Arc::new(AtomicU64::new(0));
+    let provider = ExternalFunction::new_contextual({
+        let cleanups = Arc::clone(&cleanups);
+        move |context, _| {
+            context.register_resource(CountedResource(Arc::clone(&cleanups)))?;
+            Ok(NativeValue::Native {
+                type_name: "File".to_owned(),
+                id: 1,
+            })
+        }
+    });
+    let legacy = reg_vm_compile_validated(&validated)
+        .expect("legacy resource fixture compiles")
+        .eval_main_with_args_and_external_bindings(
+            std::iter::empty::<String>(),
+            [("Host.open", provider.clone())],
+        )
+        .expect("legacy resource fixture executes");
+    let direct = reg_vm_compile_mir(
+        &mir,
+        compiled.source_hash(),
+        compiled.interface_catalog_digest(),
+    )
+    .expect("direct resource MIR emits verified bytecode")
+    .eval_main_with_args_and_external_bindings(
+        std::iter::empty::<String>(),
+        [("Host.open", provider)],
+    )
+    .expect("direct resource MIR executes");
+    assert_eq!(legacy.value, direct.value);
+    assert_eq!(legacy.usage.provider_calls, direct.usage.provider_calls);
+    assert_eq!(
+        legacy.usage.resources_created,
+        direct.usage.resources_created
+    );
+    assert_eq!(
+        legacy.usage.resources_cleaned,
+        direct.usage.resources_cleaned
+    );
+    assert_eq!(cleanups.load(Ordering::SeqCst), 2);
 }
 
 #[test]
