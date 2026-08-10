@@ -193,18 +193,23 @@ fn supported_sdk_builds_use_the_mir_codegen_artifact() {
         .expect("scalar CFG migration fixture");
     let file = format!("{}.rss", case.name);
     let compiled = compile_source_to_ir(&file, case.source).expect("fixture compiles");
-    let expected = rsscript_codegen_vm::emit_artifact(
+    let mut expected = rsscript_codegen_vm::emit_artifact(
         &compiled.mir().expect("fixture lowers to MIR"),
         compiled.source_hash(),
         compiled.interface_catalog_digest(),
         env!("CARGO_PKG_VERSION"),
     )
-    .expect("fixture emits with independent MIR codegen")
-    .to_bytes()
-    .expect("Artifact serializes");
+    .expect("fixture emits with independent MIR codegen");
     let built = Compiler
         .compile(&file, case.source)
         .expect("SDK build succeeds");
+    // Codegen owns the provider-neutral executable payload. The SDK owns the
+    // workspace identity because it is the layer that captures the immutable
+    // source snapshot. Bind the same snapshot before comparing envelopes.
+    expected
+        .bind_snapshot_digest(built.snapshot_digest())
+        .expect("SDK snapshot identity binds to the emitted artifact");
+    let expected = expected.to_bytes().expect("Artifact serializes");
     assert_eq!(
         built.artifact_bytes(),
         expected,

@@ -252,9 +252,9 @@ mechanical acceptance condition holds.
   - [ ] **M02.4 — Add MIR structural validation.** Reject dangling blocks,
     invalid IDs, unterminated blocks, undefined values, and malformed CFG edges.
     - [x] **M02.4a — Verify the initial structural subset.** The verifier
-      rejects empty functions, invalid block/place/value references, duplicate
-      definitions, undefined values, and invalid CFG targets. Dominance and
-      cleanup-path validation remain follow-up work.
+    rejects empty functions, invalid block/place/value references, duplicate
+    definitions, undefined values, invalid CFG targets, and values that do not
+    dominate a control-flow use. Cleanup-path validation remains follow-up work.
 - [ ] **M03 — Make semantic operations explicit.** MIR represents move,
   read/mut borrow, retain, drop, resource acquire/release, spawn, await, join,
   cancellation, selection, external calls, and every cleanup/unwind edge.

@@ -486,6 +486,7 @@ fn verify_function(
         verify_terminator(function, block.terminator(), &mut used)?;
     }
     verify_move_dataflow(function)?;
+    verify_value_dominance(function)?;
     for value in used {
         if value.index() >= function.value_count as usize || !defined.contains(&value) {
             return Err(MirValidationError::UndefinedValue {
@@ -495,6 +496,113 @@ fn verify_function(
         }
     }
     Ok(())
+}
+
+/// Every value use must be reached by a definition on every control-flow path.
+/// MIR has no phi instruction yet, so a value defined in only one branch cannot
+/// be consumed after that branch joins. This catches a class of malformed CFGs
+/// that a whole-function "defined somewhere" set cannot distinguish.
+fn verify_value_dominance(function: &MirFunction) -> Result<(), MirValidationError> {
+    let mut entries = vec![None::<BTreeSet<ValueId>>; function.blocks.len()];
+    entries[0] = Some(BTreeSet::new());
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for block in &function.blocks {
+            let Some(entry) = entries[block.id.index()].clone() else {
+                continue;
+            };
+            let mut exit = entry;
+            for instruction in &block.instructions {
+                if let Some(destination) = instruction_definition(instruction) {
+                    exit.insert(destination);
+                }
+            }
+            for successor in successors(block.terminator()) {
+                let slot = &mut entries[successor.index()];
+                let merged = match slot {
+                    Some(existing) => existing.intersection(&exit).copied().collect(),
+                    None => exit.clone(),
+                };
+                if slot.as_ref() != Some(&merged) {
+                    *slot = Some(merged);
+                    changed = true;
+                }
+            }
+        }
+    }
+
+    for block in &function.blocks {
+        let Some(mut defined) = entries[block.id.index()].clone() else {
+            continue;
+        };
+        for instruction in &block.instructions {
+            for value in instruction_uses(instruction) {
+                if !defined.contains(&value) {
+                    return Err(MirValidationError::ValueDoesNotDominate {
+                        function: function.id,
+                        block: block.id,
+                        value,
+                    });
+                }
+            }
+            if let Some(destination) = instruction_definition(instruction) {
+                defined.insert(destination);
+            }
+        }
+        for value in terminator_uses(block.terminator()) {
+            if !defined.contains(&value) {
+                return Err(MirValidationError::ValueDoesNotDominate {
+                    function: function.id,
+                    block: block.id,
+                    value,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+fn instruction_definition(instruction: &MirInstruction) -> Option<ValueId> {
+    match instruction {
+        MirInstruction::LoadLiteral { destination, .. }
+        | MirInstruction::ReadPlace { destination, .. }
+        | MirInstruction::BorrowRead { destination, .. }
+        | MirInstruction::Binary { destination, .. }
+        | MirInstruction::Call { destination, .. } => Some(*destination),
+        MirInstruction::WritePlace { .. } | MirInstruction::Discard { .. } => None,
+    }
+}
+
+fn instruction_uses(instruction: &MirInstruction) -> Vec<ValueId> {
+    match instruction {
+        MirInstruction::WritePlace { value, .. } | MirInstruction::Discard { value } => {
+            vec![*value]
+        }
+        MirInstruction::Binary { left, right, .. } => vec![*left, *right],
+        MirInstruction::Call { arguments, .. } => arguments
+            .iter()
+            .filter_map(|argument| match argument {
+                MirCallArgument::Value(value) => Some(*value),
+                MirCallArgument::BorrowRead(_)
+                | MirCallArgument::BorrowMut(_)
+                | MirCallArgument::Take(_) => None,
+            })
+            .collect(),
+        MirInstruction::LoadLiteral { .. }
+        | MirInstruction::ReadPlace { .. }
+        | MirInstruction::BorrowRead { .. } => Vec::new(),
+    }
+}
+
+fn terminator_uses(terminator: &MirTerminator) -> Vec<ValueId> {
+    match terminator {
+        MirTerminator::Return(Some(value)) => vec![*value],
+        MirTerminator::Branch { condition, .. } => vec![*condition],
+        MirTerminator::Return(None) | MirTerminator::Jump(_) | MirTerminator::Unreachable => {
+            Vec::new()
+        }
+    }
 }
 
 /// A place is considered moved at a join when any reachable predecessor moves
@@ -850,6 +958,11 @@ pub enum MirValidationError {
         function: FunctionId,
         value: ValueId,
     },
+    ValueDoesNotDominate {
+        function: FunctionId,
+        block: BlockId,
+        value: ValueId,
+    },
 }
 
 impl fmt::Display for MirValidationError {
@@ -937,6 +1050,55 @@ mod tests {
                 signed: true
             })
         );
+    }
+
+    #[test]
+    fn rejects_value_defined_on_only_one_predecessor_of_a_join() {
+        let function = MirFunction::new(
+            FunctionId::new(0),
+            signature(),
+            0,
+            2,
+            vec![
+                BasicBlock::new(
+                    BlockId::new(0),
+                    vec![MirInstruction::LoadLiteral {
+                        destination: ValueId::new(0),
+                        value: MirLiteral::Bool(true),
+                    }],
+                    MirTerminator::Branch {
+                        condition: ValueId::new(0),
+                        then_target: BlockId::new(1),
+                        else_target: BlockId::new(2),
+                    },
+                ),
+                BasicBlock::new(
+                    BlockId::new(1),
+                    vec![MirInstruction::LoadLiteral {
+                        destination: ValueId::new(1),
+                        value: MirLiteral::Int(1),
+                    }],
+                    MirTerminator::Jump(BlockId::new(3)),
+                ),
+                BasicBlock::new(
+                    BlockId::new(2),
+                    Vec::new(),
+                    MirTerminator::Jump(BlockId::new(3)),
+                ),
+                BasicBlock::new(
+                    BlockId::new(3),
+                    Vec::new(),
+                    MirTerminator::Return(Some(ValueId::new(1))),
+                ),
+            ],
+        );
+        let error = MirModule::new(vec![WireType::Unit], vec![function], debug(), Vec::new())
+            .expect_err("join must reject a non-dominating value");
+        assert!(matches!(
+            error,
+            MirValidationError::ValueDoesNotDominate { block, value, .. }
+                if block == BlockId::new(3) && value == ValueId::new(1)
+        ));
     }
 
     #[test]
