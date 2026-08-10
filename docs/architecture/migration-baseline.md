@@ -519,6 +519,10 @@ mechanical acceptance condition holds.
     handles; canonical values contain no free-form type or field-name identity.
   - [ ] **P06.2 — Implement the compatibility adapter.** Convert legacy
     `NativeValue` at generated boundaries while Core contracts use wire values.
+    - [x] **P06.2a — Bridge generation-safe resource handles.** Provider
+      runtime handles now convert to/from the canonical numeric wire handle
+      with a descriptor-supplied resource type; no legacy type-name string is
+      used at that boundary. Aggregate `NativeValue` adapters remain open.
   - [ ] **P06.3 — Migrate official Providers and mocks.** Each migration keeps
     signature, error, resource, and payload-budget conformance fixtures green.
   - [ ] **P06.4 — Remove legacy escape variants from canonical APIs.** JSON stays

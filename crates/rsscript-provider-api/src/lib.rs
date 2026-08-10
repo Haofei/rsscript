@@ -10,7 +10,8 @@ use std::time::Duration;
 
 pub use rsscript_abi_model::{
     DataEffect, ExternalImport, ExternalSymbol, FunctionSignature, InvalidExternalSymbol,
-    ParameterSignature, RUNTIME_ABI_VERSION, SignatureHash,
+    ParameterSignature, RUNTIME_ABI_VERSION, SignatureHash, WireResourceHandle, WireResourceTypeId,
+    WireValue,
 };
 pub use rsscript_operation::{CancellationToken, MonotonicDeadline, OperationId};
 use serde::{Deserialize, Serialize};
@@ -350,6 +351,28 @@ impl ResourceHandle {
         Self {
             slot: bits as u32,
             generation: (bits >> 32) as u32,
+        }
+    }
+
+    /// Convert a runtime-owned handle to the canonical ABI representation.
+    /// The resource type is supplied by the generated adapter/descriptor,
+    /// rather than being inferred from a legacy native type-name string.
+    pub const fn to_wire(self, resource_type: WireResourceTypeId) -> WireResourceHandle {
+        WireResourceHandle {
+            resource_type,
+            slot: self.slot,
+            generation: self.generation,
+        }
+    }
+
+    /// Recover the runtime table identity from a canonical wire handle. The
+    /// caller validates `resource_type` against its descriptor before looking
+    /// it up in a table; this conversion intentionally does not discard that
+    /// contract check by accepting a raw string type name.
+    pub const fn from_wire(handle: WireResourceHandle) -> Self {
+        Self {
+            slot: handle.slot,
+            generation: handle.generation,
         }
     }
 }
@@ -1179,6 +1202,24 @@ mod tests {
         assert_eq!(table.created(), 2);
         assert_eq!(table.cleaned(), 2);
         assert_eq!(table.cleanup_failures(), 0);
+    }
+
+    #[test]
+    fn resource_handles_cross_the_wire_without_legacy_type_strings() {
+        let handle = ResourceHandle {
+            slot: 12,
+            generation: 34,
+        };
+        let wire = handle.to_wire(WireResourceTypeId::new(56));
+        assert_eq!(wire.resource_type, WireResourceTypeId::new(56));
+        assert_eq!(wire.slot, 12);
+        assert_eq!(wire.generation, 34);
+        assert_eq!(ResourceHandle::from_wire(wire), handle);
+        assert!(
+            serde_json::to_string(&wire)
+                .expect("wire handle serializes")
+                .contains("resource_type")
+        );
     }
 
     #[test]
